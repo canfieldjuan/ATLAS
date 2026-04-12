@@ -12193,6 +12193,102 @@ def _build_company_signal_operator_action(
     return normalized
 
 
+def _build_company_signal_queue_recommendation_payload(
+    *,
+    actionable_pending_groups: int,
+    blocked_pending_groups: int,
+    overdue_pending_groups: int,
+    low_trust_blocked: bool,
+    low_trust_dominant_priority: str,
+    promote_low_trust_when_blocked: bool,
+    prioritize_blocked_dominant: bool,
+    overdue_rationale: str,
+    actionable_rationale: str,
+    low_trust_dominant_rationale: str,
+    threshold_dominant_rationale: str,
+    low_trust_blocked_rationale: str,
+    threshold_blocked_rationale: str,
+    monitor_rationale: str,
+) -> dict[str, Any]:
+    def _dominant_blocked_payload() -> dict[str, Any] | None:
+        if not (blocked_pending_groups > actionable_pending_groups and blocked_pending_groups > 0):
+            return None
+        if low_trust_blocked:
+            return {
+                "status": "act",
+                "action": "review_low_trust_policy",
+                "priority": low_trust_dominant_priority,
+                "owner": "intelligence_policy",
+                "reason": "blocked_low_trust_policy",
+                "rationale": low_trust_dominant_rationale,
+                "driver_key": "dominant_blocked_low_trust",
+            }
+        return {
+            "status": "act",
+            "action": "review_threshold_policy",
+            "priority": "medium",
+            "owner": "intelligence_policy",
+            "reason": "blocked_canonical_threshold",
+            "rationale": threshold_dominant_rationale,
+            "driver_key": "dominant_blocked_threshold",
+        }
+
+    dominant_blocked_payload = _dominant_blocked_payload()
+    if prioritize_blocked_dominant and dominant_blocked_payload is not None:
+        return dominant_blocked_payload
+    if actionable_pending_groups > 0 and overdue_pending_groups > 0:
+        return {
+            "status": "act",
+            "action": "clear_overdue_review_queue",
+            "priority": "high",
+            "owner": "review_ops",
+            "reason": "overdue_actionable_backlog",
+            "rationale": overdue_rationale,
+            "driver_key": "overdue_actionable",
+        }
+    if dominant_blocked_payload is not None:
+        return dominant_blocked_payload
+    if actionable_pending_groups > 0:
+        return {
+            "status": "act",
+            "action": "review_prioritized_queue",
+            "priority": "medium",
+            "owner": "review_ops",
+            "reason": "actionable_backlog",
+            "rationale": actionable_rationale,
+            "driver_key": "actionable",
+        }
+    if blocked_pending_groups > 0:
+        if low_trust_blocked and promote_low_trust_when_blocked:
+            return {
+                "status": "act",
+                "action": "review_low_trust_policy",
+                "priority": "medium",
+                "owner": "intelligence_policy",
+                "reason": "blocked_low_trust_policy",
+                "rationale": low_trust_blocked_rationale,
+                "driver_key": "blocked_low_trust",
+            }
+        return {
+            "status": "watch",
+            "action": "review_threshold_policy",
+            "priority": "medium",
+            "owner": "intelligence_policy",
+            "reason": "blocked_backlog",
+            "rationale": threshold_blocked_rationale,
+            "driver_key": "blocked_threshold",
+        }
+    return {
+        "status": "monitor",
+        "action": "monitor_queue",
+        "priority": "low",
+        "owner": "review_ops",
+        "reason": "no_backlog_pressure",
+        "rationale": monitor_rationale,
+        "driver_key": "monitor",
+    }
+
+
 async def read_company_signal_candidate_group_summary(
     pool,
     *,
@@ -13542,112 +13638,42 @@ async def read_company_signal_candidate_group_summary(
     overdue_pending_groups = int(queue_snapshot.get("overdue_pending_groups") or 0)
     near_threshold_blocked_groups = int(queue_snapshot.get("near_threshold_blocked_groups") or 0)
     pending_groups = int(queue_snapshot.get("pending_groups") or 0)
-    if pending_groups <= 0:
-        queue_recommendation = {
-            "status": "monitor",
-            "action_type": "monitor",
-            "action": "monitor_queue",
-            "priority": "low",
-            "owner": "review_ops",
-            "reason": "no_backlog_pressure",
-            "rationale": "The current queue slice does not have pending backlog pressure.",
-            "queue_filters": queue_filters,
-            "queue_snapshot": queue_snapshot,
-            "primary_driver": _build_queue_summary_driver("queue_totals"),
-        }
-    elif actionable_pending_groups > 0 and overdue_pending_groups > 0:
-        queue_recommendation = {
-            "status": "act",
-            "action_type": "review_queue",
-            "action": "clear_overdue_review_queue",
-            "priority": "high",
-            "owner": "review_ops",
-            "reason": "overdue_actionable_backlog",
-            "rationale": "This queue slice has actionable pending groups that are already overdue and should be cleared before lower-yield backlog.",
-            "queue_filters": queue_filters,
-            "queue_snapshot": queue_snapshot,
-            "primary_driver": _build_queue_summary_driver("overdue_actionable_backlog"),
-        }
-    elif blocked_pending_groups > actionable_pending_groups and blocked_pending_groups > 0:
-        if unlock_focus is not None and unlock_focus.get("recommended_action") == "review_near_threshold_low_trust":
-            queue_recommendation = {
-                "status": "act",
-                "action_type": "policy_threshold",
-                "action": "review_low_trust_policy",
-                "priority": "high" if near_threshold_blocked_groups > 0 else "medium",
-                "owner": "intelligence_policy",
-                "reason": "blocked_low_trust_policy",
-                "rationale": "Blocked low-trust backlog is outweighing actionable review work in this queue slice.",
-                "queue_filters": queue_filters,
-                "queue_snapshot": queue_snapshot,
-                "primary_driver": _build_queue_summary_driver("unlock_focus"),
-            }
-        else:
-            queue_recommendation = {
-                "status": "act",
-                "action_type": "policy_threshold",
-                "action": "review_threshold_policy",
-                "priority": "medium",
-                "owner": "intelligence_policy",
-                "reason": "blocked_canonical_threshold",
-                "rationale": "Blocked canonical-threshold backlog is outweighing actionable review work in this queue slice.",
-                "queue_filters": queue_filters,
-                "queue_snapshot": queue_snapshot,
-                "primary_driver": _build_queue_summary_driver("unlock_focus"),
-            }
-    elif actionable_pending_groups > 0:
-        queue_recommendation = {
-            "status": "act",
-            "action_type": "review_queue",
-            "action": "review_prioritized_queue",
-            "priority": "medium",
-            "owner": "review_ops",
-            "reason": "actionable_backlog",
-            "rationale": "This queue slice is actionable and should be worked in priority order.",
-            "queue_filters": queue_filters,
-            "queue_snapshot": queue_snapshot,
-            "primary_driver": _build_queue_summary_driver("actionable_backlog"),
-        }
-    elif blocked_pending_groups > 0:
-        if unlock_focus is not None and unlock_focus.get("recommended_action") == "review_near_threshold_low_trust":
-            queue_recommendation = {
-                "status": "act",
-                "action_type": "policy_threshold",
-                "action": "review_low_trust_policy",
-                "priority": "medium",
-                "owner": "intelligence_policy",
-                "reason": "blocked_low_trust_policy",
-                "rationale": "This queue slice is blocked mainly by low-trust confidence policy rather than missing analyst review work.",
-                "queue_filters": queue_filters,
-                "queue_snapshot": queue_snapshot,
-                "primary_driver": _build_queue_summary_driver("unlock_focus"),
-            }
-        else:
-            queue_recommendation = {
-                "status": "watch",
-                "action_type": "policy_threshold",
-                "action": "review_threshold_policy",
-                "priority": "medium",
-                "owner": "intelligence_policy",
-                "reason": "blocked_backlog",
-                "rationale": "This queue slice has blocked backlog but little actionable review work, so policy thresholds are the main lever.",
-                "queue_filters": queue_filters,
-                "queue_snapshot": queue_snapshot,
-                "primary_driver": _build_queue_summary_driver("queue_totals"),
-            }
-    else:
-        queue_recommendation = {
-            "status": "monitor",
-            "action_type": "monitor",
-            "action": "monitor_queue",
-            "priority": "low",
-            "owner": "review_ops",
-            "reason": "no_backlog_pressure",
-            "rationale": "The current queue slice does not have material pending backlog pressure.",
-            "queue_filters": queue_filters,
-            "queue_snapshot": queue_snapshot,
-            "primary_driver": _build_queue_summary_driver("queue_totals"),
-        }
+    queue_recommendation_payload = _build_company_signal_queue_recommendation_payload(
+        actionable_pending_groups=actionable_pending_groups,
+        blocked_pending_groups=blocked_pending_groups,
+        overdue_pending_groups=overdue_pending_groups,
+        low_trust_blocked=bool(unlock_focus is not None and unlock_focus.get("recommended_action") == "review_near_threshold_low_trust"),
+        low_trust_dominant_priority="high" if near_threshold_blocked_groups > 0 else "medium",
+        promote_low_trust_when_blocked=True,
+        prioritize_blocked_dominant=False,
+        overdue_rationale="This queue slice has actionable pending groups that are already overdue and should be cleared before lower-yield backlog.",
+        actionable_rationale="This queue slice is actionable and should be worked in priority order.",
+        low_trust_dominant_rationale="Blocked low-trust backlog is outweighing actionable review work in this queue slice.",
+        threshold_dominant_rationale="Blocked canonical-threshold backlog is outweighing actionable review work in this queue slice.",
+        low_trust_blocked_rationale="This queue slice is blocked mainly by low-trust confidence policy rather than missing analyst review work.",
+        threshold_blocked_rationale="This queue slice has blocked backlog but little actionable review work, so policy thresholds are the main lever.",
+        monitor_rationale=(
+            "The current queue slice does not have pending backlog pressure."
+            if pending_groups <= 0
+            else "The current queue slice does not have material pending backlog pressure."
+        ),
+    )
+    queue_driver_map = {
+        "overdue_actionable": _build_queue_summary_driver("overdue_actionable_backlog"),
+        "dominant_blocked_low_trust": _build_queue_summary_driver("unlock_focus"),
+        "dominant_blocked_threshold": _build_queue_summary_driver("unlock_focus"),
+        "actionable": _build_queue_summary_driver("actionable_backlog"),
+        "blocked_low_trust": _build_queue_summary_driver("unlock_focus"),
+        "blocked_threshold": _build_queue_summary_driver("queue_totals"),
+        "monitor": _build_queue_summary_driver("queue_totals"),
+    }
+    queue_driver_key = str(queue_recommendation_payload.pop("driver_key", "monitor"))
+    queue_recommendation = _build_company_signal_operator_action(
+        queue_recommendation_payload,
+        primary_driver=queue_driver_map.get(queue_driver_key),
+        queue_filters=queue_filters,
+        queue_snapshot=queue_snapshot,
+    ) or _empty_company_signal_operator_action()
     operator_focus = _build_operator_focus(queue_recommendation, unlock_focus)
     return {
         "totals": dict(totals or {}),
@@ -14907,18 +14933,7 @@ async def read_company_signal_review_impact_summary(
     def _build_trend_queue_recommendation(
         queue_focus: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        default = {
-            "status": "no_data",
-            "action_type": None,
-            "action": None,
-            "priority": None,
-            "owner": None,
-            "reason": None,
-            "rationale": None,
-            "queue_filters": {},
-            "queue_snapshot": None,
-            "primary_driver": None,
-        }
+        default = _empty_company_signal_operator_action()
         if not isinstance(queue_focus, Mapping):
             return default
         queue_filters = dict(queue_focus.get("queue_filters") or {})
@@ -14941,92 +14956,29 @@ async def read_company_signal_review_impact_summary(
             or queue_snapshot.get("overdue_pending_groups")
             or 0
         )
-        oldest_pending_age_days = float(
-            queue_focus.get("oldest_pending_age_days")
-            or queue_snapshot.get("oldest_pending_age_days")
-            or 0.0
+        queue_recommendation_payload = _build_company_signal_queue_recommendation_payload(
+            actionable_pending_groups=actionable_pending_groups,
+            blocked_pending_groups=blocked_pending_groups,
+            overdue_pending_groups=overdue_pending_groups,
+            low_trust_blocked=str(queue_filters.get("canonical_gap_reason") or "") == "low_confidence_low_trust_source",
+            low_trust_dominant_priority="high" if overdue_pending_groups > 0 else "medium",
+            promote_low_trust_when_blocked=False,
+            prioritize_blocked_dominant=True,
+            overdue_rationale="The top queue slice has actionable pending groups that are already overdue and should be cleared first.",
+            actionable_rationale="The top queue slice is actionable and should be worked in priority order before lower-yield backlog.",
+            low_trust_dominant_rationale="The top queue slice is dominated by low-trust candidates blocked on canonical confidence policy, not waiting for analyst approvals.",
+            threshold_dominant_rationale="The top queue slice is dominated by candidates blocked on canonical readiness thresholds instead of pending analyst review.",
+            low_trust_blocked_rationale="The top queue slice is dominated by low-trust candidates blocked on canonical confidence policy, not waiting for analyst approvals.",
+            threshold_blocked_rationale="The top queue slice has blocked backlog but little actionable review work, so threshold policy is the main lever.",
+            monitor_rationale="The current impact focus does not map to material pending queue work.",
         )
-        canonical_reason = str(queue_filters.get("canonical_gap_reason") or "")
-        snapshot_payload = dict(queue_snapshot)
-        primary_driver_payload = dict(primary_driver) if isinstance(primary_driver, Mapping) else primary_driver
-
-        if blocked_pending_groups > actionable_pending_groups and blocked_pending_groups > 0:
-            if canonical_reason == "low_confidence_low_trust_source":
-                return {
-                    "status": "act",
-                    "action_type": "policy_threshold",
-                    "action": "review_low_trust_policy",
-                    "priority": "high" if overdue_pending_groups > 0 else "medium",
-                    "owner": "intelligence_policy",
-                    "reason": "blocked_low_trust_policy",
-                    "rationale": "The top queue slice is dominated by low-trust candidates blocked on canonical confidence policy, not waiting for analyst approvals.",
-                    "queue_filters": queue_filters,
-                    "queue_snapshot": snapshot_payload,
-                    "primary_driver": primary_driver_payload,
-                }
-            return {
-                "status": "act",
-                "action_type": "policy_threshold",
-                "action": "review_threshold_policy",
-                "priority": "medium",
-                "owner": "intelligence_policy",
-                "reason": "blocked_canonical_threshold",
-                "rationale": "The top queue slice is dominated by candidates blocked on canonical readiness thresholds instead of pending analyst review.",
-                "queue_filters": queue_filters,
-                "queue_snapshot": snapshot_payload,
-                "primary_driver": primary_driver_payload,
-            }
-        if actionable_pending_groups > 0 and overdue_pending_groups > 0:
-            return {
-                "status": "act",
-                "action_type": "review_queue",
-                "action": "clear_overdue_review_queue",
-                "priority": "high",
-                "owner": "review_ops",
-                "reason": "overdue_actionable_backlog",
-                "rationale": "The top queue slice has actionable pending groups that are already overdue and should be cleared first.",
-                "queue_filters": queue_filters,
-                "queue_snapshot": snapshot_payload,
-                "primary_driver": primary_driver_payload,
-            }
-        if actionable_pending_groups > 0:
-            return {
-                "status": "act",
-                "action_type": "review_queue",
-                "action": "review_prioritized_queue",
-                "priority": "medium",
-                "owner": "review_ops",
-                "reason": "actionable_backlog",
-                "rationale": "The top queue slice is actionable and should be worked in priority order before lower-yield backlog.",
-                "queue_filters": queue_filters,
-                "queue_snapshot": snapshot_payload,
-                "primary_driver": primary_driver_payload,
-            }
-        if blocked_pending_groups > 0:
-            return {
-                "status": "watch",
-                "action_type": "policy_threshold",
-                "action": "review_threshold_policy",
-                "priority": "medium",
-                "owner": "intelligence_policy",
-                "reason": "blocked_backlog",
-                "rationale": "The top queue slice has blocked backlog but little actionable review work, so threshold policy is the main lever.",
-                "queue_filters": queue_filters,
-                "queue_snapshot": snapshot_payload,
-                "primary_driver": primary_driver_payload,
-            }
-        return {
-            "status": "monitor",
-            "action_type": "monitor",
-            "action": "monitor_queue",
-            "priority": "low",
-            "owner": "review_ops",
-            "reason": "no_backlog_pressure",
-            "rationale": "The current impact focus does not map to material pending queue work.",
-            "queue_filters": queue_filters,
-            "queue_snapshot": snapshot_payload,
-            "primary_driver": primary_driver_payload,
-        }
+        queue_recommendation_payload.pop("driver_key", None)
+        return _build_company_signal_operator_action(
+            queue_recommendation_payload,
+            primary_driver=primary_driver,
+            queue_filters=queue_filters,
+            queue_snapshot=queue_snapshot,
+        ) or default
 
     def _queue_snapshot_cache_key(filters: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
         return tuple(sorted((str(key), value) for key, value in filters.items()))
