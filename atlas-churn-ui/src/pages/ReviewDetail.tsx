@@ -78,6 +78,12 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   return `/opportunities?${next.toString()}`
 }
 
+function alertsPath(backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/alerts?${next.toString()}`
+}
+
 function backToLabel(value: string) {
   if (value.startsWith('/vendors/')) return 'Back to Vendor'
   if (value.startsWith('/watchlists')) {
@@ -155,7 +161,7 @@ export default function ReviewDetail() {
   const location = useLocation()
   const [searchParams] = useSearchParams()
   const [copied, setCopied] = useState(false)
-  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'watchlists' | 'account' | 'evidence' | 'vendor' | 'reports' | 'opportunities'; status: 'copied' | 'error' } | null>(null)
+  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'watchlists' | 'account' | 'alerts' | 'evidence' | 'vendor' | 'reports' | 'opportunities'; status: 'copied' | 'error' } | null>(null)
 
   const { data: review, loading, error, refresh, refreshing } = useApiData<ReviewDetailType>(
     () => {
@@ -202,6 +208,7 @@ export default function ReviewDetail() {
   const upstreamEvidencePath = backToReviews.startsWith('/evidence') ? backToReviews : null
   const directWatchlistsPath = watchlistsPath(backToReviews)
   const directAccountReviewPath = accountReviewPath(backToReviews)
+  const directAlertsPath = nestedPath(backToReviews, '/alerts')
   const directVendorWorkspacePath = nestedPath(backToReviews, '/vendors/')
   const directReportsPath = nestedPath(backToReviews, '/reports')
   const directOpportunitiesPath = nestedPath(backToReviews, '/opportunities')
@@ -222,7 +229,7 @@ export default function ReviewDetail() {
     })
   }
   const handleCopyShortcutLink = (
-    key: 'watchlists' | 'account' | 'evidence' | 'vendor' | 'reports' | 'opportunities',
+    key: 'watchlists' | 'account' | 'alerts' | 'evidence' | 'vendor' | 'reports' | 'opportunities',
     path: string,
   ) => {
     navigator.clipboard.writeText(`${window.location.origin}${path}`).then(() => {
@@ -324,6 +331,25 @@ export default function ReviewDetail() {
                 </button>
               </span>
             ) : null}
+            <span className="inline-flex items-center gap-1.5">
+              <Link
+                to={directAlertsPath ?? alertsPath(reviewDetailBackPath)}
+                className="text-rose-300 hover:text-rose-200 transition-colors"
+              >
+                Alerts API
+              </Link>
+              <button
+                type="button"
+                onClick={() => handleCopyShortcutLink('alerts', directAlertsPath ?? alertsPath(reviewDetailBackPath))}
+                className="text-slate-400 hover:text-white transition-colors"
+                aria-label="Copy alerts link"
+                title="Copy alerts link"
+              >
+                {copiedShortcutState?.key === 'alerts' && copiedShortcutState.status === 'copied'
+                  ? <Check className="h-3.5 w-3.5 text-green-400" />
+                  : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </span>
             <span className="inline-flex items-center gap-1.5">
               <Link
                 to={directVendorWorkspacePath ?? vendorDetailPath(review.vendor_name, reviewDetailBackPath)}
