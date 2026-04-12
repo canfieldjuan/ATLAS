@@ -1483,6 +1483,7 @@ async def reason_vendor(
 ):
     """Return the best available persisted reasoning for a single vendor."""
     _ = force
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
 
     pool = _pool_or_503()
 

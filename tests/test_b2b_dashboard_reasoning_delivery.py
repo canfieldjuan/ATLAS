@@ -881,6 +881,54 @@ async def test_dashboard_vendor_profile_rejects_blank_vendor_name_without_db_tou
 
 
 @pytest.mark.asyncio
+async def test_reason_vendor_rejects_blank_vendor_name_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_pool_or_503",
+        lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")),
+    )
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.reason_vendor("   ", user=None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "vendor_name is required"
+
+
+@pytest.mark.asyncio
+async def test_reason_vendor_trims_vendor_name_before_reader_call(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_synthesis_reader as reader_mod
+
+    pool = SimpleNamespace()
+    load_mock = AsyncMock(return_value=_make_view("Zendesk"))
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(reader_mod, "load_best_reasoning_view", load_mock)
+    monkeypatch.setattr(
+        reader_mod,
+        "synthesis_view_to_reasoning_entry",
+        lambda _view: {
+            "mode": "cached",
+            "confidence": "medium",
+            "archetype": "price_squeeze",
+            "risk_level": "high",
+            "executive_summary": "Summary",
+            "key_signals": ["signal"],
+            "falsification_conditions": ["condition"],
+            "uncertainty_sources": ["source"],
+        },
+    )
+
+    result = await mod.reason_vendor("  Zendesk  ", user=None)
+
+    load_mock.assert_awaited_once_with(pool, "Zendesk")
+    assert result["vendor_name"] == "Zendesk"
+    assert result["cached"] is True
+
+
+@pytest.mark.asyncio
 async def test_dashboard_pipeline_excludes_cross_source_duplicates(monkeypatch):
     from atlas_brain.api import b2b_dashboard as mod
 
