@@ -2111,6 +2111,13 @@ async def test_tracked_vendor_routes_reject_blank_required_text_without_db_touch
             ),
             "vendor_name is required",
         ),
+        (
+            lambda: mod.add_tracked_vendor(
+                req=mod.AddVendorRequest(vendor_name="Zendesk", track_mode="invalid"),
+                user=user,
+            ),
+            "track_mode must be 'own' or 'competitor'",
+        ),
         (lambda: mod.remove_tracked_vendor("   ", user=user), "vendor_name is required"),
         (lambda: mod.search_available_vendors(q="   ", limit=10, user=user), "q is required"),
     ]

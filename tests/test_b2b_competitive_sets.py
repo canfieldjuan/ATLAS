@@ -238,6 +238,7 @@ async def test_update_competitive_set_rejects_blank_name_before_duplicate_lookup
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "name is required"
+    assert repo.get_by_id_for_account.await_count == 0
     assert repo.get_by_name_for_account.await_count == 0
     assert canonical.await_count == 0
 

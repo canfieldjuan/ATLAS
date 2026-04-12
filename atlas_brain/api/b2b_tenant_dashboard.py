@@ -1208,11 +1208,10 @@ async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(req
     """Add a vendor to track. Enforces vendor_limit in a transaction."""
     _require_b2b_product(user)
     vendor_name = _clean_required_text(req.vendor_name, "vendor_name")
-    pool = _pool_or_503()
-    acct = _uuid.UUID(user.account_id)
-
     if req.track_mode not in ("own", "competitor"):
         raise HTTPException(status_code=400, detail="track_mode must be 'own' or 'competitor'")
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
 
     canonical_vendor = await resolve_vendor_name(vendor_name)
     label = _clean_optional_text(req.label) or ""
@@ -1544,12 +1543,14 @@ async def update_competitive_set(
     user: AuthUser = Depends(require_auth),
 ):
     _require_b2b_product(user)
+    next_name = _clean_required_text(req.name, "name") if req.name is not None else None
     pool = _pool_or_503()
     repo = get_competitive_set_repo()
     existing = await repo.get_by_id_for_account(competitive_set_id, _uuid.UUID(user.account_id))
     if not existing:
         raise HTTPException(status_code=404, detail="Competitive set not found")
-    next_name = _clean_required_text(req.name, "name") if req.name is not None else existing.name
+    if next_name is None:
+        next_name = existing.name
     existing_name = await repo.get_by_name_for_account(_uuid.UUID(user.account_id), next_name)
     if existing_name and existing_name.id != competitive_set_id:
         raise HTTPException(status_code=409, detail="Competitive set name already exists")
