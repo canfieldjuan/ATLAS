@@ -5823,7 +5823,6 @@ async def create_webhook(
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    pool = _pool_or_503()
 
     # Validate URL scheme (prevent SSRF)
     if not body.url.startswith(("https://", "http://")):
@@ -5844,6 +5843,7 @@ async def create_webhook(
             detail="auth_header is required for CRM channels (e.g., 'Bearer pat-xxx')",
         )
 
+    pool = _pool_or_503()
     try:
         row = await pool.fetchrow(
             """
@@ -6043,13 +6043,13 @@ async def get_webhook(
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    pool = _pool_or_503()
 
     try:
         wid = _uuid.UUID(webhook_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
+    pool = _pool_or_503()
     row = await pool.fetchrow(
         """
         SELECT id, url, event_types,
@@ -6082,13 +6082,13 @@ async def delete_webhook(
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    pool = _pool_or_503()
 
     try:
         wid = _uuid.UUID(webhook_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
+    pool = _pool_or_503()
     result = await pool.execute(
         "DELETE FROM b2b_webhook_subscriptions WHERE id = $1 AND account_id = $2::uuid",
         wid, user.account_id,
@@ -6108,13 +6108,13 @@ async def update_webhook(
     """Update webhook subscription fields (enabled, event_types, url, description)."""
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    pool = _pool_or_503()
 
     try:
         wid = _uuid.UUID(webhook_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
+    pool = _pool_or_503()
     # Build dynamic SET clause
     sets: list[str] = []
     params: list = []
@@ -6190,12 +6190,26 @@ async def list_webhook_deliveries(
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    pool = _pool_or_503()
 
     try:
         wid = _uuid.UUID(webhook_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
+
+    parsed_start_date = None
+    parsed_end_date = None
+    if start_date:
+        try:
+            parsed_start_date = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date (ISO 8601 expected)")
+    if end_date:
+        try:
+            parsed_end_date = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date (ISO 8601 expected)")
+
+    pool = _pool_or_503()
 
     # Verify ownership
     owns = await pool.fetchval(
@@ -6217,21 +6231,13 @@ async def list_webhook_deliveries(
         conditions.append(f"event_type = ${idx}")
         params.append(event_type)
         idx += 1
-    if start_date:
-        try:
-            sd = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start_date (ISO 8601 expected)")
+    if parsed_start_date is not None:
         conditions.append(f"delivered_at >= ${idx}")
-        params.append(sd)
+        params.append(parsed_start_date)
         idx += 1
-    if end_date:
-        try:
-            ed = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end_date (ISO 8601 expected)")
+    if parsed_end_date is not None:
         conditions.append(f"delivered_at < ${idx}")
-        params.append(ed)
+        params.append(parsed_end_date)
         idx += 1
 
     where = " AND ".join(conditions)
@@ -6317,7 +6323,6 @@ async def test_webhook(
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    pool = _pool_or_503()
 
     try:
         wid = _uuid.UUID(webhook_id)
@@ -6350,7 +6355,6 @@ async def list_crm_push_log(
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    pool = _pool_or_503()
 
     try:
         wid = _uuid.UUID(webhook_id)
@@ -6358,6 +6362,7 @@ async def list_crm_push_log(
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
     limit = max(1, min(limit, 200))
+    pool = _pool_or_503()
 
     # Verify ownership
     owns = await pool.fetchval(

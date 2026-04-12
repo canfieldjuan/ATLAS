@@ -239,6 +239,49 @@ async def test_update_webhook_blank_url_is_treated_as_no_update():
 
 
 @pytest.mark.asyncio
+async def test_create_webhook_validates_before_db_touch():
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.CreateWebhookBody(
+        url='https://hooks.example.com/churn',
+        secret='a' * 24,
+        event_types=['high_intent_push'],
+        channel='generic',
+    )
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.create_webhook(body, user=user)
+
+    assert exc_info.value.status_code == 400
+    assert 'require a CRM channel' in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_get_webhook_rejects_invalid_uuid_before_db_touch():
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.get_webhook('   ', user=user)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'webhook_id must be a valid UUID'
+
+
+@pytest.mark.asyncio
+async def test_update_webhook_rejects_invalid_uuid_before_db_touch():
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.UpdateWebhookBody(enabled=True)
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.update_webhook('   ', body, user=user)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'webhook_id must be a valid UUID'
+
+
+@pytest.mark.asyncio
 async def test_update_webhook_rejects_high_intent_push_for_generic_channel():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value='generic')
@@ -256,6 +299,50 @@ async def test_update_webhook_rejects_high_intent_push_for_generic_channel():
     assert exc_info.value.status_code == 400
     assert 'require a CRM channel' in exc_info.value.detail
     pool.fetchval.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_webhook_deliveries_rejects_invalid_uuid_before_db_touch():
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.list_webhook_deliveries(
+                '   ',
+                success=None,
+                event_type=None,
+                start_date=None,
+                end_date=None,
+                limit=50,
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'webhook_id must be a valid UUID'
+
+
+@pytest.mark.asyncio
+async def test_test_webhook_rejects_invalid_uuid_before_db_touch():
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.test_webhook('   ', user=user)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'webhook_id must be a valid UUID'
+
+
+@pytest.mark.asyncio
+async def test_list_crm_push_log_rejects_invalid_uuid_before_db_touch():
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.list_crm_push_log('   ', limit=50, user=user)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'webhook_id must be a valid UUID'
 
 
 @pytest.mark.asyncio
