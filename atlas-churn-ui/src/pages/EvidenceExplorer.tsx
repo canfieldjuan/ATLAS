@@ -185,6 +185,22 @@ function watchlistsShortcutLabel(value: string | null) {
   }
 }
 
+function upstreamReportsPath(value: string | null): string | null {
+  let current = parseBackTo(value)
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/reports')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = parseBackTo(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -274,6 +290,7 @@ export default function EvidenceExplorer() {
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const directWatchlistsShortcutPath = useMemo(() => upstreamWatchlistsPath(requestedBackTo), [requestedBackTo])
+  const directReportsShortcutPath = useMemo(() => upstreamReportsPath(requestedBackTo), [requestedBackTo])
   const matchedWatchlistViewId = useMemo(() => {
     if (!activeVendor) return null
     const normalizedVendor = activeVendor.toLowerCase()
@@ -722,14 +739,14 @@ export default function EvidenceExplorer() {
               </span>
               <span className="inline-flex items-center gap-2">
                 <Link
-                  to={evidenceReportsPath(searchParams, activeVendor)}
+                  to={directReportsShortcutPath ?? evidenceReportsPath(searchParams, activeVendor)}
                   className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
                 >
                   Reports
                 </Link>
                 <button
                   type="button"
-                  onClick={() => void handleCopyReportsLink(evidenceReportsPath(searchParams, activeVendor))}
+                  onClick={() => void handleCopyReportsLink(directReportsShortcutPath ?? evidenceReportsPath(searchParams, activeVendor))}
                   className="text-slate-400 hover:text-white transition-colors"
                   aria-label="Copy reports link"
                 >

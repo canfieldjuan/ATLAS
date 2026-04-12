@@ -516,6 +516,38 @@ describe('EvidenceExplorer', () => {
     })
   })
 
+  it('prefers the exact upstream reports shortcut when entered from a report path', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Freports%253Fvendor_filter%253DZendesk%2526report_type%253Dbattle_card%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const reportsLink = await screen.findByRole('link', { name: 'Reports' })
+    expect(reportsLink).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Zendesk&report_type=battle_card&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('copies the exact upstream reports shortcut when entered from a report path', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Freports%253Fvendor_filter%253DZendesk%2526report_type%253Dbattle_card%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const reportsLink = await screen.findByRole('link', { name: 'Reports' })
+    await user.click(screen.getByRole('button', { name: 'Copy reports link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${reportsLink.getAttribute('href')}`)
+    })
+  })
+
   it('copies the active reports shortcut link', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
