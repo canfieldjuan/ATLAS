@@ -138,3 +138,62 @@ def test_ingest_crm_events_batch_trims_text_fields_before_persistence(monkeypatc
     assert args[7] == "deal-2"
     assert args[8] == "Renewal"
     assert args[9] == "evaluation"
+
+
+
+def test_list_crm_events_validates_filters_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+
+    monkeypatch.setattr(crm_events_api.settings.crm_event, "enabled", True)
+
+    def _boom():
+        raise AssertionError("DB pool should not be acquired")
+
+    monkeypatch.setattr(crm_events_api, "get_db_pool", _boom)
+
+    with TestClient(app) as client:
+        status_response = client.get("/b2b/crm/events", params={"status": "not_a_status"})
+        provider_response = client.get("/b2b/crm/events", params={"crm_provider": "not_a_provider"})
+        start_response = client.get("/b2b/crm/events", params={"start_date": "not-a-date"})
+
+    assert status_response.status_code == 400
+    assert status_response.json()["detail"].startswith("Invalid status.")
+    assert provider_response.status_code == 400
+    assert provider_response.json()["detail"].startswith("Invalid crm_provider.")
+    assert start_response.status_code == 400
+    assert start_response.json()["detail"] == "Invalid start_date (ISO 8601 expected)"
+
+
+def test_list_crm_events_normalizes_blank_optional_filters(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(crm_events_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/b2b/crm/events",
+            params={
+                "status": "   ",
+                "crm_provider": "  ",
+                "company_name": "	",
+                "start_date": "   ",
+                "end_date": "  ",
+                "limit": 50,
+                "offset": 0,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["events"] == []
+    query, *params = pool.fetch.await_args.args
+    assert "status = $" not in query
+    assert "crm_provider = $" not in query
+    assert "LOWER(company_name) LIKE" not in query
+    assert "received_at >= $" not in query
+    assert "received_at < $" not in query
+    assert params == [50, 0]

@@ -836,14 +836,38 @@ async def list_crm_events(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """List ingested CRM events with optional filters."""
-    pool = _pool_or_503()
+    status = (_clean_optional_text(status) or "").lower() or None
+    crm_provider = (_clean_optional_text(crm_provider) or "").lower() or None
+    company_name = _clean_optional_text(company_name)
+    start_date = _clean_optional_text(start_date)
+    end_date = _clean_optional_text(end_date)
 
     if status and status not in VALID_EVENT_STATUSES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid status. Must be one of: {sorted(VALID_EVENT_STATUSES)}",
         )
+    if crm_provider and crm_provider not in VALID_CRM_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid crm_provider. Must be one of: {sorted(VALID_CRM_PROVIDERS)}",
+        )
 
+    sd = None
+    if start_date:
+        try:
+            sd = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid start_date (ISO 8601 expected)") from exc
+
+    ed = None
+    if end_date:
+        try:
+            ed = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid end_date (ISO 8601 expected)") from exc
+
+    pool = _pool_or_503()
     conditions = ["1=1"]
     params: list = []
     idx = 1
@@ -868,20 +892,12 @@ async def list_crm_events(
         params.append(company_name)
         idx += 1
 
-    if start_date:
-        try:
-            sd = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start_date (ISO 8601 expected)")
+    if sd is not None:
         conditions.append(f"received_at >= ${idx}")
         params.append(sd)
         idx += 1
 
-    if end_date:
-        try:
-            ed = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end_date (ISO 8601 expected)")
+    if ed is not None:
         conditions.append(f"received_at < ${idx}")
         params.append(ed)
         idx += 1
