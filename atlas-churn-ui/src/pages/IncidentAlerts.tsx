@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
-import { BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
+import { ArrowRight, BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
@@ -659,6 +659,10 @@ export default function IncidentAlerts() {
     summaryWindow,
   ])
 
+  const currentAlertsUrl = useMemo(() => (
+    location.search ? `${location.pathname}${location.search}` : location.pathname
+  ), [location.pathname, location.search])
+
   useEffect(() => {
     setSummaryWindow((current) => (current === requestedSummaryWindow ? current : requestedSummaryWindow))
   }, [requestedSummaryWindow])
@@ -778,6 +782,34 @@ export default function IncidentAlerts() {
             </div>
           ))}
         </div>
+      </div>
+    )
+  }
+
+  function renderActivityDetailShortcuts(activity: AlertActivityReferenceSource, backTo: string) {
+    const reviewId = normalizeActivityReference(activity.review_id)
+    const reportId = normalizeActivityReference(activity.report_id)
+    if (!reviewId && !reportId) return null
+    return (
+      <div className="mt-2 flex flex-wrap gap-2">
+        {reviewId ? (
+          <Link
+            to={buildReviewDetailPath(reviewId, backTo)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+          >
+            <ArrowRight className="h-3.5 w-3.5" />
+            Open Review
+          </Link>
+        ) : null}
+        {reportId ? (
+          <Link
+            to={buildReportDetailPath(reportId, backTo)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+          >
+            <ArrowRight className="h-3.5 w-3.5" />
+            Open Report
+          </Link>
+        ) : null}
       </div>
     )
   }
@@ -1076,6 +1108,7 @@ export default function IncidentAlerts() {
                             {formatFailureSummary(webhook)} · {formatTs(webhook.latest_failure_at)}
                           </div>
                           {renderActivityReferences(latestFailureReferences)}
+                          {renderActivityDetailShortcuts(latestFailureReferences, currentAlertsUrl)}
                         </div>
                       ) : null}
                       {latestManualTest ? (
@@ -1096,6 +1129,7 @@ export default function IncidentAlerts() {
                             })()}
                           </div>
                           {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
+                          {latestManualTestReferences ? renderActivityDetailShortcuts(latestManualTestReferences, currentAlertsUrl) : null}
                         </div>
                       ) : null}
                     </div>
