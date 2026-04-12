@@ -332,9 +332,7 @@ async def _resolve_tracked_vendors_for_view(
     account_id: _uuid.UUID,
     vendor_names: list[str] | None,
 ) -> list[str] | None:
-    if not vendor_names:
-        return None
-    cleaned = [v.strip() for v in vendor_names if v and v.strip()]
+    cleaned = _clean_optional_text_list(vendor_names)
     if not cleaned:
         return None
     resolved = []
@@ -358,11 +356,11 @@ async def _resolve_tracked_vendors_for_view(
 
 def _merge_vendor_names_from_request(req) -> list[str] | None:
     """Merge vendor_names and vendor_name fields from request for backward compat."""
-    if req.vendor_names:
-        return [v.strip() for v in req.vendor_names if v and v.strip()] or None
-    if req.vendor_name and req.vendor_name.strip():
-        return [req.vendor_name.strip()]
-    return None
+    vendor_names = _clean_optional_text_list(getattr(req, "vendor_names", None))
+    if vendor_names:
+        return vendor_names
+    vendor_name = _clean_optional_text(getattr(req, "vendor_name", None))
+    return [vendor_name] if vendor_name is not None else None
 
 
 def _watchlist_view_payload(row: Any) -> dict[str, Any]:

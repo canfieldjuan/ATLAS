@@ -2004,6 +2004,58 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
 
 
 @pytest.mark.asyncio
+async def test_create_watchlist_view_falls_back_to_legacy_vendor_name_when_vendor_names_blank(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    view_id = uuid4()
+    account_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(side_effect=[None, "Intercom"]),
+        fetchrow=AsyncMock(
+            return_value={
+                "id": view_id,
+                "name": "Legacy vendor fallback",
+                "vendor_names": ["Intercom"],
+                "category": None,
+                "source": None,
+                "min_urgency": None,
+                "include_stale": True,
+                "named_accounts_only": False,
+                "changed_wedges_only": False,
+                "vendor_alert_threshold": None,
+                "account_alert_threshold": None,
+                "stale_days_threshold": None,
+                "alert_email_enabled": False,
+                "alert_delivery_frequency": "daily",
+                "next_alert_delivery_at": None,
+                "last_alert_delivery_at": None,
+                "last_alert_delivery_status": None,
+                "last_alert_delivery_summary": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.create_watchlist_view(
+        req=mod.WatchlistViewRequest(
+            name="Legacy vendor fallback",
+            vendor_name="  Intercom  ",
+            vendor_names=["   ", ""],
+        ),
+        user=user,
+    )
+
+    assert result["vendor_names"] == ["Intercom"]
+    assert pool.fetchval.await_args_list[1].args[2] == "Intercom"
+    assert pool.fetchrow.await_args.args[4] == ["Intercom"]
+
+
+@pytest.mark.asyncio
 async def test_create_watchlist_view_rejects_blank_name_without_db_touch(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -2154,6 +2206,78 @@ async def test_update_watchlist_view_rejects_blank_name_without_duplicate_lookup
     assert exc.value.detail == "Saved view name is required"
     assert pool.fetchrow.await_count == 1
     assert pool.fetchval.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_watchlist_view_falls_back_to_legacy_vendor_name_when_vendor_names_blank(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    view_id = uuid4()
+    account_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            side_effect=[
+                {
+                    "id": view_id,
+                    "name": "Changed wedges only",
+                    "vendor_names": ["Zendesk"],
+                    "category": None,
+                    "source": None,
+                    "min_urgency": None,
+                    "include_stale": True,
+                    "named_accounts_only": False,
+                    "changed_wedges_only": True,
+                    "vendor_alert_threshold": 6.5,
+                    "account_alert_threshold": 7.5,
+                    "stale_days_threshold": 5,
+                    "alert_email_enabled": True,
+                    "alert_delivery_frequency": "weekly",
+                    "next_alert_delivery_at": datetime(2026, 4, 12, 9, 0, tzinfo=timezone.utc),
+                },
+                {
+                    "id": view_id,
+                    "name": "Changed wedges only",
+                    "vendor_names": ["Intercom"],
+                    "category": None,
+                    "source": None,
+                    "min_urgency": None,
+                    "include_stale": True,
+                    "named_accounts_only": False,
+                    "changed_wedges_only": True,
+                    "vendor_alert_threshold": 6.5,
+                    "account_alert_threshold": 7.5,
+                    "stale_days_threshold": 5,
+                    "alert_email_enabled": True,
+                    "alert_delivery_frequency": "weekly",
+                    "next_alert_delivery_at": datetime(2026, 4, 12, 9, 0, tzinfo=timezone.utc),
+                    "last_alert_delivery_at": None,
+                    "last_alert_delivery_status": None,
+                    "last_alert_delivery_summary": None,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ]
+        ),
+        fetchval=AsyncMock(side_effect=[None, "Intercom"]),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.update_watchlist_view(
+        view_id=view_id,
+        req=mod.WatchlistViewRequest(
+            name="Changed wedges only",
+            vendor_name="  Intercom  ",
+            vendor_names=["   "],
+        ),
+        user=user,
+    )
+
+    assert result["vendor_names"] == ["Intercom"]
+    assert pool.fetchval.await_args_list[1].args[2] == "Intercom"
+    assert pool.fetchrow.await_args_list[1].args[4] == ["Intercom"]
 
 
 @pytest.mark.asyncio
