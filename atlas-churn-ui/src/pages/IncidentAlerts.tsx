@@ -1496,7 +1496,9 @@ export default function IncidentAlerts() {
                               {filteredDeliveries.length ? filteredDeliveries.map((delivery) => (
                                 <div key={delivery.id} className={`rounded-lg border px-3 py-3 text-sm ${deliveryTone(delivery.success)}`}>
                                   <div className="flex items-center justify-between gap-3">
-                                    <span className="font-medium">{delivery.report_title || delivery.event_type}</span>
+                                    <span className="font-medium">
+                                      {delivery.report_title || delivery.company_name || delivery.vendor_name || delivery.signal_type || delivery.event_type}
+                                    </span>
                                     <span className="text-xs">
                                       {delivery.success ? 'success' : `failed${delivery.status_code ? ` · ${delivery.status_code}` : ''}`}
                                     </span>

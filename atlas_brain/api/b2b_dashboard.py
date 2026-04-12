@@ -6442,6 +6442,12 @@ async def list_webhook_deliveries(
             tracked_vendor_cache=tracked_vendor_cache,
             signal_cache=signal_cache,
         )
+        signal_type = context.get("signal_type") or r["event_type"]
+        if r["event_type"] == "test":
+            vendor_name = None
+            company_name = None
+            signal_type = None
+
         deliveries.append({
             "id": str(r["id"]),
             "event_type": r["event_type"],
@@ -6454,7 +6460,7 @@ async def list_webhook_deliveries(
             "vendor_name": vendor_name,
             "company_name": company_name,
             "signal_id": signal_id,
-            "signal_type": context.get("signal_type") or r["event_type"],
+            "signal_type": signal_type,
             "review_id": resolved_review_id,
             "report_id": report_id or (report_context or {}).get("report_id"),
             "report_type": context.get("report_type") or (report_context or {}).get("report_type"),

@@ -7,7 +7,10 @@ import {
   fetchCompanySignalCandidateGroupSummary,
   fetchCompanySignalCandidateGroups,
   fetchCompanySignalReviewImpactSummary,
+  fetchWebhookDeliverySummary,
   listWebhooks,
+  listWebhookCrmPushLog,
+  listWebhookDeliveries,
   normalizeReportLibraryViewFilters,
   suppressCompanySignalCandidateGroup,
   suppressCompanySignalCandidateGroups,
@@ -79,6 +82,45 @@ describe('api client helpers', () => {
     const legacyDashboardPrefix = ['/api/v1', '/b2b', '/dashboard'].join('')
     expect(requestedUrl).toContain('/api/v1/b2b/tenant/webhooks')
     expect(requestedUrl).not.toContain(legacyDashboardPrefix)
+  })
+
+  it('uses tenant webhook activity routes with explicit filters', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ window_days: 30, active_subscriptions: 1, total_deliveries: 3, successful: 2, failed: 1, success_rate: 0.667, avg_success_duration_ms: 120, p95_success_duration_ms: 180, last_delivery_at: '2026-04-11T00:00:00Z' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ deliveries: [], count: 0 }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ pushes: [], count: 0 }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchWebhookDeliverySummary(30)
+    await listWebhookDeliveries('wh-1', {
+      success: false,
+      event_type: 'signal_update',
+      limit: 10,
+    })
+    await listWebhookCrmPushLog('wh-1', 5)
+
+    expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/tenant/webhooks/delivery-summary?days=30',
+    )
+    expect(String(fetchMock.mock.calls[1]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/tenant/webhooks/wh-1/deliveries?success=false&event_type=signal_update&limit=10',
+    )
+    expect(String(fetchMock.mock.calls[2]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/tenant/webhooks/wh-1/crm-push-log?limit=5',
+    )
   })
 
   it('uses the grouped review dashboard routes for queue summaries and actions', async () => {

@@ -650,6 +650,57 @@ async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus
 
 
 @pytest.mark.asyncio
+async def test_list_webhook_deliveries_hides_synthetic_test_vendor_context():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': '3df7f790-6afc-4e0f-b40e-a78f77e60dd2',
+                'event_type': 'test',
+                'payload': {
+                    'vendor': 'test_vendor',
+                    'data': {
+                        'company_name': 'Synthetic Account',
+                        'signal_type': 'manual_test',
+                    },
+                },
+                'status_code': 202,
+                'duration_ms': 120,
+                'attempt': 1,
+                'success': True,
+                'error': None,
+                'delivered_at': datetime(2026, 4, 11, 1, 0, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            '_resolve_webhook_activity_account_focus',
+            AsyncMock(return_value=None),
+        ):
+            result = await b2b_dashboard.list_webhook_deliveries(
+                '3df7f790-6afc-4e0f-b40e-a78f77e60dd2',
+                success=None,
+                event_type=None,
+                start_date=None,
+                end_date=None,
+                limit=50,
+                user=user,
+            )
+
+    assert result['count'] == 1
+    delivery = result['deliveries'][0]
+    assert delivery['event_type'] == 'test'
+    assert delivery['vendor_name'] is None
+    assert delivery['company_name'] is None
+    assert delivery['signal_type'] is None
+
+
+@pytest.mark.asyncio
 async def test_list_webhook_deliveries_prefers_persisted_activity_refs():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=1)
