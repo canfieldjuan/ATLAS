@@ -265,6 +265,78 @@ async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus
 
 
 @pytest.mark.asyncio
+async def test_list_webhook_deliveries_prefers_persisted_activity_refs():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': '71c27653-5df3-4d19-9b24-a1a15f61efbd',
+                'event_type': 'report_generated',
+                'payload': {
+                    'vendor': 'Payload Vendor',
+                    'data': {
+                        'report_id': '11111111-1111-4111-8111-111111111111',
+                    },
+                },
+                'signal_id': None,
+                'review_id': '33333333-3333-4333-8333-333333333334',
+                'report_id': '44444444-4444-4444-8444-444444444444',
+                'vendor_name': 'Acme Rival',
+                'company_name': 'Acme Bank',
+                'status_code': 202,
+                'duration_ms': 95,
+                'attempt': 1,
+                'success': True,
+                'error': None,
+                'delivered_at': datetime(2026, 4, 11, 4, 5, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            '_fetch_webhook_activity_report_context',
+            AsyncMock(return_value={
+                'report_id': '44444444-4444-4444-8444-444444444444',
+                'report_type': 'battle_card',
+                'vendor_name': 'Acme Rival',
+                'report_title': 'Acme Rival Battle Card',
+            }),
+        ) as fetch_report_context:
+            with patch.object(
+                b2b_dashboard,
+                '_resolve_webhook_activity_account_focus',
+                AsyncMock(return_value=None),
+            ) as resolve_focus:
+                result = await b2b_dashboard.list_webhook_deliveries(
+                    '71c27653-5df3-4d19-9b24-a1a15f61efbd',
+                    success=None,
+                    event_type=None,
+                    start_date=None,
+                    end_date=None,
+                    limit=50,
+                    user=user,
+                )
+
+    delivery = result['deliveries'][0]
+    assert delivery['vendor_name'] == 'Acme Rival'
+    assert delivery['company_name'] == 'Acme Bank'
+    assert delivery['review_id'] == '33333333-3333-4333-8333-333333333334'
+    assert delivery['report_id'] == '44444444-4444-4444-8444-444444444444'
+    assert delivery['report_type'] == 'battle_card'
+    assert delivery['report_title'] == 'Acme Rival Battle Card'
+    fetch_report_context.assert_awaited_once()
+    resolve_focus.assert_awaited_once()
+    _, kwargs = resolve_focus.await_args
+    assert kwargs['vendor_name'] == 'Acme Rival'
+    assert kwargs['company_name'] == 'Acme Bank'
+    assert kwargs['review_id'] == '33333333-3333-4333-8333-333333333334'
+
+
+@pytest.mark.asyncio
 async def test_list_crm_push_log_exposes_review_id_from_signal_context():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=1)
@@ -510,6 +582,45 @@ def test_build_report_generated_payload_formats_vendor_comparison_title():
         'status': 'published',
         'category_filter': 'Freshdesk',
     }
+
+
+@pytest.mark.asyncio
+async def test_log_delivery_attempt_persists_activity_refs():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
+
+    await webhook_dispatcher._log_delivery_attempt(
+        pool,
+        '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+        'report_generated',
+        {
+            'vendor': 'Acme Rival',
+            'data': {
+                'company_name': 'Acme Bank',
+                'report_id': '44444444-4444-4444-8444-444444444444',
+                'review_id': '33333333-3333-4333-8333-333333333334',
+            },
+        },
+        status_code=202,
+        response_body='ok',
+        duration_ms=85,
+        attempt=1,
+        success=True,
+        error_msg=None,
+    )
+
+    sql = pool.execute.call_args[0][0]
+    args = pool.execute.call_args[0][1:]
+    assert 'signal_id' in sql
+    assert 'review_id' in sql
+    assert 'report_id' in sql
+    assert 'vendor_name' in sql
+    assert args[1] == 'report_generated'
+    assert args[3] == '44444444-4444-4444-8444-444444444444'
+    assert args[4] == '33333333-3333-4333-8333-333333333334'
+    assert args[5] == '44444444-4444-4444-8444-444444444444'
+    assert args[6] == 'Acme Rival'
+    assert args[7] == 'Acme Bank'
 
 
 @pytest.mark.asyncio

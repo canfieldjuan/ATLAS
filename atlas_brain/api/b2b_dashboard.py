@@ -6169,7 +6169,9 @@ async def list_webhook_deliveries(
 
     rows = await pool.fetch(
         f"""
-        SELECT id, event_type, payload, status_code, duration_ms, attempt, success, error, delivered_at
+        SELECT id, event_type, payload, signal_id, review_id, report_id,
+               vendor_name, company_name, status_code, duration_ms,
+               attempt, success, error, delivered_at
         FROM b2b_webhook_delivery_log
         WHERE {where}
         ORDER BY delivered_at DESC
@@ -6185,24 +6187,31 @@ async def list_webhook_deliveries(
     deliveries = []
     for r in rows:
         context = _extract_webhook_activity_context(r.get("payload"))
-        signal_id = context.get("signal_id")
+        signal_id = _normalize_webhook_activity_uuid_text(r.get("signal_id")) or context.get("signal_id")
         signal_context = None
         if signal_id:
             signal_context = signal_cache.get(signal_id)
             if signal_context is None and signal_id not in signal_cache:
                 signal_context = await _fetch_company_signal_focus_context(pool, signal_id)
                 signal_cache[signal_id] = signal_context
+        report_id = _normalize_webhook_activity_uuid_text(r.get("report_id")) or context.get("report_id")
         report_context = await _fetch_webhook_activity_report_context(
             pool,
-            context.get("report_id"),
+            report_id,
             report_activity_cache,
         )
-        resolved_review_id = context.get("review_id") or (signal_context or {}).get("review_id")
+        resolved_review_id = (
+            _normalize_webhook_activity_uuid_text(r.get("review_id"))
+            or context.get("review_id")
+            or (signal_context or {}).get("review_id")
+        )
+        vendor_name = _optional_query_text(r.get("vendor_name")) or context.get("vendor_name") or (report_context or {}).get("vendor_name")
+        company_name = _optional_query_text(r.get("company_name")) or context.get("company_name") or (signal_context or {}).get("company_name")
         account_review_focus = await _resolve_webhook_activity_account_focus(
             pool,
             user,
-            vendor_name=context.get("vendor_name"),
-            company_name=context.get("company_name"),
+            vendor_name=vendor_name,
+            company_name=company_name,
             signal_id=signal_id,
             review_id=resolved_review_id,
             report_cache=report_cache,
@@ -6218,11 +6227,11 @@ async def list_webhook_deliveries(
             "success": r["success"],
             "error": r["error"],
             "delivered_at": r["delivered_at"].isoformat(),
-            "vendor_name": context.get("vendor_name") or (report_context or {}).get("vendor_name"),
-            "company_name": context.get("company_name") or (signal_context or {}).get("company_name"),
+            "vendor_name": vendor_name,
+            "company_name": company_name,
             "signal_type": context.get("signal_type") or r["event_type"],
             "review_id": resolved_review_id,
-            "report_id": context.get("report_id") or (report_context or {}).get("report_id"),
+            "report_id": report_id or (report_context or {}).get("report_id"),
             "report_type": context.get("report_type") or (report_context or {}).get("report_type"),
             "report_title": context.get("report_title") or (report_context or {}).get("report_title"),
             "account_review_focus": account_review_focus,

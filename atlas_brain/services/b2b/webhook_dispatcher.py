@@ -503,22 +503,17 @@ async def _deliver_single(
 
         # Log delivery attempt
         try:
-            await pool.execute(
-                """
-                INSERT INTO b2b_webhook_delivery_log
-                    (subscription_id, event_type, payload, status_code,
-                     response_body, duration_ms, attempt, success, error)
-                VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
-                """,
+            await _log_delivery_attempt(
+                pool,
                 sub["id"],
                 event_type,
-                json.dumps(envelope, default=str),
-                status_code,
-                response_body,
-                duration_ms,
-                attempt,
-                success,
-                error_msg,
+                envelope,
+                status_code=status_code,
+                response_body=response_body,
+                duration_ms=duration_ms,
+                attempt=attempt,
+                success=success,
+                error_msg=error_msg,
             )
         except Exception:
             logger.exception("Failed to log webhook delivery")
@@ -558,6 +553,66 @@ def _normalize_uuid_text(value: object) -> str | None:
         return None
 
 
+def _extract_delivery_activity_context(event_type: str, envelope: dict) -> dict[str, str | None]:
+    data = envelope.get("data", {})
+    if not isinstance(data, dict):
+        data = {}
+
+    signal_id_value = data.get("company_signal_id")
+    if signal_id_value is None:
+        signal_id_value = data.get("signal_id")
+    if signal_id_value is None and event_type == "report_generated":
+        signal_id_value = data.get("report_id")
+
+    return {
+        "vendor_name": str(envelope.get("vendor") or "").strip() or None,
+        "company_name": str(data.get("company_name") or data.get("company") or "").strip() or None,
+        "signal_id": _normalize_uuid_text(signal_id_value),
+        "review_id": _normalize_uuid_text(data.get("review_id")),
+        "report_id": _normalize_uuid_text(data.get("report_id")),
+    }
+
+
+async def _log_delivery_attempt(
+    pool,
+    subscription_id,
+    event_type: str,
+    envelope: dict,
+    *,
+    status_code: int | None,
+    response_body: str | None,
+    duration_ms: int | None,
+    attempt: int,
+    success: bool,
+    error_msg: str | None,
+) -> None:
+    context = _extract_delivery_activity_context(event_type, envelope)
+    await pool.execute(
+        """
+        INSERT INTO b2b_webhook_delivery_log
+            (subscription_id, event_type, payload, signal_id, review_id, report_id,
+             vendor_name, company_name, status_code, response_body, duration_ms,
+             attempt, success, error)
+        VALUES ($1, $2, $3::jsonb, $4::uuid, $5::uuid, $6::uuid,
+                $7, $8, $9, $10, $11, $12, $13, $14)
+        """,
+        subscription_id,
+        event_type,
+        json.dumps(envelope, default=str),
+        context["signal_id"],
+        context["review_id"],
+        context["report_id"],
+        context["vendor_name"],
+        context["company_name"],
+        status_code,
+        response_body,
+        duration_ms,
+        attempt,
+        success,
+        error_msg,
+    )
+
+
 async def _log_crm_push(
     pool,
     subscription_id,
@@ -569,8 +624,11 @@ async def _log_crm_push(
 ) -> None:
     """Log a successful CRM push to b2b_crm_push_log."""
     try:
-        vendor = envelope.get("vendor", "")
         data = envelope.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
+        activity_context = _extract_delivery_activity_context(event_type, envelope)
+
         # Try to extract CRM record ID from response body
         if not crm_record_id and response_body:
             try:
@@ -585,20 +643,13 @@ async def _log_crm_push(
             except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
 
-        signal_id_value = data.get("company_signal_id")
-        if signal_id_value is None:
-            signal_id_value = data.get("signal_id")
-        if signal_id_value is None and event_type == "report_generated":
-            signal_id_value = data.get("report_id")
-        signal_id = _normalize_uuid_text(signal_id_value)
-        review_id = _normalize_uuid_text(data.get("review_id"))
         if event_type == "high_intent_push":
             signal_type = "high_intent_push"
         elif event_type == "change_event":
             signal_type = "change_event"
         elif event_type == "report_generated":
             signal_type = "report_generated"
-        elif data.get("company_name") or data.get("company"):
+        elif activity_context["company_name"]:
             signal_type = "company_signal"
         else:
             signal_type = "churn_signal"
@@ -611,10 +662,10 @@ async def _log_crm_push(
             """,
             subscription_id,
             signal_type,
-            signal_id,
-            review_id,
-            vendor,
-            data.get("company_name") or data.get("company"),
+            activity_context["signal_id"],
+            activity_context["review_id"],
+            activity_context["vendor_name"] or "",
+            activity_context["company_name"],
             crm_record_id,
             "deal" if event_type in ("churn_alert", "signal_update", "high_intent_push") else "note",
         )
