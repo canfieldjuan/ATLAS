@@ -152,6 +152,13 @@ def _clean_required_text(value: Any, field_name: str) -> str:
     return text
 
 
+def _clean_required_watchlist_view_name(value: Any) -> str:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise HTTPException(status_code=422, detail="Saved view name is required")
+    return text
+
+
 def _company_signal_lookup_key(company_name: Any, vendor_name: Any) -> tuple[str, str] | None:
     company_key = normalize_company_name(str(company_name or "").strip())
     vendor_key = _normalize_vendor_name(vendor_name)
@@ -1431,19 +1438,19 @@ async def create_competitive_set(
     user: AuthUser = Depends(require_auth),
 ):
     _require_b2b_product(user)
-    pool = _pool_or_503()
     repo = get_competitive_set_repo()
-    requested_name = str(req.name or "").strip()
+    requested_name = _clean_required_text(req.name, "name")
     existing_name = await repo.get_by_name_for_account(
         _uuid.UUID(user.account_id),
         requested_name,
     )
     if existing_name:
         raise HTTPException(status_code=409, detail="Competitive set name already exists")
+    pool = _pool_or_503()
     payload = await _canonical_competitive_set_payload(
         pool,
         _uuid.UUID(user.account_id),
-        name=req.name,
+        name=requested_name,
         focal_vendor_name=req.focal_vendor_name,
         competitor_vendor_names=req.competitor_vendor_names,
         refresh_mode=req.refresh_mode,
@@ -1473,7 +1480,7 @@ async def update_competitive_set(
     existing = await repo.get_by_id_for_account(competitive_set_id, _uuid.UUID(user.account_id))
     if not existing:
         raise HTTPException(status_code=404, detail="Competitive set not found")
-    next_name = str(req.name).strip() if req.name is not None else existing.name
+    next_name = _clean_required_text(req.name, "name") if req.name is not None else existing.name
     existing_name = await repo.get_by_name_for_account(_uuid.UUID(user.account_id), next_name)
     if existing_name and existing_name.id != competitive_set_id:
         raise HTTPException(status_code=409, detail="Competitive set name already exists")
@@ -2158,11 +2165,9 @@ async def create_watchlist_view(
     user: AuthUser = Depends(require_auth),
 ):
     _require_b2b_product(user)
-    pool = _pool_or_503()
     account_id = _uuid.UUID(user.account_id)
-    name = str(req.name).strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="Saved view name is required")
+    name = _clean_required_watchlist_view_name(req.name)
+    pool = _pool_or_503()
     existing = await pool.fetchval(
         """
         SELECT 1
@@ -2250,9 +2255,7 @@ async def update_watchlist_view(
     )
     if not existing:
         raise HTTPException(status_code=404, detail="Saved view not found")
-    name = str(req.name).strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="Saved view name is required")
+    name = _clean_required_watchlist_view_name(req.name)
     duplicate = await pool.fetchval(
         """
         SELECT 1
@@ -3213,6 +3216,7 @@ async def list_tenant_high_intent(
 async def get_lead_detail(company: str, user: AuthUser = Depends(require_auth)):
     """Company drill-down: all reviews, signals, buying stage."""
     _require_b2b_product(user)
+    company_name = _clean_required_text(company, "company")
     pool = _pool_or_503()
     from ..autonomous.tasks._b2b_shared import read_review_details
 
@@ -3229,7 +3233,7 @@ async def get_lead_detail(company: str, user: AuthUser = Depends(require_auth)):
         pool,
         window_days=3650,
         scoped_vendors=scoped_vendors,
-        company=company.strip(),
+        company=company_name,
         recency_column="coalesce",
         limit=50,
     )
@@ -3257,7 +3261,7 @@ async def get_lead_detail(company: str, user: AuthUser = Depends(require_auth)):
     ]
 
     return {
-        "company": company.strip(),
+        "company": company_name,
         "reviews": reviews,
         "count": len(reviews),
     }

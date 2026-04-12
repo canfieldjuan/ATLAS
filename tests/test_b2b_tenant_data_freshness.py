@@ -1824,7 +1824,7 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
 
     result = await mod.create_watchlist_view(
         req=mod.WatchlistViewRequest(
-            name="Intercom named only",
+            name="  Intercom named only  ",
             vendor_names=["intercom"],
             category="Helpdesk",
             source="reddit",
@@ -1841,6 +1841,7 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
         user=user,
     )
 
+    assert result["name"] == "Intercom named only"
     assert result["vendor_name"] == "Intercom"
     assert result["include_stale"] is False
     assert result["named_accounts_only"] is True
@@ -1856,9 +1857,35 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
     insert_sql = pool.fetchrow.await_args.args[0]
     assert "INSERT INTO b2b_watchlist_views" in insert_sql
     assert "alert_email_enabled" in insert_sql
+    assert pool.fetchrow.await_args.args[3] == "Intercom named only"
     assert pool.fetchrow.await_args.args[14] is True
     assert pool.fetchrow.await_args.args[15] == "weekly"
     assert pool.fetchrow.await_args.args[16] is not None
+
+
+@pytest.mark.asyncio
+async def test_create_watchlist_view_rejects_blank_name_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(),
+        fetchrow=AsyncMock(),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.create_watchlist_view(
+            req=mod.WatchlistViewRequest(name="   "),
+            user=user,
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "Saved view name is required"
+    assert pool.fetchval.await_count == 0
+    assert pool.fetchrow.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -1922,11 +1949,12 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
 
     updated = await mod.update_watchlist_view(
         view_id=view_id,
-        req=mod.WatchlistViewRequest(name="Changed wedges only", changed_wedges_only=True),
+        req=mod.WatchlistViewRequest(name="  Changed wedges only  ", changed_wedges_only=True),
         user=user,
     )
     deleted = await mod.delete_watchlist_view(view_id=view_id, user=user)
 
+    assert updated["name"] == "Changed wedges only"
     assert updated["changed_wedges_only"] is True
     assert updated["vendor_alert_threshold"] == 6.5
     assert updated["account_alert_threshold"] == 7.5
@@ -1935,10 +1963,118 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
     assert updated["alert_delivery_frequency"] == "weekly"
     assert updated["next_alert_delivery_at"] == "2026-04-12 09:00:00+00:00"
     assert "UPDATE b2b_watchlist_views" in pool.fetchrow.await_args_list[1].args[0]
+    assert pool.fetchrow.await_args_list[1].args[3] == "Changed wedges only"
     assert pool.fetchrow.await_args_list[1].args[15] == "weekly"
     assert pool.fetchrow.await_args_list[1].args[16] == existing_next_delivery_at
     assert deleted == {"deleted": True, "watchlist_view_id": str(view_id)}
     assert "DELETE FROM b2b_watchlist_views" in pool.fetchrow.await_args_list[-1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_update_watchlist_view_rejects_blank_name_without_duplicate_lookup(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    view_id = uuid4()
+    account_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            return_value={
+                "id": view_id,
+                "name": "Changed wedges only",
+                "vendor_names": [],
+                "category": None,
+                "source": None,
+                "min_urgency": None,
+                "include_stale": True,
+                "named_accounts_only": False,
+                "changed_wedges_only": True,
+                "vendor_alert_threshold": 6.5,
+                "account_alert_threshold": 7.5,
+                "stale_days_threshold": 5,
+                "alert_email_enabled": True,
+                "alert_delivery_frequency": "weekly",
+                "next_alert_delivery_at": datetime(2026, 4, 12, 9, 0, tzinfo=timezone.utc),
+            }
+        ),
+        fetchval=AsyncMock(),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.update_watchlist_view(
+            view_id=view_id,
+            req=mod.WatchlistViewRequest(name="   "),
+            user=user,
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "Saved view name is required"
+    assert pool.fetchrow.await_count == 1
+    assert pool.fetchval.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_lead_detail_rejects_blank_company_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock())
+    read_mock = AsyncMock()
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(shared_mod, "read_review_details", read_mock)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.get_lead_detail("   ", user=user)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "company is required"
+    assert pool.fetch.await_count == 0
+    assert read_mock.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_lead_detail_trims_company_before_reader_call(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    account_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[]),
+    )
+    read_mock = AsyncMock(
+        return_value=[
+            {
+                "id": "r1",
+                "vendor_name": "Salesforce",
+                "product_category": "CRM",
+                "rating": 4.0,
+                "urgency_score": 8.5,
+                "pain_category": "support",
+                "intent_to_leave": True,
+                "decision_maker": "yes",
+                "role_level": "director",
+                "buying_stage": "active_evaluation",
+                "competitors_mentioned": ["HubSpot"],
+                "enriched_at": datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(shared_mod, "read_review_details", read_mock)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.get_lead_detail("  Acme Corp  ", user=user)
+
+    assert read_mock.await_args.kwargs["company"] == "Acme Corp"
+    assert result["company"] == "Acme Corp"
+    assert result["count"] == 1
 
 
 @pytest.mark.asyncio

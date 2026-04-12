@@ -131,6 +131,118 @@ async def test_load_vendor_category_map_prefers_profiles_before_scorecard_fallba
 
 
 @pytest.mark.asyncio
+async def test_create_competitive_set_rejects_blank_name_before_repo_lookup(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    repo = SimpleNamespace(
+        get_by_name_for_account=AsyncMock(),
+    )
+    canonical = AsyncMock()
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(uuid4()),
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+    monkeypatch.setattr(mod, "get_competitive_set_repo", lambda: repo)
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: object())
+    monkeypatch.setattr(mod, "_canonical_competitive_set_payload", canonical)
+
+    req = mod.CompetitiveSetRequest(
+        name="   ",
+        focal_vendor_name="Salesforce",
+        competitor_vendor_names=["HubSpot"],
+    )
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.create_competitive_set(req, user=user)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "name is required"
+    assert repo.get_by_name_for_account.await_count == 0
+    assert canonical.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_create_competitive_set_passes_trimmed_name_to_canonical_payload(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    repo = SimpleNamespace(
+        get_by_name_for_account=AsyncMock(return_value=None),
+        create=AsyncMock(return_value=_competitive_set(name="Sales Ops")),
+    )
+    canonical = AsyncMock(
+        return_value={
+            "name": "Sales Ops",
+            "focal_vendor_name": "Salesforce",
+            "competitor_vendor_names": ["HubSpot"],
+            "refresh_mode": "scheduled",
+            "refresh_interval_hours": 24,
+        }
+    )
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(uuid4()),
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+    monkeypatch.setattr(mod, "get_competitive_set_repo", lambda: repo)
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: object())
+    monkeypatch.setattr(mod, "_canonical_competitive_set_payload", canonical)
+
+    req = mod.CompetitiveSetRequest(
+        name="  Sales Ops  ",
+        focal_vendor_name="Salesforce",
+        competitor_vendor_names=["HubSpot"],
+    )
+
+    await mod.create_competitive_set(req, user=user)
+
+    assert canonical.await_args.kwargs["name"] == "Sales Ops"
+    assert repo.create.await_args.kwargs["name"] == "Sales Ops"
+
+
+@pytest.mark.asyncio
+async def test_update_competitive_set_rejects_blank_name_before_duplicate_lookup(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    current = _competitive_set(name="Sales Ops")
+    repo = SimpleNamespace(
+        get_by_id_for_account=AsyncMock(return_value=current),
+        get_by_name_for_account=AsyncMock(),
+    )
+    canonical = AsyncMock()
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(current.account_id),
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+    monkeypatch.setattr(mod, "get_competitive_set_repo", lambda: repo)
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: object())
+    monkeypatch.setattr(mod, "_canonical_competitive_set_payload", canonical)
+
+    req = mod.CompetitiveSetUpdateRequest(name="   ")
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.update_competitive_set(current.id, req, user=user)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "name is required"
+    assert repo.get_by_name_for_account.await_count == 0
+    assert canonical.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_create_competitive_set_trims_name_before_duplicate_lookup(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
