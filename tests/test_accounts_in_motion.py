@@ -1007,6 +1007,68 @@ class TestBuildVendorAggregate:
         assert "account_reasoning:insufficient" in agg["reasoning_contract_gaps"]
         assert "account_reasoning:suppressed" in agg["reasoning_contract_gaps"]
 
+    def test_sparse_account_reasoning_surfaces_preview_only(self):
+        from atlas_brain.autonomous.tasks._b2b_synthesis_reader import SynthesisView
+
+        view = SynthesisView(
+            "Salesforce",
+            {
+                "reasoning_contracts": {
+                    "schema_version": "v1",
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "pricing_shock",
+                            "confidence": "high",
+                            "summary": "Pricing pressure is escalating.",
+                            "data_gaps": [],
+                            "citations": [],
+                        },
+                    },
+                    "account_reasoning": {
+                        "confidence": "insufficient",
+                        "market_summary": (
+                            "Single account (Concentrix) in post-purchase stage with "
+                            "0.6 intent score provides limited directional signal."
+                        ),
+                        "total_accounts": {
+                            "value": 1,
+                            "source_id": "accounts:summary:total_accounts",
+                        },
+                        "top_accounts": [
+                            {
+                                "name": "Concentrix",
+                                "intent_score": 0.6,
+                                "source_id": "accounts:company:concentrix",
+                            },
+                        ],
+                    },
+                },
+            },
+            schema_version="v2",
+            as_of_date=date(2026, 4, 12),
+        )
+
+        agg = _build_vendor_aggregate(
+            "Salesforce",
+            [],
+            category="CRM",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+            synthesis_views={"Salesforce": view},
+        )
+
+        assert "account_reasoning" not in agg.get("reasoning_contracts", {})
+        assert "account_reasoning" not in agg
+        assert agg["account_reasoning_preview"]["top_accounts"][0]["name"] == "Concentrix"
+        assert agg["account_pressure_metrics"]["total_accounts"] == 1
+        assert agg["priority_account_names"] == ["Concentrix"]
+        assert agg["reasoning_section_disclaimers"]["account_reasoning"]
+        assert "account_reasoning:suppressed" in agg["reasoning_contract_gaps"]
+
     def test_empty_accounts(self):
         """Vendor with no accounts still builds a valid aggregate."""
         agg = _build_vendor_aggregate(

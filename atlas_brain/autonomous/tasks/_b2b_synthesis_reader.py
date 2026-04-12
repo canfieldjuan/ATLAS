@@ -99,6 +99,7 @@ _CONSUMER_REQUIRED_CONTRACTS = {
 _PACKET_SCHEMA_VERSION = "witness_packet_v1"
 
 _ACCOUNT_REASONING_PREVIEW_CONSUMERS = frozenset({
+    "accounts_in_motion",
     "vendor_briefing",
     "vendor_scorecard",
 })

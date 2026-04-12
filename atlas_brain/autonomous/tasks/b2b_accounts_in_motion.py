@@ -1073,6 +1073,27 @@ def _build_vendor_aggregate(
                     result["account_pressure_metrics"] = summary_metrics
                 if priority_names:
                     result["priority_account_names"] = priority_names
+            else:
+                account_preview = context.get("account_reasoning_preview")
+                if isinstance(account_preview, dict) and account_preview:
+                    preview_reasoning = account_preview.get("account_reasoning")
+                    if isinstance(preview_reasoning, dict) and preview_reasoning:
+                        result["account_reasoning_preview"] = preview_reasoning
+                        summary_text = str(
+                            account_preview.get("account_pressure_summary") or ""
+                        ).strip()
+                        summary_metrics = account_preview.get("account_pressure_metrics")
+                        priority_names = account_preview.get("priority_account_names")
+                        if summary_text:
+                            result["account_pressure_summary"] = summary_text
+                        if isinstance(summary_metrics, dict) and summary_metrics:
+                            result["account_pressure_metrics"] = dict(summary_metrics)
+                        if isinstance(priority_names, list) and priority_names:
+                            result["priority_account_names"] = [
+                                str(name).strip()
+                                for name in priority_names
+                                if str(name or "").strip()
+                            ]
             if isinstance(vendor_core, dict):
                 segment_playbook = vendor_core.get("segment_playbook") or {}
                 timing_intelligence = vendor_core.get("timing_intelligence") or {}
