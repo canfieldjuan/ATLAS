@@ -385,6 +385,16 @@ function formatCrmPushSummary(push: {
   return parts.join(' · ')
 }
 
+function formatAccountReviewTargetLabel(focus: AlertAccountReviewFocus | null | undefined) {
+  if (!focus) return null
+  const company = String(focus.company || '').trim()
+  if (!company) return null
+  const category = String(focus.category || '').trim()
+  return category
+    ? `Account review target: ${company} (${category})`
+    : `Account review target: ${company}`
+}
+
 function generateWebhookSecret() {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
   const bytes = new Uint8Array(24)
@@ -1197,6 +1207,11 @@ export default function IncidentAlerts() {
                           <div className="mt-1">
                             {formatFailureSummary(webhook)} · {formatTs(webhook.latest_failure_at)}
                           </div>
+                          {latestFailureContext.account_review_focus ? (
+                            <div className="mt-1 text-[11px] font-medium text-rose-100/90">
+                              {formatAccountReviewTargetLabel(latestFailureContext.account_review_focus)}
+                            </div>
+                          ) : null}
                           {renderActivityReferences(latestFailureReferences)}
                           {renderActivityDetailShortcuts(latestFailureContext, currentAlertsUrl)}
                           {renderActivityVendorShortcuts(latestFailureContext, currentAlertsUrl)}
@@ -1219,6 +1234,11 @@ export default function IncidentAlerts() {
                                 : formatTs(latestManualTest.testedAt)
                             })()}
                           </div>
+                          {latestManualTestContext?.account_review_focus ? (
+                            <div className="mt-1 text-[11px] font-medium text-current/90">
+                              {formatAccountReviewTargetLabel(latestManualTestContext.account_review_focus)}
+                            </div>
+                          ) : null}
                           {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
                           {latestManualTestContext ? renderActivityDetailShortcuts(latestManualTestContext, currentAlertsUrl) : null}
                           {latestManualTestContext ? renderActivityVendorShortcuts(latestManualTestContext, currentAlertsUrl) : null}
@@ -1230,6 +1250,11 @@ export default function IncidentAlerts() {
                             Latest CRM push {latestCrmPush.status === 'success' ? 'succeeded' : 'failed'}
                           </div>
                           <div className="mt-1">{formatCrmPushSummary(latestCrmPush)}</div>
+                          {latestCrmPush.account_review_focus ? (
+                            <div className="mt-1 text-[11px] font-medium text-current/90">
+                              {formatAccountReviewTargetLabel(latestCrmPush.account_review_focus)}
+                            </div>
+                          ) : null}
                           {renderActivityReferences(latestCrmPush)}
                           {renderActivityDetailShortcuts(latestCrmPush, currentAlertsUrl)}
                           {renderActivityVendorShortcuts(latestCrmPush, currentAlertsUrl)}

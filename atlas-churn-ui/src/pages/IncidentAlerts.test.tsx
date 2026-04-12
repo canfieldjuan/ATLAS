@@ -343,6 +343,7 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByText('Failure focus endpoint')).toBeInTheDocument()
+    expect(screen.getByText('Account review target: Acme Bank (Switch Risk)')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
       'href',
       '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor&back_to=%2Falerts',
@@ -404,6 +405,7 @@ describe('IncidentAlerts', () => {
 
     expect(await screen.findByText('Test focus endpoint')).toBeInTheDocument()
     expect(screen.getByText('Latest manual test failed')).toBeInTheDocument()
+    expect(screen.getByText('Account review target: Acme Bank (Budget Risk)')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
       'href',
       '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Budget+Risk&account_track_mode=competitor&back_to=%2Falerts',
@@ -462,6 +464,7 @@ describe('IncidentAlerts', () => {
     expect(await screen.findByText('CRM summary endpoint')).toBeInTheDocument()
     expect(screen.getByText('Latest CRM push failed')).toBeInTheDocument()
     expect(screen.getByText((text) => text.includes("company_signal") && text.includes("deal") && text.includes("deal-42"))).toBeInTheDocument()
+    expect(screen.getByText('Account review target: Acme Bank (Switch Risk)')).toBeInTheDocument()
     expect(screen.getByText('sig-crm')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Open Review' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Open Report' })).not.toBeInTheDocument()
