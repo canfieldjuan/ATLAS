@@ -152,10 +152,33 @@ function vendorDetailSharePath(vendorName: string, backTo: string | null): strin
   return `${path}?${params.toString()}`
 }
 
+const BACK_TARGET_RULES = [
+  { prefix: '/vendors/', label: 'Back to Vendor' },
+  { prefix: '/vendors', label: 'Back to Vendors' },
+  { prefix: '/watchlists', label: 'Back to Watchlists' },
+  { prefix: '/evidence', label: 'Back to Evidence' },
+  { prefix: '/reports/', label: 'Back to Report' },
+  { prefix: '/reports', label: 'Back to Reports' },
+  { prefix: '/opportunities', label: 'Back to Opportunities' },
+  { prefix: '/reviews/', label: 'Back to Review' },
+  { prefix: '/reviews', label: 'Back to Reviews' },
+  { prefix: '/alerts', label: 'Back to Alerts' },
+  { prefix: '/dashboard', label: 'Back to Dashboard' },
+  { prefix: '/affiliates', label: 'Back to Affiliates' },
+  { prefix: '/vendor-targets', label: 'Back to Vendor Targets' },
+  { prefix: '/blog-review', label: 'Back to Blog Review' },
+  { prefix: '/briefing-review', label: 'Back to Briefing Review' },
+  { prefix: '/campaign-review', label: 'Back to Campaign Review' },
+  { prefix: '/challengers', label: 'Back to Challengers' },
+  { prefix: '/prospects', label: 'Back to Prospects' },
+  { prefix: '/pipeline-review', label: 'Back to Pipeline Review' },
+  { prefix: '/predictor', label: 'Back to Predictor' },
+  { prefix: '/onboarding', label: 'Back to Onboarding' },
+] as const
+
 function normalizeBackTo(value: string | null | undefined): string | null {
   if (!value) return null
-  const allowedPrefixes = ['/vendors', '/watchlists', '/evidence', '/reports', '/opportunities', '/reviews', '/alerts']
-  const isAllowedPath = (candidate: string) => allowedPrefixes.some((prefix) => candidate.startsWith(prefix))
+  const isAllowedPath = (candidate: string) => BACK_TARGET_RULES.some((rule) => candidate.startsWith(rule.prefix))
   if (isAllowedPath(value)) return value
   try {
     const url = new URL(value, window.location.origin)
@@ -178,12 +201,7 @@ function backToLabel(backTo: string): string {
     }
     return 'Back to Watchlists'
   }
-  if (backTo.startsWith('/evidence')) return 'Back to Evidence'
-  if (backTo.startsWith('/reports')) return 'Back to Reports'
-  if (backTo.startsWith('/opportunities')) return 'Back to Opportunities'
-  if (backTo.startsWith('/reviews')) return 'Back to Review'
-  if (backTo.startsWith('/alerts')) return 'Back to Alerts'
-  return 'Back to Vendors'
+  return BACK_TARGET_RULES.find((rule) => backTo.startsWith(rule.prefix))?.label ?? 'Back to Vendors'
 }
 
 function upstreamWatchlistsPath(backTo: string | null): string | null {

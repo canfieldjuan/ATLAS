@@ -177,6 +177,96 @@ describe('VendorDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/alerts?webhook=wh-crm')
   })
 
+  it.each([
+    {
+      name: 'returns to dashboard when back_to points at dashboard',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fdashboard',
+      buttonName: 'Back to Dashboard',
+      expectedNavigate: '/dashboard',
+    },
+    {
+      name: 'returns to vendors when back_to points at the vendors list',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fvendors%3Fsearch%3DZendesk%26min_urgency%3D6',
+      buttonName: 'Back to Vendors',
+      expectedNavigate: '/vendors?search=Zendesk&min_urgency=6',
+    },
+    {
+      name: 'returns to affiliates when back_to points at affiliates',
+      initialEntry: '/vendors/Zendesk?back_to=%2Faffiliates%3Fvendor%3DZendesk%26min_urgency%3D7%26min_score%3D80%26dm_only%3Dtrue',
+      buttonName: 'Back to Affiliates',
+      expectedNavigate: '/affiliates?vendor=Zendesk&min_urgency=7&min_score=80&dm_only=true',
+    },
+    {
+      name: 'returns to vendor targets when back_to points at vendor targets',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fvendor-targets%3Fsearch%3DZendesk%26mode%3Dchallenger_intel',
+      buttonName: 'Back to Vendor Targets',
+      expectedNavigate: '/vendor-targets?search=Zendesk&mode=challenger_intel',
+    },
+    {
+      name: 'returns to briefing review when back_to points at briefing review',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fbriefing-review%3Fstatus%3Dsent%26vendor%3DZendesk',
+      buttonName: 'Back to Briefing Review',
+      expectedNavigate: '/briefing-review?status=sent&vendor=Zendesk',
+    },
+    {
+      name: 'returns to blog review when back_to points at blog review',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1',
+      buttonName: 'Back to Blog Review',
+      expectedNavigate: '/blog-review?status=published&draft=draft-1',
+    },
+    {
+      name: 'returns to campaign review when back_to points at campaign review',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fcampaign-review%3Fstatus%3Dsent%26company%3DAcme%2BCorp',
+      buttonName: 'Back to Campaign Review',
+      expectedNavigate: '/campaign-review?status=sent&company=Acme+Corp',
+    },
+    {
+      name: 'returns to challengers when back_to points at challengers',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fchallengers%3Fsearch%3DZendesk',
+      buttonName: 'Back to Challengers',
+      expectedNavigate: '/challengers?search=Zendesk',
+    },
+    {
+      name: 'returns to prospects when back_to points at prospects',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fprospects%3Fcompany%3DAcme%26status%3Dactive%26seniority%3Dvp',
+      buttonName: 'Back to Prospects',
+      expectedNavigate: '/prospects?company=Acme&status=active&seniority=vp',
+    },
+    {
+      name: 'returns to pipeline review when back_to points at pipeline review',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fpipeline-review%3Fqueue_vendor%3DZendesk',
+      buttonName: 'Back to Pipeline Review',
+      expectedNavigate: '/pipeline-review?queue_vendor=Zendesk',
+    },
+    {
+      name: 'returns to predictor when back_to points at predictor',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fpredictor%3Fvendor%3DZendesk%26company_size%3Dsmb%26industry%3Dfintech',
+      buttonName: 'Back to Predictor',
+      expectedNavigate: '/predictor?vendor=Zendesk&company_size=smb&industry=fintech',
+    },
+    {
+      name: 'returns to onboarding when back_to points at onboarding',
+      initialEntry: '/vendors/Zendesk?back_to=%2Fonboarding%3Fq%3DZendesk',
+      buttonName: 'Back to Onboarding',
+      expectedNavigate: '/onboarding?q=Zendesk',
+    },
+  ])('$name', async ({ initialEntry, buttonName, expectedNavigate }) => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: buttonName }))
+
+    expect(mockNavigate).toHaveBeenCalledWith(expectedNavigate)
+  })
+
   it('surfaces recent reports in the vendor workspace and keeps vendor back_to on drilldown', async () => {
     const user = userEvent.setup()
     api.fetchReports.mockResolvedValue({
