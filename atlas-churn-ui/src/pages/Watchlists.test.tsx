@@ -2196,6 +2196,26 @@ describe('Watchlists', () => {
     )
   })
 
+  it('copies the alerts api link with preserved watchlist context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Copy Alerts Link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/alerts?back_to=%2Fwatchlists%3Fview%3Dview-1`,
+      )
+    })
+    expect(await screen.findByText('Copied Alerts API link')).toBeInTheDocument()
+  })
+
   it('uses an in-app confirmation modal before deleting a saved view', async () => {
     const user = userEvent.setup()
     const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)

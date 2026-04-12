@@ -374,6 +374,10 @@ function watchlistAlertsPath(searchParams: URLSearchParams) {
   return `/alerts?${params.toString()}`
 }
 
+function watchlistAlertsUrl(searchParams: URLSearchParams) {
+  return `${window.location.origin}${watchlistAlertsPath(searchParams)}`
+}
+
 function watchlistVendorPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('back_to', watchlistPath(searchParams))
@@ -1699,6 +1703,17 @@ export default function Watchlists() {
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy current view link')
+    }
+  }
+
+  async function handleCopyAlertsLink() {
+    try {
+      await navigator.clipboard.writeText(watchlistAlertsUrl(searchParams))
+      setActionError(null)
+      setActionMessage('Copied Alerts API link')
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy Alerts API link')
     }
   }
 
@@ -3427,6 +3442,13 @@ export default function Watchlists() {
             >
               Alerts API
             </Link>
+            <button
+              className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
+              onClick={() => void handleCopyAlertsLink()}
+              type="button"
+            >
+              Copy Alerts Link
+            </button>
             <button
               className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
               onClick={handleEvaluateWatchlistAlerts}
