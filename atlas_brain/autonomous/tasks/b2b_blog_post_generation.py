@@ -511,16 +511,27 @@ def _reasoning_int(value: Any) -> int | None:
             return None
 
 
-def _blog_account_reasoning_stats(account_reasoning: dict[str, Any] | None) -> dict[str, Any]:
+def _blog_account_reasoning_stats(
+    account_reasoning: dict[str, Any] | None,
+    account_preview: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build deterministic account-pressure stats for blog blueprints."""
     if not isinstance(account_reasoning, dict):
-        return {}
+        account_reasoning = {}
+    if not isinstance(account_preview, dict):
+        account_preview = {}
     stats: dict[str, Any] = {}
     summary = str(account_reasoning.get("market_summary") or "").strip()
+    if not summary:
+        summary = str(account_preview.get("account_pressure_summary") or "").strip()
     if summary:
         stats["account_pressure_summary"] = summary
     for key in ("total_accounts", "high_intent_count", "active_eval_count"):
         value = _reasoning_int(account_reasoning.get(key))
+        if value is None:
+            preview_metrics = account_preview.get("account_pressure_metrics") or {}
+            if isinstance(preview_metrics, dict):
+                value = _reasoning_int(preview_metrics.get(key))
         if value is not None:
             stats[key] = value
     names: list[str] = []
@@ -530,6 +541,11 @@ def _blog_account_reasoning_stats(account_reasoning: dict[str, Any] | None) -> d
         name = str(item.get("name") or "").strip()
         if name and name not in names:
             names.append(name)
+    if not names:
+        for item in account_preview.get("priority_account_names") or []:
+            name = str(item or "").strip()
+            if name and name not in names:
+                names.append(name)
     if names:
         stats["priority_accounts"] = names[:3]
     return stats
@@ -5103,13 +5119,17 @@ async def _load_pool_layers_for_blog(
             primary = next(iter(synth), "")
     if primary and synth.get(primary):
         view = synth[primary]
-        contracts = view.materialized_contracts()
+        consumer_context = view.filtered_consumer_context("blog_reranker")
+        contracts = consumer_context.get("reasoning_contracts") or view.materialized_contracts()
         if contracts:
             data["synthesis_contracts"] = contracts
             data["synthesis_wedge"] = (
                 view.primary_wedge.value if view.primary_wedge else None
             )
             data["synthesis_wedge_label"] = view.wedge_label
+        account_preview = consumer_context.get("account_reasoning_preview") or {}
+        if isinstance(account_preview, dict) and account_preview:
+            data["account_reasoning_preview"] = copy.deepcopy(account_preview)
         # Phase 3 governance sections for blueprint context
         if view.why_they_stay:
             data["why_they_stay"] = view.why_they_stay
@@ -5124,13 +5144,20 @@ async def _load_pool_layers_for_blog(
     if vendor_a and vendor_b:
         view_b = synth.get(vendor_b)
         if view_b:
-            contracts_b = view_b.materialized_contracts()
+            consumer_context_b = view_b.filtered_consumer_context("blog_reranker")
+            contracts_b = (
+                consumer_context_b.get("reasoning_contracts")
+                or view_b.materialized_contracts()
+            )
             if contracts_b:
                 data["synthesis_contracts_b"] = contracts_b
                 data["synthesis_wedge_b"] = (
                     view_b.primary_wedge.value if view_b.primary_wedge else None
                 )
                 data["synthesis_wedge_label_b"] = view_b.wedge_label
+            account_preview_b = consumer_context_b.get("account_reasoning_preview") or {}
+            if isinstance(account_preview_b, dict) and account_preview_b:
+                data["account_reasoning_preview_b"] = copy.deepcopy(account_preview_b)
             if view_b.why_they_stay:
                 data["why_they_stay_b"] = view_b.why_they_stay
             if view_b.confidence_posture:
@@ -6530,6 +6557,7 @@ def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
     pool_temporal = data.get("pool_temporal") or {}
     pool_segment = data.get("pool_segment") or {}
     synth_contracts = data.get("synthesis_contracts") or {}
+    account_preview = data.get("account_reasoning_preview") or {}
     vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
     displacement_reasoning = synth_contracts.get("displacement_reasoning") or {}
     category_reasoning = synth_contracts.get("category_reasoning") or {}
@@ -6540,7 +6568,10 @@ def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
     contract_disp = _blog_migration_proof_stats(displacement_reasoning)
     contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
     contract_segment = _blog_segment_reasoning_stats(segment_playbook, timing_intelligence)
-    contract_account = _blog_account_reasoning_stats(account_reasoning)
+    contract_account = _blog_account_reasoning_stats(
+        account_reasoning,
+        account_preview,
+    )
     contract_category = _blog_category_reasoning_stats(category_reasoning)
 
     has_pool_context = bool(
@@ -6890,6 +6921,7 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
     profile = data.get("profile", {})
     market_regime = (data.get("category_overview", {}).get("cross_vendor_analysis") or {}).get("market_regime")
     synth_contracts = data.get("synthesis_contracts") or {}
+    account_preview = data.get("account_reasoning_preview") or {}
     vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
     displacement_reasoning = synth_contracts.get("displacement_reasoning") or {}
     category_reasoning = synth_contracts.get("category_reasoning") or {}
@@ -6900,7 +6932,10 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
     contract_segment = _blog_segment_reasoning_stats(segment_playbook, timing_intelligence)
     contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
     contract_category = _blog_category_reasoning_stats(category_reasoning)
-    contract_account = _blog_account_reasoning_stats(account_reasoning)
+    contract_account = _blog_account_reasoning_stats(
+        account_reasoning,
+        account_preview,
+    )
     if not market_regime:
         market_regime = contract_category.get("market_regime")
 
@@ -7114,6 +7149,7 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
     profile = data.get("profile", {})
     signals = data.get("signals", [])
     synth_contracts = data.get("synthesis_contracts") or {}
+    account_preview = data.get("account_reasoning_preview") or {}
     vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
     displacement_reasoning = synth_contracts.get("displacement_reasoning") or {}
     category_reasoning = synth_contracts.get("category_reasoning") or {}
@@ -7291,6 +7327,7 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
     signals = data.get("signals", [])
     competitor_profiles = data.get("competitor_profiles", [])
     synth_contracts = data.get("synthesis_contracts") or {}
+    account_preview = data.get("account_reasoning_preview") or {}
     vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
     category_reasoning = synth_contracts.get("category_reasoning") or {}
     account_reasoning = synth_contracts.get("account_reasoning") or {}
@@ -7298,7 +7335,10 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
     timing_intelligence = vendor_core.get("timing_intelligence") if isinstance(vendor_core, dict) else {}
     contract_segment = _blog_segment_reasoning_stats(segment_playbook, timing_intelligence)
     contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
-    contract_account = _blog_account_reasoning_stats(account_reasoning)
+    contract_account = _blog_account_reasoning_stats(
+        account_reasoning,
+        account_preview,
+    )
     contract_category = _blog_category_reasoning_stats(category_reasoning)
     quote_highlights = _blog_quote_highlights(
         data.get("quotes", []),

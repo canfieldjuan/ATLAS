@@ -1076,6 +1076,62 @@ def test_blueprint_vendor_deep_dive_promotes_reasoning_sections():
     assert {"segment_timing", "timing_signals", "account_pressure", "market_position", "reviewer_voice"} <= section_ids
 
 
+def test_blueprint_vendor_deep_dive_uses_sparse_account_preview():
+    blueprint = blog_mod._blueprint_vendor_deep_dive(
+        {
+            "vendor": "Jira",
+            "category": "Project Management",
+            "review_count": 42,
+            "profile_richness": 4,
+            "slug": "jira-deep-dive-2026-04",
+        },
+        {
+            "profile": {
+                "strengths": [{"area": "workflows"}],
+                "weaknesses": [{"area": "pricing"}],
+                "commonly_compared_to": ["Asana", "ClickUp"],
+            },
+            "signals": [
+                {"pain_category": "pricing", "avg_urgency": 7.2, "signal_count": 8, "feature_gaps": []},
+            ],
+            "quotes": [],
+            "competitor_profiles": [],
+            "synthesis_contracts": {
+                "vendor_core_reasoning": {
+                    "segment_playbook": {
+                        "priority_segments": [
+                            {"segment": "mid-market", "estimated_reach": 12, "best_opening_angle": "pricing at renewal"},
+                        ],
+                    },
+                },
+                "category_reasoning": {
+                    "market_regime": "replacement wave",
+                    "narrative": "Buyers are re-evaluating project management suites.",
+                },
+            },
+            "account_reasoning_preview": {
+                "preview_mode": "early_account_signal",
+                "disclaimer": "Early account signal only.",
+                "account_pressure_summary": "A small set of named accounts is showing early churn pressure.",
+                "account_pressure_metrics": {"total_accounts": 1},
+                "priority_account_names": ["Concentrix"],
+            },
+            "data_context": {},
+        },
+    )
+
+    account_pressure = _section_by_id(blueprint, "account_pressure")
+    verdict = _section_by_id(blueprint, "verdict")
+
+    assert account_pressure.key_stats["account_pressure_summary"] == (
+        "A small set of named accounts is showing early churn pressure."
+    )
+    assert account_pressure.key_stats["priority_accounts"] == ["Concentrix"]
+    assert verdict.key_stats["account_pressure_summary"] == (
+        "A small set of named accounts is showing early churn pressure."
+    )
+
+
 def test_blueprint_best_fit_guide_adds_tradeoff_and_voice_sections():
     blueprint = blog_mod._blueprint_best_fit_guide(
         {
@@ -1948,6 +2004,49 @@ def test_blueprint_vendor_alternative_uses_reasoning_contracts_for_market_contex
     assert verdict.key_stats["market_regime"] == "consolidating"
 
 
+def test_blueprint_vendor_alternative_uses_sparse_account_preview_when_suppressed():
+    blueprint = _blueprint_vendor_alternative(
+        {"vendor": "Zendesk", "category": "Helpdesk", "urgency": 7.2, "review_count": 42, "slug": "zendesk-alternatives"},
+        {
+            "profile": {"strengths": []},
+            "signals": [{"pain_category": "pricing", "avg_urgency": 7.1, "signal_count": 12, "feature_gaps": []}],
+            "partner": None,
+            "pool_displacement": [],
+            "pool_temporal": {},
+            "pool_segment": {},
+            "data_context": {},
+            "synthesis_contracts": {
+                "vendor_core_reasoning": {
+                    "segment_playbook": {
+                        "priority_segments": [{"segment": "mid-market finance teams", "estimated_reach": {"value": 18}}],
+                    },
+                },
+                "category_reasoning": {"market_regime": "consolidating", "winner": "Freshdesk"},
+            },
+            "account_reasoning_preview": {
+                "preview_mode": "early_account_signal",
+                "disclaimer": "Early account signal only.",
+                "account_pressure_summary": "Two named accounts are showing early evaluation pressure.",
+                "account_pressure_metrics": {"total_accounts": 2},
+                "priority_account_names": ["Acme Corp", "Globex"],
+            },
+            "synthesis_wedge": "price_squeeze",
+            "synthesis_wedge_label": "Price Squeeze",
+        },
+    )
+
+    market_context = _section_by_id(blueprint, "market_context")
+    verdict = _section_by_id(blueprint, "verdict")
+
+    assert market_context.key_stats["account_pressure_summary"] == (
+        "Two named accounts are showing early evaluation pressure."
+    )
+    assert market_context.key_stats["priority_accounts"] == ["Acme Corp", "Globex"]
+    assert verdict.key_stats["account_pressure_summary"] == (
+        "Two named accounts are showing early evaluation pressure."
+    )
+
+
 def test_blueprint_churn_report_uses_contract_sections_when_pool_slices_are_thin():
     blueprint = _blueprint_churn_report(
         {
@@ -2475,6 +2574,64 @@ async def test_load_pool_layers_for_blog_scopes_synthesis_query_to_requested_ven
     assert len(loaded_vendors) == 1
     assert "Zendesk" in loaded_vendors[0]
     assert data.get("synthesis_views") == {}
+
+
+@pytest.mark.asyncio
+async def test_load_pool_layers_for_blog_uses_filtered_contracts_and_preview(monkeypatch):
+    from datetime import date
+
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import SynthesisView
+
+    monkeypatch.setattr(
+        blog_mod,
+        "fetch_all_pool_layers",
+        AsyncMock(return_value={"Zendesk": {"segment": {}, "temporal": {}, "accounts": {}, "category": {}, "displacement": []}}),
+    )
+
+    view = SynthesisView(
+        "Zendesk",
+        {
+            "reasoning_contracts": {
+                "schema_version": "v2",
+                "vendor_core_reasoning": {
+                    "causal_narrative": {
+                        "primary_wedge": "price_squeeze",
+                        "confidence": "high",
+                    },
+                },
+                "account_reasoning": {
+                    "confidence": "insufficient",
+                    "market_summary": "A small set of named accounts is showing early evaluation pressure.",
+                    "total_accounts": {"value": 1, "source_id": "accounts:summary:total_accounts"},
+                    "top_accounts": [
+                        {"name": "Concentrix", "source_id": "accounts:company:concentrix"},
+                    ],
+                },
+            },
+        },
+        schema_version="v2",
+        as_of_date=date(2026, 4, 12),
+    )
+
+    async def _fake_load_views(pool, vendor_names, **kwargs):
+        return {"Zendesk": view}
+
+    from atlas_brain.autonomous.tasks import _b2b_synthesis_reader as reader_mod
+
+    monkeypatch.setattr(reader_mod, "load_best_reasoning_views", _fake_load_views)
+
+    pool = type("Pool", (), {"fetch": AsyncMock(return_value=[]), "fetchrow": AsyncMock(return_value=None)})()
+    data: dict = {}
+
+    await _load_pool_layers_for_blog(
+        pool,
+        "vendor_alternative",
+        {"vendor": "Zendesk", "category": "Helpdesk"},
+        data,
+    )
+
+    assert "account_reasoning" not in (data.get("synthesis_contracts") or {})
+    assert data["account_reasoning_preview"]["priority_account_names"] == ["Concentrix"]
 
 
 @pytest.mark.asyncio

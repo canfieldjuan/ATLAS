@@ -117,6 +117,39 @@ def _campaign_reasoning_view(vendor_name: str = "Asana"):
     return SynthesisView(vendor_name, raw, schema_version="v2", as_of_date=date(2026, 3, 30))
 
 
+def _campaign_sparse_account_preview_view(vendor_name: str = "Asana"):
+    from datetime import date
+
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import SynthesisView
+
+    raw = {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "medium",
+                    "summary": "Pricing pressure is clustering around renewal moments.",
+                },
+            },
+            "displacement_reasoning": {
+                "switch_triggers": [
+                    {"type": "deadline", "description": "Q2 renewal"},
+                ],
+            },
+            "account_reasoning": {
+                "confidence": "insufficient",
+                "market_summary": "A small set of named accounts is showing early churn pressure.",
+                "total_accounts": {"value": 1, "source_id": "accounts:summary:total_accounts"},
+                "top_accounts": [
+                    {"name": "Concentrix", "source_id": "accounts:company:concentrix"},
+                ],
+            },
+            "schema_version": "v2",
+        },
+    }
+    return SynthesisView(vendor_name, raw, schema_version="v2", as_of_date=date(2026, 3, 30))
+
+
 def test_briefing_context_from_data_parses_string_payload():
     briefing_data = json.dumps({
         "headline": "Retention pressure is visible this cycle.",
@@ -2237,6 +2270,22 @@ def test_reasoning_context_includes_phase3_fields():
     assert len(reasoning_ctx["switch_triggers"]) == 2
     assert reasoning_ctx["confidence_limits"] == ["thin enterprise sample"]
     assert reasoning_ctx["account_summary"] == "Active evaluation concentrated in mid-market ops teams."
+
+
+def test_campaign_account_summary_uses_sparse_preview_when_contract_suppressed():
+    view = _campaign_sparse_account_preview_view("Salesforce")
+
+    consumer_context = view.filtered_consumer_context("campaign")
+    account_summary = mod._campaign_account_summary_from_consumer_context(
+        consumer_context,
+    )
+
+    assert account_summary["account_summary"] == (
+        "A small set of named accounts is showing early churn pressure."
+    )
+    assert account_summary["account_summary_source"] == "account_reasoning_preview"
+    assert account_summary["priority_account_names"] == ["Concentrix"]
+    assert "Early account signal only" in account_summary["account_summary_disclaimer"]
 
 
 def test_challenger_ctx_includes_incumbent_reasoning():

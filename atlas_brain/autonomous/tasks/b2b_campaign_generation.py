@@ -811,6 +811,47 @@ def _briefing_context_from_data(briefing_data: Any) -> dict[str, Any]:
     return context
 
 
+def _campaign_account_summary_from_consumer_context(
+    consumer_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(consumer_context, dict):
+        return {}
+
+    contracts = consumer_context.get("reasoning_contracts") or {}
+    if isinstance(contracts, dict):
+        account_reasoning = contracts.get("account_reasoning") or {}
+        if isinstance(account_reasoning, dict):
+            summary = str(account_reasoning.get("market_summary") or "").strip()
+            if summary:
+                return {
+                    "account_summary": summary,
+                    "account_summary_source": "account_reasoning",
+                }
+
+    preview = consumer_context.get("account_reasoning_preview") or {}
+    if not isinstance(preview, dict):
+        return {}
+
+    summary = str(preview.get("account_pressure_summary") or "").strip()
+    if not summary:
+        return {}
+
+    payload = {
+        "account_summary": summary,
+        "account_summary_source": "account_reasoning_preview",
+    }
+    disclaimer = str(preview.get("disclaimer") or "").strip()
+    if disclaimer:
+        payload["account_summary_disclaimer"] = disclaimer
+
+    priority_names = preview.get("priority_account_names") or []
+    if isinstance(priority_names, list):
+        cleaned = [str(item or "").strip() for item in priority_names if str(item or "").strip()]
+        if cleaned:
+            payload["priority_account_names"] = cleaned[:3]
+    return payload
+
+
 _CAMPAIGN_WORD_RE = re.compile(r"[a-z0-9]+")
 _COMPARISON_TOPIC_TYPES = {
     "vendor_showdown",
@@ -2500,12 +2541,14 @@ async def _generate_vendor_campaigns(
             cp = vendor_reasoning.confidence_posture
             if cp and cp.get("limits"):
                 reasoning_ctx["confidence_limits"] = cp["limits"]
-            # Account reasoning summary
-            acct = vendor_reasoning.contract("account_reasoning")
-            if acct and acct.get("market_summary"):
-                reasoning_ctx["account_summary"] = acct["market_summary"]
+            consumer_context = vendor_reasoning.filtered_consumer_context("campaign")
+            account_summary = _campaign_account_summary_from_consumer_context(
+                consumer_context,
+            )
+            if account_summary:
+                reasoning_ctx.update(account_summary)
             atom_context = _campaign_reasoning_atom_context(
-                vendor_reasoning.filtered_consumer_context("campaign"),
+                consumer_context,
             )
             if atom_context:
                 reasoning_ctx["atom_context"] = atom_context

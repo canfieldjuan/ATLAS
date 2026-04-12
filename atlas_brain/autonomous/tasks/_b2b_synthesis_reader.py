@@ -100,6 +100,8 @@ _PACKET_SCHEMA_VERSION = "witness_packet_v1"
 
 _ACCOUNT_REASONING_PREVIEW_CONSUMERS = frozenset({
     "accounts_in_motion",
+    "blog_reranker",
+    "campaign",
     "challenger_brief",
     "vendor_briefing",
     "vendor_scorecard",
