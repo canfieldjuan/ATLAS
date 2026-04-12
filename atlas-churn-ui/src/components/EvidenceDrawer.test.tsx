@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import EvidenceDrawer from './EvidenceDrawer'
@@ -15,6 +15,7 @@ vi.mock('../api/client', () => api)
 
 describe('EvidenceDrawer', () => {
   beforeEach(() => {
+    cleanup()
     vi.clearAllMocks()
     api.fetchWitness.mockResolvedValue({
       witness: {
@@ -81,6 +82,25 @@ describe('EvidenceDrawer', () => {
     })
 
     expect(await screen.findByText('Remove pin')).toBeInTheDocument()
+  })
+
+  it('surfaces annotation mutation failures inline', async () => {
+    const user = userEvent.setup()
+    api.setAnnotation.mockRejectedValueOnce(new Error('annotation service unavailable'))
+
+    render(
+      <EvidenceDrawer
+        vendorName="Salesforce"
+        witnessId="w1"
+        open
+        onClose={() => {}}
+      />,
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Pin' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('annotation service unavailable')
+    expect(screen.queryByText('Remove pin')).not.toBeInTheDocument()
   })
 
   it('uses an in-app confirmation modal before removing an annotation', async () => {

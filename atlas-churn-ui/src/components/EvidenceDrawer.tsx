@@ -209,6 +209,7 @@ export default function EvidenceDrawer({
   const [annotation, setAnnotationState] = useState<EvidenceAnnotation | null>(null)
   const [matchedAccountReviewPath, setMatchedAccountReviewPath] = useState<string | null>(null)
   const [annotating, setAnnotating] = useState(false)
+  const [annotationActionError, setAnnotationActionError] = useState<string | null>(null)
   const [pendingRemoveAnnotation, setPendingRemoveAnnotation] = useState(false)
   const [removeAnnotationError, setRemoveAnnotationError] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -219,6 +220,7 @@ export default function EvidenceDrawer({
     setError('')
     setAnnotationState(null)
     setMatchedAccountReviewPath(null)
+    setAnnotationActionError(null)
     setPendingRemoveAnnotation(false)
     setRemoveAnnotationError(null)
     Promise.all([
@@ -269,6 +271,7 @@ export default function EvidenceDrawer({
   async function handleAnnotate(type: 'pin' | 'flag' | 'suppress') {
     if (!witnessId || !vendorName) return
     setAnnotating(true)
+    setAnnotationActionError(null)
     try {
       const result = await setAnnotation({
         witness_id: witnessId,
@@ -276,14 +279,15 @@ export default function EvidenceDrawer({
         annotation_type: type,
       })
       setAnnotationState(result)
-    } catch {
-      // keep current state
+    } catch (err) {
+      setAnnotationActionError(err instanceof Error ? err.message : 'Failed to update annotation')
     } finally {
       setAnnotating(false)
     }
   }
 
   function requestRemoveAnnotation() {
+    setAnnotationActionError(null)
     setPendingRemoveAnnotation(true)
     setRemoveAnnotationError(null)
   }
@@ -295,6 +299,7 @@ export default function EvidenceDrawer({
     try {
       await removeAnnotations({ witness_ids: [witnessId] })
       setAnnotationState(null)
+      setAnnotationActionError(null)
       setPendingRemoveAnnotation(false)
     } catch (err) {
       setRemoveAnnotationError(err instanceof Error ? err.message : 'Failed to remove annotation')
@@ -411,6 +416,11 @@ export default function EvidenceDrawer({
               )}
             </div>
           )}
+          {annotationActionError ? (
+            <div role="alert" className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+              {annotationActionError}
+            </div>
+          ) : null}
         </div>
 
         {loading && (
