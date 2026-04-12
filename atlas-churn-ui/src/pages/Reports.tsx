@@ -151,18 +151,32 @@ function reportDetailLocation(reportId: string, backTo: string) {
   }
 }
 
+const REPORT_EXTERNAL_BACK_TARGET_RULES = [
+  { prefix: '/vendors/', label: 'Back to Vendor' },
+  { prefix: '/vendors', label: 'Back to Vendors' },
+  { prefix: '/watchlists', label: 'Back to Watchlists' },
+  { prefix: '/reviews/', label: 'Back to Review' },
+  { prefix: '/reviews', label: 'Back to Reviews' },
+  { prefix: '/evidence', label: 'Back to Evidence' },
+  { prefix: '/alerts', label: 'Back to Alerts' },
+  { prefix: '/opportunities', label: 'Back to Opportunities' },
+  { prefix: '/dashboard', label: 'Back to Dashboard' },
+  { prefix: '/affiliates', label: 'Back to Affiliates' },
+  { prefix: '/vendor-targets', label: 'Back to Vendor Targets' },
+  { prefix: '/blog-review', label: 'Back to Blog Review' },
+  { prefix: '/briefing-review', label: 'Back to Briefing Review' },
+  { prefix: '/campaign-review', label: 'Back to Campaign Review' },
+  { prefix: '/prospects', label: 'Back to Prospects' },
+  { prefix: '/challengers', label: 'Back to Challengers' },
+  { prefix: '/pipeline-review', label: 'Back to Pipeline Review' },
+  { prefix: '/predictor', label: 'Back to Predictor' },
+  { prefix: '/report', label: 'Back to Report' },
+] as const
+
 function reportExternalBackTarget(searchParams: URLSearchParams) {
   const value = searchParams.get('back_to')
   if (!value) return null
-  if (
-    value.startsWith('/vendors/')
-    || value.startsWith('/watchlists')
-    || value.startsWith('/reviews')
-    || value.startsWith('/evidence')
-    || value.startsWith('/alerts')
-    || value.startsWith('/opportunities')
-  ) return value
-  return null
+  return REPORT_EXTERNAL_BACK_TARGET_RULES.some((rule) => value.startsWith(rule.prefix)) ? value : null
 }
 
 const REPORT_BACK_TARGET_KEYS = [
@@ -352,26 +366,16 @@ export default function Reports() {
     () => `${location.pathname}${location.search}`,
     [location.pathname, location.search],
   )
-  const backButtonLabel = reportsBackTarget.startsWith('/vendors/')
-    ? 'Back to Vendor'
-    : reportsBackTarget.startsWith('/watchlists')
-      ? (() => {
-          try {
-            const url = new URL(reportsBackTarget, window.location.origin)
-            return url.searchParams.get('account_company')?.trim() ? 'Back to Account Review' : 'Back to Watchlists'
-          } catch {
-            return 'Back to Watchlists'
-          }
-        })()
-      : reportsBackTarget.startsWith('/reviews')
-        ? 'Back to Review'
-        : reportsBackTarget.startsWith('/evidence')
-          ? 'Back to Evidence'
-          : reportsBackTarget.startsWith('/alerts')
-            ? 'Back to Alerts'
-            : reportsBackTarget.startsWith('/opportunities')
-              ? 'Back to Opportunities'
-      : 'Back to Library'
+  const backButtonLabel = reportsBackTarget.startsWith('/watchlists')
+    ? (() => {
+        try {
+          const url = new URL(reportsBackTarget, window.location.origin)
+          return url.searchParams.get('account_company')?.trim() ? 'Back to Account Review' : 'Back to Watchlists'
+        } catch {
+          return 'Back to Watchlists'
+        }
+      })()
+    : REPORT_EXTERNAL_BACK_TARGET_RULES.find((rule) => reportsBackTarget.startsWith(rule.prefix))?.label ?? 'Back to Library'
 
   useEffect(() => {
     const composer = searchParams.get('composer')

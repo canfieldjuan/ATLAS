@@ -70,8 +70,31 @@ function opportunitiesPath(vendorName: string, backTo: string) {
 
 // Shared specialized and structured report rendering is imported for this page.
 
+const REPORT_DETAIL_BACK_TARGET_RULES = [
+  { prefix: '/vendors/', label: 'Back to Vendor' },
+  { prefix: '/vendors', label: 'Back to Vendors' },
+  { prefix: '/watchlists', label: 'Back to Watchlists' },
+  { prefix: '/alerts', label: 'Back to Alerts' },
+  { prefix: '/reviews/', label: 'Back to Review' },
+  { prefix: '/reviews', label: 'Back to Reviews' },
+  { prefix: '/evidence', label: 'Back to Evidence' },
+  { prefix: '/opportunities', label: 'Back to Opportunities' },
+  { prefix: '/dashboard', label: 'Back to Dashboard' },
+  { prefix: '/affiliates', label: 'Back to Affiliates' },
+  { prefix: '/vendor-targets', label: 'Back to Vendor Targets' },
+  { prefix: '/blog-review', label: 'Back to Blog Review' },
+  { prefix: '/briefing-review', label: 'Back to Briefing Review' },
+  { prefix: '/campaign-review', label: 'Back to Campaign Review' },
+  { prefix: '/prospects', label: 'Back to Prospects' },
+  { prefix: '/challengers', label: 'Back to Challengers' },
+  { prefix: '/pipeline-review', label: 'Back to Pipeline Review' },
+  { prefix: '/predictor', label: 'Back to Predictor' },
+  { prefix: '/reports/', label: 'Back to Report' },
+  { prefix: '/reports', label: 'Back to Reports' },
+  { prefix: '/report', label: 'Back to Report' },
+] as const
+
 function backToLabel(value: string) {
-  if (value.startsWith('/vendors/')) return 'Back to Vendor'
   if (value.startsWith('/watchlists')) {
     try {
       const url = new URL(value, window.location.origin)
@@ -81,11 +104,7 @@ function backToLabel(value: string) {
     }
     return 'Back to Watchlists'
   }
-  if (value.startsWith('/alerts')) return 'Back to Alerts'
-  if (value.startsWith('/reviews')) return 'Back to Review'
-  if (value.startsWith('/evidence')) return 'Back to Evidence'
-  if (value.startsWith('/opportunities')) return 'Back to Opportunities'
-  return 'Back to Reports'
+  return REPORT_DETAIL_BACK_TARGET_RULES.find((rule) => value.startsWith(rule.prefix))?.label ?? 'Back to Reports'
 }
 
 function upstreamWatchlistsPath(value: string | null): string | null {
@@ -179,30 +198,17 @@ export default function ReportDetail() {
   const subscriptionState = subscriptionStateOverride ?? baseSubscriptionState
   const reportScopeLabel = report.report_subscription?.scope_label
     ?? `${report.report_type.replace(/_/g, ' ')} - ${report.vendor_filter ?? 'all'}`
+  const isAllowedReportDetailBackTarget = (candidate: string) => (
+    REPORT_DETAIL_BACK_TARGET_RULES.some((rule) => candidate.startsWith(rule.prefix))
+  )
   const stateBackTo = typeof location.state === 'object' && location.state && 'backTo' in location.state
     && typeof (location.state as { backTo?: unknown }).backTo === 'string'
-    && (
-      (location.state as { backTo: string }).backTo.startsWith('/reports')
-      || (location.state as { backTo: string }).backTo.startsWith('/vendors/')
-      || (location.state as { backTo: string }).backTo.startsWith('/watchlists')
-      || (location.state as { backTo: string }).backTo.startsWith('/reviews')
-      || (location.state as { backTo: string }).backTo.startsWith('/evidence')
-      || (location.state as { backTo: string }).backTo.startsWith('/alerts')
-      || (location.state as { backTo: string }).backTo.startsWith('/opportunities')
-    )
+    && isAllowedReportDetailBackTarget((location.state as { backTo: string }).backTo)
     ? (location.state as { backTo: string }).backTo
     : null
   const queryBackTo = (() => {
     const value = searchParams.get('back_to')
-    return value && (
-      value.startsWith('/reports')
-      || value.startsWith('/vendors/')
-      || value.startsWith('/watchlists')
-      || value.startsWith('/reviews')
-      || value.startsWith('/evidence')
-      || value.startsWith('/alerts')
-      || value.startsWith('/opportunities')
-    ) ? value : null
+    return value && isAllowedReportDetailBackTarget(value) ? value : null
   })()
   const backToReports = stateBackTo ?? queryBackTo ?? '/reports'
   const backButtonLabel = backToLabel(backToReports)

@@ -429,6 +429,151 @@ describe('ReportDetail', () => {
     expect(router.state.location.search).toBe('?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1')
   })
 
+
+  it.each([
+    {
+      name: 'returns to dashboard when back_to targets the dashboard',
+      initialEntry: '/reports/report-1?back_to=%2Fdashboard',
+      routePath: '/dashboard',
+      targetId: 'dashboard-route',
+      targetText: 'Dashboard route',
+      buttonName: 'Back to Dashboard',
+      expectedPath: '/dashboard',
+      expectedSearch: '',
+    },
+    {
+      name: 'returns to vendors when back_to targets the vendors list',
+      initialEntry: '/reports/report-1?back_to=%2Fvendors%3Fsearch%3DZendesk%26min_urgency%3D6',
+      routePath: '/vendors',
+      targetId: 'vendors-route',
+      targetText: 'Vendors route',
+      buttonName: 'Back to Vendors',
+      expectedPath: '/vendors',
+      expectedSearch: '?search=Zendesk&min_urgency=6',
+    },
+    {
+      name: 'returns to affiliates when back_to targets affiliates',
+      initialEntry: '/reports/report-1?back_to=%2Faffiliates%3Fvendor%3DZendesk%26min_urgency%3D7%26min_score%3D80%26dm_only%3Dtrue',
+      routePath: '/affiliates',
+      targetId: 'affiliates-route',
+      targetText: 'Affiliates route',
+      buttonName: 'Back to Affiliates',
+      expectedPath: '/affiliates',
+      expectedSearch: '?vendor=Zendesk&min_urgency=7&min_score=80&dm_only=true',
+    },
+    {
+      name: 'returns to vendor targets when back_to targets vendor targets',
+      initialEntry: '/reports/report-1?back_to=%2Fvendor-targets%3Fsearch%3DZendesk%26mode%3Dchallenger_intel',
+      routePath: '/vendor-targets',
+      targetId: 'vendor-targets-route',
+      targetText: 'Vendor targets route',
+      buttonName: 'Back to Vendor Targets',
+      expectedPath: '/vendor-targets',
+      expectedSearch: '?search=Zendesk&mode=challenger_intel',
+    },
+    {
+      name: 'returns to briefing review when back_to targets briefing review',
+      initialEntry: '/reports/report-1?back_to=%2Fbriefing-review%3Fstatus%3Dsent%26vendor%3DZendesk',
+      routePath: '/briefing-review',
+      targetId: 'briefing-review-route',
+      targetText: 'Briefing review route',
+      buttonName: 'Back to Briefing Review',
+      expectedPath: '/briefing-review',
+      expectedSearch: '?status=sent&vendor=Zendesk',
+    },
+    {
+      name: 'returns to blog review when back_to targets blog review',
+      initialEntry: '/reports/report-1?back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1',
+      routePath: '/blog-review',
+      targetId: 'blog-review-route',
+      targetText: 'Blog review route',
+      buttonName: 'Back to Blog Review',
+      expectedPath: '/blog-review',
+      expectedSearch: '?status=published&draft=draft-1',
+    },
+    {
+      name: 'returns to campaign review when back_to targets campaign review',
+      initialEntry: '/reports/report-1?back_to=%2Fcampaign-review%3Fstatus%3Dsent%26company%3DAcme%2BCorp',
+      routePath: '/campaign-review',
+      targetId: 'campaign-review-route',
+      targetText: 'Campaign review route',
+      buttonName: 'Back to Campaign Review',
+      expectedPath: '/campaign-review',
+      expectedSearch: '?status=sent&company=Acme+Corp',
+    },
+    {
+      name: 'returns to challengers when back_to targets challengers',
+      initialEntry: '/reports/report-1?back_to=%2Fchallengers%3Fsearch%3DZendesk',
+      routePath: '/challengers',
+      targetId: 'challengers-route',
+      targetText: 'Challengers route',
+      buttonName: 'Back to Challengers',
+      expectedPath: '/challengers',
+      expectedSearch: '?search=Zendesk',
+    },
+    {
+      name: 'returns to prospects when back_to targets prospects',
+      initialEntry: '/reports/report-1?back_to=%2Fprospects%3Fcompany%3DAcme%26status%3Dactive%26seniority%3Dvp',
+      routePath: '/prospects',
+      targetId: 'prospects-route',
+      targetText: 'Prospects route',
+      buttonName: 'Back to Prospects',
+      expectedPath: '/prospects',
+      expectedSearch: '?company=Acme&status=active&seniority=vp',
+    },
+    {
+      name: 'returns to pipeline review when back_to targets pipeline review',
+      initialEntry: '/reports/report-1?back_to=%2Fpipeline-review%3Fqueue_vendor%3DZendesk',
+      routePath: '/pipeline-review',
+      targetId: 'pipeline-review-route',
+      targetText: 'Pipeline review route',
+      buttonName: 'Back to Pipeline Review',
+      expectedPath: '/pipeline-review',
+      expectedSearch: '?queue_vendor=Zendesk',
+    },
+    {
+      name: 'returns to predictor when back_to targets predictor',
+      initialEntry: '/reports/report-1?back_to=%2Fpredictor%3Fvendor%3DZendesk%26company_size%3Dsmb%26industry%3Dfintech',
+      routePath: '/predictor',
+      targetId: 'predictor-route',
+      targetText: 'Predictor route',
+      buttonName: 'Back to Predictor',
+      expectedPath: '/predictor',
+      expectedSearch: '?vendor=Zendesk&company_size=smb&industry=fintech',
+    },
+    {
+      name: 'returns to the public report when back_to targets the public report surface',
+      initialEntry: '/reports/report-1?back_to=%2Freport%3Fvendor%3DZendesk%26ref%3Dtest-token%26mode%3Dview',
+      routePath: '/report',
+      targetId: 'public-report-route',
+      targetText: 'Public report route',
+      buttonName: 'Back to Report',
+      expectedPath: '/report',
+      expectedSearch: '?vendor=Zendesk&ref=test-token&mode=view',
+    },
+  ])('$name', async ({ initialEntry, routePath, targetId, targetText, buttonName, expectedPath, expectedSearch }) => {
+    const router = createMemoryRouter(
+      [
+        { path: routePath, element: <div data-testid={targetId}>{targetText}</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [initialEntry],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    fireEvent.click(screen.getByRole('button', { name: buttonName }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId(targetId)).toBeInTheDocument()
+    })
+    expect(router.state.location.pathname).toBe(expectedPath)
+    expect(router.state.location.search).toBe(expectedSearch)
+  })
+
   it('shows vendor workspace, evidence, and opportunity shortcuts for the report vendor', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports/:id', element: <ReportDetail /> }],
