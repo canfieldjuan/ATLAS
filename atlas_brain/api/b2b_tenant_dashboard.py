@@ -14,7 +14,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Param
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from ..auth.dependencies import AuthUser, require_auth, require_b2b_plan
 from ..autonomous.tasks.b2b_campaign_generation import (
@@ -993,6 +993,53 @@ class PushToCrmOpportunity(BaseModel):
     company_country: str | None = None
     revenue_range: str | None = None
     alternatives: list[str] | None = None
+
+    @field_validator(
+        "company",
+        "vendor",
+        mode="before",
+    )
+    @classmethod
+    def _trim_required_text(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("value is required")
+        return text
+
+    @field_validator(
+        "pain",
+        "role_type",
+        "buying_stage",
+        "contract_end",
+        "decision_timeline",
+        "competitor_context",
+        "primary_quote",
+        "trust_tier",
+        "source",
+        "review_id",
+        "industry",
+        "company_size",
+        "company_domain",
+        "company_country",
+        "revenue_range",
+        mode="before",
+    )
+    @classmethod
+    def _trim_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("alternatives", mode="before")
+    @classmethod
+    def _trim_alternatives(cls, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            return value
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned or None
 
 
 class PushToCrmBody(BaseModel):

@@ -956,6 +956,132 @@ def test_push_to_crm_omits_company_signal_id_without_canonical_match(monkeypatch
     assert log_push.await_count == 1
 
 
+def test_push_to_crm_rejects_blank_company_and_vendor_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    def fail_get_db_pool():
+        raise AssertionError("DB pool should not be acquired for blank push-to-crm fields")
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", fail_get_db_pool)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/tenant/push-to-crm",
+            json={
+                "opportunities": [
+                    {
+                        "company": "   ",
+                        "vendor": "   ",
+                        "urgency": 8.5,
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 422
+
+
+def test_push_to_crm_trims_payload_fields_before_lookup_and_delivery(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    signal_id = uuid4()
+
+    class Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *args):
+            if "FROM b2b_webhook_subscriptions" in query:
+                return [
+                    {
+                        "id": "sub-1",
+                        "url": "https://example.com/webhook",
+                        "secret": "secret",
+                        "account_id": _auth_user().account_id,
+                        "channel": "crm_hubspot",
+                        "auth_header": None,
+                        "event_types": ["high_intent_push"],
+                    }
+                ]
+            if "FROM b2b_company_signals" in query:
+                assert args[0] == ["acme"]
+                assert args[1] == ["salesforce"]
+                return [
+                    {
+                        "company_name": "Acme",
+                        "vendor_name": "Salesforce",
+                        "id": signal_id,
+                    }
+                ]
+            raise AssertionError(f"Unexpected query: {query}")
+
+    captured: dict[str, object] = {}
+    log_push = AsyncMock()
+
+    async def fake_deliver(pool, sub, event_type, envelope, payload_bytes, cfg):
+        await log_push(pool, sub["id"], event_type, envelope)
+        return True
+
+    def fake_format_for_channel(channel, envelope):
+        captured["channel"] = channel
+        captured["envelope"] = envelope
+        return b"{}"
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._format_for_channel",
+        fake_format_for_channel,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._deliver_single",
+        fake_deliver,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._log_crm_push",
+        log_push,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/tenant/push-to-crm",
+            json={
+                "opportunities": [
+                    {
+                        "company": "  Acme  ",
+                        "vendor": "  Salesforce  ",
+                        "urgency": 8.5,
+                        "pain": "  pricing  ",
+                        "competitor_context": "  HubSpot  ",
+                        "primary_quote": "  We need better renewal controls.  ",
+                        "trust_tier": "  high  ",
+                        "source": "  reddit  ",
+                        "review_id": "  review-1  ",
+                        "alternatives": ["  HubSpot  ", "   ", "  Close  "],
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["pushed"] == 1
+    assert response.json()["failed"] == []
+    envelope = captured["envelope"]
+    assert isinstance(envelope, dict)
+    assert envelope["vendor"] == "Salesforce"
+    assert envelope["data"]["company_name"] == "Acme"
+    assert envelope["data"]["pain"] == "pricing"
+    assert envelope["data"]["competitor_context"] == "HubSpot"
+    assert envelope["data"]["primary_quote"] == "We need better renewal controls."
+    assert envelope["data"]["trust_tier"] == "high"
+    assert envelope["data"]["source"] == "reddit"
+    assert envelope["data"]["review_id"] == "review-1"
+    assert envelope["data"]["alternatives"] == ["HubSpot", "Close"]
+    assert envelope["data"]["company_signal_id"] == str(signal_id)
+
+
 def test_push_to_crm_skips_payloads_above_size_limit(monkeypatch):
     app = FastAPI()
     app.include_router(tenant_dashboard_api.router)
