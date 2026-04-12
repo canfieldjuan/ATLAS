@@ -14478,18 +14478,47 @@ async def read_company_signal_review_impact_summary(
             "overdue_pending_reviews": int(totals.get("overdue_pending_reviews") or 0),
         }
 
+    def _queue_snapshot_cache_key(filters: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
+        return tuple(sorted((str(key), value) for key, value in filters.items()))
+
+    async def _resolve_queue_snapshot(filters: Mapping[str, Any]) -> dict[str, Any] | None:
+        if not filters:
+            return None
+        key = _queue_snapshot_cache_key(filters)
+        if key not in queue_snapshot_cache:
+            queue_snapshot_cache[key] = _build_trend_recommendation_queue_snapshot(
+                await _read_company_signal_candidate_group_totals(
+                    pool,
+                    window_days=window_days,
+                    vendor_name=filters.get("vendor_name"),
+                    source_name=filters.get("source_name"),
+                    scoped_vendors=scoped_vendors,
+                    candidate_bucket=filters.get("candidate_bucket"),
+                    review_status=filters.get("review_status"),
+                    canonical_gap_reason=filters.get("canonical_gap_reason"),
+                    review_priority_band=filters.get("review_priority_band"),
+                    review_priority_reason=filters.get("review_priority_reason"),
+                )
+            )
+        return queue_snapshot_cache[key]
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     daily_trends = [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows]
     trend_comparison = _build_trend_comparison(daily_trends)
     raw_trend_alerts = _build_trend_alerts(trend_comparison)
-    trend_alerts = [
-        {
-            **dict(alert),
-            "impact_filters": _build_trend_recommendation_filters({}, alert),
-            "queue_filters": _build_trend_alert_queue_filters(alert),
-        }
-        for alert in raw_trend_alerts
-    ]
+    queue_snapshot_cache: dict[tuple[tuple[str, Any], ...], dict[str, Any] | None] = {}
+    trend_alerts = []
+    for alert in raw_trend_alerts:
+        impact_filters = _build_trend_recommendation_filters({}, alert)
+        queue_filters = _build_trend_alert_queue_filters(alert)
+        trend_alerts.append(
+            {
+                **dict(alert),
+                "impact_filters": impact_filters,
+                "queue_filters": queue_filters,
+                "queue_snapshot": await _resolve_queue_snapshot(queue_filters),
+            }
+        )
     trend_focus = _build_trend_focus(trend_comparison, trend_alerts)
     trend_focus = {
         **dict(trend_focus),
@@ -14507,41 +14536,8 @@ async def read_company_signal_review_impact_summary(
     trend_recommendation = _build_trend_recommendation(trend_comparison, trend_focus, trend_alerts)
     trend_recommendation_filters = _build_trend_recommendation_filters(trend_recommendation, trend_focus)
     trend_recommendation_queue_filters = _build_trend_recommendation_queue_filters(trend_recommendation, trend_focus)
-    trend_recommendation_queue_snapshot = None
-    if trend_recommendation_queue_filters:
-        trend_recommendation_queue_snapshot = _build_trend_recommendation_queue_snapshot(
-            await _read_company_signal_candidate_group_totals(
-                pool,
-                window_days=window_days,
-                vendor_name=trend_recommendation_queue_filters.get("vendor_name"),
-                source_name=trend_recommendation_queue_filters.get("source_name"),
-                scoped_vendors=scoped_vendors,
-                candidate_bucket=trend_recommendation_queue_filters.get("candidate_bucket"),
-                review_status=trend_recommendation_queue_filters.get("review_status"),
-                canonical_gap_reason=trend_recommendation_queue_filters.get("canonical_gap_reason"),
-                review_priority_band=trend_recommendation_queue_filters.get("review_priority_band"),
-                review_priority_reason=trend_recommendation_queue_filters.get("review_priority_reason"),
-            )
-        )
-    if trend_focus.get("queue_filters") == trend_recommendation_queue_filters:
-        trend_focus["queue_snapshot"] = trend_recommendation_queue_snapshot
-    elif trend_focus.get("queue_filters"):
-        trend_focus["queue_snapshot"] = _build_trend_recommendation_queue_snapshot(
-            await _read_company_signal_candidate_group_totals(
-                pool,
-                window_days=window_days,
-                vendor_name=trend_focus["queue_filters"].get("vendor_name"),
-                source_name=trend_focus["queue_filters"].get("source_name"),
-                scoped_vendors=scoped_vendors,
-                candidate_bucket=trend_focus["queue_filters"].get("candidate_bucket"),
-                review_status=trend_focus["queue_filters"].get("review_status"),
-                canonical_gap_reason=trend_focus["queue_filters"].get("canonical_gap_reason"),
-                review_priority_band=trend_focus["queue_filters"].get("review_priority_band"),
-                review_priority_reason=trend_focus["queue_filters"].get("review_priority_reason"),
-            )
-        )
-    else:
-        trend_focus["queue_snapshot"] = None
+    trend_recommendation_queue_snapshot = await _resolve_queue_snapshot(trend_recommendation_queue_filters)
+    trend_focus["queue_snapshot"] = await _resolve_queue_snapshot(trend_focus.get("queue_filters") or {})
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
