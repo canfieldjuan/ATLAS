@@ -1635,6 +1635,484 @@ async def test_bulk_suppress_company_signal_candidate_groups_retracts_and_rebuil
 
 
 @pytest.mark.asyncio
+async def test_dispatch_company_signal_update_webhooks_shapes_material_updates():
+    pool = MagicMock()
+    dispatch = AsyncMock(return_value=2)
+    with patch(
+        "atlas_brain.services.b2b.webhook_dispatcher.dispatch_webhooks_multi",
+        new=dispatch,
+    ):
+        delivered = await b2b_dashboard._dispatch_company_signal_update_webhooks(
+            pool,
+            [
+                {
+                    "vendor_name": "Zendesk",
+                    "company_name": "Acme Corp",
+                    "company_signal_id": "11111111-1111-1111-1111-111111111111",
+                    "company_signal_action": "created",
+                    "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "review_scope": "candidate",
+                    "review_action": "approved",
+                    "candidate_source": "reddit",
+                },
+                {
+                    "vendor_name": "Zendesk",
+                    "company_name": "Acme Corp",
+                    "company_signal_action": "none",
+                },
+                {
+                    "vendor_name": "HubSpot",
+                    "company_name": "Beta Corp",
+                    "retracted_company_signal_id": "22222222-2222-2222-2222-222222222222",
+                    "company_signal_action": "deleted",
+                    "review_scope": "bulk_group",
+                    "review_action": "suppressed",
+                },
+            ],
+        )
+
+    assert delivered == 2
+    dispatch.assert_awaited_once_with(
+        pool,
+        "signal_update",
+        [
+            (
+                "Zendesk",
+                {
+                    "signal_type": "company_signal",
+                    "company_name": "Acme Corp",
+                    "company_signal_id": "11111111-1111-1111-1111-111111111111",
+                    "company_signal_action": "created",
+                    "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "review_scope": "candidate",
+                    "review_action": "approved",
+                    "source": "reddit",
+                },
+            ),
+            (
+                "HubSpot",
+                {
+                    "signal_type": "company_signal",
+                    "company_name": "Beta Corp",
+                    "company_signal_id": "22222222-2222-2222-2222-222222222222",
+                    "company_signal_action": "deleted",
+                    "review_scope": "bulk_group",
+                    "review_action": "suppressed",
+                },
+            ),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_approve_company_signal_candidate_dispatches_signal_update_webhook():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
+    pool.fetchval = AsyncMock(return_value=None)
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "company_name": "Acme Corp",
+                "company_name_raw": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "source": "reddit",
+                "urgency_score": 8.2,
+                "pain_category": "pricing",
+                "buyer_role": "vp",
+                "decision_maker": True,
+                "seat_count": 120,
+                "contract_end": "2026-07-01",
+                "buying_stage": "evaluation",
+                "confidence_score": 0.26,
+                "review_status": "pending",
+            },
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "company_name": "acme corp",
+                "vendor_name": "Zendesk",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            },
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "review_status": "approved",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 0, tzinfo=timezone.utc),
+                "reviewed_by": "api:user-1",
+                "review_notes": "looks good",
+            },
+        ]
+    )
+    body = b2b_dashboard.CompanySignalCandidateReviewBody(notes="looks good", trigger_rebuild=False)
+    webhook_mock = AsyncMock(return_value=1)
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "_dispatch_company_signal_update_webhooks",
+                new=webhook_mock,
+            ):
+                await b2b_dashboard.approve_company_signal_candidate(
+                    "11111111-1111-1111-1111-111111111111",
+                    body,
+                    MagicMock(user_id="user-1"),
+                )
+
+    webhook_mock.assert_awaited_once_with(
+        pool,
+        [
+            {
+                "vendor_name": "Zendesk",
+                "company_name": "acme corp",
+                "company_signal_id": "22222222-2222-2222-2222-222222222222",
+                "company_signal_action": "created",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "review_scope": "candidate",
+                "review_action": "approved",
+                "candidate_source": "reddit",
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_suppress_company_signal_candidate_group_dispatches_signal_update_webhook():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "company_name": "acme",
+                "display_company_name": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "review_count": 4,
+                "max_urgency_score": 8.4,
+                "corroborated_confidence_score": 0.66,
+                "representative_review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "representative_source": "reddit",
+                "representative_pain_category": "pricing",
+                "representative_buyer_role": "vp",
+                "representative_decision_maker": True,
+                "representative_seat_count": 120,
+                "representative_contract_end": "2026-07-01",
+                "representative_buying_stage": "evaluation",
+                "review_status": "pending",
+            },
+            {
+                "id": "44444444-4444-4444-4444-444444444444",
+                "company_name": "acme",
+                "vendor_name": "Zendesk",
+            },
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "review_status": "suppressed",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 15, tzinfo=timezone.utc),
+                "reviewed_by": "analyst",
+                "review_notes": "noise cluster",
+            },
+        ]
+    )
+    body = b2b_dashboard.CompanySignalCandidateReviewBody(notes="noise cluster", trigger_rebuild=False)
+    webhook_mock = AsyncMock(return_value=1)
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "_dispatch_company_signal_update_webhooks",
+                new=webhook_mock,
+            ):
+                await b2b_dashboard.suppress_company_signal_candidate_group(
+                    "33333333-3333-3333-3333-333333333333",
+                    body,
+                    None,
+                )
+
+    webhook_mock.assert_awaited_once_with(
+        pool,
+        [
+            {
+                "vendor_name": "Zendesk",
+                "company_name": "acme",
+                "company_signal_id": "44444444-4444-4444-4444-444444444444",
+                "company_signal_action": "deleted",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "review_scope": "group",
+                "review_action": "suppressed",
+                "candidate_source": "reddit",
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_bulk_approve_company_signal_candidate_groups_dispatches_signal_update_webhooks():
+    pool = MagicMock()
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value=None)
+    conn.fetchval = AsyncMock(side_effect=[None, None])
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "company_name": "acme",
+                "display_company_name": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "review_count": 4,
+                "max_urgency_score": 8.4,
+                "corroborated_confidence_score": 0.66,
+                "representative_review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "representative_source": "reddit",
+                "representative_pain_category": "pricing",
+                "representative_buyer_role": "vp",
+                "representative_decision_maker": True,
+                "representative_seat_count": 120,
+                "representative_contract_end": "2026-07-01",
+                "representative_buying_stage": "evaluation",
+                "review_status": "pending",
+            },
+            {
+                "id": "44444444-4444-4444-4444-444444444444",
+                "company_name": "beta",
+                "display_company_name": "Beta Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "review_count": 3,
+                "max_urgency_score": 7.8,
+                "corroborated_confidence_score": 0.62,
+                "representative_review_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "representative_source": "g2",
+                "representative_pain_category": "support",
+                "representative_buyer_role": "director",
+                "representative_decision_maker": False,
+                "representative_seat_count": 85,
+                "representative_contract_end": "2026-10-01",
+                "representative_buying_stage": "consideration",
+                "review_status": "pending",
+            },
+            {
+                "id": "55555555-5555-5555-5555-555555555555",
+                "company_name": "acme",
+                "vendor_name": "Zendesk",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            },
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "review_status": "approved",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 20, tzinfo=timezone.utc),
+                "reviewed_by": "api:user-1",
+                "review_notes": "bulk approve",
+            },
+            {
+                "id": "66666666-6666-6666-6666-666666666666",
+                "company_name": "beta",
+                "vendor_name": "Zendesk",
+                "review_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            },
+            {
+                "id": "44444444-4444-4444-4444-444444444444",
+                "review_status": "approved",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 21, tzinfo=timezone.utc),
+                "reviewed_by": "api:user-1",
+                "review_notes": "bulk approve",
+            },
+        ]
+    )
+    pool.transaction = MagicMock(return_value=_transaction_context(conn))
+    body = b2b_dashboard.BulkCompanySignalCandidateGroupReviewBody(
+        group_ids=[
+            "33333333-3333-3333-3333-333333333333",
+            "44444444-4444-4444-4444-444444444444",
+        ],
+        notes="bulk approve",
+        trigger_rebuild=False,
+    )
+    webhook_mock = AsyncMock(return_value=2)
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "_dispatch_company_signal_update_webhooks",
+                new=webhook_mock,
+            ):
+                await b2b_dashboard.approve_company_signal_candidate_groups(
+                    body,
+                    MagicMock(user_id="user-1"),
+                )
+
+    webhook_mock.assert_awaited_once_with(
+        pool,
+        [
+            {
+                "vendor_name": "Zendesk",
+                "company_name": "acme",
+                "company_signal_id": "55555555-5555-5555-5555-555555555555",
+                "company_signal_action": "created",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "review_scope": "bulk_group",
+                "review_action": "approved",
+                "candidate_source": "reddit",
+            },
+            {
+                "vendor_name": "Zendesk",
+                "company_name": "beta",
+                "company_signal_id": "66666666-6666-6666-6666-666666666666",
+                "company_signal_action": "created",
+                "review_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "review_scope": "bulk_group",
+                "review_action": "approved",
+                "candidate_source": "g2",
+            },
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_bulk_suppress_company_signal_candidate_groups_dispatches_signal_update_webhooks():
+    pool = MagicMock()
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value=None)
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "company_name": "acme",
+                "display_company_name": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "review_count": 4,
+                "max_urgency_score": 8.4,
+                "corroborated_confidence_score": 0.66,
+                "representative_review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "representative_source": "reddit",
+                "representative_pain_category": "pricing",
+                "representative_buyer_role": "vp",
+                "representative_decision_maker": True,
+                "representative_seat_count": 120,
+                "representative_contract_end": "2026-07-01",
+                "representative_buying_stage": "evaluation",
+                "review_status": "approved",
+            },
+            {
+                "id": "44444444-4444-4444-4444-444444444444",
+                "company_name": "beta",
+                "display_company_name": "Beta Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "review_count": 3,
+                "max_urgency_score": 7.8,
+                "corroborated_confidence_score": 0.62,
+                "representative_review_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "representative_source": "g2",
+                "representative_pain_category": "support",
+                "representative_buyer_role": "director",
+                "representative_decision_maker": False,
+                "representative_seat_count": 85,
+                "representative_contract_end": "2026-10-01",
+                "representative_buying_stage": "consideration",
+                "review_status": "approved",
+            },
+            {
+                "id": "55555555-5555-5555-5555-555555555555",
+                "company_name": "acme",
+                "vendor_name": "Zendesk",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            },
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "review_status": "suppressed",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 22, tzinfo=timezone.utc),
+                "reviewed_by": "api:user-1",
+                "review_notes": "bulk suppress",
+            },
+            {
+                "id": "66666666-6666-6666-6666-666666666666",
+                "company_name": "beta",
+                "vendor_name": "Zendesk",
+                "review_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            },
+            {
+                "id": "44444444-4444-4444-4444-444444444444",
+                "review_status": "suppressed",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 23, tzinfo=timezone.utc),
+                "reviewed_by": "api:user-1",
+                "review_notes": "bulk suppress",
+            },
+        ]
+    )
+    pool.transaction = MagicMock(return_value=_transaction_context(conn))
+    body = b2b_dashboard.BulkCompanySignalCandidateGroupReviewBody(
+        group_ids=[
+            "33333333-3333-3333-3333-333333333333",
+            "44444444-4444-4444-4444-444444444444",
+        ],
+        notes="bulk suppress",
+        trigger_rebuild=False,
+    )
+    webhook_mock = AsyncMock(return_value=2)
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "_dispatch_company_signal_update_webhooks",
+                new=webhook_mock,
+            ):
+                await b2b_dashboard.suppress_company_signal_candidate_groups(
+                    body,
+                    MagicMock(user_id="user-1"),
+                )
+
+    webhook_mock.assert_awaited_once_with(
+        pool,
+        [
+            {
+                "vendor_name": "Zendesk",
+                "company_name": "acme",
+                "company_signal_id": "55555555-5555-5555-5555-555555555555",
+                "company_signal_action": "deleted",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "review_scope": "bulk_group",
+                "review_action": "suppressed",
+                "candidate_source": "reddit",
+            },
+            {
+                "vendor_name": "Zendesk",
+                "company_name": "beta",
+                "company_signal_id": "66666666-6666-6666-6666-666666666666",
+                "company_signal_action": "deleted",
+                "review_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "review_scope": "bulk_group",
+                "review_action": "suppressed",
+                "candidate_source": "g2",
+            },
+        ],
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_report_handles_null_battle_card_quality():
     pool = MagicMock()
     pool.fetchrow = AsyncMock(

@@ -520,7 +520,7 @@ async def _upsert_company_signal(
             source = COALESCE(EXCLUDED.source, b2b_company_signals.source),
             confidence_score = GREATEST(b2b_company_signals.confidence_score, EXCLUDED.confidence_score),
             last_seen_at = EXCLUDED.last_seen_at
-        RETURNING id, company_name, vendor_name
+        RETURNING id, company_name, vendor_name, review_id
         """,
         company_name,
         vendor_name,
@@ -553,7 +553,7 @@ async def _delete_company_signal(
         DELETE FROM b2b_company_signals
         WHERE company_name = $1
           AND vendor_name = $2
-        RETURNING id, company_name, vendor_name
+        RETURNING id, company_name, vendor_name, review_id
         """,
         company_name,
         vendor_name,
@@ -778,6 +778,65 @@ async def _record_company_signal_review_event(
             vendor_name,
             company_name,
         )
+
+
+def _build_company_signal_update_webhook_event(
+    update: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    vendor_name = _optional_query_text(update.get("vendor_name"))
+    company_name = _optional_query_text(update.get("company_name"))
+    company_signal_id = (
+        _optional_query_text(update.get("company_signal_id"))
+        or _optional_query_text(update.get("retracted_company_signal_id"))
+    )
+    company_signal_action = _optional_query_text(update.get("company_signal_action")) or "none"
+    if not vendor_name or not company_name or not company_signal_id or company_signal_action == "none":
+        return None
+
+    payload = {
+        "signal_type": "company_signal",
+        "company_name": company_name,
+        "company_signal_id": company_signal_id,
+        "company_signal_action": company_signal_action,
+    }
+    review_id = (
+        _optional_query_text(update.get("review_id"))
+        or _optional_query_text(update.get("representative_review_id"))
+    )
+    if review_id:
+        payload["review_id"] = review_id
+    review_scope = _optional_query_text(update.get("review_scope"))
+    if review_scope:
+        payload["review_scope"] = review_scope
+    review_action = _optional_query_text(update.get("review_action"))
+    if review_action:
+        payload["review_action"] = review_action
+    candidate_source = _optional_query_text(update.get("candidate_source"))
+    if candidate_source:
+        payload["source"] = candidate_source
+    return vendor_name, payload
+
+
+async def _dispatch_company_signal_update_webhooks(
+    pool,
+    updates: list[Mapping[str, Any]],
+) -> int:
+    events: list[tuple[str, dict[str, Any]]] = []
+    for update in updates:
+        event = _build_company_signal_update_webhook_event(update)
+        if event is not None:
+            events.append(event)
+
+    if not events:
+        return 0
+
+    try:
+        from ..services.b2b.webhook_dispatcher import dispatch_webhooks_multi
+
+        return await dispatch_webhooks_multi(pool, "signal_update", events)
+    except Exception:
+        logger.exception("Failed to dispatch company signal update webhooks")
+        return 0
 
 
 async def _trigger_accounts_in_motion_rebuilds(
@@ -3184,6 +3243,32 @@ async def approve_company_signal_candidate(
             else "none"
         ),
     )
+    await _dispatch_company_signal_update_webhooks(
+        pool,
+        [
+            {
+                "vendor_name": candidate["vendor_name"],
+                "company_name": canonical_row["company_name"] if canonical_row else candidate["company_name"],
+                "company_signal_id": (
+                    str(canonical_row["id"])
+                    if canonical_row and canonical_row.get("id")
+                    else None
+                ),
+                "company_signal_action": (
+                    canonical_row.get("company_signal_action")
+                    if canonical_row
+                    else "none"
+                ),
+                "review_id": (
+                    (canonical_row.get("review_id") if canonical_row else None)
+                    or candidate.get("review_id")
+                ),
+                "review_scope": "candidate",
+                "review_action": "approved",
+                "candidate_source": unlock_snapshot.get("candidate_source"),
+            }
+        ],
+    )
 
     return {
         "review_batch_id": review_batch_id,
@@ -3301,6 +3386,32 @@ async def suppress_company_signal_candidate(
             if deleted_signal
             else "none"
         ),
+    )
+    await _dispatch_company_signal_update_webhooks(
+        pool,
+        [
+            {
+                "vendor_name": candidate["vendor_name"],
+                "company_name": candidate["company_name"],
+                "company_signal_id": (
+                    str(deleted_signal["id"])
+                    if deleted_signal and deleted_signal.get("id")
+                    else None
+                ),
+                "company_signal_action": (
+                    deleted_signal.get("company_signal_action")
+                    if deleted_signal
+                    else "none"
+                ),
+                "review_id": (
+                    (deleted_signal.get("review_id") if deleted_signal else None)
+                    or candidate.get("review_id")
+                ),
+                "review_scope": "candidate",
+                "review_action": "suppressed",
+                "candidate_source": unlock_snapshot.get("candidate_source"),
+            }
+        ],
     )
     return {
         "review_batch_id": review_batch_id,
@@ -3423,6 +3534,32 @@ async def approve_company_signal_candidate_group(
             else "none"
         ),
     )
+    await _dispatch_company_signal_update_webhooks(
+        pool,
+        [
+            {
+                "vendor_name": group["vendor_name"],
+                "company_name": canonical_row["company_name"] if canonical_row else group["company_name"],
+                "company_signal_id": (
+                    str(canonical_row["id"])
+                    if canonical_row and canonical_row.get("id")
+                    else None
+                ),
+                "company_signal_action": (
+                    canonical_row.get("company_signal_action")
+                    if canonical_row
+                    else "none"
+                ),
+                "review_id": (
+                    (canonical_row.get("review_id") if canonical_row else None)
+                    or group.get("representative_review_id")
+                ),
+                "review_scope": "group",
+                "review_action": "approved",
+                "candidate_source": unlock_snapshot.get("candidate_source"),
+            }
+        ],
+    )
 
     return {
         "review_batch_id": review_batch_id,
@@ -3529,6 +3666,32 @@ async def suppress_company_signal_candidate_group(
             else "none"
         ),
     )
+    await _dispatch_company_signal_update_webhooks(
+        pool,
+        [
+            {
+                "vendor_name": group["vendor_name"],
+                "company_name": group["company_name"],
+                "company_signal_id": (
+                    str(deleted_signal["id"])
+                    if deleted_signal and deleted_signal.get("id")
+                    else None
+                ),
+                "company_signal_action": (
+                    deleted_signal.get("company_signal_action")
+                    if deleted_signal
+                    else "none"
+                ),
+                "review_id": (
+                    (deleted_signal.get("review_id") if deleted_signal else None)
+                    or group.get("representative_review_id")
+                ),
+                "review_scope": "group",
+                "review_action": "suppressed",
+                "candidate_source": unlock_snapshot.get("candidate_source"),
+            }
+        ],
+    )
     return {
         "review_batch_id": review_batch_id,
         "group_id": str(reviewed["id"]) if reviewed else group_id,
@@ -3576,6 +3739,7 @@ async def approve_company_signal_candidate_groups(
         raise HTTPException(status_code=400, detail="group_ids must include at least one non-empty UUID")
     groups: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
+    webhook_updates: list[dict[str, Any]] = []
 
     async with pool.transaction() as conn:
         for group_id in group_ids:
@@ -3645,6 +3809,25 @@ async def approve_company_signal_candidate_groups(
                     "review_unlock_reason": unlock_snapshot.get("review_unlock_reason"),
                 }
             )
+            webhook_updates.append(
+                {
+                    "vendor_name": group["vendor_name"],
+                    "company_name": canonical_row["company_name"] if canonical_row else group["company_name"],
+                    "company_signal_id": str(canonical_row["id"]) if canonical_row else None,
+                    "company_signal_action": (
+                        canonical_row.get("company_signal_action")
+                        if canonical_row
+                        else "none"
+                    ),
+                    "review_id": (
+                        (canonical_row.get("review_id") if canonical_row else None)
+                        or group.get("representative_review_id")
+                    ),
+                    "review_scope": "bulk_group",
+                    "review_action": "approved",
+                    "candidate_source": unlock_snapshot.get("candidate_source"),
+                }
+            )
 
     rebuilds = await _trigger_accounts_in_motion_rebuilds(
         pool,
@@ -3679,6 +3862,7 @@ async def approve_company_signal_candidate_groups(
             company_signal_id=result.get("company_signal_id"),
             company_signal_action=result.get("company_signal_action") or "none",
         )
+    await _dispatch_company_signal_update_webhooks(pool, webhook_updates)
     return {
         "review_batch_id": review_batch_id,
         "groups": results,
@@ -3700,6 +3884,7 @@ async def suppress_company_signal_candidate_groups(
         raise HTTPException(status_code=400, detail="group_ids must include at least one non-empty UUID")
     groups: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
+    webhook_updates: list[dict[str, Any]] = []
 
     async with pool.transaction() as conn:
         for group_id in group_ids:
@@ -3763,6 +3948,29 @@ async def suppress_company_signal_candidate_groups(
                     "review_unlock_reason": unlock_snapshot.get("review_unlock_reason"),
                 }
             )
+            webhook_updates.append(
+                {
+                    "vendor_name": group["vendor_name"],
+                    "company_name": group["company_name"],
+                    "company_signal_id": (
+                        str(deleted_signal["id"])
+                        if deleted_signal and deleted_signal.get("id")
+                        else None
+                    ),
+                    "company_signal_action": (
+                        deleted_signal.get("company_signal_action")
+                        if deleted_signal
+                        else "none"
+                    ),
+                    "review_id": (
+                        (deleted_signal.get("review_id") if deleted_signal else None)
+                        or group.get("representative_review_id")
+                    ),
+                    "review_scope": "bulk_group",
+                    "review_action": "suppressed",
+                    "candidate_source": unlock_snapshot.get("candidate_source"),
+                }
+            )
 
     rebuilds = await _trigger_accounts_in_motion_rebuilds(
         pool,
@@ -3797,6 +4005,7 @@ async def suppress_company_signal_candidate_groups(
             company_signal_id=result.get("retracted_company_signal_id"),
             company_signal_action=result.get("company_signal_action") or "none",
         )
+    await _dispatch_company_signal_update_webhooks(pool, webhook_updates)
     return {
         "review_batch_id": review_batch_id,
         "groups": results,
