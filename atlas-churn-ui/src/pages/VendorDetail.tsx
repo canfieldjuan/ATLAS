@@ -296,6 +296,12 @@ function vendorOpportunitiesPath(vendorName: string): string {
   return `/opportunities?${params.toString()}`
 }
 
+function vendorAlertsPath(vendorName: string): string {
+  const params = new URLSearchParams()
+  params.set('back_to', vendorDetailPath(vendorName))
+  return `/alerts?${params.toString()}`
+}
+
 function vendorReviewDetailPath(reviewId: string, vendorName: string): string {
   const params = new URLSearchParams()
   params.set('back_to', vendorDetailPath(vendorName))
@@ -344,7 +350,7 @@ export default function VendorDetail() {
     'support_sentiment' | 'legacy_support_score' | 'new_feature_velocity' | 'employee_growth_rate'
   >('support_sentiment')
   const [copied, setCopied] = useState(false)
-  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'evidence' | 'watchlists' | 'reports' | 'opportunities'; status: 'copied' | 'error' } | null>(null)
+  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'alerts' | 'evidence' | 'watchlists' | 'reports' | 'opportunities'; status: 'copied' | 'error' } | null>(null)
 
   const { data, loading, error, refresh, refreshing } = useApiData<VendorData>(
     async () => {
@@ -398,6 +404,7 @@ export default function VendorDetail() {
   const backLabel = backToLabel(backTo)
   const watchlistsReturnPath = upstreamWatchlistsPath(backTo)
   const watchlistsReturnLabel = upstreamWatchlistsLabel(watchlistsReturnPath)
+  const alertsPath = upstreamNestedPath(backTo, '/alerts') ?? vendorAlertsPath(profile.vendor_name)
   const evidenceExplorerPath = upstreamEvidencePath(backTo, profile.vendor_name) ?? vendorEvidenceExplorerPath(profile.vendor_name)
   const reportsPath = upstreamNestedPath(backTo, '/reports') ?? vendorReportsPath(profile.vendor_name)
   const opportunitiesPath = upstreamNestedPath(backTo, '/opportunities') ?? vendorOpportunitiesPath(profile.vendor_name)
@@ -407,7 +414,7 @@ export default function VendorDetail() {
       setTimeout(() => setCopied(false), 2000)
     })
   }
-  const handleCopyShortcutLink = (key: 'evidence' | 'watchlists' | 'reports' | 'opportunities', path: string) => {
+  const handleCopyShortcutLink = (key: 'alerts' | 'evidence' | 'watchlists' | 'reports' | 'opportunities', path: string) => {
     navigator.clipboard.writeText(`${window.location.origin}${path}`).then(() => {
       setCopiedShortcutState({ key, status: 'copied' })
       setTimeout(() => setCopiedShortcutState((current) => (
@@ -765,6 +772,25 @@ export default function VendorDetail() {
             ) : null}
             <span className="inline-flex items-center gap-2">
               <button
+                onClick={() => navigate(alertsPath)}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+              >
+                Alerts API
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCopyShortcutLink('alerts', alertsPath)}
+                className="text-slate-400 hover:text-white transition-colors"
+                aria-label="Copy alerts link"
+                title="Copy alerts link"
+              >
+                {copiedShortcutState?.key === 'alerts' && copiedShortcutState.status === 'copied'
+                  ? <Check className="h-3.5 w-3.5 text-green-400" />
+                  : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <button
                 onClick={() => navigate(opportunitiesPath)}
                 className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
               >
@@ -867,6 +893,25 @@ export default function VendorDetail() {
             </button>
           </span>
         ) : null}
+        <span className="inline-flex items-center gap-2">
+          <button
+            onClick={() => navigate(alertsPath)}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+          >
+            Alerts API
+          </button>
+          <button
+            type="button"
+            onClick={() => handleCopyShortcutLink('alerts', alertsPath)}
+            className="text-slate-400 hover:text-white transition-colors"
+            aria-label="Copy alerts link"
+            title="Copy alerts link"
+          >
+            {copiedShortcutState?.key === 'alerts' && copiedShortcutState.status === 'copied'
+              ? <Check className="h-3.5 w-3.5 text-green-400" />
+              : <Copy className="h-3.5 w-3.5" />}
+          </button>
+        </span>
         <span className="inline-flex items-center gap-2">
           <button
             onClick={() => navigate(opportunitiesPath)}

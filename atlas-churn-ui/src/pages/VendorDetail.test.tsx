@@ -513,6 +513,69 @@ describe('VendorDetail', () => {
     })
   })
 
+  it('copies the alerts shortcut link with preserved vendor back context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy alerts link' })[0])
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/alerts?back_to=%2Fvendors%2FZendesk`,
+      )
+    })
+  })
+
+  it('preserves the exact upstream alerts path through nested evidence context', async () => {
+    const user = userEvent.setup()
+    const directAlertsPath = '/alerts?webhook=wh-crm&window=30d'
+    const nestedEvidencePath = `/evidence?vendor=Zendesk&tab=witnesses&back_to=${encodeURIComponent(directAlertsPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/vendors/Zendesk?back_to=${encodeURIComponent(nestedEvidencePath)}`]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Alerts API' })[0])
+
+    expect(mockNavigate).toHaveBeenCalledWith(directAlertsPath)
+  })
+
+  it('copies the exact upstream alerts path through nested evidence context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const directAlertsPath = '/alerts?webhook=wh-crm&window=30d'
+    const nestedEvidencePath = `/evidence?vendor=Zendesk&tab=witnesses&back_to=${encodeURIComponent(directAlertsPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/vendors/Zendesk?back_to=${encodeURIComponent(nestedEvidencePath)}`]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy alerts link' })[0])
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${directAlertsPath}`)
+    })
+  })
+
   it('preserves the exact upstream reports path through nested evidence context', async () => {
     const user = userEvent.setup()
     const directReportsPath = '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1'
@@ -611,6 +674,22 @@ describe('VendorDetail', () => {
     await user.click(screen.getAllByRole('button', { name: 'Open Account Review' })[0])
 
     expect(mockNavigate).toHaveBeenCalledWith('/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp')
+  })
+
+  it('shows alerts, opportunities, evidence, and reports shortcuts on the vendor surface', async () => {
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Alerts API' })[0]).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'View Opportunities' })[0]).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Validate Evidence' })[0]).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'View Reports' })[0]).toBeInTheDocument()
   })
 
   it('surfaces the upstream watchlist path when entered from evidence explorer', async () => {
