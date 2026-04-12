@@ -28,14 +28,19 @@ async def list_crm_pushes(
     limit: Max results (default 50, max 200)
     """
     try:
+        subscription_id = _clean_optional_text(subscription_id)
+        vendor_name = _clean_optional_text(vendor_name)
+        limit = max(1, min(limit, 200))
+
+        if subscription_id and not _is_uuid(subscription_id):
+            return json.dumps({"error": "subscription_id must be a valid UUID"})
+
         pool = get_pool()
         conditions = []
         params: list = []
         idx = 1
 
         if subscription_id:
-            if not _is_uuid(subscription_id):
-                return json.dumps({"error": "subscription_id must be a valid UUID"})
             conditions.append(f"pl.subscription_id = ${idx}::uuid")
             params.append(subscription_id)
             idx += 1
@@ -46,7 +51,7 @@ async def list_crm_pushes(
             idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        limit = max(1, min(limit, 200))
+        params.append(limit)
 
         rows = await pool.fetch(
             f"""
@@ -59,7 +64,7 @@ async def list_crm_pushes(
             JOIN b2b_webhook_subscriptions ws ON ws.id = pl.subscription_id
             {where}
             ORDER BY pl.pushed_at DESC
-            LIMIT {limit}
+            LIMIT ${idx}
             """,
             *params,
         )

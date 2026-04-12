@@ -1474,3 +1474,33 @@ async def test_crm_mcp_ingest_event_rejects_blank_required_text_before_pool(monk
     )
 
     assert json.loads(raw)["error"].startswith("crm_provider must be one of")
+
+
+
+@pytest.mark.asyncio
+async def test_crm_mcp_list_pushes_validates_subscription_before_pool(monkeypatch):
+    from atlas_brain.mcp.b2b.crm_events import list_crm_pushes
+
+    def _boom():
+        raise AssertionError("DB pool should not be acquired")
+
+    monkeypatch.setattr("atlas_brain.storage.database.get_db_pool", _boom)
+
+    raw = await list_crm_pushes(subscription_id="not-a-uuid")
+
+    assert json.loads(raw)["error"] == "subscription_id must be a valid UUID"
+
+
+@pytest.mark.asyncio
+async def test_crm_mcp_list_pushes_normalizes_blank_vendor_filter():
+    from atlas_brain.mcp.b2b.crm_events import list_crm_pushes
+
+    pool = _mock_pool(fetch_return=[])
+    with _patch_pool(pool):
+        raw = await list_crm_pushes(vendor_name="   ", limit=50)
+
+    payload = json.loads(raw)
+    assert payload["pushes"] == []
+    query, *params = pool.fetch.await_args.args
+    assert "pl.vendor_name ILIKE" not in query
+    assert params == [50]
