@@ -1130,6 +1130,14 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["trend_recommendation_filters"]["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["trend_recommendation_filters"]["candidate_source"] == "reddit"
     assert summary["trend_recommendation_filters"]["company_signal_action"] == "none"
+    assert summary["trend_recommendation_queue_filters"] == {
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "canonical_gap_reason": "low_confidence_low_trust_source",
+        "review_priority_band": "promote_now",
+        "review_priority_reason": "canonical_ready",
+        "source_name": "reddit",
+    }
 
 
 def _make_review_impact_summary_pool(*, totals=None, daily_trends=None):

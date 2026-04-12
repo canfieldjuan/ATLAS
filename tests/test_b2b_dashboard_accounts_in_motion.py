@@ -442,6 +442,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
             "supporting_focuses": ["effect_rate_down", "approval_volume_up"],
         },
         "trend_recommendation_filters": {"company_signal_action": "none"},
+        "trend_recommendation_queue_filters": {"candidate_bucket": "analyst_review", "review_status": "pending"},
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         with patch.object(

@@ -13502,6 +13502,7 @@ async def read_company_signal_review_impact_summary(
                 "supporting_focuses": [],
             },
             "trend_recommendation_filters": {},
+            "trend_recommendation_queue_filters": {},
         }
 
     where_clause = " AND ".join(conditions)
@@ -14351,6 +14352,29 @@ async def read_company_signal_review_impact_summary(
             filters["rebuild_outcome"] = rebuild_outcome
         return filters
 
+    def _build_trend_recommendation_queue_filters(
+        recommendation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        action = recommendation.get("action") if isinstance(recommendation, Mapping) else None
+        if action not in {"review_effect_quality", "increase_review_throughput"}:
+            return {}
+
+        filters: dict[str, Any] = {
+            "candidate_bucket": "analyst_review",
+            "review_status": "pending",
+        }
+        if vendor_name:
+            filters["vendor_name"] = vendor_name
+        if canonical_gap_reason:
+            filters["canonical_gap_reason"] = canonical_gap_reason
+        if review_priority_band:
+            filters["review_priority_band"] = review_priority_band
+        if review_priority_reason:
+            filters["review_priority_reason"] = review_priority_reason
+        if candidate_source:
+            filters["source_name"] = candidate_source
+        return filters
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     daily_trends = [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows]
     trend_comparison = _build_trend_comparison(daily_trends)
@@ -14358,6 +14382,7 @@ async def read_company_signal_review_impact_summary(
     trend_focus = _build_trend_focus(trend_comparison, trend_alerts)
     trend_recommendation = _build_trend_recommendation(trend_comparison, trend_focus, trend_alerts)
     trend_recommendation_filters = _build_trend_recommendation_filters(trend_recommendation, trend_focus)
+    trend_recommendation_queue_filters = _build_trend_recommendation_queue_filters(trend_recommendation)
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -14377,6 +14402,7 @@ async def read_company_signal_review_impact_summary(
         "trend_alerts": trend_alerts,
         "trend_recommendation": trend_recommendation,
         "trend_recommendation_filters": trend_recommendation_filters,
+        "trend_recommendation_queue_filters": trend_recommendation_queue_filters,
     }
 
 
