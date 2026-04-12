@@ -2562,6 +2562,32 @@ async def test_list_watchlist_alert_events_returns_view_scoped_rows(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_list_tenant_campaigns_normalizes_blank_and_trimmed_status(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_growth", role="member", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_campaigns(status="   ", limit=20, user=user)
+
+    assert result == {"campaigns": [], "count": 0}
+    sql, *params = pool.fetch.await_args.args
+    assert "bc.status =" not in sql
+
+    pool.fetch.reset_mock(return_value=True)
+    pool.fetch.return_value = []
+
+    await mod.list_tenant_campaigns(status="  approved  ", limit=20, user=user)
+
+    sql, *params = pool.fetch.await_args.args
+    assert "bc.status =" in sql
+    assert any(param == "approved" for param in params)
+    assert not any(param == "  approved  " for param in params)
+
+
+@pytest.mark.asyncio
 async def test_list_watchlist_alert_events_normalizes_blank_status_to_open(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 

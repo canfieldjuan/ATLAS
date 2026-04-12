@@ -4070,6 +4070,7 @@ async def list_tenant_campaigns(
     user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Campaigns scoped to tracked vendors. Requires b2b_growth+ plan."""
+    status = _clean_optional_text(status)
     pool = _pool_or_503()
 
     t_params = _tenant_params(user)
