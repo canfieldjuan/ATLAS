@@ -6,6 +6,15 @@ from ._shared import _safe_json, logger, get_pool
 from .server import mcp
 
 
+def _clean_optional_text(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _clean_required_text(value: Optional[str]) -> str | None:
+    return _clean_optional_text(value)
+
+
 @mcp.tool()
 async def get_product_profile(vendor_name: str) -> str:
     """
@@ -16,7 +25,8 @@ async def get_product_profile(vendor_name: str) -> str:
     Returns strengths, weaknesses, pain addressed scores, competitive
     positioning, use cases, company size fit, and LLM-generated summary.
     """
-    if not vendor_name or not vendor_name.strip():
+    clean_vendor_name = _clean_required_text(vendor_name)
+    if clean_vendor_name is None:
         return json.dumps({"success": False, "error": "vendor_name is required"})
 
     try:
@@ -34,11 +44,11 @@ async def get_product_profile(vendor_name: str) -> str:
             ORDER BY total_reviews_analyzed DESC
             LIMIT 1
             """,
-            vendor_name.strip(),
+            clean_vendor_name,
         )
 
         if not row:
-            return json.dumps({"success": False, "error": f"No product profile found for '{vendor_name}'"})
+            return json.dumps({"success": False, "error": f"No product profile found for '{clean_vendor_name}'"})
 
         profile = {
             "id": str(row["id"]),
@@ -82,6 +92,10 @@ async def get_product_profile_history(
     days: How many days back to look (default 90)
     limit: Max snapshots to return (default 90, max 365)
     """
+    clean_vendor_name = _clean_required_text(vendor_name)
+    if clean_vendor_name is None:
+        return json.dumps({"error": "vendor_name is required"})
+
     limit = min(max(limit, 1), 365)
     days = min(max(days, 1), 365)
     try:
@@ -103,15 +117,15 @@ async def get_product_profile_history(
             ORDER BY snapshot_date DESC
             LIMIT $3
             """,
-            vendor_name.strip(), days, limit,
+            clean_vendor_name, days, limit,
         )
 
         if not rows:
             return json.dumps({
-                "vendor_name": vendor_name,
+                "vendor_name": clean_vendor_name,
                 "snapshots": [],
                 "count": 0,
-                "message": f"No product profile snapshots found for '{vendor_name}'",
+                "message": f"No product profile snapshots found for '{clean_vendor_name}'",
             })
 
         resolved = rows[0]["vendor_name"]
@@ -166,16 +180,19 @@ async def match_products_tool(
     industry: Company industry (optional)
     limit: Max results (default 3, cap 10)
     """
-    if not churning_from or not churning_from.strip():
+    clean_churning_from = _clean_required_text(churning_from)
+    if clean_churning_from is None:
         return json.dumps({"success": False, "error": "churning_from is required"})
+    clean_industry = _clean_optional_text(industry)
+    clean_pain_categories = _clean_optional_text(pain_categories)
 
     limit = max(1, min(limit, 10))
 
     # Parse pain_categories from JSON string
     pains: list[dict] = []
-    if pain_categories:
+    if clean_pain_categories:
         try:
-            parsed = json.loads(pain_categories)
+            parsed = json.loads(clean_pain_categories)
             if isinstance(parsed, list):
                 pains = parsed
         except (json.JSONDecodeError, TypeError):
@@ -186,10 +203,10 @@ async def match_products_tool(
 
         pool = get_pool()
         matches = await match_products(
-            churning_from=churning_from.strip(),
+            churning_from=clean_churning_from,
             pain_categories=pains,
             company_size=company_size,
-            industry=industry,
+            industry=clean_industry,
             pool=pool,
             limit=limit,
         )
