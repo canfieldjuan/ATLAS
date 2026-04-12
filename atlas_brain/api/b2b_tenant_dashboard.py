@@ -2475,16 +2475,16 @@ async def list_watchlist_alert_events(
     user: AuthUser = Depends(require_auth),
 ):
     _require_b2b_product(user)
+    status_text = _clean_optional_text(status)
+    status_value = (status_text or "open").lower()
+    if status_value not in {"open", "resolved", "all"}:
+        raise HTTPException(status_code=422, detail="status must be one of: open, resolved, all")
+
     pool = _pool_or_503()
     account_id = _uuid.UUID(user.account_id)
     view_row = await _fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
     if not view_row:
         raise HTTPException(status_code=404, detail="Saved view not found")
-
-    status_text = _clean_optional_text(status)
-    status_value = (status_text or "open").lower()
-    if status_value not in {"open", "resolved", "all"}:
-        raise HTTPException(status_code=422, detail="status must be one of: open, resolved, all")
 
     params: list[Any] = [account_id, view_id]
     status_clause = ""
@@ -4321,6 +4321,10 @@ async def list_opportunity_dispositions(
 ):
     """List persisted opportunity dispositions for this account."""
     _require_b2b_product(user)
+    disposition_value = _clean_optional_text(disposition)
+    if disposition_value and disposition_value not in _VALID_DISPOSITIONS:
+        raise HTTPException(status_code=422, detail=f"disposition must be one of: {', '.join(sorted(_VALID_DISPOSITIONS))}")
+
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
 
@@ -4330,10 +4334,7 @@ async def list_opportunity_dispositions(
         acct,
     )
 
-    disposition_value = _clean_optional_text(disposition)
     if disposition_value:
-        if disposition_value not in _VALID_DISPOSITIONS:
-            raise HTTPException(status_code=422, detail=f"disposition must be one of: {', '.join(sorted(_VALID_DISPOSITIONS))}")
         rows = await pool.fetch(
             """
             SELECT id, opportunity_key, company, vendor, review_id,

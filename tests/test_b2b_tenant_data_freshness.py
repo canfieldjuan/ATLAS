@@ -1216,6 +1216,22 @@ async def test_opportunity_disposition_routes_trim_fields_before_persistence(mon
 
 
 @pytest.mark.asyncio
+async def test_list_opportunity_dispositions_rejects_invalid_filter_before_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.list_opportunity_dispositions(disposition="invalid", user=user)
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "disposition must be one of: dismissed, saved, snoozed"
+
+
+@pytest.mark.asyncio
 async def test_list_opportunity_dispositions_normalizes_blank_filter(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -2663,6 +2679,22 @@ async def test_list_tenant_campaigns_normalizes_blank_and_trimmed_status(monkeyp
     assert "bc.status =" in sql
     assert any(param == "approved" for param in params)
     assert not any(param == "  approved  " for param in params)
+
+
+@pytest.mark.asyncio
+async def test_list_watchlist_alert_events_rejects_invalid_status_before_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.list_watchlist_alert_events(view_id=uuid4(), status="invalid", limit=25, user=user)
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "status must be one of: open, resolved, all"
 
 
 @pytest.mark.asyncio
