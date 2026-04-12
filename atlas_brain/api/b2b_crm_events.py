@@ -240,7 +240,14 @@ async def ingest_crm_events_batch(
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
 
-    raw = await request.json()
+    try:
+        raw = await request.json()
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object containing an 'events' array")
+
     events = raw.get("events", [])
     if not isinstance(events, list) or not events:
         raise HTTPException(status_code=400, detail="Body must contain a non-empty 'events' array")
