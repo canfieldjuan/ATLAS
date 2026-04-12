@@ -247,6 +247,98 @@ async def test_summarize_source_field_baseline_scopes_coverage_to_enriched_rows(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_source_health_normalizes_blank_source(monkeypatch):
+    pool = _mock_pool(fetch_return=[])
+    monkeypatch.setattr(b2b_dashboard, "_pool_or_503", lambda: pool)
+    query_mock = MagicMock(return_value=("SELECT 1", []))
+    monkeypatch.setattr(b2b_dashboard, "_build_source_health_query", query_mock)
+
+    result = await b2b_dashboard.get_source_health(window_days=7, source="   ")
+
+    query_mock.assert_called_once_with(None)
+    pool.fetch.assert_awaited_once_with("SELECT 1", 7)
+    assert result["summary"]["total_sources"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_source_telemetry_normalizes_blank_source(monkeypatch):
+    pool = _mock_pool(fetch_return=[])
+    monkeypatch.setattr(b2b_dashboard, "_pool_or_503", lambda: pool)
+
+    result = await b2b_dashboard.get_source_telemetry(window_days=7, source="   ", user=None)
+
+    fetch_args = pool.fetch.await_args.args
+    assert fetch_args[1:] == (7,)
+    assert result["total_sources"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_source_capabilities_normalizes_blank_source(monkeypatch):
+    cap = MagicMock()
+    cap.to_dict.return_value = {"mode": "read_only"}
+    monkeypatch.setattr(b2b_dashboard, "get_capability", MagicMock(side_effect=AssertionError("unexpected single-source lookup")))
+
+    with patch(
+        "atlas_brain.services.scraping.capabilities.get_all_capabilities",
+        return_value={"reddit": cap},
+    ) as all_caps_mock:
+        result = await b2b_dashboard.list_source_capabilities(source="   ", user=None)
+
+    all_caps_mock.assert_called_once_with()
+    assert result == {
+        "sources": [{"source": "reddit", "capabilities": {"mode": "read_only"}}],
+        "total": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dashboard_source_impact_ledger_normalizes_blank_source(monkeypatch):
+    monkeypatch.setattr(
+        b2b_dashboard,
+        "build_source_impact_ledger",
+        MagicMock(return_value={"summary": {"total_sources": 0}, "sources": []}),
+    )
+
+    result = await b2b_dashboard.get_source_impact_ledger(
+        source="   ",
+        window_days=45,
+        include_field_baseline=False,
+        include_consumer_wiring=False,
+        user=MagicMock(),
+    )
+
+    b2b_dashboard.build_source_impact_ledger.assert_called_once_with(source=None)
+    assert result["source_filter"] is None
+    assert result["impact_summary"]["total_sources"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_telemetry_timeline_normalizes_blank_source(monkeypatch):
+    pool = _mock_pool(fetch_return=[])
+    monkeypatch.setattr(b2b_dashboard, "_pool_or_503", lambda: pool)
+
+    result = await b2b_dashboard.get_telemetry_timeline(days=14, source="   ", user=None)
+
+    fetch_args = pool.fetch.await_args.args
+    assert fetch_args[1:] == (14,)
+    assert result["timeline"] == []
+
+
+@pytest.mark.asyncio
+async def test_dashboard_export_source_health_normalizes_blank_source(monkeypatch):
+    pool = _mock_pool(fetch_return=[])
+    monkeypatch.setattr(b2b_dashboard, "_pool_or_503", lambda: pool)
+    query_mock = MagicMock(return_value=("SELECT 1", []))
+    monkeypatch.setattr(b2b_dashboard, "_build_source_health_query", query_mock)
+
+    response = await b2b_dashboard.export_source_health(window_days=7, source="   ")
+
+    query_mock.assert_called_once_with(None)
+    pool.fetch.assert_awaited_once_with("SELECT 1", 7)
+    assert response.media_type == "text/csv"
+
+
+@pytest.mark.asyncio
 async def test_dashboard_source_impact_ledger_includes_field_baseline(monkeypatch):
     pool = _mock_pool(
         fetch_return=[

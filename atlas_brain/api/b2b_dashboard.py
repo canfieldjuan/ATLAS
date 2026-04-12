@@ -639,6 +639,11 @@ def _optional_query_text(value: Any) -> str | None:
     return value or None
 
 
+def _normalize_source_query(value: Any) -> str | None:
+    value = _optional_query_text(value)
+    return value.lower() if value else None
+
+
 def _company_signal_review_unlock_snapshot(
     row: Mapping[str, Any] | None,
     *,
@@ -2102,8 +2107,8 @@ async def get_source_health(
 ):
     pool = _pool_or_503()
 
-    if source:
-        source = source.strip().lower()
+    source = _normalize_source_query(source)
+    if source is not None:
         if source not in ALL_SOURCES:
             raise HTTPException(
                 status_code=400,
@@ -2153,8 +2158,8 @@ async def get_source_telemetry(
     conditions = ["started_at >= NOW() - make_interval(days => $1)"]
     params: list = [window_days]
     idx = 2
-    if source:
-        source = source.strip().lower()
+    source = _normalize_source_query(source)
+    if source is not None:
         if source not in ALL_SOURCES:
             raise HTTPException(400, f"Invalid source: {source}")
         conditions.append(f"source = ${idx}")
@@ -2234,8 +2239,8 @@ async def list_source_capabilities(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """List source capability profiles (access pattern, anti-bot, proxy tier, fallback chain)."""
-    if source:
-        source = source.strip().lower()
+    source = _normalize_source_query(source)
+    if source is not None:
         cap = get_capability(source)
         if not cap:
             raise HTTPException(404, f"No capability profile for source: {source}")
@@ -2266,8 +2271,8 @@ async def get_source_impact_ledger(
     user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Return source-to-pool impact mappings plus live field and wiring baselines."""
-    if source:
-        source = source.strip().lower()
+    source = _normalize_source_query(source)
+    if source is not None:
         if source not in _KNOWN_SOURCES:
             raise HTTPException(
                 status_code=400,
@@ -2456,8 +2461,8 @@ async def get_telemetry_timeline(
     conditions = ["started_at >= NOW() - make_interval(days => $1)"]
     params: list = [days]
     idx = 2
-    if source:
-        source = source.strip().lower()
+    source = _normalize_source_query(source)
+    if source is not None:
         if source not in ALL_SOURCES:
             raise HTTPException(400, f"Invalid source: {source}")
         conditions.append(f"source = ${idx}")
@@ -5385,8 +5390,8 @@ async def export_source_health(
 ):
     pool = _pool_or_503()
 
-    if source:
-        source = source.strip().lower()
+    source = _normalize_source_query(source)
+    if source is not None:
         if source not in ALL_SOURCES:
             raise HTTPException(
                 status_code=400,
