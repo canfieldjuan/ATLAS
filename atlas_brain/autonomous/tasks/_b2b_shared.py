@@ -13576,6 +13576,7 @@ async def read_company_signal_review_impact_summary(
             "trend_recommendation_filters": {},
             "trend_recommendation_queue_filters": {},
             "trend_recommendation_queue_snapshot": None,
+            "trend_queue_rankings": [],
         }
 
     where_clause = " AND ".join(conditions)
@@ -14481,6 +14482,38 @@ async def read_company_signal_review_impact_summary(
     def _queue_snapshot_cache_key(filters: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
         return tuple(sorted((str(key), value) for key, value in filters.items()))
 
+    def _build_trend_queue_driver(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        driver = {
+            "kind": kind,
+            "status": payload.get("status"),
+            "focus": payload.get("focus"),
+            "action": payload.get("action"),
+            "metric": payload.get("metric"),
+            "direction": payload.get("direction"),
+            "rationale": payload.get("rationale"),
+        }
+        if kind == "trend_alert":
+            driver["label"] = payload.get("focus") or "trend_alert"
+        elif kind == "trend_focus":
+            driver["label"] = payload.get("focus") or "trend_focus"
+        elif kind == "trend_recommendation":
+            driver["label"] = payload.get("action") or "trend_recommendation"
+        else:
+            driver["label"] = kind
+        return driver
+
+    def _sort_trend_queue_rankings(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                -(row.get("actionable_pending_groups") or 0),
+                -(row.get("pending_groups") or 0),
+                -(row.get("overdue_pending_groups") or 0),
+                -(row.get("oldest_pending_age_days") or 0.0),
+                str(row.get("primary_driver", {}).get("label") or ""),
+            ),
+        )
+
     async def _resolve_queue_snapshot(filters: Mapping[str, Any]) -> dict[str, Any] | None:
         if not filters:
             return None
@@ -14538,6 +14571,56 @@ async def read_company_signal_review_impact_summary(
     trend_recommendation_queue_filters = _build_trend_recommendation_queue_filters(trend_recommendation, trend_focus)
     trend_recommendation_queue_snapshot = await _resolve_queue_snapshot(trend_recommendation_queue_filters)
     trend_focus["queue_snapshot"] = await _resolve_queue_snapshot(trend_focus.get("queue_filters") or {})
+
+    ranking_buckets: dict[tuple[tuple[str, Any], ...], dict[str, Any]] = {}
+    queue_candidates = [
+        ("trend_focus", trend_focus),
+        *(("trend_alert", alert) for alert in trend_alerts),
+        (
+            "trend_recommendation",
+            {
+                **dict(trend_recommendation),
+                "queue_filters": trend_recommendation_queue_filters,
+                "queue_snapshot": trend_recommendation_queue_snapshot,
+            },
+        ),
+    ]
+    for kind, payload in queue_candidates:
+        queue_filters = payload.get("queue_filters") if isinstance(payload, Mapping) else None
+        queue_snapshot = payload.get("queue_snapshot") if isinstance(payload, Mapping) else None
+        if not queue_filters or not queue_snapshot:
+            continue
+        key = _queue_snapshot_cache_key(queue_filters)
+        bucket = ranking_buckets.get(key)
+        driver = _build_trend_queue_driver(kind, payload)
+        if bucket is None:
+            bucket = {
+                "queue_filters": dict(queue_filters),
+                "queue_snapshot": dict(queue_snapshot),
+                "drivers": [],
+            }
+            ranking_buckets[key] = bucket
+        bucket["drivers"].append(driver)
+
+    trend_queue_rankings: list[dict[str, Any]] = []
+    for bucket in ranking_buckets.values():
+        queue_snapshot = bucket["queue_snapshot"]
+        drivers = bucket["drivers"]
+        primary_driver = drivers[0] if drivers else None
+        trend_queue_rankings.append(
+            {
+                "primary_driver": primary_driver,
+                "drivers": drivers,
+                "queue_filters": bucket["queue_filters"],
+                "queue_snapshot": queue_snapshot,
+                "pending_groups": int(queue_snapshot.get("pending_groups") or 0),
+                "actionable_pending_groups": int(queue_snapshot.get("actionable_pending_groups") or 0),
+                "blocked_pending_groups": int(queue_snapshot.get("blocked_pending_groups") or 0),
+                "overdue_pending_groups": int(queue_snapshot.get("overdue_pending_groups") or 0),
+                "oldest_pending_age_days": float(queue_snapshot.get("oldest_pending_age_days") or 0.0),
+            }
+        )
+    trend_queue_rankings = _sort_trend_queue_rankings(trend_queue_rankings)
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -14559,6 +14642,7 @@ async def read_company_signal_review_impact_summary(
         "trend_recommendation_filters": trend_recommendation_filters,
         "trend_recommendation_queue_filters": trend_recommendation_queue_filters,
         "trend_recommendation_queue_snapshot": trend_recommendation_queue_snapshot,
+        "trend_queue_rankings": trend_queue_rankings,
     }
 
 

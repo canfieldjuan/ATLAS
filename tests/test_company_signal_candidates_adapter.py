@@ -1217,6 +1217,45 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         "overdue_pending_groups": 1,
         "overdue_pending_reviews": 2,
     }
+    assert len(summary["trend_queue_rankings"]) == 1
+    assert summary["trend_queue_rankings"][0]["primary_driver"] == {
+        "kind": "trend_focus",
+        "status": "watch",
+        "focus": "effect_rate_down",
+        "action": None,
+        "metric": "company_signal_effect_rate",
+        "direction": "down",
+        "rationale": "Review actions are producing fewer downstream company-signal effects per action than in the prior window.",
+        "label": "effect_rate_down",
+    }
+    assert [driver["kind"] for driver in summary["trend_queue_rankings"][0]["drivers"]] == [
+        "trend_focus",
+        "trend_alert",
+        "trend_recommendation",
+    ]
+    assert summary["trend_queue_rankings"][0]["queue_filters"] == {
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "canonical_gap_reason": "low_confidence_low_trust_source",
+        "review_priority_band": "promote_now",
+        "review_priority_reason": "canonical_ready",
+        "source_name": "reddit",
+    }
+    assert summary["trend_queue_rankings"][0]["queue_snapshot"] == {
+        "total_groups": 6,
+        "total_reviews": 10,
+        "pending_groups": 4,
+        "actionable_pending_groups": 3,
+        "actionable_pending_reviews": 6,
+        "blocked_pending_groups": 1,
+        "blocked_pending_reviews": 2,
+        "avg_pending_age_days": 2.5,
+        "oldest_pending_age_days": 5.0,
+        "overdue_pending_groups": 1,
+        "overdue_pending_reviews": 2,
+    }
+    assert summary["trend_queue_rankings"][0]["actionable_pending_groups"] == 3
+    assert summary["trend_queue_rankings"][0]["pending_groups"] == 4
 
 
 def _make_review_impact_summary_pool(*, totals=None, daily_trends=None):
@@ -1254,6 +1293,7 @@ async def test_read_company_signal_review_impact_summary_returns_no_data_without
     assert summary["trend_focus"]["queue_snapshot"] is None
     assert summary["trend_alerts"] == []
     assert summary["trend_recommendation_queue_snapshot"] is None
+    assert summary["trend_queue_rankings"] == []
 
 
 @pytest.mark.asyncio

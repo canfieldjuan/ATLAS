@@ -450,6 +450,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "trend_recommendation_filters": {"company_signal_action": "none"},
         "trend_recommendation_queue_filters": {"candidate_bucket": "analyst_review", "review_status": "pending"},
         "trend_recommendation_queue_snapshot": {"pending_groups": 2, "blocked_pending_groups": 1},
+        "trend_queue_rankings": [{"primary_driver": {"kind": "trend_focus", "label": "effect_rate_down"}, "pending_groups": 2}],
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         with patch.object(
