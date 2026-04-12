@@ -1466,7 +1466,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.info("Reasoning synthesis v2: vendor phase skipped; cross-vendor scope still active")
 
     # Resolve LLM via standard pipeline routing
-    from ...pipelines.llm import get_pipeline_llm, parse_json_response
+    from ...pipelines.llm import (
+        get_pipeline_llm,
+        normalize_openrouter_model,
+        parse_json_response,
+    )
     from ...services.b2b.anthropic_batch import (
         AnthropicBatchItem,
         mark_batch_fallback_result,
@@ -1479,13 +1483,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         resolve_anthropic_batch_llm,
     )
 
-    synthesis_model = str(
-        getattr(cfg, "reasoning_synthesis_model", "") or ""
-    ).strip()
+    synthesis_model = normalize_openrouter_model(
+        getattr(cfg, "reasoning_synthesis_model", ""),
+        context="vendor reasoning synthesis override",
+    )
     if not synthesis_model:
-        synthesis_model = str(
-            getattr(settings.llm, "openrouter_reasoning_model", "") or ""
-        ).strip()
+        synthesis_model = normalize_openrouter_model(
+            getattr(settings.llm, "openrouter_reasoning_model", ""),
+            context="vendor reasoning synthesis default",
+        )
     llm = get_pipeline_llm(
         workload="synthesis",
         openrouter_model=synthesis_model or None,
@@ -1512,7 +1518,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             current_llm=llm,
             target_model_candidates=(
                 synthesis_model,
-                getattr(settings.llm, "openrouter_reasoning_model", ""),
+                normalize_openrouter_model(
+                    getattr(settings.llm, "openrouter_reasoning_model", ""),
+                    context="vendor reasoning synthesis batch",
+                ),
             ),
         )
         if (vendor_batch_requested or cross_vendor_batch_requested)

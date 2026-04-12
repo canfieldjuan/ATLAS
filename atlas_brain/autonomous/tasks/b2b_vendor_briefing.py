@@ -810,17 +810,21 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
     cache_namespace = "b2b_vendor_briefing.analyst_summary"
 
     try:
-        from ...pipelines.llm import clean_llm_output
+        from ...pipelines.llm import clean_llm_output, normalize_openrouter_model
         from ...services.b2b.cache_runner import (
             lookup_b2b_exact_stage_text,
             prepare_b2b_exact_stage_request,
             store_b2b_exact_stage_text,
         )
+        analyst_model = normalize_openrouter_model(
+            settings.b2b_churn.briefing_analyst_model,
+            context="vendor briefing analyst summary",
+        )
 
         request = prepare_b2b_exact_stage_request(
             "b2b_vendor_briefing.analyst_summary",
             provider="openrouter",
-            model=settings.b2b_churn.briefing_analyst_model,
+            model=analyst_model,
             messages=[
                 {"role": "system", "content": _ANALYST_SYSTEM_PROMPT},
                 {"role": "user", "content": payload_json},
@@ -848,7 +852,7 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": settings.b2b_churn.briefing_analyst_model,
+                        "model": analyst_model,
                         "messages": [
                             {"role": "system", "content": _ANALYST_SYSTEM_PROMPT},
                             {"role": "user", "content": payload_json},

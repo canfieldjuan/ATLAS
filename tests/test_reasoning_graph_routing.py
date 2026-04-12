@@ -149,6 +149,22 @@ def test_openrouter_workload_uses_configured_model(monkeypatch):
     assert seen == ["anthropic/claude-haiku-4-5-20251001"]
 
 
+def test_openrouter_workload_normalizes_deprecated_gpt_oss(monkeypatch):
+    monkeypatch.setattr(settings.llm, "openrouter_reasoning_model", "openai/gpt-oss-120b")
+    seen = []
+
+    def _fake_try_openrouter(model=None):
+        seen.append(model)
+        return object()
+
+    monkeypatch.setattr("atlas_brain.pipelines.llm._try_openrouter", _fake_try_openrouter)
+
+    llm = get_pipeline_llm(workload="openrouter", auto_activate_ollama=False)
+
+    assert llm is not None
+    assert seen == ["anthropic/claude-sonnet-4-5"]
+
+
 def test_synthesis_explicit_openrouter_override_uses_settings_api_key(monkeypatch):
     from atlas_brain.services.llm.openrouter import OpenRouterLLM
 

@@ -1394,15 +1394,16 @@ class TestScorecardNarrativeLLMInput:
             mock_settings.b2b_churn.scorecard_narrative_max_tokens = 333
             assert _scorecard_narrative_max_tokens() == 333
 
-    def test_scorecard_narrative_max_tokens_expands_for_gpt_oss(self):
+    def test_scorecard_narrative_max_tokens_ignores_deprecated_gpt_oss(self):
         from atlas_brain.autonomous.tasks.b2b_churn_reports import (
             _scorecard_narrative_max_tokens,
         )
 
         with patch("atlas_brain.autonomous.tasks.b2b_churn_reports.settings") as mock_settings:
             mock_settings.llm.openrouter_reasoning_model = "openai/gpt-oss-120b"
+            mock_settings.b2b_churn.scorecard_narrative_max_tokens = 333
             mock_settings.b2b_churn.scorecard_narrative_gpt_oss_max_tokens = 1600
-            assert _scorecard_narrative_max_tokens() == 1600
+            assert _scorecard_narrative_max_tokens() == 333
 
     def test_scorecard_narrative_max_tokens_uses_deepseek_budget(self):
         from atlas_brain.autonomous.tasks.b2b_churn_reports import (

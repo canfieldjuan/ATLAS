@@ -264,10 +264,13 @@ def _build_scorecard_narrative_payload(
 
 def _scorecard_narrative_max_tokens() -> int:
     """Return a configured token budget for scorecard narrative generation."""
-    model = str(getattr(settings.llm, "openrouter_reasoning_model", "") or "").lower()
+    from ...pipelines.llm import normalize_openrouter_model
+
+    model = normalize_openrouter_model(
+        getattr(settings.llm, "openrouter_reasoning_model", ""),
+        context="scorecard narrative token budget",
+    ).lower()
     cfg = settings.b2b_churn
-    if "gpt-oss" in model:
-        return int(cfg.scorecard_narrative_gpt_oss_max_tokens)
     if "deepseek" in model:
         return int(cfg.scorecard_narrative_deepseek_max_tokens)
     return int(cfg.scorecard_narrative_max_tokens)
@@ -1393,6 +1396,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...pipelines.llm import (
         call_llm_with_skill,
         get_pipeline_llm,
+        normalize_openrouter_model,
         parse_json_response,
     )
     from ...services.b2b.anthropic_batch import (
@@ -1419,6 +1423,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     _cache_stage_id = "b2b_churn_reports.scorecard_narrative"
     _resolved_llm = get_pipeline_llm(workload=_llm_workload)
     _provider, _model = llm_identity(_resolved_llm)
+    _reasoning_model = normalize_openrouter_model(
+        getattr(settings.llm, "openrouter_reasoning_model", ""),
+        context="scorecard narrative synthesis",
+    )
     _batch_requested = anthropic_batch_requested(
         task,
         global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
@@ -1428,7 +1436,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     _batch_llm = (
         resolve_anthropic_batch_llm(
             current_llm=_resolved_llm,
-            target_model_candidates=(getattr(settings.llm, "openrouter_reasoning_model", ""),),
+            target_model_candidates=(_reasoning_model,),
         )
         if _batch_requested
         else None
@@ -1831,9 +1839,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "scorecard_batch_failed_items": scorecard_batch_metrics["failed_items"],
                         })
                         if scorecard_llm_generated > 0:
-                            report_llm_model = str(
-                                getattr(settings.llm, "openrouter_reasoning_model", "") or "pipeline_mixed"
-                            )
+                            report_llm_model = _reasoning_model or "pipeline_mixed"
                     report_status = "published" if data else "failed"
                     latest_failure_step = None if data else "no_data"
                     latest_error_code = None if data else "no_data"

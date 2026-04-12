@@ -631,12 +631,12 @@ def test_tenant_payload_vendor_chunks_groups_categories_before_splitting(monkeyp
     assert chunks == [["Zendesk", "Intercom", "ClickUp", "Asana"], ["HubSpot"]]
 
 
-def test_tenant_report_chunk_size_uses_smaller_chunks_for_gpt_oss(monkeypatch):
+def test_tenant_report_chunk_size_ignores_deprecated_gpt_oss_override(monkeypatch):
     monkeypatch.setattr(
         "atlas_brain.autonomous.tasks.b2b_tenant_report.settings.llm.openrouter_reasoning_model",
         "openai/gpt-oss-120b",
     )
-    assert _tenant_report_chunk_size() == 3
+    assert _tenant_report_chunk_size() == 6
 
 
 def test_filter_tenant_payload_for_vendors_scopes_vendor_lists():

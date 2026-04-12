@@ -5220,7 +5220,7 @@ class TestReasoningSynthesisTask:
         )
 
         await run(SimpleNamespace(metadata={"force": True}))
-        assert seen_models[0] == "openai/gpt-oss-120b"
+        assert seen_models[0] == "anthropic/claude-sonnet-4-5"
 
         monkeypatch.setattr(
             settings.b2b_churn, "reasoning_synthesis_model", "anthropic/claude-sonnet-4-5", raising=False,
