@@ -13,6 +13,24 @@ from ._shared import (
 from .server import mcp
 
 
+def _clean_optional_text(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _clean_required_text(value: Optional[str]) -> str | None:
+    return _clean_optional_text(value)
+
+
+def _clean_vendor_names(values: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for raw_value in values:
+        vendor_name = _clean_optional_text(raw_value)
+        if vendor_name is not None:
+            cleaned.append(vendor_name)
+    return cleaned
+
+
 def _normalize_vendor_name(value: str | None) -> str:
     return str(value or "").strip().lower()
 
@@ -78,6 +96,8 @@ async def list_churn_signals(
     category: Filter by product_category (exact match)
     limit: Maximum results (default 20, cap 100)
     """
+    clean_vendor_name = _clean_optional_text(vendor_name)
+    clean_category = _clean_optional_text(category)
     limit = max(1, min(limit, 100))
     min_urgency = max(0.0, min(min_urgency, 10.0))
     try:
@@ -88,9 +108,9 @@ async def list_churn_signals(
 
         rows = await read_vendor_signal_rows(
             pool,
-            vendor_name_query=vendor_name,
+            vendor_name_query=clean_vendor_name,
             min_urgency=min_urgency,
-            product_category=category,
+            product_category=clean_category,
             exclude_suppressed=True,
             limit=limit,
         )
@@ -141,8 +161,10 @@ async def get_churn_signal(
     vendor_name: Vendor to look up (partial match, case-insensitive)
     product_category: Narrow to a specific product category (optional)
     """
-    if not vendor_name or not vendor_name.strip():
+    clean_vendor_name = _clean_required_text(vendor_name)
+    if clean_vendor_name is None:
         return json.dumps({"success": False, "error": "vendor_name is required"})
+    clean_product_category = _clean_optional_text(product_category)
 
     try:
         pool = get_pool()
@@ -153,8 +175,8 @@ async def get_churn_signal(
 
         row = await read_vendor_signal_detail(
             pool,
-            vendor_name_query=vendor_name.strip(),
-            product_category=product_category,
+            vendor_name_query=clean_vendor_name,
+            product_category=clean_product_category,
             exclude_suppressed=True,
         )
 
@@ -236,6 +258,7 @@ async def list_high_intent_companies(
     window_days: How far back to look in days (default 30)
     limit: Maximum results (default 20, cap 100)
     """
+    clean_vendor_name = _clean_optional_text(vendor_name)
     limit = max(1, min(limit, 100))
     min_urgency = max(0.0, min(min_urgency, 10.0))
     window_days = max(1, min(window_days, 3650))
@@ -248,7 +271,7 @@ async def list_high_intent_companies(
             pool,
             min_urgency=min_urgency,
             window_days=window_days,
-            vendor_name=vendor_name,
+            vendor_name=clean_vendor_name,
             limit=limit,
         )
         companies = []
@@ -303,14 +326,14 @@ async def get_vendor_profile(vendor_name: str) -> str:
 
     vendor_name: Vendor to profile (required)
     """
-    if not vendor_name or not vendor_name.strip():
+    vname = _clean_required_text(vendor_name)
+    if vname is None:
         return json.dumps({"success": False, "error": "vendor_name is required"})
 
     try:
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
-        vname = vendor_name.strip()
 
         from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_signal_detail, read_high_intent_companies
 
@@ -465,6 +488,10 @@ async def reason_vendor(
     vendor_name: Vendor to reason about (required)
     force: Compatibility no-op; returns the latest persisted reasoning
     """
+    clean_vendor_name = _clean_required_text(vendor_name)
+    if clean_vendor_name is None:
+        return json.dumps({"success": False, "error": "vendor_name is required"})
+
     try:
         _ = force
         pool = get_pool()
@@ -474,10 +501,10 @@ async def reason_vendor(
         )
         view = await load_best_reasoning_view(
             pool,
-            vendor_name,
+            clean_vendor_name,
         )
         if view is None:
-            return json.dumps({"success": False, "error": f"No reasoning data for vendor: {vendor_name}"})
+            return json.dumps({"success": False, "error": f"No reasoning data for vendor: {clean_vendor_name}"})
         entry = synthesis_view_to_reasoning_entry(view)
         return json.dumps({
             "success": True,
@@ -508,7 +535,8 @@ async def compare_vendors(
     vendors: List of vendor names to compare (2-5 required)
     force: Compatibility no-op; returns latest persisted reasoning
     """
-    if len(vendors) < 2 or len(vendors) > 5:
+    clean_vendors = _clean_vendor_names(vendors)
+    if len(clean_vendors) < 2 or len(clean_vendors) > 5:
         return json.dumps({"success": False, "error": "vendors must contain 2-5 vendor names"})
 
     try:
@@ -520,10 +548,10 @@ async def compare_vendors(
         )
         views = await load_best_reasoning_views(
             pool,
-            vendors,
+            clean_vendors,
         )
         results = []
-        for requested_name in vendors:
+        for requested_name in clean_vendors:
             matched_view = None
             for current_name, view in views.items():
                 if str(current_name or "").strip().lower() == str(requested_name or "").strip().lower():
