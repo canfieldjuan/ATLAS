@@ -363,7 +363,7 @@ describe('IncidentAlerts', () => {
     )
     expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
       'href',
-      '/reports?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
+      '/reports?vendor_filter=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
     )
     expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',

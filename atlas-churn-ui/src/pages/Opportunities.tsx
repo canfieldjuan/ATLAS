@@ -98,7 +98,7 @@ type DispositionTab = (typeof DISPOSITION_TABS)[number]
 function resolveBackTarget(rawValue: string | null): string | null {
   const value = rawValue?.trim() || ''
   if (!value) return null
-  if (value.startsWith('/vendors/') || value.startsWith('/watchlists')) return value
+  if (value.startsWith('/vendors/') || value.startsWith('/watchlists') || value.startsWith('/alerts')) return value
   return null
 }
 
@@ -106,6 +106,7 @@ function backButtonLabel(target: string | null): string {
   if (!target) return 'Back'
   if (target.startsWith('/vendors/')) return 'Back to Vendor'
   if (target.startsWith('/watchlists')) return 'Back to Watchlists'
+  if (target.startsWith('/alerts')) return 'Back to Alerts'
   return 'Back'
 }
 

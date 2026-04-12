@@ -81,6 +81,7 @@ function backToLabel(value: string) {
     }
     return 'Back to Watchlists'
   }
+  if (value.startsWith('/alerts')) return 'Back to Alerts'
   if (value.startsWith('/reviews')) return 'Back to Review'
   if (value.startsWith('/evidence')) return 'Back to Evidence'
   if (value.startsWith('/opportunities')) return 'Back to Opportunities'
@@ -186,6 +187,7 @@ export default function ReportDetail() {
       || (location.state as { backTo: string }).backTo.startsWith('/watchlists')
       || (location.state as { backTo: string }).backTo.startsWith('/reviews')
       || (location.state as { backTo: string }).backTo.startsWith('/evidence')
+      || (location.state as { backTo: string }).backTo.startsWith('/alerts')
       || (location.state as { backTo: string }).backTo.startsWith('/opportunities')
     )
     ? (location.state as { backTo: string }).backTo
@@ -198,6 +200,7 @@ export default function ReportDetail() {
       || value.startsWith('/watchlists')
       || value.startsWith('/reviews')
       || value.startsWith('/evidence')
+      || value.startsWith('/alerts')
       || value.startsWith('/opportunities')
     ) ? value : null
   })()

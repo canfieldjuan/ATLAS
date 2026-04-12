@@ -113,6 +113,28 @@ describe('Opportunities', () => {
     })
   })
 
+  it('supports alerts back_to navigation', async () => {
+    const user = userEvent.setup()
+    const router = createMemoryRouter(
+      [
+        { path: '/opportunities', element: <Opportunities /> },
+        { path: '/alerts', element: <div>Alerts workspace</div> },
+      ],
+      { initialEntries: ['/opportunities?vendor=Zendesk&back_to=%2Falerts%3Fwebhook%3Dwh-1'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('link', { name: 'Back to Alerts' })).toHaveAttribute('href', '/alerts?webhook=wh-1')
+    expect(screen.getByPlaceholderText('Filter vendor...')).toHaveValue('Zendesk')
+
+    await user.click(screen.getByRole('link', { name: 'Back to Alerts' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Alerts workspace')).toBeInTheDocument()
+    })
+  })
+
   it('shows vendor workspace, evidence, and report shortcuts for the active vendor filter', async () => {
     const router = createMemoryRouter(
       [{ path: '/opportunities', element: <Opportunities /> }],

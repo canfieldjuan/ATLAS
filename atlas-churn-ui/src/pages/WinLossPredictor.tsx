@@ -227,7 +227,7 @@ function buildVendorWorkspacePath(vendorName: string, backTo: string) {
 
 function buildVendorScopedPath(pathname: string, vendorName: string, backTo: string) {
   const next = new URLSearchParams()
-  next.set('vendor', vendorName)
+  next.set(pathname === '/reports' ? 'vendor_filter' : 'vendor', vendorName)
   next.set('back_to', backTo)
   return `${pathname}?${next.toString()}`
 }

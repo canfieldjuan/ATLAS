@@ -160,6 +160,23 @@ describe('VendorDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/reviews/review-1?back_to=%2Fvendors%2FZendesk')
   })
 
+  it('returns to alerts when back_to points at an alerts page', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Falerts%3Fwebhook%3Dwh-crm']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to Alerts' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/alerts?webhook=wh-crm')
+  })
+
   it('surfaces recent reports in the vendor workspace and keeps vendor back_to on drilldown', async () => {
     const user = userEvent.setup()
     api.fetchReports.mockResolvedValue({

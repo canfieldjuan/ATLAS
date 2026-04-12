@@ -159,6 +159,7 @@ function reportExternalBackTarget(searchParams: URLSearchParams) {
     || value.startsWith('/watchlists')
     || value.startsWith('/reviews')
     || value.startsWith('/evidence')
+    || value.startsWith('/alerts')
     || value.startsWith('/opportunities')
   ) return value
   return null
@@ -366,8 +367,10 @@ export default function Reports() {
         ? 'Back to Review'
         : reportsBackTarget.startsWith('/evidence')
           ? 'Back to Evidence'
-          : reportsBackTarget.startsWith('/opportunities')
-            ? 'Back to Opportunities'
+          : reportsBackTarget.startsWith('/alerts')
+            ? 'Back to Alerts'
+            : reportsBackTarget.startsWith('/opportunities')
+              ? 'Back to Opportunities'
       : 'Back to Library'
 
   useEffect(() => {

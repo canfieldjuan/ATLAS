@@ -290,6 +290,20 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('accepts alerts back_to and renders an alerts return link', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Falerts%3Fwebhook%3Dwh-crm']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to Alerts' })).toHaveAttribute(
+      'href',
+      '/alerts?webhook=wh-crm',
+    )
+  })
+
   it('renders an account review return label for focused watchlist back_to paths', async () => {
     render(
       <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor']}>

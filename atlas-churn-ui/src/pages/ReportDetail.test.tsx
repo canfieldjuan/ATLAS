@@ -334,6 +334,31 @@ describe('ReportDetail', () => {
     expect(router.state.location.pathname).toBe('/vendors/Zendesk')
   })
 
+  it('returns to alerts when back_to targets the alerts workspace', async () => {
+    const router = createMemoryRouter(
+      [
+        { path: '/alerts', element: <div data-testid="alerts-route">Alerts route</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Falerts%3Fwebhook%3Dwh-crm',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Alerts' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('alerts-route')).toBeInTheDocument()
+    })
+    expect(router.state.location.pathname).toBe('/alerts')
+    expect(router.state.location.search).toBe('?webhook=wh-crm')
+  })
+
 
   it('returns to review detail when back_to targets a review path', async () => {
     const router = createMemoryRouter(

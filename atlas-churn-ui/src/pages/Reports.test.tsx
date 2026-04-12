@@ -861,6 +861,47 @@ describe('Reports', () => {
     )
   })
 
+  it('preserves alerts back_to when opening report detail from an alerts-scoped library view', async () => {
+    function ReportDetailRouteProbe() {
+      const location = useLocation()
+      return (
+        <div data-testid="report-detail-route">
+          {JSON.stringify(location.state)}
+        </div>
+      )
+    }
+
+    const router = createMemoryRouter(
+      [
+        { path: '/reports', element: <Reports /> },
+        { path: '/reports/:id', element: <ReportDetailRouteProbe /> },
+      ],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Falerts%3Fwebhook%3Dwh-crm',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    expect(screen.getByRole('button', { name: 'Back to Alerts' })).toBeInTheDocument()
+
+    const card = await screen.findByTestId('report-card-report-1')
+    fireEvent.click(within(card).getByRole('button', { name: /summary/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('report-detail-route')).toBeInTheDocument()
+    })
+
+    expect(router.state.location.pathname).toBe('/reports/report-1')
+    expect(router.state.location.search).toBe('?back_to=%2Falerts%3Fwebhook%3Dwh-crm')
+    expect(screen.getByTestId('report-detail-route')).toHaveTextContent(
+      '"backTo":"/alerts?webhook=wh-crm"',
+    )
+  })
+
 
   it('preserves review back_to when opening report detail from a review-scoped library view', async () => {
     function ReportDetailRouteProbe() {

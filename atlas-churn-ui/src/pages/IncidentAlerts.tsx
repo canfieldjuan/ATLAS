@@ -137,7 +137,7 @@ const SAMPLE_EVENT_PAYLOADS: Record<WebhookEventType, Record<string, string | nu
 }
 
 function previewTimestamp() {
-  return '2026-04-10T12:00:00Z'
+  return new Date().toISOString()
 }
 
 function buildPreviewEnvelope(eventType: WebhookEventType) {
@@ -357,7 +357,20 @@ function formatManualTestSummary(result: ManualTestResult) {
 }
 
 function generateWebhookSecret() {
-  return `atlas_${Math.random().toString(36).slice(2, 14)}${Math.random().toString(36).slice(2, 14)}`
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const bytes = new Uint8Array(24)
+
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    globalThis.crypto.getRandomValues(bytes)
+    return `atlas_${Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('')}`
+  }
+
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    const fallback = `${globalThis.crypto.randomUUID().replaceAll('-', '')}${globalThis.crypto.randomUUID().replaceAll('-', '')}`
+    return `atlas_${fallback.slice(0, 24)}`
+  }
+
+  throw new Error('Secure random generator unavailable')
 }
 
 function channelTone(channel: WebhookChannel) {
@@ -404,7 +417,7 @@ function buildVendorWorkspacePath(vendorName: string, backTo: string) {
 
 function buildVendorScopedPath(pathname: string, vendorName: string, backTo: string) {
   const next = new URLSearchParams()
-  next.set('vendor', vendorName)
+  next.set(pathname === '/reports' ? 'vendor_filter' : 'vendor', vendorName)
   next.set('back_to', backTo)
   return `${pathname}?${next.toString()}`
 }

@@ -119,6 +119,7 @@ function parseBackTo(value: string | null) {
     || value.startsWith('/vendors/')
     || value.startsWith('/reviews')
     || value.startsWith('/opportunities')
+    || value.startsWith('/alerts')
     || value.startsWith('/reports')
   ) return value
   try {
@@ -130,6 +131,7 @@ function parseBackTo(value: string | null) {
         || url.pathname.startsWith('/vendors/')
         || url.pathname.startsWith('/reviews')
         || url.pathname === '/opportunities'
+        || url.pathname === '/alerts'
         || url.pathname === '/reports'
       )
     ) {
@@ -155,6 +157,7 @@ function backToLabel(value: string | null) {
   if (value.startsWith('/vendors/')) return 'Back to Vendor'
   if (value.startsWith('/reviews')) return 'Back to Review'
   if (value.startsWith('/opportunities')) return 'Back to Opportunities'
+  if (value.startsWith('/alerts')) return 'Back to Alerts'
   if (value.startsWith('/reports')) return 'Back to Reports'
   return 'Back'
 }

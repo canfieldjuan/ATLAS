@@ -101,7 +101,7 @@ describe('WinLossPredictor', () => {
     )
     expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
       'href',
-      '/reports?vendor=Zendesk&back_to=%2Fpredictor%3Fvendor%3DZendesk%26company_size%3Dsmb%26industry%3Dfintech',
+      '/reports?vendor_filter=Zendesk&back_to=%2Fpredictor%3Fvendor%3DZendesk%26company_size%3Dsmb%26industry%3Dfintech',
     )
     expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',
