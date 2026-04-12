@@ -1528,10 +1528,14 @@ async def compare_vendor_reasoning(
 ):
     """Side-by-side persisted reasoning for multiple vendors (2-5)."""
 
-    vendors = body.get("vendors", [])
+    raw_vendors = body.get("vendors", [])
     _ = body.get("force", False)
 
-    if not isinstance(vendors, list) or len(vendors) < 2 or len(vendors) > 5:
+    if not isinstance(raw_vendors, list):
+        raise HTTPException(status_code=400, detail="vendors must be a list of 2-5 vendor names")
+    vendors = [_optional_query_text(value) for value in raw_vendors]
+    vendors = [value for value in vendors if value]
+    if len(vendors) < 2 or len(vendors) > 5:
         raise HTTPException(status_code=400, detail="vendors must be a list of 2-5 vendor names")
 
     pool = _pool_or_503()

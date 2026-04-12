@@ -929,6 +929,56 @@ async def test_reason_vendor_trims_vendor_name_before_reader_call(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_compare_vendor_reasoning_rejects_blank_vendor_entries_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_pool_or_503",
+        lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")),
+    )
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.compare_vendor_reasoning({"vendors": ["  ", "Zendesk"]}, user=None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "vendors must be a list of 2-5 vendor names"
+
+
+@pytest.mark.asyncio
+async def test_compare_vendor_reasoning_trims_vendor_names_before_reader_call(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_synthesis_reader as reader_mod
+
+    pool = SimpleNamespace()
+    load_mock = AsyncMock(return_value={
+        "Zendesk": _make_view("Zendesk"),
+        "Intercom": _make_view("Intercom"),
+    })
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(reader_mod, "load_best_reasoning_views", load_mock)
+    monkeypatch.setattr(
+        reader_mod,
+        "synthesis_view_to_reasoning_entry",
+        lambda _view: {
+            "mode": "cached",
+            "confidence": "medium",
+            "archetype": "price_squeeze",
+            "risk_level": "high",
+            "executive_summary": "Summary",
+            "key_signals": ["signal"],
+            "falsification_conditions": ["condition"],
+        },
+    )
+
+    result = await mod.compare_vendor_reasoning({"vendors": ["  Zendesk  ", " Intercom "]}, user=None)
+
+    load_mock.assert_awaited_once_with(pool, ["Zendesk", "Intercom"])
+    assert result["count"] == 2
+    assert [row["vendor_name"] for row in result["vendors"]] == ["Zendesk", "Intercom"]
+
+
+@pytest.mark.asyncio
 async def test_dashboard_pipeline_excludes_cross_source_duplicates(monkeypatch):
     from atlas_brain.api import b2b_dashboard as mod
 
