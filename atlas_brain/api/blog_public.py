@@ -9,13 +9,42 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.params import Param
 
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.blog_public")
 
 router = APIRouter(prefix="/blog", tags=["blog-public"])
+
+
+def _unwrap_param_default(value: object | None) -> object | None:
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
+def _clean_optional_text(value: object | None) -> str | None:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _clean_required_text(value: object | None, field_name: str) -> str:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise HTTPException(422, f"{field_name} is required")
+    return text
+
+
+def _clean_int_query(value: object | None, *, default: int) -> int:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return int(value)
 
 
 def _safe_json(raw: Any) -> Any:
@@ -34,6 +63,9 @@ async def list_published_posts(
     offset: int = Query(default=0, ge=0),
 ) -> dict:
     """List published blog posts for the public frontend."""
+    topic_type = _clean_optional_text(topic_type)
+    limit = _clean_int_query(limit, default=50)
+    offset = _clean_int_query(offset, default=0)
     pool = get_db_pool()
 
     filters = ["status = 'published'"]
@@ -98,6 +130,7 @@ async def list_published_posts(
 @router.get("/published/{slug}")
 async def get_published_post(slug: str) -> dict:
     """Get a single published blog post by slug."""
+    slug = _clean_required_text(slug, "slug")
     pool = get_db_pool()
     row = await pool.fetchrow(
         """
