@@ -472,6 +472,10 @@ type AlertActivityReferenceSource = {
   report_id?: string | null
 }
 
+type AlertActivityVendorSource = AlertActivityReferenceSource & {
+  vendor_name?: string | null
+}
+
 type AlertActivityReference = {
   key: 'signal_id' | 'review_id' | 'report_id'
   label: 'Signal ID' | 'Review ID' | 'Report ID'
@@ -814,6 +818,52 @@ export default function IncidentAlerts() {
     )
   }
 
+  function renderActivityVendorShortcuts(activity: AlertActivityVendorSource, backTo: string) {
+    const vendorName = normalizeActivityReference(activity.vendor_name)
+    const reviewId = normalizeActivityReference(activity.review_id)
+    const reportId = normalizeActivityReference(activity.report_id)
+    if (!vendorName || reviewId || reportId) return null
+    return (
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Link
+          to={buildWatchlistsPath(vendorName, backTo)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+          Watchlists
+        </Link>
+        <Link
+          to={buildVendorWorkspacePath(vendorName, backTo)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+          Vendor workspace
+        </Link>
+        <Link
+          to={buildVendorScopedPath('/evidence', vendorName, backTo)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+          Evidence
+        </Link>
+        <Link
+          to={buildVendorScopedPath('/reports', vendorName, backTo)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+          Reports
+        </Link>
+        <Link
+          to={buildVendorScopedPath('/opportunities', vendorName, backTo)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+          Opportunities
+        </Link>
+      </div>
+    )
+  }
+
   function normalizeEventTypesForChannel(channel: WebhookChannel, eventTypes: WebhookEventType[]): WebhookEventType[] {
     if (channel.startsWith('crm_')) return eventTypes
     const filtered = eventTypes.filter((eventType): eventType is WebhookEventType => !CRM_ONLY_EVENT_TYPES.has(eventType))
@@ -1062,6 +1112,10 @@ export default function IncidentAlerts() {
                 review_id: webhook.latest_failure_review_id,
                 report_id: webhook.latest_failure_report_id,
               }
+              const latestFailureContext = {
+                ...latestFailureReferences,
+                vendor_name: webhook.latest_failure_vendor_name,
+              }
               const latestManualTestReferences = manualTestResults[webhook.id]
                 ? null
                 : {
@@ -1069,6 +1123,12 @@ export default function IncidentAlerts() {
                     review_id: webhook.latest_test_review_id,
                     report_id: webhook.latest_test_report_id,
                   }
+              const latestManualTestContext = latestManualTestReferences
+                ? {
+                    ...latestManualTestReferences,
+                    vendor_name: webhook.latest_test_vendor_name,
+                  }
+                : null
               const hasLatestFailure = Boolean(webhook.latest_failure_at)
               const latestFailureIsManualTest = webhook.latest_failure_event_type === 'test'
               const testButtonLabel = manualTestButtonLabel(latestManualTest, hasLatestFailure, latestFailureIsManualTest)
@@ -1108,7 +1168,8 @@ export default function IncidentAlerts() {
                             {formatFailureSummary(webhook)} · {formatTs(webhook.latest_failure_at)}
                           </div>
                           {renderActivityReferences(latestFailureReferences)}
-                          {renderActivityDetailShortcuts(latestFailureReferences, currentAlertsUrl)}
+                          {renderActivityDetailShortcuts(latestFailureContext, currentAlertsUrl)}
+                          {renderActivityVendorShortcuts(latestFailureContext, currentAlertsUrl)}
                         </div>
                       ) : null}
                       {latestManualTest ? (
@@ -1129,7 +1190,8 @@ export default function IncidentAlerts() {
                             })()}
                           </div>
                           {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
-                          {latestManualTestReferences ? renderActivityDetailShortcuts(latestManualTestReferences, currentAlertsUrl) : null}
+                          {latestManualTestContext ? renderActivityDetailShortcuts(latestManualTestContext, currentAlertsUrl) : null}
+                          {latestManualTestContext ? renderActivityVendorShortcuts(latestManualTestContext, currentAlertsUrl) : null}
                         </div>
                       ) : null}
                     </div>

@@ -219,6 +219,75 @@ describe('IncidentAlerts', () => {
     expect(await screen.findByText('Copied report id')).toBeInTheDocument()
   })
 
+
+  it('links latest failure cards into vendor workflows when only vendor context is available', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-vendor',
+          url: 'https://hooks.example.com/vendor',
+          event_types: ['signal_update'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Vendor-only endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 2,
+          recent_success_rate_7d: 0.5,
+          latest_failure_event_type: 'signal_update',
+          latest_failure_status_code: 500,
+          latest_failure_error: 'downstream timeout',
+          latest_failure_at: '2026-04-10T02:55:00Z',
+          latest_failure_signal_id: 'sig-vendor',
+          latest_failure_review_id: null,
+          latest_failure_report_id: null,
+          latest_failure_vendor_name: 'Acme Rival',
+          latest_failure_company_name: 'Acme Bank',
+          latest_test_success: null,
+          latest_test_status_code: null,
+          latest_test_error: null,
+          latest_test_at: null,
+          latest_test_signal_id: null,
+          latest_test_review_id: null,
+          latest_test_report_id: null,
+          latest_test_vendor_name: null,
+          latest_test_company_name: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Vendor-only endpoint')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open Review' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open Report' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?vendor_name=Acme+Rival&back_to=%2Falerts',
+    )
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Acme%20Rival?back_to=%2Falerts',
+    )
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Acme+Rival&back_to=%2Falerts',
+    )
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Acme+Rival&back_to=%2Falerts',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Acme+Rival&back_to=%2Falerts',
+    )
+  })
+
   it('shows the latest manual test result on the webhook card', async () => {
     const user = userEvent.setup()
 

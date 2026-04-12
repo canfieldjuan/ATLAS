@@ -66,6 +66,8 @@ async def test_list_webhooks_exposes_latest_test_summary():
                 'latest_failure_signal_id': '22222222-2222-2222-2222-222222222222',
                 'latest_failure_review_id': '33333333-3333-4333-8333-333333333334',
                 'latest_failure_report_id': None,
+                'latest_failure_vendor_name': 'Acme Rival',
+                'latest_failure_company_name': 'Acme Bank',
                 'latest_test_success': False,
                 'latest_test_status_code': 504,
                 'latest_test_error': 'test timeout',
@@ -73,6 +75,8 @@ async def test_list_webhooks_exposes_latest_test_summary():
                 'latest_test_signal_id': None,
                 'latest_test_review_id': None,
                 'latest_test_report_id': '44444444-4444-4444-8444-444444444444',
+                'latest_test_vendor_name': 'Acme Rival',
+                'latest_test_company_name': 'Acme Bank',
             }
         ]
     )
@@ -92,9 +96,13 @@ async def test_list_webhooks_exposes_latest_test_summary():
     assert webhook['latest_failure_signal_id'] == '22222222-2222-2222-2222-222222222222'
     assert webhook['latest_failure_review_id'] == '33333333-3333-4333-8333-333333333334'
     assert webhook['latest_failure_report_id'] is None
+    assert webhook['latest_failure_vendor_name'] == 'Acme Rival'
+    assert webhook['latest_failure_company_name'] == 'Acme Bank'
     assert webhook['latest_test_signal_id'] is None
     assert webhook['latest_test_review_id'] is None
     assert webhook['latest_test_report_id'] == '44444444-4444-4444-8444-444444444444'
+    assert webhook['latest_test_vendor_name'] == 'Acme Rival'
+    assert webhook['latest_test_company_name'] == 'Acme Bank'
 
 
 @pytest.mark.asyncio
