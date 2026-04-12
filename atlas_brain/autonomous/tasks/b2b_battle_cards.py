@@ -252,10 +252,18 @@ def _battle_card_prior_attempt(parsed_copy: dict[str, Any]) -> Any:
 
 def _battle_card_llm_options(cfg: Any) -> dict[str, Any]:
     """Resolve backend-specific call_llm_with_skill options for battle cards."""
+    from ...pipelines.llm import normalize_openrouter_model
+
     backend = str(getattr(cfg, "battle_card_llm_backend", "auto") or "auto").strip().lower()
     model = (
-        str(getattr(cfg, "battle_card_openrouter_model", "") or "").strip()
-        or str(settings.llm.openrouter_reasoning_model or "").strip()
+        normalize_openrouter_model(
+            getattr(cfg, "battle_card_openrouter_model", ""),
+            context="battle card OpenRouter model",
+        )
+        or normalize_openrouter_model(
+            getattr(settings.llm, "openrouter_reasoning_model", ""),
+            context="battle card inherited reasoning model",
+        )
         or None
     )
     if backend == "anthropic":

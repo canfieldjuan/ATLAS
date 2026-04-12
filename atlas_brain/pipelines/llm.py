@@ -16,6 +16,8 @@ import time
 from typing import Any
 
 logger = logging.getLogger("atlas.pipelines.llm")
+_PREFERRED_OPENROUTER_REASONING_MODEL = "anthropic/claude-sonnet-4-5"
+_DEPRECATED_OPENROUTER_WARNING_KEYS: set[tuple[str, str]] = set()
 
 
 def _trace_cache_metrics(
@@ -67,6 +69,36 @@ def _strict_openrouter_reasoning() -> bool:
     return bool(getattr(_settings.llm, "openrouter_reasoning_strict", False))
 
 
+def normalize_openrouter_model(model: Any | None, *, context: str = "") -> str:
+    """Normalize deprecated OpenRouter aliases to the supported Claude default."""
+    text = str(model or "").strip()
+    if not text:
+        return ""
+    if "gpt-oss" not in text.lower():
+        return text
+    warning_key = (text.lower(), context.strip().lower())
+    if warning_key not in _DEPRECATED_OPENROUTER_WARNING_KEYS:
+        _DEPRECATED_OPENROUTER_WARNING_KEYS.add(warning_key)
+        logger.warning(
+            "Deprecated OpenRouter model %s requested%s; using %s instead",
+            text,
+            f" for {context}" if context else "",
+            _PREFERRED_OPENROUTER_REASONING_MODEL,
+        )
+    return _PREFERRED_OPENROUTER_REASONING_MODEL
+
+
+def configured_openrouter_reasoning_model() -> str:
+    """Return the supported OpenRouter reasoning model from settings."""
+    from ..config import settings as _settings
+
+    configured = normalize_openrouter_model(
+        getattr(_settings.llm, "openrouter_reasoning_model", ""),
+        context="ATLAS_LLM__OPENROUTER_REASONING_MODEL",
+    )
+    return configured or _PREFERRED_OPENROUTER_REASONING_MODEL
+
+
 def _resolve_workload(workload: str):
     """Try to resolve an LLM for a specific workload type.
 
@@ -84,15 +116,15 @@ def _resolve_workload(workload: str):
 
     if workload in ("synthesis", "reasoning"):
         # Primary: configured OpenRouter reasoning model
-        from ..config import settings as _settings
-        llm = _try_openrouter(_settings.llm.openrouter_reasoning_model)
+        configured_model = configured_openrouter_reasoning_model()
+        llm = _try_openrouter(configured_model)
         if llm is not None:
             logger.debug(
                 "Using OpenRouter %s for workload '%s'",
-                _settings.llm.openrouter_reasoning_model, workload,
+                configured_model, workload,
             )
             return llm
-        if _strict_openrouter_reasoning() and str(_settings.llm.openrouter_reasoning_model or "").strip():
+        if _strict_openrouter_reasoning() and configured_model:
             logger.warning(
                 "OpenRouter reasoning strict mode enabled; not falling back for workload '%s'",
                 workload,
@@ -114,8 +146,7 @@ def _resolve_workload(workload: str):
         return llm_registry.get_active()
 
     if workload == "openrouter":
-        from ..config import settings as _settings
-        return _try_openrouter(_settings.llm.openrouter_reasoning_model)
+        return _try_openrouter(configured_openrouter_reasoning_model())
 
     if workload == "vllm":
         return _activate_vllm()
@@ -130,12 +161,11 @@ def _resolve_workload(workload: str):
 def _try_openrouter(openrouter_model: str | None = None):
     """Try to activate OpenRouter. Reuses existing instance if model matches."""
     from ..services import llm_registry
-    from ..config import settings as _settings
 
-    target_model = (
-        str(openrouter_model or "").strip()
-        or str(_settings.llm.openrouter_reasoning_model or "").strip()
-    )
+    target_model = normalize_openrouter_model(
+        openrouter_model,
+        context="OpenRouter override",
+    ) or configured_openrouter_reasoning_model()
     or_key = _resolve_openrouter_api_key()
     if not or_key or not target_model:
         return None
@@ -274,18 +304,22 @@ def get_pipeline_llm(
     # --- Workload-based routing (preferred) ---
     if workload is not None:
         strict_reasoning = workload in ("synthesis", "reasoning") and _strict_openrouter_reasoning()
+        normalized_openrouter_model = normalize_openrouter_model(
+            openrouter_model,
+            context=f"{workload} workload override",
+        )
         # Explicit model override: create a standalone instance (don't swap the singleton)
-        if openrouter_model and try_openrouter:
+        if normalized_openrouter_model and try_openrouter:
             or_key = _resolve_openrouter_api_key()
             if or_key:
                 try:
                     from ..services.llm.openrouter import OpenRouterLLM
-                    _or = OpenRouterLLM(model=openrouter_model, api_key=or_key)
+                    _or = OpenRouterLLM(model=normalized_openrouter_model, api_key=or_key)
                     _or.load()
-                    logger.info("Using explicit OpenRouter model override: %s", openrouter_model)
+                    logger.info("Using explicit OpenRouter model override: %s", normalized_openrouter_model)
                     return _or
                 except Exception as e:
-                    logger.warning("Explicit OpenRouter model %s failed: %s", openrouter_model, e)
+                    logger.warning("Explicit OpenRouter model %s failed: %s", normalized_openrouter_model, e)
                     if strict_reasoning:
                         return None
         llm = _resolve_workload(workload)
@@ -318,7 +352,7 @@ def get_pipeline_llm(
             return None
         # Workload model unavailable; try OpenRouter fallback
         if try_openrouter:
-            llm = _try_openrouter(openrouter_model)
+            llm = _try_openrouter(normalized_openrouter_model)
             if llm is not None:
                 return llm
         # For synthesis/reasoning, triage (Haiku) is a last resort with warning
@@ -345,7 +379,9 @@ def get_pipeline_llm(
             return llm
 
     if try_openrouter:
-        llm = _try_openrouter(openrouter_model)
+        llm = _try_openrouter(
+            normalize_openrouter_model(openrouter_model, context="legacy pipeline override")
+        )
         if llm is not None:
             return llm
 

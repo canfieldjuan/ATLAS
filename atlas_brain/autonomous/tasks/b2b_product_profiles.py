@@ -546,6 +546,15 @@ async def _call_vllm(messages: list[dict], max_tokens: int, cfg, client: httpx.A
     return data["choices"][0]["message"]["content"].strip()
 
 
+def _product_profile_openrouter_model(cfg: Any) -> str:
+    from ...pipelines.llm import normalize_openrouter_model
+
+    return normalize_openrouter_model(
+        getattr(cfg, "product_profile_openrouter_model", ""),
+        context="product profile synthesis",
+    )
+
+
 async def _call_openrouter(messages: list[dict], max_tokens: int, cfg, client: httpx.AsyncClient) -> str:
     """Call OpenRouter API for profile synthesis."""
     import os
@@ -561,7 +570,7 @@ async def _call_openrouter(messages: list[dict], max_tokens: int, cfg, client: h
             "Content-Type": "application/json",
         },
         json={
-            "model": cfg.product_profile_openrouter_model,
+            "model": _product_profile_openrouter_model(cfg),
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0.3,
@@ -727,7 +736,7 @@ async def _synthesize_profile(
     cfg = settings.b2b_churn
     backend = cfg.product_profile_llm_backend
     model_id = (
-        cfg.product_profile_openrouter_model
+        _product_profile_openrouter_model(cfg)
         if backend == "openrouter"
         else cfg.product_profile_vllm_model
     )
@@ -1133,8 +1142,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
     batch_llm = (
         resolve_anthropic_batch_llm(
-            current_llm=SimpleNamespace(name="openrouter", model=str(cfg.product_profile_openrouter_model or "")),
-            target_model_candidates=(cfg.product_profile_openrouter_model,),
+            current_llm=SimpleNamespace(name="openrouter", model=_product_profile_openrouter_model(cfg)),
+            target_model_candidates=(_product_profile_openrouter_model(cfg),),
         )
         if batch_requested
         else None
@@ -1286,7 +1295,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 request = prepare_b2b_exact_stage_request(
                     "b2b_product_profiles.synthesis",
                     provider="openrouter",
-                    model=str(cfg.product_profile_openrouter_model or ""),
+                    model=_product_profile_openrouter_model(cfg),
                     messages=messages,
                     max_tokens=max_tokens,
                     temperature=0.3,

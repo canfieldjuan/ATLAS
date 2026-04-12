@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILES = (".env", ".env.local")
+DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
 
 
 class SaaSAuthConfig(BaseSettings):
@@ -195,7 +196,7 @@ class LLMConfig(BaseSettings):
 
     # OpenRouter reasoning model (synthesis/reasoning workloads)
     openrouter_reasoning_model: str = Field(
-        default="openai/gpt-oss-120b",
+        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
         description=(
             "OpenRouter model for synthesis/reasoning workloads. "
             "Set via ATLAS_LLM__OPENROUTER_REASONING_MODEL "
@@ -2203,7 +2204,7 @@ class ExternalDataConfig(BaseSettings):
     blog_base_url: str = Field(default="https://atlas-intel-ui-two.vercel.app", description="Base URL for consumer blog (full URLs in campaign emails)")
     amazon_associate_tag: str = Field(default="", description="Amazon Associates tag for consumer affiliate links")
     blog_post_openrouter_model: str = Field(
-        default="openai/gpt-oss-120b",
+        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
         description="OpenRouter model for blog post generation",
     )
     # Blog auto-deploy (git push + Vercel deploy hook)
@@ -2694,7 +2695,7 @@ class B2BChurnConfig(BaseSettings):
         description="LLM backend for product profiles: 'vllm' (local) or 'openrouter'",
     )
     product_profile_openrouter_model: str = Field(
-        default="openai/gpt-oss-120b",
+        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
         description="OpenRouter model for product profile synthesis",
     )
     product_profile_anthropic_batch_enabled: bool = Field(
@@ -2720,7 +2721,7 @@ class B2BChurnConfig(BaseSettings):
     blog_post_timeout_seconds: int = Field(default=1800, description="Task timeout for blog post generation")
     blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
     blog_base_url: str = Field(default="https://churnsignals.co", description="Base URL for B2B blog (full URLs in campaign emails)")
-    blog_post_openrouter_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for blog generation")
+    blog_post_openrouter_model: str = Field(default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL, description="OpenRouter model for blog generation")
     blog_post_temperature: float = Field(
         default=0.7,
         ge=0.0,
@@ -2911,7 +2912,7 @@ class B2BChurnConfig(BaseSettings):
 
     # Analyst enrichment (OpenRouter)
     openrouter_api_key: str = Field(default="", description="OpenRouter API key for analyst enrichment")
-    briefing_analyst_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for briefing analyst summary")
+    briefing_analyst_model: str = Field(default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL, description="OpenRouter model for briefing analyst summary")
     scorecard_narrative_max_tokens: int = Field(
         default=300,
         ge=128,
@@ -2922,7 +2923,7 @@ class B2BChurnConfig(BaseSettings):
         default=1600,
         ge=256,
         le=8192,
-        description="Max output tokens for vendor scorecard narratives when the synthesis model is gpt-oss",
+        description="Deprecated legacy GPT OSS token budget retained for backward-compatible env parsing",
     )
     scorecard_narrative_deepseek_max_tokens: int = Field(
         default=1200,
@@ -3038,11 +3039,11 @@ class B2BChurnConfig(BaseSettings):
         description="Max completion tokens for vendor or cross-vendor reasoning synthesis calls",
     )
     reasoning_synthesis_model: str = Field(
-        default="",
+        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
         description=(
-            "OpenRouter model override for vendor reasoning synthesis. "
-            "Empty = prefer settings.llm.openrouter_reasoning_model before "
-            "falling back to the legacy reasoning-model defaults."
+            "OpenRouter model for vendor reasoning synthesis. "
+            "Defaults to Claude Sonnet 4.5; empty inherits the global "
+            "OpenRouter reasoning model."
         ),
     )
     reasoning_synthesis_temperature: float = Field(
@@ -3336,10 +3337,11 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     battle_card_openrouter_model: str = Field(
-        default="",
+        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
         description=(
-            "OpenRouter model override for battle-card sales copy. "
-            "Empty = inherit ATLAS_LLM__OPENROUTER_REASONING_MODEL."
+            "OpenRouter model for battle-card sales copy. "
+            "Defaults to Claude Sonnet 4.5; empty inherits the global "
+            "OpenRouter reasoning model."
         ),
     )
     battle_card_llm_max_tokens: int = Field(default=16384, ge=256, le=32768, description="Max output tokens for battle card sales copy (reasoning models need extra budget)")

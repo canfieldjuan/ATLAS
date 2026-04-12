@@ -872,7 +872,12 @@ async def _compute_prediction(
             "segment_match": segment_data,
         }
 
-        win_loss_model = str(settings.b2b_churn.win_loss_model).strip()
+        from ..pipelines.llm import normalize_openrouter_model
+
+        win_loss_model = normalize_openrouter_model(
+            settings.b2b_churn.win_loss_model,
+            context="win/loss strategy synthesis",
+        )
         payload_text = json.dumps(strategy_payload, sort_keys=True, ensure_ascii=True)
 
         # Check exact cache first

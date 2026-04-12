@@ -103,9 +103,12 @@ def _normalize_vendor_name(value: Any) -> str:
 
 def _tenant_report_chunk_size() -> int:
     """Return a safe per-chunk vendor cap for tenant synthesis."""
-    model = str(getattr(settings.llm, "openrouter_reasoning_model", "") or "").lower()
-    if "gpt-oss" in model:
-        return 3
+    from ...pipelines.llm import normalize_openrouter_model
+
+    model = normalize_openrouter_model(
+        getattr(settings.llm, "openrouter_reasoning_model", ""),
+        context="tenant report chunk sizing",
+    ).lower()
     if "deepseek" in model:
         return 4
     return 6
@@ -1027,7 +1030,7 @@ async def _run_chunked_tenant_synthesis(
     if len(chunks) <= 1:
         return await _run_tenant_synthesis_llm(payload, max_tokens=max_tokens)
 
-    from ...pipelines.llm import get_pipeline_llm
+    from ...pipelines.llm import get_pipeline_llm, normalize_openrouter_model
     from ...services.b2b.anthropic_batch import (
         AnthropicBatchItem,
         mark_batch_fallback_result,
@@ -1069,7 +1072,12 @@ async def _run_chunked_tenant_synthesis(
     batch_llm = (
         resolve_anthropic_batch_llm(
             current_llm=resolved_llm,
-            target_model_candidates=(getattr(settings.llm, "openrouter_reasoning_model", ""),),
+            target_model_candidates=(
+                normalize_openrouter_model(
+                    getattr(settings.llm, "openrouter_reasoning_model", ""),
+                    context="tenant report synthesis",
+                ),
+            ),
         )
         if batch_requested
         else None
