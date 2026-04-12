@@ -315,11 +315,17 @@ def _account_reasoning_named_accounts(
 def _apply_account_reasoning_to_report_entry(
     entry: dict[str, Any],
     account_reasoning: dict[str, Any] | None,
+    *,
+    preview_only: bool = False,
 ) -> None:
     """Promote account reasoning into visible report fields."""
     if not isinstance(entry, dict) or not isinstance(account_reasoning, dict) or not account_reasoning:
         return
-    entry["account_reasoning"] = account_reasoning
+    if preview_only:
+        entry["account_reasoning_preview"] = account_reasoning
+        entry["account_reasoning_preview_only"] = True
+    else:
+        entry["account_reasoning"] = account_reasoning
     metrics: dict[str, int] = {}
     for key in ("total_accounts", "high_intent_count", "active_eval_count"):
         value = _reasoning_int(account_reasoning.get(key))
@@ -442,6 +448,16 @@ def _attach_synthesis_contracts_to_report_entry(
     if account_reasoning:
         contracts["account_reasoning"] = account_reasoning
         _apply_account_reasoning_to_report_entry(entry, account_reasoning)
+    else:
+        account_preview = context.get("account_reasoning_preview")
+        if isinstance(account_preview, dict):
+            preview_reasoning = account_preview.get("account_reasoning")
+            if isinstance(preview_reasoning, dict) and preview_reasoning:
+                _apply_account_reasoning_to_report_entry(
+                    entry,
+                    preview_reasoning,
+                    preview_only=True,
+                )
 
     if include_displacement:
         displacement = materialized.get("displacement_reasoning")

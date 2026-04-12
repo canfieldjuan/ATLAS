@@ -177,6 +177,53 @@ class TestGovernanceFieldsInReportEntries:
         assert "account_reasoning:insufficient" in entry["reasoning_contract_gaps"]
         assert "account_reasoning:suppressed" in entry["reasoning_contract_gaps"]
 
+    def test_sparse_account_reasoning_surfaces_preview_only_in_scorecard_entry(self):
+        entry: dict[str, Any] = {"vendor": "TestVendor"}
+        view = SynthesisView(
+            "TestVendor",
+            {
+                "reasoning_contracts": {
+                    "schema_version": "v1",
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "summary": "Pricing pressure is acute after Q1 hike.",
+                            "data_gaps": [],
+                            "citations": [],
+                        },
+                    },
+                    "account_reasoning": {
+                        "confidence": "insufficient",
+                        "market_summary": "A single post-purchase account is in scope.",
+                        "total_accounts": {
+                            "value": 1,
+                            "source_id": "accounts:summary:total_accounts",
+                        },
+                        "top_accounts": [
+                            {
+                                "name": "Concentrix",
+                                "intent_score": 0.6,
+                                "source_id": "accounts:company:concentrix",
+                            },
+                        ],
+                    },
+                },
+            },
+            schema_version="v2",
+            as_of_date=date(2026, 3, 28),
+        )
+        _attach_synthesis_contracts_to_report_entry(
+            entry, view, consumer_name="vendor_scorecard",
+            requested_as_of=date(2026, 3, 28), include_displacement=True,
+        )
+
+        assert "account_reasoning" not in entry.get("reasoning_contracts", {})
+        assert entry["account_reasoning_preview"]["top_accounts"][0]["name"] == "Concentrix"
+        assert entry["account_pressure_metrics"]["total_accounts"] == 1
+        assert entry["priority_account_names"] == ["Concentrix"]
+        assert "account_reasoning:suppressed" in entry["reasoning_contract_gaps"]
+
     def test_low_confidence_sections_surface_disclaimers(self):
         entry: dict[str, Any] = {"vendor": "TestVendor"}
         view = SynthesisView(

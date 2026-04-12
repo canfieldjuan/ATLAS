@@ -801,6 +801,75 @@ class TestBuildChallengerBrief:
         assert brief["evidence_window_days"] == 17
         assert brief["reasoning_source"] == "b2b_reasoning_synthesis"
 
+    def test_sparse_account_reasoning_surfaces_preview_fallback(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "schema_version": "v1",
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "trigger": "Price hike",
+                        },
+                    },
+                    "displacement_reasoning": {
+                        "schema_version": "v1",
+                        "migration_proof": {"confidence": "medium"},
+                    },
+                    "account_reasoning": {
+                        "schema_version": "v1",
+                        "confidence": "insufficient",
+                        "market_summary": (
+                            "Single account (Concentrix) in post-purchase stage with "
+                            "0.6 intent score provides limited directional signal."
+                        ),
+                        "total_accounts": {
+                            "value": 1,
+                            "source_id": "accounts:summary:total_accounts",
+                        },
+                        "top_accounts": [
+                            {
+                                "name": "Concentrix",
+                                "intent_score": 0.6,
+                                "source_id": "accounts:company:concentrix",
+                            },
+                        ],
+                    },
+                },
+                "meta": {
+                    "evidence_window_start": "2026-03-01",
+                    "evidence_window_end": "2026-03-18",
+                },
+            },
+            "Salesforce",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Salesforce",
+            challenger="HubSpot",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["data_sources"]["account_reasoning"] is False
+        assert brief["data_sources"]["account_reasoning_preview"] is True
+        assert "account_reasoning" not in brief
+        assert brief["account_reasoning_preview"]["top_accounts"][0]["name"] == "Concentrix"
+        assert brief["incumbent_profile"]["account_pressure_summary"].startswith("Single account")
+        assert brief["target_accounts_source"] == "account_reasoning_preview"
+        assert brief["target_accounts"][0]["company"] == "Concentrix"
+        assert brief["reasoning_section_disclaimers"]["account_reasoning"]
+
     def test_build_brief_surfaces_reasoning_anchor_examples(self):
         synthesis_view = load_synthesis_view(
             {

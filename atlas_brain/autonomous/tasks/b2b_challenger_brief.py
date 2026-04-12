@@ -1385,6 +1385,7 @@ def _build_challenger_brief(
     vendor_core_reasoning: dict[str, Any] = {}
     displacement_reasoning: dict[str, Any] = {}
     account_reasoning: dict[str, Any] = {}
+    account_reasoning_preview: dict[str, Any] = {}
     reasoning_contracts: dict[str, Any] = {}
     segment_playbook: dict[str, Any] = {}
     reasoning_contract_gaps: list[str] = []
@@ -1432,6 +1433,16 @@ def _build_challenger_brief(
         account_reasoning = (
             consumer_context.get("account_reasoning")
             if isinstance(consumer_context.get("account_reasoning"), dict)
+            else {}
+        )
+        account_preview_payload = (
+            consumer_context.get("account_reasoning_preview")
+            if isinstance(consumer_context.get("account_reasoning_preview"), dict)
+            else {}
+        )
+        account_reasoning_preview = (
+            account_preview_payload.get("account_reasoning")
+            if isinstance(account_preview_payload.get("account_reasoning"), dict)
             else {}
         )
         reasoning_anchor_examples = (
@@ -1503,6 +1514,16 @@ def _build_challenger_brief(
         account_pressure_summary, account_pressure_metrics = (
             _account_reasoning_summary_payload(account_reasoning)
         )
+        if (
+            (not account_pressure_summary)
+            and (not account_pressure_metrics)
+            and account_reasoning_preview
+        ):
+            account_pressure_summary, account_pressure_metrics = (
+                _account_reasoning_summary_payload(account_reasoning_preview)
+            )
+            if account_reasoning_preview:
+                incumbent_section["account_reasoning_preview"] = account_reasoning_preview
         if account_pressure_summary:
             incumbent_section["account_pressure_summary"] = account_pressure_summary
         if account_pressure_metrics:
@@ -1677,6 +1698,15 @@ def _build_challenger_brief(
         )
         if target_accounts or total_target:
             target_accounts_source = "account_reasoning"
+    elif account_reasoning_preview:
+        target_accounts, total_target, considering_count = (
+            _fallback_target_accounts_from_reasoning(
+                account_reasoning_preview,
+                max_accounts=max_target_accounts,
+            )
+        )
+        if target_accounts or total_target:
+            target_accounts_source = "account_reasoning_preview"
     elif battle_card:
         target_accounts, total_target, considering_count = (
             _fallback_target_accounts_from_battle_card(
@@ -1733,6 +1763,7 @@ def _build_challenger_brief(
         vendor_core_reasoning
         or displacement_reasoning
         or account_reasoning
+        or account_reasoning_preview
         or synthesis_wedge
         or evidence_window
     )
@@ -1744,6 +1775,7 @@ def _build_challenger_brief(
         "evidence_vault": used_evidence_vault,
         "accounts_in_motion": accounts_in_motion is not None,
         "account_reasoning": bool(account_reasoning),
+        "account_reasoning_preview": bool(account_reasoning_preview),
         "product_profiles": (incumbent_profile is not None or challenger_profile is not None),
         "cross_vendor_conclusion": cross_vendor_battle is not None,
         "review_quotes": bool(review_pain_quotes),
@@ -1762,6 +1794,8 @@ def _build_challenger_brief(
         exec_summary = "%s %s" % (exec_summary, timing_summary)
     if target_accounts_source == "account_reasoning":
         exec_summary = "%s Target list uses reasoning-backed account fallback." % exec_summary
+    elif target_accounts_source == "account_reasoning_preview":
+        exec_summary = "%s Target list uses preview-only account reasoning fallback." % exec_summary
 
     result = {
         "incumbent": incumbent,
@@ -1800,6 +1834,8 @@ def _build_challenger_brief(
         result["reasoning_delta"] = reasoning_delta
     if account_reasoning:
         result["account_reasoning"] = account_reasoning
+    if account_reasoning_preview:
+        result["account_reasoning_preview"] = account_reasoning_preview
     if timing_summary or timing_metrics or priority_timing_triggers:
         timing_intelligence = (
             vendor_core_reasoning.get("timing_intelligence")
