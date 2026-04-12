@@ -13883,6 +13883,18 @@ async def read_company_signal_review_impact_summary(
                 "queue_snapshot": None,
                 "primary_driver": None,
             },
+            "operator_focus": {
+                "status": "no_data",
+                "action_type": None,
+                "action": None,
+                "priority": None,
+                "owner": None,
+                "reason": None,
+                "rationale": None,
+                "queue_filters": {},
+                "queue_snapshot": None,
+                "primary_driver": None,
+            },
         }
 
     where_clause = " AND ".join(conditions)
@@ -14785,6 +14797,87 @@ async def read_company_signal_review_impact_summary(
             "overdue_pending_reviews": int(totals.get("overdue_pending_reviews") or 0),
         }
 
+    def _build_review_impact_operator_focus(
+        trend_recommendation: Mapping[str, Any],
+        trend_recommendation_filters: Mapping[str, Any],
+        trend_recommendation_queue_filters: Mapping[str, Any],
+        trend_recommendation_queue_snapshot: Mapping[str, Any] | None,
+        trend_focus: Mapping[str, Any],
+        trend_queue_recommendation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        default = {
+            "status": "no_data",
+            "action_type": None,
+            "action": None,
+            "priority": None,
+            "owner": None,
+            "reason": None,
+            "rationale": None,
+            "queue_filters": {},
+            "queue_snapshot": None,
+            "primary_driver": None,
+        }
+
+        def _priority_rank(value: Any) -> int:
+            order = {
+                "high": 3,
+                "medium": 2,
+                "low": 1,
+            }
+            return order.get(str(value or "").lower(), 0)
+
+        trend_payload: dict[str, Any] | None = None
+        trend_action = trend_recommendation.get("action") if isinstance(trend_recommendation, Mapping) else None
+        if trend_action:
+            if trend_action == "inspect_rebuild_pipeline":
+                action_type = "rebuild_pipeline"
+            elif trend_action == "review_effect_quality":
+                action_type = "review_quality"
+            elif trend_action == "increase_review_throughput":
+                action_type = "review_queue"
+            else:
+                action_type = "monitor"
+            trend_payload = {
+                "status": trend_recommendation.get("status"),
+                "action_type": action_type,
+                "action": trend_action,
+                "priority": trend_recommendation.get("priority"),
+                "owner": trend_recommendation.get("owner"),
+                "reason": trend_focus.get("focus") if isinstance(trend_focus, Mapping) else None,
+                "rationale": trend_recommendation.get("rationale"),
+                "queue_filters": dict(trend_recommendation_queue_filters or {}),
+                "queue_snapshot": (
+                    dict(trend_recommendation_queue_snapshot)
+                    if isinstance(trend_recommendation_queue_snapshot, Mapping)
+                    else None
+                ),
+                "primary_driver": _build_trend_queue_driver("trend_recommendation", trend_recommendation),
+            }
+
+        queue_payload = None
+        queue_action = trend_queue_recommendation.get("action") if isinstance(trend_queue_recommendation, Mapping) else None
+        if queue_action:
+            queue_payload = {
+                **default,
+                **dict(trend_queue_recommendation),
+            }
+
+        if trend_payload and queue_payload:
+            if _priority_rank(trend_payload.get("priority")) > _priority_rank(queue_payload.get("priority")):
+                return {
+                    **default,
+                    **trend_payload,
+                }
+            return queue_payload
+        if queue_payload:
+            return queue_payload
+        if trend_payload:
+            return {
+                **default,
+                **trend_payload,
+            }
+        return default
+
     def _build_trend_queue_recommendation(
         queue_focus: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
@@ -15053,6 +15146,14 @@ async def read_company_signal_review_impact_summary(
     trend_queue_rankings = _sort_trend_queue_rankings(trend_queue_rankings)
     trend_queue_focus = trend_queue_rankings[0] if trend_queue_rankings else None
     trend_queue_recommendation = _build_trend_queue_recommendation(trend_queue_focus)
+    operator_focus = _build_review_impact_operator_focus(
+        trend_recommendation,
+        trend_recommendation_filters,
+        trend_recommendation_queue_filters,
+        trend_recommendation_queue_snapshot,
+        trend_focus,
+        trend_queue_recommendation,
+    )
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -15077,6 +15178,7 @@ async def read_company_signal_review_impact_summary(
         "trend_queue_rankings": trend_queue_rankings,
         "trend_queue_focus": trend_queue_focus,
         "trend_queue_recommendation": trend_queue_recommendation,
+        "operator_focus": operator_focus,
     }
 
 

@@ -1359,6 +1359,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
             "label": "effect_rate_down",
         },
     }
+    assert summary["operator_focus"] == summary["trend_queue_recommendation"]
 
 
 def _make_review_impact_summary_pool(*, totals=None, daily_trends=None):
@@ -1399,6 +1400,18 @@ async def test_read_company_signal_review_impact_summary_returns_no_data_without
     assert summary["trend_queue_rankings"] == []
     assert summary["trend_queue_focus"] is None
     assert summary["trend_queue_recommendation"] == {
+        "status": "no_data",
+        "action_type": None,
+        "action": None,
+        "priority": None,
+        "owner": None,
+        "reason": None,
+        "rationale": None,
+        "queue_filters": {},
+        "queue_snapshot": None,
+        "primary_driver": None,
+    }
+    assert summary["operator_focus"] == {
         "status": "no_data",
         "action_type": None,
         "action": None,
@@ -1531,6 +1544,7 @@ async def test_read_company_signal_review_impact_summary_recommends_policy_revie
             "label": "effect_rate_down",
         },
     }
+    assert summary["operator_focus"] == summary["trend_queue_recommendation"]
 
 
 @pytest.mark.asyncio
@@ -1728,6 +1742,27 @@ async def test_read_company_signal_review_impact_summary_recommends_rebuild_pipe
     assert summary["trend_recommendation"]["priority"] == "high"
     assert summary["trend_recommendation"]["owner"] == "backend_pipeline"
     assert summary["trend_recommendation"]["supporting_focuses"] == ["rebuild_blocks_up", "rebuild_trigger_rate_down"]
+    assert summary["operator_focus"] == {
+        "status": "act",
+        "action_type": "rebuild_pipeline",
+        "action": "inspect_rebuild_pipeline",
+        "priority": "high",
+        "owner": "backend_pipeline",
+        "reason": "rebuild_blocks_up",
+        "rationale": "Recent review actions are losing momentum in the rebuild handoff path.",
+        "queue_filters": {},
+        "queue_snapshot": None,
+        "primary_driver": {
+            "kind": "trend_recommendation",
+            "status": "act",
+            "focus": None,
+            "action": "inspect_rebuild_pipeline",
+            "metric": None,
+            "direction": None,
+            "rationale": "Recent review actions are losing momentum in the rebuild handoff path.",
+            "label": "inspect_rebuild_pipeline",
+        },
+    }
 
 
 @pytest.mark.asyncio
