@@ -529,6 +529,30 @@ function watchlistAlertEventEvidencePath(
   return watchlistEvidenceExplorerPath(contextParams, vendorName, witnessId, source)
 }
 
+function watchlistAlertEventAccountUrl(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const path = watchlistAlertEventAccountPath(searchParams, event)
+  return path ? `${window.location.origin}${path}` : null
+}
+
+function watchlistAlertEventReviewUrl(
+  searchParams: URLSearchParams,
+  event: WatchlistAlertEvent,
+  reviewId: string,
+) {
+  const path = watchlistAlertEventReviewDetailPath(searchParams, event, reviewId)
+  return path ? `${window.location.origin}${path}` : null
+}
+
+function watchlistAlertEventEvidenceUrl(
+  searchParams: URLSearchParams,
+  event: WatchlistAlertEvent,
+  witnessId?: string | null,
+  source?: string | null,
+) {
+  const path = watchlistAlertEventEvidencePath(searchParams, event, witnessId, source)
+  return path ? `${window.location.origin}${path}` : null
+}
+
 function accountFocusFromRow(row: AccountsInMotionFeedItem) {
   return {
     vendor: row.vendor || '',
@@ -1514,6 +1538,52 @@ export default function Watchlists() {
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : `Failed to copy link for ${view.name}`)
+    }
+  }
+
+  async function handleCopyAlertEventAccountReviewLink(event: WatchlistAlertEvent) {
+    const targetUrl = watchlistAlertEventAccountUrl(searchParams, event)
+    const eventLabel = event.company_name || event.vendor_name || 'alert event'
+    if (!targetUrl) return
+    try {
+      await navigator.clipboard.writeText(targetUrl)
+      setActionError(null)
+      setActionMessage(`Copied account review link for ${eventLabel}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy account review link')
+    }
+  }
+
+  async function handleCopyAlertEventReviewLink(event: WatchlistAlertEvent, reviewId: string) {
+    const targetUrl = watchlistAlertEventReviewUrl(searchParams, event, reviewId)
+    const eventLabel = event.company_name || event.vendor_name || 'alert event'
+    if (!targetUrl) return
+    try {
+      await navigator.clipboard.writeText(targetUrl)
+      setActionError(null)
+      setActionMessage(`Copied review link for ${eventLabel}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy review link')
+    }
+  }
+
+  async function handleCopyAlertEventWitnessLink(
+    event: WatchlistAlertEvent,
+    witnessId: string,
+    source?: string | null,
+  ) {
+    const targetUrl = watchlistAlertEventEvidenceUrl(searchParams, event, witnessId, source)
+    const eventLabel = event.company_name || event.vendor_name || 'alert event'
+    if (!targetUrl) return
+    try {
+      await navigator.clipboard.writeText(targetUrl)
+      setActionError(null)
+      setActionMessage(`Copied witness link for ${eventLabel}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy witness link')
     }
   }
 
@@ -3186,6 +3256,16 @@ export default function Watchlists() {
                                 Account Review
                               </Link>
                             ) : null}
+                            {accountReviewPath ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyAlertEventAccountReviewLink(event)}
+                                aria-label={`Copy alert account review link for ${eventLabel}`}
+                                className="text-slate-300 hover:text-slate-200"
+                              >
+                                Copy account review
+                              </button>
+                            ) : null}
                             {reviewPath ? (
                               <Link
                                 to={reviewPath}
@@ -3195,6 +3275,16 @@ export default function Watchlists() {
                                 Review
                               </Link>
                             ) : null}
+                            {reviewPath ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyAlertEventReviewLink(event, primaryReviewId)}
+                                aria-label={`Copy alert review link for ${eventLabel}`}
+                                className="text-slate-300 hover:text-slate-200"
+                              >
+                                Copy review
+                              </button>
+                            ) : null}
                             {witnessPath ? (
                               <Link
                                 to={witnessPath}
@@ -3203,6 +3293,16 @@ export default function Watchlists() {
                               >
                                 Witness
                               </Link>
+                            ) : null}
+                            {witnessPath ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyAlertEventWitnessLink(event, primaryWitnessId, eventSource)}
+                                aria-label={`Copy alert witness link for ${eventLabel}`}
+                                className="text-slate-300 hover:text-slate-200"
+                              >
+                                Copy witness
+                              </button>
                             ) : null}
                             {evidencePath ? (
                               <Link
