@@ -180,6 +180,8 @@ describe('IncidentAlerts', () => {
           latest_failure_signal_id: 'sig-fail',
           latest_failure_review_id: 'review-fail',
           latest_failure_report_id: null,
+          latest_failure_vendor_name: 'Acme Rival',
+          latest_failure_company_name: 'Acme Bank',
           latest_test_success: false,
           latest_test_status_code: 504,
           latest_test_error: 'test timeout',
@@ -205,6 +207,7 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('sig-fail')).toBeInTheDocument()
     expect(screen.getByText('review-fail')).toBeInTheDocument()
     expect(screen.getByText('report-test')).toBeInTheDocument()
+    expect(screen.getByText('Review target: Acme Bank')).toBeInTheDocument()
     expect(screen.getByText('Report target: Battle Card · Acme Rival')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open Review' })).toHaveAttribute(
       'href',

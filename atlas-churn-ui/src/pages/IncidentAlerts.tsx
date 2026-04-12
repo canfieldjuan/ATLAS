@@ -408,6 +408,21 @@ function formatReportTargetLabel(activity: {
   return reportType ? `Report target: ${reportType}` : `Report target: ${reportId}`
 }
 
+function formatReviewTargetLabel(activity: {
+  review_id?: string | null
+  report_id?: string | null
+  company_name?: string | null
+  vendor_name?: string | null
+  account_review_focus?: AlertAccountReviewFocus | null
+}) {
+  const reviewId = normalizeActivityReference(activity.review_id)
+  if (!reviewId || activity.account_review_focus || normalizeActivityReference(activity.report_id)) return null
+  const company = String(activity.company_name || '').trim()
+  if (company) return `Review target: ${company}`
+  const vendor = String(activity.vendor_name || '').trim()
+  return vendor ? `Review target: ${vendor}` : `Review target: ${reviewId}`
+}
+
 function generateWebhookSecret() {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
   const bytes = new Uint8Array(24)
@@ -1176,6 +1191,7 @@ export default function IncidentAlerts() {
                 report_type: webhook.latest_failure_report_type,
                 report_title: webhook.latest_failure_report_title,
                 vendor_name: webhook.latest_failure_vendor_name,
+                company_name: webhook.latest_failure_company_name,
                 account_review_focus: webhook.latest_failure_account_review_focus ?? null,
               }
               const latestManualTestReferences = manualTestResults[webhook.id]
@@ -1191,6 +1207,7 @@ export default function IncidentAlerts() {
                     report_type: webhook.latest_test_report_type,
                     report_title: webhook.latest_test_report_title,
                     vendor_name: webhook.latest_test_vendor_name,
+                    company_name: webhook.latest_test_company_name,
                     account_review_focus: webhook.latest_test_account_review_focus ?? null,
                   }
                 : null
@@ -1238,6 +1255,11 @@ export default function IncidentAlerts() {
                               {formatAccountReviewTargetLabel(latestFailureContext.account_review_focus)}
                             </div>
                           ) : null}
+                          {formatReviewTargetLabel(latestFailureContext) ? (
+                            <div className="mt-1 text-[11px] font-medium text-rose-100/90">
+                              {formatReviewTargetLabel(latestFailureContext)}
+                            </div>
+                          ) : null}
                           {formatReportTargetLabel(latestFailureContext) ? (
                             <div className="mt-1 text-[11px] font-medium text-rose-100/90">
                               {formatReportTargetLabel(latestFailureContext)}
@@ -1270,6 +1292,11 @@ export default function IncidentAlerts() {
                               {formatAccountReviewTargetLabel(latestManualTestContext.account_review_focus)}
                             </div>
                           ) : null}
+                          {latestManualTestContext && formatReviewTargetLabel(latestManualTestContext) ? (
+                            <div className="mt-1 text-[11px] font-medium text-current/90">
+                              {formatReviewTargetLabel(latestManualTestContext)}
+                            </div>
+                          ) : null}
                           {latestManualTestContext && formatReportTargetLabel(latestManualTestContext) ? (
                             <div className="mt-1 text-[11px] font-medium text-current/90">
                               {formatReportTargetLabel(latestManualTestContext)}
@@ -1289,6 +1316,11 @@ export default function IncidentAlerts() {
                           {latestCrmPush.account_review_focus ? (
                             <div className="mt-1 text-[11px] font-medium text-current/90">
                               {formatAccountReviewTargetLabel(latestCrmPush.account_review_focus)}
+                            </div>
+                          ) : null}
+                          {formatReviewTargetLabel(latestCrmPush) ? (
+                            <div className="mt-1 text-[11px] font-medium text-current/90">
+                              {formatReviewTargetLabel(latestCrmPush)}
                             </div>
                           ) : null}
                           {formatReportTargetLabel(latestCrmPush) ? (
