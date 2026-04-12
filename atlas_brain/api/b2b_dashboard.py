@@ -17,7 +17,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Mapping, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
@@ -5721,12 +5721,58 @@ class CreateWebhookBody(BaseModel):
     auth_header: str | None = None
     description: str | None = None
 
+    @field_validator("url", "secret", "channel", mode="before")
+    @classmethod
+    def _trim_required_text(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("value is required")
+        return text
+
+    @field_validator("auth_header", "description", mode="before")
+    @classmethod
+    def _trim_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("event_types", mode="before")
+    @classmethod
+    def _trim_event_types(cls, value: Any) -> Any:
+        if value is None or not isinstance(value, list):
+            return value
+        return [str(item).strip() for item in value if str(item).strip()]
+
 
 class UpdateWebhookBody(BaseModel):
     url: str | None = None
     event_types: list[str] | None = None
     enabled: bool | None = None
     description: str | None = None
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _trim_url(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _trim_description(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @field_validator("event_types", mode="before")
+    @classmethod
+    def _trim_event_types(cls, value: Any) -> Any:
+        if value is None or not isinstance(value, list):
+            return value
+        return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _validate_webhook_event_types_for_channel(event_types: list[str], channel: str) -> None:

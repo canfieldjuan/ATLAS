@@ -177,6 +177,68 @@ async def test_create_webhook_allows_high_intent_push_for_crm_channel():
 
 
 @pytest.mark.asyncio
+async def test_create_webhook_trims_body_text_before_validation_and_persistence():
+    created_at = datetime.now(timezone.utc)
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        return_value={
+            'id': '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+            'account_id': 'account-1',
+            'url': 'https://hooks.example.com/crm',
+            'event_types': ['high_intent_push', 'report_generated'],
+            'channel': 'crm_hubspot',
+            'enabled': True,
+            'description': 'CRM escalation',
+            'created_at': created_at,
+        }
+    )
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.CreateWebhookBody(
+        url='  https://hooks.example.com/crm  ',
+        secret='  ' + ('a' * 24) + '  ',
+        event_types=['  high_intent_push  ', '   ', ' report_generated '],
+        channel='  crm_hubspot  ',
+        auth_header='  Bearer pat-123  ',
+        description='  CRM escalation  ',
+    )
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.create_webhook(body, user=user)
+
+    assert result['event_types'] == ['high_intent_push', 'report_generated']
+    assert result['channel'] == 'crm_hubspot'
+    pool.fetchrow.assert_awaited_once()
+    args = pool.fetchrow.await_args.args
+    assert args[1] == 'account-1'
+    assert args[2] == 'https://hooks.example.com/crm'
+    assert args[3] == 'a' * 24
+    assert args[4] == ['high_intent_push', 'report_generated']
+    assert args[5] == 'crm_hubspot'
+    assert args[6] == 'Bearer pat-123'
+    assert args[7] == 'CRM escalation'
+
+
+@pytest.mark.asyncio
+async def test_update_webhook_blank_url_is_treated_as_no_update():
+    pool = MagicMock()
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.UpdateWebhookBody(url='   ')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.update_webhook(
+                '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+                body,
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'No fields to update'
+    pool.fetchval.assert_not_called()
+    pool.fetchrow.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_update_webhook_rejects_high_intent_push_for_generic_channel():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value='generic')
