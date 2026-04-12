@@ -12115,7 +12115,7 @@ def _company_signal_action_type(action: Any) -> str | None:
         return "rebuild_pipeline"
     if action_name == "review_effect_quality":
         return "review_quality"
-    if action_name == "monitor_queue":
+    if action_name in {"monitor_queue", "monitor_trends", "maintain_current_course"}:
         return "monitor"
     return None
 

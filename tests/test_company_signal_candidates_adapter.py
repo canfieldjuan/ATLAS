@@ -1716,6 +1716,27 @@ async def test_read_company_signal_review_impact_summary_recommends_monitor_when
     assert summary["trend_recommendation"]["priority"] == "low"
     assert summary["trend_recommendation"]["owner"] == "review_ops"
     assert summary["trend_recommendation"]["supporting_focuses"] == []
+    assert summary["operator_focus"] == {
+        "status": "monitor",
+        "action_type": "monitor",
+        "action": "monitor_trends",
+        "priority": "low",
+        "owner": "review_ops",
+        "reason": None,
+        "rationale": "Recent review impact is broadly flat relative to the prior window.",
+        "queue_filters": {},
+        "queue_snapshot": None,
+        "primary_driver": {
+            "kind": "trend_recommendation",
+            "status": "monitor",
+            "focus": None,
+            "action": "monitor_trends",
+            "metric": None,
+            "direction": None,
+            "rationale": "Recent review impact is broadly flat relative to the prior window.",
+            "label": "monitor_trends",
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -1787,6 +1808,27 @@ async def test_read_company_signal_review_impact_summary_recommends_maintain_whe
     assert summary["trend_recommendation"]["priority"] == "low"
     assert summary["trend_recommendation"]["owner"] == "review_ops"
     assert summary["trend_recommendation"]["supporting_focuses"] == ["effect_rate_up"]
+    assert summary["operator_focus"] == {
+        "status": "maintain",
+        "action_type": "monitor",
+        "action": "maintain_current_course",
+        "priority": "low",
+        "owner": "review_ops",
+        "reason": "effect_rate_up",
+        "rationale": "Recent review impact is improving; keep the current operating path stable.",
+        "queue_filters": {},
+        "queue_snapshot": None,
+        "primary_driver": {
+            "kind": "trend_recommendation",
+            "status": "maintain",
+            "focus": None,
+            "action": "maintain_current_course",
+            "metric": None,
+            "direction": None,
+            "rationale": "Recent review impact is improving; keep the current operating path stable.",
+            "label": "maintain_current_course",
+        },
+    }
 
 
 @pytest.mark.asyncio
