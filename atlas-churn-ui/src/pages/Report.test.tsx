@@ -43,6 +43,29 @@ vi.mock('../components/report-renderers/SpecializedReportData', () => ({
   },
 }))
 
+function buildStructuredPublicReport() {
+  return {
+    vendor_name: 'Zendesk',
+    briefing: {},
+    intelligence_reports: [
+      {
+        report_type: 'exploratory_overview',
+        executive_summary: 'Structured summary',
+        data: {
+          key_insights: [
+            { label: 'Pricing friction', summary: 'Pricing created churn risk' },
+          ],
+          key_insights_reference_ids: {
+            witness_ids: ['w1'],
+          },
+        },
+        report_date: '2026-04-10',
+      },
+    ],
+    product_profile: null,
+  }
+}
+
 describe('Report', () => {
   const signup = vi.fn()
   const login = vi.fn()
@@ -98,26 +121,7 @@ describe('Report', () => {
   it('passes the vendor context into structured report renderers on direct report load', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        vendor_name: 'Zendesk',
-        briefing: {},
-        intelligence_reports: [
-          {
-            report_type: 'exploratory_overview',
-            executive_summary: 'Structured summary',
-            data: {
-              key_insights: [
-                { label: 'Pricing friction', summary: 'Pricing created churn risk' },
-              ],
-              key_insights_reference_ids: {
-                witness_ids: ['w1'],
-              },
-            },
-            report_date: '2026-04-10',
-          },
-        ],
-        product_profile: null,
-      }),
+      json: async () => buildStructuredPublicReport(),
     } as Response)
 
     render(
@@ -177,6 +181,71 @@ describe('Report', () => {
       expect(specializedRenderer.lastProps?.backTo).toBe('/report?vendor=Zendesk&ref=test-token&mode=view')
     })
     expect(specializedRenderer.lastProps?.reportType).toBe('accounts_in_motion')
+  })
+
+  it('shows checkout API errors inline in the pricing modal', async () => {
+    const user = userEvent.setup()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => buildStructuredPublicReport(),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ detail: 'Checkout temporarily unavailable' }),
+      } as Response)
+
+    render(
+      <MemoryRouter initialEntries={['/report?vendor=Zendesk&ref=test-token&mode=view']}>
+        <Routes>
+          <Route path="/report" element={<Report />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Structured Report')
+    await user.click(screen.getAllByRole('button', { name: 'Get Weekly Intelligence' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Get Started' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Checkout temporarily unavailable')
+    })
+    expect(alertSpy).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
+  })
+
+  it('shows malformed checkout responses inline in the pricing modal', async () => {
+    const user = userEvent.setup()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => buildStructuredPublicReport(),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      } as Response)
+
+    render(
+      <MemoryRouter initialEntries={['/report?vendor=Zendesk&ref=test-token&mode=view']}>
+        <Routes>
+          <Route path="/report" element={<Report />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Structured Report')
+    await user.click(screen.getAllByRole('button', { name: 'Get Weekly Intelligence' })[0])
+    await user.click(screen.getAllByRole('button', { name: 'Get Started' })[1])
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Checkout session unavailable -- please try again.')
+    })
+    expect(alertSpy).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
   })
 
   it('redirects checkout-created accounts into watchlists', async () => {

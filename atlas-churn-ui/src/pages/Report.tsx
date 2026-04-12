@@ -46,22 +46,31 @@ function noStoreInit(init: RequestInit = {}): RequestInit {
   }
 }
 
-async function startCheckout(vendorName: string, tier: 'standard' | 'pro') {
+type CheckoutResult = { ok: true } | { ok: false; error: string }
+
+async function startCheckout(vendorName: string, tier: 'standard' | 'pro'): Promise<CheckoutResult> {
   try {
     const res = await fetch(CHECKOUT_URL, noStoreInit({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ vendor_name: vendorName, tier }),
     }))
-    if (res.ok) {
-      const { url } = await res.json()
-      window.location.href = url
-    } else {
+    if (!res.ok) {
       const body = await res.json().catch(() => ({ detail: 'Checkout failed' }))
-      alert(body.detail || 'Failed to start checkout')
+      const detail = isRecord(body) ? body.detail : undefined
+      return { ok: false, error: formatApiDetail(detail, res.status) }
     }
+
+    const body = await res.json().catch(() => ({}))
+    const url = isRecord(body) ? body.url : undefined
+    if (typeof url !== 'string' || !url.trim()) {
+      return { ok: false, error: 'Checkout session unavailable -- please try again.' }
+    }
+
+    window.location.assign(url)
+    return { ok: true }
   } catch {
-    alert('Network error -- please try again')
+    return { ok: false, error: 'Network error -- please try again' }
   }
 }
 
@@ -180,11 +189,16 @@ function RankedBar({ label, count, max }: { label: string; count: number; max: n
 
 function PricingModal({ vendorName, onClose }: { vendorName: string; onClose: () => void }) {
   const [loading, setLoading] = useState<'standard' | 'pro' | null>(null)
+  const [checkoutError, setCheckoutError] = useState('')
 
   const handleSelect = async (tier: 'standard' | 'pro') => {
+    setCheckoutError('')
     setLoading(tier)
-    await startCheckout(vendorName, tier)
+    const result = await startCheckout(vendorName, tier)
     setLoading(null)
+    if (!result.ok) {
+      setCheckoutError(result.error)
+    }
   }
 
   return (
@@ -267,6 +281,16 @@ function PricingModal({ vendorName, onClose }: { vendorName: string; onClose: ()
             </button>
           </div>
         </div>
+
+        {checkoutError && (
+          <div
+            role="alert"
+            className="mt-6 flex items-center gap-2 rounded-lg border border-red-800/50 bg-red-900/20 px-3 py-2 text-sm text-red-300"
+          >
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{checkoutError}</span>
+          </div>
+        )}
 
         <p className="text-center text-xs text-slate-500 mt-6">Cancel anytime. No long-term contracts.</p>
       </div>
