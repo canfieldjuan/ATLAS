@@ -541,6 +541,9 @@ export interface WebhookDelivery {
   vendor_name: string | null
   company_name: string | null
   signal_type: string | null
+  report_id?: string | null
+  report_type?: string | null
+  report_title?: string | null
   account_review_focus?: AlertAccountReviewFocus | null
 }
 
@@ -550,6 +553,9 @@ export interface WebhookCrmPushLogEntry {
   signal_id: string | null
   vendor_name: string | null
   company_name: string | null
+  report_id?: string | null
+  report_type?: string | null
+  report_title?: string | null
   crm_record_id: string | null
   crm_record_type: string | null
   status: string

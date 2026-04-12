@@ -442,6 +442,12 @@ function buildVendorScopedPath(pathname: string, vendorName: string, backTo: str
   return `${pathname}?${next.toString()}`
 }
 
+function buildReportDetailPath(reportId: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/reports/${encodeURIComponent(reportId)}?${next.toString()}`
+}
+
 export default function IncidentAlerts() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -1110,18 +1116,18 @@ export default function IncidentAlerts() {
                               {filteredDeliveries.length ? filteredDeliveries.map((delivery) => (
                                 <div key={delivery.id} className={`rounded-lg border px-3 py-3 text-sm ${deliveryTone(delivery.success)}`}>
                                   <div className="flex items-center justify-between gap-3">
-                                    <span className="font-medium">{delivery.event_type}</span>
+                                    <span className="font-medium">{delivery.report_title || delivery.event_type}</span>
                                     <span className="text-xs">
                                       {delivery.success ? 'success' : `failed${delivery.status_code ? ` · ${delivery.status_code}` : ''}`}
                                     </span>
                                   </div>
                                   <div className="mt-1 text-xs text-slate-300">
-                                    {delivery.company_name || delivery.vendor_name || delivery.signal_type ? (
-                                      <>{delivery.signal_type || delivery.event_type} · </>
+                                    {delivery.report_type || delivery.company_name || delivery.vendor_name || delivery.signal_type ? (
+                                      <>{delivery.report_type || delivery.signal_type || delivery.event_type} · </>
                                     ) : null}
                                     attempt {delivery.attempt} · {formatDurationMs(delivery.duration_ms)} · {formatTs(delivery.delivered_at)}
                                   </div>
-                                  {delivery.vendor_name ? (
+                                  {delivery.account_review_focus || delivery.report_id || delivery.vendor_name ? (
                                     <div className="mt-3 flex flex-wrap gap-2 text-xs">
                                       {delivery.account_review_focus ? (
                                         <Link
@@ -1131,36 +1137,48 @@ export default function IncidentAlerts() {
                                           Account Review
                                         </Link>
                                       ) : null}
-                                      <Link
-                                        to={buildWatchlistsPath(delivery.vendor_name, activityBackTo)}
-                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                      >
-                                        Watchlists
-                                      </Link>
-                                      <Link
-                                        to={buildVendorWorkspacePath(delivery.vendor_name, activityBackTo)}
-                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                      >
-                                        Vendor workspace
-                                      </Link>
-                                      <Link
-                                        to={buildVendorScopedPath('/evidence', delivery.vendor_name, activityBackTo)}
-                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                      >
-                                        Evidence
-                                      </Link>
-                                      <Link
-                                        to={buildVendorScopedPath('/reports', delivery.vendor_name, activityBackTo)}
-                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                      >
-                                        Reports
-                                      </Link>
-                                      <Link
-                                        to={buildVendorScopedPath('/opportunities', delivery.vendor_name, activityBackTo)}
-                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                      >
-                                        Opportunities
-                                      </Link>
+                                      {delivery.report_id ? (
+                                        <Link
+                                          to={buildReportDetailPath(delivery.report_id, activityBackTo)}
+                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                        >
+                                          Report
+                                        </Link>
+                                      ) : null}
+                                      {delivery.vendor_name ? (
+                                        <>
+                                          <Link
+                                            to={buildWatchlistsPath(delivery.vendor_name, activityBackTo)}
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                          >
+                                            Watchlists
+                                          </Link>
+                                          <Link
+                                            to={buildVendorWorkspacePath(delivery.vendor_name, activityBackTo)}
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                          >
+                                            Vendor workspace
+                                          </Link>
+                                          <Link
+                                            to={buildVendorScopedPath('/evidence', delivery.vendor_name, activityBackTo)}
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                          >
+                                            Evidence
+                                          </Link>
+                                          <Link
+                                            to={buildVendorScopedPath('/reports', delivery.vendor_name, activityBackTo)}
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                          >
+                                            Reports
+                                          </Link>
+                                          <Link
+                                            to={buildVendorScopedPath('/opportunities', delivery.vendor_name, activityBackTo)}
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                          >
+                                            Opportunities
+                                          </Link>
+                                        </>
+                                      ) : null}
                                     </div>
                                   ) : null}
                                   {delivery.error ? (
@@ -1201,14 +1219,15 @@ export default function IncidentAlerts() {
                                   <div key={push.id} className={`rounded-lg border px-3 py-3 text-sm ${deliveryTone(push.status === 'success')}`}>
                                     <div className="flex items-center justify-between gap-3">
                                       <span className="font-medium">
-                                        {push.company_name || push.vendor_name || push.signal_type}
+                                        {push.report_title || push.company_name || push.vendor_name || push.signal_type}
                                       </span>
                                       <span className="text-xs">{push.status}</span>
                                     </div>
                                     <div className="mt-1 text-xs text-slate-300">
+                                      {push.report_type || push.signal_type ? <>{push.report_type || push.signal_type} · </> : null}
                                       {push.crm_record_type || 'record'}{push.crm_record_id ? ` · ${push.crm_record_id}` : ''} · {formatTs(push.pushed_at)}
                                     </div>
-                                    {push.vendor_name ? (
+                                    {push.account_review_focus || push.report_id || push.vendor_name ? (
                                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
                                         {push.account_review_focus ? (
                                           <Link
@@ -1218,36 +1237,48 @@ export default function IncidentAlerts() {
                                             Account Review
                                           </Link>
                                         ) : null}
-                                        <Link
-                                          to={buildWatchlistsPath(push.vendor_name, activityBackTo)}
-                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                        >
-                                          Watchlists
-                                        </Link>
-                                        <Link
-                                          to={buildVendorWorkspacePath(push.vendor_name, activityBackTo)}
-                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                        >
-                                          Vendor workspace
-                                        </Link>
-                                        <Link
-                                          to={buildVendorScopedPath('/evidence', push.vendor_name, activityBackTo)}
-                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                        >
-                                          Evidence
-                                        </Link>
-                                        <Link
-                                          to={buildVendorScopedPath('/reports', push.vendor_name, activityBackTo)}
-                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                        >
-                                          Reports
-                                        </Link>
-                                        <Link
-                                          to={buildVendorScopedPath('/opportunities', push.vendor_name, activityBackTo)}
-                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                        >
-                                          Opportunities
-                                        </Link>
+                                        {push.report_id ? (
+                                          <Link
+                                            to={buildReportDetailPath(push.report_id, activityBackTo)}
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                          >
+                                            Report
+                                          </Link>
+                                        ) : null}
+                                        {push.vendor_name ? (
+                                          <>
+                                            <Link
+                                              to={buildWatchlistsPath(push.vendor_name, activityBackTo)}
+                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                            >
+                                              Watchlists
+                                            </Link>
+                                            <Link
+                                              to={buildVendorWorkspacePath(push.vendor_name, activityBackTo)}
+                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                            >
+                                              Vendor workspace
+                                            </Link>
+                                            <Link
+                                              to={buildVendorScopedPath('/evidence', push.vendor_name, activityBackTo)}
+                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                            >
+                                              Evidence
+                                            </Link>
+                                            <Link
+                                              to={buildVendorScopedPath('/reports', push.vendor_name, activityBackTo)}
+                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                            >
+                                              Reports
+                                            </Link>
+                                            <Link
+                                              to={buildVendorScopedPath('/opportunities', push.vendor_name, activityBackTo)}
+                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                            >
+                                              Opportunities
+                                            </Link>
+                                          </>
+                                        ) : null}
                                       </div>
                                     ) : null}
                                     {push.error ? (

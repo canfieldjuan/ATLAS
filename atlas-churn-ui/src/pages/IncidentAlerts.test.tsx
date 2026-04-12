@@ -563,4 +563,98 @@ describe('IncidentAlerts', () => {
     })
     expect(await screen.findByText('Added generic webhook')).toBeInTheDocument()
   })
+
+
+  it('links report-generated deliveries to exact report detail', async () => {
+    api.listWebhookDeliveries.mockResolvedValueOnce({
+      deliveries: [
+        {
+          id: 'delivery-report',
+          event_type: 'report_generated',
+          status_code: 202,
+          duration_ms: 95,
+          attempt: 1,
+          success: true,
+          error: null,
+          delivered_at: '2026-04-10T03:15:00Z',
+          vendor_name: null,
+          company_name: null,
+          signal_type: 'report_generated',
+          report_id: '33333333-3333-4333-8333-333333333333',
+          report_type: 'battle_card',
+          report_title: 'Acme Rival Battle Card',
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-1']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Rival Battle Card')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Report' })).toHaveAttribute(
+      'href',
+      '/reports/33333333-3333-4333-8333-333333333333?back_to=%2Falerts%3Fwebhook%3Dwh-1',
+    )
+  })
+
+  it('links report-generated CRM pushes to exact report detail', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-crm',
+          url: 'https://hooks.example.com/crm',
+          event_types: ['report_generated'],
+          channel: 'crm_hubspot',
+          enabled: true,
+          description: 'CRM escalation',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 1,
+          recent_success_rate_7d: 1,
+        },
+      ],
+      count: 1,
+    })
+    api.listWebhookDeliveries.mockResolvedValueOnce({
+      deliveries: [],
+      count: 0,
+    })
+    api.listWebhookCrmPushLog.mockResolvedValueOnce({
+      pushes: [
+        {
+          id: 'push-report',
+          signal_type: 'report_generated',
+          signal_id: '33333333-3333-4333-8333-333333333333',
+          vendor_name: null,
+          company_name: null,
+          report_id: '33333333-3333-4333-8333-333333333333',
+          report_type: 'battle_card',
+          report_title: 'Acme Rival Battle Card',
+          crm_record_id: 'note-42',
+          crm_record_type: 'note',
+          status: 'success',
+          error: null,
+          pushed_at: '2026-04-10T03:20:00Z',
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-crm&crm_status=success']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Rival Battle Card')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Report' })).toHaveAttribute(
+      'href',
+      '/reports/33333333-3333-4333-8333-333333333333?back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
+    )
+  })
+
 })

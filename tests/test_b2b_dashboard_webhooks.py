@@ -348,3 +348,147 @@ async def test_log_crm_push_persists_signal_id_from_envelope():
     assert args[2] == '22222222-2222-2222-2222-222222222222'
     assert args[3] == 'Acme Rival'
     assert args[4] == 'Acme Bank'
+
+
+@pytest.mark.asyncio
+async def test_list_webhook_deliveries_exposes_report_context():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': '71c27653-5df3-4d19-9b24-a1a15f61efbc',
+                'event_type': 'report_generated',
+                'payload': {
+                    'vendor': 'Acme Rival',
+                    'data': {
+                        'report_id': '33333333-3333-4333-8333-333333333333',
+                    },
+                },
+                'status_code': 202,
+                'duration_ms': 95,
+                'attempt': 1,
+                'success': True,
+                'error': None,
+                'delivered_at': datetime(2026, 4, 11, 4, 0, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            '_fetch_webhook_activity_report_context',
+            AsyncMock(return_value={
+                'report_id': '33333333-3333-4333-8333-333333333333',
+                'report_type': 'battle_card',
+                'vendor_name': 'Acme Rival',
+                'report_title': 'Acme Rival Battle Card',
+            }),
+        ) as fetch_report_context:
+            with patch.object(
+                b2b_dashboard,
+                '_resolve_webhook_activity_account_focus',
+                AsyncMock(return_value=None),
+            ):
+                result = await b2b_dashboard.list_webhook_deliveries(
+                    '71c27653-5df3-4d19-9b24-a1a15f61efbc',
+                    success=None,
+                    event_type=None,
+                    start_date=None,
+                    end_date=None,
+                    limit=50,
+                    user=user,
+                )
+
+    delivery = result['deliveries'][0]
+    assert delivery['report_id'] == '33333333-3333-4333-8333-333333333333'
+    assert delivery['report_type'] == 'battle_card'
+    assert delivery['report_title'] == 'Acme Rival Battle Card'
+    assert delivery['vendor_name'] == 'Acme Rival'
+    fetch_report_context.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_crm_push_log_exposes_report_context_for_report_generated():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': 'bb5659f4-dfe6-4c12-8fd6-e6eb5579cc45',
+                'signal_type': 'report_generated',
+                'signal_id': '33333333-3333-4333-8333-333333333333',
+                'vendor_name': None,
+                'company_name': None,
+                'crm_record_id': 'note-42',
+                'crm_record_type': 'note',
+                'status': 'success',
+                'error': None,
+                'pushed_at': datetime(2026, 4, 11, 5, 0, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            '_fetch_webhook_activity_report_context',
+            AsyncMock(return_value={
+                'report_id': '33333333-3333-4333-8333-333333333333',
+                'report_type': 'battle_card',
+                'vendor_name': 'Acme Rival',
+                'report_title': 'Acme Rival Battle Card',
+            }),
+        ) as fetch_report_context:
+            with patch.object(
+                b2b_dashboard,
+                '_resolve_webhook_activity_account_focus',
+                AsyncMock(return_value=None),
+            ) as resolve_focus:
+                result = await b2b_dashboard.list_crm_push_log(
+                    'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44',
+                    limit=50,
+                    user=user,
+                )
+
+    push = result['pushes'][0]
+    assert push['report_id'] == '33333333-3333-4333-8333-333333333333'
+    assert push['report_type'] == 'battle_card'
+    assert push['report_title'] == 'Acme Rival Battle Card'
+    assert push['vendor_name'] == 'Acme Rival'
+    fetch_report_context.assert_awaited_once()
+    resolve_focus.assert_awaited_once()
+    _, kwargs = resolve_focus.await_args
+    assert kwargs['signal_id'] is None
+
+
+@pytest.mark.asyncio
+async def test_log_crm_push_persists_report_id_for_report_generated():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
+
+    await webhook_dispatcher._log_crm_push(
+        pool,
+        '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+        'report_generated',
+        {
+            'vendor': 'Acme Rival',
+            'data': {
+                'report_id': '33333333-3333-4333-8333-333333333333',
+                'report_type': 'battle_card',
+            },
+        },
+        crm_record_id='crm-note-42',
+    )
+
+    sql = pool.execute.call_args[0][0]
+    args = pool.execute.call_args[0][1:]
+    assert 'signal_id' in sql
+    assert args[1] == 'report_generated'
+    assert args[2] == '33333333-3333-4333-8333-333333333333'
+    assert args[3] == 'Acme Rival'
+    assert args[4] is None
+    assert args[6] == 'note'

@@ -577,11 +577,15 @@ async def _log_crm_push(
         signal_id_value = data.get("company_signal_id")
         if signal_id_value is None:
             signal_id_value = data.get("signal_id")
+        if signal_id_value is None and event_type == "report_generated":
+            signal_id_value = data.get("report_id")
         signal_id = str(signal_id_value).strip() if signal_id_value is not None else ""
         if event_type == "high_intent_push":
             signal_type = "high_intent_push"
         elif event_type == "change_event":
             signal_type = "change_event"
+        elif event_type == "report_generated":
+            signal_type = "report_generated"
         elif data.get("company_name") or data.get("company"):
             signal_type = "company_signal"
         else:

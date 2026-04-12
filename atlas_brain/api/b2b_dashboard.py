@@ -6164,9 +6164,15 @@ async def list_webhook_deliveries(
     report_cache: dict[str, Any] = {}
     tracked_vendor_cache: dict[str, Any] = {}
     signal_cache: dict[str, Any] = {}
+    report_activity_cache: dict[str, Any] = {}
     deliveries = []
     for r in rows:
         context = _extract_webhook_activity_context(r.get("payload"))
+        report_context = await _fetch_webhook_activity_report_context(
+            pool,
+            context.get("report_id"),
+            report_activity_cache,
+        )
         account_review_focus = await _resolve_webhook_activity_account_focus(
             pool,
             user,
@@ -6187,9 +6193,12 @@ async def list_webhook_deliveries(
             "success": r["success"],
             "error": r["error"],
             "delivered_at": r["delivered_at"].isoformat(),
-            "vendor_name": context.get("vendor_name"),
+            "vendor_name": context.get("vendor_name") or (report_context or {}).get("vendor_name"),
             "company_name": context.get("company_name"),
             "signal_type": context.get("signal_type") or r["event_type"],
+            "report_id": context.get("report_id") or (report_context or {}).get("report_id"),
+            "report_type": context.get("report_type") or (report_context or {}).get("report_type"),
+            "report_title": context.get("report_title") or (report_context or {}).get("report_title"),
             "account_review_focus": account_review_focus,
         })
 
@@ -6268,25 +6277,33 @@ async def list_crm_push_log(
     report_cache: dict[str, Any] = {}
     tracked_vendor_cache: dict[str, Any] = {}
     signal_cache: dict[str, Any] = {}
+    report_activity_cache: dict[str, Any] = {}
     pushes = []
     for r in rows:
+        signal_type = str(r["signal_type"] or "").strip()
         signal_id = str(r["signal_id"]) if r["signal_id"] else None
+        report_context = None
+        if signal_type == "report_generated" and signal_id:
+            report_context = await _fetch_webhook_activity_report_context(pool, signal_id, report_activity_cache)
         account_review_focus = await _resolve_webhook_activity_account_focus(
             pool,
             user,
             vendor_name=r["vendor_name"],
             company_name=r["company_name"],
-            signal_id=signal_id,
+            signal_id=None if signal_type == "report_generated" else signal_id,
             report_cache=report_cache,
             tracked_vendor_cache=tracked_vendor_cache,
             signal_cache=signal_cache,
         )
         pushes.append({
             "id": str(r["id"]),
-            "signal_type": r["signal_type"],
+            "signal_type": signal_type,
             "signal_id": signal_id,
-            "vendor_name": r["vendor_name"],
+            "vendor_name": r["vendor_name"] or (report_context or {}).get("vendor_name"),
             "company_name": r["company_name"],
+            "report_id": signal_id if signal_type == "report_generated" else None,
+            "report_type": (report_context or {}).get("report_type"),
+            "report_title": (report_context or {}).get("report_title"),
             "crm_record_id": r["crm_record_id"],
             "crm_record_type": r["crm_record_type"],
             "status": r["status"],
@@ -7216,13 +7233,84 @@ def _extract_webhook_activity_context(payload: Any) -> dict[str, str | None]:
         signal_id_value = data.get("signal_id")
     signal_id = str(signal_id_value).strip() if signal_id_value is not None else ""
     review_id = str(data.get("review_id") or "").strip()
+    report_id_value = data.get("report_id")
+    report_id = str(report_id_value).strip() if report_id_value is not None else ""
+    report_type = str(data.get("report_type") or data.get("artifact_type") or "").strip() or None
+    report_title = str(data.get("report_title") or "").strip() or None
     return {
         "vendor_name": vendor_name,
         "company_name": company_name,
         "signal_type": signal_type,
         "signal_id": signal_id or None,
         "review_id": review_id or None,
+        "report_id": report_id or None,
+        "report_type": report_type,
+        "report_title": report_title,
     }
+
+
+def _format_webhook_activity_report_title(
+    report_type: str | None,
+    vendor_name: str | None,
+    category_filter: str | None = None,
+) -> str | None:
+    report_type_text = str(report_type or "").strip()
+    vendor_text = str(vendor_name or "").strip()
+    category_text = str(category_filter or "").strip()
+    if not report_type_text or not vendor_text:
+        return None
+    report_label = report_type_text.replace("_", " ").title()
+    if report_type_text == "vendor_comparison" and category_text:
+        return f"{vendor_text} vs {category_text}"
+    if report_type_text == "challenger_brief" and category_text:
+        return f"{vendor_text} vs {category_text} Challenger Brief"
+    if category_text:
+        return f"{vendor_text} {report_label}: {category_text}"
+    return f"{vendor_text} {report_label}"
+
+
+async def _fetch_webhook_activity_report_context(
+    pool,
+    report_id: str | None,
+    report_cache: dict[str, Any] | None = None,
+) -> dict[str, str | None] | None:
+    report_key = str(report_id or "").strip()
+    if not report_key:
+        return None
+    if report_cache is not None and report_key in report_cache:
+        return report_cache[report_key]
+    try:
+        parsed = _uuid.UUID(report_key)
+    except (ValueError, TypeError, AttributeError):
+        if report_cache is not None:
+            report_cache[report_key] = None
+        return None
+    row = await pool.fetchrow(
+        """
+        SELECT id, report_type, vendor_filter, category_filter
+        FROM b2b_intelligence
+        WHERE id = $1::uuid
+        """,
+        parsed,
+    )
+    if not row:
+        if report_cache is not None:
+            report_cache[report_key] = None
+        return None
+    context = {
+        "report_id": str(row["id"]),
+        "report_type": str(row["report_type"] or "").strip() or None,
+        "vendor_name": str(row["vendor_filter"] or "").strip() or None,
+        "category_filter": str(row["category_filter"] or "").strip() or None,
+    }
+    context["report_title"] = _format_webhook_activity_report_title(
+        context.get("report_type"),
+        context.get("vendor_name"),
+        context.get("category_filter"),
+    )
+    if report_cache is not None:
+        report_cache[report_key] = context
+    return context
 
 
 async def _fetch_company_signal_focus_context(
