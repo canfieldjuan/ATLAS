@@ -3,6 +3,7 @@ import json
 import uuid as _uuid
 from typing import Optional
 
+from ...api.b2b_dashboard import _extract_report_account_preview_fields
 from ._shared import _is_uuid, _safe_json, get_pool, logger, VALID_REPORT_TYPES
 from .server import mcp
 
@@ -51,7 +52,7 @@ async def list_reports(
         rows = await pool.fetch(
             f"""
             SELECT id, report_date, report_type, executive_summary,
-                   vendor_filter, status, created_at
+                   vendor_filter, status, created_at, intelligence_data
             FROM b2b_intelligence
             {where}
             ORDER BY report_date DESC
@@ -69,6 +70,7 @@ async def list_reports(
                 "vendor_filter": r["vendor_filter"],
                 "status": r["status"],
                 "created_at": r["created_at"],
+                **_extract_report_account_preview_fields(r.get("intelligence_data")),
             }
             for r in rows
         ]

@@ -581,6 +581,14 @@ class TestB2BChurnMCPTools:
         from atlas_brain.mcp.b2b.reports import list_reports
 
         report = _make_report_row()
+        report["intelligence_data"] = {
+            "account_reasoning_preview_only": True,
+            "account_reasoning_preview": {
+                "disclaimer": "Early account signal only.",
+                "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                "priority_account_names": ["Concentrix", "Concentrix"],
+            },
+        }
         pool = _mock_pool(fetch_return=[report])
 
         with _patch_pool(pool):
@@ -589,6 +597,12 @@ class TestB2BChurnMCPTools:
         data = json.loads(raw)
         assert data["count"] == 1
         assert data["reports"][0]["report_type"] == "weekly_churn_feed"
+        assert data["reports"][0]["account_reasoning_preview_only"] is True
+        assert data["reports"][0]["account_pressure_summary"] == (
+            "A single named account is showing early evaluation pressure."
+        )
+        assert data["reports"][0]["priority_account_names"] == ["Concentrix"]
+        assert data["reports"][0]["account_pressure_disclaimer"] == "Early account signal only."
 
     async def test_list_reports_with_type_filter(self):
         from atlas_brain.mcp.b2b.reports import list_reports
