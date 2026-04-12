@@ -906,6 +906,7 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             "oldest_pending_age_days": 5.5,
         },
     }
+    assert summary["operator_focus"] == summary["queue_recommendation"]
 
 
 @pytest.mark.asyncio

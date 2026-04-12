@@ -12167,6 +12167,18 @@ async def read_company_signal_candidate_group_summary(
                 "queue_snapshot": None,
                 "primary_driver": None,
             },
+            "operator_focus": {
+                "status": "no_data",
+                "action_type": None,
+                "action": None,
+                "priority": None,
+                "owner": None,
+                "reason": None,
+                "rationale": None,
+                "queue_filters": {},
+                "queue_snapshot": None,
+                "primary_driver": None,
+            },
         }
 
     where_clause = " AND ".join(conditions)
@@ -13396,6 +13408,58 @@ async def read_company_signal_candidate_group_summary(
             ),
             "alternate_queue_filters": alternate_queue_filters,
         }
+    def _priority_rank(value: Any) -> int:
+        order = {
+            "high": 3,
+            "medium": 2,
+            "low": 1,
+        }
+        return order.get(str(value or "").lower(), 0)
+
+    def _build_operator_focus(
+        queue_recommendation: Mapping[str, Any] | None,
+        unlock_focus: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        default = {
+            "status": "no_data",
+            "action_type": None,
+            "action": None,
+            "priority": None,
+            "owner": None,
+            "reason": None,
+            "rationale": None,
+            "queue_filters": {},
+            "queue_snapshot": None,
+            "primary_driver": None,
+        }
+        queue_payload = dict(queue_recommendation or {})
+        unlock_payload = dict(unlock_focus or {})
+        queue_action = queue_payload.get("action")
+        unlock_action = unlock_payload.get("action")
+        if queue_action and unlock_action:
+            if _priority_rank(unlock_payload.get("priority")) > _priority_rank(queue_payload.get("priority")):
+                return {
+                    **default,
+                    **unlock_payload,
+                    "primary_driver": _build_queue_summary_driver("unlock_focus"),
+                }
+            return {
+                **default,
+                **queue_payload,
+            }
+        if queue_action:
+            return {
+                **default,
+                **queue_payload,
+            }
+        if unlock_action:
+            return {
+                **default,
+                **unlock_payload,
+                "primary_driver": _build_queue_summary_driver("unlock_focus"),
+            }
+        return default
+
     queue_filters = _build_queue_summary_filters()
     queue_snapshot = _build_queue_summary_snapshot()
     actionable_pending_groups = int(queue_snapshot.get("actionable_pending_groups") or 0)
@@ -13509,6 +13573,7 @@ async def read_company_signal_candidate_group_summary(
             "queue_snapshot": queue_snapshot,
             "primary_driver": _build_queue_summary_driver("queue_totals"),
         }
+    operator_focus = _build_operator_focus(queue_recommendation, unlock_focus)
     return {
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
@@ -13536,6 +13601,7 @@ async def read_company_signal_candidate_group_summary(
         "pending_sla_reasons": [dict(row) for row in pending_sla_reason_rows],
         "oldest_pending_group": oldest_pending_group,
         "queue_recommendation": queue_recommendation,
+        "operator_focus": operator_focus,
     }
 
 

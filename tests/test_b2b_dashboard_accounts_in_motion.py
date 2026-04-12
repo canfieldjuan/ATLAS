@@ -270,6 +270,18 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
             "queue_snapshot": {"pending_groups": 2, "actionable_pending_groups": 2},
             "primary_driver": {"kind": "queue_totals", "label": "actionable_backlog"},
         },
+        "operator_focus": {
+            "status": "act",
+            "action_type": "review_queue",
+            "action": "review_prioritized_queue",
+            "priority": "medium",
+            "owner": "review_ops",
+            "reason": "actionable_backlog",
+            "rationale": "This queue slice is actionable and should be worked in priority order.",
+            "queue_filters": {"review_status": "pending", "source_name": "reddit", "review_priority_band": "medium", "review_priority_reason": "cross_source_corroboration"},
+            "queue_snapshot": {"pending_groups": 2, "actionable_pending_groups": 2},
+            "primary_driver": {"kind": "queue_totals", "label": "actionable_backlog"},
+        },
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         with patch.object(
