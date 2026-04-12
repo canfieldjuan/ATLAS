@@ -214,6 +214,108 @@ def test_visibility_queue_runs_detached_batch_health_sync(monkeypatch):
     assert sync.await_count == 1
 
 
+
+def test_visibility_queue_normalizes_blank_filters(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    pool.fetchrow = AsyncMock(return_value=None)
+    pool.execute = AsyncMock(return_value="UPDATE 0")
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+    sync = AsyncMock(return_value=None)
+    monkeypatch.setattr(visibility_api, "_sync_detached_batch_health", sync)
+
+    with TestClient(app) as client:
+        response = client.get("/pipeline/visibility/queue?stage=%20%20&severity=%20")
+
+    assert response.status_code == 200
+    query = pool.fetch.await_args.args[0]
+    assert "e.stage =" not in query
+    assert "e.severity =" not in query
+    assert pool.fetch.await_args.args[1:] == (50, 0)
+
+
+
+def test_synthesis_validation_normalizes_blank_and_trimmed_filters(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/pipeline/visibility/synthesis-validation?vendor_name=%20Shopify%20&run_id=%20%20"
+        )
+
+    assert response.status_code == 200
+    query = pool.fetch.await_args.args[0]
+    assert "vendor_name = $1" in query
+    assert "run_id =" not in query
+    assert pool.fetch.await_args.args[1:] == ("Shopify", 100, 0)
+
+
+
+def test_dedup_decisions_normalizes_blank_stage_filter(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.get("/pipeline/visibility/dedup-decisions?stage=%20%20")
+
+    assert response.status_code == 200
+    query = pool.fetch.await_args.args[0]
+    assert "stage =" not in query
+    assert pool.fetch.await_args.args[1:] == (100, 0)
+
+
+
+def test_review_actions_rejects_invalid_review_id_before_db_touch(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    def _fail_get_db_pool():
+        raise AssertionError("get_db_pool should not be called")
+
+    monkeypatch.setattr(visibility_api, "get_db_pool", _fail_get_db_pool)
+
+    with TestClient(app) as client:
+        response = client.get("/pipeline/visibility/review-actions?review_id=not-a-uuid")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "review_id must be a valid UUID"
+
+
+
+def test_review_actions_trims_and_forwards_filters(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    review_id = uuid4()
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/pipeline/visibility/review-actions?review_id=%20{review_id}%20&target_entity_type=%20vendor%20&target_entity_id=%20acme%20"
+        )
+
+    assert response.status_code == 200
+    query = pool.fetch.await_args.args[0]
+    assert "review_id = $1::uuid" in query
+    assert "target_entity_type = $2" in query
+    assert "target_entity_id = $3" in query
+    assert pool.fetch.await_args.args[1:] == (str(review_id), "vendor", "acme", 100, 0)
+
+
 def test_watchlist_delivery_ops_returns_summary_views_and_logs(monkeypatch):
     app = _make_app()
     app.dependency_overrides[require_auth] = _auth_user
