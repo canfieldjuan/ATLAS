@@ -268,6 +268,7 @@ async def test_dashboard_source_routes_reject_invalid_source_before_db_touch(mon
         lambda: b2b_dashboard.get_source_health(window_days=7, source="invalid-source"),
         lambda: b2b_dashboard.get_source_telemetry(window_days=7, source="invalid-source", user=None),
         lambda: b2b_dashboard.get_telemetry_timeline(days=14, source="invalid-source", user=None),
+        lambda: b2b_dashboard.export_source_health(window_days=7, source="invalid-source"),
     ]
 
     for call in cases:

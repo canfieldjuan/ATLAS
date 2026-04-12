@@ -5676,8 +5676,6 @@ async def export_source_health(
     window_days: int = Query(7, ge=1, le=30),
     source: Optional[str] = Query(None),
 ):
-    pool = _pool_or_503()
-
     source = _normalize_source_query(source)
     if source is not None:
         if source not in ALL_SOURCES:
@@ -5686,6 +5684,7 @@ async def export_source_health(
                 detail=f"Invalid source. Must be one of: {sorted(s.value for s in ALL_SOURCES)}",
             )
 
+    pool = _pool_or_503()
     sql, extra_params = _build_source_health_query(source)
     rows = await pool.fetch(sql, window_days, *extra_params)
 
