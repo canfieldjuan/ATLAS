@@ -503,9 +503,15 @@ function watchlistAlertEventPrimaryReviewId(event: WatchlistAlertEvent) {
   return event.source_review_ids[0] || ''
 }
 
+function watchlistAlertEventContextParams(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  return event.account_review_focus
+    ? accountFocusParamsFromFocus(searchParams, event.account_review_focus)
+    : searchParams
+}
+
 function watchlistAlertEventAccountPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
   if (!event.account_review_focus) return null
-  return watchlistPath(accountFocusParamsFromFocus(searchParams, event.account_review_focus))
+  return watchlistPath(watchlistAlertEventContextParams(searchParams, event))
 }
 
 function watchlistAlertEventReviewDetailPath(
@@ -527,10 +533,25 @@ function watchlistAlertEventEvidencePath(
 ) {
   const vendorName = watchlistAlertEventVendorName(event)
   if (!vendorName) return null
-  const contextParams = event.account_review_focus
-    ? accountFocusParamsFromFocus(searchParams, event.account_review_focus)
-    : searchParams
-  return watchlistEvidenceExplorerPath(contextParams, vendorName, witnessId, source)
+  return watchlistEvidenceExplorerPath(watchlistAlertEventContextParams(searchParams, event), vendorName, witnessId, source)
+}
+
+function watchlistAlertEventVendorPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const vendorName = watchlistAlertEventVendorName(event)
+  if (!vendorName) return null
+  return watchlistVendorPath(watchlistAlertEventContextParams(searchParams, event), vendorName)
+}
+
+function watchlistAlertEventReportsPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const vendorName = watchlistAlertEventVendorName(event)
+  if (!vendorName) return null
+  return watchlistReportsPath(watchlistAlertEventContextParams(searchParams, event), vendorName)
+}
+
+function watchlistAlertEventOpportunitiesPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const vendorName = watchlistAlertEventVendorName(event)
+  if (!vendorName) return null
+  return watchlistOpportunitiesPath(watchlistAlertEventContextParams(searchParams, event), vendorName)
 }
 
 function watchlistAlertEventAccountUrl(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
@@ -554,6 +575,21 @@ function watchlistAlertEventEvidenceUrl(
   source?: string | null,
 ) {
   const path = watchlistAlertEventEvidencePath(searchParams, event, witnessId, source)
+  return path ? `${window.location.origin}${path}` : null
+}
+
+function watchlistAlertEventVendorUrl(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const path = watchlistAlertEventVendorPath(searchParams, event)
+  return path ? `${window.location.origin}${path}` : null
+}
+
+function watchlistAlertEventReportsUrl(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const path = watchlistAlertEventReportsPath(searchParams, event)
+  return path ? `${window.location.origin}${path}` : null
+}
+
+function watchlistAlertEventOpportunitiesUrl(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const path = watchlistAlertEventOpportunitiesPath(searchParams, event)
   return path ? `${window.location.origin}${path}` : null
 }
 
@@ -1606,10 +1642,11 @@ export default function Watchlists() {
   }
 
   async function handleCopyAlertEventVendorLink(event: WatchlistAlertEvent) {
+    const targetUrl = watchlistAlertEventVendorUrl(searchParams, event)
     const vendorName = watchlistAlertEventVendorName(event)
-    if (!vendorName) return
+    if (!targetUrl || !vendorName) return
     try {
-      await navigator.clipboard.writeText(watchlistVendorWorkspaceUrl(searchParams, vendorName))
+      await navigator.clipboard.writeText(targetUrl)
       setActionError(null)
       setActionMessage(`Copied vendor workspace link for ${vendorName}`)
     } catch (err) {
@@ -1619,10 +1656,11 @@ export default function Watchlists() {
   }
 
   async function handleCopyAlertEventReportsLink(event: WatchlistAlertEvent) {
+    const targetUrl = watchlistAlertEventReportsUrl(searchParams, event)
     const vendorName = watchlistAlertEventVendorName(event)
-    if (!vendorName) return
+    if (!targetUrl || !vendorName) return
     try {
-      await navigator.clipboard.writeText(watchlistReportsUrl(searchParams, vendorName))
+      await navigator.clipboard.writeText(targetUrl)
       setActionError(null)
       setActionMessage(`Copied reports link for ${vendorName}`)
     } catch (err) {
@@ -1632,10 +1670,11 @@ export default function Watchlists() {
   }
 
   async function handleCopyAlertEventOpportunitiesLink(event: WatchlistAlertEvent) {
+    const targetUrl = watchlistAlertEventOpportunitiesUrl(searchParams, event)
     const vendorName = watchlistAlertEventVendorName(event)
-    if (!vendorName) return
+    if (!targetUrl || !vendorName) return
     try {
-      await navigator.clipboard.writeText(watchlistOpportunitiesUrl(searchParams, vendorName))
+      await navigator.clipboard.writeText(targetUrl)
       setActionError(null)
       setActionMessage(`Copied opportunities link for ${vendorName}`)
     } catch (err) {
@@ -3278,6 +3317,9 @@ export default function Watchlists() {
                   const witnessPath = primaryWitnessId
                     ? watchlistAlertEventEvidencePath(searchParams, event, primaryWitnessId, eventSource)
                     : null
+                  const vendorWorkspacePath = watchlistAlertEventVendorPath(searchParams, event)
+                  const reportsPath = watchlistAlertEventReportsPath(searchParams, event)
+                  const opportunitiesPath = watchlistAlertEventOpportunitiesPath(searchParams, event)
                   const eventLabel = event.company_name || vendorName
                   return (
                     <div
@@ -3380,9 +3422,9 @@ export default function Watchlists() {
                                 Copy evidence
                               </button>
                             ) : null}
-                            {vendorName ? (
+                            {vendorWorkspacePath ? (
                               <Link
-                                to={watchlistVendorPath(searchParams, vendorName)}
+                                to={vendorWorkspacePath}
                                 aria-label={`Open alert vendor workspace for ${vendorName}`}
                                 className="text-amber-300 hover:text-amber-200"
                               >
@@ -3399,9 +3441,9 @@ export default function Watchlists() {
                                 Copy vendor
                               </button>
                             ) : null}
-                            {vendorName ? (
+                            {reportsPath ? (
                               <Link
-                                to={watchlistReportsPath(searchParams, vendorName)}
+                                to={reportsPath}
                                 aria-label={`Open alert reports for ${vendorName}`}
                                 className="text-fuchsia-300 hover:text-fuchsia-200"
                               >
@@ -3418,9 +3460,9 @@ export default function Watchlists() {
                                 Copy reports
                               </button>
                             ) : null}
-                            {vendorName ? (
+                            {opportunitiesPath ? (
                               <Link
-                                to={watchlistOpportunitiesPath(searchParams, vendorName)}
+                                to={opportunitiesPath}
                                 aria-label={`Open alert opportunities for ${vendorName}`}
                                 className="text-orange-300 hover:text-orange-200"
                               >
