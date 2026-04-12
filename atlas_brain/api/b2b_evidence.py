@@ -157,12 +157,14 @@ async def list_witnesses(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """List witness records for a vendor with optional filters."""
-    pool = _pool_or_503()
+    vendor_name = _clean_required_text(vendor_name, "vendor_name")
     target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
+
+    pool = _pool_or_503()
 
     snapshot_date = await _latest_witness_snapshot_date(pool, vendor_name, window_days, target_date)
     if snapshot_date is None:
@@ -309,12 +311,15 @@ async def get_witness(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Get a single witness record with full review text and evidence spans."""
-    pool = _pool_or_503()
+    witness_id = _clean_required_text(witness_id, "witness_id")
+    vendor_name = _clean_required_text(vendor_name, "vendor_name")
     target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
+
+    pool = _pool_or_503()
 
     snapshot_date = await _latest_witness_snapshot_date(pool, vendor_name, window_days, target_date)
     if snapshot_date is None:
@@ -376,14 +381,14 @@ async def get_vault(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Get the evidence vault for a vendor -- weakness/strength claims with provenance."""
-    pool = _pool_or_503()
-
+    vendor_name = _clean_required_text(vendor_name, "vendor_name")
+    target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
 
-    target_date = _parse_target_date(as_of_date)
+    pool = _pool_or_503()
 
     vault_row = await _read_vendor_intelligence_record(
         pool,
@@ -444,14 +449,14 @@ async def get_trace(
     Returns the chain: synthesis -> evidence_vault -> witnesses -> reviews,
     showing how each claim in the synthesis is backed by evidence.
     """
-    pool = _pool_or_503()
-
+    vendor_name = _clean_required_text(vendor_name, "vendor_name")
+    target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
 
-    target_date = _parse_target_date(as_of_date)
+    pool = _pool_or_503()
 
     # Layer 1: Reasoning synthesis
     synthesis_row = await pool.fetchrow(
@@ -635,6 +640,15 @@ async def list_annotations(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """List evidence annotations for this account."""
+    vendor_name = _clean_optional_text(vendor_name)
+    annotation_type = _clean_optional_text(annotation_type)
+
+    if annotation_type and annotation_type not in _VALID_ANNOTATION_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"annotation_type must be one of: {', '.join(sorted(_VALID_ANNOTATION_TYPES))}",
+        )
+
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
 
@@ -649,11 +663,6 @@ async def list_annotations(
         params.append(vendor_name)
         idx += 1
     if annotation_type:
-        if annotation_type not in _VALID_ANNOTATION_TYPES:
-            raise HTTPException(
-                status_code=422,
-                detail=f"annotation_type must be one of: {', '.join(sorted(_VALID_ANNOTATION_TYPES))}",
-            )
         conditions.append(f"annotation_type = ${idx}")
         params.append(annotation_type)
         idx += 1
