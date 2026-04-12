@@ -18,6 +18,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.params import Param
 from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_b2b_plan
@@ -59,7 +60,14 @@ def _parse_target_date(as_of_date: Optional[str]) -> date:
         raise HTTPException(status_code=400, detail="Invalid as_of_date; expected YYYY-MM-DD") from exc
 
 
+def _unwrap_param_default(value: object | None) -> object | None:
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
 def _clean_required_text(value: object | None, field_name: str) -> str:
+    value = _unwrap_param_default(value)
     text = str(value or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail=f"{field_name} is required")
@@ -67,8 +75,16 @@ def _clean_required_text(value: object | None, field_name: str) -> str:
 
 
 def _clean_optional_text(value: object | None) -> str | None:
+    value = _unwrap_param_default(value)
     text = str(value or "").strip()
     return text or None
+
+
+def _clean_int_query(value: object | None, *, default: int) -> int:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return int(value)
 
 
 def _safe_json(value) -> list | dict | None:
@@ -158,6 +174,9 @@ async def list_witnesses(
 ):
     """List witness records for a vendor with optional filters."""
     vendor_name = _clean_required_text(vendor_name, "vendor_name")
+    window_days = _clean_int_query(window_days, default=_default_analysis_window_days())
+    limit = _clean_int_query(limit, default=DEFAULT_WITNESS_LIMIT)
+    offset = _clean_int_query(offset, default=0)
     target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
@@ -313,6 +332,7 @@ async def get_witness(
     """Get a single witness record with full review text and evidence spans."""
     witness_id = _clean_required_text(witness_id, "witness_id")
     vendor_name = _clean_required_text(vendor_name, "vendor_name")
+    window_days = _clean_int_query(window_days, default=_default_analysis_window_days())
     target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
@@ -382,6 +402,7 @@ async def get_vault(
 ):
     """Get the evidence vault for a vendor -- weakness/strength claims with provenance."""
     vendor_name = _clean_required_text(vendor_name, "vendor_name")
+    window_days = _clean_int_query(window_days, default=_default_analysis_window_days())
     target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
@@ -450,6 +471,7 @@ async def get_trace(
     showing how each claim in the synthesis is backed by evidence.
     """
     vendor_name = _clean_required_text(vendor_name, "vendor_name")
+    window_days = _clean_int_query(window_days, default=_default_analysis_window_days())
     target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
