@@ -261,6 +261,22 @@ async def test_dashboard_source_health_normalizes_blank_source(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_source_routes_reject_invalid_source_before_db_touch(monkeypatch):
+    monkeypatch.setattr(b2b_dashboard, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+
+    cases = [
+        lambda: b2b_dashboard.get_source_health(window_days=7, source="invalid-source"),
+        lambda: b2b_dashboard.get_source_telemetry(window_days=7, source="invalid-source", user=None),
+        lambda: b2b_dashboard.get_telemetry_timeline(days=14, source="invalid-source", user=None),
+    ]
+
+    for call in cases:
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await call()
+        assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_dashboard_source_telemetry_normalizes_blank_source(monkeypatch):
     pool = _mock_pool(fetch_return=[])
     monkeypatch.setattr(b2b_dashboard, "_pool_or_503", lambda: pool)

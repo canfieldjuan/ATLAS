@@ -1541,6 +1541,31 @@ async def test_suppress_company_signal_candidate_group_marks_members_suppressed(
 
 
 @pytest.mark.asyncio
+async def test_bulk_group_company_signal_reviews_reject_empty_group_ids_before_db_touch():
+    body = b2b_dashboard.BulkCompanySignalCandidateGroupReviewBody(
+        group_ids=["   ", ""],
+        notes="noop",
+        trigger_rebuild=True,
+    )
+    user = MagicMock(user_id="user-1")
+
+    with patch.object(
+        b2b_dashboard,
+        "_pool_or_503",
+        side_effect=AssertionError("db should not be touched"),
+    ):
+        with pytest.raises(b2b_dashboard.HTTPException) as approve_exc:
+            await b2b_dashboard.approve_company_signal_candidate_groups(body, user)
+        with pytest.raises(b2b_dashboard.HTTPException) as suppress_exc:
+            await b2b_dashboard.suppress_company_signal_candidate_groups(body, user)
+
+    assert approve_exc.value.status_code == 400
+    assert approve_exc.value.detail == "group_ids must include at least one non-empty UUID"
+    assert suppress_exc.value.status_code == 400
+    assert suppress_exc.value.detail == "group_ids must include at least one non-empty UUID"
+
+
+@pytest.mark.asyncio
 async def test_bulk_approve_company_signal_candidate_groups_promotes_and_rebuilds_per_vendor():
     pool = MagicMock()
     conn = MagicMock()
@@ -2726,6 +2751,28 @@ async def test_list_corrections_normalizes_blank_filters():
     assert "created_at >= $" not in query
     assert "created_at < $" not in query
     assert params == [50]
+
+
+@pytest.mark.asyncio
+async def test_list_displacement_edges_rejects_invalid_min_strength_before_db_touch():
+    with patch.object(
+        b2b_dashboard,
+        "_pool_or_503",
+        side_effect=AssertionError("db should not be touched"),
+    ):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.list_displacement_edges(
+                from_vendor=None,
+                to_vendor=None,
+                min_strength="invalid",
+                min_confidence=None,
+                window_days=90,
+                limit=50,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid min_strength: invalid"
 
 
 @pytest.mark.asyncio

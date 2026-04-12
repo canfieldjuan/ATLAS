@@ -2212,8 +2212,6 @@ async def get_source_health(
     window_days: int = Query(7, ge=1, le=30),
     source: Optional[str] = Query(None),
 ):
-    pool = _pool_or_503()
-
     source = _normalize_source_query(source)
     if source is not None:
         if source not in ALL_SOURCES:
@@ -2223,6 +2221,7 @@ async def get_source_health(
             )
 
     sql, extra_params = _build_source_health_query(source)
+    pool = _pool_or_503()
     rows = await pool.fetch(sql, window_days, *extra_params)
 
     sources_list = [_row_to_source_dict(r) for r in rows]
@@ -2260,8 +2259,6 @@ async def get_source_telemetry(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """CAPTCHA attempts, solve times, block type distribution, and proxy usage per source."""
-    pool = _pool_or_503()
-
     conditions = ["started_at >= NOW() - make_interval(days => $1)"]
     params: list = [window_days]
     idx = 2
@@ -2273,6 +2270,7 @@ async def get_source_telemetry(
         params.append(source)
         idx += 1
 
+    pool = _pool_or_503()
     where = " AND ".join(conditions)
     rows = await pool.fetch(
         f"""
@@ -2563,8 +2561,6 @@ async def get_telemetry_timeline(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Daily time-series of CAPTCHA attempts, blocks, and success rates for trending."""
-    pool = _pool_or_503()
-
     conditions = ["started_at >= NOW() - make_interval(days => $1)"]
     params: list = [days]
     idx = 2
@@ -2576,6 +2572,7 @@ async def get_telemetry_timeline(
         params.append(source)
         idx += 1
 
+    pool = _pool_or_503()
     where = " AND ".join(conditions)
     rows = await pool.fetch(
         f"""
@@ -2668,7 +2665,6 @@ async def list_displacement_edges(
     limit: int = Query(50, ge=1, le=200),
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
     from_vendor = _optional_query_text(from_vendor)
     to_vendor = _optional_query_text(to_vendor)
     min_strength = _optional_query_text(min_strength)
@@ -2676,6 +2672,7 @@ async def list_displacement_edges(
     if min_strength and min_strength not in strength_order:
         raise HTTPException(400, f"Invalid min_strength: {min_strength}")
 
+    pool = _pool_or_503()
     conditions: list[str] = ["computed_date > NOW() - make_interval(days => $1)"]
     params: list = [window_days]
     idx = 2
@@ -3770,12 +3767,12 @@ async def approve_company_signal_candidate_groups(
     body: BulkCompanySignalCandidateGroupReviewBody,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
     group_ids = _unique_strings_preserving_order(body.group_ids)
     if not group_ids:
         raise HTTPException(status_code=400, detail="group_ids must include at least one non-empty UUID")
+    pool = _pool_or_503()
     groups: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     webhook_updates: list[dict[str, Any]] = []
@@ -3915,12 +3912,12 @@ async def suppress_company_signal_candidate_groups(
     body: BulkCompanySignalCandidateGroupReviewBody,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
     group_ids = _unique_strings_preserving_order(body.group_ids)
     if not group_ids:
         raise HTTPException(status_code=400, detail="group_ids must include at least one non-empty UUID")
+    pool = _pool_or_503()
     groups: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     webhook_updates: list[dict[str, Any]] = []
