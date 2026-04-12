@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   X, ExternalLink, Quote, User, Building2, Calendar,
   Star, Tag, Fingerprint, FileText, ChevronRight, Loader2,
-  Pin, Flag, EyeOff, RotateCcw,
+  Pin, Flag, EyeOff, RotateCcw, Copy,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { fetchWitness, fetchAnnotations, setAnnotation, removeAnnotations, fetchAccountsInMotionFeed } from '../api/client'
@@ -112,6 +112,11 @@ function accountReviewPath(row: AccountsInMotionFeedItem, backToPath?: string | 
   return `/watchlists?${params.toString()}`
 }
 
+function toAbsoluteUrl(pathOrUrl: string) {
+  if (typeof window === 'undefined') return pathOrUrl
+  return new URL(pathOrUrl, window.location.origin).toString()
+}
+
 function AnnotationRemovalModal({
   annotationType,
   confirming,
@@ -210,6 +215,8 @@ export default function EvidenceDrawer({
   const [matchedAccountReviewPath, setMatchedAccountReviewPath] = useState<string | null>(null)
   const [annotating, setAnnotating] = useState(false)
   const [annotationActionError, setAnnotationActionError] = useState<string | null>(null)
+  const [copiedLinkKey, setCopiedLinkKey] = useState<string | null>(null)
+  const [linkCopyError, setLinkCopyError] = useState<string | null>(null)
   const [pendingRemoveAnnotation, setPendingRemoveAnnotation] = useState(false)
   const [removeAnnotationError, setRemoveAnnotationError] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -221,6 +228,8 @@ export default function EvidenceDrawer({
     setAnnotationState(null)
     setMatchedAccountReviewPath(null)
     setAnnotationActionError(null)
+    setCopiedLinkKey(null)
+    setLinkCopyError(null)
     setPendingRemoveAnnotation(false)
     setRemoveAnnotationError(null)
     Promise.all([
@@ -308,6 +317,22 @@ export default function EvidenceDrawer({
     }
   }
 
+  async function handleCopyLink(copyKey: string, target: string) {
+    if (!navigator.clipboard?.writeText) {
+      setCopiedLinkKey(null)
+      setLinkCopyError('Copy is unavailable in this browser')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(toAbsoluteUrl(target))
+      setCopiedLinkKey(copyKey)
+      setLinkCopyError(null)
+    } catch (err) {
+      setCopiedLinkKey(null)
+      setLinkCopyError(err instanceof Error ? err.message : 'Failed to copy link')
+    }
+  }
+
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
   }, [onClose])
@@ -318,6 +343,16 @@ export default function EvidenceDrawer({
   }, [open, handleKeyDown])
 
   if (!open) return null
+
+  const libraryPath = vendorName
+    ? (() => {
+        const params = new URLSearchParams()
+        params.set('vendor_filter', vendorName)
+        if (backToPath) params.set('back_to', backToPath)
+        return `/reports?${params.toString()}`
+      })()
+    : null
+  const reviewPath = witness?.review_id ? reviewDetailPath(witness.review_id, backToPath) : null
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -357,22 +392,44 @@ export default function EvidenceDrawer({
           {witness && (
             <div className="mt-3 flex items-center gap-2">
               {explorerUrl && (
-                <a
-                  href={explorerUrl}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 transition-colors"
-                >
-                  <Fingerprint className="h-3 w-3" />
-                  Open in Evidence Explorer
-                </a>
+                <>
+                  <a
+                    href={explorerUrl}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 transition-colors"
+                  >
+                    <Fingerprint className="h-3 w-3" />
+                    Open in Evidence Explorer
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyLink('explorer', explorerUrl)}
+                    aria-label="Copy evidence explorer link"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 transition-colors"
+                  >
+                    <Copy className="h-3 w-3" />
+                    {copiedLinkKey === 'explorer' ? 'Copied' : 'Copy explorer'}
+                  </button>
+                </>
               )}
               {matchedAccountReviewPath ? (
-                <Link
-                  to={matchedAccountReviewPath}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors"
-                >
-                  <Building2 className="h-3 w-3" />
-                  Open account review
-                </Link>
+                <>
+                  <Link
+                    to={matchedAccountReviewPath}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors"
+                  >
+                    <Building2 className="h-3 w-3" />
+                    Open account review
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyLink('account-review', matchedAccountReviewPath)}
+                    aria-label="Copy account review link"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 transition-colors"
+                  >
+                    <Copy className="h-3 w-3" />
+                    {copiedLinkKey === 'account-review' ? 'Copied' : 'Copy account review'}
+                  </button>
+                </>
               ) : null}
               {annotation ? (
                 <button
@@ -419,6 +476,11 @@ export default function EvidenceDrawer({
           {annotationActionError ? (
             <div role="alert" className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
               {annotationActionError}
+            </div>
+          ) : null}
+          {linkCopyError ? (
+            <div role="alert" className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+              {linkCopyError}
             </div>
           ) : null}
         </div>
@@ -550,27 +612,44 @@ export default function EvidenceDrawer({
               <div>
                 <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                   <FileText className="w-3 h-3" /> Source Review
-                  {vendorName && (() => {
-                    const params = new URLSearchParams()
-                    params.set('vendor_filter', vendorName)
-                    if (backToPath) params.set('back_to', backToPath)
-                    return (
-                    <a
-                      href={`/reports?${params.toString()}`}
-                      className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
-                    >
-                      View library <ExternalLink className="h-3 w-3" />
-                    </a>
-                    )
-                  })()}
-                  {witness.review_id && (
-                    <Link
-                      to={reviewDetailPath(witness.review_id, backToPath)}
-                      className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
-                    >
-                      Open review detail <ExternalLink className="h-3 w-3" />
-                    </Link>
-                  )}
+                  {libraryPath ? (
+                    <>
+                      <a
+                        href={libraryPath}
+                        className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
+                      >
+                        View library <ExternalLink className="h-3 w-3" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyLink('library', libraryPath)}
+                        aria-label="Copy report library link"
+                        className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-slate-200 mt-1"
+                      >
+                        <Copy className="h-3 w-3" />
+                        {copiedLinkKey === 'library' ? 'Copied' : 'Copy library'}
+                      </button>
+                    </>
+                  ) : null}
+                  {reviewPath ? (
+                    <>
+                      <Link
+                        to={reviewPath}
+                        className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
+                      >
+                        Open review detail <ExternalLink className="h-3 w-3" />
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyLink('review-detail', reviewPath)}
+                        aria-label="Copy review detail link"
+                        className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-slate-200 mt-1"
+                      >
+                        <Copy className="h-3 w-3" />
+                        {copiedLinkKey === 'review-detail' ? 'Copied' : 'Copy review'}
+                      </button>
+                    </>
+                  ) : null}
                   {witness.source_url && (
                     <a href={witness.source_url} target="_blank" rel="noopener noreferrer"
                        className="ml-auto text-cyan-400 hover:text-cyan-300 flex items-center gap-1">

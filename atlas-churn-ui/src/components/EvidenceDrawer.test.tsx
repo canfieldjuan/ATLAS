@@ -1,5 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import EvidenceDrawer from './EvidenceDrawer'
 
@@ -54,13 +55,15 @@ describe('EvidenceDrawer', () => {
     const user = userEvent.setup()
 
     render(
-      <EvidenceDrawer
-        vendorName="Salesforce"
-        witnessId="w1"
-        open
-        backToPath="/report?vendor=Salesforce&ref=test-token&mode=view"
-        onClose={() => {}}
-      />,
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          backToPath="/report?vendor=Salesforce&ref=test-token&mode=view"
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
     )
 
     expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
@@ -84,17 +87,113 @@ describe('EvidenceDrawer', () => {
     expect(await screen.findByText('Remove pin')).toBeInTheDocument()
   })
 
+  it('copies exact drawer handoff links', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.fetchWitness.mockResolvedValueOnce({
+      witness: {
+        witness_id: 'w1',
+        excerpt_text: 'Pricing spiked after renewal.',
+        source: 'g2',
+        reviewed_at: '2026-04-07T18:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP IT',
+        pain_category: 'pricing',
+        competitor: 'Zendesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        review_id: 'review-1',
+        source_url: 'https://g2.example/review-1',
+        review_text: 'Pricing spiked after renewal and support dropped.',
+        evidence_spans: [],
+        all_evidence_span_count: 0,
+      },
+    })
+    api.fetchAccountsInMotionFeed.mockResolvedValueOnce({
+      accounts: [{
+        company: 'Acme Corp',
+        vendor: 'Salesforce',
+        watch_vendor: 'HubSpot',
+        category: 'CRM',
+        track_mode: 'competitor',
+        report_date: '2026-04-08',
+      }],
+    })
+
+    try {
+      render(
+        <MemoryRouter>
+          <EvidenceDrawer
+            vendorName="Salesforce"
+            witnessId="w1"
+            open
+            explorerUrl="/evidence?vendor=Salesforce&witness_id=w1&back_to=%2Freports%3Fvendor_filter%3DSalesforce"
+            backToPath="/reports?vendor_filter=Salesforce"
+            onClose={() => {}}
+          />
+        </MemoryRouter>,
+      )
+
+      await user.click(await screen.findByRole('button', { name: 'Copy evidence explorer link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledTimes(1)
+      })
+      let copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+      let copiedUrl = new URL(copiedText)
+      expect(copiedUrl.pathname).toBe('/evidence')
+      expect(copiedUrl.searchParams.get('vendor')).toBe('Salesforce')
+      expect(copiedUrl.searchParams.get('witness_id')).toBe('w1')
+
+      await user.click(await screen.findByRole('button', { name: 'Copy account review link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledTimes(2)
+      })
+      copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+      copiedUrl = new URL(copiedText)
+      expect(copiedUrl.pathname).toBe('/watchlists')
+      expect(copiedUrl.searchParams.get('account_company')).toBe('Acme Corp')
+      expect(copiedUrl.searchParams.get('account_vendor')).toBe('Salesforce')
+      expect(copiedUrl.searchParams.get('account_watch_vendor')).toBe('HubSpot')
+
+      await user.click(screen.getByRole('button', { name: 'Copy report library link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledTimes(3)
+      })
+      copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+      copiedUrl = new URL(copiedText)
+      expect(copiedUrl.pathname).toBe('/reports')
+      expect(copiedUrl.searchParams.get('vendor_filter')).toBe('Salesforce')
+
+      await user.click(screen.getByRole('button', { name: 'Copy review detail link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledTimes(4)
+      })
+      copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+      copiedUrl = new URL(copiedText)
+      expect(copiedUrl.pathname).toBe('/reviews/review-1')
+      const reviewBackTo = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+      expect(reviewBackTo.pathname).toBe('/reports')
+      expect(reviewBackTo.searchParams.get('vendor_filter')).toBe('Salesforce')
+    } finally {
+      clipboardSpy.mockRestore()
+    }
+  })
+
   it('surfaces annotation mutation failures inline', async () => {
     const user = userEvent.setup()
     api.setAnnotation.mockRejectedValueOnce(new Error('annotation service unavailable'))
 
     render(
-      <EvidenceDrawer
-        vendorName="Salesforce"
-        witnessId="w1"
-        open
-        onClose={() => {}}
-      />,
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
     )
 
     await user.click(await screen.findByRole('button', { name: 'Pin' }))
@@ -120,12 +219,14 @@ describe('EvidenceDrawer', () => {
 
     try {
       render(
-        <EvidenceDrawer
-          vendorName="Salesforce"
-          witnessId="w1"
-          open
-          onClose={() => {}}
-        />,
+        <MemoryRouter>
+          <EvidenceDrawer
+            vendorName="Salesforce"
+            witnessId="w1"
+            open
+            onClose={() => {}}
+          />
+        </MemoryRouter>,
       )
 
       await user.click(await screen.findByRole('button', { name: 'Remove pin' }))
@@ -163,12 +264,14 @@ describe('EvidenceDrawer', () => {
     })
 
     render(
-      <EvidenceDrawer
-        vendorName="Salesforce"
-        witnessId="w1"
-        open
-        onClose={() => {}}
-      />,
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
     )
 
     await user.click(await screen.findByRole('button', { name: 'Remove pin' }))
