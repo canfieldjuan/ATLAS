@@ -1254,6 +1254,82 @@ async def test_resolve_webhook_activity_account_focus_prefers_review_id_match():
     }
 
 
+@pytest.mark.asyncio
+async def test_resolve_webhook_activity_account_focus_reuses_cached_report_focus_index():
+    pool = MagicMock()
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+    tracked_vendor_cache = {
+        b2b_dashboard._normalize_vendor_name('Acme Rival'): {
+            'vendor_name': 'Acme Rival',
+            'track_mode': 'competitor',
+        }
+    }
+    report_cache = {
+        b2b_dashboard._normalize_vendor_name('Acme Rival'): {
+            'report_date': '2026-04-10',
+            'intelligence_data': {'accounts': []},
+        }
+    }
+    account_focus_index_cache = {}
+    cached_index = {
+        'report_date': '2026-04-10',
+        'matches': {
+            (
+                b2b_dashboard._company_lookup_key('Acme Bank'),
+                b2b_dashboard._normalize_vendor_name('Acme Rival'),
+            ): [
+                {
+                    'account': {
+                        'company': 'Acme Bank',
+                        'vendor': 'Acme Rival',
+                        'category': 'Switch Risk',
+                    },
+                    'source_review_ids': {'review-123'},
+                }
+            ],
+        },
+    }
+
+    with patch.object(
+        b2b_dashboard,
+        '_build_accounts_in_motion_focus_index',
+        MagicMock(return_value=cached_index),
+    ) as build_focus_index:
+        first = await b2b_dashboard._resolve_webhook_activity_account_focus(
+            pool,
+            user,
+            vendor_name='Acme Rival',
+            company_name='Acme Bank',
+            review_id='review-123',
+            report_cache=report_cache,
+            tracked_vendor_cache=tracked_vendor_cache,
+            signal_cache={},
+            account_focus_index_cache=account_focus_index_cache,
+        )
+        second = await b2b_dashboard._resolve_webhook_activity_account_focus(
+            pool,
+            user,
+            vendor_name='Acme Rival',
+            company_name='Acme Bank',
+            review_id='review-123',
+            report_cache=report_cache,
+            tracked_vendor_cache=tracked_vendor_cache,
+            signal_cache={},
+            account_focus_index_cache=account_focus_index_cache,
+        )
+
+    assert build_focus_index.call_count == 1
+    assert first == {
+        'vendor': 'Acme Rival',
+        'company': 'Acme Bank',
+        'report_date': '2026-04-10',
+        'watch_vendor': 'Acme Rival',
+        'category': 'Switch Risk',
+        'track_mode': 'competitor',
+    }
+    assert second == first
+
+
 def test_build_report_generated_payload_skips_failed_status():
     payload = webhook_dispatcher._build_report_generated_payload(
         report_id='report-1',

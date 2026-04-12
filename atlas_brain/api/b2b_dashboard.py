@@ -5961,6 +5961,7 @@ async def list_webhooks(
     tracked_vendor_cache: dict[str, Any] = {}
     signal_cache: dict[str, Any] = {}
     report_activity_cache: dict[str, Any] = {}
+    account_focus_index_cache: dict[str, Any] = {}
     await _prime_webhook_list_summary_context_caches(
         pool,
         rows,
@@ -5998,6 +5999,7 @@ async def list_webhooks(
                 report_cache=report_cache,
                 tracked_vendor_cache=tracked_vendor_cache,
                 signal_cache=signal_cache,
+                account_focus_index_cache=account_focus_index_cache,
             )
             if any((latest_failure_signal_id, latest_failure_review_id, latest_failure_company_name))
             else None
@@ -6025,6 +6027,7 @@ async def list_webhooks(
                 report_cache=report_cache,
                 tracked_vendor_cache=tracked_vendor_cache,
                 signal_cache=signal_cache,
+                account_focus_index_cache=account_focus_index_cache,
             )
             if any((latest_test_signal_id, latest_test_review_id, latest_test_company_name))
             else None
@@ -6069,6 +6072,7 @@ async def list_webhooks(
                 report_cache=report_cache,
                 tracked_vendor_cache=tracked_vendor_cache,
                 signal_cache=signal_cache,
+                account_focus_index_cache=account_focus_index_cache,
             )
             latest_crm_push = {
                 "id": str(latest_crm_id),
@@ -6415,6 +6419,7 @@ async def list_webhook_deliveries(
     tracked_vendor_cache: dict[str, Any] = {}
     signal_cache: dict[str, Any] = {}
     report_activity_cache: dict[str, Any] = {}
+    account_focus_index_cache: dict[str, Any] = {}
     await _prime_webhook_delivery_activity_context_caches(
         pool,
         rows,
@@ -6454,6 +6459,7 @@ async def list_webhook_deliveries(
             report_cache=report_cache,
             tracked_vendor_cache=tracked_vendor_cache,
             signal_cache=signal_cache,
+            account_focus_index_cache=account_focus_index_cache,
         )
         signal_type = context.get("signal_type") or r["event_type"]
         if r["event_type"] == "test":
@@ -6558,6 +6564,7 @@ async def list_crm_push_log(
     tracked_vendor_cache: dict[str, Any] = {}
     signal_cache: dict[str, Any] = {}
     report_activity_cache: dict[str, Any] = {}
+    account_focus_index_cache: dict[str, Any] = {}
     await _prime_webhook_crm_push_activity_context_caches(
         pool,
         rows,
@@ -6590,6 +6597,7 @@ async def list_crm_push_log(
             report_cache=report_cache,
             tracked_vendor_cache=tracked_vendor_cache,
             signal_cache=signal_cache,
+            account_focus_index_cache=account_focus_index_cache,
         )
         pushes.append({
             "id": str(r["id"]),
@@ -8017,6 +8025,44 @@ async def _prime_webhook_crm_account_focus_caches(
     )
 
 
+def _build_accounts_in_motion_focus_index(
+    report_row: Any,
+    watch_vendor: str,
+) -> dict[str, Any] | None:
+    report = _safe_json(report_row["intelligence_data"])
+    if not isinstance(report, dict):
+        return None
+    report_date = str(report_row["report_date"]) if report_row.get("report_date") else ""
+    if not report_date:
+        return None
+
+    matches: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for account in report.get("accounts") or []:
+        if not isinstance(account, dict):
+            continue
+        shaped = _shape_persisted_accounts_in_motion_account(account, watch_vendor)
+        company_key = _company_lookup_key(shaped.get("company"))
+        vendor_key = _normalize_vendor_name(shaped.get("vendor"))
+        if not company_key or not vendor_key:
+            continue
+        source_review_ids = {
+            str(item).strip()
+            for item in (account.get("source_reviews") or [])
+            if str(item or "").strip()
+        }
+        matches.setdefault((company_key, vendor_key), []).append(
+            {
+                "account": shaped,
+                "source_review_ids": source_review_ids,
+            }
+        )
+
+    return {
+        "report_date": report_date,
+        "matches": matches,
+    }
+
+
 async def _resolve_webhook_activity_account_focus(
     pool,
     user: AuthUser | None,
@@ -8028,6 +8074,7 @@ async def _resolve_webhook_activity_account_focus(
     report_cache: dict[str, Any] | None = None,
     tracked_vendor_cache: dict[str, Any] | None = None,
     signal_cache: dict[str, Any] | None = None,
+    account_focus_index_cache: dict[str, Any] | None = None,
 ) -> dict[str, str] | None:
     if not user or not getattr(user, "account_id", None):
         return None
@@ -8080,30 +8127,33 @@ async def _resolve_webhook_activity_account_focus(
     if not report_row:
         return None
 
-    report = _safe_json(report_row["intelligence_data"])
-    if not isinstance(report, dict):
+    if account_focus_index_cache is not None and watch_vendor_key in account_focus_index_cache:
+        report_focus_index = account_focus_index_cache[watch_vendor_key]
+    else:
+        report_focus_index = _build_accounts_in_motion_focus_index(report_row, watch_vendor)
+        if account_focus_index_cache is not None:
+            account_focus_index_cache[watch_vendor_key] = report_focus_index
+    if not report_focus_index:
         return None
-    report_date = str(report_row["report_date"]) if report_row.get("report_date") else ""
+
+    report_date = str(report_focus_index.get("report_date") or "").strip()
     if not report_date:
         return None
 
     target_company_key = _company_lookup_key(resolved_company)
     target_vendor_key = _normalize_vendor_name(resolved_vendor)
+    candidate_matches = (report_focus_index.get("matches") or {}).get((target_company_key, target_vendor_key), [])
     strong_matches: list[dict[str, Any]] = []
     fallback_matches: list[dict[str, Any]] = []
-    for account in report.get("accounts") or []:
-        if not isinstance(account, dict):
+    for candidate in candidate_matches:
+        if not isinstance(candidate, dict):
             continue
-        shaped = _shape_persisted_accounts_in_motion_account(account, watch_vendor)
-        if _company_lookup_key(shaped.get("company")) != target_company_key:
+        shaped = candidate.get("account")
+        if not isinstance(shaped, dict):
             continue
-        if _normalize_vendor_name(shaped.get("vendor")) != target_vendor_key:
-            continue
-        source_review_ids = {
-            str(item).strip()
-            for item in (account.get("source_reviews") or [])
-            if str(item or "").strip()
-        }
+        source_review_ids = candidate.get("source_review_ids")
+        if not isinstance(source_review_ids, set):
+            source_review_ids = set()
         if resolved_review_id and resolved_review_id in source_review_ids:
             strong_matches.append(shaped)
         else:
