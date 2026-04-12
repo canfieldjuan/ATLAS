@@ -854,13 +854,30 @@ async def test_dashboard_vendor_profile_only_uses_trusted_account_resolution(mon
     )
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
 
-    result = await mod.get_vendor_profile("Zendesk", user=None)
+    result = await mod.get_vendor_profile("  Zendesk  ", user=None)
 
     assert result["vendor_name"] == "Zendesk"
     hi_sql = pool.fetch.await_args_list[0].args[0]
     counts_sql = pool.fetchrow.await_args_list[1].args[0]
     assert "WHEN ar.confidence_label IN ('high', 'medium')" in hi_sql
     assert "duplicate_of_review_id IS NULL" in counts_sql
+
+
+@pytest.mark.asyncio
+async def test_dashboard_vendor_profile_rejects_blank_vendor_name_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_pool_or_503",
+        lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")),
+    )
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.get_vendor_profile("   ", user=None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "vendor_name is required"
 
 
 @pytest.mark.asyncio

@@ -1214,8 +1214,8 @@ async def list_high_intent(
 
 @router.get("/vendors/{vendor_name}")
 async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(optional_auth)):
+    vname = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
-    vname = vendor_name.strip()
 
     # When authenticated, verify vendor is tracked by the user's account
     if _should_scope(user):
