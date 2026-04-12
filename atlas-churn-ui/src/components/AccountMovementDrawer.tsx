@@ -29,6 +29,8 @@ interface AccountMovementDrawerProps {
   open: boolean
   onClose: () => void
   onViewVendor: (vendorName: string) => void
+  alertsApiUrl?: string | null
+  onCopyAlertsLink?: () => void
   onCopyVendorLink?: () => void
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   onCopyWitnessLink?: (witnessId: string) => void
@@ -86,6 +88,8 @@ export default function AccountMovementDrawer({
   open,
   onClose,
   onViewVendor,
+  alertsApiUrl,
+  onCopyAlertsLink,
   onCopyVendorLink,
   onOpenWitness,
   onCopyWitnessLink,
@@ -183,6 +187,24 @@ export default function AccountMovementDrawer({
               >
                 <Copy className="h-3.5 w-3.5" />
                 Copy link
+              </button>
+            )}
+            {alertsApiUrl && (
+              <Link
+                className="inline-flex items-center gap-1 rounded-md bg-rose-500/10 px-2.5 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/20"
+                to={alertsApiUrl}
+              >
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Alerts API
+              </Link>
+            )}
+            {alertsApiUrl && onCopyAlertsLink && (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={onCopyAlertsLink}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy alerts
               </button>
             )}
             {evidenceExplorerUrl && (

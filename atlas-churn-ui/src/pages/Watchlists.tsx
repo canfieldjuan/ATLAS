@@ -1842,6 +1842,18 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopySelectedAlertsLink() {
+    if (!selectedAccount) return
+    try {
+      await navigator.clipboard.writeText(watchlistAlertsUrl(selectedAccountSearchParams))
+      setActionError(null)
+      setActionMessage(`Copied Alerts API link for ${selectedAccount.company || selectedAccount.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy Alerts API link')
+    }
+  }
+
   async function handleCopyAccountRowLink(row: AccountsInMotionFeedItem) {
     try {
       await navigator.clipboard.writeText(watchlistAccountUrl(searchParams, row))
@@ -4575,6 +4587,8 @@ export default function Watchlists() {
         open={selectedAccount != null}
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(watchlistVendorPath(selectedAccountSearchParams, vendorName))}
+        alertsApiUrl={selectedAccount ? watchlistAlertsPath(selectedAccountSearchParams) : null}
+        onCopyAlertsLink={() => void handleCopySelectedAlertsLink()}
         onCopyVendorLink={() => void handleCopySelectedVendorLink()}
         onCopyWitnessLink={(witnessId) => void handleCopySelectedWitnessLink(witnessId)}
         onCopyLink={() => void handleCopySelectedAccountLink()}
