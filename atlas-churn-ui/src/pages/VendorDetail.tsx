@@ -186,13 +186,20 @@ function backToLabel(backTo: string): string {
 }
 
 function upstreamWatchlistsPath(backTo: string | null): string | null {
-  if (!backTo?.startsWith('/evidence')) return null
-  try {
-    const url = new URL(backTo, window.location.origin)
-    return normalizeBackTo(url.searchParams.get('back_to'))
-  } catch {
-    return null
+  let current = normalizeBackTo(backTo)
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/watchlists')) return current
+
+    try {
+      const url = new URL(current, window.location.origin)
+      current = normalizeBackTo(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
   }
+
+  return null
 }
 
 function upstreamWatchlistsLabel(backTo: string | null): string {
