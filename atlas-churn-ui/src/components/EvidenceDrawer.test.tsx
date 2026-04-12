@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import EvidenceDrawer from './EvidenceDrawer'
@@ -81,5 +81,85 @@ describe('EvidenceDrawer', () => {
     })
 
     expect(await screen.findByText('Remove pin')).toBeInTheDocument()
+  })
+
+  it('uses an in-app confirmation modal before removing an annotation', async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
+    api.fetchAnnotations.mockResolvedValueOnce({
+      annotations: [{
+        id: 'ann-1',
+        witness_id: 'w1',
+        vendor_name: 'Salesforce',
+        annotation_type: 'pin',
+        note_text: null,
+        created_at: '2026-04-08T12:00:00Z',
+        updated_at: '2026-04-08T12:00:00Z',
+      }],
+    })
+
+    try {
+      render(
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          onClose={() => {}}
+        />,
+      )
+
+      await user.click(await screen.findByRole('button', { name: 'Remove pin' }))
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      expect(api.removeAnnotations).not.toHaveBeenCalled()
+
+      const dialog = await screen.findByRole('alertdialog')
+      expect(dialog).toHaveTextContent('Remove pin')
+      expect(dialog).toHaveTextContent('Remove pin annotation from this witness?')
+
+      await user.click(within(dialog).getByRole('button', { name: 'Remove pin' }))
+
+      await waitFor(() => {
+        expect(api.removeAnnotations).toHaveBeenCalledWith({ witness_ids: ['w1'] })
+      })
+      expect(await screen.findByRole('button', { name: 'Pin' })).toBeInTheDocument()
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('does not remove an annotation when the confirmation modal is cancelled', async () => {
+    const user = userEvent.setup()
+    api.fetchAnnotations.mockResolvedValueOnce({
+      annotations: [{
+        id: 'ann-1',
+        witness_id: 'w1',
+        vendor_name: 'Salesforce',
+        annotation_type: 'pin',
+        note_text: null,
+        created_at: '2026-04-08T12:00:00Z',
+        updated_at: '2026-04-08T12:00:00Z',
+      }],
+    })
+
+    render(
+      <EvidenceDrawer
+        vendorName="Salesforce"
+        witnessId="w1"
+        open
+        onClose={() => {}}
+      />,
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Remove pin' }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(api.removeAnnotations).not.toHaveBeenCalled()
+    })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Remove pin' }).length).toBeGreaterThan(0)
   })
 })

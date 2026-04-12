@@ -112,6 +112,87 @@ function accountReviewPath(row: AccountsInMotionFeedItem, backToPath?: string | 
   return `/watchlists?${params.toString()}`
 }
 
+function AnnotationRemovalModal({
+  annotationType,
+  confirming,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  annotationType: string
+  confirming: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-slate-950/80"
+        onClick={() => {
+          if (!confirming) onCancel()
+        }}
+      />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="evidence-annotation-removal-title"
+        className="relative z-10 w-full max-w-md rounded-xl border border-amber-500/20 bg-slate-950 p-6 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="rounded-lg bg-amber-500/10 p-2 text-amber-300">
+              <RotateCcw className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 id="evidence-annotation-removal-title" className="text-base font-semibold text-white">
+                Remove {annotationType}
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Remove {annotationType} annotation from this witness? This clears the saved analyst override.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!confirming) onCancel()
+            }}
+            className="text-slate-500 hover:text-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={confirming}
+            aria-label="Close annotation removal dialog"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {error ? (
+          <div role="alert" className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+            {error}
+          </div>
+        ) : null}
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={confirming}
+            className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={confirming}
+            className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {confirming ? 'Removing...' : `Remove ${annotationType}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function EvidenceDrawer({
   vendorName,
   witnessId,
@@ -128,6 +209,8 @@ export default function EvidenceDrawer({
   const [annotation, setAnnotationState] = useState<EvidenceAnnotation | null>(null)
   const [matchedAccountReviewPath, setMatchedAccountReviewPath] = useState<string | null>(null)
   const [annotating, setAnnotating] = useState(false)
+  const [pendingRemoveAnnotation, setPendingRemoveAnnotation] = useState(false)
+  const [removeAnnotationError, setRemoveAnnotationError] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -136,6 +219,8 @@ export default function EvidenceDrawer({
     setError('')
     setAnnotationState(null)
     setMatchedAccountReviewPath(null)
+    setPendingRemoveAnnotation(false)
+    setRemoveAnnotationError(null)
     Promise.all([
       fetchWitness(witnessId, vendorName, {
         as_of_date: asOfDate || undefined,
@@ -198,14 +283,21 @@ export default function EvidenceDrawer({
     }
   }
 
+  function requestRemoveAnnotation() {
+    setPendingRemoveAnnotation(true)
+    setRemoveAnnotationError(null)
+  }
+
   async function handleRemoveAnnotation() {
     if (!witnessId) return
     setAnnotating(true)
+    setRemoveAnnotationError(null)
     try {
       await removeAnnotations({ witness_ids: [witnessId] })
       setAnnotationState(null)
-    } catch {
-      // keep current state
+      setPendingRemoveAnnotation(false)
+    } catch (err) {
+      setRemoveAnnotationError(err instanceof Error ? err.message : 'Failed to remove annotation')
     } finally {
       setAnnotating(false)
     }
@@ -279,7 +371,7 @@ export default function EvidenceDrawer({
               ) : null}
               {annotation ? (
                 <button
-                  onClick={handleRemoveAnnotation}
+                  onClick={requestRemoveAnnotation}
                   disabled={annotating}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 disabled:opacity-50 transition-colors"
                 >
@@ -514,7 +606,20 @@ export default function EvidenceDrawer({
           </div>
         )}
       </div>
-
+      {annotation && pendingRemoveAnnotation ? (
+        <AnnotationRemovalModal
+          annotationType={annotation.annotation_type}
+          confirming={annotating}
+          error={removeAnnotationError}
+          onCancel={() => {
+            if (!annotating) {
+              setPendingRemoveAnnotation(false)
+              setRemoveAnnotationError(null)
+            }
+          }}
+          onConfirm={() => void handleRemoveAnnotation()}
+        />
+      ) : null}
     </div>
   )
 }
