@@ -1436,7 +1436,7 @@ export default function IncidentAlerts() {
                           ) : null}
                           {renderActivityReferences(latestFailureReferences)}
                           {renderActivityDetailShortcuts(latestFailureContext, currentAlertsUrl, { includeCopy: true })}
-                          {renderActivityVendorShortcuts(latestFailureContext, currentAlertsUrl)}
+                          {renderActivityVendorShortcuts(latestFailureContext, currentAlertsUrl, { includeCopy: true })}
                         </div>
                       ) : null}
                       {latestManualTest ? (
@@ -1478,7 +1478,7 @@ export default function IncidentAlerts() {
                           ) : null}
                           {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
                           {latestManualTestContext ? renderActivityDetailShortcuts(latestManualTestContext, currentAlertsUrl, { includeCopy: true }) : null}
-                          {latestManualTestContext ? renderActivityVendorShortcuts(latestManualTestContext, currentAlertsUrl) : null}
+                          {latestManualTestContext ? renderActivityVendorShortcuts(latestManualTestContext, currentAlertsUrl, { includeCopy: true }) : null}
                         </div>
                       ) : null}
                       {latestCrmPush ? (
@@ -1509,7 +1509,7 @@ export default function IncidentAlerts() {
                           ) : null}
                           {renderActivityReferences(latestCrmPush)}
                           {renderActivityDetailShortcuts(latestCrmPush, currentAlertsUrl, { includeCopy: true })}
-                          {renderActivityVendorShortcuts(latestCrmPush, currentAlertsUrl)}
+                          {renderActivityVendorShortcuts(latestCrmPush, currentAlertsUrl, { includeCopy: true })}
                           {latestCrmPush.error ? (
                             <div className="mt-2 text-xs text-rose-200">{latestCrmPush.error}</div>
                           ) : null}

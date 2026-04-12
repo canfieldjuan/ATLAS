@@ -295,6 +295,9 @@ describe('IncidentAlerts', () => {
 
 
   it('links latest failure cards into vendor workflows when only vendor context is available', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
     api.listWebhooks.mockResolvedValueOnce({
       webhooks: [
         {
@@ -361,6 +364,12 @@ describe('IncidentAlerts', () => {
       'href',
       '/opportunities?vendor=Acme+Rival&back_to=%2Falerts',
     )
+
+    await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}/vendors/Acme%20Rival?back_to=%2Falerts`)
+    })
+    expect(await screen.findByText('Copied vendor workspace link')).toBeInTheDocument()
   })
 
 
