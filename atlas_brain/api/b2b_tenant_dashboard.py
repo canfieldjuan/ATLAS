@@ -3624,8 +3624,9 @@ async def list_tenant_reports(
 async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_auth)):
     """Report detail (verify vendor in tracked)."""
     _require_b2b_product(user)
+    report_id = _clean_optional_text(report_id)
     try:
-        rid = _uuid.UUID(report_id)
+        rid = _uuid.UUID(report_id or "")
     except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail="Invalid report_id (must be UUID)")
 
@@ -3942,8 +3943,9 @@ async def list_tenant_reviews(
 async def get_tenant_review(review_id: str, user: AuthUser = Depends(require_auth)):
     """Review detail (verify vendor in tracked)."""
     _require_b2b_product(user)
+    review_id = _clean_optional_text(review_id)
     try:
-        rid = _uuid.UUID(review_id)
+        rid = _uuid.UUID(review_id or "")
     except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail="Invalid review_id (must be UUID)")
 

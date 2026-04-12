@@ -655,6 +655,42 @@ async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_tenant_report_trims_uuid_path_before_lookup(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    report_id = uuid4()
+    row = {
+        "id": report_id,
+        "report_date": None,
+        "report_type": "vendor_scorecard",
+        "vendor_filter": "Zendesk",
+        "category_filter": None,
+        "executive_summary": "Summary",
+        "intelligence_data": {},
+        "data_density": {},
+        "status": "published",
+        "latest_failure_step": None,
+        "latest_error_code": None,
+        "latest_error_summary": None,
+        "blocker_count": 0,
+        "warning_count": 0,
+        "llm_model": "test-model",
+        "created_at": datetime.now(timezone.utc),
+    }
+    pool = SimpleNamespace(is_initialized=True, fetchval=AsyncMock(return_value=0))
+    load_mock = AsyncMock(return_value=row)
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(mod, "_load_accessible_tenant_report", load_mock)
+    monkeypatch.setattr(mod, "_fetch_report_subscription_row", AsyncMock(return_value=None))
+
+    await mod.get_tenant_report(f"  {report_id}  ", user=user)
+
+    load_mock.assert_awaited_once_with(pool, report_id, user)
+
+
+@pytest.mark.asyncio
 async def test_get_tenant_report_exposes_report_subscription_summary(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -2490,6 +2526,48 @@ async def test_get_lead_detail_trims_company_before_reader_call(monkeypatch):
     assert read_mock.await_args.kwargs["company"] == "Acme Corp"
     assert result["company"] == "Acme Corp"
     assert result["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_review_trims_uuid_path_before_lookup(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    review_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            return_value={
+                "id": review_id,
+                "source": "g2",
+                "source_url": None,
+                "vendor_name": "Zendesk",
+                "product_name": None,
+                "product_category": "CRM",
+                "rating": 4,
+                "summary": None,
+                "review_text": None,
+                "pros": None,
+                "cons": None,
+                "reviewer_name": None,
+                "reviewer_title": None,
+                "reviewer_company": None,
+                "company_size_raw": None,
+                "reviewer_industry": None,
+                "reviewed_at": None,
+                "enrichment": {},
+                "enrichment_status": "enriched",
+                "enriched_at": None,
+            }
+        ),
+        fetchval=AsyncMock(return_value=1),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    await mod.get_tenant_review(f"  {review_id}  ", user=user)
+
+    assert pool.fetchrow.await_args.args[1] == review_id
 
 
 @pytest.mark.asyncio
