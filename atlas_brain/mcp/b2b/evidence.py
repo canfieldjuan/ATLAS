@@ -8,6 +8,12 @@ from ._shared import _safe_json, get_pool, logger
 from .server import mcp
 
 
+def _clean_optional_text(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+
 # -------------------------------------------------------------------
 # Evidence Vault
 # -------------------------------------------------------------------
@@ -143,7 +149,7 @@ async def list_evidence_vaults(
             pool,
             as_of=target_date,
             analysis_window_days=window_days,
-            vendor_query=vendor_name.strip() if vendor_name else None,
+            vendor_query=_clean_optional_text(vendor_name),
         )
 
         vaults = []
@@ -296,9 +302,10 @@ async def list_segment_intelligence(
         params: list = [target_date, window_days]
         idx = 3
 
-        if vendor_name:
+        clean_vendor_name = _clean_optional_text(vendor_name)
+        if clean_vendor_name:
             conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-            params.append(vendor_name.strip())
+            params.append(clean_vendor_name)
             idx += 1
 
         where = " AND ".join(conditions)
@@ -465,9 +472,10 @@ async def list_temporal_intelligence(
         params: list = [target_date, window_days]
         idx = 3
 
-        if vendor_name:
+        clean_vendor_name = _clean_optional_text(vendor_name)
+        if clean_vendor_name:
             conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-            params.append(vendor_name.strip())
+            params.append(clean_vendor_name)
             idx += 1
 
         where = " AND ".join(conditions)
@@ -647,14 +655,16 @@ async def list_displacement_dynamics(
         params: list = [target_date, window_days]
         idx = 3
 
-        if from_vendor:
+        clean_from_vendor = _clean_optional_text(from_vendor)
+        clean_to_vendor = _clean_optional_text(to_vendor)
+        if clean_from_vendor:
             conditions.append(f"from_vendor ILIKE '%' || ${idx} || '%'")
-            params.append(from_vendor.strip())
+            params.append(clean_from_vendor)
             idx += 1
 
-        if to_vendor:
+        if clean_to_vendor:
             conditions.append(f"to_vendor ILIKE '%' || ${idx} || '%'")
-            params.append(to_vendor.strip())
+            params.append(clean_to_vendor)
             idx += 1
 
         where = " AND ".join(conditions)
@@ -826,9 +836,10 @@ async def list_category_dynamics(
         params: list = [target_date, window_days]
         idx = 3
 
-        if category:
+        clean_category = _clean_optional_text(category)
+        if clean_category:
             conditions.append(f"category ILIKE '%' || ${idx} || '%'")
-            params.append(category.strip())
+            params.append(clean_category)
             idx += 1
 
         where = " AND ".join(conditions)
@@ -991,9 +1002,10 @@ async def list_account_intelligence(
         params: list = [target_date, window_days]
         idx = 3
 
-        if vendor_name:
+        clean_vendor_name = _clean_optional_text(vendor_name)
+        if clean_vendor_name:
             conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-            params.append(vendor_name.strip())
+            params.append(clean_vendor_name)
             idx += 1
 
         where = " AND ".join(conditions)

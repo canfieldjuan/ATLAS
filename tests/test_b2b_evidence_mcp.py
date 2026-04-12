@@ -108,3 +108,90 @@ async def test_list_evidence_vaults_sorts_before_limit(monkeypatch):
     assert body["count"] == 1
     assert body["vaults"][0]["vendor_name"] == "Zendesk"
     assert body["vaults"][0]["avg_urgency"] == 7.2
+
+
+@pytest.mark.asyncio
+async def test_list_evidence_vaults_normalizes_blank_vendor_filter(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    reader = AsyncMock(return_value=[])
+    monkeypatch.setattr(evidence_mcp, "_search_vendor_intelligence_records", reader)
+
+    body = json.loads(await evidence_mcp.list_evidence_vaults(vendor_name="   "))
+
+    reader.assert_awaited_once_with(
+        pool,
+        as_of=date.today(),
+        analysis_window_days=30,
+        vendor_query=None,
+    )
+    assert body["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_segment_intelligence_normalizes_blank_vendor_filter(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.list_segment_intelligence(vendor_name="   "))
+
+    pool.fetch.assert_awaited_once()
+    query, *params = pool.fetch.await_args.args
+    assert "vendor_name ILIKE" not in query
+    assert params == [date.today(), 30]
+    assert body["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_displacement_dynamics_normalizes_blank_vendor_filters(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(
+        await evidence_mcp.list_displacement_dynamics(from_vendor="   ", to_vendor="  ")
+    )
+
+    pool.fetch.assert_awaited_once()
+    query, *params = pool.fetch.await_args.args
+    assert "from_vendor ILIKE" not in query
+    assert "to_vendor ILIKE" not in query
+    assert params == [date.today(), 30]
+    assert body["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_category_dynamics_normalizes_blank_category_filter(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.list_category_dynamics(category="   "))
+
+    pool.fetch.assert_awaited_once()
+    query, *params = pool.fetch.await_args.args
+    assert "category ILIKE" not in query
+    assert params == [date.today(), 30]
+    assert body["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_account_intelligence_normalizes_blank_vendor_filter(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.list_account_intelligence(vendor_name="   "))
+
+    pool.fetch.assert_awaited_once()
+    query, *params = pool.fetch.await_args.args
+    assert "vendor_name ILIKE" not in query
+    assert params == [date.today(), 30]
+    assert body["count"] == 0
