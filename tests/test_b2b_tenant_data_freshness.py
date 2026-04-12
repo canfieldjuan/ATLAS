@@ -958,6 +958,22 @@ async def test_report_subscription_routes_validate_scope_and_filters_before_db_t
             "scope_key is required",
         ),
         (
+            lambda: mod.get_report_subscription("report", "not-a-uuid", user=user),
+            "scope_key must be a report UUID",
+        ),
+        (
+            lambda: mod.upsert_report_subscription(
+                "report",
+                "not-a-uuid",
+                mod.ReportSubscriptionUpsertRequest(
+                    scope_label="Pipeline",
+                    enabled=False,
+                ),
+                user=user,
+            ),
+            "scope_key must be a report UUID",
+        ),
+        (
             lambda: mod.upsert_report_subscription(
                 "library_view",
                 "pipeline",

@@ -3788,12 +3788,15 @@ async def get_report_subscription(
         scope_type,
         scope_key,
     )
-    pool = _pool_or_503()
 
+    report_id: _uuid.UUID | None = None
     if normalized_scope_type == "report":
         report_id = _coerce_uuid(normalized_scope_key)
         if not report_id:
             raise HTTPException(status_code=400, detail="scope_key must be a report UUID")
+
+    pool = _pool_or_503()
+    if report_id:
         await _load_accessible_tenant_report(pool, report_id, user)
 
     row = await _fetch_report_subscription_row(
@@ -3833,15 +3836,17 @@ async def upsert_report_subscription(
         body.filter_payload,
     )
 
-    pool = _pool_or_503()
-    account_id = _uuid.UUID(user.account_id)
-    user_id = _coerce_uuid(getattr(user, "user_id", None))
-
     report_id: _uuid.UUID | None = None
     if normalized_scope_type == "report":
         report_id = _coerce_uuid(normalized_scope_key)
         if not report_id:
             raise HTTPException(status_code=400, detail="scope_key must be a report UUID")
+
+    pool = _pool_or_503()
+    account_id = _uuid.UUID(user.account_id)
+    user_id = _coerce_uuid(getattr(user, "user_id", None))
+
+    if report_id:
         await _load_accessible_tenant_report(pool, report_id, user)
 
     existing_subscription = await _fetch_report_subscription_schedule_row(
