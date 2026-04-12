@@ -13562,6 +13562,7 @@ async def read_company_signal_review_impact_summary(
                 "rationale": None,
                 "impact_filters": {},
                 "queue_filters": {},
+                "queue_snapshot": None,
             },
             "trend_alerts": [],
             "trend_recommendation": {
@@ -14522,6 +14523,25 @@ async def read_company_signal_review_impact_summary(
                 review_priority_reason=trend_recommendation_queue_filters.get("review_priority_reason"),
             )
         )
+    if trend_focus.get("queue_filters") == trend_recommendation_queue_filters:
+        trend_focus["queue_snapshot"] = trend_recommendation_queue_snapshot
+    elif trend_focus.get("queue_filters"):
+        trend_focus["queue_snapshot"] = _build_trend_recommendation_queue_snapshot(
+            await _read_company_signal_candidate_group_totals(
+                pool,
+                window_days=window_days,
+                vendor_name=trend_focus["queue_filters"].get("vendor_name"),
+                source_name=trend_focus["queue_filters"].get("source_name"),
+                scoped_vendors=scoped_vendors,
+                candidate_bucket=trend_focus["queue_filters"].get("candidate_bucket"),
+                review_status=trend_focus["queue_filters"].get("review_status"),
+                canonical_gap_reason=trend_focus["queue_filters"].get("canonical_gap_reason"),
+                review_priority_band=trend_focus["queue_filters"].get("review_priority_band"),
+                review_priority_reason=trend_focus["queue_filters"].get("review_priority_reason"),
+            )
+        )
+    else:
+        trend_focus["queue_snapshot"] = None
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
