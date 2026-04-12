@@ -6190,6 +6190,10 @@ async def list_webhook_deliveries(
     except ValueError:
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
+    event_type = _optional_query_text(event_type)
+    start_date = _optional_query_text(start_date)
+    end_date = _optional_query_text(end_date)
+
     parsed_start_date = None
     parsed_end_date = None
     if start_date:

@@ -400,6 +400,32 @@ async def test_test_webhook_dispatches_after_ownership_check():
 
 
 @pytest.mark.asyncio
+async def test_list_webhook_deliveries_normalizes_blank_optional_filters():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(return_value=[])
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.list_webhook_deliveries(
+            '3df7f790-6afc-4e0f-b40e-a78f77e60dd2',
+            success=None,
+            event_type='   ',
+            start_date='  ',
+            end_date='	',
+            limit=50,
+            user=user,
+        )
+
+    assert result == {'deliveries': [], 'count': 0}
+    query, *params = pool.fetch.await_args.args
+    assert 'event_type = $' not in query
+    assert 'delivered_at >=' not in query
+    assert 'delivered_at <' not in query
+    assert params == [b2b_dashboard._uuid.UUID('3df7f790-6afc-4e0f-b40e-a78f77e60dd2'), 50]
+
+
+@pytest.mark.asyncio
 async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=1)
