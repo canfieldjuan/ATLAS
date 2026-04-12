@@ -12090,6 +12090,15 @@ async def _read_company_signal_candidate_group_totals(
     return dict(row or _empty_company_signal_candidate_group_totals())
 
 
+def _company_signal_action_priority_rank(value: Any) -> int:
+    order = {
+        "high": 3,
+        "medium": 2,
+        "low": 1,
+    }
+    return order.get(str(value or "").lower(), 0)
+
+
 async def read_company_signal_candidate_group_summary(
     pool,
     *,
@@ -13408,14 +13417,6 @@ async def read_company_signal_candidate_group_summary(
             ),
             "alternate_queue_filters": alternate_queue_filters,
         }
-    def _priority_rank(value: Any) -> int:
-        order = {
-            "high": 3,
-            "medium": 2,
-            "low": 1,
-        }
-        return order.get(str(value or "").lower(), 0)
-
     def _build_operator_focus(
         queue_recommendation: Mapping[str, Any] | None,
         unlock_focus: Mapping[str, Any] | None,
@@ -13437,7 +13438,7 @@ async def read_company_signal_candidate_group_summary(
         queue_action = queue_payload.get("action")
         unlock_action = unlock_payload.get("action")
         if queue_action and unlock_action:
-            if _priority_rank(unlock_payload.get("priority")) > _priority_rank(queue_payload.get("priority")):
+            if _company_signal_action_priority_rank(unlock_payload.get("priority")) > _company_signal_action_priority_rank(queue_payload.get("priority")):
                 return {
                     **default,
                     **unlock_payload,
@@ -14818,14 +14819,6 @@ async def read_company_signal_review_impact_summary(
             "primary_driver": None,
         }
 
-        def _priority_rank(value: Any) -> int:
-            order = {
-                "high": 3,
-                "medium": 2,
-                "low": 1,
-            }
-            return order.get(str(value or "").lower(), 0)
-
         trend_payload: dict[str, Any] | None = None
         trend_action = trend_recommendation.get("action") if isinstance(trend_recommendation, Mapping) else None
         if trend_action:
@@ -14863,7 +14856,7 @@ async def read_company_signal_review_impact_summary(
             }
 
         if trend_payload and queue_payload:
-            if _priority_rank(trend_payload.get("priority")) > _priority_rank(queue_payload.get("priority")):
+            if _company_signal_action_priority_rank(trend_payload.get("priority")) > _company_signal_action_priority_rank(queue_payload.get("priority")):
                 return {
                     **default,
                     **trend_payload,
