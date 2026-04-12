@@ -5967,6 +5967,15 @@ async def list_webhooks(
         report_cache=report_activity_cache,
         signal_cache=signal_cache,
     )
+    await _prime_webhook_summary_account_focus_caches(
+        pool,
+        user,
+        rows,
+        tracked_vendor_cache=tracked_vendor_cache,
+        report_cache=report_cache,
+        signal_cache=signal_cache,
+        report_activity_cache=report_activity_cache,
+    )
     webhooks = []
     for r in rows:
         recent_total = r["recent_deliveries"] or 0
@@ -6412,6 +6421,15 @@ async def list_webhook_deliveries(
         signal_cache=signal_cache,
         report_cache=report_activity_cache,
     )
+    await _prime_webhook_delivery_account_focus_caches(
+        pool,
+        user,
+        rows,
+        tracked_vendor_cache=tracked_vendor_cache,
+        report_cache=report_cache,
+        signal_cache=signal_cache,
+        report_activity_cache=report_activity_cache,
+    )
     deliveries = []
     for r in rows:
         context = _extract_webhook_activity_context(r.get("payload"))
@@ -6545,6 +6563,15 @@ async def list_crm_push_log(
         rows,
         signal_cache=signal_cache,
         report_cache=report_activity_cache,
+    )
+    await _prime_webhook_crm_account_focus_caches(
+        pool,
+        user,
+        rows,
+        tracked_vendor_cache=tracked_vendor_cache,
+        report_cache=report_cache,
+        signal_cache=signal_cache,
+        report_activity_cache=report_activity_cache,
     )
     pushes = []
     for r in rows:
@@ -7752,6 +7779,241 @@ async def _prime_webhook_crm_push_activity_context_caches(
         report_ids=report_ids,
         signal_cache=signal_cache,
         report_cache=report_cache,
+    )
+
+
+async def _prime_webhook_account_focus_caches(
+    pool,
+    user: AuthUser | None,
+    *,
+    candidates: list[dict[str, str | None]],
+    tracked_vendor_cache: dict[str, Any] | None = None,
+    report_cache: dict[str, Any] | None = None,
+    signal_cache: dict[str, Any] | None = None,
+    report_activity_cache: dict[str, Any] | None = None,
+) -> None:
+    if not user or not getattr(user, "account_id", None):
+        return
+
+    missing_signal_ids: list[str] = []
+    missing_report_ids: list[str] = []
+    for candidate in candidates:
+        signal_id = str(candidate.get("signal_id") or "").strip()
+        signal_type = str(candidate.get("signal_type") or "").strip()
+        report_id = str(candidate.get("report_id") or "").strip()
+        if signal_id and signal_type != "report_generated" and signal_cache is not None and signal_id not in signal_cache:
+            missing_signal_ids.append(signal_id)
+        if report_id and report_activity_cache is not None and report_id not in report_activity_cache:
+            missing_report_ids.append(report_id)
+
+    if missing_signal_ids or missing_report_ids:
+        await _prime_webhook_activity_context_caches(
+            pool,
+            signal_ids=missing_signal_ids,
+            report_ids=missing_report_ids,
+            signal_cache=signal_cache,
+            report_cache=report_activity_cache,
+        )
+
+    vendor_names: list[str] = []
+    for candidate in candidates:
+        signal_id = str(candidate.get("signal_id") or "").strip()
+        report_id = str(candidate.get("report_id") or "").strip()
+        review_id = str(candidate.get("review_id") or "").strip()
+        signal_context = signal_cache.get(signal_id) if signal_cache is not None and signal_id else None
+        company_name = str((signal_context or {}).get("company_name") or candidate.get("company_name") or "").strip()
+        if not any((signal_id, review_id, company_name)):
+            continue
+        vendor_name = str(
+            (signal_context or {}).get("vendor_name")
+            or candidate.get("vendor_name")
+            or ((report_activity_cache or {}).get(report_id) or {}).get("vendor_name")
+            or ""
+        ).strip()
+        if vendor_name:
+            vendor_names.append(vendor_name)
+
+    vendor_keys = list(dict.fromkeys(_normalize_vendor_name(name) for name in vendor_names if _normalize_vendor_name(name)))
+    missing_vendor_keys = [key for key in vendor_keys if tracked_vendor_cache is not None and key not in tracked_vendor_cache]
+    if missing_vendor_keys:
+        rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (LOWER(vendor_name)) vendor_name, track_mode
+            FROM tracked_vendors
+            WHERE account_id = $1::uuid
+              AND LOWER(vendor_name) = ANY($2::text[])
+            ORDER BY LOWER(vendor_name), added_at ASC
+            """,
+            user.account_id,
+            missing_vendor_keys,
+        )
+        tracked_rows_by_key = {
+            _normalize_vendor_name(row["vendor_name"]): row
+            for row in rows
+            if _normalize_vendor_name(row["vendor_name"])
+        }
+        for vendor_key in missing_vendor_keys:
+            tracked_vendor_cache[vendor_key] = tracked_rows_by_key.get(vendor_key)
+
+    watch_vendors: list[str] = []
+    for vendor_key in vendor_keys:
+        tracked_row = tracked_vendor_cache.get(vendor_key) if tracked_vendor_cache is not None else None
+        if not tracked_row:
+            continue
+        watch_vendor = str(tracked_row["vendor_name"] or "").strip()
+        if watch_vendor:
+            watch_vendors.append(watch_vendor)
+
+    missing_watch_vendors = []
+    for watch_vendor in list(dict.fromkeys(watch_vendors)):
+        watch_vendor_key = _normalize_vendor_name(watch_vendor)
+        if report_cache is not None and watch_vendor_key not in report_cache:
+            missing_watch_vendors.append((watch_vendor_key, watch_vendor))
+
+    if missing_watch_vendors:
+        async def load_accounts_in_motion_report(watch_vendor_key: str, watch_vendor: str):
+            report_row = await _fetch_latest_accounts_in_motion_report(pool, watch_vendor, user)
+            if report_cache is not None:
+                report_cache[watch_vendor_key] = report_row
+            return report_row
+
+        await asyncio.gather(
+            *(load_accounts_in_motion_report(watch_vendor_key, watch_vendor) for watch_vendor_key, watch_vendor in missing_watch_vendors)
+        )
+
+
+async def _prime_webhook_summary_account_focus_caches(
+    pool,
+    user: AuthUser | None,
+    rows: list[Any],
+    *,
+    tracked_vendor_cache: dict[str, Any] | None = None,
+    report_cache: dict[str, Any] | None = None,
+    signal_cache: dict[str, Any] | None = None,
+    report_activity_cache: dict[str, Any] | None = None,
+) -> None:
+    candidates: list[dict[str, str | None]] = []
+    for row in rows:
+        latest_failure_signal_id = _normalize_webhook_activity_uuid_text(row.get("latest_failure_signal_id")) if row.get("latest_failure_signal_id") else None
+        latest_failure_review_id = _normalize_webhook_activity_uuid_text(row.get("latest_failure_review_id")) if row.get("latest_failure_review_id") else None
+        latest_failure_report_id = _normalize_webhook_activity_uuid_text(row.get("latest_failure_report_id")) if row.get("latest_failure_report_id") else None
+        latest_failure_report_context = (report_activity_cache or {}).get(latest_failure_report_id) if latest_failure_report_id else None
+        candidates.append({
+            "signal_id": latest_failure_signal_id,
+            "review_id": latest_failure_review_id,
+            "report_id": latest_failure_report_id,
+            "signal_type": str(row.get("latest_failure_event_type") or "").strip() or None,
+            "vendor_name": _optional_query_text(row.get("latest_failure_vendor_name")) or (latest_failure_report_context or {}).get("vendor_name"),
+            "company_name": _optional_query_text(row.get("latest_failure_company_name")),
+        })
+
+        latest_test_signal_id = _normalize_webhook_activity_uuid_text(row.get("latest_test_signal_id")) if row.get("latest_test_signal_id") else None
+        latest_test_review_id = _normalize_webhook_activity_uuid_text(row.get("latest_test_review_id")) if row.get("latest_test_review_id") else None
+        latest_test_report_id = _normalize_webhook_activity_uuid_text(row.get("latest_test_report_id")) if row.get("latest_test_report_id") else None
+        latest_test_report_context = (report_activity_cache or {}).get(latest_test_report_id) if latest_test_report_id else None
+        candidates.append({
+            "signal_id": latest_test_signal_id,
+            "review_id": latest_test_review_id,
+            "report_id": latest_test_report_id,
+            "signal_type": "test",
+            "vendor_name": _optional_query_text(row.get("latest_test_vendor_name")) or (latest_test_report_context or {}).get("vendor_name"),
+            "company_name": _optional_query_text(row.get("latest_test_company_name")),
+        })
+
+        latest_crm_signal_type = str(row.get("latest_crm_signal_type") or "").strip()
+        latest_crm_signal_id = _normalize_webhook_activity_uuid_text(row.get("latest_crm_signal_id")) if row.get("latest_crm_signal_id") else None
+        latest_crm_signal_context = (signal_cache or {}).get(latest_crm_signal_id) if latest_crm_signal_id and latest_crm_signal_type != "report_generated" else None
+        latest_crm_report_context = (report_activity_cache or {}).get(latest_crm_signal_id) if latest_crm_signal_type == "report_generated" and latest_crm_signal_id else None
+        candidates.append({
+            "signal_id": None if latest_crm_signal_type == "report_generated" else latest_crm_signal_id,
+            "review_id": _normalize_webhook_activity_uuid_text(row.get("latest_crm_review_id")) if row.get("latest_crm_review_id") else (latest_crm_signal_context or {}).get("review_id"),
+            "report_id": latest_crm_signal_id if latest_crm_signal_type == "report_generated" else None,
+            "signal_type": latest_crm_signal_type or None,
+            "vendor_name": _optional_query_text(row.get("latest_crm_vendor_name")) or (latest_crm_signal_context or {}).get("vendor_name") or (latest_crm_report_context or {}).get("vendor_name"),
+            "company_name": _optional_query_text(row.get("latest_crm_company_name")) or (latest_crm_signal_context or {}).get("company_name"),
+        })
+
+    await _prime_webhook_account_focus_caches(
+        pool,
+        user,
+        candidates=candidates,
+        tracked_vendor_cache=tracked_vendor_cache,
+        report_cache=report_cache,
+        signal_cache=signal_cache,
+        report_activity_cache=report_activity_cache,
+    )
+
+
+async def _prime_webhook_delivery_account_focus_caches(
+    pool,
+    user: AuthUser | None,
+    rows: list[Any],
+    *,
+    tracked_vendor_cache: dict[str, Any] | None = None,
+    report_cache: dict[str, Any] | None = None,
+    signal_cache: dict[str, Any] | None = None,
+    report_activity_cache: dict[str, Any] | None = None,
+) -> None:
+    candidates: list[dict[str, str | None]] = []
+    for row in rows:
+        context = _extract_webhook_activity_context(row.get("payload"))
+        signal_id = _normalize_webhook_activity_uuid_text(row.get("signal_id")) or context.get("signal_id")
+        report_id = _normalize_webhook_activity_uuid_text(row.get("report_id")) or context.get("report_id")
+        signal_context = (signal_cache or {}).get(signal_id) if signal_id else None
+        report_context = (report_activity_cache or {}).get(report_id) if report_id else None
+        candidates.append({
+            "signal_id": signal_id,
+            "review_id": _normalize_webhook_activity_uuid_text(row.get("review_id")) or context.get("review_id") or (signal_context or {}).get("review_id"),
+            "report_id": report_id,
+            "signal_type": str(context.get("signal_type") or row.get("event_type") or "").strip() or None,
+            "vendor_name": _optional_query_text(row.get("vendor_name")) or context.get("vendor_name") or (report_context or {}).get("vendor_name"),
+            "company_name": _optional_query_text(row.get("company_name")) or context.get("company_name") or (signal_context or {}).get("company_name"),
+        })
+
+    await _prime_webhook_account_focus_caches(
+        pool,
+        user,
+        candidates=candidates,
+        tracked_vendor_cache=tracked_vendor_cache,
+        report_cache=report_cache,
+        signal_cache=signal_cache,
+        report_activity_cache=report_activity_cache,
+    )
+
+
+async def _prime_webhook_crm_account_focus_caches(
+    pool,
+    user: AuthUser | None,
+    rows: list[Any],
+    *,
+    tracked_vendor_cache: dict[str, Any] | None = None,
+    report_cache: dict[str, Any] | None = None,
+    signal_cache: dict[str, Any] | None = None,
+    report_activity_cache: dict[str, Any] | None = None,
+) -> None:
+    candidates: list[dict[str, str | None]] = []
+    for row in rows:
+        signal_type = str(row.get("signal_type") or "").strip()
+        signal_id = _normalize_webhook_activity_uuid_text(row.get("signal_id")) if row.get("signal_id") else None
+        signal_context = (signal_cache or {}).get(signal_id) if signal_id and signal_type != "report_generated" else None
+        report_context = (report_activity_cache or {}).get(signal_id) if signal_type == "report_generated" and signal_id else None
+        candidates.append({
+            "signal_id": None if signal_type == "report_generated" else signal_id,
+            "review_id": _normalize_webhook_activity_uuid_text(row.get("review_id")) or (signal_context or {}).get("review_id"),
+            "report_id": signal_id if signal_type == "report_generated" else None,
+            "signal_type": signal_type or None,
+            "vendor_name": _optional_query_text(row.get("vendor_name")) or (signal_context or {}).get("vendor_name") or (report_context or {}).get("vendor_name"),
+            "company_name": _optional_query_text(row.get("company_name")) or (signal_context or {}).get("company_name"),
+        })
+
+    await _prime_webhook_account_focus_caches(
+        pool,
+        user,
+        candidates=candidates,
+        tracked_vendor_cache=tracked_vendor_cache,
+        report_cache=report_cache,
+        signal_cache=signal_cache,
+        report_activity_cache=report_activity_cache,
     )
 
 

@@ -40,6 +40,34 @@ b2b_dashboard = importlib.import_module('atlas_brain.api.b2b_dashboard')
 webhook_dispatcher = importlib.import_module('atlas_brain.services.b2b.webhook_dispatcher')
 
 
+def _wire_account_focus_pool(pool, *, tracked_rows=None, report_row=None):
+    primary_rows = list(getattr(pool.fetch, 'return_value', []) or [])
+    tracked_rows = tracked_rows or [
+        {
+            'vendor_name': 'Acme Rival',
+            'track_mode': 'competitor',
+        }
+    ]
+
+    async def fetch_side_effect(query, *args):
+        if 'FROM tracked_vendors' in query:
+            requested = {
+                str(value or '').strip().lower()
+                for value in (args[1] if len(args) > 1 else [])
+                if str(value or '').strip()
+            }
+            return [
+                row
+                for row in tracked_rows
+                if b2b_dashboard._normalize_vendor_name(row.get('vendor_name')) in requested
+            ]
+        return primary_rows
+
+    pool.fetch = AsyncMock(side_effect=fetch_side_effect)
+    pool.fetchrow = AsyncMock(return_value=report_row)
+
+
+
 @pytest.mark.asyncio
 async def test_list_webhooks_exposes_latest_test_summary():
     created_at = datetime.now(timezone.utc) - timedelta(days=1)
@@ -81,6 +109,7 @@ async def test_list_webhooks_exposes_latest_test_summary():
         ]
     )
     user = MagicMock(account_id='account-1')
+    _wire_account_focus_pool(pool)
 
     latest_failure_focus = {
         'vendor': 'Acme Rival',
@@ -243,6 +272,7 @@ async def test_list_webhooks_primes_unique_summary_context_ids_once():
         ]
     )
     user = MagicMock(account_id='account-1')
+    _wire_account_focus_pool(pool)
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
@@ -323,6 +353,7 @@ async def test_list_webhooks_exposes_latest_crm_push_summary():
         ]
     )
     user = MagicMock(account_id='account-1')
+    _wire_account_focus_pool(pool)
 
     focus = {
         'vendor': 'Acme Rival',
@@ -462,6 +493,60 @@ async def test_prime_webhook_activity_context_caches_dedupes_ids():
     assert report_cache['44444444-4444-4444-8444-444444444444']['report_type'] == 'battle_card'
     assert signal_cache['22222222-2222-2222-2222-222222222222']['review_id'] == '33333333-3333-4333-8333-333333333334'
 
+
+
+@pytest.mark.asyncio
+async def test_prime_webhook_account_focus_caches_dedupes_tracked_vendor_and_report_fetches():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'vendor_name': 'Acme Rival',
+                'track_mode': 'competitor',
+            }
+        ]
+    )
+    user = MagicMock(account_id='account-1')
+    tracked_vendor_cache = {}
+    report_cache = {}
+
+    with patch.object(
+        b2b_dashboard,
+        '_fetch_latest_accounts_in_motion_report',
+        AsyncMock(return_value={'report_date': '2026-04-10'}),
+    ) as fetch_accounts_in_motion_report:
+        await b2b_dashboard._prime_webhook_account_focus_caches(
+            pool,
+            user,
+            candidates=[
+                {
+                    'signal_id': None,
+                    'review_id': None,
+                    'report_id': None,
+                    'signal_type': None,
+                    'vendor_name': 'Acme Rival',
+                    'company_name': 'Acme Bank',
+                },
+                {
+                    'signal_id': None,
+                    'review_id': None,
+                    'report_id': None,
+                    'signal_type': None,
+                    'vendor_name': 'Acme Rival',
+                    'company_name': 'Acme Bank',
+                },
+            ],
+            tracked_vendor_cache=tracked_vendor_cache,
+            report_cache=report_cache,
+            signal_cache={},
+            report_activity_cache={},
+        )
+
+    pool.fetch.assert_awaited_once()
+    fetch_accounts_in_motion_report.assert_awaited_once()
+    assert fetch_accounts_in_motion_report.await_args.args[1] == 'Acme Rival'
+    assert tracked_vendor_cache[b2b_dashboard._normalize_vendor_name('Acme Rival')]['track_mode'] == 'competitor'
+    assert report_cache[b2b_dashboard._normalize_vendor_name('Acme Rival')]['report_date'] == '2026-04-10'
 
 
 @pytest.mark.asyncio
@@ -780,6 +865,7 @@ async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus
         ]
     )
     user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+    _wire_account_focus_pool(pool)
     focus = {
         'vendor': 'Acme Rival',
         'company': 'Acme Bank',
@@ -847,6 +933,7 @@ async def test_list_webhook_deliveries_hides_synthetic_test_vendor_context():
         ]
     )
     user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+    _wire_account_focus_pool(pool)
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
@@ -902,6 +989,7 @@ async def test_list_webhook_deliveries_prefers_persisted_activity_refs():
         ]
     )
     user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+    _wire_account_focus_pool(pool)
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
@@ -965,6 +1053,7 @@ async def test_list_crm_push_log_exposes_review_id_from_signal_context():
         ]
     )
     user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+    _wire_account_focus_pool(pool)
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
@@ -1018,6 +1107,7 @@ async def test_list_crm_push_log_exposes_direct_review_id_without_signal_context
         ]
     )
     user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+    _wire_account_focus_pool(pool)
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
@@ -1062,6 +1152,7 @@ async def test_list_crm_push_log_exposes_account_review_focus():
         ]
     )
     user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+    _wire_account_focus_pool(pool)
     focus = {
         'vendor': 'Acme Rival',
         'company': 'Acme Bank',
