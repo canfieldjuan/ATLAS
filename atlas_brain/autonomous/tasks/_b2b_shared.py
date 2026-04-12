@@ -14352,13 +14352,7 @@ async def read_company_signal_review_impact_summary(
             filters["rebuild_outcome"] = rebuild_outcome
         return filters
 
-    def _build_trend_recommendation_queue_filters(
-        recommendation: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        action = recommendation.get("action") if isinstance(recommendation, Mapping) else None
-        if action not in {"review_effect_quality", "increase_review_throughput"}:
-            return {}
-
+    def _base_trend_queue_filters() -> dict[str, Any]:
         filters: dict[str, Any] = {
             "candidate_bucket": "analyst_review",
             "review_status": "pending",
@@ -14375,14 +14369,39 @@ async def read_company_signal_review_impact_summary(
             filters["source_name"] = candidate_source
         return filters
 
+    def _build_trend_alert_queue_filters(
+        focus: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        focus_name = focus.get("focus") if isinstance(focus, Mapping) else None
+        if focus_name not in {"effect_rate_down", "approval_volume_down"}:
+            return {}
+        return _base_trend_queue_filters()
+
+    def _build_trend_recommendation_queue_filters(
+        recommendation: Mapping[str, Any],
+        focus: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        action = recommendation.get("action") if isinstance(recommendation, Mapping) else None
+        if action not in {"review_effect_quality", "increase_review_throughput"}:
+            return {}
+        return _build_trend_alert_queue_filters(focus)
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     daily_trends = [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows]
     trend_comparison = _build_trend_comparison(daily_trends)
-    trend_alerts = _build_trend_alerts(trend_comparison)
+    raw_trend_alerts = _build_trend_alerts(trend_comparison)
+    trend_alerts = [
+        {
+            **dict(alert),
+            "impact_filters": _build_trend_recommendation_filters({}, alert),
+            "queue_filters": _build_trend_alert_queue_filters(alert),
+        }
+        for alert in raw_trend_alerts
+    ]
     trend_focus = _build_trend_focus(trend_comparison, trend_alerts)
     trend_recommendation = _build_trend_recommendation(trend_comparison, trend_focus, trend_alerts)
     trend_recommendation_filters = _build_trend_recommendation_filters(trend_recommendation, trend_focus)
-    trend_recommendation_queue_filters = _build_trend_recommendation_queue_filters(trend_recommendation)
+    trend_recommendation_queue_filters = _build_trend_recommendation_queue_filters(trend_recommendation, trend_focus)
     return {
         "totals": totals_payload,
         "review_scope": review_scope,

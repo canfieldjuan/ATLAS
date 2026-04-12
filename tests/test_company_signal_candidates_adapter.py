@@ -1120,7 +1120,18 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["trend_focus"]["prior_value"] == 1.0
     assert len(summary["trend_alerts"]) == 2
     assert summary["trend_alerts"][0]["focus"] == "effect_rate_down"
+    assert summary["trend_alerts"][0]["impact_filters"]["company_signal_action"] == "none"
+    assert summary["trend_alerts"][0]["queue_filters"] == {
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "canonical_gap_reason": "low_confidence_low_trust_source",
+        "review_priority_band": "promote_now",
+        "review_priority_reason": "canonical_ready",
+        "source_name": "reddit",
+    }
     assert summary["trend_alerts"][1]["focus"] == "approval_volume_up"
+    assert summary["trend_alerts"][1]["impact_filters"]["review_action"] == "approved"
+    assert summary["trend_alerts"][1]["queue_filters"] == {}
     assert summary["trend_recommendation"]["status"] == "act"
     assert summary["trend_recommendation"]["action"] == "review_effect_quality"
     assert summary["trend_recommendation"]["priority"] == "high"
