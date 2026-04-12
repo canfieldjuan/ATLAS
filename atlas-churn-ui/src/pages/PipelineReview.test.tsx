@@ -686,10 +686,17 @@ describe('PipelineReview watchlist delivery ops', () => {
 
     await waitFor(() => {
       expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: undefined,
+        review_priority_reason: undefined,
         window_days: 90,
         top_n: 6,
       })
     })
+
     await waitFor(() => {
       expect(api.fetchCompanySignalCandidateGroups).toHaveBeenCalledWith({
         candidate_bucket: 'analyst_review',
@@ -746,6 +753,19 @@ describe('PipelineReview watchlist delivery ops', () => {
     await user.click(screen.getByRole('button', { name: 'Focus queue for Salesforce' }))
 
     await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: 'Salesforce',
+        source_name: undefined,
+        review_priority_band: undefined,
+        review_priority_reason: undefined,
+        window_days: 90,
+        top_n: 6,
+      })
+    })
+
+    await waitFor(() => {
       expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
         candidate_bucket: 'analyst_review',
         review_status: 'pending',
@@ -759,6 +779,19 @@ describe('PipelineReview watchlist delivery ops', () => {
     })
 
     await user.click(screen.getByRole('button', { name: 'Focus queue for cross_source_corroboration' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: 'Salesforce',
+        source_name: undefined,
+        review_priority_band: 'high',
+        review_priority_reason: 'cross_source_corroboration',
+        window_days: 90,
+        top_n: 6,
+      })
+    })
 
     await waitFor(() => {
       expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
@@ -777,6 +810,198 @@ describe('PipelineReview watchlist delivery ops', () => {
       'href',
       '/reviews/rev-1?back_to=%2Fpipeline-review%3Fqueue_vendor%3DSalesforce%26queue_priority_band%3Dhigh%26queue_priority_reason%3Dcross_source_corroboration',
     )
+  })
+
+  it('lets operators edit priority reason filters directly', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Candidate Groups')
+    await user.type(screen.getByLabelText('Priority Reason'), 'missing_signal_evidence')
+    expect(screen.getByLabelText('Priority Reason')).toHaveValue('missing_signal_evidence')
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: undefined,
+        review_priority_reason: 'missing_signal_evidence',
+        window_days: 90,
+        top_n: 6,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: undefined,
+        review_priority_reason: 'missing_signal_evidence',
+        window_days: 90,
+        limit: 10,
+      })
+    })
+  })
+
+  it('focuses the queue source from supporting review badges', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Candidate Groups')
+    await user.click(screen.getByRole('button', { name: 'Focus queue for source g2' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: 'g2',
+        review_priority_band: undefined,
+        review_priority_reason: undefined,
+        window_days: 90,
+        top_n: 6,
+      })
+    })
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: 'g2',
+        review_priority_band: undefined,
+        review_priority_reason: undefined,
+        window_days: 90,
+        limit: 10,
+      })
+    })
+
+    expect(screen.getByRole('link', { name: 'Open representative review Acme Corp' })).toHaveAttribute(
+      'href',
+      '/reviews/rev-1?back_to=%2Fpipeline-review%3Fqueue_source%3Dg2',
+    )
+  })
+
+  it('clears individual queue filter chips without resetting the rest of the queue', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Candidate Groups')
+    await user.click(screen.getByRole('button', { name: 'Focus queue for source g2' }))
+    await screen.findByRole('button', { name: 'Remove queue filter Source: g2' })
+
+    await user.click(screen.getByRole('button', { name: 'Remove queue filter Source: g2' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: undefined,
+        review_priority_reason: undefined,
+        window_days: 90,
+        top_n: 6,
+      })
+    })
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: undefined,
+        review_priority_reason: undefined,
+        window_days: 90,
+        limit: 10,
+      })
+    })
+  })
+
+  it('focuses queue priority filters directly from candidate group rows', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Candidate Groups')
+    await user.click(screen.getByRole('button', { name: 'Focus queue for priority high' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: 'high',
+        review_priority_reason: undefined,
+        window_days: 90,
+        top_n: 6,
+      })
+    })
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: 'high',
+        review_priority_reason: undefined,
+        window_days: 90,
+        limit: 10,
+      })
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Focus queue for priority reason cross_source_corroboration' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: 'high',
+        review_priority_reason: 'cross_source_corroboration',
+        window_days: 90,
+        top_n: 6,
+      })
+    })
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: undefined,
+        source_name: undefined,
+        review_priority_band: 'high',
+        review_priority_reason: 'cross_source_corroboration',
+        window_days: 90,
+        limit: 10,
+      })
+    })
   })
 
   it('approves candidate groups from the queue with action defaults', async () => {

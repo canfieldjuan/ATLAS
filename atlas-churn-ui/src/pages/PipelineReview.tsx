@@ -465,6 +465,7 @@ function summarizeCandidateSupport(
   row: CompanySignalCandidateGroup,
   activeTab: TabKey,
   queueFilters: PipelineQueueFilters,
+  onFocusSource: (sourceName: string) => void,
 ) {
   const supportingReviews = row.supporting_reviews ?? []
   if (supportingReviews.length === 0) {
@@ -479,9 +480,20 @@ function summarizeCandidateSupport(
         return (
           <div key={review.review_id} className="space-y-1">
             <div className="flex flex-wrap items-center gap-2 text-[11px]">
-              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
-                {reviewLabel}
-              </span>
+              {review.source ? (
+                <button
+                  type="button"
+                  aria-label={`Focus queue for source ${review.source}`}
+                  onClick={() => onFocusSource(review.source!)}
+                  className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300 transition hover:bg-cyan-500/20 hover:text-cyan-200"
+                >
+                  {reviewLabel}
+                </button>
+              ) : (
+                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
+                  {reviewLabel}
+                </span>
+              )}
               {review.review_id ? (
                 <Link
                   to={pipelineReviewDetailPath(activeTab, review.review_id, queueFilters)}
@@ -922,10 +934,16 @@ function QueueTab({
   } = useApiData<CompanySignalCandidateGroupSummary>(
     () =>
       fetchCompanySignalCandidateGroupSummary({
+        candidate_bucket: queueFilters.candidateBucket,
+        review_status: queueFilters.reviewStatus,
+        vendor_name: queueFilters.vendorName || undefined,
+        source_name: queueFilters.sourceName || undefined,
+        review_priority_band: queueFilters.reviewPriorityBand || undefined,
+        review_priority_reason: queueFilters.reviewPriorityReason || undefined,
         window_days: 90,
         top_n: COMPANY_SIGNAL_SUMMARY_TOP_N,
       }),
-    [],
+    [queueFilters.vendorName, queueFilters.candidateBucket, queueFilters.reviewStatus, queueFilters.reviewPriorityBand, queueFilters.reviewPriorityReason, queueFilters.sourceName],
   )
   const {
     data: companySignalGroupsData,
@@ -1175,17 +1193,43 @@ function QueueTab({
     queueFilters.reviewPriorityReason !== '' ||
     queueFilters.sourceName !== ''
   const companySignalActiveFilters = [
-    queueFilters.vendorName ? `Vendor: ${queueFilters.vendorName}` : null,
+    queueFilters.vendorName
+      ? {
+          label: `Vendor: ${queueFilters.vendorName}`,
+          clear: () => updateQueueFilters({ vendorName: '' }),
+        }
+      : null,
     queueFilters.candidateBucket !== DEFAULT_PIPELINE_QUEUE_FILTERS.candidateBucket
-      ? `Bucket: ${formatPipelineLabel(queueFilters.candidateBucket)}`
+      ? {
+          label: `Bucket: ${formatPipelineLabel(queueFilters.candidateBucket)}`,
+          clear: () => updateQueueFilters({ candidateBucket: DEFAULT_PIPELINE_QUEUE_FILTERS.candidateBucket }),
+        }
       : null,
     queueFilters.reviewStatus !== DEFAULT_PIPELINE_QUEUE_FILTERS.reviewStatus
-      ? `Status: ${formatPipelineLabel(queueFilters.reviewStatus)}`
+      ? {
+          label: `Status: ${formatPipelineLabel(queueFilters.reviewStatus)}`,
+          clear: () => updateQueueFilters({ reviewStatus: DEFAULT_PIPELINE_QUEUE_FILTERS.reviewStatus }),
+        }
       : null,
-    queueFilters.reviewPriorityBand ? `Priority: ${formatPipelineLabel(queueFilters.reviewPriorityBand)}` : null,
-    queueFilters.reviewPriorityReason ? `Reason: ${formatPipelineLabel(queueFilters.reviewPriorityReason)}` : null,
-    queueFilters.sourceName ? `Source: ${queueFilters.sourceName}` : null,
-  ].filter(Boolean) as string[]
+    queueFilters.reviewPriorityBand
+      ? {
+          label: `Priority: ${formatPipelineLabel(queueFilters.reviewPriorityBand)}`,
+          clear: () => updateQueueFilters({ reviewPriorityBand: '', reviewPriorityReason: '' }),
+        }
+      : null,
+    queueFilters.reviewPriorityReason
+      ? {
+          label: `Reason: ${formatPipelineLabel(queueFilters.reviewPriorityReason)}`,
+          clear: () => updateQueueFilters({ reviewPriorityReason: '' }),
+        }
+      : null,
+    queueFilters.sourceName
+      ? {
+          label: `Source: ${queueFilters.sourceName}`,
+          clear: () => updateQueueFilters({ sourceName: '' }),
+        }
+      : null,
+  ].filter((value): value is { label: string; clear: () => void } => Boolean(value))
   const allVisibleCompanySignalGroupsSelected =
     visibleCompanySignalGroupIds.length > 0 &&
     visibleCompanySignalGroupIds.every((groupId) => selectedCompanySignalGroupIds.includes(groupId))
@@ -1202,11 +1246,13 @@ function QueueTab({
   }, [companySignalGroups])
 
   function updateQueueFilters(partial: Partial<PipelineQueueFilters>) {
+    const bandWasExplicitlySet = Object.prototype.hasOwnProperty.call(partial, 'reviewPriorityBand')
+    const reasonWasExplicitlySet = Object.prototype.hasOwnProperty.call(partial, 'reviewPriorityReason')
     const nextFilters = {
       ...queueFilters,
       ...partial,
     }
-    if (!nextFilters.reviewPriorityBand) {
+    if (bandWasExplicitlySet && !nextFilters.reviewPriorityBand && !reasonWasExplicitlySet) {
       nextFilters.reviewPriorityReason = ''
     }
     onQueueFiltersChange(nextFilters)
@@ -1474,10 +1520,40 @@ function QueueTab({
       header: 'Priority',
       render: (row) => (
         <div className="space-y-1">
-          {row.review_priority_band ? <PriorityBadge priority={row.review_priority_band} /> : <span className="text-xs text-slate-500">--</span>}
-          <p className="max-w-[220px] text-[11px] text-slate-400">
-            {row.review_priority_reason ? formatPipelineLabel(row.review_priority_reason) : '--'}
-          </p>
+          {row.review_priority_band ? (
+            <button
+              type="button"
+              aria-label={`Focus queue for priority ${row.review_priority_band}`}
+              onClick={() =>
+                updateQueueFilters({
+                  reviewPriorityBand: row.review_priority_band || '',
+                  reviewPriorityReason: '',
+                })
+              }
+              className="transition hover:opacity-80"
+            >
+              <PriorityBadge priority={row.review_priority_band} />
+            </button>
+          ) : (
+            <span className="text-xs text-slate-500">--</span>
+          )}
+          {row.review_priority_reason ? (
+            <button
+              type="button"
+              aria-label={`Focus queue for priority reason ${row.review_priority_reason}`}
+              onClick={() =>
+                updateQueueFilters({
+                  reviewPriorityBand: row.review_priority_band || '',
+                  reviewPriorityReason: row.review_priority_reason || '',
+                })
+              }
+              className="max-w-[220px] text-left text-[11px] text-slate-400 transition hover:text-cyan-300"
+            >
+              {formatPipelineLabel(row.review_priority_reason)}
+            </button>
+          ) : (
+            <p className="max-w-[220px] text-[11px] text-slate-400">--</p>
+          )}
         </div>
       ),
       sortable: true,
@@ -1528,7 +1604,10 @@ function QueueTab({
     {
       key: 'support',
       header: 'Support',
-      render: (row) => summarizeCandidateSupport(row, backToTab, queueFilters),
+      render: (row) =>
+        summarizeCandidateSupport(row, backToTab, queueFilters, (sourceName) => {
+          updateQueueFilters({ sourceName })
+        }),
       sortable: false,
     },
     {
@@ -1807,12 +1886,30 @@ function QueueTab({
           {watchlistDeliveryError.message}
         </div>
       )}
+      {hasActiveCompanySignalQueueFilters ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {companySignalActiveFilters.map((filter) => (
+            <button
+              key={filter.label}
+              type="button"
+              aria-label={`Remove queue filter ${filter.label}`}
+              onClick={filter.clear}
+              className="inline-flex items-center gap-2 rounded bg-cyan-500/10 px-2 py-1 text-cyan-300 transition hover:bg-cyan-500/20"
+            >
+              <span>{filter.label}</span>
+              <span className="text-[10px] uppercase tracking-wide text-cyan-100/80">Clear</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
         <div className="border-b border-slate-700/50 px-4 py-3">
           <h2 className="text-sm font-medium text-white">Company Signal Review Queue</h2>
           <p className="text-xs text-slate-500">
-            Pending grouped review work, highest-pressure vendor pockets, and priority reasons.
+            {hasActiveCompanySignalQueueFilters
+              ? 'Pending grouped review work matching the current queue filters.'
+              : 'Pending grouped review work, highest-pressure vendor pockets, and priority reasons.'}
           </p>
         </div>
 
@@ -1910,6 +2007,12 @@ function QueueTab({
             onChange={(value) => updateQueueFilters({ sourceName: value })}
             placeholder="reddit"
           />
+          <FilterInput
+            label="Priority Reason"
+            value={queueFilters.reviewPriorityReason}
+            onChange={(value) => updateQueueFilters({ reviewPriorityReason: value })}
+            placeholder="cross_source_corroboration"
+          />
           <FilterSelect
             label="Bucket"
             value={queueFilters.candidateBucket}
@@ -1964,15 +2067,8 @@ function QueueTab({
           </button>
         </div>
         {hasActiveCompanySignalQueueFilters ? (
-          <div className="flex flex-wrap items-center gap-2 border-b border-slate-700/50 px-4 py-3 text-xs">
-            {companySignalActiveFilters.map((label) => (
-              <span
-                key={label}
-                className="rounded bg-cyan-500/10 px-2 py-1 text-cyan-300"
-              >
-                {label}
-              </span>
-            ))}
+          <div className="border-b border-slate-700/50 px-4 py-2 text-[11px] text-slate-500">
+            Queue summary and candidate groups are scoped to the active filters above.
           </div>
         ) : null}
         <div className="flex flex-wrap items-center gap-3 border-b border-slate-700/50 px-4 py-3">

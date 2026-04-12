@@ -344,6 +344,89 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
 
 
 @pytest.mark.asyncio
+async def test_get_company_signal_candidate_group_summary_forwards_active_queue_filters():
+    pool = MagicMock()
+    returned = {
+        "totals": {"pending_groups": 2, "canonical_ready_groups": 1},
+        "top_vendors": [
+            {
+                "vendor_name": "Salesforce",
+                "group_count": 3,
+                "review_count": 7,
+                "pending_groups": 2,
+                "canonical_ready_groups": 1,
+            }
+        ],
+        "pending_priority_reasons": [
+            {
+                "review_priority_band": "high",
+                "review_priority_reason": "cross_source_corroboration",
+                "group_count": 2,
+                "review_count": 5,
+            }
+        ],
+    }
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ) as scope_mock:
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_candidate_group_summary",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.get_company_signal_candidate_group_summary(
+                    vendor_name="Salesforce",
+                    company_name=None,
+                    source_name="g2",
+                    candidate_bucket="analyst_review",
+                    review_status="pending",
+                    canonical_gap_reason=None,
+                    review_priority_band="high",
+                    review_priority_reason="cross_source_corroboration",
+                    min_urgency=0,
+                    min_confidence=None,
+                    min_reviews=1,
+                    decision_makers_only=False,
+                    signal_evidence_present=None,
+                    window_days=90,
+                    top_n=6,
+                    user=None,
+                )
+
+    assert result == {
+        **returned,
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "review_priority_band": "high",
+        "review_priority_reason": "cross_source_corroboration",
+        "source_name": "g2",
+    }
+    scope_mock.assert_awaited_once_with(pool, None)
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        vendor_name="Salesforce",
+        company_name=None,
+        source_name="g2",
+        scoped_vendors=None,
+        candidate_bucket="analyst_review",
+        review_status="pending",
+        canonical_gap_reason=None,
+        review_priority_band="high",
+        review_priority_reason="cross_source_corroboration",
+        min_urgency=0,
+        min_confidence=None,
+        min_reviews=1,
+        decision_makers_only=False,
+        signal_evidence_present=None,
+        top_n=6,
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_company_signal_candidate_group_summary_rejects_invalid_bucket():
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
         with pytest.raises(b2b_dashboard.HTTPException) as exc:
