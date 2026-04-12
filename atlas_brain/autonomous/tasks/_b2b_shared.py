@@ -14907,7 +14907,6 @@ async def read_company_signal_review_impact_summary(
 
     def _build_review_impact_operator_focus(
         trend_recommendation: Mapping[str, Any],
-        trend_recommendation_filters: Mapping[str, Any],
         trend_recommendation_queue_filters: Mapping[str, Any],
         trend_recommendation_queue_snapshot: Mapping[str, Any] | None,
         trend_focus: Mapping[str, Any],
@@ -15120,7 +15119,6 @@ async def read_company_signal_review_impact_summary(
     trend_queue_recommendation = _build_trend_queue_recommendation(trend_queue_focus)
     operator_focus = _build_review_impact_operator_focus(
         trend_recommendation,
-        trend_recommendation_filters,
         trend_recommendation_queue_filters,
         trend_recommendation_queue_snapshot,
         trend_focus,
