@@ -418,6 +418,53 @@ async def test_list_webhooks_tolerates_missing_latest_test_summary_fields():
 
 
 @pytest.mark.asyncio
+async def test_prime_webhook_activity_context_caches_dedupes_ids():
+    pool = MagicMock()
+    report_cache = {}
+    signal_cache = {}
+
+    with patch.object(
+        b2b_dashboard,
+        '_fetch_webhook_activity_report_context',
+        AsyncMock(return_value={
+            'report_id': '44444444-4444-4444-8444-444444444444',
+            'report_type': 'battle_card',
+            'vendor_name': 'Acme Rival',
+            'report_title': 'Battle Card \u00b7 Acme Rival',
+        }),
+    ) as fetch_report_context:
+        with patch.object(
+            b2b_dashboard,
+            '_fetch_company_signal_focus_context',
+            AsyncMock(return_value={
+                'signal_id': '22222222-2222-2222-2222-222222222222',
+                'company_name': 'Acme Bank',
+                'vendor_name': 'Acme Rival',
+                'review_id': '33333333-3333-4333-8333-333333333334',
+            }),
+        ) as fetch_signal_context:
+            await b2b_dashboard._prime_webhook_activity_context_caches(
+                pool,
+                signal_ids=[
+                    '22222222-2222-2222-2222-222222222222',
+                    '22222222-2222-2222-2222-222222222222',
+                ],
+                report_ids=[
+                    '44444444-4444-4444-8444-444444444444',
+                    '44444444-4444-4444-8444-444444444444',
+                ],
+                signal_cache=signal_cache,
+                report_cache=report_cache,
+            )
+
+    assert fetch_report_context.await_count == 1
+    assert fetch_signal_context.await_count == 1
+    assert report_cache['44444444-4444-4444-8444-444444444444']['report_type'] == 'battle_card'
+    assert signal_cache['22222222-2222-2222-2222-222222222222']['review_id'] == '33333333-3333-4333-8333-333333333334'
+
+
+
+@pytest.mark.asyncio
 async def test_create_webhook_rejects_high_intent_push_for_generic_channel():
     user = MagicMock(account_id='account-1')
     body = b2b_dashboard.CreateWebhookBody(

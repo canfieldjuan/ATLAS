@@ -6406,22 +6406,19 @@ async def list_webhook_deliveries(
     tracked_vendor_cache: dict[str, Any] = {}
     signal_cache: dict[str, Any] = {}
     report_activity_cache: dict[str, Any] = {}
+    await _prime_webhook_delivery_activity_context_caches(
+        pool,
+        rows,
+        signal_cache=signal_cache,
+        report_cache=report_activity_cache,
+    )
     deliveries = []
     for r in rows:
         context = _extract_webhook_activity_context(r.get("payload"))
         signal_id = _normalize_webhook_activity_uuid_text(r.get("signal_id")) or context.get("signal_id")
-        signal_context = None
-        if signal_id:
-            signal_context = signal_cache.get(signal_id)
-            if signal_context is None and signal_id not in signal_cache:
-                signal_context = await _fetch_company_signal_focus_context(pool, signal_id)
-                signal_cache[signal_id] = signal_context
+        signal_context = signal_cache.get(signal_id) if signal_id else None
         report_id = _normalize_webhook_activity_uuid_text(r.get("report_id")) or context.get("report_id")
-        report_context = await _fetch_webhook_activity_report_context(
-            pool,
-            report_id,
-            report_activity_cache,
-        )
+        report_context = report_activity_cache.get(report_id) if report_id else None
         resolved_review_id = (
             _normalize_webhook_activity_uuid_text(r.get("review_id"))
             or context.get("review_id")
@@ -6543,19 +6540,18 @@ async def list_crm_push_log(
     tracked_vendor_cache: dict[str, Any] = {}
     signal_cache: dict[str, Any] = {}
     report_activity_cache: dict[str, Any] = {}
+    await _prime_webhook_crm_push_activity_context_caches(
+        pool,
+        rows,
+        signal_cache=signal_cache,
+        report_cache=report_activity_cache,
+    )
     pushes = []
     for r in rows:
         signal_type = str(r["signal_type"] or "").strip()
         signal_id = str(r["signal_id"]) if r["signal_id"] else None
-        signal_context = None
-        if signal_id and signal_type != "report_generated":
-            signal_context = signal_cache.get(signal_id)
-            if signal_context is None and signal_id not in signal_cache:
-                signal_context = await _fetch_company_signal_focus_context(pool, signal_id)
-                signal_cache[signal_id] = signal_context
-        report_context = None
-        if signal_type == "report_generated" and signal_id:
-            report_context = await _fetch_webhook_activity_report_context(pool, signal_id, report_activity_cache)
+        signal_context = signal_cache.get(signal_id) if signal_id and signal_type != "report_generated" else None
+        report_context = report_activity_cache.get(signal_id) if signal_type == "report_generated" and signal_id else None
         resolved_review_id = _normalize_webhook_activity_uuid_text(r.get("review_id")) or (signal_context or {}).get("review_id")
         account_review_focus = await _resolve_webhook_activity_account_focus(
             pool,
@@ -7640,6 +7636,36 @@ async def _fetch_company_signal_focus_context(
     }
 
 
+async def _prime_webhook_activity_context_caches(
+    pool,
+    *,
+    signal_ids: list[str],
+    report_ids: list[str],
+    signal_cache: dict[str, Any] | None = None,
+    report_cache: dict[str, Any] | None = None,
+) -> None:
+    unique_signal_ids = list(dict.fromkeys(signal_ids))
+    unique_report_ids = list(dict.fromkeys(report_ids))
+
+    if unique_report_ids:
+        async def load_report_context(report_id: str):
+            context = await _fetch_webhook_activity_report_context(pool, report_id, report_cache)
+            if report_cache is not None:
+                report_cache[report_id] = context
+            return context
+
+        await asyncio.gather(*(load_report_context(report_id) for report_id in unique_report_ids))
+
+    if unique_signal_ids:
+        async def load_signal_context(signal_id: str):
+            context = await _fetch_company_signal_focus_context(pool, signal_id)
+            if signal_cache is not None:
+                signal_cache[signal_id] = context
+            return context
+
+        await asyncio.gather(*(load_signal_context(signal_id) for signal_id in unique_signal_ids))
+
+
 async def _prime_webhook_list_summary_context_caches(
     pool,
     rows: list[Any],
@@ -7666,26 +7692,67 @@ async def _prime_webhook_list_summary_context_caches(
         else:
             signal_ids.append(latest_crm_signal_id)
 
-    unique_report_ids = list(dict.fromkeys(report_ids))
-    unique_signal_ids = list(dict.fromkeys(signal_ids))
+    await _prime_webhook_activity_context_caches(
+        pool,
+        signal_ids=signal_ids,
+        report_ids=report_ids,
+        signal_cache=signal_cache,
+        report_cache=report_cache,
+    )
 
-    if unique_report_ids:
-        async def load_report_context(report_id: str):
-            context = await _fetch_webhook_activity_report_context(pool, report_id, report_cache)
-            if report_cache is not None:
-                report_cache[report_id] = context
-            return context
 
-        await asyncio.gather(*(load_report_context(report_id) for report_id in unique_report_ids))
+async def _prime_webhook_delivery_activity_context_caches(
+    pool,
+    rows: list[Any],
+    signal_cache: dict[str, Any] | None = None,
+    report_cache: dict[str, Any] | None = None,
+) -> None:
+    signal_ids: list[str] = []
+    report_ids: list[str] = []
+    for row in rows:
+        context = _extract_webhook_activity_context(row.get("payload"))
+        signal_type = str(context.get("signal_type") or row.get("event_type") or "").strip()
+        signal_id = _normalize_webhook_activity_uuid_text(row.get("signal_id")) or context.get("signal_id")
+        if signal_id and signal_type != "report_generated":
+            signal_ids.append(signal_id)
+        report_id = _normalize_webhook_activity_uuid_text(row.get("report_id")) or context.get("report_id")
+        if report_id:
+            report_ids.append(report_id)
 
-    if unique_signal_ids:
-        async def load_signal_context(signal_id: str):
-            context = await _fetch_company_signal_focus_context(pool, signal_id)
-            if signal_cache is not None:
-                signal_cache[signal_id] = context
-            return context
+    await _prime_webhook_activity_context_caches(
+        pool,
+        signal_ids=signal_ids,
+        report_ids=report_ids,
+        signal_cache=signal_cache,
+        report_cache=report_cache,
+    )
 
-        await asyncio.gather(*(load_signal_context(signal_id) for signal_id in unique_signal_ids))
+
+async def _prime_webhook_crm_push_activity_context_caches(
+    pool,
+    rows: list[Any],
+    signal_cache: dict[str, Any] | None = None,
+    report_cache: dict[str, Any] | None = None,
+) -> None:
+    signal_ids: list[str] = []
+    report_ids: list[str] = []
+    for row in rows:
+        signal_type = str(row.get("signal_type") or "").strip()
+        signal_id = _normalize_webhook_activity_uuid_text(row.get("signal_id")) if row.get("signal_id") else None
+        if not signal_id:
+            continue
+        if signal_type == "report_generated":
+            report_ids.append(signal_id)
+        else:
+            signal_ids.append(signal_id)
+
+    await _prime_webhook_activity_context_caches(
+        pool,
+        signal_ids=signal_ids,
+        report_ids=report_ids,
+        signal_cache=signal_cache,
+        report_cache=report_cache,
+    )
 
 
 async def _resolve_webhook_activity_account_focus(
