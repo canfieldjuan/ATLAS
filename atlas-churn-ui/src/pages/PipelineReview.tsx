@@ -18,6 +18,7 @@ import {
   CalendarClock,
   GitCompareArrows,
   Workflow,
+  Copy,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -915,6 +916,7 @@ function QueueTab({
   const [companySignalActionTriggerRebuild, setCompanySignalActionTriggerRebuild] = useState(true)
   const [selectedCompanySignalGroupIds, setSelectedCompanySignalGroupIds] = useState<string[]>([])
   const [companySignalBulkActionMode, setCompanySignalBulkActionMode] = useState<'approve' | 'suppress' | null>(null)
+  const [queueLinkCopyState, setQueueLinkCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
 
   const { data, loading, error, refresh: refreshQueue, refreshing } = useApiData(
     () =>
@@ -1245,6 +1247,10 @@ function QueueTab({
     })
   }, [companySignalGroups])
 
+  useEffect(() => {
+    setQueueLinkCopyState('idle')
+  }, [backToTab, queueFilters])
+
   function updateQueueFilters(partial: Partial<PipelineQueueFilters>) {
     const bandWasExplicitlySet = Object.prototype.hasOwnProperty.call(partial, 'reviewPriorityBand')
     const reasonWasExplicitlySet = Object.prototype.hasOwnProperty.call(partial, 'reviewPriorityReason')
@@ -1260,6 +1266,15 @@ function QueueTab({
 
   function clearQueueFilters() {
     onQueueFiltersChange(DEFAULT_PIPELINE_QUEUE_FILTERS)
+  }
+
+  async function handleCopyQueueLink() {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${pipelineReviewPath(backToTab, queueFilters)}`)
+      setQueueLinkCopyState('copied')
+    } catch {
+      setQueueLinkCopyState('error')
+    }
   }
 
   function toggleCompanySignalGroupSelection(groupId: string) {
@@ -2059,9 +2074,17 @@ function QueueTab({
             ]}
           />
           <button
+            type="button"
+            onClick={() => void handleCopyQueueLink()}
+            className="ml-auto inline-flex items-center gap-1 rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
+          >
+            <Copy className="h-3 w-3" />
+            {queueLinkCopyState === 'copied' ? 'Copied queue link' : queueLinkCopyState === 'error' ? 'Copy failed' : 'Copy queue link'}
+          </button>
+          <button
             onClick={clearQueueFilters}
             disabled={!hasActiveCompanySignalQueueFilters}
-            className="ml-auto rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             Clear queue filters
           </button>

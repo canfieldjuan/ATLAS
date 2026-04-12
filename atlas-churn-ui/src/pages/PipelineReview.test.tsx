@@ -2,6 +2,10 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const clipboard = vi.hoisted(() => ({
+  writeText: vi.fn(),
+}))
 import PipelineReview from './PipelineReview'
 
 const api = vi.hoisted(() => ({
@@ -48,6 +52,11 @@ describe('PipelineReview watchlist delivery ops', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: clipboard,
+    })
+    clipboard.writeText.mockResolvedValue(undefined)
     api.fetchVisibilitySummary.mockResolvedValue({
       open_actionable: 2,
       failures_period: 1,
@@ -893,6 +902,31 @@ describe('PipelineReview watchlist delivery ops', () => {
       'href',
       '/reviews/rev-1?back_to=%2Fpipeline-review%3Fqueue_source%3Dg2',
     )
+  })
+
+  it('copies the current queue link with active filters', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Candidate Groups')
+    await user.click(screen.getByRole('button', { name: 'Focus queue for source g2' }))
+    await user.click(screen.getByRole('button', { name: 'Copy queue link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+
+    const copiedUrl = new URL(clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string)
+    expect(copiedUrl.pathname).toBe('/pipeline-review')
+    expect(copiedUrl.searchParams.get('queue_source')).toBe('g2')
+    expect(copiedUrl.searchParams.get('queue_vendor')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copied queue link' })).toBeInTheDocument()
   })
 
   it('clears individual queue filter chips without resetting the rest of the queue', async () => {
