@@ -11,6 +11,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.params import Param
 from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_auth
@@ -49,7 +50,14 @@ def _as_iso_text(value):
         return value.isoformat()
     return str(value)
 
+def _unwrap_param_default(value):
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
 def _clean_required_text(value, field_name: str) -> str:
+    value = _unwrap_param_default(value)
     text = str(value or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail=f"{field_name} is required")
@@ -57,8 +65,30 @@ def _clean_required_text(value, field_name: str) -> str:
 
 
 def _clean_optional_text(value):
+    value = _unwrap_param_default(value)
     text = str(value or "").strip()
     return text or None
+
+
+def _clean_int_query(value, *, default: int) -> int:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return int(value)
+
+
+def _clean_float_query(value, *, default: float) -> float:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return float(value)
+
+
+def _clean_bool_query(value, *, default: bool) -> bool:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return bool(value)
 
 
 def _clean_optional_text_list(values):
@@ -159,11 +189,16 @@ async def list_opportunities(
     dm_only: bool = Query(False),
     user: AuthUser = Depends(require_auth),
 ):
+    min_urgency = _clean_float_query(min_urgency, default=5.0)
+    min_score = _clean_int_query(min_score, default=0)
+    window_days = _clean_int_query(window_days, default=90)
+    limit = min(_clean_int_query(limit, default=50), 200)
     clean_vendor_name = _clean_optional_text(vendor_name)
+    dm_only = _clean_bool_query(dm_only, default=False)
     pool = _pool_or_503()
 
     extra_conditions = ""
-    params: list = [window_days, min_urgency, min(limit, 200)]
+    params: list = [window_days, min_urgency, limit]
     idx = 4
 
     if clean_vendor_name:

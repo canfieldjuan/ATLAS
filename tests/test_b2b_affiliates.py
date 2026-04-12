@@ -106,6 +106,22 @@ async def test_list_opportunities_normalizes_blank_vendor_filter(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_opportunities_normalizes_query_defaults_on_direct_call(monkeypatch):
+    from atlas_brain.api import b2b_affiliates as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+
+    result = await mod.list_opportunities()
+
+    assert result == {"basis": "canonical_reviews", "opportunities": [], "count": 0}
+    sql, *params = pool.fetch.await_args.args
+    assert "(r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true" not in sql
+    assert "AND r.vendor_name ILIKE '%' || $4 || '%'" not in sql
+    assert params == [90, 5.0, 50]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field_name", "body"),
     [
