@@ -12193,6 +12193,26 @@ def _build_company_signal_operator_action(
     return normalized
 
 
+def _choose_company_signal_operator_focus(
+    preferred_payload: Mapping[str, Any] | None,
+    alternate_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    default = _empty_company_signal_operator_action()
+    preferred_action = preferred_payload.get("action") if isinstance(preferred_payload, Mapping) else None
+    alternate_action = alternate_payload.get("action") if isinstance(alternate_payload, Mapping) else None
+    if preferred_action and alternate_action:
+        if _company_signal_action_priority_rank(alternate_payload.get("priority")) > _company_signal_action_priority_rank(
+            preferred_payload.get("priority")
+        ):
+            return dict(alternate_payload)
+        return dict(preferred_payload)
+    if preferred_action:
+        return dict(preferred_payload)
+    if alternate_action:
+        return dict(alternate_payload)
+    return default
+
+
 def _build_company_signal_queue_recommendation_payload(
     *,
     actionable_pending_groups: int,
@@ -13611,25 +13631,12 @@ async def read_company_signal_candidate_group_summary(
         queue_recommendation: Mapping[str, Any] | None,
         unlock_focus: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        default = _empty_company_signal_operator_action()
         queue_payload = _build_company_signal_operator_action(queue_recommendation)
         unlock_payload = _build_company_signal_operator_action(
             unlock_focus,
             primary_driver=_build_queue_summary_driver("unlock_focus"),
         )
-        queue_action = queue_payload.get("action") if isinstance(queue_payload, Mapping) else None
-        unlock_action = unlock_payload.get("action") if isinstance(unlock_payload, Mapping) else None
-        if queue_action and unlock_action:
-            if _company_signal_action_priority_rank(unlock_payload.get("priority")) > _company_signal_action_priority_rank(
-                queue_payload.get("priority")
-            ):
-                return unlock_payload
-            return queue_payload
-        if queue_action:
-            return queue_payload
-        if unlock_action:
-            return unlock_payload
-        return default
+        return _choose_company_signal_operator_focus(queue_payload, unlock_payload)
 
     queue_filters = _build_queue_summary_filters()
     queue_snapshot = _build_queue_summary_snapshot()
@@ -14906,7 +14913,6 @@ async def read_company_signal_review_impact_summary(
         trend_focus: Mapping[str, Any],
         trend_queue_recommendation: Mapping[str, Any],
     ) -> dict[str, Any]:
-        default = _empty_company_signal_operator_action()
         trend_payload = _build_company_signal_operator_action(
             trend_recommendation,
             primary_driver=_build_trend_queue_driver("trend_recommendation", trend_recommendation),
@@ -14916,19 +14922,7 @@ async def read_company_signal_review_impact_summary(
             use_reason_override=True,
         )
         queue_payload = _build_company_signal_operator_action(trend_queue_recommendation)
-        trend_action = trend_payload.get("action") if isinstance(trend_payload, Mapping) else None
-        queue_action = queue_payload.get("action") if isinstance(queue_payload, Mapping) else None
-        if trend_action and queue_action:
-            if _company_signal_action_priority_rank(trend_payload.get("priority")) > _company_signal_action_priority_rank(
-                queue_payload.get("priority")
-            ):
-                return trend_payload
-            return queue_payload
-        if queue_action:
-            return queue_payload
-        if trend_action:
-            return trend_payload
-        return default
+        return _choose_company_signal_operator_focus(queue_payload, trend_payload)
 
     def _build_trend_queue_recommendation(
         queue_focus: Mapping[str, Any] | None,
