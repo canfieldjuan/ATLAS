@@ -59,6 +59,18 @@ def _parse_target_date(as_of_date: Optional[str]) -> date:
         raise HTTPException(status_code=400, detail="Invalid as_of_date; expected YYYY-MM-DD") from exc
 
 
+def _clean_required_text(value: object | None, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail=f"{field_name} is required")
+    return text
+
+
+def _clean_optional_text(value: object | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
 def _safe_json(value) -> list | dict | None:
     if isinstance(value, (list, dict)):
         return value
@@ -667,18 +679,21 @@ async def set_annotation(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Upsert an evidence annotation (pin, flag, or suppress a witness)."""
-    pool = _pool_or_503()
-
     if req.annotation_type not in _VALID_ANNOTATION_TYPES:
         raise HTTPException(
             status_code=422,
             detail=f"annotation_type must be one of: {', '.join(sorted(_VALID_ANNOTATION_TYPES))}",
         )
 
+    witness_id = _clean_required_text(req.witness_id, "witness_id")
+    vendor_input = _clean_required_text(req.vendor_name, "vendor_name")
+    note_text = _clean_optional_text(req.note_text)
+
+    pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
     now = datetime.now(timezone.utc)
-    resolved_vendor = await resolve_vendor_name(req.vendor_name.strip())
-    vendor_name = resolved_vendor or req.vendor_name.strip()
+    resolved_vendor = await resolve_vendor_name(vendor_input)
+    vendor_name = resolved_vendor or vendor_input
 
     witness_exists = await pool.fetchval(
         """
@@ -688,7 +703,7 @@ async def set_annotation(
           AND vendor_name = $2
         LIMIT 1
         """,
-        req.witness_id.strip(),
+        witness_id,
         vendor_name,
     )
     if not witness_exists:
@@ -709,10 +724,10 @@ async def set_annotation(
         """,
         _uuid.uuid4(),
         acct,
-        req.witness_id.strip(),
+        witness_id,
         vendor_name,
         req.annotation_type,
-        req.note_text.strip() if req.note_text else None,
+        note_text,
         now,
     )
     return _annotation_payload(row)
@@ -724,12 +739,12 @@ async def remove_annotations(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Remove annotations (restore witnesses to default state)."""
-    pool = _pool_or_503()
-    acct = _uuid.UUID(user.account_id)
-
-    ids = [w.strip() for w in req.witness_ids if w.strip()]
+    ids = [str(witness_id).strip() for witness_id in req.witness_ids if str(witness_id).strip()]
     if not ids:
         return {"removed": 0}
+
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
 
     result = await pool.execute(
         """

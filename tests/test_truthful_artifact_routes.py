@@ -410,6 +410,63 @@ def test_b2b_evidence_set_annotation_validates_witness_and_upserts(monkeypatch):
     assert body["annotation_type"] == "pin"
 
 
+def test_b2b_evidence_set_annotation_rejects_blank_text_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    def _boom():
+        raise AssertionError("DB pool should not be acquired")
+
+    resolve_vendor = AsyncMock(return_value="Salesforce")
+    monkeypatch.setattr(evidence_api, "get_db_pool", _boom)
+    monkeypatch.setattr(evidence_api, "resolve_vendor_name", resolve_vendor)
+
+    with TestClient(app) as client:
+        blank_witness = client.post(
+            "/b2b/evidence/annotations",
+            json={
+                "witness_id": "   ",
+                "vendor_name": "salesforce",
+                "annotation_type": "pin",
+            },
+        )
+        blank_vendor = client.post(
+            "/b2b/evidence/annotations",
+            json={
+                "witness_id": "w1",
+                "vendor_name": "   ",
+                "annotation_type": "pin",
+            },
+        )
+
+    assert blank_witness.status_code == 422
+    assert blank_witness.json()["detail"] == "witness_id is required"
+    assert blank_vendor.status_code == 422
+    assert blank_vendor.json()["detail"] == "vendor_name is required"
+    resolve_vendor.assert_not_awaited()
+
+
+def test_b2b_evidence_remove_annotations_ignores_blank_ids_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    def _boom():
+        raise AssertionError("DB pool should not be acquired")
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", _boom)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/evidence/annotations/remove",
+            json={"witness_ids": ["   ", "\t"]},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"removed": 0}
+
+
 def test_b2b_evidence_set_annotation_rejects_unknown_witness(monkeypatch):
     app = FastAPI()
     app.include_router(evidence_api.router)
