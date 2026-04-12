@@ -14,7 +14,7 @@ from uuid import UUID
 
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth, require_auth
@@ -37,6 +37,27 @@ from ..templates.email.vendor_briefing import render_vendor_briefing_html
 logger = logging.getLogger("atlas.api.b2b_vendor_briefing")
 
 router = APIRouter(prefix="/b2b/briefings", tags=["b2b-briefings"])
+
+
+def _clean_required_text(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("value is required")
+    return text
+
+
+def _clean_optional_text(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _clean_required_query_text(value: str | None, *, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail=f"{field_name} is required")
+    return text
 
 
 def _pool_or_503():
@@ -124,21 +145,51 @@ class PreviewRequest(BaseModel):
     vendor_name: str = Field(..., min_length=1)
     prospect_mode: bool = Field(False, description="Redact named accounts for sales demos")
 
+    @field_validator("vendor_name", mode="before")
+    @classmethod
+    def _trim_vendor_name(cls, value):
+        return _clean_required_text(value)
+
 
 class GenerateRequest(BaseModel):
     vendor_name: str = Field(..., min_length=1)
     to_email: str | None = Field(None, min_length=3)
+
+    @field_validator("vendor_name", mode="before")
+    @classmethod
+    def _trim_vendor_name(cls, value):
+        return _clean_required_text(value)
+
+    @field_validator("to_email", mode="before")
+    @classmethod
+    def _trim_to_email(cls, value):
+        return _clean_optional_text(value)
 
 
 class GateRequest(BaseModel):
     email: str = Field(..., min_length=5)
     token: str = Field(..., min_length=10)
 
+    @field_validator("email", "token", mode="before")
+    @classmethod
+    def _trim_required_fields(cls, value):
+        return _clean_required_text(value)
+
 
 class VendorCheckoutRequest(BaseModel):
     vendor_name: str = Field(..., min_length=1)
     tier: str = Field(..., pattern="^(standard|pro)$")
     email: str | None = Field(None, min_length=5)
+
+    @field_validator("vendor_name", "tier", mode="before")
+    @classmethod
+    def _trim_required_fields(cls, value):
+        return _clean_required_text(value)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _trim_optional_email(cls, value):
+        return _clean_optional_text(value)
 
 
 class BulkBriefingApproveRequest(BaseModel):
@@ -212,7 +263,7 @@ async def briefing_gate(body: GateRequest):
     # Validate token
     claims = decode_gate_token(body.token)
     vendor_name = claims["vendor_name"]
-    email = body.email.strip().lower()
+    email = body.email.lower()
 
     pool = _pool_or_503()
 
@@ -394,7 +445,7 @@ async def vendor_checkout(body: VendorCheckoutRequest):
         },
     }
     if body.email:
-        session_params["customer_email"] = body.email.strip().lower()
+        session_params["customer_email"] = body.email.lower()
 
     try:
         session = stripe.checkout.Session.create(**session_params)
@@ -417,6 +468,7 @@ async def checkout_session_info(session_id: str = Query(..., min_length=10)):
     """
     import stripe
 
+    session_id = _clean_required_query_text(session_id, field_name="session_id")
     cfg = settings.saas_auth
     if not cfg.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
@@ -494,6 +546,7 @@ async def report_data(token: str = Query(..., min_length=10)):
     Called by the churnsignals.co report view page after email gate capture.
     No auth required -- the JWT token IS the access control.
     """
+    token = _clean_required_query_text(token, field_name="token")
     claims = decode_gate_token(token)
     vendor_name = claims["vendor_name"]
 

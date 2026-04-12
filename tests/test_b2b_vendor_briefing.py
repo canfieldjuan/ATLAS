@@ -1,12 +1,143 @@
 import csv
 import io
 from datetime import datetime
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from atlas_brain.api import b2b_vendor_briefing as briefing_api
 from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+
+
+
+def _make_app():
+    app = FastAPI()
+    app.include_router(briefing_api.router)
+    return app
+
+
+def test_generate_briefing_trims_vendor_name_and_blank_email(monkeypatch):
+    monkeypatch.setattr(briefing_api.settings.b2b_churn, "vendor_briefing_enabled", True, raising=False)
+    generate = AsyncMock(return_value={"status": "ok"})
+    monkeypatch.setattr(briefing_api, "generate_and_send_briefing", generate)
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/briefings/generate",
+            json={"vendor_name": "  Zendesk  ", "to_email": "   "},
+        )
+
+    assert response.status_code == 200
+    assert generate.await_args.kwargs == {"vendor_name": "Zendesk", "to_email": None}
+
+
+def test_briefing_gate_rejects_blank_email_before_db_touch(monkeypatch):
+    monkeypatch.setattr(briefing_api.settings.b2b_churn, "vendor_briefing_enabled", True, raising=False)
+
+    def _fail_pool():
+        raise AssertionError("_pool_or_503 should not be called")
+
+    monkeypatch.setattr(briefing_api, "_pool_or_503", _fail_pool)
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/briefings/gate",
+            json={"email": "     ", "token": "abcdefghij"},
+        )
+
+    assert response.status_code == 422
+
+
+def test_vendor_checkout_trims_customer_email_before_stripe(monkeypatch):
+    monkeypatch.setattr(briefing_api.settings.saas_auth, "stripe_secret_key", "sk_test", raising=False)
+    monkeypatch.setattr(briefing_api.settings.saas_auth, "stripe_vendor_standard_price_id", "price_standard", raising=False)
+    fake_session = SimpleNamespace(id="cs_test", url="https://checkout.test/session")
+    create = MagicMock(return_value=fake_session)
+    fake_stripe = SimpleNamespace(
+        api_key=None,
+        StripeError=Exception,
+        checkout=SimpleNamespace(Session=SimpleNamespace(create=create)),
+    )
+    import sys
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/briefings/checkout",
+            json={
+                "vendor_name": "  Zendesk  ",
+                "tier": "standard",
+                "email": "  Ops@Example.com  ",
+            },
+        )
+
+    assert response.status_code == 200
+    kwargs = create.call_args.kwargs
+    assert kwargs["customer_email"] == "ops@example.com"
+    assert kwargs["metadata"]["vendor_name"] == "Zendesk"
+    assert "vendor=Zendesk" in kwargs["success_url"]
+
+
+def test_vendor_checkout_omits_blank_customer_email(monkeypatch):
+    monkeypatch.setattr(briefing_api.settings.saas_auth, "stripe_secret_key", "sk_test", raising=False)
+    monkeypatch.setattr(briefing_api.settings.saas_auth, "stripe_vendor_standard_price_id", "price_standard", raising=False)
+    create = MagicMock(return_value=SimpleNamespace(id="cs_test", url="https://checkout.test/session"))
+    fake_stripe = SimpleNamespace(
+        api_key=None,
+        StripeError=Exception,
+        checkout=SimpleNamespace(Session=SimpleNamespace(create=create)),
+    )
+    import sys
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/briefings/checkout",
+            json={"vendor_name": "Zendesk", "tier": "standard", "email": "      "},
+        )
+
+    assert response.status_code == 200
+    assert "customer_email" not in create.call_args.kwargs
+
+
+def test_checkout_session_info_rejects_blank_session_id_before_stripe(monkeypatch):
+    monkeypatch.setattr(briefing_api.settings.saas_auth, "stripe_secret_key", "sk_test", raising=False)
+    retrieve = MagicMock(side_effect=AssertionError("Stripe should not be called"))
+    fake_stripe = SimpleNamespace(
+        api_key=None,
+        StripeError=Exception,
+        checkout=SimpleNamespace(Session=SimpleNamespace(retrieve=retrieve)),
+    )
+    import sys
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/briefings/checkout-session?session_id=%20%20%20%20%20%20%20%20%20%20")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "session_id is required"
+
+
+def test_report_data_rejects_blank_token_before_db_touch(monkeypatch):
+    def _fail_pool():
+        raise AssertionError("_pool_or_503 should not be called")
+
+    monkeypatch.setattr(briefing_api, "_pool_or_503", _fail_pool)
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/briefings/report-data?token=%20%20%20%20%20%20%20%20%20%20")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "token is required"
 
 
 def test_default_pain_label_maps_generic_buckets_to_overall_dissatisfaction():
