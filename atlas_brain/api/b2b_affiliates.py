@@ -49,6 +49,29 @@ def _as_iso_text(value):
         return value.isoformat()
     return str(value)
 
+def _clean_required_text(value, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail=f"{field_name} is required")
+    return text
+
+
+def _clean_optional_text(value):
+    text = str(value or "").strip()
+    return text or None
+
+
+def _clean_optional_text_list(values):
+    if values is None:
+        return None
+    cleaned: list[str] = []
+    for value in values:
+        text = _clean_optional_text(value)
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
 
 def _canonical_review_predicate(alias: str = "") -> str:
     prefix = f"{alias}." if alias else ""
@@ -136,15 +159,16 @@ async def list_opportunities(
     dm_only: bool = Query(False),
     user: AuthUser = Depends(require_auth),
 ):
+    clean_vendor_name = _clean_optional_text(vendor_name)
     pool = _pool_or_503()
 
     extra_conditions = ""
     params: list = [window_days, min_urgency, min(limit, 200)]
     idx = 4
 
-    if vendor_name:
+    if clean_vendor_name:
         extra_conditions += f" AND r.vendor_name ILIKE '%' || ${idx} || '%'"
-        params.append(vendor_name)
+        params.append(clean_vendor_name)
         idx += 1
 
     # APPROVED-ENRICHMENT-READ: reviewer_context.decision_maker
@@ -331,6 +355,15 @@ async def list_partners():
 
 @tenant_router.post("/partners", status_code=201)
 async def create_partner(body: PartnerCreate):
+    name = _clean_required_text(body.name, "name")
+    product_name = _clean_required_text(body.product_name, "product_name")
+    product_aliases = _clean_optional_text_list(body.product_aliases) or []
+    category = _clean_optional_text(body.category)
+    affiliate_url = _clean_required_text(body.affiliate_url, "affiliate_url")
+    commission_type = _clean_required_text(body.commission_type, "commission_type")
+    commission_value = _clean_optional_text(body.commission_value)
+    notes = _clean_optional_text(body.notes)
+
     pool = _pool_or_503()
     try:
         row = await pool.fetchrow(
@@ -341,21 +374,21 @@ async def create_partner(body: PartnerCreate):
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id, created_at
             """,
-            body.name,
-            body.product_name,
-            body.product_aliases,
-            body.category,
-            body.affiliate_url,
-            body.commission_type,
-            body.commission_value,
-            body.notes,
+            name,
+            product_name,
+            product_aliases,
+            category,
+            affiliate_url,
+            commission_type,
+            commission_value,
+            notes,
             body.enabled,
         )
     except Exception as e:
         if "unique" in str(e).lower() or "duplicate" in str(e).lower():
             raise HTTPException(
                 status_code=409,
-                detail=f"Partner with product_name '{body.product_name}' already exists",
+                detail=f"Partner with product_name '{product_name}' already exists",
             )
         raise
     return {"id": str(row["id"]), "created_at": str(row["created_at"])}
@@ -368,6 +401,29 @@ async def update_partner(partner_id: str, body: PartnerUpdate):
     except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail="Invalid partner_id")
 
+    normalized: dict[str, object] = {}
+    if body.name is not None:
+        normalized["name"] = _clean_required_text(body.name, "name")
+    if body.product_name is not None:
+        normalized["product_name"] = _clean_required_text(body.product_name, "product_name")
+    if body.product_aliases is not None:
+        normalized["product_aliases"] = _clean_optional_text_list(body.product_aliases) or []
+    if body.category is not None:
+        normalized["category"] = _clean_optional_text(body.category)
+    if body.affiliate_url is not None:
+        normalized["affiliate_url"] = _clean_required_text(body.affiliate_url, "affiliate_url")
+    if body.commission_type is not None:
+        normalized["commission_type"] = _clean_required_text(body.commission_type, "commission_type")
+    if body.commission_value is not None:
+        normalized["commission_value"] = _clean_optional_text(body.commission_value)
+    if body.notes is not None:
+        normalized["notes"] = _clean_optional_text(body.notes)
+    if body.enabled is not None:
+        normalized["enabled"] = body.enabled
+
+    if not normalized:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
     pool = _pool_or_503()
 
     updates: list[str] = []
@@ -379,14 +435,10 @@ async def update_partner(partner_id: str, body: PartnerUpdate):
         "affiliate_url", "commission_type", "commission_value",
         "notes", "enabled",
     ):
-        val = getattr(body, field)
-        if val is not None:
+        if field in normalized:
             updates.append(f"{field} = ${idx}")
-            params.append(val)
+            params.append(normalized[field])
             idx += 1
-
-    if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update")
 
     updates.append(f"updated_at = NOW()")
     params.append(pid)
@@ -442,12 +494,15 @@ async def record_click(body: ClickRecord):
     except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail="Invalid partner_id")
 
+    review_id = _clean_optional_text(body.review_id)
     rid = None
-    if body.review_id:
+    if review_id:
         try:
-            rid = _uuid.UUID(body.review_id)
+            rid = _uuid.UUID(review_id)
         except (ValueError, AttributeError):
             pass
+
+    referrer = _clean_optional_text(body.referrer) or "dashboard"
 
     pool = _pool_or_503()
     await pool.execute(
@@ -457,7 +512,7 @@ async def record_click(body: ClickRecord):
         """,
         pid,
         rid,
-        body.referrer,
+        referrer,
     )
     return {"ok": True}
 
