@@ -6439,7 +6439,14 @@ async def create_correction(
     body: CreateCorrectionBody,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
+    metadata = dict(body.metadata or {})
+    metadata_source_name = _optional_query_text(metadata.get("source_name"))
+    if "source_name" in metadata:
+        if metadata_source_name is None:
+            metadata.pop("source_name", None)
+        else:
+            metadata["source_name"] = metadata_source_name
+
     span = tracer.start_span(
         span_name="b2b.correction.create",
         operation_type="business_operation",
@@ -6451,7 +6458,7 @@ async def create_correction(
                 entity_type=body.entity_type,
                 correction_type=body.correction_type,
                 vendor_name=body.new_value if body.correction_type == "merge_vendor" else None,
-                source_name=(body.metadata or {}).get("source_name") if body.metadata else None,
+                source_name=metadata_source_name,
             ),
         },
     )
@@ -6483,16 +6490,15 @@ async def create_correction(
                 status_code=400,
                 detail="suppress_source corrections must use entity_type='source'",
             )
-        if not body.metadata or not body.metadata.get("source_name"):
+        if not metadata_source_name:
             raise HTTPException(
                 status_code=400,
                 detail="suppress_source requires metadata.source_name (e.g., 'reddit', 'g2')",
             )
-        source_name = body.metadata["source_name"]
-        if source_name.lower() not in _KNOWN_SOURCES:
+        if metadata_source_name.lower() not in _KNOWN_SOURCES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown source '{source_name}'. Known sources: {sorted(_KNOWN_SOURCES)}",
+                detail=f"Unknown source '{metadata_source_name}'. Known sources: {sorted(_KNOWN_SOURCES)}",
             )
 
     try:
@@ -6500,8 +6506,9 @@ async def create_correction(
     except ValueError:
         raise HTTPException(status_code=400, detail="entity_id must be a valid UUID")
 
+    pool = _pool_or_503()
     corrected_by = f"api:{user.user_id}" if user else "analyst"
-    meta = json.dumps(body.metadata) if body.metadata else "{}"
+    meta = json.dumps(metadata) if metadata else "{}"
 
     row = await pool.fetchrow(
         """
@@ -6788,13 +6795,12 @@ async def get_correction(
     correction_id: str,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
-
     try:
         cid = _uuid.UUID(correction_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="correction_id must be a valid UUID")
 
+    pool = _pool_or_503()
     row = await pool.fetchrow(
         """
         SELECT id, entity_type, entity_id, correction_type, field_name,
@@ -6839,13 +6845,12 @@ async def revert_correction(
     body: RevertCorrectionBody,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
-
     try:
         cid = _uuid.UUID(correction_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="correction_id must be a valid UUID")
 
+    pool = _pool_or_503()
     row = await pool.fetchrow(
         "SELECT id, status FROM data_corrections WHERE id = $1",
         cid,

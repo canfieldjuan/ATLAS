@@ -2475,6 +2475,32 @@ async def test_export_high_intent_normalizes_blank_vendor_filter():
     assert result == {"rows": [], "filename": "high_intent_leads.csv"}
 
 
+def test_create_correction_rejects_invalid_entity_id_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(b2b_dashboard.router)
+
+    def fail_pool():
+        raise AssertionError("DB pool should not be acquired for invalid correction entity_id")
+
+    monkeypatch.setattr(b2b_dashboard, 'get_db_pool', fail_pool)
+
+    with TestClient(app) as client:
+        response = client.post(
+            '/b2b/dashboard/corrections',
+            json={
+                'entity_type': 'vendor',
+                'entity_id': '  not-a-uuid  ',
+                'correction_type': 'merge_vendor',
+                'old_value': 'Salesforce',
+                'new_value': 'HubSpot',
+                'reason': 'duplicate vendor',
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()['detail'] == 'entity_id must be a valid UUID'
+
+
 def test_create_correction_rejects_blank_reason_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(b2b_dashboard.router)
@@ -2547,6 +2573,83 @@ async def test_create_correction_trims_body_text_before_insert_and_merge():
     assert fetch_args[6] == 'HubSpot'
     assert fetch_args[7] == 'duplicate vendor'
     merge_mock.assert_awaited_once_with(pool, 'Salesforce', 'HubSpot')
+
+
+@pytest.mark.asyncio
+async def test_create_correction_trims_suppress_source_metadata_before_validation_and_insert():
+    correction_id = 'c86d95bb-58bb-44cc-b7be-3ae905600002'
+    entity_id = '2ea3fd03-7fd9-4b72-8f24-117667f723e9'
+    created_at = datetime(2026, 4, 12, tzinfo=timezone.utc)
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(return_value={
+        'id': correction_id,
+        'entity_type': 'source',
+        'entity_id': entity_id,
+        'correction_type': 'suppress_source',
+        'status': 'applied',
+        'created_at': created_at,
+    })
+
+    body = b2b_dashboard.CreateCorrectionBody(
+        entity_type='  source  ',
+        entity_id=f'  {entity_id}  ',
+        correction_type='  suppress_source  ',
+        reason='  noisy source  ',
+        metadata={'source_name': '  reddit  '},
+    )
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.create_correction(body, user=None)
+
+    assert result == {
+        'id': correction_id,
+        'entity_type': 'source',
+        'entity_id': entity_id,
+        'correction_type': 'suppress_source',
+        'status': 'applied',
+        'created_at': created_at.isoformat(),
+    }
+    fetch_args = pool.fetchrow.await_args.args
+    assert fetch_args[1] == 'source'
+    assert str(fetch_args[2]) == entity_id
+    assert fetch_args[3] == 'suppress_source'
+    assert fetch_args[7] == 'noisy source'
+    assert fetch_args[9] == '{"source_name": "reddit"}'
+
+
+def test_get_correction_rejects_invalid_uuid_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(b2b_dashboard.router)
+
+    def fail_pool():
+        raise AssertionError("DB pool should not be acquired for invalid correction_id")
+
+    monkeypatch.setattr(b2b_dashboard, 'get_db_pool', fail_pool)
+
+    with TestClient(app) as client:
+        response = client.get('/b2b/dashboard/corrections/   ')
+
+    assert response.status_code == 400
+    assert response.json()['detail'] == 'correction_id must be a valid UUID'
+
+
+def test_revert_correction_rejects_invalid_uuid_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(b2b_dashboard.router)
+
+    def fail_pool():
+        raise AssertionError("DB pool should not be acquired for invalid correction revert id")
+
+    monkeypatch.setattr(b2b_dashboard, 'get_db_pool', fail_pool)
+
+    with TestClient(app) as client:
+        response = client.post(
+            '/b2b/dashboard/corrections/   /revert',
+            json={'reason': '  undo  '},
+        )
+
+    assert response.status_code == 400
+    assert response.json()['detail'] == 'correction_id must be a valid UUID'
 
 
 @pytest.mark.asyncio
