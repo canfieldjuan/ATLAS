@@ -540,6 +540,7 @@ export interface WebhookDelivery {
   delivered_at: string
   vendor_name: string | null
   company_name: string | null
+  signal_id?: string | null
   signal_type: string | null
   review_id?: string | null
   report_id?: string | null

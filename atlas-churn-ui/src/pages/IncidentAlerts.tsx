@@ -466,6 +466,42 @@ function buildReviewDetailPath(reviewId: string, backTo: string) {
   return `/reviews/${encodeURIComponent(reviewId)}?${next.toString()}`
 }
 
+type AlertActivityReferenceSource = {
+  signal_id?: string | null
+  review_id?: string | null
+  report_id?: string | null
+}
+
+type AlertActivityReference = {
+  key: 'signal_id' | 'review_id' | 'report_id'
+  label: 'Signal ID' | 'Review ID' | 'Report ID'
+  value: string
+}
+
+function normalizeActivityReference(value: string | null | undefined) {
+  const normalized = String(value || '').trim()
+  return normalized || null
+}
+
+function buildActivityReferences(source: AlertActivityReferenceSource): AlertActivityReference[] {
+  const references: AlertActivityReference[] = []
+  const signalId = normalizeActivityReference(source.signal_id)
+  const reviewId = normalizeActivityReference(source.review_id)
+  const reportId = normalizeActivityReference(source.report_id)
+
+  if (signalId && signalId !== reportId) {
+    references.push({ key: 'signal_id', label: 'Signal ID', value: signalId })
+  }
+  if (reviewId) {
+    references.push({ key: 'review_id', label: 'Review ID', value: reviewId })
+  }
+  if (reportId) {
+    references.push({ key: 'report_id', label: 'Report ID', value: reportId })
+  }
+
+  return references
+}
+
 export default function IncidentAlerts() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -662,7 +698,7 @@ export default function IncidentAlerts() {
     }
   }
 
-  async function copyPreview(text: string, label: string) {
+  async function copyText(text: string, label: string) {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
       await navigator.clipboard.writeText(text)
@@ -712,6 +748,28 @@ export default function IncidentAlerts() {
       setMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy webhook link')
     }
+  }
+
+  function renderActivityReferenceButtons(activity: AlertActivityReferenceSource) {
+    const references = buildActivityReferences(activity)
+    if (!references.length) return null
+    return (
+      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+        {references.map((reference) => (
+          <button
+            key={reference.key}
+            type="button"
+            aria-label={`Copy ${reference.label}`}
+            onClick={() => void copyText(reference.value, reference.label.toLowerCase())}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-slate-300 transition-colors hover:bg-slate-900"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            <span>{reference.label}</span>
+            <span className="font-mono text-[11px] text-slate-200">{reference.value}</span>
+          </button>
+        ))}
+      </div>
+    )
   }
 
   function normalizeEventTypesForChannel(channel: WebhookChannel, eventTypes: WebhookEventType[]): WebhookEventType[] {
@@ -1160,6 +1218,7 @@ export default function IncidentAlerts() {
                                     ) : null}
                                     attempt {delivery.attempt} · {formatDurationMs(delivery.duration_ms)} · {formatTs(delivery.delivered_at)}
                                   </div>
+                                  {renderActivityReferenceButtons(delivery)}
                                   {delivery.review_id || delivery.account_review_focus || delivery.report_id || delivery.vendor_name ? (
                                     <div className="mt-3 flex flex-wrap gap-2 text-xs">
                                       {delivery.review_id ? (
@@ -1268,6 +1327,7 @@ export default function IncidentAlerts() {
                                       {push.report_type || push.signal_type ? <>{push.report_type || push.signal_type} · </> : null}
                                       {push.crm_record_type || 'record'}{push.crm_record_id ? ` · ${push.crm_record_id}` : ''} · {formatTs(push.pushed_at)}
                                     </div>
+                                    {renderActivityReferenceButtons(push)}
                                     {push.review_id || push.account_review_focus || push.report_id || push.vendor_name ? (
                                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
                                         {push.review_id ? (
@@ -1566,7 +1626,7 @@ export default function IncidentAlerts() {
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => void copyPreview(previewBodyText, 'sample JSON')}
+                    onClick={() => void copyText(previewBodyText, 'sample JSON')}
                     className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 transition-colors hover:bg-slate-800"
                   >
                     <Copy className="h-3.5 w-3.5" />
@@ -1574,7 +1634,7 @@ export default function IncidentAlerts() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => void copyPreview(previewCurl, 'sample cURL')}
+                    onClick={() => void copyText(previewCurl, 'sample cURL')}
                     className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 transition-colors hover:bg-slate-800"
                   >
                     <Copy className="h-3.5 w-3.5" />

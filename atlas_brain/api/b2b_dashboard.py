@@ -6305,6 +6305,7 @@ async def list_webhook_deliveries(
             "delivered_at": r["delivered_at"].isoformat(),
             "vendor_name": vendor_name,
             "company_name": company_name,
+            "signal_id": signal_id,
             "signal_type": context.get("signal_type") or r["event_type"],
             "review_id": resolved_review_id,
             "report_id": report_id or (report_context or {}).get("report_id"),

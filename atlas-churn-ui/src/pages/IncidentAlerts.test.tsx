@@ -79,6 +79,7 @@ describe('IncidentAlerts', () => {
           delivered_at: '2026-04-10T03:05:00Z',
           vendor_name: 'Acme Rival',
           company_name: 'Acme Bank',
+          signal_id: '22222222-2222-2222-2222-222222222222',
           signal_type: 'competitive_displacement',
           review_id: '33333333-3333-4333-8333-333333333334',
           account_review_focus: {
@@ -305,6 +306,79 @@ describe('IncidentAlerts', () => {
     await waitFor(() => {
       expect(api.listWebhookDeliveries).toHaveBeenCalledWith('wh-1', { limit: 10 })
     })
+  })
+
+  it('copies canonical signal ids from delivery activity rows', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-1']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy Signal ID' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222')
+    })
+    expect(await screen.findByText('Copied signal id')).toBeInTheDocument()
+  })
+
+  it('copies canonical signal ids from CRM push activity rows', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.listWebhooks.mockResolvedValue({
+      webhooks: [
+        {
+          id: 'wh-crm',
+          url: 'https://hooks.example.com/crm',
+          event_types: ['churn_alert'],
+          channel: 'crm_hubspot',
+          enabled: true,
+          description: 'CRM escalation',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 1,
+          recent_success_rate_7d: 1,
+        },
+      ],
+      count: 1,
+    })
+    api.listWebhookDeliveries.mockResolvedValue({ deliveries: [], count: 0 })
+    api.listWebhookCrmPushLog.mockResolvedValue({
+      pushes: [
+        {
+          id: 'push-signal',
+          signal_type: 'competitive_displacement',
+          signal_id: 'sig-1',
+          vendor_name: 'Acme Rival',
+          company_name: 'Acme Bank',
+          crm_record_id: 'deal-1',
+          crm_record_type: 'deal',
+          status: 'success',
+          error: null,
+          pushed_at: '2026-04-10T03:05:00Z',
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-crm&crm_status=success']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy Signal ID' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith('sig-1')
+    })
+    expect(await screen.findByText('Copied signal id')).toBeInTheDocument()
   })
 
   it('links delivery activity back into watchlists and vendor workflows', async () => {

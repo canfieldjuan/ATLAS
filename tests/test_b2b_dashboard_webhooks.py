@@ -404,6 +404,7 @@ async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus
     delivery = result['deliveries'][0]
     assert delivery['vendor_name'] == 'Acme Rival'
     assert delivery['company_name'] == 'Acme Bank'
+    assert delivery['signal_id'] == '22222222-2222-2222-2222-222222222222'
     assert delivery['signal_type'] == 'competitive_displacement'
     assert delivery['review_id'] == '33333333-3333-4333-8333-333333333334'
     assert delivery['account_review_focus'] == focus
