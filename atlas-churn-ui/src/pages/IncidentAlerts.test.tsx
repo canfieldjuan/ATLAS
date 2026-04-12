@@ -274,6 +274,18 @@ describe('IncidentAlerts', () => {
       '/reports/report-test?back_to=%2Falerts',
     )
 
+    await user.click(screen.getByRole('button', { name: 'Copy review link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}/reviews/review-fail?back_to=%2Falerts`)
+    })
+    expect(await screen.findByText('Copied review link')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Copy report link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}/reports/report-test?back_to=%2Falerts`)
+    })
+    expect(await screen.findByText('Copied report link')).toBeInTheDocument()
+
     await user.click(screen.getByRole('button', { name: 'Copy Report ID' }))
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith('report-test')
@@ -855,6 +867,36 @@ describe('IncidentAlerts', () => {
     await waitFor(() => {
       expect(api.listWebhookDeliveries).toHaveBeenCalledWith('wh-1', { limit: 10 })
     })
+  })
+
+  it('copies exact delivery drillthrough links from activity rows', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+    await user.click(screen.getByRole('button', { name: 'View Activity' }))
+
+    await user.click(await screen.findByRole('button', { name: 'Copy account review link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor&back_to=%2Falerts%3Fwebhook%3Dwh-1`,
+      )
+    })
+    expect(await screen.findByText('Copied account review link')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Copy review link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/reviews/33333333-3333-4333-8333-333333333334?back_to=%2Falerts%3Fwebhook%3Dwh-1`,
+      )
+    })
+    expect(await screen.findByText('Copied review link')).toBeInTheDocument()
   })
 
   it('copies canonical signal ids from delivery activity rows', async () => {

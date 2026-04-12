@@ -920,6 +920,20 @@ export default function IncidentAlerts() {
     }
   }
 
+  function renderShortcutCopyButton(path: string, label: string) {
+    return (
+      <button
+        type="button"
+        aria-label={`Copy ${label} link`}
+        onClick={() => void copyText(`${window.location.origin}${path}`, `${label} link`)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+      >
+        <Copy className="h-3.5 w-3.5" />
+        Copy {label}
+      </button>
+    )
+  }
+
   function renderActivityReferences(activity: AlertActivityReferenceSource) {
     const references = buildActivityReferences(activity)
     if (!references.length) return null
@@ -952,40 +966,55 @@ export default function IncidentAlerts() {
     )
   }
 
-  function renderActivityDetailShortcuts(activity: AlertActivityReferenceSource, backTo: string) {
+  function renderActivityDetailShortcuts(
+    activity: AlertActivityReferenceSource,
+    backTo: string,
+    options?: {
+      compact?: boolean
+      includeCopy?: boolean
+    },
+  ) {
     const reviewId = normalizeActivityReference(activity.review_id)
     const reportId = normalizeActivityReference(activity.report_id)
     const accountReviewFocus = activity.account_review_focus ?? null
     if (!accountReviewFocus && !reviewId && !reportId) return null
+    const compact = options?.compact ?? false
+    const includeCopy = options?.includeCopy ?? false
+    const accountReviewPath = accountReviewFocus ? buildAccountReviewPath(accountReviewFocus, backTo) : null
+    const reviewPath = reviewId ? buildReviewDetailPath(reviewId, backTo) : null
+    const reportPath = reportId ? buildReportDetailPath(reportId, backTo) : null
     return (
       <div className="mt-2 flex flex-wrap gap-2">
-        {accountReviewFocus ? (
+        {accountReviewPath ? (
           <Link
-            to={buildAccountReviewPath(accountReviewFocus, backTo)}
+            to={accountReviewPath}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
           >
             <ArrowRight className="h-3.5 w-3.5" />
             Account Review
           </Link>
         ) : null}
-        {reviewId ? (
+        {includeCopy && accountReviewPath ? renderShortcutCopyButton(accountReviewPath, 'account review') : null}
+        {reviewPath ? (
           <Link
-            to={buildReviewDetailPath(reviewId, backTo)}
+            to={reviewPath}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
           >
             <ArrowRight className="h-3.5 w-3.5" />
-            Open Review
+            {compact ? 'Review' : 'Open Review'}
           </Link>
         ) : null}
-        {reportId ? (
+        {includeCopy && reviewPath ? renderShortcutCopyButton(reviewPath, 'review') : null}
+        {reportPath ? (
           <Link
-            to={buildReportDetailPath(reportId, backTo)}
+            to={reportPath}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
           >
             <ArrowRight className="h-3.5 w-3.5" />
-            Open Report
+            {compact ? 'Report' : 'Open Report'}
           </Link>
         ) : null}
+        {includeCopy && reportPath ? renderShortcutCopyButton(reportPath, 'report') : null}
       </div>
     )
   }
@@ -1396,7 +1425,7 @@ export default function IncidentAlerts() {
                             </div>
                           ) : null}
                           {renderActivityReferences(latestFailureReferences)}
-                          {renderActivityDetailShortcuts(latestFailureContext, currentAlertsUrl)}
+                          {renderActivityDetailShortcuts(latestFailureContext, currentAlertsUrl, { includeCopy: true })}
                           {renderActivityVendorShortcuts(latestFailureContext, currentAlertsUrl)}
                         </div>
                       ) : null}
@@ -1438,7 +1467,7 @@ export default function IncidentAlerts() {
                             </div>
                           ) : null}
                           {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
-                          {latestManualTestContext ? renderActivityDetailShortcuts(latestManualTestContext, currentAlertsUrl) : null}
+                          {latestManualTestContext ? renderActivityDetailShortcuts(latestManualTestContext, currentAlertsUrl, { includeCopy: true }) : null}
                           {latestManualTestContext ? renderActivityVendorShortcuts(latestManualTestContext, currentAlertsUrl) : null}
                         </div>
                       ) : null}
@@ -1469,7 +1498,7 @@ export default function IncidentAlerts() {
                             </div>
                           ) : null}
                           {renderActivityReferences(latestCrmPush)}
-                          {renderActivityDetailShortcuts(latestCrmPush, currentAlertsUrl)}
+                          {renderActivityDetailShortcuts(latestCrmPush, currentAlertsUrl, { includeCopy: true })}
                           {renderActivityVendorShortcuts(latestCrmPush, currentAlertsUrl)}
                           {latestCrmPush.error ? (
                             <div className="mt-2 text-xs text-rose-200">{latestCrmPush.error}</div>
@@ -1624,33 +1653,10 @@ export default function IncidentAlerts() {
                                   </div>
                                   {renderActivityReferences(delivery)}
                                   {delivery.review_id || delivery.account_review_focus || delivery.report_id || delivery.vendor_name ? (
-                                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                                      {delivery.review_id ? (
-                                        <Link
-                                          to={buildReviewDetailPath(delivery.review_id, activityBackTo)}
-                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                        >
-                                          Review
-                                        </Link>
-                                      ) : null}
-                                      {delivery.account_review_focus ? (
-                                        <Link
-                                          to={buildAccountReviewPath(delivery.account_review_focus, activityBackTo)}
-                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                        >
-                                          Account Review
-                                        </Link>
-                                      ) : null}
-                                      {delivery.report_id ? (
-                                        <Link
-                                          to={buildReportDetailPath(delivery.report_id, activityBackTo)}
-                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                        >
-                                          Report
-                                        </Link>
-                                      ) : null}
+                                    <>
+                                      {renderActivityDetailShortcuts(delivery, activityBackTo, { compact: true, includeCopy: true })}
                                       {delivery.vendor_name ? (
-                                        <>
+                                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                           <Link
                                             to={buildWatchlistsPath(delivery.vendor_name, activityBackTo)}
                                             className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
@@ -1681,9 +1687,9 @@ export default function IncidentAlerts() {
                                           >
                                             Opportunities
                                           </Link>
-                                        </>
+                                        </div>
                                       ) : null}
-                                    </div>
+                                    </>
                                   ) : null}
                                   {delivery.error ? (
                                     <div className="mt-2 text-xs text-rose-200">{delivery.error}</div>
@@ -1733,33 +1739,10 @@ export default function IncidentAlerts() {
                                     </div>
                                     {renderActivityReferences(push)}
                                     {push.review_id || push.account_review_focus || push.report_id || push.vendor_name ? (
-                                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                                        {push.review_id ? (
-                                          <Link
-                                            to={buildReviewDetailPath(push.review_id, activityBackTo)}
-                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                          >
-                                            Review
-                                          </Link>
-                                        ) : null}
-                                        {push.account_review_focus ? (
-                                          <Link
-                                            to={buildAccountReviewPath(push.account_review_focus, activityBackTo)}
-                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                          >
-                                            Account Review
-                                          </Link>
-                                        ) : null}
-                                        {push.report_id ? (
-                                          <Link
-                                            to={buildReportDetailPath(push.report_id, activityBackTo)}
-                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                          >
-                                            Report
-                                          </Link>
-                                        ) : null}
+                                      <>
+                                        {renderActivityDetailShortcuts(push, activityBackTo, { compact: true, includeCopy: true })}
                                         {push.vendor_name ? (
-                                          <>
+                                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                             <Link
                                               to={buildWatchlistsPath(push.vendor_name, activityBackTo)}
                                               className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
@@ -1790,9 +1773,9 @@ export default function IncidentAlerts() {
                                             >
                                               Opportunities
                                             </Link>
-                                          </>
+                                          </div>
                                         ) : null}
-                                      </div>
+                                      </>
                                     ) : null}
                                     {push.error ? (
                                       <div className="mt-2 text-xs text-rose-200">{push.error}</div>
