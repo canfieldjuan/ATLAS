@@ -1090,6 +1090,29 @@ def _render_battle_card(
             pdf.section_title("Evidence Conclusions")
             pdf.simple_table(["Conclusion", "Status", "Confidence", "Fallback"], rows, [52, 24, 28, 76])
 
+    account_pressure_summary = _safe_str(card.get("account_pressure_summary")).strip()
+    priority_account_names = [
+        _safe_str(item).strip()
+        for item in _safe_list(card.get("priority_account_names"))
+        if _safe_str(item).strip()
+    ]
+    account_preview = _copy_dict(card.get("account_reasoning_preview"))
+    account_pressure_disclaimer = _safe_str(
+        card.get("account_pressure_disclaimer")
+        or account_preview.get("disclaimer")
+        or "",
+    ).strip()
+    if account_pressure_summary or priority_account_names or account_pressure_disclaimer:
+        pdf.section_title("Account Pressure")
+        if account_pressure_summary:
+            pdf.body_text(account_pressure_summary[:300])
+        if priority_account_names:
+            pdf.body_text(
+                "Priority accounts: %s" % ", ".join(priority_account_names[:5])
+            )
+        if account_pressure_disclaimer:
+            pdf.body_text(f"Note: {account_pressure_disclaimer[:220]}")
+
     # Section 1: Causal Narrative
     causal = _copy_dict(card.get("causal_narrative"))
     if causal:

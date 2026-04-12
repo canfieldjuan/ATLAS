@@ -1,6 +1,7 @@
 from atlas_brain.services.b2b.pdf_renderer import (
     _battle_card_priority_segments,
     _battle_card_render_view,
+    _render_battle_card,
     _section_coverage_rows,
     render_report_pdf,
 )
@@ -142,6 +143,43 @@ class TestBattleCardRenderView:
                 "disqualifier": "",
             },
         ]
+
+    def test_render_battle_card_includes_account_pressure_block(self):
+        class StubPdf:
+            def __init__(self):
+                self.section_titles = []
+                self.body_lines = []
+
+            def __getattr__(self, _name):
+                return lambda *args, **kwargs: None
+
+            def section_title(self, title):
+                self.section_titles.append(title)
+
+            def body_text(self, text):
+                self.body_lines.append(text)
+
+        pdf = StubPdf()
+        _render_battle_card(
+            pdf,
+            {
+                "vendor": "Salesforce",
+                "churn_pressure_score": 64,
+                "confidence": "high",
+                "total_reviews": 18,
+                "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                "priority_account_names": ["Concentrix"],
+                "account_reasoning_preview": {
+                    "disclaimer": "Early account signal only.",
+                },
+            },
+            "Summary",
+        )
+
+        assert "Account Pressure" in pdf.section_titles
+        assert "A single named account is showing early evaluation pressure." in pdf.body_lines
+        assert "Priority accounts: Concentrix" in pdf.body_lines
+        assert "Note: Early account signal only." in pdf.body_lines
 
 
 class TestReportPdfEvidenceCoverage:
