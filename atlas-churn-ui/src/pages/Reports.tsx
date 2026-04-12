@@ -332,6 +332,7 @@ export default function Reports() {
   const [creatingAccountDeepDive, setCreatingAccountDeepDive] = useState(false)
   const [battleCardVendor, setBattleCardVendor] = useState('')
   const [creatingBattleCard, setCreatingBattleCard] = useState(false)
+  const [composerNotice, setComposerNotice] = useState<{ tone: 'error' | 'info'; text: string } | null>(null)
   const [libSubOpen, setLibSubOpen] = useState(false)
   const [activeComposer, setActiveComposer] = useState<ReportComposer | null>(() => {
     const composer = searchParams.get('composer')
@@ -722,11 +723,30 @@ export default function Reports() {
     )
   }
 
+  function clearComposerNotice() {
+    setComposerNotice(null)
+  }
+
+  function setComposerError(text: string, composer: ReportComposer) {
+    setActiveComposer(composer)
+    setComposerNotice({ tone: 'error', text })
+  }
+
+  function setComposerInfo(text: string) {
+    setComposerNotice({ tone: 'info', text })
+  }
+
+  function resultString(result: Record<string, unknown>, key: string) {
+    const value = result[key]
+    return typeof value === 'string' && value.trim() ? value.trim() : ''
+  }
+
   async function handleCreateComparison() {
     if (!primaryVendor.trim() || !comparisonVendor.trim()) {
-      alert('Enter both vendors to compare')
+      setComposerError('Enter both vendors to compare', 'vendor_comparison')
       return
     }
+    clearComposerNotice()
     setCreatingComparison(true)
     try {
       const result = await generateVendorComparisonReport({
@@ -748,9 +768,11 @@ export default function Reports() {
         navigate(reportDetailLocation(reportId, reportsBackTarget), {
           state: { backTo: reportsBackTarget },
         })
+      } else {
+        setComposerInfo('Comparison requested. The report will appear in the library when ready.')
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Comparison generation failed')
+      setComposerError(err instanceof Error ? err.message : 'Comparison generation failed', 'vendor_comparison')
     } finally {
       setCreatingComparison(false)
     }
@@ -758,9 +780,10 @@ export default function Reports() {
 
   async function handleCreateAccountComparison() {
     if (!primaryCompany.trim() || !comparisonCompany.trim()) {
-      alert('Enter both companies to compare')
+      setComposerError('Enter both companies to compare', 'account_comparison')
       return
     }
+    clearComposerNotice()
     setCreatingAccountComparison(true)
     try {
       const result = await generateAccountComparisonReport({
@@ -782,9 +805,11 @@ export default function Reports() {
         navigate(reportDetailLocation(reportId, reportsBackTarget), {
           state: { backTo: reportsBackTarget },
         })
+      } else {
+        setComposerInfo('Account comparison requested. The report will appear in the library when ready.')
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Account comparison generation failed')
+      setComposerError(err instanceof Error ? err.message : 'Account comparison generation failed', 'account_comparison')
     } finally {
       setCreatingAccountComparison(false)
     }
@@ -792,13 +817,16 @@ export default function Reports() {
 
   async function handleCreateBattleCard() {
     if (!battleCardVendor.trim()) {
-      alert('Enter a vendor name')
+      setComposerError('Enter a vendor name', 'battle_card')
       return
     }
+    clearComposerNotice()
     setCreatingBattleCard(true)
     try {
       const result = await requestBattleCardReport({ vendor_name: battleCardVendor.trim() })
       const reportId = typeof result.report_id === 'string' ? result.report_id : ''
+      const statusMessage = resultString(result, 'message')
+      const requestStatus = resultString(result, 'status')
       setBattleCardVendor('')
       setActiveComposer(null)
       updateComposerParams(null, {
@@ -810,9 +838,15 @@ export default function Reports() {
         navigate(reportDetailLocation(reportId, reportsBackTarget), {
           state: { backTo: reportsBackTarget },
         })
+      } else if (statusMessage) {
+        setComposerInfo(statusMessage)
+      } else if (requestStatus === 'queued' || requestStatus === 'refreshing') {
+        setComposerInfo('Battle card requested. The report will appear in the library when ready.')
+      } else {
+        setComposerInfo('Battle card request submitted.')
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Battle card generation failed')
+      setComposerError(err instanceof Error ? err.message : 'Battle card generation failed', 'battle_card')
     } finally {
       setCreatingBattleCard(false)
     }
@@ -820,9 +854,10 @@ export default function Reports() {
 
   async function handleCreateAccountDeepDive() {
     if (!deepDiveCompany.trim()) {
-      alert('Enter a company for the account deep dive')
+      setComposerError('Enter a company for the account deep dive', 'account_deep_dive')
       return
     }
+    clearComposerNotice()
     setCreatingAccountDeepDive(true)
     try {
       const result = await generateAccountDeepDiveReport({
@@ -841,9 +876,11 @@ export default function Reports() {
         navigate(reportDetailLocation(reportId, reportsBackTarget), {
           state: { backTo: reportsBackTarget },
         })
+      } else {
+        setComposerInfo('Account deep dive requested. The report will appear in the library when ready.')
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Account deep dive generation failed')
+      setComposerError(err instanceof Error ? err.message : 'Account deep dive generation failed', 'account_deep_dive')
     } finally {
       setCreatingAccountDeepDive(false)
     }
@@ -1182,6 +1219,20 @@ export default function Reports() {
               )}
             </div>
 
+            {composerNotice ? (
+              <div
+                role={composerNotice.tone === 'error' ? 'alert' : 'status'}
+                className={clsx(
+                  'rounded-xl border px-4 py-3 text-sm',
+                  composerNotice.tone === 'error'
+                    ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                    : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200',
+                )}
+              >
+                {composerNotice.text}
+              </div>
+            ) : null}
+
             <div className={composerPanelClass('vendor_comparison')}>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
                 <div className="flex-1">
@@ -1190,6 +1241,7 @@ export default function Reports() {
                     value={primaryVendor}
                     onChange={(e) => {
                       const nextValue = e.target.value
+                      clearComposerNotice()
                       setActiveComposer('vendor_comparison')
                       setPrimaryVendor(nextValue)
                       updateComposerParams('vendor_comparison', { primary_vendor: nextValue })
@@ -1204,6 +1256,7 @@ export default function Reports() {
                     value={comparisonVendor}
                     onChange={(e) => {
                       const nextValue = e.target.value
+                      clearComposerNotice()
                       setActiveComposer('vendor_comparison')
                       setComparisonVendor(nextValue)
                       updateComposerParams('vendor_comparison', { comparison_vendor: nextValue })
@@ -1230,6 +1283,7 @@ export default function Reports() {
                     value={deepDiveCompany}
                     onChange={(e) => {
                       const nextValue = e.target.value
+                      clearComposerNotice()
                       setActiveComposer('account_deep_dive')
                       setDeepDiveCompany(nextValue)
                       updateComposerParams('account_deep_dive', { deep_dive_company: nextValue })
@@ -1256,6 +1310,7 @@ export default function Reports() {
                     value={primaryCompany}
                     onChange={(e) => {
                       const nextValue = e.target.value
+                      clearComposerNotice()
                       setActiveComposer('account_comparison')
                       setPrimaryCompany(nextValue)
                       updateComposerParams('account_comparison', { primary_company: nextValue })
@@ -1270,6 +1325,7 @@ export default function Reports() {
                     value={comparisonCompany}
                     onChange={(e) => {
                       const nextValue = e.target.value
+                      clearComposerNotice()
                       setActiveComposer('account_comparison')
                       setComparisonCompany(nextValue)
                       updateComposerParams('account_comparison', { comparison_company: nextValue })
@@ -1296,6 +1352,7 @@ export default function Reports() {
                     value={battleCardVendor}
                     onChange={(e) => {
                       const nextValue = e.target.value
+                      clearComposerNotice()
                       setActiveComposer('battle_card')
                       setBattleCardVendor(nextValue)
                       updateComposerParams('battle_card', { battle_card_vendor: nextValue })

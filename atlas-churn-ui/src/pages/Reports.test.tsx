@@ -1442,4 +1442,67 @@ describe('Reports', () => {
       expect(params.get('battle_card_vendor')).toBe('Intercom')
     })
   })
+
+  it('renders inline composer validation instead of browser alerts', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      { initialEntries: ['/reports'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    fireEvent.click(screen.getByRole('button', { name: 'Create Battle Card' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter a vendor name')
+    expect(alertSpy).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
+  })
+
+  it('renders inline composer request feedback for queued battle cards', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    api.requestBattleCardReport.mockResolvedValueOnce({
+      status: 'queued',
+      message: 'Queued battle card refresh for Zendesk.',
+      reused: false,
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      { initialEntries: ['/reports?composer=battle_card&battle_card_vendor=Zendesk'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    fireEvent.click(screen.getByRole('button', { name: 'Create Battle Card' }))
+
+    await waitFor(() => {
+      expect(api.requestBattleCardReport).toHaveBeenCalledWith({ vendor_name: 'Zendesk' })
+    })
+    expect(await screen.findByRole('status')).toHaveTextContent('Queued battle card refresh for Zendesk.')
+    expect(alertSpy).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
+  })
+
+  it('renders inline composer errors instead of browser alerts for failed report generation', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    api.generateVendorComparisonReport.mockRejectedValueOnce(new Error('Comparison generation failed'))
+
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      { initialEntries: ['/reports?composer=vendor_comparison&primary_vendor=Zendesk&comparison_vendor=Intercom'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    fireEvent.click(screen.getByRole('button', { name: 'Create Comparison' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Comparison generation failed')
+    expect(alertSpy).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
+  })
 })
