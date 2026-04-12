@@ -175,6 +175,22 @@ function upstreamWatchlistsPath(value: string | null): string | null {
   return null
 }
 
+function upstreamVendorPath(value: string | null): string | null {
+  let current = parseBackTo(value)
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/vendors/')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = parseBackTo(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 function watchlistsShortcutLabel(value: string | null) {
   if (!value) return 'Watchlists'
   try {
@@ -306,6 +322,7 @@ export default function EvidenceExplorer() {
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const directWatchlistsShortcutPath = useMemo(() => upstreamWatchlistsPath(requestedBackTo), [requestedBackTo])
+  const directVendorWorkspacePath = useMemo(() => upstreamVendorPath(requestedBackTo), [requestedBackTo])
   const directReportsShortcutPath = useMemo(() => upstreamReportsPath(requestedBackTo), [requestedBackTo])
   const directOpportunitiesShortcutPath = useMemo(() => upstreamOpportunitiesPath(requestedBackTo), [requestedBackTo])
   const matchedWatchlistViewId = useMemo(() => {
@@ -724,14 +741,14 @@ export default function EvidenceExplorer() {
               ) : null}
               <span className="inline-flex items-center gap-2">
                 <Link
-                  to={evidenceVendorPath(searchParams, activeVendor)}
+                  to={directVendorWorkspacePath ?? evidenceVendorPath(searchParams, activeVendor)}
                   className="text-cyan-400 hover:text-cyan-300 transition-colors"
                 >
                   Vendor workspace
                 </Link>
                 <button
                   type="button"
-                  onClick={() => void handleCopyVendorWorkspaceLink(evidenceVendorPath(searchParams, activeVendor))}
+                  onClick={() => void handleCopyVendorWorkspaceLink(directVendorWorkspacePath ?? evidenceVendorPath(searchParams, activeVendor))}
                   className="text-slate-400 hover:text-white transition-colors"
                   aria-label="Copy vendor workspace link"
                 >

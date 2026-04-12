@@ -480,6 +480,38 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('prefers the exact upstream vendor workspace shortcut when entered from a vendor path', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fvendors%252FZendesk%253Ftab%253Dreviews%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const vendorLink = await screen.findByRole('link', { name: 'Vendor workspace' })
+    expect(vendorLink).toHaveAttribute(
+      'href',
+      '/vendors/Zendesk?tab=reviews&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('copies the exact upstream vendor workspace shortcut when entered from a vendor path', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fvendors%252FZendesk%253Ftab%253Dreviews%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const vendorLink = await screen.findByRole('link', { name: 'Vendor workspace' })
+    await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${vendorLink.getAttribute('href')}`)
+    })
+  })
+
   it('copies the active vendor workspace shortcut link', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
