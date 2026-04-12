@@ -1025,6 +1025,18 @@ export default function IncidentAlerts() {
                   }
                 : null
               const latestManualTest = manualTestResults[webhook.id] ?? persistedManualTest
+              const latestFailureReferences = {
+                signal_id: webhook.latest_failure_signal_id,
+                review_id: webhook.latest_failure_review_id,
+                report_id: webhook.latest_failure_report_id,
+              }
+              const latestManualTestReferences = manualTestResults[webhook.id]
+                ? null
+                : {
+                    signal_id: webhook.latest_test_signal_id,
+                    review_id: webhook.latest_test_review_id,
+                    report_id: webhook.latest_test_report_id,
+                  }
               const hasLatestFailure = Boolean(webhook.latest_failure_at)
               const latestFailureIsManualTest = webhook.latest_failure_event_type === 'test'
               const testButtonLabel = manualTestButtonLabel(latestManualTest, hasLatestFailure, latestFailureIsManualTest)
@@ -1063,6 +1075,7 @@ export default function IncidentAlerts() {
                           <div className="mt-1">
                             {formatFailureSummary(webhook)} · {formatTs(webhook.latest_failure_at)}
                           </div>
+                          {renderActivityReferences(latestFailureReferences)}
                         </div>
                       ) : null}
                       {latestManualTest ? (
@@ -1082,6 +1095,7 @@ export default function IncidentAlerts() {
                                 : formatTs(latestManualTest.testedAt)
                             })()}
                           </div>
+                          {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
                         </div>
                       ) : null}
                     </div>

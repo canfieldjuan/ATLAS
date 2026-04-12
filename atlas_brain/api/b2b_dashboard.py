@@ -5888,62 +5888,46 @@ async def list_webhooks(
         SELECT ws.id, ws.url, ws.event_types,
                COALESCE(ws.channel, 'generic') AS channel,
                ws.enabled, ws.description, ws.created_at, ws.updated_at,
-               (SELECT COUNT(*) FROM b2b_webhook_delivery_log dl
-                WHERE dl.subscription_id = ws.id
-                  AND dl.delivered_at > NOW() - INTERVAL '7 days') AS recent_deliveries,
-               (SELECT COUNT(*) FILTER (WHERE dl2.success)
-                FROM b2b_webhook_delivery_log dl2
-                WHERE dl2.subscription_id = ws.id
-                  AND dl2.delivered_at > NOW() - INTERVAL '7 days') AS recent_successes,
-               (SELECT dl3.event_type
-                FROM b2b_webhook_delivery_log dl3
-                WHERE dl3.subscription_id = ws.id
-                  AND NOT dl3.success
-                ORDER BY dl3.delivered_at DESC
-                LIMIT 1) AS latest_failure_event_type,
-               (SELECT dl4.status_code
-                FROM b2b_webhook_delivery_log dl4
-                WHERE dl4.subscription_id = ws.id
-                  AND NOT dl4.success
-                ORDER BY dl4.delivered_at DESC
-                LIMIT 1) AS latest_failure_status_code,
-               (SELECT dl5.error
-                FROM b2b_webhook_delivery_log dl5
-                WHERE dl5.subscription_id = ws.id
-                  AND NOT dl5.success
-                ORDER BY dl5.delivered_at DESC
-                LIMIT 1) AS latest_failure_error,
-               (SELECT dl6.delivered_at
-                FROM b2b_webhook_delivery_log dl6
-                WHERE dl6.subscription_id = ws.id
-                  AND NOT dl6.success
-                ORDER BY dl6.delivered_at DESC
-                LIMIT 1) AS latest_failure_at,
-               (SELECT dl7.success
-                FROM b2b_webhook_delivery_log dl7
-                WHERE dl7.subscription_id = ws.id
-                  AND dl7.event_type = 'test'
-                ORDER BY dl7.delivered_at DESC
-                LIMIT 1) AS latest_test_success,
-               (SELECT dl8.status_code
-                FROM b2b_webhook_delivery_log dl8
-                WHERE dl8.subscription_id = ws.id
-                  AND dl8.event_type = 'test'
-                ORDER BY dl8.delivered_at DESC
-                LIMIT 1) AS latest_test_status_code,
-               (SELECT dl9.error
-                FROM b2b_webhook_delivery_log dl9
-                WHERE dl9.subscription_id = ws.id
-                  AND dl9.event_type = 'test'
-                ORDER BY dl9.delivered_at DESC
-                LIMIT 1) AS latest_test_error,
-               (SELECT dl10.delivered_at
-                FROM b2b_webhook_delivery_log dl10
-                WHERE dl10.subscription_id = ws.id
-                  AND dl10.event_type = 'test'
-                ORDER BY dl10.delivered_at DESC
-                LIMIT 1) AS latest_test_at
+               COALESCE(recent_activity.recent_deliveries, 0) AS recent_deliveries,
+               COALESCE(recent_activity.recent_successes, 0) AS recent_successes,
+               latest_failure.event_type AS latest_failure_event_type,
+               latest_failure.status_code AS latest_failure_status_code,
+               latest_failure.error AS latest_failure_error,
+               latest_failure.delivered_at AS latest_failure_at,
+               latest_failure.signal_id AS latest_failure_signal_id,
+               latest_failure.review_id AS latest_failure_review_id,
+               latest_failure.report_id AS latest_failure_report_id,
+               latest_test.success AS latest_test_success,
+               latest_test.status_code AS latest_test_status_code,
+               latest_test.error AS latest_test_error,
+               latest_test.delivered_at AS latest_test_at,
+               latest_test.signal_id AS latest_test_signal_id,
+               latest_test.review_id AS latest_test_review_id,
+               latest_test.report_id AS latest_test_report_id
         FROM b2b_webhook_subscriptions ws
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS recent_deliveries,
+                   COUNT(*) FILTER (WHERE dl.success) AS recent_successes
+            FROM b2b_webhook_delivery_log dl
+            WHERE dl.subscription_id = ws.id
+              AND dl.delivered_at > NOW() - INTERVAL '7 days'
+        ) AS recent_activity ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT event_type, status_code, error, delivered_at, signal_id, review_id, report_id
+            FROM b2b_webhook_delivery_log dl
+            WHERE dl.subscription_id = ws.id
+              AND NOT dl.success
+            ORDER BY dl.delivered_at DESC
+            LIMIT 1
+        ) AS latest_failure ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT success, status_code, error, delivered_at, signal_id, review_id, report_id
+            FROM b2b_webhook_delivery_log dl
+            WHERE dl.subscription_id = ws.id
+              AND dl.event_type = 'test'
+            ORDER BY dl.delivered_at DESC
+            LIMIT 1
+        ) AS latest_test ON TRUE
         WHERE ws.account_id = $1::uuid
         ORDER BY ws.created_at DESC
         """,
@@ -5972,10 +5956,16 @@ async def list_webhooks(
             "latest_failure_status_code": r["latest_failure_status_code"],
             "latest_failure_error": r["latest_failure_error"],
             "latest_failure_at": r["latest_failure_at"].isoformat() if r["latest_failure_at"] else None,
+            "latest_failure_signal_id": str(r["latest_failure_signal_id"]) if "latest_failure_signal_id" in r and r["latest_failure_signal_id"] else None,
+            "latest_failure_review_id": str(r["latest_failure_review_id"]) if "latest_failure_review_id" in r and r["latest_failure_review_id"] else None,
+            "latest_failure_report_id": str(r["latest_failure_report_id"]) if "latest_failure_report_id" in r and r["latest_failure_report_id"] else None,
             "latest_test_success": latest_test_success,
             "latest_test_status_code": latest_test_status_code,
             "latest_test_error": latest_test_error,
             "latest_test_at": latest_test_at.isoformat() if latest_test_at else None,
+            "latest_test_signal_id": str(r["latest_test_signal_id"]) if "latest_test_signal_id" in r and r["latest_test_signal_id"] else None,
+            "latest_test_review_id": str(r["latest_test_review_id"]) if "latest_test_review_id" in r and r["latest_test_review_id"] else None,
+            "latest_test_report_id": str(r["latest_test_report_id"]) if "latest_test_report_id" in r and r["latest_test_report_id"] else None,
         })
 
     return {"webhooks": webhooks, "count": len(webhooks)}

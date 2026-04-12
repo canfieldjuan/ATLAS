@@ -157,6 +157,60 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText(/test timeout/)).toBeInTheDocument()
   })
 
+  it('surfaces canonical refs on the webhook summary cards', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-refs',
+          url: 'https://hooks.example.com/refs',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Ref-rich endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 3,
+          recent_success_rate_7d: 0.667,
+          latest_failure_event_type: 'signal_update',
+          latest_failure_status_code: 500,
+          latest_failure_error: 'downstream timeout',
+          latest_failure_at: '2026-04-10T02:55:00Z',
+          latest_failure_signal_id: 'sig-fail',
+          latest_failure_review_id: 'review-fail',
+          latest_failure_report_id: null,
+          latest_test_success: false,
+          latest_test_status_code: 504,
+          latest_test_error: 'test timeout',
+          latest_test_at: '2026-04-10T02:40:00Z',
+          latest_test_signal_id: null,
+          latest_test_review_id: null,
+          latest_test_report_id: 'report-test',
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Ref-rich endpoint')).toBeInTheDocument()
+    expect(screen.getAllByText('Reference IDs')).toHaveLength(2)
+    expect(screen.getByText('sig-fail')).toBeInTheDocument()
+    expect(screen.getByText('review-fail')).toBeInTheDocument()
+    expect(screen.getByText('report-test')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Copy Report ID' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith('report-test')
+    })
+    expect(await screen.findByText('Copied report id')).toBeInTheDocument()
+  })
+
   it('shows the latest manual test result on the webhook card', async () => {
     const user = userEvent.setup()
 

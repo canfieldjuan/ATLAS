@@ -502,10 +502,16 @@ export interface WebhookSubscription {
   latest_failure_status_code?: number | null
   latest_failure_error?: string | null
   latest_failure_at?: string | null
+  latest_failure_signal_id?: string | null
+  latest_failure_review_id?: string | null
+  latest_failure_report_id?: string | null
   latest_test_success?: boolean | null
   latest_test_status_code?: number | null
   latest_test_error?: string | null
   latest_test_at?: string | null
+  latest_test_signal_id?: string | null
+  latest_test_review_id?: string | null
+  latest_test_report_id?: string | null
 }
 
 export interface WebhookDeliverySummary {
