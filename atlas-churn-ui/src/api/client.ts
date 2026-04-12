@@ -529,6 +529,9 @@ export interface WebhookDelivery {
   success: boolean
   error: string | null
   delivered_at: string
+  vendor_name: string | null
+  company_name: string | null
+  signal_type: string | null
 }
 
 export interface WebhookCrmPushLogEntry {

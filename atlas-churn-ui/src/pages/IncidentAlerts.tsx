@@ -415,6 +415,13 @@ function buildVendorWorkspacePath(vendorName: string, backTo: string) {
   return `/vendors/${encodeURIComponent(vendorName)}?${next.toString()}`
 }
 
+function buildWatchlistsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_name', vendorName)
+  next.set('back_to', backTo)
+  return `/watchlists?${next.toString()}`
+}
+
 function buildVendorScopedPath(pathname: string, vendorName: string, backTo: string) {
   const next = new URLSearchParams()
   next.set(pathname === '/reports' ? 'vendor_filter' : 'vendor', vendorName)
@@ -1096,8 +1103,45 @@ export default function IncidentAlerts() {
                                     </span>
                                   </div>
                                   <div className="mt-1 text-xs text-slate-300">
+                                    {delivery.company_name || delivery.vendor_name || delivery.signal_type ? (
+                                      <>{delivery.signal_type || delivery.event_type} · </>
+                                    ) : null}
                                     attempt {delivery.attempt} · {formatDurationMs(delivery.duration_ms)} · {formatTs(delivery.delivered_at)}
                                   </div>
+                                  {delivery.vendor_name ? (
+                                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                      <Link
+                                        to={buildWatchlistsPath(delivery.vendor_name, activityBackTo)}
+                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                      >
+                                        Watchlists
+                                      </Link>
+                                      <Link
+                                        to={buildVendorWorkspacePath(delivery.vendor_name, activityBackTo)}
+                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                      >
+                                        Vendor workspace
+                                      </Link>
+                                      <Link
+                                        to={buildVendorScopedPath('/evidence', delivery.vendor_name, activityBackTo)}
+                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                      >
+                                        Evidence
+                                      </Link>
+                                      <Link
+                                        to={buildVendorScopedPath('/reports', delivery.vendor_name, activityBackTo)}
+                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                      >
+                                        Reports
+                                      </Link>
+                                      <Link
+                                        to={buildVendorScopedPath('/opportunities', delivery.vendor_name, activityBackTo)}
+                                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                      >
+                                        Opportunities
+                                      </Link>
+                                    </div>
+                                  ) : null}
                                   {delivery.error ? (
                                     <div className="mt-2 text-xs text-rose-200">{delivery.error}</div>
                                   ) : null}
@@ -1145,6 +1189,12 @@ export default function IncidentAlerts() {
                                     </div>
                                     {push.vendor_name ? (
                                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                        <Link
+                                          to={buildWatchlistsPath(push.vendor_name, activityBackTo)}
+                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                        >
+                                          Watchlists
+                                        </Link>
                                         <Link
                                           to={buildVendorWorkspacePath(push.vendor_name, activityBackTo)}
                                           className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"

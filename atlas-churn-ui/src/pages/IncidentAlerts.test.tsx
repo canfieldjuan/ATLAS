@@ -77,6 +77,9 @@ describe('IncidentAlerts', () => {
           success: true,
           error: null,
           delivered_at: '2026-04-10T03:05:00Z',
+          vendor_name: 'Acme Rival',
+          company_name: 'Acme Bank',
+          signal_type: 'competitive_displacement',
         },
         {
           id: 'delivery-2',
@@ -295,6 +298,36 @@ describe('IncidentAlerts', () => {
     })
   })
 
+  it('links delivery activity back into watchlists and vendor workflows', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-1']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?vendor_name=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-1',
+    )
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Acme%20Rival?back_to=%2Falerts%3Fwebhook%3Dwh-1',
+    )
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-1',
+    )
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-1',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-1',
+    )
+  })
+
   it('hydrates activity drillthrough and filters from the URL', async () => {
     render(
       <MemoryRouter initialEntries={['/alerts?webhook=wh-1&delivery_status=failed&delivery_event=signal_update']}>
@@ -353,22 +386,21 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
-    expect(await screen.findByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
-      'href',
-      '/vendors/Acme%20Rival?back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
-    )
-    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
-      'href',
-      '/evidence?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
-    )
-    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
-      'href',
-      '/reports?vendor_filter=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
-    )
-    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
-      'href',
-      '/opportunities?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
-    )
+    expect(await screen.findAllByRole('link', { name: 'Watchlists' })).toSatisfy((links) => (
+      links.some((link: HTMLAnchorElement) => link.getAttribute('href') === '/watchlists?vendor_name=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess')
+    ))
+    expect(screen.getAllByRole('link', { name: 'Vendor workspace' })).toSatisfy((links) => (
+      links.some((link: HTMLAnchorElement) => link.getAttribute('href') === '/vendors/Acme%20Rival?back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess')
+    ))
+    expect(screen.getAllByRole('link', { name: 'Evidence' })).toSatisfy((links) => (
+      links.some((link: HTMLAnchorElement) => link.getAttribute('href') === '/evidence?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess')
+    ))
+    expect(screen.getAllByRole('link', { name: 'Reports' })).toSatisfy((links) => (
+      links.some((link: HTMLAnchorElement) => link.getAttribute('href') === '/reports?vendor_filter=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess')
+    ))
+    expect(screen.getAllByRole('link', { name: 'Opportunities' })).toSatisfy((links) => (
+      links.some((link: HTMLAnchorElement) => link.getAttribute('href') === '/opportunities?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess')
+    ))
   })
 
   it('filters delivery activity by result and event type', async () => {
