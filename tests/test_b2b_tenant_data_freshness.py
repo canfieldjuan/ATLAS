@@ -556,12 +556,12 @@ async def test_list_tenant_reports_exposes_report_subscription_summary(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_list_tenant_reports_rejects_invalid_quality_status(monkeypatch):
+async def test_list_tenant_reports_rejects_invalid_quality_status_before_db_touch(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
-    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
     user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
-    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
 
     with pytest.raises(HTTPException) as exc:
