@@ -11,7 +11,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..storage.database import get_db_pool
 
@@ -46,6 +46,20 @@ class InboxRuleCreate(BaseModel):
     skip_notify: bool = False
     archive: bool = False
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _clean_name(cls, value):
+        return _clean_required_text(value, "name")
+
+    @field_validator(
+        "sender_domain", "sender_contains", "subject_contains",
+        "category", "priority", "set_priority", "set_category", "label",
+        mode="before",
+    )
+    @classmethod
+    def _clean_optional_fields(cls, value):
+        return _clean_optional_text(value)
+
 
 class InboxRuleUpdate(BaseModel):
     name: str | None = None
@@ -67,6 +81,22 @@ class InboxRuleUpdate(BaseModel):
     skip_notify: bool | None = None
     archive: bool | None = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _clean_name(cls, value):
+        if value is None:
+            return None
+        return _clean_required_text(value, "name")
+
+    @field_validator(
+        "sender_domain", "sender_contains", "subject_contains",
+        "category", "priority", "set_priority", "set_category", "label",
+        mode="before",
+    )
+    @classmethod
+    def _clean_optional_fields(cls, value):
+        return _clean_optional_text(value)
+
 
 class InboxRuleTest(BaseModel):
     sender: str
@@ -77,10 +107,25 @@ class InboxRuleTest(BaseModel):
     replyable: bool | None = None
     is_known_contact: bool = False
 
+    @field_validator("sender", "subject", mode="before")
+    @classmethod
+    def _clean_required_fields(cls, value, info):
+        return _clean_required_text(value, info.field_name)
+
+    @field_validator("category", "priority", mode="before")
+    @classmethod
+    def _clean_optional_fields(cls, value):
+        return _clean_optional_text(value)
+
 
 class ReorderItem(BaseModel):
     id: str
     position: int
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _clean_id(cls, value):
+        return _clean_required_text(value, "id")
 
 
 class ReorderBody(BaseModel):
@@ -90,6 +135,30 @@ class ReorderBody(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _clean_optional_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _clean_required_text(value: object | None, field_name: str) -> str:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise ValueError(f"{field_name} is required")
+    return text
+
+
+def _parse_rule_uuid_text(value: object | None, field_name: str = "id") -> UUID:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise HTTPException(422, f"{field_name} is required")
+    try:
+        return UUID(text)
+    except ValueError:
+        raise HTTPException(400, f"Invalid {field_name}")
+
 
 def _row_to_dict(row) -> dict:
     """Convert a DB row to a JSON-safe dict."""
@@ -336,19 +405,20 @@ async def delete_rule(rule_id: UUID):
 @router.post("/reorder")
 async def reorder_rules(body: ReorderBody):
     """Bulk-update positions for multiple rules."""
+    rule_updates = [(_parse_rule_uuid_text(item.id), item.position) for item in body.rules]
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(503, "Database not available")
 
     async with pool.transaction() as conn:
-        for item in body.rules:
+        for rule_id, position in rule_updates:
             await conn.execute(
                 """
                 UPDATE email_inbox_rules
                 SET position = $1, updated_at = NOW()
                 WHERE id = $2
                 """,
-                item.position, UUID(item.id),
+                position, rule_id,
             )
     logger.info("Reordered %d inbox rules", len(body.rules))
     return {"reordered": len(body.rules)}
