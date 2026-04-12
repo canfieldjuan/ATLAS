@@ -627,13 +627,33 @@ export default function IncidentAlerts() {
         crmStatus: selectedWebhookId === webhookId ? crmStatusFilter : 'all',
         summaryWindow,
       })
-      const path = `${window.location.origin}${window.location.pathname}?${next.toString()}`
+      const path = `${window.location.origin}${location.pathname}?${next.toString()}`
       await navigator.clipboard.writeText(path)
       setActionError(null)
       setMessage('Copied activity link')
     } catch (err) {
       setMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy activity link')
+    }
+  }
+
+  async function copyWebhookLink(webhookId: string) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
+      const next = buildActivitySearchParams({
+        webhookId,
+        deliveryStatus: 'all',
+        deliveryEvent: 'all',
+        crmStatus: 'all',
+        summaryWindow,
+      })
+      const path = `${window.location.origin}${location.pathname}?${next.toString()}`
+      await navigator.clipboard.writeText(path)
+      setActionError(null)
+      setMessage('Copied webhook link')
+    } catch (err) {
+      setMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy webhook link')
     }
   }
 
@@ -972,6 +992,14 @@ export default function IncidentAlerts() {
                     >
                       <Trash2 className="h-4 w-4" />
                       Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copyWebhookLink(webhook.id)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800"
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copy Webhook Link
                     </button>
                     <button
                       type="button"

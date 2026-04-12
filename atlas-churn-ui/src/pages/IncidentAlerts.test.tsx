@@ -253,6 +253,27 @@ describe('IncidentAlerts', () => {
     expect(screen.getByLabelText('Window')).toHaveValue('30')
   })
 
+  it('copies a stable webhook link without transient activity filters', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?days=30&webhook=wh-1&delivery_status=failed&delivery_event=signal_update']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy Webhook Link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/alerts?days=30&webhook=wh-1`,
+      )
+    })
+    expect(await screen.findByText('Copied webhook link')).toBeInTheDocument()
+  })
+
   it('shows delivery activity drillthrough for a webhook', async () => {
     const user = userEvent.setup()
 
