@@ -304,6 +304,96 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it.each([
+    {
+      name: 'accepts dashboard back_to and renders a dashboard return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fdashboard',
+      buttonName: 'Back to Dashboard',
+      expectedHref: '/dashboard',
+    },
+    {
+      name: 'accepts vendors-list back_to and renders a vendors return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fvendors%3Fsearch%3DZendesk%26min_urgency%3D6',
+      buttonName: 'Back to Vendors',
+      expectedHref: '/vendors?search=Zendesk&min_urgency=6',
+    },
+    {
+      name: 'accepts affiliates back_to and renders an affiliates return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Faffiliates%3Fvendor%3DZendesk%26min_urgency%3D7%26min_score%3D80%26dm_only%3Dtrue',
+      buttonName: 'Back to Affiliates',
+      expectedHref: '/affiliates?vendor=Zendesk&min_urgency=7&min_score=80&dm_only=true',
+    },
+    {
+      name: 'accepts vendor-targets back_to and renders a vendor-targets return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fvendor-targets%3Fsearch%3DZendesk%26mode%3Dchallenger_intel',
+      buttonName: 'Back to Vendor Targets',
+      expectedHref: '/vendor-targets?search=Zendesk&mode=challenger_intel',
+    },
+    {
+      name: 'accepts briefing-review back_to and renders a briefing-review return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fbriefing-review%3Fstatus%3Dsent%26vendor%3DZendesk',
+      buttonName: 'Back to Briefing Review',
+      expectedHref: '/briefing-review?status=sent&vendor=Zendesk',
+    },
+    {
+      name: 'accepts blog-review back_to and renders a blog-review return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1',
+      buttonName: 'Back to Blog Review',
+      expectedHref: '/blog-review?status=published&draft=draft-1',
+    },
+    {
+      name: 'accepts campaign-review back_to and renders a campaign-review return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fcampaign-review%3Fstatus%3Dsent%26company%3DAcme%2BCorp',
+      buttonName: 'Back to Campaign Review',
+      expectedHref: '/campaign-review?status=sent&company=Acme+Corp',
+    },
+    {
+      name: 'accepts challengers back_to and renders a challengers return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fchallengers%3Fsearch%3DZendesk',
+      buttonName: 'Back to Challengers',
+      expectedHref: '/challengers?search=Zendesk',
+    },
+    {
+      name: 'accepts prospects back_to and renders a prospects return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fprospects%3Fcompany%3DAcme%26status%3Dactive%26seniority%3Dvp',
+      buttonName: 'Back to Prospects',
+      expectedHref: '/prospects?company=Acme&status=active&seniority=vp',
+    },
+    {
+      name: 'accepts pipeline-review back_to and renders a pipeline-review return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fpipeline-review%3Fqueue_vendor%3DZendesk',
+      buttonName: 'Back to Pipeline Review',
+      expectedHref: '/pipeline-review?queue_vendor=Zendesk',
+    },
+    {
+      name: 'accepts predictor back_to and renders a predictor return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fpredictor%3Fvendor%3DZendesk%26company_size%3Dsmb%26industry%3Dfintech',
+      buttonName: 'Back to Predictor',
+      expectedHref: '/predictor?vendor=Zendesk&company_size=smb&industry=fintech',
+    },
+    {
+      name: 'accepts report-detail back_to and renders a report return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      buttonName: 'Back to Report',
+      expectedHref: '/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    },
+    {
+      name: 'accepts public-report back_to and renders a public-report return link',
+      initialEntry: '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freport%3Fvendor%3DZendesk%26ref%3Dtest-token%26mode%3Dview',
+      buttonName: 'Back to Report',
+      expectedHref: '/report?vendor=Zendesk&ref=test-token&mode=view',
+    },
+  ])('$name', async ({ initialEntry, buttonName, expectedHref }) => {
+    render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: buttonName })).toHaveAttribute('href', expectedHref)
+  })
+
   it('renders an account review return label for focused watchlist back_to paths', async () => {
     render(
       <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor']}>

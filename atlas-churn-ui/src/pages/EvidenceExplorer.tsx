@@ -112,28 +112,37 @@ function watchlistViewVendorNames(view: { vendor_names?: string[] | null; vendor
   return view.vendor_name ? [view.vendor_name] : []
 }
 
+const EVIDENCE_BACK_TARGET_RULES = [
+  { prefix: '/vendors/', label: 'Back to Vendor' },
+  { prefix: '/vendors', label: 'Back to Vendors' },
+  { prefix: '/watchlists', label: 'Back to Watchlists' },
+  { prefix: '/reviews/', label: 'Back to Review' },
+  { prefix: '/reviews', label: 'Back to Reviews' },
+  { prefix: '/opportunities', label: 'Back to Opportunities' },
+  { prefix: '/alerts', label: 'Back to Alerts' },
+  { prefix: '/reports/', label: 'Back to Report' },
+  { prefix: '/reports', label: 'Back to Reports' },
+  { prefix: '/report', label: 'Back to Report' },
+  { prefix: '/dashboard', label: 'Back to Dashboard' },
+  { prefix: '/affiliates', label: 'Back to Affiliates' },
+  { prefix: '/vendor-targets', label: 'Back to Vendor Targets' },
+  { prefix: '/blog-review', label: 'Back to Blog Review' },
+  { prefix: '/briefing-review', label: 'Back to Briefing Review' },
+  { prefix: '/campaign-review', label: 'Back to Campaign Review' },
+  { prefix: '/prospects', label: 'Back to Prospects' },
+  { prefix: '/challengers', label: 'Back to Challengers' },
+  { prefix: '/pipeline-review', label: 'Back to Pipeline Review' },
+  { prefix: '/predictor', label: 'Back to Predictor' },
+] as const
+
 function parseBackTo(value: string | null) {
   if (!value) return null
-  if (
-    value.startsWith('/watchlists')
-    || value.startsWith('/vendors/')
-    || value.startsWith('/reviews')
-    || value.startsWith('/opportunities')
-    || value.startsWith('/alerts')
-    || value.startsWith('/reports')
-  ) return value
+  if (EVIDENCE_BACK_TARGET_RULES.some((rule) => value.startsWith(rule.prefix))) return value
   try {
     const url = new URL(value, window.location.origin)
     if (
       url.origin === window.location.origin
-      && (
-        url.pathname === '/watchlists'
-        || url.pathname.startsWith('/vendors/')
-        || url.pathname.startsWith('/reviews')
-        || url.pathname === '/opportunities'
-        || url.pathname === '/alerts'
-        || url.pathname === '/reports'
-      )
+      && EVIDENCE_BACK_TARGET_RULES.some((rule) => url.pathname.startsWith(rule.prefix))
     ) {
       return `${url.pathname}${url.search}`
     }
@@ -154,12 +163,7 @@ function backToLabel(value: string | null) {
     }
     return 'Back to Watchlists'
   }
-  if (value.startsWith('/vendors/')) return 'Back to Vendor'
-  if (value.startsWith('/reviews')) return 'Back to Review'
-  if (value.startsWith('/opportunities')) return 'Back to Opportunities'
-  if (value.startsWith('/alerts')) return 'Back to Alerts'
-  if (value.startsWith('/reports')) return 'Back to Reports'
-  return 'Back'
+  return EVIDENCE_BACK_TARGET_RULES.find((rule) => value.startsWith(rule.prefix))?.label ?? 'Back'
 }
 
 function upstreamWatchlistsPath(value: string | null): string | null {
