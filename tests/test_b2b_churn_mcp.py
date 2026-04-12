@@ -1383,3 +1383,94 @@ async def test_build_accounts_in_motion_uses_canonical_vault_reader(monkeypatch)
     read_vaults.assert_awaited_once()
     assert payload["success"] is True
     assert payload["vendor_name"] == "Zendesk"
+
+
+
+@pytest.mark.asyncio
+async def test_crm_mcp_list_events_validates_filters_before_pool(monkeypatch):
+    from atlas_brain.mcp.b2b.crm_events import list_crm_events
+
+    def _boom():
+        raise AssertionError("DB pool should not be acquired")
+
+    monkeypatch.setattr("atlas_brain.storage.database.get_db_pool", _boom)
+
+    status_raw = await list_crm_events(status="not_a_status")
+    provider_raw = await list_crm_events(crm_provider="not_a_provider")
+    date_raw = await list_crm_events(start_date="not-a-date")
+
+    assert json.loads(status_raw)["error"].startswith("Invalid status.")
+    assert json.loads(provider_raw)["error"].startswith("Invalid crm_provider.")
+    assert json.loads(date_raw)["error"] == "Invalid start_date (ISO 8601 expected)"
+
+
+@pytest.mark.asyncio
+async def test_crm_mcp_list_events_normalizes_blank_optional_filters():
+    from atlas_brain.mcp.b2b.crm_events import list_crm_events
+
+    pool = _mock_pool(fetch_return=[])
+    with _patch_pool(pool):
+        raw = await list_crm_events(
+            status="   ",
+            crm_provider="  ",
+            company_name="\t",
+            start_date="   ",
+            end_date="  ",
+            limit=50,
+        )
+
+    payload = json.loads(raw)
+    assert payload["events"] == []
+    query, *params = pool.fetch.await_args.args
+    assert "status = $" not in query
+    assert "crm_provider = $" not in query
+    assert "LOWER(company_name) LIKE" not in query
+    assert "received_at >= $" not in query
+    assert "received_at < $" not in query
+    assert params == [50]
+
+
+@pytest.mark.asyncio
+async def test_crm_mcp_ingest_event_trims_text_fields_before_persistence():
+    from atlas_brain.mcp.b2b.crm_events import ingest_crm_event
+
+    pool = _mock_pool(fetchval_return=uuid4())
+    with _patch_pool(pool):
+        raw = await ingest_crm_event(
+            crm_provider=" hubspot ",
+            event_type=" deal_won ",
+            company_name=" Acme Corp ",
+            contact_email="   ",
+            deal_stage=" closedwon ",
+            deal_id=" deal-1 ",
+            notes=" note ",
+        )
+
+    payload = json.loads(raw)
+    assert payload["success"] is True
+    args = pool.fetchval.await_args.args
+    assert args[1] == "hubspot"
+    assert args[2] == "deal_won"
+    assert args[3] == "Acme Corp"
+    assert args[4] is None
+    assert args[5] == "deal-1"
+    assert args[6] == "closedwon"
+    assert json.loads(args[8]) == {"notes": "note"}
+
+
+@pytest.mark.asyncio
+async def test_crm_mcp_ingest_event_rejects_blank_required_text_before_pool(monkeypatch):
+    from atlas_brain.mcp.b2b.crm_events import ingest_crm_event
+
+    def _boom():
+        raise AssertionError("DB pool should not be acquired")
+
+    monkeypatch.setattr("atlas_brain.storage.database.get_db_pool", _boom)
+
+    raw = await ingest_crm_event(
+        crm_provider="   ",
+        event_type=" deal_won ",
+        company_name=" Acme Corp ",
+    )
+
+    assert json.loads(raw)["error"].startswith("crm_provider must be one of")

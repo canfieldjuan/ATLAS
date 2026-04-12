@@ -3,6 +3,13 @@
 import json
 from typing import Optional
 
+
+def _clean_optional_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
 from ._shared import _is_uuid, get_pool, logger
 from .server import mcp
 
@@ -103,13 +110,36 @@ async def list_crm_events(
     try:
         from datetime import datetime as _dt
 
+        status = (_clean_optional_text(status) or "").lower() or None
+        crm_provider = (_clean_optional_text(crm_provider) or "").lower() or None
+        company_name = _clean_optional_text(company_name)
+        start_date = _clean_optional_text(start_date)
+        end_date = _clean_optional_text(end_date)
+
+        _valid_statuses = {"pending", "matched", "unmatched", "skipped"}
+        _valid_providers = {"hubspot", "salesforce", "pipedrive", "generic"}
+        if status and status not in _valid_statuses:
+            return json.dumps({"error": f"Invalid status. Must be one of: {sorted(_valid_statuses)}"})
+        if crm_provider and crm_provider not in _valid_providers:
+            return json.dumps({"error": f"Invalid crm_provider. Must be one of: {sorted(_valid_providers)}"})
+
+        sd = None
+        if start_date:
+            try:
+                sd = _dt.fromisoformat(start_date.replace("Z", "+00:00"))
+            except ValueError:
+                return json.dumps({"error": "Invalid start_date (ISO 8601 expected)"})
+
+        ed = None
+        if end_date:
+            try:
+                ed = _dt.fromisoformat(end_date.replace("Z", "+00:00"))
+            except ValueError:
+                return json.dumps({"error": "Invalid end_date (ISO 8601 expected)"})
+
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"error": "Database not ready"})
-
-        _valid_statuses = {"pending", "matched", "unmatched", "skipped"}
-        if status and status not in _valid_statuses:
-            return json.dumps({"error": f"Invalid status. Must be one of: {sorted(_valid_statuses)}"})
 
         limit = max(1, min(limit, 200))
         conditions = ["1=1"]
@@ -128,22 +158,14 @@ async def list_crm_events(
             conditions.append(f"LOWER(company_name) LIKE '%' || LOWER(${idx}) || '%'")
             params.append(company_name)
             idx += 1
-        if start_date:
-            try:
-                sd = _dt.fromisoformat(start_date.replace("Z", "+00:00"))
-                conditions.append(f"received_at >= ${idx}")
-                params.append(sd)
-                idx += 1
-            except ValueError:
-                return json.dumps({"error": "Invalid start_date (ISO 8601 expected)"})
-        if end_date:
-            try:
-                ed = _dt.fromisoformat(end_date.replace("Z", "+00:00"))
-                conditions.append(f"received_at < ${idx}")
-                params.append(ed)
-                idx += 1
-            except ValueError:
-                return json.dumps({"error": "Invalid end_date (ISO 8601 expected)"})
+        if sd is not None:
+            conditions.append(f"received_at >= ${idx}")
+            params.append(sd)
+            idx += 1
+        if ed is not None:
+            conditions.append(f"received_at < ${idx}")
+            params.append(ed)
+            idx += 1
 
         where = " AND ".join(conditions)
         params.append(limit)
@@ -215,6 +237,14 @@ async def ingest_crm_event(
         "deal_stage_change", "deal_won", "deal_lost",
         "meeting_booked", "activity_logged", "contact_updated",
     }
+    crm_provider = (_clean_optional_text(crm_provider) or "").lower()
+    event_type = (_clean_optional_text(event_type) or "").lower()
+    company_name = _clean_optional_text(company_name)
+    contact_email = _clean_optional_text(contact_email)
+    deal_stage = _clean_optional_text(deal_stage)
+    deal_id = _clean_optional_text(deal_id)
+    notes = _clean_optional_text(notes)
+
     if crm_provider not in valid_providers:
         return json.dumps({"error": f"crm_provider must be one of {sorted(valid_providers)}"})
     if event_type not in valid_types:
