@@ -194,6 +194,32 @@ function buildReportsBackTarget(searchParams: URLSearchParams) {
   return qs ? `/reports?${qs}` : '/reports'
 }
 
+function upstreamWatchlistsPath(value: string | null): string | null {
+  let current = value?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/watchlists')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+function watchlistsShortcutLabel(value: string | null) {
+  if (!value) return 'Watchlists'
+  try {
+    const url = new URL(value, window.location.origin)
+    return url.searchParams.get('account_company')?.trim() ? 'Account Review' : 'Watchlists'
+  } catch {
+    return 'Watchlists'
+  }
+}
+
 function buildReportSubscriptionLocation(searchParams: URLSearchParams, report: Report) {
   const backTarget = buildReportsBackTarget(searchParams)
   const next = new URLSearchParams(
@@ -301,6 +327,8 @@ export default function Reports() {
   const effectiveTypeFilter = typeFilter || (requestedReportSubscriptionId ? requestedReportFocusType : '')
   const effectiveVendorFilter = activeVendorFilter || (requestedReportSubscriptionId ? requestedReportFocusVendor : '')
   const reportsBackTarget = useMemo(() => buildReportsBackTarget(searchParams), [searchParams])
+  const directWatchlistsPath = useMemo(() => upstreamWatchlistsPath(reportsBackTarget), [reportsBackTarget])
+  const directWatchlistsLabel = useMemo(() => watchlistsShortcutLabel(directWatchlistsPath), [directWatchlistsPath])
   const currentLibraryPath = useMemo(
     () => `${location.pathname}${location.search}`,
     [location.pathname, location.search],
@@ -817,6 +845,16 @@ export default function Reports() {
                   <span className="text-slate-500">
                     Filtered to <span className="text-slate-300">{activeVendorFilter}</span>
                   </span>
+                  {directWatchlistsPath ? (
+                    <Link
+                      to={directWatchlistsPath}
+                      className={directWatchlistsLabel === 'Account Review'
+                        ? 'text-amber-300 hover:text-amber-200 transition-colors'
+                        : 'text-violet-300 hover:text-violet-200 transition-colors'}
+                    >
+                      {directWatchlistsLabel}
+                    </Link>
+                  ) : null}
                   <Link
                     to={vendorDetailPath(activeVendorFilter, currentLibraryPath)}
                     className="text-cyan-400 hover:text-cyan-300 transition-colors"

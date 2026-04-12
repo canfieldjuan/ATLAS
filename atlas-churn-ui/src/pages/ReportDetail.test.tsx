@@ -355,6 +355,25 @@ describe('ReportDetail', () => {
     expect(router.state.location.search).toBe('?back_to=%2Fwatchlists%3Fview%3Dview-1')
   })
 
+  it('shows a direct account review shortcut for nested watchlist report detail context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Faccount_vendor%253DZendesk%2526account_company%253DAcme%252BCorp%2526account_report_date%253D2026-04-05%2526account_watch_vendor%253DZendesk%2526account_category%253DHelpdesk%2526account_track_mode%253Dcompetitor',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor',
+    )
+  })
+
   it('returns to opportunities when back_to targets the opportunity workbench', async () => {
     const router = createMemoryRouter(
       [

@@ -87,6 +87,32 @@ function backToLabel(value: string) {
   return 'Back to Reports'
 }
 
+function upstreamWatchlistsPath(value: string | null): string | null {
+  let current = value?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/watchlists')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+function watchlistsShortcutLabel(value: string | null) {
+  if (!value) return 'Watchlists'
+  try {
+    const url = new URL(value, window.location.origin)
+    return url.searchParams.get('account_company')?.trim() ? 'Account Review' : 'Watchlists'
+  } catch {
+    return 'Watchlists'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -160,6 +186,8 @@ export default function ReportDetail() {
   })()
   const backToReports = stateBackTo ?? queryBackTo ?? '/reports'
   const backButtonLabel = backToLabel(backToReports)
+  const directWatchlistsPath = upstreamWatchlistsPath(backToReports)
+  const directWatchlistsLabel = watchlistsShortcutLabel(directWatchlistsPath)
   const detailShareUrl = (() => {
     const next = new URLSearchParams()
     if (subModalOpen) {
@@ -250,6 +278,16 @@ export default function ReportDetail() {
             <span className="text-slate-500">
               Focused on <span className="text-slate-300">{report.vendor_filter}</span>
             </span>
+            {directWatchlistsPath ? (
+              <Link
+                to={directWatchlistsPath}
+                className={directWatchlistsLabel === 'Account Review'
+                  ? 'text-amber-300 hover:text-amber-200 transition-colors'
+                  : 'text-violet-300 hover:text-violet-200 transition-colors'}
+              >
+                {directWatchlistsLabel}
+              </Link>
+            ) : null}
             <Link
               to={vendorDetailPath(report.vendor_filter, detailBackPath)}
               className="text-cyan-400 hover:text-cyan-300 transition-colors"
