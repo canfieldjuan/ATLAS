@@ -288,6 +288,120 @@ describe('ReviewDetail', () => {
     })
   })
 
+  it('prefers the exact upstream vendor workspace shortcut through nested evidence context', async () => {
+    const directVendorPath = '/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1'
+    const nestedEvidencePath = `/evidence?vendor=Zendesk&tab=witnesses&back_to=${encodeURIComponent(directVendorPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/reviews/review-1?back_to=${encodeURIComponent(nestedEvidencePath)}`]}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute('href', directVendorPath)
+  })
+
+  it('copies the exact upstream vendor workspace shortcut through nested evidence context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const directVendorPath = '/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1'
+    const nestedEvidencePath = `/evidence?vendor=Zendesk&tab=witnesses&back_to=${encodeURIComponent(directVendorPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/reviews/review-1?back_to=${encodeURIComponent(nestedEvidencePath)}`]}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${directVendorPath}`)
+    })
+  })
+
+  it('prefers the exact upstream reports shortcut through nested evidence context', async () => {
+    const directReportsPath = '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1'
+    const nestedEvidencePath = `/evidence?vendor=Zendesk&tab=witnesses&back_to=${encodeURIComponent(directReportsPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/reviews/review-1?back_to=${encodeURIComponent(nestedEvidencePath)}`]}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute('href', directReportsPath)
+  })
+
+  it('copies the exact upstream reports shortcut through nested evidence context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const directReportsPath = '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1'
+    const nestedEvidencePath = `/evidence?vendor=Zendesk&tab=witnesses&back_to=${encodeURIComponent(directReportsPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/reviews/review-1?back_to=${encodeURIComponent(nestedEvidencePath)}`]}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy reports link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${directReportsPath}`)
+    })
+  })
+
+  it('prefers the exact upstream opportunities shortcut through nested evidence context', async () => {
+    const directOpportunitiesPath = '/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1'
+    const nestedEvidencePath = `/evidence?vendor=Zendesk&tab=witnesses&back_to=${encodeURIComponent(directOpportunitiesPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/reviews/review-1?back_to=${encodeURIComponent(nestedEvidencePath)}`]}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute('href', directOpportunitiesPath)
+  })
+
+  it('copies the exact upstream opportunities shortcut through nested evidence context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const directOpportunitiesPath = '/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1'
+    const nestedEvidencePath = `/evidence?vendor=Zendesk&tab=witnesses&back_to=${encodeURIComponent(directOpportunitiesPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/reviews/review-1?back_to=${encodeURIComponent(nestedEvidencePath)}`]}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy opportunities link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${directOpportunitiesPath}`)
+    })
+  })
+
   it('copies the vendor workspace shortcut link with preserved back context', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)

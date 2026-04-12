@@ -126,6 +126,25 @@ function accountReviewPath(backTo: string | null): string | null {
   }
 }
 
+function nestedPath(backTo: string | null, prefix: string): string | null {
+  let current = backTo?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith(prefix)) {
+      return current
+    }
+
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 export default function ReviewDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -173,6 +192,9 @@ export default function ReviewDetail() {
   const upstreamEvidencePath = backToReviews.startsWith('/evidence') ? backToReviews : null
   const directWatchlistsPath = watchlistsPath(backToReviews)
   const directAccountReviewPath = accountReviewPath(backToReviews)
+  const directVendorWorkspacePath = nestedPath(backToReviews, '/vendors/')
+  const directReportsPath = nestedPath(backToReviews, '/reports')
+  const directOpportunitiesPath = nestedPath(backToReviews, '/opportunities')
   const reviewDetailBackPath = (() => {
     const next = new URLSearchParams()
     if (backToReviews !== '/reviews') {
@@ -294,14 +316,14 @@ export default function ReviewDetail() {
             ) : null}
             <span className="inline-flex items-center gap-1.5">
               <Link
-                to={vendorDetailPath(review.vendor_name, reviewDetailBackPath)}
+                to={directVendorWorkspacePath ?? vendorDetailPath(review.vendor_name, reviewDetailBackPath)}
                 className="text-cyan-400 hover:text-cyan-300 transition-colors"
               >
                 Vendor workspace
               </Link>
               <button
                 type="button"
-                onClick={() => handleCopyShortcutLink('vendor', vendorDetailPath(review.vendor_name, reviewDetailBackPath))}
+                onClick={() => handleCopyShortcutLink('vendor', directVendorWorkspacePath ?? vendorDetailPath(review.vendor_name, reviewDetailBackPath))}
                 className="text-slate-400 hover:text-white transition-colors"
                 aria-label="Copy vendor workspace link"
                 title="Copy vendor workspace link"
@@ -332,14 +354,14 @@ export default function ReviewDetail() {
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Link
-                to={opportunitiesPath(review.vendor_name, reviewDetailBackPath)}
+                to={directOpportunitiesPath ?? opportunitiesPath(review.vendor_name, reviewDetailBackPath)}
                 className="text-emerald-300 hover:text-emerald-200 transition-colors"
               >
                 Opportunities
               </Link>
               <button
                 type="button"
-                onClick={() => handleCopyShortcutLink('opportunities', opportunitiesPath(review.vendor_name, reviewDetailBackPath))}
+                onClick={() => handleCopyShortcutLink('opportunities', directOpportunitiesPath ?? opportunitiesPath(review.vendor_name, reviewDetailBackPath))}
                 className="text-slate-400 hover:text-white transition-colors"
                 aria-label="Copy opportunities link"
                 title="Copy opportunities link"
@@ -351,14 +373,14 @@ export default function ReviewDetail() {
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Link
-                to={reportsPath(review.vendor_name, reviewDetailBackPath)}
+                to={directReportsPath ?? reportsPath(review.vendor_name, reviewDetailBackPath)}
                 className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
               >
                 Reports
               </Link>
               <button
                 type="button"
-                onClick={() => handleCopyShortcutLink('reports', reportsPath(review.vendor_name, reviewDetailBackPath))}
+                onClick={() => handleCopyShortcutLink('reports', directReportsPath ?? reportsPath(review.vendor_name, reviewDetailBackPath))}
                 className="text-slate-400 hover:text-white transition-colors"
                 aria-label="Copy reports link"
                 title="Copy reports link"
