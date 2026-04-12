@@ -454,6 +454,25 @@ describe('ReportDetail', () => {
     })
   })
 
+  it('prefers the exact upstream evidence shortcut for nested report detail context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fevidence%253Fvendor%253DZendesk%2526tab%253Dwitnesses%2526witness_id%253Dwit-1%2526source%253Dreddit%2526offset%253D20%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=wit-1&source=reddit&offset=20&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
   it('passes a normalized share URL to the detail action bar', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports/:id', element: <ReportDetail /> }],

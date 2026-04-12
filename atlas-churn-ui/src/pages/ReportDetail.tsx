@@ -113,6 +113,22 @@ function watchlistsShortcutLabel(value: string | null) {
   }
 }
 
+function upstreamEvidencePath(value: string | null): string | null {
+  let current = value?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/evidence')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -189,6 +205,7 @@ export default function ReportDetail() {
   const backButtonLabel = backToLabel(backToReports)
   const directWatchlistsPath = upstreamWatchlistsPath(backToReports)
   const directWatchlistsLabel = watchlistsShortcutLabel(directWatchlistsPath)
+  const directEvidencePath = upstreamEvidencePath(backToReports)
   const detailShareUrl = (() => {
     const next = new URLSearchParams()
     if (subModalOpen) {
@@ -324,7 +341,7 @@ export default function ReportDetail() {
               Vendor workspace
             </Link>
             <Link
-              to={evidencePath(report.vendor_filter, detailBackPath)}
+              to={directEvidencePath ?? evidencePath(report.vendor_filter, detailBackPath)}
               className="text-violet-300 hover:text-violet-200 transition-colors"
             >
               Evidence

@@ -220,6 +220,22 @@ function watchlistsShortcutLabel(value: string | null) {
   }
 }
 
+function upstreamEvidencePath(value: string | null): string | null {
+  let current = value?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/evidence')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 function buildReportSubscriptionLocation(searchParams: URLSearchParams, report: Report) {
   const backTarget = buildReportsBackTarget(searchParams)
   const next = new URLSearchParams(
@@ -330,6 +346,7 @@ export default function Reports() {
   const reportsBackTarget = useMemo(() => buildReportsBackTarget(searchParams), [searchParams])
   const directWatchlistsPath = useMemo(() => upstreamWatchlistsPath(reportsBackTarget), [reportsBackTarget])
   const directWatchlistsLabel = useMemo(() => watchlistsShortcutLabel(directWatchlistsPath), [directWatchlistsPath])
+  const directEvidencePath = useMemo(() => upstreamEvidencePath(reportsBackTarget), [reportsBackTarget])
   const currentLibraryPath = useMemo(
     () => `${location.pathname}${location.search}`,
     [location.pathname, location.search],
@@ -892,7 +909,7 @@ export default function Reports() {
                     Vendor workspace
                   </Link>
                   <Link
-                    to={evidencePath(activeVendorFilter, currentLibraryPath)}
+                    to={directEvidencePath ?? evidencePath(activeVendorFilter, currentLibraryPath)}
                     className="text-violet-300 hover:text-violet-200 transition-colors"
                   >
                     Evidence
