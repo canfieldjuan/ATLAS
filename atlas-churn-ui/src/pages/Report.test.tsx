@@ -52,6 +52,8 @@ function buildStructuredPublicReport() {
         report_type: 'exploratory_overview',
         executive_summary: 'Structured summary',
         data: {
+          data_as_of_date: '2026-04-08',
+          window_days: 45,
           key_insights: [
             { label: 'Pricing friction', summary: 'Pricing created churn risk' },
           ],
@@ -136,6 +138,8 @@ describe('Report', () => {
     await waitFor(() => {
       expect(structuredRenderer.lastProps?.vendorName).toBe('Zendesk')
       expect(structuredRenderer.lastProps?.backTo).toBe('/report?vendor=Zendesk&ref=test-token&mode=view')
+      expect(structuredRenderer.lastProps?.asOfDate).toBe('2026-04-08')
+      expect(structuredRenderer.lastProps?.windowDays).toBe(45)
     })
   })
 
@@ -150,6 +154,8 @@ describe('Report', () => {
             report_type: 'accounts_in_motion',
             executive_summary: 'Specialized summary',
             data: {
+              data_as_of_date: '2026-04-08',
+              window_days: 45,
               reference_ids: {
                 witness_ids: ['witness-1'],
               },
@@ -179,6 +185,8 @@ describe('Report', () => {
     await waitFor(() => {
       expect(specializedRenderer.lastProps?.vendorName).toBe('Zendesk')
       expect(specializedRenderer.lastProps?.backTo).toBe('/report?vendor=Zendesk&ref=test-token&mode=view')
+      expect(specializedRenderer.lastProps?.asOfDate).toBe('2026-04-08')
+      expect(specializedRenderer.lastProps?.windowDays).toBe(45)
     })
     expect(specializedRenderer.lastProps?.reportType).toBe('accounts_in_motion')
   })

@@ -597,10 +597,17 @@ function MixedObjectCard({ obj, label }: { obj: AnyObject; label?: string }) {
   )
 }
 
-function evidenceExplorerPath(vendorName: string, backTo?: string | null) {
+function evidenceExplorerPath(
+  vendorName: string,
+  backTo?: string | null,
+  asOfDate?: string | null,
+  windowDays?: number | null,
+) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
   params.set('tab', 'witnesses')
+  if (asOfDate) params.set('as_of_date', asOfDate)
+  if (windowDays) params.set('window_days', String(windowDays))
   if (backTo?.trim()) params.set('back_to', backTo)
   return `/evidence?${params.toString()}`
 }
@@ -645,6 +652,8 @@ export function StructuredReportData({
   onOpenWitness,
   sectionEvidence,
   backTo,
+  asOfDate,
+  windowDays,
 }: {
   data: AnyObject
   skipKeys?: string[]
@@ -653,6 +662,8 @@ export function StructuredReportData({
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   sectionEvidence?: Record<string, SectionEvidenceSummary> | null
   backTo?: string | null
+  asOfDate?: string | null
+  windowDays?: number | null
 }) {
   const registry = createCitationRegistry()
   const entries = Object.entries(data).filter(([key, value]) => {
@@ -700,7 +711,7 @@ export function StructuredReportData({
                   />
                 ) : (
                   <Link
-                    to={evidenceExplorerPath(vendorName, backTo)}
+                    to={evidenceExplorerPath(vendorName, backTo, asOfDate, windowDays)}
                     className="inline-flex items-center gap-1 rounded border border-cyan-700/40 bg-cyan-900/30 px-2 py-1 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-900/50"
                   >
                     View {citations.length} witness citation{citations.length === 1 ? '' : 's'}

@@ -73,6 +73,21 @@ function referenceIdCounts(referenceIds: ReasoningReferenceIdsViewModel | undefi
   return { metrics, witnesses, total: metrics + witnesses }
 }
 
+function evidenceExplorerPath(
+  vendorName?: string,
+  backTo?: string | null,
+  asOfDate?: string | null,
+  windowDays?: number | null,
+) {
+  const params = new URLSearchParams()
+  if (vendorName) params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  if (asOfDate) params.set('as_of_date', asOfDate)
+  if (windowDays) params.set('window_days', String(windowDays))
+  if (backTo?.trim()) params.set('back_to', backTo)
+  return `/evidence?${params.toString()}`
+}
+
 function ProvenanceStrip({
   source,
   referenceIds,
@@ -80,6 +95,8 @@ function ProvenanceStrip({
   vendorName,
   onOpenWitness,
   backTo,
+  asOfDate,
+  windowDays,
 }: {
   source?: string
   referenceIds?: ReasoningReferenceIdsViewModel
@@ -87,6 +104,8 @@ function ProvenanceStrip({
   vendorName?: string
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   backTo?: string | null
+  asOfDate?: string | null
+  windowDays?: number | null
 }) {
   const counts = referenceIdCounts(referenceIds)
   const badges = [
@@ -116,13 +135,9 @@ function ProvenanceStrip({
           {counts.witnesses} witnesses
         </button>
       ) : counts.witnesses > 0 ? (() => {
-        const params = new URLSearchParams()
-        if (vendorName) params.set('vendor', vendorName)
-        params.set('tab', 'witnesses')
-        if (backTo?.trim()) params.set('back_to', backTo)
         return (
           <Link
-            to={`/evidence?${params.toString()}`}
+            to={evidenceExplorerPath(vendorName, backTo, asOfDate, windowDays)}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-900/30 text-cyan-300 border border-cyan-700/40 hover:bg-cyan-900/50 transition-colors"
           >
           <Fingerprint className="w-3 h-3" />
@@ -234,7 +249,7 @@ function registerWitnessIds(
   return registry.getAll()
 }
 
-function ChallengerBriefDetail({ data, onOpenWitness, backTo }: { data: ChallengerBriefViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null }) {
+function ChallengerBriefDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }: { data: ChallengerBriefViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null; asOfDate?: string | null; windowDays?: number | null }) {
   const registry = createCitationRegistry()
   const disp = data.displacement_summary
   const inc = data.incumbent_profile
@@ -261,6 +276,8 @@ function ChallengerBriefDetail({ data, onOpenWitness, backTo }: { data: Challeng
         vendorName={data.incumbent}
         onOpenWitness={onOpenWitness}
         backTo={backTo}
+        asOfDate={asOfDate}
+        windowDays={windowDays}
       />
       <div className="flex flex-wrap gap-1.5">
         {Object.entries(sources).map(([key, value]) => (
@@ -673,7 +690,7 @@ function ChallengerBriefDetail({ data, onOpenWitness, backTo }: { data: Challeng
   )
 }
 
-function AccountsInMotionDetail({ data, vendorName, onOpenWitness, backTo }: { data: AccountsInMotionViewModel; vendorName?: string; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null }) {
+function AccountsInMotionDetail({ data, vendorName, onOpenWitness, backTo, asOfDate, windowDays }: { data: AccountsInMotionViewModel; vendorName?: string; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null; asOfDate?: string | null; windowDays?: number | null }) {
   const pricing = data.pricing_pressure
   const gaps = data.feature_gaps
   const xvc = data.cross_vendor_context
@@ -688,6 +705,8 @@ function AccountsInMotionDetail({ data, vendorName, onOpenWitness, backTo }: { d
         vendorName={vendorName}
         onOpenWitness={onOpenWitness}
         backTo={backTo}
+        asOfDate={asOfDate}
+        windowDays={windowDays}
       />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
@@ -807,6 +826,8 @@ function AccountsInMotionDetail({ data, vendorName, onOpenWitness, backTo }: { d
               vendorName={vendorName}
               onOpenWitness={onOpenWitness}
               backTo={backTo}
+              asOfDate={asOfDate}
+              windowDays={windowDays}
             />
           </div>
           <div className="space-y-1">
@@ -889,7 +910,7 @@ function normalizeLabel(label: string | undefined, context: 'pain' | 'satisfacti
   return label
 }
 
-function BattleCardDetail({ data, onOpenWitness, backTo }: { data: BattleCardViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null }) {
+function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }: { data: BattleCardViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null; asOfDate?: string | null; windowDays?: number | null }) {
   const registry = createCitationRegistry()
   const weaknesses = data.weakness_analysis.length > 0 ? data.weakness_analysis : data.vendor_weaknesses
   const qualityClass = data.quality_status === 'sales_ready'
@@ -910,6 +931,8 @@ function BattleCardDetail({ data, onOpenWitness, backTo }: { data: BattleCardVie
         vendorName={data.vendor}
         onOpenWitness={onOpenWitness}
         backTo={backTo}
+        asOfDate={asOfDate}
+        windowDays={windowDays}
         extraBadges={[
           data.cross_vendor_battles.length > 0 ? `${data.cross_vendor_battles.length} battle refs` : '',
           data.category_council?.reference_ids ? `Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}` : '',
@@ -1506,7 +1529,7 @@ function BattleCardDetail({ data, onOpenWitness, backTo }: { data: BattleCardVie
   )
 }
 
-function ComparisonReportDetail({ data, rawData, backTo }: { data: ComparisonReportViewModel; rawData: Record<string, unknown>; backTo?: string | null }) {
+function ComparisonReportDetail({ data, rawData, backTo, asOfDate, windowDays }: { data: ComparisonReportViewModel; rawData: Record<string, unknown>; backTo?: string | null; asOfDate?: string | null; windowDays?: number | null }) {
   const skipKeys = [
     'primary_vendor', 'comparison_vendor', 'primary_company', 'comparison_company',
     'report_date', 'window_days', 'primary_metrics', 'comparison_metrics',
@@ -1612,12 +1635,12 @@ function ComparisonReportDetail({ data, rawData, backTo }: { data: ComparisonRep
         </div>
       )}
 
-      <StructuredReportData data={rawData} skipKeys={skipKeys} backTo={backTo} />
+      <StructuredReportData data={rawData} skipKeys={skipKeys} backTo={backTo} asOfDate={asOfDate} windowDays={windowDays} />
     </div>
   )
 }
 
-function WeeklyChurnFeedDetail({ items, onOpenWitness, backTo }: { items: WeeklyChurnFeedItemViewModel[]; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null }) {
+function WeeklyChurnFeedDetail({ items, onOpenWitness, backTo, asOfDate, windowDays }: { items: WeeklyChurnFeedItemViewModel[]; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null; asOfDate?: string | null; windowDays?: number | null }) {
   return (
     <div className="space-y-3 min-w-0 [overflow-wrap:anywhere]">
       {items.map((item, index) => {
@@ -1634,6 +1657,8 @@ function WeeklyChurnFeedDetail({ items, onOpenWitness, backTo }: { items: Weekly
               vendorName={item.vendor}
               onOpenWitness={onOpenWitness}
               backTo={backTo}
+              asOfDate={asOfDate}
+              windowDays={windowDays}
             />
             {/* Header row */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -2514,22 +2539,26 @@ export function SpecializedReportData({
   vendorName,
   onOpenWitness,
   backTo,
+  asOfDate,
+  windowDays,
 }: {
   reportType: string
   data: unknown
   vendorName?: string
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   backTo?: string | null
+  asOfDate?: string | null
+  windowDays?: number | null
 }) {
   const normalizedValue = normalizeUnknown(data, reportType)
   const normalized = normalizeReportObject(Array.isArray(normalizedValue) ? {} : (normalizedValue as Record<string, unknown> | null | undefined))
-  if (reportType === 'challenger_brief') return <ChallengerBriefDetail data={toChallengerBriefViewModel(normalized)} onOpenWitness={onOpenWitness} backTo={backTo} />
-  if (reportType === 'accounts_in_motion') return <AccountsInMotionDetail data={toAccountsInMotionViewModel(normalized)} vendorName={vendorName} onOpenWitness={onOpenWitness} backTo={backTo} />
-  if (reportType === 'battle_card') return <BattleCardDetail data={toBattleCardViewModel(normalized)} onOpenWitness={onOpenWitness} backTo={backTo} />
+  if (reportType === 'challenger_brief') return <ChallengerBriefDetail data={toChallengerBriefViewModel(normalized)} onOpenWitness={onOpenWitness} backTo={backTo} asOfDate={asOfDate} windowDays={windowDays} />
+  if (reportType === 'accounts_in_motion') return <AccountsInMotionDetail data={toAccountsInMotionViewModel(normalized)} vendorName={vendorName} onOpenWitness={onOpenWitness} backTo={backTo} asOfDate={asOfDate} windowDays={windowDays} />
+  if (reportType === 'battle_card') return <BattleCardDetail data={toBattleCardViewModel(normalized)} onOpenWitness={onOpenWitness} backTo={backTo} asOfDate={asOfDate} windowDays={windowDays} />
   if (reportType === 'vendor_comparison' || reportType === 'account_comparison') {
-    return <ComparisonReportDetail data={toComparisonReportViewModel(normalized)} rawData={normalized} backTo={backTo} />
+    return <ComparisonReportDetail data={toComparisonReportViewModel(normalized)} rawData={normalized} backTo={backTo} asOfDate={asOfDate} windowDays={windowDays} />
   }
-  if (reportType === 'weekly_churn_feed') return <WeeklyChurnFeedDetail items={toWeeklyChurnFeedItems(normalizedValue)} onOpenWitness={onOpenWitness} backTo={backTo} />
+  if (reportType === 'weekly_churn_feed') return <WeeklyChurnFeedDetail items={toWeeklyChurnFeedItems(normalizedValue)} onOpenWitness={onOpenWitness} backTo={backTo} asOfDate={asOfDate} windowDays={windowDays} />
   if (reportType === 'vendor_scorecard') return <VendorScorecardDetail items={toVendorScorecards(normalizedValue)} />
   if (reportType === 'displacement_report') return <DisplacementReportDetail data={normalized} />
   if (reportType === 'vendor_deep_dive') return <VendorDeepDiveDetail items={toVendorDeepDives(normalizedValue)} />

@@ -168,6 +168,33 @@ function normalizePublicReportData(data: ReportData): ReportData {
   }
 }
 
+function positiveInteger(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    const parsed = Number.parseInt(trimmed, 10)
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+  }
+  return null
+}
+
+function reportEvidenceSnapshot(report: { report_date: string | null; data: unknown }) {
+  const reportData = isRecord(report.data) ? report.data : {}
+  const asOfDate = firstStringValue(reportData.data_as_of_date)
+    || firstStringValue(reportData.as_of_date)
+    || firstStringValue(reportData.report_date)
+    || report.report_date
+    || null
+  const windowDays = positiveInteger(reportData.analysis_window_days)
+    ?? positiveInteger(reportData.window_days)
+    ?? positiveInteger(reportData.evidence_window_days)
+  return {
+    asOfDate,
+    windowDays,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Report View (rich intelligence)
 // ---------------------------------------------------------------------------
@@ -587,20 +614,32 @@ function ReportView({ data }: { data: ReportData }) {
             <h2 className="text-lg font-bold mb-4">Deep Analysis</h2>
             <div className="space-y-6">
               {data.intelligence_reports.map((report, idx) => (
-                <div key={idx} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
-                  <div className="flex flex-wrap items-center gap-3 mb-3">
-                    <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-xs font-medium break-all">
-                      {report.report_type.replace(/_/g, ' ')}
-                    </span>
-                    {report.report_date && (
-                      <span className="text-xs text-slate-500 break-all">{report.report_date}</span>
-                    )}
-                  </div>
-                  {report.executive_summary && (
-                    <p className="text-sm text-slate-300 mb-4 break-words whitespace-pre-wrap">{report.executive_summary}</p>
-                  )}
-                  <IntelligenceData reportType={report.report_type} data={report.data} vendorName={data.vendor_name} backTo={reportBackTo} />
-                </div>
+                (() => {
+                  const evidenceSnapshot = reportEvidenceSnapshot(report)
+                  return (
+                    <div key={idx} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
+                      <div className="flex flex-wrap items-center gap-3 mb-3">
+                        <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-xs font-medium break-all">
+                          {report.report_type.replace(/_/g, ' ')}
+                        </span>
+                        {report.report_date && (
+                          <span className="text-xs text-slate-500 break-all">{report.report_date}</span>
+                        )}
+                      </div>
+                      {report.executive_summary && (
+                        <p className="text-sm text-slate-300 mb-4 break-words whitespace-pre-wrap">{report.executive_summary}</p>
+                      )}
+                      <IntelligenceData
+                        reportType={report.report_type}
+                        data={report.data}
+                        vendorName={data.vendor_name}
+                        backTo={reportBackTo}
+                        asOfDate={evidenceSnapshot.asOfDate}
+                        windowDays={evidenceSnapshot.windowDays}
+                      />
+                    </div>
+                  )
+                })()
               ))}
             </div>
           </div>
@@ -674,16 +713,41 @@ function ReportView({ data }: { data: ReportData }) {
 }
 
 /** Render intelligence data fields as key-value cards */
-function IntelligenceData({ reportType, data, vendorName, backTo }: { reportType: string; data: unknown; vendorName: string; backTo: string }) {
+function IntelligenceData({
+  reportType,
+  data,
+  vendorName,
+  backTo,
+  asOfDate,
+  windowDays,
+}: {
+  reportType: string
+  data: unknown
+  vendorName: string
+  backTo: string
+  asOfDate?: string | null
+  windowDays?: number | null
+}) {
   if (isSpecializedReportType(reportType)) {
-    return <SpecializedReportData reportType={reportType} data={data} vendorName={vendorName} backTo={backTo} />
+    return <SpecializedReportData reportType={reportType} data={data} vendorName={vendorName} backTo={backTo} asOfDate={asOfDate} windowDays={windowDays} />
   }
   return (
     <StructuredReportData
       data={normalizeReportObject(isRecord(data) ? data : {})}
-      skipKeys={['report_date', 'window_days', 'primary_vendor', 'comparison_vendor']}
+      skipKeys={[
+        'report_date',
+        'data_as_of_date',
+        'as_of_date',
+        'window_days',
+        'analysis_window_days',
+        'evidence_window_days',
+        'primary_vendor',
+        'comparison_vendor',
+      ]}
       vendorName={vendorName}
       backTo={backTo}
+      asOfDate={asOfDate}
+      windowDays={windowDays}
     />
   )
 }

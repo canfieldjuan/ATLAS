@@ -57,6 +57,8 @@ describe('SpecializedReportData', () => {
           reportType="accounts_in_motion"
           vendorName="Zendesk"
           backTo="/report?vendor=Zendesk&ref=test-token&mode=view"
+          asOfDate="2026-04-08"
+          windowDays={45}
           data={{
             reference_ids: {
               witness_ids: ['witness-1'],
@@ -75,7 +77,7 @@ describe('SpecializedReportData', () => {
 
     expect(screen.getByRole('link', { name: '1 witnesses' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freport%3Fvendor%3DZendesk%26ref%3Dtest-token%26mode%3Dview',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&back_to=%2Freport%3Fvendor%3DZendesk%26ref%3Dtest-token%26mode%3Dview',
     )
   })
 
