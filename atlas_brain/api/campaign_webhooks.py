@@ -24,9 +24,18 @@ logger = logging.getLogger("atlas.api.campaign_webhooks")
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
+def _clean_required_text(value: str, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail=f"{field_name} is required")
+    return text
+
+
+
 @router.get("/unsubscribe", response_class=HTMLResponse)
 async def unsubscribe(email: str = Query(..., description="Email to unsubscribe")):
     """One-click unsubscribe endpoint. Adds email to suppression list."""
+    email = _clean_required_text(email, "email")
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -89,10 +98,6 @@ def _verify_svix_signature(
 @router.post("/campaign-email")
 async def campaign_email_webhook(request: Request):
     """Receive Resend ESP events: opened, clicked, bounced, complained."""
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-
     payload_bytes = await request.body()
 
     # Verify signature
@@ -116,6 +121,10 @@ async def campaign_email_webhook(request: Request):
 
     if not esp_message_id:
         return {"status": "ignored", "reason": "no email_id"}
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
     # Look up campaign by ESP message ID
     campaign = await pool.fetchrow(
