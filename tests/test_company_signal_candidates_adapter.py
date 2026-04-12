@@ -851,23 +851,38 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
 async def test_read_company_signal_review_impact_summary_aggregates_actions_and_rebuilds():
     pool = type("ImpactSummaryPool", (), {})()
     pool.fetchrow = AsyncMock(
-        return_value={
-            "total_actions": 6,
-            "total_batches": 4,
-            "distinct_vendors": 2,
-            "approvals": 4,
-            "suppressions": 2,
-            "company_signal_creations": 3,
-            "company_signal_updates": 1,
-            "company_signal_deletions": 2,
-            "company_signal_noops": 0,
-            "rebuild_requests": 4,
-            "rebuild_triggered": 3,
-            "rebuild_blocked": 1,
-            "rebuild_persisted_runs": 2,
-            "rebuild_persisted_reports": 2,
-            "rebuild_total_accounts": 9,
-        }
+        side_effect=[
+            {
+                "total_actions": 6,
+                "total_batches": 4,
+                "distinct_vendors": 2,
+                "approvals": 4,
+                "suppressions": 2,
+                "company_signal_creations": 3,
+                "company_signal_updates": 1,
+                "company_signal_deletions": 2,
+                "company_signal_noops": 0,
+                "rebuild_requests": 4,
+                "rebuild_triggered": 3,
+                "rebuild_blocked": 1,
+                "rebuild_persisted_runs": 2,
+                "rebuild_persisted_reports": 2,
+                "rebuild_total_accounts": 9,
+            },
+            {
+                "total_groups": 6,
+                "total_reviews": 10,
+                "pending_groups": 4,
+                "actionable_pending_groups": 3,
+                "actionable_pending_reviews": 6,
+                "blocked_pending_groups": 1,
+                "blocked_pending_reviews": 2,
+                "avg_pending_age_days": 2.5,
+                "oldest_pending_age_days": 5.0,
+                "overdue_pending_groups": 1,
+                "overdue_pending_reviews": 2,
+            },
+        ]
     )
     pool.fetch = AsyncMock(
         side_effect=[
@@ -1028,7 +1043,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         top_n=5,
     )
 
-    totals_sql = pool.fetchrow.call_args[0][0]
+    totals_sql = pool.fetchrow.call_args_list[0][0][0]
+    queue_snapshot_sql = pool.fetchrow.call_args_list[1][0][0]
     scopes_sql = pool.fetch.call_args_list[0][0][0]
     unlock_paths_sql = pool.fetch.call_args_list[1][0][0]
     priority_sql = pool.fetch.call_args_list[2][0][0]
@@ -1051,6 +1067,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "COALESCE(rebuild_reason, 'unknown')" in totals_sql
     assert "COUNT(DISTINCT review_batch_id)" in totals_sql
     assert "FROM b2b_company_signal_review_events" in totals_sql
+    assert "FROM b2b_company_signal_candidate_groups" in queue_snapshot_sql
+    assert "actionable_pending_groups" in queue_snapshot_sql
     assert "GROUP BY 1" in scopes_sql
     assert "review_unlock_path" in unlock_paths_sql
     assert "review_unlock_reason" in unlock_paths_sql
@@ -1158,6 +1176,19 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         "review_priority_reason": "canonical_ready",
         "source_name": "reddit",
     }
+    assert summary["trend_recommendation_queue_snapshot"] == {
+        "total_groups": 6,
+        "total_reviews": 10,
+        "pending_groups": 4,
+        "actionable_pending_groups": 3,
+        "actionable_pending_reviews": 6,
+        "blocked_pending_groups": 1,
+        "blocked_pending_reviews": 2,
+        "avg_pending_age_days": 2.5,
+        "oldest_pending_age_days": 5.0,
+        "overdue_pending_groups": 1,
+        "overdue_pending_reviews": 2,
+    }
 
 
 def _make_review_impact_summary_pool(*, totals=None, daily_trends=None):
@@ -1193,6 +1224,7 @@ async def test_read_company_signal_review_impact_summary_returns_no_data_without
     assert summary["trend_focus"]["impact_filters"] == {}
     assert summary["trend_focus"]["queue_filters"] == {}
     assert summary["trend_alerts"] == []
+    assert summary["trend_recommendation_queue_snapshot"] is None
 
 
 @pytest.mark.asyncio

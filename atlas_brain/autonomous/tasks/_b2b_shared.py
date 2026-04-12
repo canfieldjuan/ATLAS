@@ -11931,7 +11931,34 @@ async def read_company_signal_candidate_groups(
     return results
 
 
-async def read_company_signal_candidate_group_summary(
+def _empty_company_signal_candidate_group_totals() -> dict[str, Any]:
+    return {
+        "total_groups": 0,
+        "total_reviews": 0,
+        "canonical_ready_reviews": 0,
+        "pending_groups": 0,
+        "actionable_pending_groups": 0,
+        "actionable_pending_reviews": 0,
+        "blocked_pending_groups": 0,
+        "blocked_pending_reviews": 0,
+        "near_threshold_blocked_groups": 0,
+        "near_threshold_blocked_reviews": 0,
+        "approved_groups": 0,
+        "suppressed_groups": 0,
+        "canonical_ready_groups": 0,
+        "analyst_review_groups": 0,
+        "pending_canonical_ready_groups": 0,
+        "pending_analyst_review_groups": 0,
+        "decision_maker_groups": 0,
+        "signal_evidence_groups": 0,
+        "avg_pending_age_days": 0.0,
+        "oldest_pending_age_days": 0.0,
+        "overdue_pending_groups": 0,
+        "overdue_pending_reviews": 0,
+    }
+
+
+async def _read_company_signal_candidate_group_totals(
     pool,
     *,
     window_days: int = 90,
@@ -11949,10 +11976,8 @@ async def read_company_signal_candidate_group_summary(
     signal_evidence_present: bool | None = None,
     review_priority_band: str | None = None,
     review_priority_reason: str | None = None,
-    top_n: int = 10,
 ) -> dict[str, Any]:
-    """Return queue-health summary for grouped company-signal candidates."""
-    conditions, params, idx = _company_signal_candidate_group_filters(
+    conditions, params, _ = _company_signal_candidate_group_filters(
         window_days=window_days,
         vendor_name=vendor_name,
         company_name=company_name,
@@ -11970,75 +11995,14 @@ async def read_company_signal_candidate_group_summary(
         review_priority_reason=review_priority_reason,
     )
     if not conditions:
-        return {
-            "totals": {
-                "total_groups": 0,
-                "total_reviews": 0,
-                "canonical_ready_reviews": 0,
-                "pending_groups": 0,
-                "actionable_pending_groups": 0,
-                "actionable_pending_reviews": 0,
-                "blocked_pending_groups": 0,
-                "blocked_pending_reviews": 0,
-                "near_threshold_blocked_groups": 0,
-                "near_threshold_blocked_reviews": 0,
-                "approved_groups": 0,
-                "suppressed_groups": 0,
-                "canonical_ready_groups": 0,
-                "analyst_review_groups": 0,
-                "pending_canonical_ready_groups": 0,
-                "pending_analyst_review_groups": 0,
-                "decision_maker_groups": 0,
-                "signal_evidence_groups": 0,
-                "avg_pending_age_days": 0.0,
-                "oldest_pending_age_days": 0.0,
-                "overdue_pending_groups": 0,
-                "overdue_pending_reviews": 0,
-            },
-            "gap_reasons": [],
-            "top_vendors": [],
-            "actionable_top_vendors": [],
-            "actionable_top_vendor_reasons": [],
-            "blocked_top_vendors": [],
-            "blocked_top_vendor_reasons": [],
-            "blocked_source_mix": [],
-            "blocked_source_vendor_gaps": [],
-            "trusted_blocked_source_mix": [],
-            "trusted_blocked_source_vendor_gaps": [],
-            "near_threshold_top_vendors": [],
-            "near_threshold_gap_reasons": [],
-            "near_threshold_groups": [],
-            "near_threshold_source_mix": [],
-            "unlock_candidates": [],
-            "unlock_path_summary": [],
-            "unlock_focus": None,
-            "confidence_tiers": [],
-            "priority_groups": [],
-            "pending_priority_bands": [],
-            "pending_priority_reasons": [],
-            "pending_sla_bands": [],
-            "pending_sla_reasons": [],
-            "oldest_pending_group": None,
-        }
+        return _empty_company_signal_candidate_group_totals()
 
     where_clause = " AND ".join(conditions)
-    top_n_param = idx
     pending_age_days_sql = _company_signal_candidate_group_pending_age_days_sql()
     pending_priority_band_sql = _company_signal_candidate_group_priority_band_sql()
-    pending_priority_reason_sql = _company_signal_candidate_group_priority_reason_sql()
     pending_sla_days_sql = _company_signal_candidate_group_sla_days_sql()
     near_threshold_sql = _company_signal_candidate_group_near_threshold_sql()
-    low_trust_source_sql = _company_signal_low_trust_source_membership_sql("source")
-    low_trust_confidence_min = _normalize_company_signal_confidence(
-        getattr(settings.b2b_churn, "company_signal_low_trust_min_confidence", 0.6),
-    )
-    if low_trust_confidence_min is None:
-        low_trust_confidence_min = 0.6
-    try:
-        high_intent_urgency_threshold = float(getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0))
-    except (TypeError, ValueError):
-        high_intent_urgency_threshold = 7.0
-    totals = await pool.fetchrow(
+    row = await pool.fetchrow(
         f"""
         WITH filtered AS (
             SELECT *
@@ -12122,6 +12086,111 @@ async def read_company_signal_candidate_group_summary(
         FROM filtered
         """,
         *params,
+    )
+    return dict(row or _empty_company_signal_candidate_group_totals())
+
+
+async def read_company_signal_candidate_group_summary(
+    pool,
+    *,
+    window_days: int = 90,
+    vendor_name: str | None = None,
+    company_name: str | None = None,
+    source_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    candidate_bucket: str | None = None,
+    review_status: str | None = None,
+    canonical_gap_reason: str | None = None,
+    min_urgency: float = 0.0,
+    min_confidence: float | None = None,
+    min_reviews: int = 1,
+    decision_makers_only: bool = False,
+    signal_evidence_present: bool | None = None,
+    review_priority_band: str | None = None,
+    review_priority_reason: str | None = None,
+    top_n: int = 10,
+) -> dict[str, Any]:
+    """Return queue-health summary for grouped company-signal candidates."""
+    conditions, params, idx = _company_signal_candidate_group_filters(
+        window_days=window_days,
+        vendor_name=vendor_name,
+        company_name=company_name,
+        source_name=source_name,
+        scoped_vendors=scoped_vendors,
+        candidate_bucket=candidate_bucket,
+        review_status=review_status,
+        canonical_gap_reason=canonical_gap_reason,
+        min_urgency=min_urgency,
+        min_confidence=min_confidence,
+        min_reviews=min_reviews,
+        decision_makers_only=decision_makers_only,
+        signal_evidence_present=signal_evidence_present,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
+    )
+    if not conditions:
+        return {
+            "totals": _empty_company_signal_candidate_group_totals(),
+            "gap_reasons": [],
+            "top_vendors": [],
+            "actionable_top_vendors": [],
+            "actionable_top_vendor_reasons": [],
+            "blocked_top_vendors": [],
+            "blocked_top_vendor_reasons": [],
+            "blocked_source_mix": [],
+            "blocked_source_vendor_gaps": [],
+            "trusted_blocked_source_mix": [],
+            "trusted_blocked_source_vendor_gaps": [],
+            "near_threshold_top_vendors": [],
+            "near_threshold_gap_reasons": [],
+            "near_threshold_groups": [],
+            "near_threshold_source_mix": [],
+            "unlock_candidates": [],
+            "unlock_path_summary": [],
+            "unlock_focus": None,
+            "confidence_tiers": [],
+            "priority_groups": [],
+            "pending_priority_bands": [],
+            "pending_priority_reasons": [],
+            "pending_sla_bands": [],
+            "pending_sla_reasons": [],
+            "oldest_pending_group": None,
+        }
+
+    where_clause = " AND ".join(conditions)
+    top_n_param = idx
+    pending_age_days_sql = _company_signal_candidate_group_pending_age_days_sql()
+    pending_priority_band_sql = _company_signal_candidate_group_priority_band_sql()
+    pending_priority_reason_sql = _company_signal_candidate_group_priority_reason_sql()
+    pending_sla_days_sql = _company_signal_candidate_group_sla_days_sql()
+    near_threshold_sql = _company_signal_candidate_group_near_threshold_sql()
+    low_trust_source_sql = _company_signal_low_trust_source_membership_sql("source")
+    low_trust_confidence_min = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_low_trust_min_confidence", 0.6),
+    )
+    if low_trust_confidence_min is None:
+        low_trust_confidence_min = 0.6
+    try:
+        high_intent_urgency_threshold = float(getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0))
+    except (TypeError, ValueError):
+        high_intent_urgency_threshold = 7.0
+    totals = await _read_company_signal_candidate_group_totals(
+        pool,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        company_name=company_name,
+        source_name=source_name,
+        scoped_vendors=scoped_vendors,
+        candidate_bucket=candidate_bucket,
+        review_status=review_status,
+        canonical_gap_reason=canonical_gap_reason,
+        min_urgency=min_urgency,
+        min_confidence=min_confidence,
+        min_reviews=min_reviews,
+        decision_makers_only=decision_makers_only,
+        signal_evidence_present=signal_evidence_present,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
     )
     gap_rows = await pool.fetch(
         f"""
@@ -13505,6 +13574,7 @@ async def read_company_signal_review_impact_summary(
             },
             "trend_recommendation_filters": {},
             "trend_recommendation_queue_filters": {},
+            "trend_recommendation_queue_snapshot": None,
         }
 
     where_clause = " AND ".join(conditions)
@@ -14388,6 +14458,25 @@ async def read_company_signal_review_impact_summary(
             return {}
         return _build_trend_alert_queue_filters(focus)
 
+    def _build_trend_recommendation_queue_snapshot(
+        totals: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not totals:
+            return None
+        return {
+            "total_groups": int(totals.get("total_groups") or 0),
+            "total_reviews": int(totals.get("total_reviews") or 0),
+            "pending_groups": int(totals.get("pending_groups") or 0),
+            "actionable_pending_groups": int(totals.get("actionable_pending_groups") or 0),
+            "actionable_pending_reviews": int(totals.get("actionable_pending_reviews") or 0),
+            "blocked_pending_groups": int(totals.get("blocked_pending_groups") or 0),
+            "blocked_pending_reviews": int(totals.get("blocked_pending_reviews") or 0),
+            "avg_pending_age_days": float(totals.get("avg_pending_age_days") or 0.0),
+            "oldest_pending_age_days": float(totals.get("oldest_pending_age_days") or 0.0),
+            "overdue_pending_groups": int(totals.get("overdue_pending_groups") or 0),
+            "overdue_pending_reviews": int(totals.get("overdue_pending_reviews") or 0),
+        }
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     daily_trends = [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows]
     trend_comparison = _build_trend_comparison(daily_trends)
@@ -14417,6 +14506,22 @@ async def read_company_signal_review_impact_summary(
     trend_recommendation = _build_trend_recommendation(trend_comparison, trend_focus, trend_alerts)
     trend_recommendation_filters = _build_trend_recommendation_filters(trend_recommendation, trend_focus)
     trend_recommendation_queue_filters = _build_trend_recommendation_queue_filters(trend_recommendation, trend_focus)
+    trend_recommendation_queue_snapshot = None
+    if trend_recommendation_queue_filters:
+        trend_recommendation_queue_snapshot = _build_trend_recommendation_queue_snapshot(
+            await _read_company_signal_candidate_group_totals(
+                pool,
+                window_days=window_days,
+                vendor_name=trend_recommendation_queue_filters.get("vendor_name"),
+                source_name=trend_recommendation_queue_filters.get("source_name"),
+                scoped_vendors=scoped_vendors,
+                candidate_bucket=trend_recommendation_queue_filters.get("candidate_bucket"),
+                review_status=trend_recommendation_queue_filters.get("review_status"),
+                canonical_gap_reason=trend_recommendation_queue_filters.get("canonical_gap_reason"),
+                review_priority_band=trend_recommendation_queue_filters.get("review_priority_band"),
+                review_priority_reason=trend_recommendation_queue_filters.get("review_priority_reason"),
+            )
+        )
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -14437,6 +14542,7 @@ async def read_company_signal_review_impact_summary(
         "trend_recommendation": trend_recommendation,
         "trend_recommendation_filters": trend_recommendation_filters,
         "trend_recommendation_queue_filters": trend_recommendation_queue_filters,
+        "trend_recommendation_queue_snapshot": trend_recommendation_queue_snapshot,
     }
 
 
