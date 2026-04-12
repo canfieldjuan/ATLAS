@@ -3726,11 +3726,11 @@ async def get_report_subscription(
 ):
     """Load the saved recurring-delivery policy for the library or a specific report."""
     _require_b2b_product(user)
-    pool = _pool_or_503()
     normalized_scope_type, normalized_scope_key = _normalize_report_subscription_scope(
         scope_type,
         scope_key,
     )
+    pool = _pool_or_503()
 
     if normalized_scope_type == "report":
         report_id = _coerce_uuid(normalized_scope_key)
@@ -3759,21 +3759,10 @@ async def upsert_report_subscription(
     _require_b2b_product(user)
     scope_label = _clean_required_text(body.scope_label, "scope_label")
     delivery_note = _clean_optional_text(body.delivery_note)
-    pool = _pool_or_503()
     normalized_scope_type, normalized_scope_key = _normalize_report_subscription_scope(
         scope_type,
         scope_key,
     )
-    account_id = _uuid.UUID(user.account_id)
-    user_id = _coerce_uuid(getattr(user, "user_id", None))
-
-    report_id: _uuid.UUID | None = None
-    if normalized_scope_type == "report":
-        report_id = _coerce_uuid(normalized_scope_key)
-        if not report_id:
-            raise HTTPException(status_code=400, detail="scope_key must be a report UUID")
-        await _load_accessible_tenant_report(pool, report_id, user)
-
     normalized_recipients = _normalize_report_subscription_recipients(body.recipients)
     if body.enabled and not normalized_recipients:
         raise HTTPException(
@@ -3785,6 +3774,17 @@ async def upsert_report_subscription(
         normalized_scope_type,
         body.filter_payload,
     )
+
+    pool = _pool_or_503()
+    account_id = _uuid.UUID(user.account_id)
+    user_id = _coerce_uuid(getattr(user, "user_id", None))
+
+    report_id: _uuid.UUID | None = None
+    if normalized_scope_type == "report":
+        report_id = _coerce_uuid(normalized_scope_key)
+        if not report_id:
+            raise HTTPException(status_code=400, detail="scope_key must be a report UUID")
+        await _load_accessible_tenant_report(pool, report_id, user)
 
     existing_subscription = await _fetch_report_subscription_schedule_row(
         pool,

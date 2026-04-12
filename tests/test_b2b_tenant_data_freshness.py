@@ -868,6 +868,45 @@ async def test_generate_tenant_company_reports_trim_body_company_names(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_report_subscription_routes_validate_scope_and_filters_before_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(account_id=str(uuid4()), user_id=str(uuid4()), product="b2b_retention")
+
+    cases = [
+        (
+            lambda: mod.get_report_subscription("   ", "library", user=user),
+            "scope_type must be library, library_view, or report",
+        ),
+        (
+            lambda: mod.get_report_subscription("report", "   ", user=user),
+            "scope_key is required",
+        ),
+        (
+            lambda: mod.upsert_report_subscription(
+                "library_view",
+                "pipeline",
+                mod.ReportSubscriptionUpsertRequest(
+                    scope_label="Pipeline",
+                    filter_payload={"vendor_filter": "   "},
+                    enabled=False,
+                ),
+                user=user,
+            ),
+            "library_view subscriptions require at least one active filter",
+        ),
+    ]
+
+    for call, detail in cases:
+        monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        with pytest.raises(mod.HTTPException) as exc:
+            await call()
+        assert exc.value.status_code == 400
+        assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
 async def test_upsert_report_subscription_trims_scope_label_and_delivery_note(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
