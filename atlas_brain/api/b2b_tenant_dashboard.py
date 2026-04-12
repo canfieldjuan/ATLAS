@@ -1132,14 +1132,15 @@ async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
 async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(require_auth)):
     """Add a vendor to track. Enforces vendor_limit in a transaction."""
     _require_b2b_product(user)
+    vendor_name = _clean_required_text(req.vendor_name, "vendor_name")
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
 
     if req.track_mode not in ("own", "competitor"):
         raise HTTPException(status_code=400, detail="track_mode must be 'own' or 'competitor'")
 
-    canonical_vendor = await resolve_vendor_name(req.vendor_name)
-    label = req.label.strip() if req.label else ""
+    canonical_vendor = await resolve_vendor_name(vendor_name)
+    label = _clean_optional_text(req.label) or ""
     async with pool.transaction() as conn:
         existing_row = await conn.fetchrow(
             """
@@ -1246,10 +1247,11 @@ async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(req
 async def remove_tracked_vendor(vendor_name: str, user: AuthUser = Depends(require_auth)):
     """Remove a tracked vendor."""
     _require_b2b_product(user)
+    vname = _clean_required_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
 
-    canonical_vendor = await resolve_vendor_name(vendor_name)
+    canonical_vendor = await resolve_vendor_name(vname)
     was_tracked = await pool.fetchval(
         """
         SELECT 1
@@ -1284,13 +1286,14 @@ async def search_available_vendors(
 ):
     """Search b2b_churn_signals for vendors matching query (for onboarding)."""
     _require_b2b_product(user)
+    query_text = _clean_required_text(q, "q")
     pool = _pool_or_503()
 
     from ..autonomous.tasks._b2b_shared import read_best_vendor_signal_rows
 
     rows = await read_best_vendor_signal_rows(
         pool,
-        vendor_name_query=q.strip(),
+        vendor_name_query=query_text,
         limit=min(limit, 50),
     )
 

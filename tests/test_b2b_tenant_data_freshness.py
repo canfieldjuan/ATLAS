@@ -1316,7 +1316,7 @@ async def test_search_available_vendors_reads_best_signal_rows(monkeypatch):
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
 
-    result = await mod.search_available_vendors(q="Zen", limit=10, user=user)
+    result = await mod.search_available_vendors(q=" Zen ", limit=10, user=user)
 
     assert result == {
         "vendors": [
@@ -1334,6 +1334,68 @@ async def test_search_available_vendors_reads_best_signal_rows(monkeypatch):
     assert "sig.vendor_name ILIKE '%' || $1 || '%'" in search_sql
     assert search_query == "Zen"
     assert search_limit == 10
+
+@pytest.mark.asyncio
+async def test_tracked_vendor_routes_reject_blank_required_text_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    resolver = AsyncMock(side_effect=AssertionError("resolver should not be touched"))
+    monkeypatch.setattr(mod, "resolve_vendor_name", resolver)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    cases = [
+        (
+            lambda: mod.add_tracked_vendor(
+                req=mod.AddVendorRequest(vendor_name="   ", track_mode="own"),
+                user=user,
+            ),
+            "vendor_name is required",
+        ),
+        (lambda: mod.remove_tracked_vendor("   ", user=user), "vendor_name is required"),
+        (lambda: mod.search_available_vendors(q="   ", limit=10, user=user), "q is required"),
+    ]
+
+    for call, detail in cases:
+        monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        with pytest.raises(mod.HTTPException) as exc:
+            await call()
+        assert exc.value.status_code == 400
+        assert exc.value.detail == detail
+
+    assert resolver.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_remove_tracked_vendor_trims_vendor_before_resolution(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(return_value=1),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    resolver = AsyncMock(return_value="Zendesk")
+    cleanup = AsyncMock(return_value={"removed_sources": ["manual"], "still_tracked": False})
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "resolve_vendor_name", resolver)
+    monkeypatch.setattr(mod, "purge_tracked_vendor_sources", cleanup)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.remove_tracked_vendor(" Zendesk ", user=user)
+
+    resolver.assert_awaited_once_with("Zendesk")
+    assert pool.fetchval.await_args.args[1:] == (UUID(user.account_id), "Zendesk")
+    cleanup.assert_awaited_once_with(pool, str(UUID(user.account_id)), "Zendesk")
+    assert result == {
+        "status": "ok",
+        "vendor_name": "Zendesk",
+        "removed_sources": ["manual"],
+        "still_tracked": False,
+    }
+
 
 
 @pytest.mark.asyncio
