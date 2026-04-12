@@ -327,7 +327,8 @@ function watchlistViewUrl(viewId: string) {
 function parseBackTo(value: string | null) {
   if (!value) return null
   if (
-    value.startsWith('/evidence')
+    value.startsWith('/alerts')
+    || value.startsWith('/evidence')
     || value.startsWith('/vendors/')
     || value.startsWith('/reports')
     || value.startsWith('/opportunities')
@@ -337,7 +338,8 @@ function parseBackTo(value: string | null) {
     if (
       url.origin === window.location.origin
       && (
-        url.pathname === '/evidence'
+        url.pathname === '/alerts'
+        || url.pathname === '/evidence'
         || url.pathname.startsWith('/vendors/')
         || url.pathname === '/reports'
         || url.pathname === '/opportunities'
@@ -353,6 +355,7 @@ function parseBackTo(value: string | null) {
 
 function backToLabel(value: string | null) {
   if (!value) return 'Back'
+  if (value.startsWith('/alerts')) return 'Back to Alerts'
   if (value.startsWith('/evidence')) return 'Back to Evidence'
   if (value.startsWith('/vendors/')) return 'Back to Vendor'
   if (value.startsWith('/reports')) return 'Back to Reports'

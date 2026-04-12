@@ -1029,6 +1029,33 @@ describe('Watchlists', () => {
     })
   })
 
+  it('preserves alerts return links on a vendor-focused watchlist URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&back_to=%2Falerts%3Fwebhook%3Dwh-1%26days%3D30']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Back to Alerts' })).toHaveAttribute(
+      'href',
+      '/alerts?webhook=wh-1&days=30',
+    )
+  })
+
+  it('preserves alerts return links when account review state is opened from the URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Falerts%3Fwebhook%3Dwh-1%26days%3D30']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Back to Alerts' })).toHaveAttribute(
+      'href',
+      '/alerts?webhook=wh-1&days=30',
+    )
+    expect(await screen.findByLabelText('Account movement evidence')).toBeInTheDocument()
+  })
+
   it('adds account drawer focus to the URL when an account row is opened', async () => {
     const user = userEvent.setup()
 
