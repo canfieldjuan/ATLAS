@@ -295,3 +295,42 @@ def test_get_enrichment_stats_keeps_global_query_without_auth(monkeypatch):
     query, *params = pool.fetchrow.await_args.args
     assert "WHERE account_id = $1::uuid" not in query
     assert params == []
+
+
+def test_ingest_hubspot_webhook_persists_account_id(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+    app.dependency_overrides[crm_events_api.optional_auth] = lambda: SimpleNamespace(
+        account_id="11111111-1111-1111-1111-111111111111"
+    )
+
+    monkeypatch.setattr(crm_events_api.settings.crm_event, "enabled", True)
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.execute = AsyncMock(return_value="INSERT 0 1")
+    monkeypatch.setattr(crm_events_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/crm/events/hubspot",
+            json={
+                "subscriptionType": "deal.propertyChange",
+                "objectId": 123,
+                "propertyName": "dealstage",
+                "propertyValue": "closedwon",
+                "occurredAt": 1712916000000,
+                "properties": {
+                    "company": "Acme Corp",
+                    "email": "owner@acme.test",
+                    "dealname": "Renewal",
+                    "amount": "1200",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    query, *params = pool.execute.await_args.args
+    assert "processing_notes, account_id" in query
+    assert "$12::uuid" in query
+    assert "COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in query
+    assert params[-1] == "11111111-1111-1111-1111-111111111111"

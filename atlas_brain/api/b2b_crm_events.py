@@ -466,14 +466,15 @@ async def ingest_hubspot_webhook(
                     crm_provider, crm_event_id, event_type,
                     company_name, contact_email, deal_id, deal_name,
                     deal_stage, deal_amount, event_data, event_timestamp,
-                    processing_notes
-                ) VALUES ('hubspot', $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
+                    processing_notes, account_id
+                ) VALUES ('hubspot', $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::uuid)
                 ON CONFLICT (crm_provider, crm_event_id)
                     WHERE crm_event_id IS NOT NULL
                 DO UPDATE SET
                     event_type = EXCLUDED.event_type,
                     deal_stage = EXCLUDED.deal_stage,
                     event_data = EXCLUDED.event_data,
+                    account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                     status = 'pending',
                     processed_at = NULL
                 """,
@@ -488,6 +489,7 @@ async def ingest_hubspot_webhook(
                 json.dumps(evt, default=str),
                 event_ts,
                 notes,
+                str(user.account_id),
             )
             ingested += 1
         except Exception:
