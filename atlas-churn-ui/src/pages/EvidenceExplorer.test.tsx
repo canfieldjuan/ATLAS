@@ -498,6 +498,38 @@ describe('EvidenceExplorer', () => {
     })
   })
 
+  it('prefers the exact upstream opportunities shortcut when entered from an opportunity path', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fopportunities%253Fvendor%253DZendesk%2526stage%253Dexpansion%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const opportunitiesLink = await screen.findByRole('link', { name: 'Opportunities' })
+    expect(opportunitiesLink).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Zendesk&stage=expansion&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('copies the exact upstream opportunities shortcut when entered from an opportunity path', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fopportunities%253Fvendor%253DZendesk%2526stage%253Dexpansion%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const opportunitiesLink = await screen.findByRole('link', { name: 'Opportunities' })
+    await user.click(screen.getByRole('button', { name: 'Copy opportunities link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${opportunitiesLink.getAttribute('href')}`)
+    })
+  })
+
   it('copies the active opportunities shortcut link', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
