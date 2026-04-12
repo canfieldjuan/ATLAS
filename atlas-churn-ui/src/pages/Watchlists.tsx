@@ -546,6 +546,15 @@ function watchlistAlertEventVendorPath(searchParams: URLSearchParams, event: Wat
   return watchlistVendorPath(watchlistAlertEventContextParams(searchParams, event), vendorName)
 }
 
+function watchlistAlertEventAlertsPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const vendorName = watchlistAlertEventVendorName(event)
+  if (!vendorName) return null
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', watchlistPath(watchlistAlertEventContextParams(searchParams, event)))
+  return `/alerts?${params.toString()}`
+}
+
 function watchlistAlertEventReportsPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
   const vendorName = watchlistAlertEventVendorName(event)
   if (!vendorName) return null
@@ -584,6 +593,11 @@ function watchlistAlertEventEvidenceUrl(
 
 function watchlistAlertEventVendorUrl(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
   const path = watchlistAlertEventVendorPath(searchParams, event)
+  return path ? `${window.location.origin}${path}` : null
+}
+
+function watchlistAlertEventAlertsUrl(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  const path = watchlistAlertEventAlertsPath(searchParams, event)
   return path ? `${window.location.origin}${path}` : null
 }
 
@@ -1094,9 +1108,75 @@ export default function Watchlists() {
     const durableViewId = initialRequestedWatchlistViewIdRef.current || requestedWatchlistViewId || activeWatchlistView?.id || ''
     if (durableViewId) {
       next.set('view', durableViewId)
+    } else {
+      next.delete('view')
+    }
+    if (selectedVendorFilter.trim()) {
+      next.set('vendor_name', selectedVendorFilter.trim())
+    } else {
+      next.delete('vendor_name')
+    }
+    if (selectedSourceFilter.trim()) {
+      next.set('source', selectedSourceFilter.trim())
+    } else {
+      next.delete('source')
+    }
+    if (selectedCategoryFilter.trim()) {
+      next.set('category', selectedCategoryFilter.trim())
+    } else {
+      next.delete('category')
+    }
+    if (selectedMinUrgency.trim()) {
+      next.set('min_urgency', selectedMinUrgency.trim())
+    } else {
+      next.delete('min_urgency')
+    }
+    if (freshOnly) {
+      next.set('fresh_only', 'true')
+    } else {
+      next.delete('fresh_only')
+    }
+    if (namedAccountsOnly) {
+      next.set('named_accounts_only', 'true')
+    } else {
+      next.delete('named_accounts_only')
+    }
+    if (changedWedgesOnly) {
+      next.set('changed_wedges_only', 'true')
+    } else {
+      next.delete('changed_wedges_only')
+    }
+    if (vendorAlertThreshold.trim()) {
+      next.set('vendor_alert_threshold', vendorAlertThreshold.trim())
+    } else {
+      next.delete('vendor_alert_threshold')
+    }
+    if (accountAlertThreshold.trim()) {
+      next.set('account_alert_threshold', accountAlertThreshold.trim())
+    } else {
+      next.delete('account_alert_threshold')
+    }
+    if (staleDaysThreshold.trim()) {
+      next.set('stale_days_threshold', staleDaysThreshold.trim())
+    } else {
+      next.delete('stale_days_threshold')
     }
     return next
-  }, [activeWatchlistView?.id, requestedWatchlistViewId, searchParams])
+  }, [
+    accountAlertThreshold,
+    activeWatchlistView?.id,
+    changedWedgesOnly,
+    freshOnly,
+    namedAccountsOnly,
+    requestedWatchlistViewId,
+    searchParams,
+    selectedCategoryFilter,
+    selectedMinUrgency,
+    selectedSourceFilter,
+    selectedVendorFilter,
+    staleDaysThreshold,
+    vendorAlertThreshold,
+  ])
   const selectedAccountSearchParams = useMemo(
     () => (selectedAccount
       ? accountFocusParams(outboundWatchlistSearchParams, selectedAccount)
@@ -1708,7 +1788,7 @@ export default function Watchlists() {
 
   async function handleCopyAlertsLink() {
     try {
-      await navigator.clipboard.writeText(watchlistAlertsUrl(searchParams))
+      await navigator.clipboard.writeText(watchlistAlertsUrl(outboundWatchlistSearchParams))
       setActionError(null)
       setActionMessage('Copied Alerts API link')
     } catch (err) {
@@ -1729,7 +1809,7 @@ export default function Watchlists() {
   }
 
   async function handleCopyAlertEventAccountReviewLink(event: WatchlistAlertEvent) {
-    const targetUrl = watchlistAlertEventAccountUrl(searchParams, event)
+    const targetUrl = watchlistAlertEventAccountUrl(outboundWatchlistSearchParams, event)
     const eventLabel = event.company_name || event.vendor_name || 'alert event'
     if (!targetUrl) return
     try {
@@ -1743,7 +1823,7 @@ export default function Watchlists() {
   }
 
   async function handleCopyAlertEventReviewLink(event: WatchlistAlertEvent, reviewId: string) {
-    const targetUrl = watchlistAlertEventReviewUrl(searchParams, event, reviewId)
+    const targetUrl = watchlistAlertEventReviewUrl(outboundWatchlistSearchParams, event, reviewId)
     const eventLabel = event.company_name || event.vendor_name || 'alert event'
     if (!targetUrl) return
     try {
@@ -1761,7 +1841,7 @@ export default function Watchlists() {
     witnessId: string,
     source?: string | null,
   ) {
-    const targetUrl = watchlistAlertEventEvidenceUrl(searchParams, event, witnessId, source)
+    const targetUrl = watchlistAlertEventEvidenceUrl(outboundWatchlistSearchParams, event, witnessId, source)
     const eventLabel = event.company_name || watchlistAlertEventVendorName(event) || 'alert event'
     if (!targetUrl) return
     try {
@@ -1775,7 +1855,7 @@ export default function Watchlists() {
   }
 
   async function handleCopyAlertEventEvidenceLink(event: WatchlistAlertEvent, source?: string | null) {
-    const targetUrl = watchlistAlertEventEvidenceUrl(searchParams, event, null, source)
+    const targetUrl = watchlistAlertEventEvidenceUrl(outboundWatchlistSearchParams, event, null, source)
     const vendorName = watchlistAlertEventVendorName(event)
     if (!targetUrl || !vendorName) return
     try {
@@ -1789,7 +1869,7 @@ export default function Watchlists() {
   }
 
   async function handleCopyAlertEventVendorLink(event: WatchlistAlertEvent) {
-    const targetUrl = watchlistAlertEventVendorUrl(searchParams, event)
+    const targetUrl = watchlistAlertEventVendorUrl(outboundWatchlistSearchParams, event)
     const vendorName = watchlistAlertEventVendorName(event)
     if (!targetUrl || !vendorName) return
     try {
@@ -1802,8 +1882,22 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyAlertEventAlertsLink(event: WatchlistAlertEvent) {
+    const targetUrl = watchlistAlertEventAlertsUrl(outboundWatchlistSearchParams, event)
+    const vendorName = watchlistAlertEventVendorName(event)
+    if (!targetUrl || !vendorName) return
+    try {
+      await navigator.clipboard.writeText(targetUrl)
+      setActionError(null)
+      setActionMessage(`Copied Alerts API link for ${vendorName}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy Alerts API link')
+    }
+  }
+
   async function handleCopyAlertEventReportsLink(event: WatchlistAlertEvent) {
-    const targetUrl = watchlistAlertEventReportsUrl(searchParams, event)
+    const targetUrl = watchlistAlertEventReportsUrl(outboundWatchlistSearchParams, event)
     const vendorName = watchlistAlertEventVendorName(event)
     if (!targetUrl || !vendorName) return
     try {
@@ -1817,7 +1911,7 @@ export default function Watchlists() {
   }
 
   async function handleCopyAlertEventOpportunitiesLink(event: WatchlistAlertEvent) {
-    const targetUrl = watchlistAlertEventOpportunitiesUrl(searchParams, event)
+    const targetUrl = watchlistAlertEventOpportunitiesUrl(outboundWatchlistSearchParams, event)
     const vendorName = watchlistAlertEventVendorName(event)
     if (!targetUrl || !vendorName) return
     try {
@@ -3449,7 +3543,7 @@ export default function Watchlists() {
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <Link
-              to={watchlistAlertsPath(searchParams)}
+              to={watchlistAlertsPath(outboundWatchlistSearchParams)}
               className="rounded-md bg-violet-500/10 px-3 py-2 text-center text-sm font-medium text-violet-300 hover:bg-violet-500/20"
             >
               Alerts API
@@ -3512,17 +3606,18 @@ export default function Watchlists() {
                   const primaryReviewId = watchlistAlertEventPrimaryReviewId(event)
                   const primaryWitnessId = watchlistAlertEventPrimaryWitnessId(event)
                   const eventSource = event.source || selectedSourceFilter || null
-                  const accountReviewPath = watchlistAlertEventAccountPath(searchParams, event)
+                  const accountReviewPath = watchlistAlertEventAccountPath(outboundWatchlistSearchParams, event)
                   const reviewPath = primaryReviewId
-                    ? watchlistAlertEventReviewDetailPath(searchParams, event, primaryReviewId)
+                    ? watchlistAlertEventReviewDetailPath(outboundWatchlistSearchParams, event, primaryReviewId)
                     : null
-                  const evidencePath = watchlistAlertEventEvidencePath(searchParams, event, null, eventSource)
+                  const evidencePath = watchlistAlertEventEvidencePath(outboundWatchlistSearchParams, event, null, eventSource)
                   const witnessPath = primaryWitnessId
-                    ? watchlistAlertEventEvidencePath(searchParams, event, primaryWitnessId, eventSource)
+                    ? watchlistAlertEventEvidencePath(outboundWatchlistSearchParams, event, primaryWitnessId, eventSource)
                     : null
-                  const vendorWorkspacePath = watchlistAlertEventVendorPath(searchParams, event)
-                  const reportsPath = watchlistAlertEventReportsPath(searchParams, event)
-                  const opportunitiesPath = watchlistAlertEventOpportunitiesPath(searchParams, event)
+                  const vendorWorkspacePath = watchlistAlertEventVendorPath(outboundWatchlistSearchParams, event)
+                  const alertsPath = watchlistAlertEventAlertsPath(outboundWatchlistSearchParams, event)
+                  const reportsPath = watchlistAlertEventReportsPath(outboundWatchlistSearchParams, event)
+                  const opportunitiesPath = watchlistAlertEventOpportunitiesPath(outboundWatchlistSearchParams, event)
                   const eventLabel = event.company_name || vendorName
                   return (
                     <div
@@ -3604,6 +3699,25 @@ export default function Watchlists() {
                                 className="text-slate-300 hover:text-slate-200"
                               >
                                 Copy witness
+                              </button>
+                            ) : null}
+                            {alertsPath ? (
+                              <Link
+                                to={alertsPath}
+                                aria-label={`Open alert delivery activity for ${vendorName}`}
+                                className="text-violet-200 hover:text-violet-100"
+                              >
+                                Alerts API
+                              </Link>
+                            ) : null}
+                            {vendorName ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyAlertEventAlertsLink(event)}
+                                aria-label={`Copy alert delivery activity link for ${vendorName}`}
+                                className="text-slate-300 hover:text-slate-200"
+                              >
+                                Copy alerts
                               </button>
                             ) : null}
                             {evidencePath ? (

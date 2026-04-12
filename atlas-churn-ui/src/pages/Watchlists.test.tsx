@@ -563,6 +563,7 @@ describe('Watchlists', () => {
     })
 
     const feedControls = screen.getByRole('group', { name: 'Feed controls' })
+    await within(feedControls).findByRole('option', { name: 'Intercom' })
 
     await user.selectOptions(within(feedControls).getByLabelText('Vendors'), 'Intercom')
     await waitFor(() => {
@@ -898,6 +899,7 @@ describe('Watchlists', () => {
     const accountReviewLink = await screen.findByLabelText('Open alert account review for Acme Corp')
     const reviewLink = screen.getByLabelText('Open alert review detail for Acme Corp')
     const witnessLink = screen.getByLabelText('Open alert witness for Acme Corp')
+    const alertsLink = screen.getByLabelText('Open alert delivery activity for Zendesk')
     const vendorLink = screen.getByLabelText('Open alert vendor workspace for Zendesk')
     const reportsLink = screen.getByLabelText('Open alert reports for Zendesk')
     const opportunitiesLink = screen.getByLabelText('Open alert opportunities for Zendesk')
@@ -928,6 +930,17 @@ describe('Watchlists', () => {
     expect(witnessBackTo.pathname).toBe('/watchlists')
     expect(witnessBackTo.searchParams.get('account_company')).toBe('Acme Corp')
     expect(witnessBackTo.searchParams.get('account_report_date')).toBe('2026-04-07')
+
+    const alertsUrl = new URL(alertsLink.getAttribute('href') || '', 'https://atlas.test')
+    expect(alertsUrl.pathname).toBe('/alerts')
+    expect(alertsUrl.searchParams.get('vendor')).toBe('Zendesk')
+    const alertsBackTo = new URL(alertsUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+    expect(alertsBackTo.pathname).toBe('/watchlists')
+    expect(alertsBackTo.searchParams.get('view')).toBe('view-1')
+    expect(alertsBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(alertsBackTo.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(alertsBackTo.searchParams.get('account_report_date')).toBe('2026-04-07')
+    expect(alertsBackTo.searchParams.get('account_watch_vendor')).toBe('Intercom')
 
     const vendorUrl = new URL(vendorLink.getAttribute('href') || '', 'https://atlas.test')
     expect(vendorUrl.pathname).toBe('/vendors/Zendesk')
@@ -1040,7 +1053,9 @@ describe('Watchlists', () => {
       </MemoryRouter>,
     )
 
-    await user.click(await screen.findByRole('button', { name: 'Copy alert account review link for Acme Corp' }))
+    await screen.findByLabelText('Open alert account review for Acme Corp', {}, { timeout: 3000 })
+
+    await user.click(screen.getByRole('button', { name: 'Copy alert account review link for Acme Corp' }))
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalled()
     })
@@ -1078,9 +1093,31 @@ describe('Watchlists', () => {
     expect(witnessBackTo.searchParams.get('account_company')).toBe('Acme Corp')
     expect(await screen.findByText('Copied witness link for Acme Corp')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Copy alert evidence link for Zendesk' }))
+    await user.click(screen.getByRole('button', { name: 'Copy alert delivery activity link for Zendesk' }))
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledTimes(4)
+    })
+    copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/alerts')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Zendesk')
+    let alertsBackTo = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+    expect(alertsBackTo.pathname).toBe('/watchlists')
+    expect(alertsBackTo.searchParams.get('view')).toBe('view-1')
+    expect(alertsBackTo.searchParams.get('source')).toBe('reddit')
+    expect(alertsBackTo.searchParams.get('category')).toBe('Helpdesk')
+    expect(alertsBackTo.searchParams.get('min_urgency')).toBe('8')
+    expect(alertsBackTo.searchParams.get('fresh_only')).toBe('true')
+    expect(alertsBackTo.searchParams.get('named_accounts_only')).toBe('true')
+    expect(alertsBackTo.searchParams.get('changed_wedges_only')).toBe('true')
+    expect(alertsBackTo.searchParams.get('vendor_alert_threshold')).toBe('7.5')
+    expect(alertsBackTo.searchParams.get('account_alert_threshold')).toBe('8.5')
+    expect(alertsBackTo.searchParams.get('stale_days_threshold')).toBe('1')
+    expect(await screen.findByText('Copied Alerts API link for Zendesk')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Copy alert evidence link for Zendesk' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledTimes(5)
     })
     copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
     copiedUrl = new URL(copiedText)
@@ -1095,7 +1132,7 @@ describe('Watchlists', () => {
 
     await user.click(screen.getByRole('button', { name: 'Copy alert vendor workspace link for Zendesk' }))
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledTimes(5)
+      expect(clipboardSpy).toHaveBeenCalledTimes(6)
     })
     copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
     copiedUrl = new URL(copiedText)
@@ -1116,7 +1153,7 @@ describe('Watchlists', () => {
 
     await user.click(screen.getByRole('button', { name: 'Copy alert reports link for Zendesk' }))
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledTimes(6)
+      expect(clipboardSpy).toHaveBeenCalledTimes(7)
     })
     copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
     copiedUrl = new URL(copiedText)
@@ -1138,7 +1175,7 @@ describe('Watchlists', () => {
 
     await user.click(screen.getByRole('button', { name: 'Copy alert opportunities link for Zendesk' }))
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledTimes(7)
+      expect(clipboardSpy).toHaveBeenCalledTimes(8)
     })
     copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
     copiedUrl = new URL(copiedText)
@@ -3209,8 +3246,8 @@ describe('Watchlists', () => {
     )
 
     await screen.findByRole('heading', { name: 'Watchlists' })
-    await user.click(screen.getAllByRole('button', { name: /Intercom weekly email/i })[0])
-    await user.click(screen.getByRole('button', { name: 'Update active view' }))
+    await user.click((await screen.findAllByRole('button', { name: /Intercom weekly email/i }, { timeout: 3000 }))[0])
+    await user.click(await screen.findByRole('button', { name: 'Update active view' }))
 
     await waitFor(() => {
       expect(api.updateWatchlistView).toHaveBeenCalledWith('view-2', expect.objectContaining({
