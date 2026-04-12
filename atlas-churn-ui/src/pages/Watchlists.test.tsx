@@ -2196,6 +2196,148 @@ describe('Watchlists', () => {
     )
   })
 
+  it('uses an in-app confirmation modal before deleting a saved view', async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_names: ['Intercom'],
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: false,
+          vendor_alert_threshold: 8,
+          account_alert_threshold: 9,
+          stale_days_threshold: 7,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: '2026-04-08T09:00:00Z',
+          last_alert_delivery_status: 'sent',
+          last_alert_delivery_at: '2026-04-07T09:00:00Z',
+          created_at: '2026-04-07T08:00:00Z',
+          updated_at: '2026-04-07T08:30:00Z',
+        },
+      ],
+      count: 1,
+    })
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/watchlists']}>
+          <Watchlists />
+        </MemoryRouter>,
+      )
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete saved view Fresh named Intercom' })
+      await user.click(deleteButton)
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      const dialog = await screen.findByRole('alertdialog')
+      expect(dialog).toHaveTextContent('Delete saved view Fresh named Intercom?')
+
+      await user.click(within(dialog).getByRole('button', { name: 'Delete saved view' }))
+
+      await waitFor(() => {
+        expect(api.deleteWatchlistView).toHaveBeenCalledWith('view-1')
+      })
+      expect(await screen.findByText('Deleted saved view Fresh named Intercom')).toBeInTheDocument()
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('uses an in-app confirmation modal before removing a tracked vendor', async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
+
+    try {
+      render(
+        <MemoryRouter>
+          <Watchlists />
+        </MemoryRouter>,
+      )
+
+      const removeButton = await screen.findByRole('button', { name: 'Remove' })
+      await user.click(removeButton)
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      const dialog = await screen.findByRole('alertdialog')
+      expect(dialog).toHaveTextContent('Remove Intercom from your watchlists?')
+
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() => {
+        expect(api.removeTrackedVendor).not.toHaveBeenCalled()
+      })
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('uses an in-app confirmation modal before deleting a competitive set', async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
+    api.listCompetitiveSets.mockResolvedValue({
+      competitive_sets: [
+        {
+          id: 'set-1',
+          name: 'Helpdesk core',
+          focal_vendor_name: 'Intercom',
+          competitor_vendor_names: ['Zendesk', 'Freshdesk'],
+          active: true,
+          refresh_mode: 'manual',
+          refresh_interval_hours: null,
+          vendor_synthesis_enabled: true,
+          pairwise_enabled: true,
+          category_council_enabled: false,
+          asymmetry_enabled: true,
+          last_run_at: null,
+          last_success_at: null,
+          last_run_status: null,
+          last_run_summary: {},
+          created_at: '2026-04-07T12:00:00Z',
+          updated_at: '2026-04-07T12:00:00Z',
+        },
+      ],
+      count: 1,
+      defaults: {
+        default_refresh_interval_hours: 24,
+        max_competitors: 5,
+        default_changed_vendors_only: true,
+      },
+    })
+
+    try {
+      render(
+        <MemoryRouter>
+          <Watchlists />
+        </MemoryRouter>,
+      )
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' })
+      await user.click(deleteButton)
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      const dialog = await screen.findByRole('alertdialog')
+      expect(dialog).toHaveTextContent('Delete competitive set Helpdesk core?')
+
+      await user.click(within(dialog).getByRole('button', { name: 'Delete competitive set' }))
+
+      await waitFor(() => {
+        expect(api.deleteCompetitiveSet).toHaveBeenCalledWith('set-1')
+      })
+      expect(await screen.findByText('Deleted competitive set Helpdesk core')).toBeInTheDocument()
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
   it('evaluates persisted alert events for the active saved view', async () => {
     const user = userEvent.setup()
     api.listWatchlistViews.mockResolvedValue({

@@ -639,6 +639,122 @@ function alertEventLabel(event: WatchlistAlertEvent) {
   return 'vendor alert'
 }
 
+type PendingWatchlistDestructiveAction =
+  | { kind: 'delete_watchlist_view'; view: WatchlistView }
+  | { kind: 'remove_vendor'; vendorName: string }
+  | { kind: 'delete_competitive_set'; item: CompetitiveSet }
+
+function describePendingWatchlistDestructiveAction(action: PendingWatchlistDestructiveAction) {
+  switch (action.kind) {
+    case 'delete_watchlist_view':
+      return {
+        title: 'Delete saved view',
+        message: `Delete saved view ${action.view.name}? This removes the saved monitoring slice and its delivery settings.`,
+        confirmLabel: 'Delete saved view',
+        confirmingLabel: 'Deleting...',
+      }
+    case 'remove_vendor':
+      return {
+        title: 'Remove tracked vendor',
+        message: `Remove ${action.vendorName} from your watchlists? This stops it from appearing in tracked monitoring and vendor-scoped shortcuts.`,
+        confirmLabel: 'Remove vendor',
+        confirmingLabel: 'Removing...',
+      }
+    case 'delete_competitive_set':
+      return {
+        title: 'Delete competitive set',
+        message: `Delete competitive set ${action.item.name}? This removes the saved comparison scope and its preview history.`,
+        confirmLabel: 'Delete competitive set',
+        confirmingLabel: 'Deleting...',
+      }
+  }
+}
+
+function DestructiveActionModal({
+  title,
+  message,
+  confirmLabel,
+  confirmingLabel,
+  confirming,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string
+  message: string
+  confirmLabel: string
+  confirmingLabel: string
+  confirming: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-slate-950/80"
+        onClick={() => {
+          if (!confirming) onCancel()
+        }}
+      />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="watchlists-destructive-action-title"
+        className="relative z-10 w-full max-w-md rounded-xl border border-rose-500/20 bg-slate-950 p-6 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="rounded-lg bg-rose-500/10 p-2 text-rose-300">
+              <Trash2 className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 id="watchlists-destructive-action-title" className="text-base font-semibold text-white">
+                {title}
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">{message}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!confirming) onCancel()
+            }}
+            className="text-slate-500 hover:text-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={confirming}
+            aria-label="Close destructive action dialog"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {error ? (
+          <div role="alert" className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+            {error}
+          </div>
+        ) : null}
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={confirming}
+            className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={confirming}
+            className="rounded-md bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {confirming ? confirmingLabel : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Watchlists() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -681,6 +797,8 @@ export default function Watchlists() {
   const [previewingCompetitiveSetId, setPreviewingCompetitiveSetId] = useState<string | null>(null)
   const [openCompetitiveSetPreviewId, setOpenCompetitiveSetPreviewId] = useState<string | null>(null)
   const [deletingCompetitiveSetId, setDeletingCompetitiveSetId] = useState<string | null>(null)
+  const [pendingDestructiveAction, setPendingDestructiveAction] = useState<PendingWatchlistDestructiveAction | null>(null)
+  const [pendingDestructiveError, setPendingDestructiveError] = useState<string | null>(null)
   const [editingCompetitiveSetId, setEditingCompetitiveSetId] = useState<string | null>(null)
   const [competitiveSetPreviews, setCompetitiveSetPreviews] = useState<Record<string, CompetitiveSetPlan>>({})
   const [competitiveSetRuns, setCompetitiveSetRuns] = useState<Record<string, CompetitiveSetRun[]>>({})
@@ -712,6 +830,20 @@ export default function Watchlists() {
       setGeneratingCampaignFor(null)
     }
   }
+
+  function openDestructiveAction(action: PendingWatchlistDestructiveAction) {
+    setPendingDestructiveAction(action)
+    setPendingDestructiveError(null)
+    setActionMessage(null)
+    setActionError(null)
+  }
+
+  function closeDestructiveAction() {
+    if (deletingWatchlistViewId || removingVendor || deletingCompetitiveSetId) return
+    setPendingDestructiveAction(null)
+    setPendingDestructiveError(null)
+  }
+
   const [competitiveSetName, setCompetitiveSetName] = useState('')
   const [competitiveSetFocal, setCompetitiveSetFocal] = useState('')
   const [competitiveSetCompetitors, setCompetitiveSetCompetitors] = useState<string[]>([])
@@ -1995,20 +2127,23 @@ export default function Watchlists() {
     }
   }
 
-  async function handleDeleteWatchlistView(view: WatchlistView) {
-    if (!confirm(`Delete saved view ${view.name}?`)) return
+  function handleDeleteWatchlistView(view: WatchlistView) {
+    openDestructiveAction({ kind: 'delete_watchlist_view', view })
+  }
+
+  async function confirmDeleteWatchlistView(view: WatchlistView) {
     setDeletingWatchlistViewId(view.id)
-    setActionError(null)
-    setActionMessage(null)
     try {
       await deleteWatchlistView(view.id)
       if (activeWatchlistView?.id === view.id) {
         setSavedViewName('')
       }
+      setPendingDestructiveAction(null)
+      setPendingDestructiveError(null)
       setActionMessage(`Deleted saved view ${view.name}`)
       refresh()
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to delete saved view')
+      setPendingDestructiveError(err instanceof Error ? err.message : 'Failed to delete saved view')
     } finally {
       setDeletingWatchlistViewId(null)
     }
@@ -2079,17 +2214,20 @@ export default function Watchlists() {
     }
   }
 
-  async function handleRemoveVendor(vendorName: string) {
-    if (!confirm(`Remove ${vendorName} from your watchlists?`)) return
+  function handleRemoveVendor(vendorName: string) {
+    openDestructiveAction({ kind: 'remove_vendor', vendorName })
+  }
+
+  async function confirmRemoveVendor(vendorName: string) {
     setRemovingVendor(vendorName)
-    setActionError(null)
-    setActionMessage(null)
     try {
       await removeTrackedVendor(vendorName)
+      setPendingDestructiveAction(null)
+      setPendingDestructiveError(null)
       setActionMessage(`${vendorName} removed from watchlists`)
       refresh()
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to remove vendor')
+      setPendingDestructiveError(err instanceof Error ? err.message : 'Failed to remove vendor')
     } finally {
       setRemovingVendor(null)
     }
@@ -2148,18 +2286,21 @@ export default function Watchlists() {
     }
   }
 
-  async function handleDeleteCompetitiveSet(item: CompetitiveSet) {
-    if (!confirm(`Delete competitive set ${item.name}?`)) return
+  function handleDeleteCompetitiveSet(item: CompetitiveSet) {
+    openDestructiveAction({ kind: 'delete_competitive_set', item })
+  }
+
+  async function confirmDeleteCompetitiveSet(item: CompetitiveSet) {
     setDeletingCompetitiveSetId(item.id)
-    setActionError(null)
-    setActionMessage(null)
     try {
       await deleteCompetitiveSet(item.id)
       if (editingCompetitiveSetId === item.id) resetCompetitiveSetForm()
+      setPendingDestructiveAction(null)
+      setPendingDestructiveError(null)
       setActionMessage(`Deleted competitive set ${item.name}`)
       refresh()
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to delete competitive set')
+      setPendingDestructiveError(err instanceof Error ? err.message : 'Failed to delete competitive set')
     } finally {
       setDeletingCompetitiveSetId(null)
     }
@@ -2953,6 +3094,34 @@ export default function Watchlists() {
       },
     },
   ]
+
+  async function handleConfirmDestructiveAction() {
+    if (!pendingDestructiveAction) return
+    switch (pendingDestructiveAction.kind) {
+      case 'delete_watchlist_view':
+        await confirmDeleteWatchlistView(pendingDestructiveAction.view)
+        return
+      case 'remove_vendor':
+        await confirmRemoveVendor(pendingDestructiveAction.vendorName)
+        return
+      case 'delete_competitive_set':
+        await confirmDeleteCompetitiveSet(pendingDestructiveAction.item)
+        return
+    }
+  }
+
+  const pendingDestructiveActionConfig = pendingDestructiveAction
+    ? describePendingWatchlistDestructiveAction(pendingDestructiveAction)
+    : null
+  const pendingDestructiveActionBusy = pendingDestructiveAction
+    ? (
+        pendingDestructiveAction.kind === 'delete_watchlist_view'
+          ? deletingWatchlistViewId === pendingDestructiveAction.view.id
+          : pendingDestructiveAction.kind === 'remove_vendor'
+            ? removingVendor === pendingDestructiveAction.vendorName
+            : deletingCompetitiveSetId === pendingDestructiveAction.item.id
+      )
+    : false
 
   if (error) return <PageError error={error} onRetry={refresh} />
 
@@ -4364,6 +4533,21 @@ export default function Watchlists() {
           </div>
         </div>
       </div>
+      {pendingDestructiveAction && pendingDestructiveActionConfig ? (
+        <DestructiveActionModal
+          title={pendingDestructiveActionConfig.title}
+          message={pendingDestructiveActionConfig.message}
+          confirmLabel={pendingDestructiveActionConfig.confirmLabel}
+          confirmingLabel={pendingDestructiveActionConfig.confirmingLabel}
+          confirming={pendingDestructiveActionBusy}
+          error={pendingDestructiveError}
+          onCancel={closeDestructiveAction}
+          onConfirm={() => {
+            void handleConfirmDestructiveAction()
+          }}
+        />
+      ) : null}
+
       <AccountMovementDrawer
         item={selectedAccount}
         open={selectedAccount != null}
