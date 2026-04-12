@@ -779,7 +779,7 @@ function latestActivityTimestamp(value: string | null | undefined) {
   return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY
 }
 
-function pickLatestVendorScopedExactTarget(
+function collectVendorScopedExactTargets(
   webhooks: WebhookSubscription[],
   manualTestResults: Record<string, ManualTestResult>,
 ) {
@@ -796,7 +796,14 @@ function pickLatestVendorScopedExactTarget(
   })
 
   candidates.sort((left, right) => latestActivityTimestamp(right.occurred_at) - latestActivityTimestamp(left.occurred_at))
-  return candidates[0] ?? null
+  return candidates
+}
+
+function pickLatestVendorScopedExactTarget(
+  webhooks: WebhookSubscription[],
+  manualTestResults: Record<string, ManualTestResult>,
+) {
+  return collectVendorScopedExactTargets(webhooks, manualTestResults)[0] ?? null
 }
 
 function DestructiveActionModal({
@@ -1096,6 +1103,16 @@ export default function IncidentAlerts() {
   const vendorScopedLatestExactTarget = useMemo(() => {
     if (!requestedVendorName.trim()) return null
     return pickLatestVendorScopedExactTarget(webhooks, manualTestResults)
+  }, [manualTestResults, requestedVendorName, webhooks])
+
+  const vendorScopedExactTargetSummary = useMemo(() => {
+    if (!requestedVendorName.trim()) return null
+    const targets = collectVendorScopedExactTargets(webhooks, manualTestResults)
+    if (!targets.length) return null
+    return {
+      count: targets.length,
+      latest: targets[0],
+    }
   }, [manualTestResults, requestedVendorName, webhooks])
 
   const clearVendorScopePath = useMemo(() => {
@@ -1703,7 +1720,7 @@ export default function IncidentAlerts() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${vendorScopedExactTargetSummary ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`}>
         <StatCard
           label={requestedVendorName ? 'Webhooks with Activity' : 'Active Webhooks'}
           value={summary?.active_subscriptions ?? 0}
@@ -1732,6 +1749,15 @@ export default function IncidentAlerts() {
           sub={`P95 ${formatDurationMs(summary?.p95_success_duration_ms)}`}
           skeleton={loading}
         />
+        {vendorScopedExactTargetSummary ? (
+          <StatCard
+            label="Exact Targets"
+            value={vendorScopedExactTargetSummary.count}
+            icon={<ArrowRight className="h-4 w-4 text-cyan-400" />}
+            sub={`${vendorScopedExactTargetSummary.latest.summary_label} · ${vendorScopedExactTargetSummary.latest.webhook_label}`}
+            skeleton={loading}
+          />
+        ) : null}
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">

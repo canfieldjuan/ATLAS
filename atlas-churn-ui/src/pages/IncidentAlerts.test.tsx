@@ -366,6 +366,82 @@ describe('IncidentAlerts', () => {
     expect(await screen.findByText('Copied account review link')).toBeInTheDocument()
   })
 
+  it('shows an exact target summary card for vendor-scoped views', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-report',
+          url: 'https://hooks.example.com/reports',
+          event_types: ['report_generated'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Report delivery',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 2,
+          recent_success_rate_7d: 1,
+          latest_failure_event_type: 'report_generated',
+          latest_failure_status_code: 500,
+          latest_failure_error: 'report publish failed',
+          latest_failure_at: '2026-04-10T02:20:00Z',
+          latest_failure_report_id: 'report-older',
+          latest_failure_report_type: 'battle_card',
+          latest_failure_report_title: 'Older Battle Card',
+          latest_failure_vendor_name: 'Acme Rival',
+        },
+        {
+          id: 'wh-crm',
+          url: 'https://hooks.example.com/crm',
+          event_types: ['high_intent_push'],
+          channel: 'crm_hubspot',
+          enabled: true,
+          description: 'CRM escalation',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 4,
+          recent_success_rate_7d: 1,
+          latest_crm_push: {
+            id: 'push-1',
+            signal_type: 'competitive_displacement',
+            signal_id: 'sig-1',
+            vendor_name: 'Acme Rival',
+            company_name: 'Acme Bank',
+            review_id: '33333333-3333-4333-8333-333333333334',
+            crm_record_id: 'deal-1',
+            crm_record_type: 'deal',
+            status: 'success',
+            error: null,
+            pushed_at: '2026-04-10T03:05:00Z',
+            account_review_focus: {
+              vendor: 'Acme Rival',
+              company: 'Acme Bank',
+              report_date: '2026-04-10',
+              watch_vendor: 'Acme Rival',
+              category: 'Switch Risk',
+              track_mode: 'competitor',
+            },
+          },
+        },
+      ],
+      count: 2,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?vendor=Acme%20Rival']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
+    const exactTargetsLabel = screen.getByText('Exact Targets')
+    const exactTargetsCard = exactTargetsLabel.closest('div')?.parentElement
+    expect(exactTargetsCard).not.toBeNull()
+    const exactTargetsRegion = within(exactTargetsCard as HTMLElement)
+    expect(exactTargetsRegion.getByText('2')).toBeInTheDocument()
+    expect(exactTargetsRegion.getByText(/Latest CRM push succeeded/)).toBeInTheDocument()
+    expect(exactTargetsRegion.getByText(/CRM escalation/)).toBeInTheDocument()
+  })
+
   it('does not show a latest exact target header region for vendor-only activity', async () => {
     api.listWebhooks.mockResolvedValueOnce({
       webhooks: [
@@ -399,6 +475,7 @@ describe('IncidentAlerts', () => {
 
     expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Latest exact target' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Exact Targets')).not.toBeInTheDocument()
   })
 
   it('uses an in-app confirmation modal before deleting a webhook', async () => {
