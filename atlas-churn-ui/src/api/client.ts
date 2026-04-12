@@ -643,11 +643,20 @@ export async function listWebhookDeliveries(webhookId: string, params?: {
   )
 }
 
-export async function listWebhookCrmPushLog(webhookId: string, limit = 20) {
+export async function listWebhookCrmPushLog(webhookId: string, params: number | {
+  limit?: number
+  status?: 'success' | 'failed'
+} = 20) {
+  const requestParams = typeof params === 'number'
+    ? { limit: params }
+    : params
   return get<{ pushes: WebhookCrmPushLogEntry[]; count: number }>(
     WEBHOOKS_BASE,
     `/webhooks/${encodeURIComponent(webhookId)}/crm-push-log`,
-    { limit },
+    {
+      limit: requestParams.limit ?? 20,
+      ...(requestParams.status ? { status: requestParams.status } : {}),
+    },
   )
 }
 

@@ -21,6 +21,54 @@ const clipboard = vi.hoisted(() => ({
 
 vi.mock('../api/client', () => api)
 
+const DEFAULT_DELIVERIES = [
+  {
+    id: 'delivery-1',
+    event_type: 'churn_alert',
+    status_code: 202,
+    duration_ms: 180,
+    attempt: 1,
+    success: true,
+    error: null,
+    delivered_at: '2026-04-10T03:05:00Z',
+    vendor_name: 'Acme Rival',
+    company_name: 'Acme Bank',
+    signal_id: '22222222-2222-2222-2222-222222222222',
+    signal_type: 'competitive_displacement',
+    review_id: '33333333-3333-4333-8333-333333333334',
+    account_review_focus: {
+      vendor: 'Acme Rival',
+      company: 'Acme Bank',
+      report_date: '2026-04-10',
+      watch_vendor: 'Acme Rival',
+      category: 'Switch Risk',
+      track_mode: 'competitor',
+    },
+  },
+  {
+    id: 'delivery-2',
+    event_type: 'signal_update',
+    status_code: 500,
+    duration_ms: 210,
+    attempt: 2,
+    success: false,
+    error: 'downstream timeout',
+    delivered_at: '2026-04-10T02:55:00Z',
+  },
+]
+
+function filterDeliveries(params?: { success?: boolean; event_type?: string; limit?: number }) {
+  let deliveries = [...DEFAULT_DELIVERIES]
+  if (typeof params?.success === 'boolean') {
+    deliveries = deliveries.filter((delivery) => delivery.success === params.success)
+  }
+  if (params?.event_type) {
+    deliveries = deliveries.filter((delivery) => delivery.event_type === params.event_type)
+  }
+  const limit = params?.limit ?? deliveries.length
+  return { deliveries: deliveries.slice(0, limit), count: deliveries.length }
+}
+
 describe('IncidentAlerts', () => {
   beforeEach(() => {
     cleanup()
@@ -66,44 +114,11 @@ describe('IncidentAlerts', () => {
       ],
       count: 1,
     })
-    api.listWebhookDeliveries.mockResolvedValue({
-      deliveries: [
-        {
-          id: 'delivery-1',
-          event_type: 'churn_alert',
-          status_code: 202,
-          duration_ms: 180,
-          attempt: 1,
-          success: true,
-          error: null,
-          delivered_at: '2026-04-10T03:05:00Z',
-          vendor_name: 'Acme Rival',
-          company_name: 'Acme Bank',
-          signal_id: '22222222-2222-2222-2222-222222222222',
-          signal_type: 'competitive_displacement',
-          review_id: '33333333-3333-4333-8333-333333333334',
-          account_review_focus: {
-            vendor: 'Acme Rival',
-            company: 'Acme Bank',
-            report_date: '2026-04-10',
-            watch_vendor: 'Acme Rival',
-            category: 'Switch Risk',
-            track_mode: 'competitor',
-          },
-        },
-        {
-          id: 'delivery-2',
-          event_type: 'signal_update',
-          status_code: 500,
-          duration_ms: 210,
-          attempt: 2,
-          success: false,
-          error: 'downstream timeout',
-          delivered_at: '2026-04-10T02:55:00Z',
-        },
-      ],
-      count: 2,
-    })
+    api.listWebhookDeliveries.mockImplementation(async (_webhookId: string, params?: {
+      success?: boolean
+      event_type?: string
+      limit?: number
+    }) => filterDeliveries(params))
     api.listWebhookCrmPushLog.mockResolvedValue({
       pushes: [],
       count: 0,
@@ -155,6 +170,47 @@ describe('IncidentAlerts', () => {
 
     expect(await screen.findByText('Latest manual test failed')).toBeInTheDocument()
     expect(screen.getByText(/test timeout/)).toBeInTheDocument()
+  })
+
+  it('does not render vendor shortcuts for synthetic persisted manual tests', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-test',
+          url: 'https://hooks.example.com/test',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Synthetic test endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 1,
+          recent_success_rate_7d: 1,
+          latest_test_success: false,
+          latest_test_status_code: 500,
+          latest_test_error: 'HTTP 500: manual test failed',
+          latest_test_at: '2026-04-10T02:40:00Z',
+          latest_test_signal_id: null,
+          latest_test_review_id: null,
+          latest_test_report_id: null,
+          latest_test_vendor_name: null,
+          latest_test_company_name: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    const summaryCard = await screen.findByText('Latest manual test failed')
+    expect(summaryCard).toBeInTheDocument()
+    expect(summaryCard.parentElement).toHaveTextContent('500')
+    expect(summaryCard.parentElement).toHaveTextContent('manual test failed')
+    expect(screen.queryByRole('link', { name: 'Vendor workspace' })).not.toBeInTheDocument()
   })
 
   it('surfaces canonical refs on the webhook summary cards', async () => {
@@ -868,6 +924,10 @@ describe('IncidentAlerts', () => {
       </MemoryRouter>,
     )
 
+    await waitFor(() => {
+      expect(api.listWebhookCrmPushLog).toHaveBeenCalledWith('wh-crm', { limit: 10, status: 'success' })
+    })
+
     expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
     expect(await screen.findByText('Acme Bank')).toBeInTheDocument()
     expect(screen.getByText('Reference IDs')).toBeInTheDocument()
@@ -1023,6 +1083,68 @@ describe('IncidentAlerts', () => {
     ))
   })
 
+  it('keeps CRM filters visible when the backend returns no matching pushes', async () => {
+    const user = userEvent.setup()
+
+    api.listWebhooks.mockResolvedValue({
+      webhooks: [
+        {
+          id: 'wh-crm',
+          url: 'https://hooks.example.com/crm',
+          event_types: ['churn_alert'],
+          channel: 'crm_hubspot',
+          enabled: true,
+          description: 'CRM escalation',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 1,
+          recent_success_rate_7d: 1,
+        },
+      ],
+      count: 1,
+    })
+    api.listWebhookCrmPushLog.mockImplementation(async (_webhookId: string, params?: {
+      limit?: number
+      status?: 'success' | 'failed'
+    }) => (
+      params?.status === 'success'
+        ? { pushes: [], count: 0 }
+        : {
+          pushes: [
+            {
+              id: 'push-failed',
+              signal_type: 'competitive_displacement',
+              signal_id: 'sig-1',
+              vendor_name: 'Acme Rival',
+              company_name: 'Acme Bank',
+              crm_record_id: 'deal-1',
+              crm_record_type: 'deal',
+              status: 'failed',
+              error: 'delivery failed',
+              pushed_at: '2026-04-10T03:05:00Z',
+            },
+          ],
+          count: 1,
+        }
+    ))
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-crm&crm_status=success']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('No CRM pushes match the current filters.')).toBeInTheDocument()
+    expect(screen.getByLabelText('CRM push status filter')).toHaveValue('success')
+
+    await user.selectOptions(screen.getByLabelText('CRM push status filter'), 'failed')
+
+    await waitFor(() => {
+      expect(api.listWebhookCrmPushLog).toHaveBeenLastCalledWith('wh-crm', { limit: 10, status: 'failed' })
+    })
+    expect(await screen.findByText('delivery failed')).toBeInTheDocument()
+  })
+
   it('filters delivery activity by result and event type', async () => {
     const user = userEvent.setup()
 
@@ -1037,11 +1159,25 @@ describe('IncidentAlerts', () => {
 
     expect(await screen.findAllByText('signal_update')).not.toHaveLength(0)
     await user.selectOptions(screen.getByLabelText('Delivery status filter'), 'failed')
+    await waitFor(() => {
+      expect(api.listWebhookDeliveries).toHaveBeenLastCalledWith('wh-1', {
+        success: false,
+        limit: 10,
+      })
+    })
     expect(screen.queryByText('attempt 1')).not.toBeInTheDocument()
     expect(screen.getByText('downstream timeout')).toBeInTheDocument()
 
     await user.selectOptions(screen.getByLabelText('Delivery event filter'), 'churn_alert')
+    await waitFor(() => {
+      expect(api.listWebhookDeliveries).toHaveBeenLastCalledWith('wh-1', {
+        success: false,
+        event_type: 'churn_alert',
+        limit: 10,
+      })
+    })
     expect(screen.getByText('No deliveries match the current filters.')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'signal_update' })).toBeInTheDocument()
   })
 
   it('applies presets and shows channel guidance', async () => {

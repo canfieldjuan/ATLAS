@@ -663,6 +663,23 @@ def _optional_query_text(value: Any) -> str | None:
     return value or None
 
 
+def _format_webhook_activity_error(
+    *,
+    status_code: Any,
+    error: Any,
+    response_body: Any,
+) -> str | None:
+    normalized_error = _optional_query_text(error)
+    if normalized_error:
+        return normalized_error
+    normalized_body = _optional_query_text(response_body)
+    if status_code is not None and normalized_body:
+        return f"HTTP {status_code}: {normalized_body}"
+    if status_code is not None:
+        return f"HTTP {status_code}"
+    return normalized_body
+
+
 def _required_query_text(value: Any, field_name: str) -> str:
     normalized = _optional_query_text(value)
     if normalized is None:
@@ -5820,9 +5837,15 @@ async def create_webhook(
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    # Validate URL scheme (prevent SSRF)
-    if not body.url.startswith(("https://", "http://")):
-        raise HTTPException(status_code=400, detail="url must begin with https:// or http://")
+    from ..services.b2b.webhook_dispatcher import validate_webhook_destination
+
+    destination_ok, destination_error = await validate_webhook_destination(
+        body.url,
+        settings.b2b_webhook,
+        resolve_dns=False,
+    )
+    if not destination_ok:
+        raise HTTPException(status_code=400, detail=destination_error)
 
     if body.channel not in VALID_WEBHOOK_CHANNELS:
         raise HTTPException(
@@ -5892,6 +5915,7 @@ async def list_webhooks(
                COALESCE(recent_activity.recent_successes, 0) AS recent_successes,
                latest_failure.event_type AS latest_failure_event_type,
                latest_failure.status_code AS latest_failure_status_code,
+               latest_failure.response_body AS latest_failure_response_body,
                latest_failure.error AS latest_failure_error,
                latest_failure.delivered_at AS latest_failure_at,
                latest_failure.signal_id AS latest_failure_signal_id,
@@ -5901,6 +5925,7 @@ async def list_webhooks(
                latest_failure.company_name AS latest_failure_company_name,
                latest_test.success AS latest_test_success,
                latest_test.status_code AS latest_test_status_code,
+               latest_test.response_body AS latest_test_response_body,
                latest_test.error AS latest_test_error,
                latest_test.delivered_at AS latest_test_at,
                latest_test.signal_id AS latest_test_signal_id,
@@ -5926,21 +5951,22 @@ async def list_webhooks(
             FROM b2b_webhook_delivery_log dl
             WHERE dl.subscription_id = ws.id
               AND dl.delivered_at > NOW() - INTERVAL '7 days'
+              AND dl.event_type <> 'test'
         ) AS recent_activity ON TRUE
         LEFT JOIN LATERAL (
-            SELECT event_type, status_code, error, delivered_at, signal_id, review_id, report_id, vendor_name, company_name
+            SELECT event_type, status_code, response_body, error, delivered_at, signal_id, review_id, report_id, vendor_name, company_name
             FROM b2b_webhook_delivery_log dl
             WHERE dl.subscription_id = ws.id
               AND NOT dl.success
-            ORDER BY dl.delivered_at DESC
+            ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC
             LIMIT 1
         ) AS latest_failure ON TRUE
         LEFT JOIN LATERAL (
-            SELECT success, status_code, error, delivered_at, signal_id, review_id, report_id, vendor_name, company_name
+            SELECT success, status_code, response_body, error, delivered_at, signal_id, review_id, report_id, vendor_name, company_name
             FROM b2b_webhook_delivery_log dl
             WHERE dl.subscription_id = ws.id
               AND dl.event_type = 'test'
-            ORDER BY dl.delivered_at DESC
+            ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC
             LIMIT 1
         ) AS latest_test ON TRUE
         LEFT JOIN LATERAL (
@@ -5948,7 +5974,7 @@ async def list_webhooks(
                    crm_record_id, crm_record_type, status, error, pushed_at
             FROM b2b_crm_push_log cp
             WHERE cp.subscription_id = ws.id
-            ORDER BY cp.pushed_at DESC
+            ORDER BY cp.pushed_at DESC, cp.id DESC
             LIMIT 1
         ) AS latest_crm ON TRUE
         WHERE ws.account_id = $1::uuid
@@ -6006,7 +6032,11 @@ async def list_webhooks(
         )
         latest_test_success = r["latest_test_success"] if "latest_test_success" in r else None
         latest_test_status_code = r["latest_test_status_code"] if "latest_test_status_code" in r else None
-        latest_test_error = r["latest_test_error"] if "latest_test_error" in r else None
+        latest_test_error = _format_webhook_activity_error(
+            status_code=latest_test_status_code,
+            error=r["latest_test_error"] if "latest_test_error" in r else None,
+            response_body=r["latest_test_response_body"] if "latest_test_response_body" in r else None,
+        )
         latest_test_at = r["latest_test_at"] if "latest_test_at" in r else None
         latest_test_signal_id = _normalize_webhook_activity_uuid_text(r["latest_test_signal_id"]) if "latest_test_signal_id" in r and r["latest_test_signal_id"] else None
         latest_test_review_id = _normalize_webhook_activity_uuid_text(r["latest_test_review_id"]) if "latest_test_review_id" in r and r["latest_test_review_id"] else None
@@ -6016,6 +6046,11 @@ async def list_webhooks(
             _optional_query_text(r["latest_test_vendor_name"]) if "latest_test_vendor_name" in r and r["latest_test_vendor_name"] else None
         ) or (latest_test_report_context or {}).get("vendor_name")
         latest_test_company_name = _optional_query_text(r["latest_test_company_name"]) if "latest_test_company_name" in r and r["latest_test_company_name"] else None
+        if latest_test_vendor_name == "test_vendor" and not any(
+            (latest_test_signal_id, latest_test_review_id, latest_test_report_id)
+        ):
+            latest_test_vendor_name = None
+            latest_test_company_name = None
         latest_test_account_review_focus = (
             await _resolve_webhook_activity_account_focus(
                 pool,
@@ -6104,7 +6139,11 @@ async def list_webhooks(
             "recent_success_rate_7d": round(r["recent_successes"] / max(recent_total, 1), 3) if recent_total else None,
             "latest_failure_event_type": r["latest_failure_event_type"],
             "latest_failure_status_code": r["latest_failure_status_code"],
-            "latest_failure_error": r["latest_failure_error"],
+            "latest_failure_error": _format_webhook_activity_error(
+                status_code=r["latest_failure_status_code"],
+                error=r["latest_failure_error"],
+                response_body=r["latest_failure_response_body"] if "latest_failure_response_body" in r else None,
+            ),
             "latest_failure_at": r["latest_failure_at"].isoformat() if r["latest_failure_at"] else None,
             "latest_failure_signal_id": latest_failure_signal_id,
             "latest_failure_review_id": latest_failure_review_id,
@@ -6163,6 +6202,7 @@ async def webhook_delivery_summary(
         LEFT JOIN b2b_webhook_delivery_log dl
             ON dl.subscription_id = ws.id
             AND dl.delivered_at > NOW() - ($2 || ' days')::interval
+            AND dl.event_type <> 'test'
         WHERE ws.account_id = $1::uuid
           AND ws.enabled = true
         """,
@@ -6261,8 +6301,16 @@ async def update_webhook(
     except ValueError:
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
-    if body.url is not None and not body.url.startswith(("https://", "http://")):
-        raise HTTPException(status_code=400, detail="url must begin with https:// or http://")
+    if body.url is not None:
+        from ..services.b2b.webhook_dispatcher import validate_webhook_destination
+
+        destination_ok, destination_error = await validate_webhook_destination(
+            body.url,
+            settings.b2b_webhook,
+            resolve_dns=False,
+        )
+        if not destination_ok:
+            raise HTTPException(status_code=400, detail=destination_error)
     if (
         body.enabled is None
         and body.event_types is None
@@ -6409,7 +6457,7 @@ async def list_webhook_deliveries(
                attempt, success, error, delivered_at
         FROM b2b_webhook_delivery_log
         WHERE {where}
-        ORDER BY delivered_at DESC
+        ORDER BY delivered_at DESC, attempt DESC, id DESC
         LIMIT ${idx}
         """,
         *params,
@@ -6527,6 +6575,7 @@ async def test_webhook(
 async def list_crm_push_log(
     webhook_id: str,
     limit: int = 50,
+    status: Optional[str] = Query(None, description="Filter by normalized CRM push status"),
     user: AuthUser | None = Depends(optional_auth),
 ):
     if not user:
@@ -6538,6 +6587,10 @@ async def list_crm_push_log(
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
     limit = max(1, min(limit, 200))
+    raw_status = status if isinstance(status, str) or status is None else None
+    normalized_status = _normalize_crm_push_status(raw_status)
+    if raw_status is not None and normalized_status not in {"success", "failed"}:
+        raise HTTPException(status_code=400, detail="status must be one of: success, failed")
     pool = _pool_or_503()
 
     # Verify ownership
@@ -6548,16 +6601,30 @@ async def list_crm_push_log(
     if not owns:
         raise HTTPException(status_code=404, detail="Webhook not found")
 
+    normalized_status_sql = (
+        "CASE WHEN lower(coalesce(status, '')) = 'pushed' THEN 'success' "
+        "ELSE lower(coalesce(status, '')) END"
+    )
+    conditions = ["subscription_id = $1"]
+    params: list[Any] = [wid]
+    idx = 2
+    if normalized_status == "success":
+        conditions.append(f"{normalized_status_sql} = ${idx}")
+        params.append("success")
+        idx += 1
+    elif normalized_status == "failed":
+        conditions.append(f"coalesce({normalized_status_sql}, '') <> 'success'")
+    params.append(limit)
     rows = await pool.fetch(
-        """
+        f"""
         SELECT id, signal_type, signal_id, review_id, vendor_name, company_name,
                crm_record_id, crm_record_type, status, error, pushed_at
         FROM b2b_crm_push_log
-        WHERE subscription_id = $1
-        ORDER BY pushed_at DESC
-        LIMIT $2
+        WHERE {' AND '.join(conditions)}
+        ORDER BY pushed_at DESC, id DESC
+        LIMIT ${idx}
         """,
-        wid, limit,
+        *params,
     )
 
     report_cache: dict[str, Any] = {}

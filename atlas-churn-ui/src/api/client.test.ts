@@ -110,7 +110,7 @@ describe('api client helpers', () => {
       event_type: 'signal_update',
       limit: 10,
     })
-    await listWebhookCrmPushLog('wh-1', 5)
+    await listWebhookCrmPushLog('wh-1', { limit: 5, status: 'success' })
 
     expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
       '/api/v1/b2b/tenant/webhooks/delivery-summary?days=30',
@@ -119,7 +119,7 @@ describe('api client helpers', () => {
       '/api/v1/b2b/tenant/webhooks/wh-1/deliveries?success=false&event_type=signal_update&limit=10',
     )
     expect(String(fetchMock.mock.calls[2]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/wh-1/crm-push-log?limit=5',
+      '/api/v1/b2b/tenant/webhooks/wh-1/crm-push-log?limit=5&status=success',
     )
   })
 

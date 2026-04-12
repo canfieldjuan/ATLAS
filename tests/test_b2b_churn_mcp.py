@@ -1504,3 +1504,124 @@ async def test_crm_mcp_list_pushes_normalizes_blank_vendor_filter():
     query, *params = pool.fetch.await_args.args
     assert "pl.vendor_name ILIKE" not in query
     assert params == [50]
+
+
+@pytest.mark.asyncio
+async def test_webhook_mcp_update_rejects_embedded_credentials_url():
+    from atlas_brain.mcp.b2b.webhooks import update_webhook
+
+    pool = _mock_pool()
+    with _patch_pool(pool):
+        raw = await update_webhook(
+            subscription_id=str(uuid4()),
+            url="https://user:pass@hooks.example.com/churn",
+        )
+
+    payload = json.loads(raw)
+    assert payload == {"error": "Webhook URL must not include embedded credentials"}
+    pool.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_webhook_mcp_update_allows_high_intent_push_for_crm_channel():
+    from atlas_brain.mcp.b2b.webhooks import update_webhook
+
+    subscription_id = uuid4()
+    pool = _mock_pool()
+    pool.fetchrow = AsyncMock(side_effect=[
+        {"channel": "crm_hubspot"},
+        {
+            "id": subscription_id,
+            "url": "https://hooks.example.com/crm",
+            "event_types": ["high_intent_push", "report_generated"],
+            "channel": "crm_hubspot",
+            "enabled": True,
+            "description": "CRM webhook",
+            "updated_at": datetime(2026, 4, 12, tzinfo=timezone.utc),
+        },
+    ])
+    with _patch_pool(pool):
+        raw = await update_webhook(
+            subscription_id=str(subscription_id),
+            event_types="high_intent_push, report_generated",
+        )
+
+    payload = json.loads(raw)
+    assert payload["success"] is True
+    assert payload["webhook"]["event_types"] == ["high_intent_push", "report_generated"]
+    validate_query, validate_id = pool.fetchrow.await_args_list[0].args
+    assert "SELECT COALESCE(channel, 'generic') AS channel" in validate_query
+    assert validate_id == subscription_id
+
+
+@pytest.mark.asyncio
+async def test_webhook_mcp_update_rejects_high_intent_push_for_generic_channel():
+    from atlas_brain.mcp.b2b.webhooks import update_webhook
+
+    subscription_id = uuid4()
+    pool = _mock_pool()
+    pool.fetchrow = AsyncMock(return_value={"channel": "generic"})
+    with _patch_pool(pool):
+        raw = await update_webhook(
+            subscription_id=str(subscription_id),
+            event_types="high_intent_push",
+        )
+
+    payload = json.loads(raw)
+    assert payload == {
+        "error": "Invalid event_types for channel generic: ['high_intent_push'] require a CRM channel",
+    }
+    assert pool.fetchrow.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_mcp_list_subscriptions_excludes_manual_tests_from_recent_stats():
+    from atlas_brain.mcp.b2b.webhooks import list_webhook_subscriptions
+
+    pool = _mock_pool(fetch_return=[
+        {
+            "id": uuid4(),
+            "account_id": uuid4(),
+            "account_name": "Acme",
+            "url": "https://hooks.example.com/churn",
+            "event_types": ["churn_alert"],
+            "channel": "generic",
+            "enabled": True,
+            "description": "Ops webhook",
+            "created_at": datetime(2026, 4, 12, tzinfo=timezone.utc),
+            "recent_deliveries": 3,
+            "recent_successes": 2,
+        }
+    ])
+    with _patch_pool(pool):
+        raw = await list_webhook_subscriptions()
+
+    payload = json.loads(raw)
+    query = pool.fetch.await_args.args[0]
+    assert "dl.event_type <> 'test'" in query
+    assert "dl2.event_type <> 'test'" in query
+    assert payload["count"] == 1
+    assert payload["subscriptions"][0]["recent_success_rate_7d"] == 0.667
+
+
+@pytest.mark.asyncio
+async def test_webhook_mcp_delivery_summary_excludes_manual_tests():
+    from atlas_brain.mcp.b2b.webhooks import get_webhook_delivery_summary
+
+    pool = _mock_pool(fetchrow_return={
+        "active_subscriptions": 2,
+        "total_deliveries": 4,
+        "successful": 3,
+        "failed": 1,
+        "avg_success_duration_ms": 120.4,
+        "last_delivery_at": datetime(2026, 4, 12, tzinfo=timezone.utc),
+    })
+    with _patch_pool(pool):
+        raw = await get_webhook_delivery_summary(days=30)
+
+    payload = json.loads(raw)
+    query = pool.fetchrow.await_args.args[0]
+    assert "dl.event_type <> 'test'" in query
+    assert payload["success"] is True
+    assert payload["total_deliveries"] == 4
+    assert payload["success_rate"] == 0.75

@@ -43,9 +43,9 @@ async def list_webhook_subscriptions(
                    ws.enabled, ws.description, ws.created_at,
                    sa.name AS account_name,
                    (SELECT COUNT(*) FROM b2b_webhook_delivery_log dl
-                    WHERE dl.subscription_id = ws.id AND dl.delivered_at > NOW() - INTERVAL '7 days') AS recent_deliveries,
+                    WHERE dl.subscription_id = ws.id AND dl.delivered_at > NOW() - INTERVAL '7 days' AND dl.event_type <> 'test') AS recent_deliveries,
                    (SELECT COUNT(*) FILTER (WHERE dl2.success) FROM b2b_webhook_delivery_log dl2
-                    WHERE dl2.subscription_id = ws.id AND dl2.delivered_at > NOW() - INTERVAL '7 days') AS recent_successes
+                    WHERE dl2.subscription_id = ws.id AND dl2.delivered_at > NOW() - INTERVAL '7 days' AND dl2.event_type <> 'test') AS recent_successes
             FROM b2b_webhook_subscriptions ws
             JOIN saas_accounts sa ON sa.id = ws.account_id
             {where}
@@ -113,17 +113,19 @@ async def update_webhook(
 
     subscription_id: UUID of the webhook to update
     enabled: Set to true/false to enable/disable the webhook
-    event_types: Comma-separated list of event types (change_event, churn_alert, report_generated, signal_update)
+    event_types: Comma-separated list of event types (change_event, churn_alert, report_generated, signal_update, high_intent_push)
     url: New webhook URL (must start with https:// or http://)
     description: New description
     """
     if not _is_uuid(subscription_id):
         return json.dumps({"error": "subscription_id must be a valid UUID"})
 
-    _valid_events = {"change_event", "churn_alert", "report_generated", "signal_update"}
-
     try:
         import uuid as _u
+
+        from ...api.b2b_dashboard import CRM_ONLY_WEBHOOK_EVENT_TYPES, VALID_WEBHOOK_EVENT_TYPES
+        from ...config import settings
+        from ...services.b2b.webhook_dispatcher import validate_webhook_destination
 
         pool = get_pool()
         if not pool.is_initialized:
@@ -132,24 +134,47 @@ async def update_webhook(
         sets: list[str] = []
         params: list = []
         idx = 1
+        subscription_uuid = _u.UUID(subscription_id)
+        current_channel = None
 
         if enabled is not None:
             sets.append(f"enabled = ${idx}")
             params.append(enabled)
             idx += 1
         if event_types is not None:
+            channel_row = await pool.fetchrow(
+                """
+                SELECT COALESCE(channel, 'generic') AS channel
+                FROM b2b_webhook_subscriptions
+                WHERE id = $1
+                """,
+                subscription_uuid,
+            )
+            if not channel_row:
+                return json.dumps({"error": "Webhook not found"})
+            current_channel = str(channel_row["channel"] or "generic").strip() or "generic"
             et_list = [e.strip() for e in event_types.split(",") if e.strip()]
-            invalid = set(et_list) - _valid_events
+            invalid = set(et_list) - VALID_WEBHOOK_EVENT_TYPES
             if invalid:
-                return json.dumps({"error": f"Invalid event_types: {sorted(invalid)}. Valid: {sorted(_valid_events)}"})
+                return json.dumps({"error": f"Invalid event_types: {sorted(invalid)}. Valid: {sorted(VALID_WEBHOOK_EVENT_TYPES)}"})
             if not et_list:
                 return json.dumps({"error": "event_types must not be empty"})
+            crm_only = set(et_list) & CRM_ONLY_WEBHOOK_EVENT_TYPES
+            if crm_only and not current_channel.startswith("crm_"):
+                return json.dumps({
+                    "error": f"Invalid event_types for channel {current_channel}: {sorted(crm_only)} require a CRM channel",
+                })
             sets.append(f"event_types = ${idx}")
             params.append(et_list)
             idx += 1
         if url is not None:
-            if not url.startswith(("https://", "http://")):
-                return json.dumps({"error": "url must begin with https:// or http://"})
+            destination_ok, destination_error = await validate_webhook_destination(
+                url,
+                settings.b2b_webhook,
+                resolve_dns=False,
+            )
+            if not destination_ok:
+                return json.dumps({"error": destination_error})
             sets.append(f"url = ${idx}")
             params.append(url)
             idx += 1
@@ -162,7 +187,7 @@ async def update_webhook(
             return json.dumps({"error": "No fields to update"})
 
         sets.append("updated_at = NOW()")
-        params.append(_u.UUID(subscription_id))
+        params.append(subscription_uuid)
 
         row = await pool.fetchrow(
             f"""
@@ -236,6 +261,7 @@ async def get_webhook_delivery_summary(
             LEFT JOIN b2b_webhook_delivery_log dl
                 ON dl.subscription_id = ws.id
                 AND dl.delivered_at > NOW() - ($1 || ' days')::interval
+                AND dl.event_type <> 'test'
             WHERE {where}
             """,
             *params,

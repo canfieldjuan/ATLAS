@@ -3697,6 +3697,10 @@ class B2BWebhookConfig(BaseSettings):
     max_retries: int = Field(default=3, ge=0, le=5, description="Max retry attempts on failure")
     retry_delay_seconds: int = Field(default=5, ge=1, le=600, description="Delay between retries")
     max_payload_bytes: int = Field(default=65536, description="Max payload size in bytes")
+    allow_non_global_destinations: bool = Field(
+        default=False,
+        description="Allow webhook deliveries to localhost, private, or otherwise non-global network destinations",
+    )
     delivery_log_retention_days: int = Field(default=30, ge=1, le=365, description="Days to keep delivery logs")
     min_change_event_severity: str = Field(
         default="moderate",

@@ -132,7 +132,7 @@ async def test_list_webhooks_exposes_latest_test_summary():
         'report_type': 'battle_card',
         'vendor_name': 'Acme Rival',
         'category_filter': None,
-        'report_title': 'Battle Card \u00b7 Acme Rival',
+        'report_title': 'Battle Card - Acme Rival',
     }
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
@@ -176,7 +176,7 @@ async def test_list_webhooks_exposes_latest_test_summary():
     assert webhook['latest_test_review_id'] is None
     assert webhook['latest_test_report_id'] == '44444444-4444-4444-8444-444444444444'
     assert webhook['latest_test_report_type'] == 'battle_card'
-    assert webhook['latest_test_report_title'] == 'Battle Card \u00b7 Acme Rival'
+    assert webhook['latest_test_report_title'] == 'Battle Card - Acme Rival'
     assert webhook['latest_test_vendor_name'] == 'Acme Rival'
     assert webhook['latest_test_company_name'] == 'Acme Bank'
     assert webhook['latest_test_account_review_focus'] == latest_test_focus
@@ -439,6 +439,11 @@ async def test_list_webhooks_tolerates_missing_latest_test_summary_fields():
         result = await b2b_dashboard.list_webhooks(user=user)
 
     assert result['count'] == 1
+    query, account_id = pool.fetch.await_args.args
+    assert "AND dl.event_type <> 'test'" in query
+    assert "ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC" in query
+    assert "ORDER BY cp.pushed_at DESC, cp.id DESC" in query
+    assert account_id == 'account-1'
     webhook = result['webhooks'][0]
     assert webhook['recent_success_rate_7d'] == 0.667
     assert webhook['latest_failure_at'] == failed_at.isoformat()
@@ -547,6 +552,158 @@ async def test_prime_webhook_account_focus_caches_dedupes_tracked_vendor_and_rep
     assert fetch_accounts_in_motion_report.await_args.args[1] == 'Acme Rival'
     assert tracked_vendor_cache[b2b_dashboard._normalize_vendor_name('Acme Rival')]['track_mode'] == 'competitor'
     assert report_cache[b2b_dashboard._normalize_vendor_name('Acme Rival')]['report_date'] == '2026-04-10'
+
+
+@pytest.mark.asyncio
+async def test_list_webhooks_derives_latest_delivery_errors_from_status_and_response_body():
+    created_at = datetime.now(timezone.utc) - timedelta(days=1)
+    failed_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    tested_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    pool = MagicMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': '8f56e6ce-e7f8-4c6a-87cc-8bd04db95f9e',
+                'url': 'https://hooks.example.com/churn',
+                'event_types': ['churn_alert'],
+                'channel': 'generic',
+                'enabled': True,
+                'description': 'Generic webhook',
+                'created_at': created_at,
+                'updated_at': created_at,
+                'recent_deliveries': 4,
+                'recent_successes': 2,
+                'latest_failure_event_type': 'churn_alert',
+                'latest_failure_status_code': 502,
+                'latest_failure_response_body': 'upstream rejected',
+                'latest_failure_error': None,
+                'latest_failure_at': failed_at,
+                'latest_failure_signal_id': None,
+                'latest_failure_review_id': None,
+                'latest_failure_report_id': None,
+                'latest_failure_vendor_name': None,
+                'latest_failure_company_name': None,
+                'latest_test_success': False,
+                'latest_test_status_code': 500,
+                'latest_test_response_body': 'bad signature',
+                'latest_test_error': None,
+                'latest_test_at': tested_at,
+                'latest_test_signal_id': None,
+                'latest_test_review_id': None,
+                'latest_test_report_id': None,
+                'latest_test_vendor_name': None,
+                'latest_test_company_name': None,
+                'latest_crm_id': None,
+            }
+        ]
+    )
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.list_webhooks(user=user)
+
+    webhook = result['webhooks'][0]
+    assert webhook['latest_failure_error'] == 'HTTP 502: upstream rejected'
+    assert webhook['latest_test_error'] == 'HTTP 500: bad signature'
+    assert webhook['latest_test_at'] == tested_at.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_list_webhooks_hides_synthetic_latest_manual_test_vendor_context():
+    created_at = datetime.now(timezone.utc) - timedelta(days=1)
+    tested_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    pool = MagicMock()
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    'id': '62885ce9-70de-4a5b-a724-a8c74ae1f4d5',
+                    'url': 'https://hooks.example.com/churn',
+                    'event_types': ['churn_alert'],
+                    'channel': 'generic',
+                    'enabled': True,
+                    'description': 'Generic webhook',
+                    'created_at': created_at,
+                    'updated_at': created_at,
+                    'recent_deliveries': 1,
+                    'recent_successes': 1,
+                    'latest_failure_event_type': None,
+                    'latest_failure_status_code': None,
+                    'latest_failure_response_body': None,
+                    'latest_failure_error': None,
+                    'latest_failure_at': None,
+                    'latest_failure_signal_id': None,
+                    'latest_failure_review_id': None,
+                    'latest_failure_report_id': None,
+                    'latest_failure_vendor_name': None,
+                    'latest_failure_company_name': None,
+                    'latest_test_success': False,
+                    'latest_test_status_code': 500,
+                    'latest_test_response_body': 'manual test failed',
+                    'latest_test_error': None,
+                    'latest_test_at': tested_at,
+                    'latest_test_signal_id': None,
+                    'latest_test_review_id': None,
+                    'latest_test_report_id': None,
+                    'latest_test_vendor_name': 'test_vendor',
+                    'latest_test_company_name': 'Synthetic Account',
+                    'latest_crm_id': None,
+                }
+            ],
+            [],
+        ]
+    )
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            '_resolve_webhook_activity_account_focus',
+            AsyncMock(return_value=None),
+        ) as resolve_account_focus:
+            result = await b2b_dashboard.list_webhooks(user=user)
+
+    webhook = result['webhooks'][0]
+    assert webhook['latest_test_vendor_name'] is None
+    assert webhook['latest_test_company_name'] is None
+    assert webhook['latest_test_account_review_focus'] is None
+    resolve_account_focus.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_summary_excludes_manual_tests_from_aggregate_query():
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        return_value={
+            'active_subscriptions': 2,
+            'total_deliveries': 3,
+            'successful': 2,
+            'failed': 1,
+            'avg_success_duration_ms': 120.4,
+            'p95_success_duration_ms': 181.2,
+            'last_delivery_at': datetime(2026, 4, 10, 3, 0, tzinfo=timezone.utc),
+        }
+    )
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.webhook_delivery_summary(days=30, user=user)
+
+    query, account_id, days = pool.fetchrow.await_args.args
+    assert "AND dl.event_type <> 'test'" in query
+    assert account_id == 'account-1'
+    assert days == '30'
+    assert result == {
+        'window_days': 30,
+        'active_subscriptions': 2,
+        'total_deliveries': 3,
+        'successful': 2,
+        'failed': 1,
+        'success_rate': 0.667,
+        'avg_success_duration_ms': 120.4,
+        'p95_success_duration_ms': 181.2,
+        'last_delivery_at': '2026-04-10T03:00:00+00:00',
+    }
 
 
 @pytest.mark.asyncio
@@ -677,6 +834,41 @@ async def test_update_webhook_rejects_invalid_url_before_db_touch():
 
 
 @pytest.mark.asyncio
+async def test_update_webhook_rejects_embedded_credentials_before_db_touch():
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.UpdateWebhookBody(url='https://user:pass@hooks.example.com/fail')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.update_webhook(
+                '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+                body,
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'Webhook URL must not include embedded credentials'
+
+
+@pytest.mark.asyncio
+async def test_create_webhook_rejects_non_global_destination_before_db_touch():
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.CreateWebhookBody(
+        url='http://127.0.0.1:8080/hook',
+        secret='a' * 24,
+        event_types=['churn_alert'],
+        channel='generic',
+    )
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.create_webhook(body, user=user)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'Webhook destination cannot target non-global address: 127.0.0.1'
+
+
+@pytest.mark.asyncio
 async def test_create_webhook_validates_before_db_touch():
     user = MagicMock(account_id='account-1')
     body = b2b_dashboard.CreateWebhookBody(
@@ -784,6 +976,23 @@ async def test_list_crm_push_log_rejects_invalid_uuid_before_db_touch():
 
 
 @pytest.mark.asyncio
+async def test_list_crm_push_log_rejects_invalid_status_before_db_touch():
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.list_crm_push_log(
+                'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44',
+                limit=50,
+                status='pending',
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'status must be one of: success, failed'
+
+
+@pytest.mark.asyncio
 async def test_test_webhook_dispatches_after_ownership_check():
     user = MagicMock(account_id='account-1')
     pool = MagicMock()
@@ -834,6 +1043,7 @@ async def test_list_webhook_deliveries_normalizes_blank_optional_filters():
     assert 'event_type = $' not in query
     assert 'delivered_at >=' not in query
     assert 'delivered_at <' not in query
+    assert 'ORDER BY delivered_at DESC, attempt DESC, id DESC' in query
     assert params == [b2b_dashboard._uuid.UUID('3df7f790-6afc-4e0f-b40e-a78f77e60dd2'), 50]
 
 
@@ -1083,6 +1293,31 @@ async def test_list_crm_push_log_exposes_review_id_from_signal_context():
     resolve_focus.assert_awaited_once()
     _, kwargs = resolve_focus.await_args
     assert kwargs['review_id'] == '33333333-3333-4333-8333-333333333334'
+
+
+@pytest.mark.asyncio
+async def test_list_crm_push_log_applies_normalized_success_filter():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(return_value=[])
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.list_crm_push_log(
+            'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44',
+            limit=25,
+            status='pushed',
+            user=user,
+        )
+
+    assert result == {'pushes': [], 'count': 0}
+    query, wid, normalized_status, limit = pool.fetch.await_args.args
+    assert "CASE WHEN lower(coalesce(status, '')) = 'pushed' THEN 'success'" in query
+    assert " = $2" in query
+    assert "ORDER BY pushed_at DESC, id DESC" in query
+    assert normalized_status == 'success'
+    assert limit == 25
+    assert str(wid) == 'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44'
 
 
 @pytest.mark.asyncio

@@ -101,6 +101,7 @@ const CHANNEL_GUIDANCE: Record<WebhookChannel, { title: string; detail: string }
 }
 
 const SUMMARY_WINDOWS = [7, 30, 90] as const
+const ACTIVITY_LOG_LIMIT = 10
 
 function parseSummaryWindow(value: string | null) {
   const parsed = Number(value)
@@ -525,7 +526,7 @@ function buildActivitySearchParams({
 }: {
   webhookId: string | null
   deliveryStatus: 'all' | 'success' | 'failed'
-  deliveryEvent: 'all' | WebhookEventType
+  deliveryEvent: 'all' | string
   crmStatus: 'all' | 'success' | 'failed'
   summaryWindow: (typeof SUMMARY_WINDOWS)[number]
   backTo?: string | null
@@ -655,7 +656,7 @@ export default function IncidentAlerts() {
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [selectedPreviewEventType, setSelectedPreviewEventType] = useState<WebhookEventType>('churn_alert')
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<'all' | 'success' | 'failed'>(requestedDeliveryStatus)
-  const [deliveryEventFilter, setDeliveryEventFilter] = useState<'all' | WebhookEventType>(requestedDeliveryEvent as 'all' | WebhookEventType)
+  const [deliveryEventFilter, setDeliveryEventFilter] = useState<'all' | string>(requestedDeliveryEvent)
   const [crmStatusFilter, setCrmStatusFilter] = useState<'all' | 'success' | 'failed'>(requestedCrmStatus)
   const [manualTestResults, setManualTestResults] = useState<Record<string, ManualTestResult>>({})
   const [message, setMessage] = useState<string | null>(null)
@@ -701,9 +702,14 @@ export default function IncidentAlerts() {
     refreshing: deliveryRefreshing,
   } = useApiData(
     () => (selectedWebhookId
-      ? listWebhookDeliveries(selectedWebhookId, { limit: 10 })
+      ? listWebhookDeliveries(selectedWebhookId, {
+        limit: ACTIVITY_LOG_LIMIT,
+        ...(deliveryStatusFilter === 'success' ? { success: true } : {}),
+        ...(deliveryStatusFilter === 'failed' ? { success: false } : {}),
+        ...(deliveryEventFilter !== 'all' ? { event_type: deliveryEventFilter } : {}),
+      })
       : Promise.resolve({ deliveries: [], count: 0 })),
-    [selectedWebhookId],
+    [deliveryEventFilter, deliveryStatusFilter, selectedWebhookId],
     { refreshOnFocus: false, refreshOnReconnect: false },
   )
 
@@ -714,9 +720,12 @@ export default function IncidentAlerts() {
     refreshing: crmPushRefreshing,
   } = useApiData(
     () => (selectedWebhookId && selectedWebhook?.channel.startsWith('crm_')
-      ? listWebhookCrmPushLog(selectedWebhookId, 10)
+      ? listWebhookCrmPushLog(selectedWebhookId, {
+        limit: ACTIVITY_LOG_LIMIT,
+        ...(crmStatusFilter !== 'all' ? { status: crmStatusFilter } : {}),
+      })
       : Promise.resolve({ pushes: [], count: 0 })),
-    [selectedWebhook?.channel, selectedWebhookId],
+    [crmStatusFilter, selectedWebhook?.channel, selectedWebhookId],
     { refreshOnFocus: false, refreshOnReconnect: false },
   )
 
@@ -742,43 +751,43 @@ export default function IncidentAlerts() {
     () => buildPreviewCurl(form.url, previewHeaders, previewPayload),
     [form.url, previewHeaders, previewPayload],
   )
-  const activityLoading = deliveryLoading || crmPushLoading
   const activityRefreshing = deliveryRefreshing || crmPushRefreshing
   const channelGuidance = CHANNEL_GUIDANCE[form.channel]
-  const filteredDeliveries = useMemo(() => {
-    const deliveries = deliveryData?.deliveries ?? []
-    return deliveries.filter((delivery) => {
-      if (deliveryStatusFilter === 'success' && !delivery.success) return false
-      if (deliveryStatusFilter === 'failed' && delivery.success) return false
-      if (deliveryEventFilter !== 'all' && delivery.event_type !== deliveryEventFilter) return false
-      return true
-    })
-  }, [deliveryData?.deliveries, deliveryEventFilter, deliveryStatusFilter])
-  const filteredCrmPushes = useMemo(() => {
-    const pushes = crmPushData?.pushes ?? []
-    return pushes.filter((push) => {
-      if (crmStatusFilter === 'success') return push.status === 'success'
-      if (crmStatusFilter === 'failed') return push.status !== 'success'
-      return true
-    })
-  }, [crmPushData?.pushes, crmStatusFilter])
+  const filteredDeliveries = deliveryData?.deliveries ?? []
+  const filteredCrmPushes = crmPushData?.pushes ?? []
+  const hasActiveDeliveryFilters = deliveryStatusFilter !== 'all' || deliveryEventFilter !== 'all'
+  const hasActiveCrmFilters = crmStatusFilter !== 'all'
+  const activityCrmStatus = selectedWebhookId && selectedWebhook && !selectedWebhook.channel.startsWith('crm_')
+    ? 'all'
+    : crmStatusFilter
   const deliveryEventOptions = useMemo(() => {
-    const values = new Set((deliveryData?.deliveries ?? []).map((delivery) => delivery.event_type as WebhookEventType))
-    return Array.from(values)
-  }, [deliveryData?.deliveries])
+    const values = new Set<string>()
+    for (const eventType of selectedWebhook?.event_types ?? []) values.add(eventType)
+    for (const delivery of deliveryData?.deliveries ?? []) {
+      const eventType = String(delivery.event_type || '').trim()
+      if (eventType) values.add(eventType)
+    }
+    if (deliveryEventFilter !== 'all') values.add(deliveryEventFilter)
+    const eventOrder = new Map(EVENT_TYPE_OPTIONS.map((option, index) => [option.value, index]))
+    return Array.from(values).sort((left, right) => {
+      const leftRank = eventOrder.get(left as WebhookEventType) ?? Number.MAX_SAFE_INTEGER
+      const rightRank = eventOrder.get(right as WebhookEventType) ?? Number.MAX_SAFE_INTEGER
+      return leftRank - rightRank || left.localeCompare(right)
+    })
+  }, [deliveryData?.deliveries, deliveryEventFilter, selectedWebhook?.event_types])
   const activityBackTo = useMemo(() => {
     const next = buildActivitySearchParams({
       webhookId: selectedWebhookId,
       deliveryStatus: deliveryStatusFilter,
       deliveryEvent: deliveryEventFilter,
-      crmStatus: crmStatusFilter,
+      crmStatus: activityCrmStatus,
       summaryWindow,
       backTo: requestedBackTo,
     })
     const query = next.toString()
     return query ? `${location.pathname}?${query}` : location.pathname
   }, [
-    crmStatusFilter,
+    activityCrmStatus,
     deliveryEventFilter,
     deliveryStatusFilter,
     location.pathname,
@@ -806,14 +815,14 @@ export default function IncidentAlerts() {
       webhookId: selectedWebhookId,
       deliveryStatus: deliveryStatusFilter,
       deliveryEvent: deliveryEventFilter,
-      crmStatus: crmStatusFilter,
+      crmStatus: activityCrmStatus,
       summaryWindow,
       backTo: requestedBackTo,
     })
     if (next.toString() === searchParams.toString()) return
     setSearchParams(next, { replace: true })
   }, [
-    crmStatusFilter,
+    activityCrmStatus,
     deliveryEventFilter,
     deliveryStatusFilter,
     requestedBackTo,
@@ -822,6 +831,17 @@ export default function IncidentAlerts() {
     setSearchParams,
     summaryWindow,
   ])
+
+  function toggleActivity(webhookId: string) {
+    if (selectedWebhookId === webhookId) {
+      setSelectedWebhookId(null)
+      return
+    }
+    setDeliveryStatusFilter('all')
+    setDeliveryEventFilter('all')
+    setCrmStatusFilter('all')
+    setSelectedWebhookId(webhookId)
+  }
 
   async function refreshAll() {
     const tasks: Promise<void>[] = [refreshSummary(), refreshWebhooks()]
@@ -850,7 +870,9 @@ export default function IncidentAlerts() {
         webhookId,
         deliveryStatus: selectedWebhookId === webhookId ? deliveryStatusFilter : 'all',
         deliveryEvent: selectedWebhookId === webhookId ? deliveryEventFilter : 'all',
-        crmStatus: selectedWebhookId === webhookId ? crmStatusFilter : 'all',
+        crmStatus: selectedWebhookId === webhookId
+          ? activityCrmStatus
+          : 'all',
         summaryWindow,
         backTo: requestedBackTo,
       })
@@ -1513,7 +1535,7 @@ export default function IncidentAlerts() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSelectedWebhookId((current) => (current === webhook.id ? null : webhook.id))}
+                      onClick={() => toggleActivity(webhook.id)}
                       className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800"
                     >
                       {selectedWebhookId === webhook.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -1555,11 +1577,11 @@ export default function IncidentAlerts() {
                       <div className="mt-4 grid gap-4 xl:grid-cols-2">
                         <div>
                           <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Deliveries</div>
-                          {activityLoading ? (
+                          {deliveryLoading ? (
                             <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
                               Loading delivery activity...
                             </div>
-                          ) : deliveryData?.deliveries?.length ? (
+                          ) : (
                             <div className="space-y-2">
                               <div className="mb-3 flex flex-wrap gap-2">
                                 <select
@@ -1575,7 +1597,7 @@ export default function IncidentAlerts() {
                                 <select
                                   aria-label="Delivery event filter"
                                   value={deliveryEventFilter}
-                                  onChange={(event) => setDeliveryEventFilter(event.target.value as 'all' | WebhookEventType)}
+                                  onChange={(event) => setDeliveryEventFilter(event.target.value)}
                                   className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200"
                                 >
                                   <option value="all">All event types</option>
@@ -1669,13 +1691,9 @@ export default function IncidentAlerts() {
                                 </div>
                               )) : (
                                 <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
-                                  No deliveries match the current filters.
+                                  {hasActiveDeliveryFilters ? 'No deliveries match the current filters.' : 'No recent delivery attempts for this webhook.'}
                                 </div>
                               )}
-                            </div>
-                          ) : (
-                            <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
-                              No recent delivery attempts for this webhook.
                             </div>
                           )}
                         </div>
@@ -1683,7 +1701,11 @@ export default function IncidentAlerts() {
                         <div>
                           <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">CRM Push Log</div>
                           {selectedWebhook?.channel.startsWith('crm_') ? (
-                            crmPushData?.pushes?.length ? (
+                            crmPushLoading ? (
+                              <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
+                                Loading CRM push history...
+                              </div>
+                            ) : (
                               <div className="space-y-2">
                                 <div className="mb-3 flex flex-wrap gap-2">
                                   <select
@@ -1778,13 +1800,9 @@ export default function IncidentAlerts() {
                                   </div>
                                 )) : (
                                   <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
-                                    No CRM pushes match the current filters.
+                                    {hasActiveCrmFilters ? 'No CRM pushes match the current filters.' : 'No CRM push activity recorded for this webhook yet.'}
                                   </div>
                                 )}
-                              </div>
-                            ) : (
-                              <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
-                                No CRM push activity recorded for this webhook yet.
                               </div>
                             )
                           ) : (

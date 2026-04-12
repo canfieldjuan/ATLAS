@@ -17,11 +17,14 @@ Usage::
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
+import socket
 import time
 import uuid as _uuid
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -265,6 +268,131 @@ def _sign_payload(payload_bytes: bytes, secret: str) -> str:
 # ---------------------------------------------------------------------------
 
 VALID_CHANNELS = {"generic", "slack", "teams", "crm_hubspot", "crm_salesforce", "crm_pipedrive"}
+LOCAL_WEBHOOK_HOSTNAMES = {"localhost", "localhost.localdomain"}
+
+
+def _webhook_destination_scheme_error() -> str:
+    return "url must begin with https:// or http://"
+
+
+def _webhook_destination_hostname_error() -> str:
+    return "Webhook URL must include a hostname"
+
+
+def _webhook_destination_credentials_error() -> str:
+    return "Webhook URL must not include embedded credentials"
+
+
+def _webhook_destination_non_global_error(target: str) -> str:
+    return f"Webhook destination cannot target non-global address: {target}"
+
+
+def _coerce_webhook_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _normalize_webhook_hostname(hostname: str | None) -> str:
+    return str(hostname or "").strip().lower().rstrip(".")
+
+
+def _is_non_global_webhook_ip(ip_text: str) -> bool:
+    try:
+        return not ipaddress.ip_address(ip_text).is_global
+    except ValueError:
+        return False
+
+
+def _validate_webhook_hostname(hostname: str, *, allow_non_global_destinations: bool) -> tuple[bool, str | None]:
+    normalized = _normalize_webhook_hostname(hostname)
+    if not normalized:
+        return False, _webhook_destination_hostname_error()
+    if allow_non_global_destinations:
+        return True, None
+    if normalized in LOCAL_WEBHOOK_HOSTNAMES or normalized.endswith(".localhost"):
+        return False, _webhook_destination_non_global_error(normalized)
+    if _is_non_global_webhook_ip(normalized):
+        return False, _webhook_destination_non_global_error(normalized)
+    return True, None
+
+
+async def _resolve_webhook_destination_ip_strings(hostname: str, port: int) -> set[str]:
+    loop = asyncio.get_running_loop()
+    results = await loop.getaddrinfo(
+        hostname,
+        port,
+        type=socket.SOCK_STREAM,
+        proto=socket.IPPROTO_TCP,
+    )
+    resolved: set[str] = set()
+    for family, _socktype, _proto, _canonname, sockaddr in results:
+        if family in (socket.AF_INET, socket.AF_INET6) and sockaddr:
+            resolved.add(str(sockaddr[0]))
+    return resolved
+
+
+async def validate_webhook_destination(
+    url: str,
+    cfg=None,
+    *,
+    resolve_dns: bool,
+) -> tuple[bool, str | None]:
+    allow_non_global_destinations = _coerce_webhook_bool(
+        getattr(cfg, "allow_non_global_destinations", False),
+        default=False,
+    )
+    try:
+        parsed = urlsplit(str(url or "").strip())
+    except ValueError:
+        return False, _webhook_destination_scheme_error()
+
+    if parsed.scheme not in {"http", "https"}:
+        return False, _webhook_destination_scheme_error()
+    if parsed.username is not None or parsed.password is not None:
+        return False, _webhook_destination_credentials_error()
+
+    hostname = _normalize_webhook_hostname(parsed.hostname)
+    ok, error = _validate_webhook_hostname(
+        hostname,
+        allow_non_global_destinations=allow_non_global_destinations,
+    )
+    if not ok:
+        return False, error
+
+    if not resolve_dns or allow_non_global_destinations:
+        return True, None
+
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return False, _webhook_destination_hostname_error()
+
+    try:
+        resolved_ips = await _resolve_webhook_destination_ip_strings(hostname, port)
+    except socket.gaierror:
+        return False, f"Webhook destination hostname could not be resolved: {hostname}"
+    except Exception:
+        logger.exception("Failed to resolve webhook destination %s", hostname)
+        return False, f"Webhook destination hostname could not be resolved: {hostname}"
+
+    if not resolved_ips:
+        return False, f"Webhook destination hostname could not be resolved: {hostname}"
+
+    for resolved_ip in sorted(resolved_ips):
+        if _is_non_global_webhook_ip(resolved_ip):
+            return False, _webhook_destination_non_global_error(resolved_ip)
+
+    return True, None
 
 
 def _format_slack_payload(envelope: dict) -> dict:
@@ -456,15 +584,64 @@ def _format_for_channel(channel: str, envelope: dict) -> bytes:
     return json.dumps(payload, default=str).encode()
 
 
-async def _deliver_single(
+def _build_delivery_failure_message(
+    *,
+    status_code: int | None,
+    response_body: str | None,
+    error_msg: str | None,
+) -> str:
+    if error_msg:
+        return error_msg
+    body = str(response_body or "").strip()
+    if status_code is not None and body:
+        return f"HTTP {status_code}: {body}"
+    if status_code is not None:
+        return f"HTTP {status_code}"
+    if body:
+        return body
+    return "test webhook delivery failed"
+
+
+async def _deliver_single_with_result(
     pool,
     sub,
     event_type: str,
     envelope: dict,
     payload_bytes: bytes,
     cfg,
-) -> bool:
-    """Deliver to a single subscription with retry.  Returns True on success."""
+) -> dict[str, object]:
+    """Deliver to a single subscription and return the final attempt outcome."""
+    destination_ok, destination_error = await validate_webhook_destination(
+        sub["url"],
+        cfg,
+        resolve_dns=True,
+    )
+    if not destination_ok:
+        await _log_delivery_attempt(
+            pool,
+            sub["id"],
+            event_type,
+            envelope,
+            status_code=None,
+            response_body=None,
+            duration_ms=0,
+            attempt=1,
+            success=False,
+            error_msg=destination_error,
+        )
+        logger.warning(
+            "Webhook delivery blocked for subscription %s -> %s: %s",
+            sub["id"],
+            sub["url"],
+            destination_error,
+        )
+        return {
+            "success": False,
+            "status_code": None,
+            "response_body": None,
+            "error": destination_error,
+        }
+
     signature = _sign_payload(payload_bytes, sub["secret"])
     headers = {
         "Content-Type": "application/json",
@@ -477,6 +654,12 @@ async def _deliver_single(
     if auth_header:
         headers["Authorization"] = auth_header
 
+    last_result = {
+        "success": False,
+        "status_code": None,
+        "response_body": None,
+        "error": None,
+    }
     for attempt in range(1, cfg.max_retries + 1):
         status_code = None
         response_body = None
@@ -486,7 +669,10 @@ async def _deliver_single(
 
         t0 = time.monotonic()
         try:
-            async with httpx.AsyncClient(timeout=cfg.timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=cfg.timeout_seconds,
+                follow_redirects=False,
+            ) as client:
                 resp = await client.post(
                     sub["url"], content=payload_bytes, headers=headers,
                 )
@@ -501,6 +687,12 @@ async def _deliver_single(
             duration_ms = int((time.monotonic() - t0) * 1000)
             error_msg = str(exc)[:500]
 
+        last_result = {
+            "success": success,
+            "status_code": status_code,
+            "response_body": response_body,
+            "error": error_msg,
+        }
         # Log delivery attempt
         try:
             await _log_delivery_attempt(
@@ -526,7 +718,7 @@ async def _deliver_single(
                     pool, sub["id"], event_type, envelope,
                     crm_record_id=None, response_body=response_body,
                 )
-            return True
+            return last_result
 
         if attempt < cfg.max_retries:
             logger.info(
@@ -540,7 +732,20 @@ async def _deliver_single(
         "Webhook delivery exhausted %d retries for subscription %s -> %s",
         cfg.max_retries, sub["id"], sub["url"],
     )
-    return False
+    return last_result
+
+
+async def _deliver_single(
+    pool,
+    sub,
+    event_type: str,
+    envelope: dict,
+    payload_bytes: bytes,
+    cfg,
+) -> bool:
+    """Deliver to a single subscription with retry.  Returns True on success."""
+    result = await _deliver_single_with_result(pool, sub, event_type, envelope, payload_bytes, cfg)
+    return bool(result["success"])
 
 
 def _normalize_uuid_text(value: object) -> str | None:
@@ -710,8 +915,16 @@ async def send_test_webhook(pool, subscription_id) -> dict:
         },
     )
 
-    ok = await _deliver_single(pool, sub, "test", envelope, payload_bytes, cfg)
+    delivery_result = await _deliver_single_with_result(pool, sub, "test", envelope, payload_bytes, cfg)
+    ok = bool(delivery_result["success"])
+    failure_error = None if ok else _build_delivery_failure_message(
+        status_code=delivery_result["status_code"],
+        response_body=delivery_result["response_body"],
+        error_msg=delivery_result["error"],
+    )
     response = {"success": ok, "subscription_id": str(subscription_id), "channel": sub["channel"]}
+    if failure_error:
+        response["error"] = failure_error
     tracer.end_span(
         span,
         status="completed" if ok else "failed",
@@ -722,7 +935,7 @@ async def send_test_webhook(pool, subscription_id) -> dict:
                 evidence={"success": ok},
             ),
         },
-        error_message=None if ok else "test webhook delivery failed",
+        error_message=failure_error,
         error_type=None if ok else "WebhookTestFailure",
     )
     return response
