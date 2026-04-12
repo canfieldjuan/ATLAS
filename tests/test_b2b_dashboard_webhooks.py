@@ -148,6 +148,15 @@ async def test_list_webhooks_exposes_latest_crm_push_summary():
     )
     user = MagicMock(account_id='account-1')
 
+    focus = {
+        'vendor': 'Acme Rival',
+        'company': 'Acme Bank',
+        'report_date': '2026-04-10',
+        'watch_vendor': 'Acme Rival',
+        'category': 'Switch Risk',
+        'track_mode': 'competitor',
+    }
+
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
             b2b_dashboard,
@@ -159,7 +168,12 @@ async def test_list_webhooks_exposes_latest_crm_push_summary():
                 'review_id': '33333333-3333-4333-8333-333333333334',
             }),
         ) as fetch_signal_context:
-            result = await b2b_dashboard.list_webhooks(user=user)
+            with patch.object(
+                b2b_dashboard,
+                '_resolve_webhook_activity_account_focus',
+                AsyncMock(return_value=focus),
+            ) as resolve_account_focus:
+                result = await b2b_dashboard.list_webhooks(user=user)
 
     webhook = result['webhooks'][0]
     assert webhook['latest_crm_push'] == {
@@ -177,8 +191,15 @@ async def test_list_webhooks_exposes_latest_crm_push_summary():
         'status': 'success',
         'error': 'crm timeout',
         'pushed_at': pushed_at.isoformat(),
+        'account_review_focus': focus,
     }
     fetch_signal_context.assert_awaited_once()
+    resolve_account_focus.assert_awaited_once()
+    kwargs = resolve_account_focus.await_args.kwargs
+    assert kwargs['vendor_name'] == 'Acme Rival'
+    assert kwargs['company_name'] == 'Acme Bank'
+    assert kwargs['signal_id'] == '22222222-2222-2222-2222-222222222222'
+    assert kwargs['review_id'] == '33333333-3333-4333-8333-333333333334'
 
 @pytest.mark.asyncio
 async def test_list_webhooks_tolerates_missing_latest_test_summary_fields():

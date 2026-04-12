@@ -313,6 +313,14 @@ describe('IncidentAlerts', () => {
             report_id: null,
             report_type: null,
             report_title: null,
+            account_review_focus: {
+              vendor: 'Acme Rival',
+              company: 'Acme Bank',
+              report_date: '2026-04-10',
+              watch_vendor: 'Acme Rival',
+              category: 'Switch Risk',
+              track_mode: 'competitor',
+            },
             crm_record_id: 'deal-42',
             crm_record_type: 'deal',
             status: 'failed',
@@ -336,6 +344,10 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('sig-crm')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Open Review' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Open Report' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor&back_to=%2Falerts',
+    )
     expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?vendor_name=Acme+Rival&back_to=%2Falerts',

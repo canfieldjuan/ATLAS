@@ -486,6 +486,7 @@ type AlertActivityReferenceSource = {
   signal_id?: string | null
   review_id?: string | null
   report_id?: string | null
+  account_review_focus?: AlertAccountReviewFocus | null
 }
 
 type AlertActivityVendorSource = AlertActivityReferenceSource & {
@@ -809,9 +810,19 @@ export default function IncidentAlerts() {
   function renderActivityDetailShortcuts(activity: AlertActivityReferenceSource, backTo: string) {
     const reviewId = normalizeActivityReference(activity.review_id)
     const reportId = normalizeActivityReference(activity.report_id)
-    if (!reviewId && !reportId) return null
+    const accountReviewFocus = activity.account_review_focus ?? null
+    if (!accountReviewFocus && !reviewId && !reportId) return null
     return (
       <div className="mt-2 flex flex-wrap gap-2">
+        {accountReviewFocus ? (
+          <Link
+            to={buildAccountReviewPath(accountReviewFocus, backTo)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+          >
+            <ArrowRight className="h-3.5 w-3.5" />
+            Account Review
+          </Link>
+        ) : null}
         {reviewId ? (
           <Link
             to={buildReviewDetailPath(reviewId, backTo)}
