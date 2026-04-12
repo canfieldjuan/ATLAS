@@ -799,13 +799,6 @@ function collectVendorScopedExactTargets(
   return candidates
 }
 
-function pickLatestVendorScopedExactTarget(
-  webhooks: WebhookSubscription[],
-  manualTestResults: Record<string, ManualTestResult>,
-) {
-  return collectVendorScopedExactTargets(webhooks, manualTestResults)[0] ?? null
-}
-
 function DestructiveActionModal({
   title,
   message,
@@ -1100,20 +1093,21 @@ export default function IncidentAlerts() {
     requestedVendorName,
   ])
 
-  const vendorScopedLatestExactTarget = useMemo(() => {
-    if (!requestedVendorName.trim()) return null
-    return pickLatestVendorScopedExactTarget(webhooks, manualTestResults)
+  const vendorScopedExactTargets = useMemo(() => {
+    if (!requestedVendorName.trim()) return []
+    return collectVendorScopedExactTargets(webhooks, manualTestResults)
   }, [manualTestResults, requestedVendorName, webhooks])
 
-  const vendorScopedExactTargetSummary = useMemo(() => {
-    if (!requestedVendorName.trim()) return null
-    const targets = collectVendorScopedExactTargets(webhooks, manualTestResults)
-    if (!targets.length) return null
-    return {
-      count: targets.length,
-      latest: targets[0],
-    }
-  }, [manualTestResults, requestedVendorName, webhooks])
+  const vendorScopedLatestExactTarget = vendorScopedExactTargets[0] ?? null
+
+  const vendorScopedRecentExactTargets = vendorScopedExactTargets.slice(1, 4)
+
+  const vendorScopedExactTargetSummary = vendorScopedLatestExactTarget
+    ? {
+        count: vendorScopedExactTargets.length,
+        latest: vendorScopedLatestExactTarget,
+      }
+    : null
 
   const clearVendorScopePath = useMemo(() => {
     const next = buildActivitySearchParams({
@@ -1674,6 +1668,33 @@ export default function IncidentAlerts() {
                 {vendorScopedLatestExactTarget.summary_label} · {formatTs(vendorScopedLatestExactTarget.occurred_at)} · {vendorScopedLatestExactTarget.webhook_label}
               </div>
               {renderActivityDetailShortcuts(vendorScopedLatestExactTarget, currentAlertsUrl, { includeCopy: true })}
+            </div>
+          ) : null}
+          {vendorScopedRecentExactTargets.length ? (
+            <div
+              role="region"
+              aria-label="Other recent exact targets"
+              className="mt-3 rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3"
+            >
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                Other recent exact targets
+              </div>
+              <div className="mt-3 space-y-3">
+                {vendorScopedRecentExactTargets.map((activity) => (
+                  <div
+                    key={`${activity.webhook_label}-${activity.summary_label}-${activity.occurred_at}`}
+                    className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3"
+                  >
+                    <div className="text-sm font-medium text-white">
+                      {formatExactTargetLabel(activity)}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-400">
+                      {activity.summary_label} · {formatTs(activity.occurred_at)} · {activity.webhook_label}
+                    </div>
+                    {renderActivityDetailShortcuts(activity, currentAlertsUrl)}
+                  </div>
+                ))}
+              </div>
             </div>
           ) : null}
         </div>
