@@ -13713,6 +13713,103 @@ async def read_company_signal_candidate_group_summary(
     }
 
 
+def _company_signal_consumer_preview_limit() -> int:
+    return int(getattr(settings.b2b_churn, "company_signal_consumer_preview_limit", 3))
+
+
+def _company_signal_consumer_window_days() -> int:
+    core_window = int(getattr(settings.b2b_churn, "intelligence_window_days", 30) or 30)
+    company_signal_window = int(
+        getattr(settings.b2b_churn, "company_signal_window_days", core_window)
+        or core_window
+    )
+    return max(core_window, company_signal_window)
+
+
+def _company_signal_consumer_group_payload(group: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "group_id": group.get("group_id"),
+        "company": group.get("company"),
+        "display_company": group.get("display_company"),
+        "review_count": int(group.get("review_count") or 0),
+        "decision_maker_count": int(group.get("decision_maker_count") or 0),
+        "signal_evidence_count": int(group.get("signal_evidence_count") or 0),
+        "corroborated_confidence_score": group.get("corroborated_confidence_score"),
+        "canonical_gap_reason": group.get("canonical_gap_reason"),
+        "representative_source": group.get("representative_source"),
+        "representative_buying_stage": group.get("representative_buying_stage"),
+        "representative_urgency_score": group.get("representative_urgency_score"),
+        "review_priority_band": group.get("review_priority_band"),
+        "review_priority_reason": group.get("review_priority_reason"),
+        "supporting_reviews": list(group.get("supporting_reviews") or []),
+    }
+
+
+async def read_vendor_company_signal_review_queue(
+    pool,
+    *,
+    vendor_name: str,
+    window_days: int | None = None,
+    preview_limit: int | None = None,
+) -> dict[str, Any]:
+    """Return additive analyst-review backlog context for a vendor consumer."""
+    vendor = _canonicalize_vendor(vendor_name or "")
+    if not vendor:
+        return {}
+
+    limit = preview_limit if preview_limit is not None else _company_signal_consumer_preview_limit()
+    limit = max(1, int(limit))
+    resolved_window_days = (
+        int(window_days)
+        if window_days is not None
+        else _company_signal_consumer_window_days()
+    )
+
+    summary = await read_company_signal_candidate_group_summary(
+        pool,
+        window_days=resolved_window_days,
+        vendor_name=vendor,
+        candidate_bucket="analyst_review",
+        review_status="pending",
+        top_n=limit,
+    )
+    groups = await read_company_signal_candidate_groups(
+        pool,
+        window_days=resolved_window_days,
+        vendor_name=vendor,
+        candidate_bucket="analyst_review",
+        review_status="pending",
+        limit=limit,
+    )
+
+    totals = summary.get("totals") or {}
+    pending_groups = int(totals.get("pending_groups") or 0)
+    if pending_groups <= 0 and not groups:
+        return {}
+
+    return {
+        "vendor": vendor,
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "totals": {
+            "pending_groups": pending_groups,
+            "actionable_pending_groups": int(totals.get("actionable_pending_groups") or 0),
+            "blocked_pending_groups": int(totals.get("blocked_pending_groups") or 0),
+            "overdue_pending_groups": int(totals.get("overdue_pending_groups") or 0),
+            "pending_reviews": (
+                int(totals.get("actionable_pending_reviews") or 0)
+                + int(totals.get("blocked_pending_reviews") or 0)
+            ),
+        },
+        "operator_focus": dict(summary.get("operator_focus") or {}),
+        "groups": [
+            _company_signal_consumer_group_payload(group)
+            for group in groups
+            if isinstance(group, Mapping)
+        ],
+    }
+
+
 def _company_signal_review_event_filters(
     *,
     window_days: int = 30,

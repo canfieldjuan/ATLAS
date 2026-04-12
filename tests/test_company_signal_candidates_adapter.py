@@ -14,6 +14,7 @@ from atlas_brain.autonomous.tasks._b2b_shared import (
     read_company_signal_candidate_group_summary,
     read_company_signal_review_impact_summary,
     read_company_signal_candidates,
+    read_vendor_company_signal_review_queue,
 )
 
 
@@ -1912,3 +1913,64 @@ async def test_read_company_signal_review_impact_summary_recommends_throughput_r
     assert summary["trend_recommendation"]["priority"] == "medium"
     assert summary["trend_recommendation"]["owner"] == "review_ops"
     assert summary["trend_recommendation"]["supporting_focuses"] == ["approval_volume_down"]
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_company_signal_review_queue_returns_pending_group_context():
+    group = {
+        "group_id": "group-1",
+        "company": "acme",
+        "display_company": "Acme Corp",
+        "review_count": 2,
+        "decision_maker_count": 1,
+        "signal_evidence_count": 1,
+        "corroborated_confidence_score": 0.44,
+        "canonical_gap_reason": "low_confidence_low_trust_source",
+        "representative_source": "reddit",
+        "representative_buying_stage": "evaluation",
+        "representative_urgency_score": 6.0,
+        "review_priority_band": "low",
+        "review_priority_reason": "low_trust_needs_policy",
+        "supporting_reviews": [{"review_id": "r1"}],
+    }
+    summary = {
+        "totals": {
+            "pending_groups": 2,
+            "actionable_pending_groups": 0,
+            "blocked_pending_groups": 2,
+            "overdue_pending_groups": 1,
+            "actionable_pending_reviews": 0,
+            "blocked_pending_reviews": 3,
+        },
+        "operator_focus": {
+            "status": "act",
+            "action_type": "policy_threshold",
+            "action": "review_low_trust_policy",
+            "priority": "high",
+        },
+    }
+
+    with patch.object(shared_mod, "read_company_signal_candidate_group_summary", AsyncMock(return_value=summary)), patch.object(
+        shared_mod,
+        "read_company_signal_candidate_groups",
+        AsyncMock(return_value=[group]),
+    ):
+        result = await read_vendor_company_signal_review_queue(
+            object(),
+            vendor_name=" Zendesk ",
+            window_days=30,
+            preview_limit=2,
+        )
+
+    assert result["vendor"] == "Zendesk"
+    assert result["candidate_bucket"] == "analyst_review"
+    assert result["review_status"] == "pending"
+    assert result["totals"] == {
+        "pending_groups": 2,
+        "actionable_pending_groups": 0,
+        "blocked_pending_groups": 2,
+        "overdue_pending_groups": 1,
+        "pending_reviews": 3,
+    }
+    assert result["operator_focus"]["action"] == "review_low_trust_policy"
+    assert result["groups"] == [group]
