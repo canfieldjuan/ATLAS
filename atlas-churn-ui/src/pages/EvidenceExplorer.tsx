@@ -159,6 +159,32 @@ function backToLabel(value: string | null) {
   return 'Back'
 }
 
+function upstreamWatchlistsPath(value: string | null): string | null {
+  let current = parseBackTo(value)
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/watchlists')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = parseBackTo(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+function watchlistsShortcutLabel(value: string | null) {
+  if (!value) return 'Watchlists'
+  try {
+    const url = new URL(value, window.location.origin)
+    return url.searchParams.get('account_company')?.trim() ? 'Account Review' : 'Watchlists'
+  } catch {
+    return 'Watchlists'
+  }
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -247,6 +273,7 @@ export default function EvidenceExplorer() {
   const [copiedWitnessState, setCopiedWitnessState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
+  const directWatchlistsShortcutPath = useMemo(() => upstreamWatchlistsPath(requestedBackTo), [requestedBackTo])
   const matchedWatchlistViewId = useMemo(() => {
     if (!activeVendor) return null
     const normalizedVendor = activeVendor.toLowerCase()
@@ -259,12 +286,15 @@ export default function EvidenceExplorer() {
       watchlistViewVendorNames(view).some((name) => name.toLowerCase() === normalizedVendor)
     ))?.id ?? null
   }, [activeVendor, watchlistViews])
-  const hasWatchlistsShortcut = useMemo(
-    () => Boolean(activeVendor) && (
-      trackedVendorNames.includes(activeVendor.toLowerCase())
-      || Boolean(matchedWatchlistViewId)
-    ),
-    [activeVendor, matchedWatchlistViewId, trackedVendorNames],
+  const watchlistsShortcutPath = useMemo(() => {
+    if (directWatchlistsShortcutPath) return directWatchlistsShortcutPath
+    if (!activeVendor) return null
+    if (!(trackedVendorNames.includes(activeVendor.toLowerCase()) || matchedWatchlistViewId)) return null
+    return evidenceWatchlistsPath(searchParams, activeVendor, matchedWatchlistViewId)
+  }, [activeVendor, directWatchlistsShortcutPath, matchedWatchlistViewId, searchParams, trackedVendorNames])
+  const watchlistsShortcutLabelText = useMemo(
+    () => watchlistsShortcutLabel(watchlistsShortcutPath),
+    [watchlistsShortcutPath],
   )
   const drawerBackToPath = useMemo(() => {
     const next = new URLSearchParams(searchParams.toString())
@@ -640,19 +670,19 @@ export default function EvidenceExplorer() {
               <span className="text-slate-500">
                 Focused on <span className="text-slate-300">{activeVendor}</span>
               </span>
-              {hasWatchlistsShortcut ? (
+              {watchlistsShortcutPath ? (
                 <span className="inline-flex items-center gap-2">
                   <Link
-                    to={evidenceWatchlistsPath(searchParams, activeVendor, matchedWatchlistViewId)}
+                    to={watchlistsShortcutPath}
                     className="text-violet-300 hover:text-violet-200 transition-colors"
                   >
-                    Watchlists
+                    {watchlistsShortcutLabelText}
                   </Link>
                   <button
                     type="button"
-                    onClick={() => void handleCopyWatchlistsLink(evidenceWatchlistsPath(searchParams, activeVendor, matchedWatchlistViewId))}
+                    onClick={() => void handleCopyWatchlistsLink(watchlistsShortcutPath)}
                     className="text-slate-400 hover:text-white transition-colors"
-                    aria-label="Copy watchlists link"
+                    aria-label={watchlistsShortcutLabelText === 'Account Review' ? 'Copy account review link' : 'Copy watchlists link'}
                   >
                     {copiedWatchlistsState === 'copied' ? 'Copied' : copiedWatchlistsState == 'error' ? 'Copy Failed' : 'Copy Link'}
                   </button>

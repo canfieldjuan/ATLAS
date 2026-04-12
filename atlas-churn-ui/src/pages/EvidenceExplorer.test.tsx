@@ -552,6 +552,40 @@ describe('EvidenceExplorer', () => {
     })
   })
 
+  it('prefers the upstream account review path for the watchlists shortcut', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk%2526account_company%253DAcme%252BCorp']}> 
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp',
+    )
+  })
+
+  it('copies the upstream account review shortcut link', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk%2526account_company%253DAcme%252BCorp']}> 
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy account review link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp`,
+      )
+    })
+  })
+
   it('keeps the watchlists shortcut when a saved view exists even without tracked-vendor membership', async () => {
     api.listTrackedVendors.mockResolvedValueOnce({
       vendors: [],
