@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import markdown as _md
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.params import Param
 from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth
@@ -34,6 +35,27 @@ logger = logging.getLogger("atlas.api.blog_admin")
 _REVIEW_BASIS_CANONICAL = "canonical_reviews"
 
 router = APIRouter(prefix="/admin/blog", tags=["blog-admin"])
+
+
+def _unwrap_param_default(value: object | None) -> object | None:
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
+def _clean_optional_text(value: object | None) -> str | None:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _clean_int_query(value: object | None, *, default: int) -> int:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return int(value)
 
 
 def _canonical_review_predicate(alias: str = "") -> str:
@@ -245,6 +267,8 @@ async def list_drafts(
     _user: AuthUser = Depends(require_auth),
 ):
     """List blog post drafts, optionally filtered by status."""
+    status = _clean_optional_text(status)
+    limit = _clean_int_query(limit, default=50)
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(503, "Database not ready")
@@ -720,6 +744,7 @@ async def get_draft_evidence(
     _user: AuthUser = Depends(require_auth),
 ):
     """Return matching b2b_reviews that back the claims in a blog draft."""
+    limit = _clean_int_query(limit, default=20)
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(503, "Database not ready")
