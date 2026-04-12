@@ -17,6 +17,7 @@ import {
   type WebhookChannel,
   type WebhookCreateBody,
   type WebhookEventType,
+  type WebhookSubscription,
 } from '../api/client'
 
 const EVENT_TYPE_OPTIONS: Array<{ value: WebhookEventType; label: string; description: string }> = [
@@ -638,6 +639,22 @@ type AlertActivityReference = {
   value: string
 }
 
+type AlertLatestActivityContext = AlertActivityVendorSource & {
+  signal_type?: string | null
+  company_name?: string | null
+  report_type?: string | null
+  report_title?: string | null
+  account_review_focus?: AlertAccountReviewFocus | null
+  crm_record_type?: string | null
+  crm_record_id?: string | null
+  pushed_at?: string | null
+  status?: string | null
+  error?: string | null
+  occurred_at: string
+  summary_label: string
+  webhook_label: string
+}
+
 function normalizeActivityReference(value: string | null | undefined) {
   const normalized = String(value || '').trim()
   return normalized || null
@@ -660,6 +677,126 @@ function buildActivityReferences(source: AlertActivityReferenceSource): AlertAct
   }
 
   return references
+}
+
+function webhookDisplayLabel(webhook: WebhookSubscription) {
+  return String(webhook.description || '').trim() || webhook.url
+}
+
+function latestFailureSummaryLabel(webhook: WebhookSubscription) {
+  return `Latest failure${webhook.latest_failure_event_type ? ` · ${webhook.latest_failure_event_type}` : ''}${webhook.latest_failure_status_code != null ? ` · ${webhook.latest_failure_status_code}` : ''}`
+}
+
+function buildLatestFailureReferences(webhook: WebhookSubscription): AlertActivityReferenceSource {
+  return {
+    signal_id: webhook.latest_failure_signal_id,
+    review_id: webhook.latest_failure_review_id,
+    report_id: webhook.latest_failure_report_id,
+  }
+}
+
+function buildLatestFailureContext(webhook: WebhookSubscription): AlertLatestActivityContext | null {
+  if (!webhook.latest_failure_at || webhook.latest_failure_event_type === 'test') return null
+  return {
+    ...buildLatestFailureReferences(webhook),
+    report_type: webhook.latest_failure_report_type,
+    report_title: webhook.latest_failure_report_title,
+    vendor_name: webhook.latest_failure_vendor_name,
+    company_name: webhook.latest_failure_company_name,
+    account_review_focus: webhook.latest_failure_account_review_focus ?? null,
+    occurred_at: webhook.latest_failure_at,
+    summary_label: latestFailureSummaryLabel(webhook),
+    webhook_label: webhookDisplayLabel(webhook),
+  }
+}
+
+function buildPersistedManualTest(webhook: WebhookSubscription): ManualTestResult | null {
+  if (!webhook.latest_test_at) return null
+  return {
+    success: Boolean(webhook.latest_test_success),
+    testedAt: webhook.latest_test_at,
+    statusCode: webhook.latest_test_status_code,
+    error: webhook.latest_test_error,
+  }
+}
+
+function buildLatestManualTestReferences(
+  webhook: WebhookSubscription,
+  manualTestResult: ManualTestResult | null,
+  manualTestOverride: ManualTestResult | null,
+): AlertActivityReferenceSource | null {
+  if (!manualTestResult || manualTestOverride) return null
+  return {
+    signal_id: webhook.latest_test_signal_id,
+    review_id: webhook.latest_test_review_id,
+    report_id: webhook.latest_test_report_id,
+  }
+}
+
+function buildLatestManualTestContext(
+  webhook: WebhookSubscription,
+  manualTestResult: ManualTestResult | null,
+  manualTestOverride: ManualTestResult | null,
+): AlertLatestActivityContext | null {
+  const references = buildLatestManualTestReferences(webhook, manualTestResult, manualTestOverride)
+  if (!manualTestResult || !references) return null
+  return {
+    ...references,
+    report_type: webhook.latest_test_report_type,
+    report_title: webhook.latest_test_report_title,
+    vendor_name: webhook.latest_test_vendor_name,
+    company_name: webhook.latest_test_company_name,
+    account_review_focus: webhook.latest_test_account_review_focus ?? null,
+    occurred_at: manualTestResult.testedAt,
+    summary_label: `Latest manual test ${manualTestResult.success ? 'passed' : 'failed'}`,
+    webhook_label: webhookDisplayLabel(webhook),
+  }
+}
+
+function buildLatestCrmPushContext(webhook: WebhookSubscription): AlertLatestActivityContext | null {
+  const push = webhook.latest_crm_push
+  if (!push?.pushed_at) return null
+  return {
+    ...push,
+    occurred_at: push.pushed_at,
+    summary_label: `Latest CRM push ${push.status === 'success' ? 'succeeded' : 'failed'}`,
+    webhook_label: webhookDisplayLabel(webhook),
+  }
+}
+
+function formatExactTargetLabel(activity: AlertActivityVendorSource) {
+  return formatAccountReviewTargetLabel(activity.account_review_focus)
+    ?? formatReviewTargetLabel(activity)
+    ?? formatReportTargetLabel(activity)
+}
+
+function hasExactTarget(activity: AlertActivityVendorSource) {
+  return Boolean(formatExactTargetLabel(activity))
+}
+
+function latestActivityTimestamp(value: string | null | undefined) {
+  const timestamp = Date.parse(String(value || ''))
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY
+}
+
+function pickLatestVendorScopedExactTarget(
+  webhooks: WebhookSubscription[],
+  manualTestResults: Record<string, ManualTestResult>,
+) {
+  const candidates = webhooks.flatMap((webhook) => {
+    const persistedManualTest = buildPersistedManualTest(webhook)
+    const manualTestOverride = manualTestResults[webhook.id] ?? null
+    const latestManualTest = manualTestOverride ?? persistedManualTest
+    const contexts = [
+      buildLatestFailureContext(webhook),
+      buildLatestManualTestContext(webhook, latestManualTest, manualTestOverride),
+      buildLatestCrmPushContext(webhook),
+    ]
+    return contexts.filter((context): context is AlertLatestActivityContext => Boolean(context && hasExactTarget(context)))
+  })
+
+  candidates.sort((left, right) => latestActivityTimestamp(right.occurred_at) - latestActivityTimestamp(left.occurred_at))
+  return candidates[0] ?? null
 }
 
 function DestructiveActionModal({
@@ -955,6 +1092,11 @@ export default function IncidentAlerts() {
     directWatchlistsShortcutPath,
     requestedVendorName,
   ])
+
+  const vendorScopedLatestExactTarget = useMemo(() => {
+    if (!requestedVendorName.trim()) return null
+    return pickLatestVendorScopedExactTarget(webhooks, manualTestResults)
+  }, [manualTestResults, requestedVendorName, webhooks])
 
   const clearVendorScopePath = useMemo(() => {
     const next = buildActivitySearchParams({
@@ -1499,6 +1641,24 @@ export default function IncidentAlerts() {
               {renderShortcutCopyButton(vendorScopedHeaderShortcuts.opportunitiesPath, 'opportunities')}
             </div>
           ) : null}
+          {vendorScopedLatestExactTarget ? (
+            <div
+              role="region"
+              aria-label="Latest exact target"
+              className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3"
+            >
+              <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-300/80">
+                Latest exact target
+              </div>
+              <div className="mt-1 text-sm font-medium text-white">
+                {formatExactTargetLabel(vendorScopedLatestExactTarget)}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">
+                {vendorScopedLatestExactTarget.summary_label} · {formatTs(vendorScopedLatestExactTarget.occurred_at)} · {vendorScopedLatestExactTarget.webhook_label}
+              </div>
+              {renderActivityDetailShortcuts(vendorScopedLatestExactTarget, currentAlertsUrl, { includeCopy: true })}
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <label className="text-xs text-slate-500" htmlFor="alerts-summary-window">Window</label>
@@ -1595,46 +1755,14 @@ export default function IncidentAlerts() {
               </div>
             ) : webhooks.map((webhook) => {
               const isBusy = busyWebhookId === webhook.id
-              const persistedManualTest = webhook.latest_test_at
-                ? {
-                    success: Boolean(webhook.latest_test_success),
-                    testedAt: webhook.latest_test_at,
-                    statusCode: webhook.latest_test_status_code,
-                    error: webhook.latest_test_error,
-                  }
-                : null
-              const latestManualTest = manualTestResults[webhook.id] ?? persistedManualTest
-              const latestFailureReferences = {
-                signal_id: webhook.latest_failure_signal_id,
-                review_id: webhook.latest_failure_review_id,
-                report_id: webhook.latest_failure_report_id,
-              }
-              const latestFailureContext = {
-                ...latestFailureReferences,
-                report_type: webhook.latest_failure_report_type,
-                report_title: webhook.latest_failure_report_title,
-                vendor_name: webhook.latest_failure_vendor_name,
-                company_name: webhook.latest_failure_company_name,
-                account_review_focus: webhook.latest_failure_account_review_focus ?? null,
-              }
-              const latestManualTestReferences = manualTestResults[webhook.id]
-                ? null
-                : {
-                    signal_id: webhook.latest_test_signal_id,
-                    review_id: webhook.latest_test_review_id,
-                    report_id: webhook.latest_test_report_id,
-                  }
-              const latestManualTestContext = latestManualTestReferences
-                ? {
-                    ...latestManualTestReferences,
-                    report_type: webhook.latest_test_report_type,
-                    report_title: webhook.latest_test_report_title,
-                    vendor_name: webhook.latest_test_vendor_name,
-                    company_name: webhook.latest_test_company_name,
-                    account_review_focus: webhook.latest_test_account_review_focus ?? null,
-                  }
-                : null
-              const latestCrmPush = webhook.latest_crm_push ?? null
+              const persistedManualTest = buildPersistedManualTest(webhook)
+              const manualTestOverride = manualTestResults[webhook.id] ?? null
+              const latestManualTest = manualTestOverride ?? persistedManualTest
+              const latestFailureReferences = buildLatestFailureReferences(webhook)
+              const latestFailureContext = buildLatestFailureContext(webhook)
+              const latestManualTestReferences = buildLatestManualTestReferences(webhook, latestManualTest, manualTestOverride)
+              const latestManualTestContext = buildLatestManualTestContext(webhook, latestManualTest, manualTestOverride)
+              const latestCrmPush = buildLatestCrmPushContext(webhook)
               const hasLatestFailure = Boolean(webhook.latest_failure_at)
               const latestFailureIsManualTest = webhook.latest_failure_event_type === 'test'
               const testButtonLabel = manualTestButtonLabel(latestManualTest, hasLatestFailure, latestFailureIsManualTest)
@@ -1664,11 +1792,10 @@ export default function IncidentAlerts() {
                           </span>
                         ))}
                       </div>
-                      {webhook.latest_failure_at && !latestFailureIsManualTest ? (
+                      {latestFailureContext ? (
                         <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
                           <div className="font-medium text-rose-100">
-                            Latest failure{webhook.latest_failure_event_type ? ` · ${webhook.latest_failure_event_type}` : ''}
-                            {webhook.latest_failure_status_code != null ? ` · ${webhook.latest_failure_status_code}` : ''}
+                            {latestFailureContext.summary_label}
                           </div>
                           <div className="mt-1">
                             {formatFailureSummary(webhook)} · {formatTs(webhook.latest_failure_at)}
