@@ -507,6 +507,7 @@ export interface WebhookSubscription {
   latest_failure_report_id?: string | null
   latest_failure_vendor_name?: string | null
   latest_failure_company_name?: string | null
+  latest_failure_account_review_focus?: AlertAccountReviewFocus | null
   latest_test_success?: boolean | null
   latest_test_status_code?: number | null
   latest_test_error?: string | null
@@ -516,6 +517,7 @@ export interface WebhookSubscription {
   latest_test_report_id?: string | null
   latest_test_vendor_name?: string | null
   latest_test_company_name?: string | null
+  latest_test_account_review_focus?: AlertAccountReviewFocus | null
   latest_crm_push?: WebhookCrmPushLogEntry | null
 }
 

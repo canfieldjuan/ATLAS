@@ -289,6 +289,127 @@ describe('IncidentAlerts', () => {
   })
 
 
+
+  it('links latest failure cards into exact account review when focus is available', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-failure-focus',
+          url: 'https://hooks.example.com/failure-focus',
+          event_types: ['signal_update'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Failure focus endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 1,
+          recent_success_rate_7d: 0,
+          latest_failure_event_type: 'signal_update',
+          latest_failure_status_code: 500,
+          latest_failure_error: 'downstream timeout',
+          latest_failure_at: '2026-04-10T02:55:00Z',
+          latest_failure_signal_id: 'sig-failure-focus',
+          latest_failure_review_id: null,
+          latest_failure_report_id: null,
+          latest_failure_vendor_name: 'Acme Rival',
+          latest_failure_company_name: 'Acme Bank',
+          latest_failure_account_review_focus: {
+            vendor: 'Acme Rival',
+            company: 'Acme Bank',
+            report_date: '2026-04-10',
+            watch_vendor: 'Acme Rival',
+            category: 'Switch Risk',
+            track_mode: 'competitor',
+          },
+          latest_test_success: null,
+          latest_test_status_code: null,
+          latest_test_error: null,
+          latest_test_at: null,
+          latest_test_signal_id: null,
+          latest_test_review_id: null,
+          latest_test_report_id: null,
+          latest_test_vendor_name: null,
+          latest_test_company_name: null,
+          latest_crm_push: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Failure focus endpoint')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor&back_to=%2Falerts',
+    )
+  })
+
+  it('links latest manual test cards into exact account review when focus is available', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-test-focus',
+          url: 'https://hooks.example.com/test-focus',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Test focus endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 1,
+          recent_success_rate_7d: 0,
+          latest_failure_event_type: null,
+          latest_failure_status_code: null,
+          latest_failure_error: null,
+          latest_failure_at: null,
+          latest_failure_signal_id: null,
+          latest_failure_review_id: null,
+          latest_failure_report_id: null,
+          latest_failure_vendor_name: null,
+          latest_failure_company_name: null,
+          latest_failure_account_review_focus: null,
+          latest_test_success: false,
+          latest_test_status_code: 504,
+          latest_test_error: 'test timeout',
+          latest_test_at: '2026-04-10T02:40:00Z',
+          latest_test_signal_id: null,
+          latest_test_review_id: null,
+          latest_test_report_id: null,
+          latest_test_vendor_name: 'Acme Rival',
+          latest_test_company_name: 'Acme Bank',
+          latest_test_account_review_focus: {
+            vendor: 'Acme Rival',
+            company: 'Acme Bank',
+            report_date: '2026-04-10',
+            watch_vendor: 'Acme Rival',
+            category: 'Budget Risk',
+            track_mode: 'competitor',
+          },
+          latest_crm_push: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Test focus endpoint')).toBeInTheDocument()
+    expect(screen.getByText('Latest manual test failed')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Budget+Risk&account_track_mode=competitor&back_to=%2Falerts',
+    )
+  })
+
   it('shows the latest CRM push summary on CRM webhook cards', async () => {
     api.listWebhooks.mockResolvedValueOnce({
       webhooks: [

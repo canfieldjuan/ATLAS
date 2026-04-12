@@ -1142,6 +1142,7 @@ export default function IncidentAlerts() {
               const latestFailureContext = {
                 ...latestFailureReferences,
                 vendor_name: webhook.latest_failure_vendor_name,
+                account_review_focus: webhook.latest_failure_account_review_focus ?? null,
               }
               const latestManualTestReferences = manualTestResults[webhook.id]
                 ? null
@@ -1154,6 +1155,7 @@ export default function IncidentAlerts() {
                 ? {
                     ...latestManualTestReferences,
                     vendor_name: webhook.latest_test_vendor_name,
+                    account_review_focus: webhook.latest_test_account_review_focus ?? null,
                   }
                 : null
               const latestCrmPush = webhook.latest_crm_push ?? null

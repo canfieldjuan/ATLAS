@@ -82,8 +82,30 @@ async def test_list_webhooks_exposes_latest_test_summary():
     )
     user = MagicMock(account_id='account-1')
 
+    latest_failure_focus = {
+        'vendor': 'Acme Rival',
+        'company': 'Acme Bank',
+        'report_date': '2026-04-10',
+        'watch_vendor': 'Acme Rival',
+        'category': 'Switch Risk',
+        'track_mode': 'competitor',
+    }
+    latest_test_focus = {
+        'vendor': 'Acme Rival',
+        'company': 'Acme Bank',
+        'report_date': '2026-04-10',
+        'watch_vendor': 'Acme Rival',
+        'category': 'Budget Risk',
+        'track_mode': 'competitor',
+    }
+
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
-        result = await b2b_dashboard.list_webhooks(user=user)
+        with patch.object(
+            b2b_dashboard,
+            '_resolve_webhook_activity_account_focus',
+            AsyncMock(side_effect=[latest_failure_focus, latest_test_focus]),
+        ) as resolve_account_focus:
+            result = await b2b_dashboard.list_webhooks(user=user)
 
     assert result['count'] == 1
     webhook = result['webhooks'][0]
@@ -98,11 +120,24 @@ async def test_list_webhooks_exposes_latest_test_summary():
     assert webhook['latest_failure_report_id'] is None
     assert webhook['latest_failure_vendor_name'] == 'Acme Rival'
     assert webhook['latest_failure_company_name'] == 'Acme Bank'
+    assert webhook['latest_failure_account_review_focus'] == latest_failure_focus
     assert webhook['latest_test_signal_id'] is None
     assert webhook['latest_test_review_id'] is None
     assert webhook['latest_test_report_id'] == '44444444-4444-4444-8444-444444444444'
     assert webhook['latest_test_vendor_name'] == 'Acme Rival'
     assert webhook['latest_test_company_name'] == 'Acme Bank'
+    assert webhook['latest_test_account_review_focus'] == latest_test_focus
+    assert resolve_account_focus.await_count == 2
+    first_kwargs = resolve_account_focus.await_args_list[0].kwargs
+    assert first_kwargs['vendor_name'] == 'Acme Rival'
+    assert first_kwargs['company_name'] == 'Acme Bank'
+    assert first_kwargs['signal_id'] == '22222222-2222-2222-2222-222222222222'
+    assert first_kwargs['review_id'] == '33333333-3333-4333-8333-333333333334'
+    second_kwargs = resolve_account_focus.await_args_list[1].kwargs
+    assert second_kwargs['vendor_name'] == 'Acme Rival'
+    assert second_kwargs['company_name'] == 'Acme Bank'
+    assert second_kwargs['signal_id'] is None
+    assert second_kwargs['review_id'] is None
 
 
 

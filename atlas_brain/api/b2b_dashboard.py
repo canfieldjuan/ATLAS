@@ -5964,10 +5964,50 @@ async def list_webhooks(
     webhooks = []
     for r in rows:
         recent_total = r["recent_deliveries"] or 0
+        latest_failure_signal_id = _normalize_webhook_activity_uuid_text(r["latest_failure_signal_id"]) if "latest_failure_signal_id" in r and r["latest_failure_signal_id"] else None
+        latest_failure_review_id = _normalize_webhook_activity_uuid_text(r["latest_failure_review_id"]) if "latest_failure_review_id" in r and r["latest_failure_review_id"] else None
+        latest_failure_report_id = _normalize_webhook_activity_uuid_text(r["latest_failure_report_id"]) if "latest_failure_report_id" in r and r["latest_failure_report_id"] else None
+        latest_failure_vendor_name = _optional_query_text(r["latest_failure_vendor_name"]) if "latest_failure_vendor_name" in r and r["latest_failure_vendor_name"] else None
+        latest_failure_company_name = _optional_query_text(r["latest_failure_company_name"]) if "latest_failure_company_name" in r and r["latest_failure_company_name"] else None
+        latest_failure_account_review_focus = (
+            await _resolve_webhook_activity_account_focus(
+                pool,
+                user,
+                vendor_name=latest_failure_vendor_name,
+                company_name=latest_failure_company_name,
+                signal_id=latest_failure_signal_id,
+                review_id=latest_failure_review_id,
+                report_cache=report_cache,
+                tracked_vendor_cache=tracked_vendor_cache,
+                signal_cache=signal_cache,
+            )
+            if any((latest_failure_signal_id, latest_failure_review_id, latest_failure_vendor_name, latest_failure_company_name))
+            else None
+        )
         latest_test_success = r["latest_test_success"] if "latest_test_success" in r else None
         latest_test_status_code = r["latest_test_status_code"] if "latest_test_status_code" in r else None
         latest_test_error = r["latest_test_error"] if "latest_test_error" in r else None
         latest_test_at = r["latest_test_at"] if "latest_test_at" in r else None
+        latest_test_signal_id = _normalize_webhook_activity_uuid_text(r["latest_test_signal_id"]) if "latest_test_signal_id" in r and r["latest_test_signal_id"] else None
+        latest_test_review_id = _normalize_webhook_activity_uuid_text(r["latest_test_review_id"]) if "latest_test_review_id" in r and r["latest_test_review_id"] else None
+        latest_test_report_id = _normalize_webhook_activity_uuid_text(r["latest_test_report_id"]) if "latest_test_report_id" in r and r["latest_test_report_id"] else None
+        latest_test_vendor_name = _optional_query_text(r["latest_test_vendor_name"]) if "latest_test_vendor_name" in r and r["latest_test_vendor_name"] else None
+        latest_test_company_name = _optional_query_text(r["latest_test_company_name"]) if "latest_test_company_name" in r and r["latest_test_company_name"] else None
+        latest_test_account_review_focus = (
+            await _resolve_webhook_activity_account_focus(
+                pool,
+                user,
+                vendor_name=latest_test_vendor_name,
+                company_name=latest_test_company_name,
+                signal_id=latest_test_signal_id,
+                review_id=latest_test_review_id,
+                report_cache=report_cache,
+                tracked_vendor_cache=tracked_vendor_cache,
+                signal_cache=signal_cache,
+            )
+            if any((latest_test_signal_id, latest_test_review_id, latest_test_vendor_name, latest_test_company_name))
+            else None
+        )
         latest_crm_push = None
         latest_crm_id = r["latest_crm_id"] if "latest_crm_id" in r else None
         if latest_crm_id:
@@ -6041,20 +6081,22 @@ async def list_webhooks(
             "latest_failure_status_code": r["latest_failure_status_code"],
             "latest_failure_error": r["latest_failure_error"],
             "latest_failure_at": r["latest_failure_at"].isoformat() if r["latest_failure_at"] else None,
-            "latest_failure_signal_id": str(r["latest_failure_signal_id"]) if "latest_failure_signal_id" in r and r["latest_failure_signal_id"] else None,
-            "latest_failure_review_id": str(r["latest_failure_review_id"]) if "latest_failure_review_id" in r and r["latest_failure_review_id"] else None,
-            "latest_failure_report_id": str(r["latest_failure_report_id"]) if "latest_failure_report_id" in r and r["latest_failure_report_id"] else None,
-            "latest_failure_vendor_name": r["latest_failure_vendor_name"] if "latest_failure_vendor_name" in r and r["latest_failure_vendor_name"] else None,
-            "latest_failure_company_name": r["latest_failure_company_name"] if "latest_failure_company_name" in r and r["latest_failure_company_name"] else None,
+            "latest_failure_signal_id": latest_failure_signal_id,
+            "latest_failure_review_id": latest_failure_review_id,
+            "latest_failure_report_id": latest_failure_report_id,
+            "latest_failure_vendor_name": latest_failure_vendor_name,
+            "latest_failure_company_name": latest_failure_company_name,
+            "latest_failure_account_review_focus": latest_failure_account_review_focus,
             "latest_test_success": latest_test_success,
             "latest_test_status_code": latest_test_status_code,
             "latest_test_error": latest_test_error,
             "latest_test_at": latest_test_at.isoformat() if latest_test_at else None,
-            "latest_test_signal_id": str(r["latest_test_signal_id"]) if "latest_test_signal_id" in r and r["latest_test_signal_id"] else None,
-            "latest_test_review_id": str(r["latest_test_review_id"]) if "latest_test_review_id" in r and r["latest_test_review_id"] else None,
-            "latest_test_report_id": str(r["latest_test_report_id"]) if "latest_test_report_id" in r and r["latest_test_report_id"] else None,
-            "latest_test_vendor_name": r["latest_test_vendor_name"] if "latest_test_vendor_name" in r and r["latest_test_vendor_name"] else None,
-            "latest_test_company_name": r["latest_test_company_name"] if "latest_test_company_name" in r and r["latest_test_company_name"] else None,
+            "latest_test_signal_id": latest_test_signal_id,
+            "latest_test_review_id": latest_test_review_id,
+            "latest_test_report_id": latest_test_report_id,
+            "latest_test_vendor_name": latest_test_vendor_name,
+            "latest_test_company_name": latest_test_company_name,
+            "latest_test_account_review_focus": latest_test_account_review_focus,
             "latest_crm_push": latest_crm_push,
         })
 
