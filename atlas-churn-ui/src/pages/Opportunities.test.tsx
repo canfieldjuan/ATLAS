@@ -216,6 +216,60 @@ describe('Opportunities', () => {
     )
   })
 
+  it('prefers the exact upstream vendor workspace shortcut for nested opportunity context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fvendors%252FZendesk%253Fback_to%253D%25252Fwatchlists%25253Fview%25253Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('prefers the exact upstream evidence shortcut for nested opportunity context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fevidence%253Fvendor%253DZendesk%2526tab%253Dwitnesses%2526witness_id%253Dwit-1%2526source%253Dreddit%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=wit-1&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('prefers the exact upstream reports shortcut for nested opportunity context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Freports%252Freport-1%253Fback_to%253D%25252Fwatchlists%25253Fview%25253Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
   it('shows watchlists, vendor workspace, evidence, report, and alerts shortcuts for the active vendor filter', async () => {
     const router = createMemoryRouter(
       [{ path: '/opportunities', element: <Opportunities /> }],

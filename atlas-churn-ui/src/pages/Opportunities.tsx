@@ -788,6 +788,9 @@ export default function Opportunities() {
   const directWatchlistsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/watchlists') : null
   const directWatchlistsLabel = watchlistsShortcutLabel(directWatchlistsPath)
   const directAlertsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/alerts') : null
+  const directVendorWorkspacePath = activeVendorFilter ? upstreamNestedPath(backTarget, '/vendors/') : null
+  const directEvidencePath = activeVendorFilter ? upstreamNestedPath(backTarget, '/evidence') : null
+  const directReportsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/reports') : null
 
   if (error) return <PageError error={error} onRetry={refresh} />
 
@@ -822,19 +825,19 @@ export default function Opportunities() {
                   {directWatchlistsLabel}
                 </Link>
                 <Link
-                  to={vendorDetailPath(activeVendorFilter, currentPagePath)}
+                  to={directVendorWorkspacePath ?? vendorDetailPath(activeVendorFilter, currentPagePath)}
                   className="text-cyan-400 hover:text-cyan-300 transition-colors"
                 >
                   Vendor workspace
                 </Link>
                 <Link
-                  to={evidencePath(activeVendorFilter, currentPagePath)}
+                  to={directEvidencePath ?? evidencePath(activeVendorFilter, currentPagePath)}
                   className="text-violet-300 hover:text-violet-200 transition-colors"
                 >
                   Evidence
                 </Link>
                 <Link
-                  to={reportsPath(activeVendorFilter, currentPagePath)}
+                  to={directReportsPath ?? reportsPath(activeVendorFilter, currentPagePath)}
                   className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
                 >
                   Reports
