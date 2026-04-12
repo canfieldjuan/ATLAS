@@ -159,6 +159,51 @@ describe('AccountMovementDrawer', () => {
     expect(onOpenWitness).toHaveBeenCalledWith('witness:zendesk:1', 'Zendesk')
   })
 
+  it('fires the primary evidence, witness, vendor, and review header actions', async () => {
+    const user = userEvent.setup()
+    const onViewVendor = vi.fn()
+    const onOpenWitness = vi.fn()
+    const onViewReview = vi.fn()
+    const onCopyEvidenceLink = vi.fn()
+    const onCopyWitnessLink = vi.fn()
+    const onCopyVendorLink = vi.fn()
+    const onCopyReviewLink = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <AccountMovementDrawer
+          item={baseItem}
+          open
+          onClose={() => {}}
+          onViewVendor={onViewVendor}
+          onOpenWitness={onOpenWitness}
+          onViewReview={onViewReview}
+          onCopyEvidenceLink={onCopyEvidenceLink}
+          onCopyWitnessLink={onCopyWitnessLink}
+          onCopyVendorLink={onCopyVendorLink}
+          onCopyReviewLink={onCopyReviewLink}
+          evidenceExplorerUrl="/evidence?vendor=Zendesk"
+        />
+      </MemoryRouter>,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Copy evidence' }))
+    await user.click(screen.getByRole('button', { name: 'Open primary witness detail' }))
+    await user.click(screen.getByRole('button', { name: 'Copy primary witness link' }))
+    await user.click(screen.getByRole('button', { name: 'View vendor' }))
+    await user.click(screen.getByRole('button', { name: 'Copy vendor' }))
+    await user.click(screen.getByRole('button', { name: 'Open primary review detail' }))
+    await user.click(screen.getByRole('button', { name: 'Copy primary review link' }))
+
+    expect(onCopyEvidenceLink).toHaveBeenCalledTimes(1)
+    expect(onOpenWitness).toHaveBeenCalledWith('witness:zendesk:1', 'Zendesk')
+    expect(onCopyWitnessLink).toHaveBeenCalledWith('witness:zendesk:1')
+    expect(onViewVendor).toHaveBeenCalledWith('Zendesk')
+    expect(onCopyVendorLink).toHaveBeenCalledTimes(1)
+    expect(onViewReview).toHaveBeenCalledWith('review-1')
+    expect(onCopyReviewLink).toHaveBeenCalledWith('review-1')
+  })
+
   it('fires the report actions and shows the persisted report badge', async () => {
     const user = userEvent.setup()
     const onViewReport = vi.fn()
@@ -185,7 +230,6 @@ describe('AccountMovementDrawer', () => {
     expect(onViewReport).toHaveBeenCalledWith(expect.objectContaining({ vendor: 'Zendesk' }))
     expect(onCopyReportLink).toHaveBeenCalledWith(expect.objectContaining({ vendor: 'Zendesk' }))
   })
-
 
   it('shows the generating state on the campaign action', () => {
     render(
