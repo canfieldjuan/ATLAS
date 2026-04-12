@@ -1391,11 +1391,11 @@ async def generate_comparison_report(
     body: VendorComparisonRequest,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
-    primary_vendor = body.primary_vendor.strip()
-    comparison_vendor = body.comparison_vendor.strip()
+    primary_vendor = _optional_query_text(body.primary_vendor)
+    comparison_vendor = _optional_query_text(body.comparison_vendor)
     if not primary_vendor or not comparison_vendor:
         raise HTTPException(status_code=400, detail="Both vendors are required")
+    pool = _pool_or_503()
     if primary_vendor.lower() == comparison_vendor.lower():
         raise HTTPException(status_code=400, detail="Choose two different vendors")
     if _should_scope(user):
@@ -1425,11 +1425,11 @@ async def generate_account_comparison_report(
     body: AccountComparisonRequest,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
-    primary_company = body.primary_company.strip()
-    comparison_company = body.comparison_company.strip()
+    primary_company = _optional_query_text(body.primary_company)
+    comparison_company = _optional_query_text(body.comparison_company)
     if not primary_company or not comparison_company:
         raise HTTPException(status_code=400, detail="Both companies are required")
+    pool = _pool_or_503()
     if primary_company.lower() == comparison_company.lower():
         raise HTTPException(status_code=400, detail="Choose two different companies")
     from ..autonomous.tasks.b2b_churn_intelligence import generate_company_comparison_report
@@ -1452,10 +1452,10 @@ async def generate_account_deep_dive_report(
     body: AccountDeepDiveRequest,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    pool = _pool_or_503()
-    company_name = body.company_name.strip()
+    company_name = _optional_query_text(body.company_name)
     if not company_name:
         raise HTTPException(status_code=400, detail="Company name is required")
+    pool = _pool_or_503()
     from ..autonomous.tasks.b2b_churn_intelligence import generate_company_deep_dive_report
 
     report = await generate_company_deep_dive_report(

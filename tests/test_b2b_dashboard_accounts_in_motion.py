@@ -72,6 +72,107 @@ async def test_list_accounts_in_motion_uses_persisted_report_only():
 
 
 @pytest.mark.asyncio
+async def test_dashboard_report_actions_validate_required_body_text_before_db_touch(monkeypatch):
+    monkeypatch.setattr(
+        b2b_dashboard,
+        "_pool_or_503",
+        lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")),
+    )
+
+    cases = [
+        (
+            lambda: b2b_dashboard.generate_comparison_report(
+                b2b_dashboard.VendorComparisonRequest(primary_vendor="   ", comparison_vendor="Acme"),
+                user=None,
+            ),
+            "Both vendors are required",
+        ),
+        (
+            lambda: b2b_dashboard.generate_comparison_report(
+                b2b_dashboard.VendorComparisonRequest(primary_vendor="Zendesk", comparison_vendor="   "),
+                user=None,
+            ),
+            "Both vendors are required",
+        ),
+        (
+            lambda: b2b_dashboard.generate_account_comparison_report(
+                b2b_dashboard.AccountComparisonRequest(primary_company="   ", comparison_company="Acme"),
+                user=None,
+            ),
+            "Both companies are required",
+        ),
+        (
+            lambda: b2b_dashboard.generate_account_comparison_report(
+                b2b_dashboard.AccountComparisonRequest(primary_company="Acme", comparison_company="   "),
+                user=None,
+            ),
+            "Both companies are required",
+        ),
+        (
+            lambda: b2b_dashboard.generate_account_deep_dive_report(
+                b2b_dashboard.AccountDeepDiveRequest(company_name="   "),
+                user=None,
+            ),
+            "Company name is required",
+        ),
+    ]
+
+    for call, detail in cases:
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await call()
+        assert exc.value.status_code == 400
+        assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+async def test_dashboard_report_actions_trim_body_text_before_task_calls(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_churn_intelligence as task_mod
+
+    pool = MagicMock()
+    vendor_mock = AsyncMock(return_value={"kind": "vendor"})
+    account_mock = AsyncMock(return_value={"kind": "account"})
+    deep_mock = AsyncMock(return_value={"kind": "deep"})
+    monkeypatch.setattr(b2b_dashboard, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(task_mod, "generate_vendor_comparison_report", vendor_mock)
+    monkeypatch.setattr(task_mod, "generate_company_comparison_report", account_mock)
+    monkeypatch.setattr(task_mod, "generate_company_deep_dive_report", deep_mock)
+
+    vendor_result = await b2b_dashboard.generate_comparison_report(
+        b2b_dashboard.VendorComparisonRequest(
+            primary_vendor="  Zendesk  ",
+            comparison_vendor="  Intercom  ",
+            window_days=14,
+            persist=False,
+        ),
+        user=None,
+    )
+    account_result = await b2b_dashboard.generate_account_comparison_report(
+        b2b_dashboard.AccountComparisonRequest(
+            primary_company="  Acme  ",
+            comparison_company="  Beta  ",
+            window_days=21,
+            persist=False,
+        ),
+        user=None,
+    )
+    deep_result = await b2b_dashboard.generate_account_deep_dive_report(
+        b2b_dashboard.AccountDeepDiveRequest(
+            company_name="  Acme  ",
+            window_days=30,
+            persist=False,
+        ),
+        user=None,
+    )
+
+    assert vendor_result == {"kind": "vendor"}
+    assert account_result == {"kind": "account"}
+    assert deep_result == {"kind": "deep"}
+    vendor_mock.assert_awaited_once_with(pool, "Zendesk", "Intercom", window_days=14, persist=False)
+    account_mock.assert_awaited_once_with(pool, "Acme", "Beta", window_days=21, persist=False, account_id=None)
+    deep_mock.assert_awaited_once_with(pool, "Acme", window_days=30, persist=False, account_id=None)
+
+
+@pytest.mark.asyncio
 async def test_list_accounts_in_motion_raises_when_persisted_missing():
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
         with patch.object(
