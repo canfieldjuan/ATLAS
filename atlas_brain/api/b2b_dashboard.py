@@ -1066,9 +1066,10 @@ async def get_signal(
     product_category: Optional[str] = Query(None),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
     product_category = _optional_query_text(product_category)
     pool = _pool_or_503()
-    vname = vendor_name.strip()
+    vname = vendor_name
     row = await read_vendor_signal_detail(
         pool,
         vendor_name_query=vname,
@@ -4736,6 +4737,7 @@ async def fuzzy_company_search(
 ):
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="q parameter is required")
+    vendor_name = _optional_query_text(vendor_name)
     limit = max(1, min(limit, 100))
     min_similarity = max(0.0, min(min_similarity, 1.0))
 

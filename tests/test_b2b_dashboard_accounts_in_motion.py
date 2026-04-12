@@ -2773,6 +2773,116 @@ async def test_accounts_in_motion_routes_trim_active_vendor_name_before_downstre
 
 
 @pytest.mark.asyncio
+async def test_get_signal_rejects_blank_vendor_name_without_db_touch():
+    with patch.object(b2b_dashboard, "_pool_or_503", side_effect=AssertionError("db should not be touched")):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.get_signal("   ", product_category=None, user=None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "vendor_name is required"
+
+
+@pytest.mark.asyncio
+async def test_get_signal_trims_active_vendor_name_before_reader_call():
+    pool = MagicMock()
+    row = {
+        "id": "sig-1",
+        "vendor_name": "Zendesk",
+        "product_category": "CRM",
+        "total_reviews": 10,
+        "negative_reviews": 3,
+        "churn_intent_count": 2,
+        "avg_urgency_score": 6.1,
+        "avg_rating_normalized": 0.4,
+        "nps_proxy": -0.1,
+        "price_complaint_rate": 0.2,
+        "decision_maker_churn_rate": 0.1,
+        "support_sentiment": -0.2,
+        "legacy_support_score": -0.1,
+        "new_feature_velocity": 0.3,
+        "employee_growth_rate": 0.02,
+        "top_pain_categories": [],
+        "top_competitors": [],
+        "top_feature_gaps": [],
+        "company_churn_list": [],
+        "quotable_evidence": [],
+        "top_use_cases": [],
+        "top_integration_stacks": [],
+        "budget_signal_summary": {},
+        "sentiment_distribution": {},
+        "buyer_authority_summary": {},
+        "timeline_summary": {},
+        "source_distribution": {},
+        "sample_review_ids": [],
+        "review_window_start": None,
+        "review_window_end": None,
+        "confidence_score": 0.4,
+        "insider_signal_count": 0,
+        "insider_org_health_summary": None,
+        "insider_talent_drain_rate": None,
+        "insider_quotable_evidence": [],
+        "keyword_spike_count": 0,
+        "keyword_spike_keywords": [],
+        "keyword_trend_summary": None,
+        "last_computed_at": None,
+        "created_at": None,
+    }
+    read_detail = AsyncMock(return_value=row)
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(b2b_dashboard, "read_vendor_signal_detail", read_detail):
+            with patch.object(b2b_dashboard, "_load_reasoning_views_for_vendors", new=AsyncMock(return_value={})):
+                with patch.object(
+                    b2b_dashboard,
+                    "_apply_field_overrides",
+                    new=AsyncMock(side_effect=lambda pool, entity_type, entity_id, payload: payload),
+                ):
+                    result = await b2b_dashboard.get_signal(" Zendesk ", product_category=None, user=None)
+
+    read_detail.assert_awaited_once_with(
+        pool,
+        vendor_name_query="Zendesk",
+        product_category=None,
+        tracked_account_id=None,
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+    )
+    assert result["vendor_name"] == "Zendesk"
+
+
+@pytest.mark.asyncio
+async def test_fuzzy_company_search_normalizes_blank_vendor_filter(monkeypatch):
+    search_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr("atlas_brain.services.vendor_registry.fuzzy_search_companies", search_mock)
+
+    result = await b2b_dashboard.fuzzy_company_search(
+        q="acme",
+        vendor_name="   ",
+        limit=10,
+        min_similarity=0.3,
+    )
+
+    search_mock.assert_awaited_once_with("acme", vendor_name=None, limit=10, min_similarity=0.3)
+    assert result == {"query": "acme", "vendor_filter": None, "results": [], "count": 0}
+
+
+@pytest.mark.asyncio
+async def test_fuzzy_company_search_trims_active_vendor_filter(monkeypatch):
+    search_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr("atlas_brain.services.vendor_registry.fuzzy_search_companies", search_mock)
+
+    result = await b2b_dashboard.fuzzy_company_search(
+        q=" acme ",
+        vendor_name=" Zendesk ",
+        limit=12,
+        min_similarity=0.4,
+    )
+
+    search_mock.assert_awaited_once_with("acme", vendor_name="Zendesk", limit=12, min_similarity=0.4)
+    assert result == {"query": "acme", "vendor_filter": "Zendesk", "results": [], "count": 0}
+
+
+@pytest.mark.asyncio
 async def test_list_webhooks_exposes_latest_failure_summary():
     created_at = datetime.now(timezone.utc) - timedelta(days=1)
     failed_at = datetime.now(timezone.utc) - timedelta(hours=2)
