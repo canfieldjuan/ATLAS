@@ -11,6 +11,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.params import Param
 from pydantic import BaseModel, Field
 
 from ..config import settings
@@ -26,14 +27,49 @@ logger = logging.getLogger("atlas.api.universal_scrape")
 router = APIRouter(prefix="/scraper", tags=["universal-scraper"])
 
 
-# ── Schemas ──────────────────────────────────────────────────────────
+def _pool_or_503():
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(503, "Database not ready")
+    return pool
+
+
+def _unwrap_param_default(value: object | None) -> object | None:
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
+def _clean_optional_text(value: object | None) -> str | None:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _clean_required_text(value: object | None, field_name: str) -> str:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise HTTPException(422, f"{field_name} is required")
+    return text
+
+
+def _clean_int_query(value: object | None, *, default: int) -> int:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return int(value)
+
+
+# -- Schemas ----------------------------------------------------------
 
 
 class FromFileRequest(BaseModel):
     path: str = Field(description="Path to a JSON config file on disk")
 
 
-# ── Endpoints ────────────────────────────────────────────────────────
+# -- Endpoints --------------------------------------------------------
 
 
 @router.post("/jobs")
@@ -41,9 +77,7 @@ async def create_job(config: ScrapeJobConfig):
     """Submit a scrape job. Returns immediately with job_id; scraping runs in background."""
     if not settings.universal_scrape.enabled:
         raise HTTPException(503, "Universal scraper is disabled")
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(503, "Database not ready")
+    pool = _pool_or_503()
 
     try:
         scraper = get_universal_scraper()
@@ -59,14 +93,13 @@ async def create_job_from_file(req: FromFileRequest):
     """Load a scrape job from a JSON config file on disk and start it."""
     if not settings.universal_scrape.enabled:
         raise HTTPException(503, "Universal scraper is disabled")
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(503, "Database not ready")
+    path_text = _clean_required_text(req.path, "path")
+    pool = _pool_or_503()
 
     try:
-        config = load_config_file(req.path)
+        config = load_config_file(path_text)
     except FileNotFoundError:
-        raise HTTPException(404, f"Config file not found: {req.path}")
+        raise HTTPException(404, f"Config file not found: {path_text}")
     except Exception as exc:
         raise HTTPException(400, f"Invalid config file: {exc}")
 
@@ -86,9 +119,10 @@ async def list_jobs(
     offset: int = Query(default=0, ge=0),
 ):
     """List scrape jobs, optionally filtered by status."""
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(503, "Database not ready")
+    status = _clean_optional_text(status)
+    limit = _clean_int_query(limit, default=20)
+    offset = _clean_int_query(offset, default=0)
+    pool = _pool_or_503()
 
     conditions: list[str] = []
     args: list = []
@@ -119,9 +153,7 @@ async def list_jobs(
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: UUID):
     """Get job status and progress."""
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(503, "Database not ready")
+    pool = _pool_or_503()
 
     row = await pool.fetchrow(
         """
@@ -144,9 +176,9 @@ async def get_results(
     offset: int = Query(default=0, ge=0),
 ):
     """Get extracted data for a job."""
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(503, "Database not ready")
+    limit = _clean_int_query(limit, default=50)
+    offset = _clean_int_query(offset, default=0)
+    pool = _pool_or_503()
 
     cols = (
         "id, job_id, target_url, page_number, page_title, "
@@ -173,9 +205,7 @@ async def get_results(
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: UUID):
     """Cancel a pending or running job."""
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(503, "Database not ready")
+    pool = _pool_or_503()
 
     result = await pool.execute(
         """
@@ -191,9 +221,7 @@ async def cancel_job(job_id: UUID):
 @router.delete("/jobs/{job_id}")
 async def delete_job(job_id: UUID):
     """Delete a job and all its results (CASCADE)."""
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(503, "Database not ready")
+    pool = _pool_or_503()
 
     result = await pool.execute(
         "DELETE FROM universal_scrape_jobs WHERE id = $1", job_id
