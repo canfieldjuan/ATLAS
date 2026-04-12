@@ -128,12 +128,45 @@ function backButtonLabel(target: string | null): string {
   return BACK_TARGET_RULES.find((rule) => target.startsWith(rule.prefix))?.label ?? 'Back'
 }
 
+function upstreamNestedPath(value: string | null, prefix: string): string | null {
+  let current = value?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith(prefix)) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+function watchlistsShortcutLabel(target: string | null): string {
+  if (!target) return 'Watchlists'
+  try {
+    const url = new URL(target, window.location.origin)
+    return url.searchParams.get('account_company')?.trim() ? 'Account Review' : 'Watchlists'
+  } catch {
+    return 'Watchlists'
+  }
+}
+
 function opportunitiesPath(vendorName: string, backTarget: string | null): string {
   const params = new URLSearchParams()
   if (vendorName) params.set('vendor', vendorName)
   if (backTarget) params.set('back_to', backTarget)
   const query = params.toString()
   return query ? `/opportunities?${query}` : '/opportunities'
+}
+
+function watchlistsPath(vendorName: string, returnPath: string): string {
+  const params = new URLSearchParams()
+  params.set('vendor_name', vendorName)
+  params.set('back_to', returnPath)
+  return `/watchlists?${params.toString()}`
 }
 
 function evidencePath(vendorName: string, returnPath: string): string {
@@ -151,14 +184,24 @@ function reportsPath(vendorName: string, returnPath: string): string {
   return `/reports?${params.toString()}`
 }
 
+function alertsPath(returnPath: string): string {
+  const params = new URLSearchParams()
+  params.set('back_to', returnPath)
+  return `/alerts?${params.toString()}`
+}
+
 function reviewDetailPath(reviewId: string, returnPath: string): string {
   const params = new URLSearchParams()
   params.set('back_to', returnPath)
   return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
 }
 
-function vendorDetailPath(vendorName: string): string {
-  return `/vendors/${encodeURIComponent(vendorName)}`
+function vendorDetailPath(vendorName: string, backTo?: string | null): string {
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  if (!backTo) return base
+  const params = new URLSearchParams()
+  params.set('back_to', backTo)
+  return `${base}?${params.toString()}`
 }
 
 function CollapsibleSection({ title, defaultOpen = false, children }: {
@@ -742,6 +785,9 @@ export default function Opportunities() {
     [debouncedVendor, backTarget],
   )
   const activeVendorFilter = debouncedVendor.trim()
+  const directWatchlistsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/watchlists') : null
+  const directWatchlistsLabel = watchlistsShortcutLabel(directWatchlistsPath)
+  const directAlertsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/alerts') : null
 
   if (error) return <PageError error={error} onRetry={refresh} />
 
@@ -768,7 +814,15 @@ export default function Opportunities() {
                   Filtered to <span className="text-slate-300">{activeVendorFilter}</span>
                 </span>
                 <Link
-                  to={vendorDetailPath(activeVendorFilter)}
+                  to={directWatchlistsPath ?? watchlistsPath(activeVendorFilter, currentPagePath)}
+                  className={directWatchlistsLabel === 'Account Review'
+                    ? 'text-amber-300 hover:text-amber-200 transition-colors'
+                    : 'text-violet-300 hover:text-violet-200 transition-colors'}
+                >
+                  {directWatchlistsLabel}
+                </Link>
+                <Link
+                  to={vendorDetailPath(activeVendorFilter, currentPagePath)}
                   className="text-cyan-400 hover:text-cyan-300 transition-colors"
                 >
                   Vendor workspace
@@ -784,6 +838,12 @@ export default function Opportunities() {
                   className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
                 >
                   Reports
+                </Link>
+                <Link
+                  to={directAlertsPath ?? alertsPath(currentPagePath)}
+                  className="text-rose-300 hover:text-rose-200 transition-colors"
+                >
+                  Alerts API
                 </Link>
               </div>
             ) : null}
@@ -1345,7 +1405,7 @@ function EvidencePanel({
   const quotes = Array.isArray(row.quotes)
     ? row.quotes.filter((q) => typeof q === 'string' && q.trim())
     : []
-  const vendorPath = vendorDetailPath(row.vendor)
+  const vendorPath = vendorDetailPath(row.vendor, currentPagePath)
   const vendorEvidencePath = evidencePath(row.vendor, currentPagePath)
   const vendorReportsLibraryPath = reportsPath(row.vendor, currentPagePath)
   const reviewPath = row.review_id ? reviewDetailPath(row.review_id, currentPagePath) : null

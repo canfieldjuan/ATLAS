@@ -198,7 +198,25 @@ describe('Opportunities', () => {
     })
   })
 
-  it('shows vendor workspace, evidence, and report shortcuts for the active vendor filter', async () => {
+  it('prefers the exact upstream alerts shortcut for nested opportunity context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fwebhook%253Dwh-1%2526days%253D30',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?webhook=wh-1&days=30',
+    )
+  })
+
+  it('shows watchlists, vendor workspace, evidence, report, and alerts shortcuts for the active vendor filter', async () => {
     const router = createMemoryRouter(
       [{ path: '/opportunities', element: <Opportunities /> }],
       { initialEntries: ['/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1'] },
@@ -208,9 +226,13 @@ describe('Opportunities', () => {
 
     expect(await screen.findByText('Filtered to')).toBeInTheDocument()
     expect(screen.getByText('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-1',
+    )
     expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
-      '/vendors/Zendesk',
+      '/vendors/Zendesk?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
       'href',
@@ -219,6 +241,10 @@ describe('Opportunities', () => {
     expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
       'href',
       '/reports?vendor_filter=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
   })
 
@@ -254,7 +280,10 @@ describe('Opportunities', () => {
 
     await user.click(screen.getByText('Acme Corp'))
 
-    expect(await screen.findByRole('link', { name: 'View vendor' })).toHaveAttribute('href', '/vendors/Zendesk')
+    expect(await screen.findByRole('link', { name: 'View vendor' })).toHaveAttribute(
+      'href',
+      '/vendors/Zendesk?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
+    )
     expect(screen.getByRole('link', { name: 'Validate evidence' })).toHaveAttribute(
       'href',
       '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
