@@ -18,6 +18,13 @@ REPORT_SECTION_EVIDENCE_SKIP_KEYS = frozenset({
     "quality_status",
     "battle_card_quality",
     "data_stale",
+    "date",
+    "report_date",
+    "as_of_date",
+    "data_as_of_date",
+    "window_days",
+    "analysis_window_days",
+    "evidence_window_days",
     "reasoning_reference_ids",
     "reasoning_witness_highlights",
     "reference_ids",
@@ -106,6 +113,53 @@ def report_artifact_payload(status: Any) -> dict[str, str]:
     if normalized in {"queued", "pending", "running", "processing", "enriching", "repairing"}:
         return {"state": "processing", "label": "Processing"}
     return {"state": "unknown", "label": "Status unknown"}
+
+
+def _coerce_date_text(value: Any) -> str | None:
+    dt = coerce_datetime(value)
+    return dt.date().isoformat() if dt else None
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value > 0 and value.is_integer() else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = int(text)
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def report_evidence_snapshot_payload(
+    *,
+    report_date: Any,
+    intelligence_data: Any,
+) -> dict[str, Any]:
+    metadata = intelligence_data if _is_record(intelligence_data) else {}
+    return {
+        "as_of_date": (
+            _coerce_date_text(metadata.get("data_as_of_date"))
+            or _coerce_date_text(metadata.get("as_of_date"))
+            or _coerce_date_text(metadata.get("report_date"))
+            or _coerce_date_text(report_date)
+        ),
+        "analysis_window_days": (
+            _coerce_positive_int(metadata.get("analysis_window_days"))
+            or _coerce_positive_int(metadata.get("window_days"))
+            or _coerce_positive_int(metadata.get("evidence_window_days"))
+        ),
+    }
 
 
 def _is_record(value: Any) -> bool:

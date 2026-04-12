@@ -53,18 +53,28 @@ function vendorDetailPath(vendorName: string, backTo?: string) {
   return `${base}?${next.toString()}`
 }
 
-function evidencePath(vendorName: string, backTo: string) {
+function evidencePath(vendorName: string, backTo: string, asOfDate?: string | null, windowDays?: number | null) {
   const next = new URLSearchParams()
   next.set('vendor', vendorName)
   next.set('tab', 'witnesses')
+  if (asOfDate) next.set('as_of_date', asOfDate)
+  if (windowDays) next.set('window_days', String(windowDays))
   next.set('back_to', backTo)
   return `/evidence?${next.toString()}`
 }
 
-function evidenceWitnessPath(vendorName: string, witnessId: string, backTo: string) {
+function evidenceWitnessPath(
+  vendorName: string,
+  witnessId: string,
+  backTo: string,
+  asOfDate?: string | null,
+  windowDays?: number | null,
+) {
   const next = new URLSearchParams()
   next.set('vendor', vendorName)
   next.set('tab', 'witnesses')
+  if (asOfDate) next.set('as_of_date', asOfDate)
+  if (windowDays) next.set('window_days', String(windowDays))
   next.set('witness_id', witnessId)
   next.set('back_to', backTo)
   return `/evidence?${next.toString()}`
@@ -244,8 +254,16 @@ export default function ReportDetail() {
     const qs = next.toString()
     return qs ? `/reports/${report.id}?${qs}` : `/reports/${report.id}`
   })()
+  const reportEvidenceAsOfDate = report.as_of_date ?? report.report_date ?? null
+  const reportEvidenceWindowDays = report.analysis_window_days ?? null
   const drawerExplorerUrl = drawerWitnessId && drawerVendor
-    ? evidenceWitnessPath(drawerVendor, drawerWitnessId, detailBackPath)
+    ? evidenceWitnessPath(
+        drawerVendor,
+        drawerWitnessId,
+        detailBackPath,
+        reportEvidenceAsOfDate,
+        reportEvidenceWindowDays,
+      )
     : null
   const handleCopyDirectWatchlistsLink = () => {
     if (!directWatchlistsPath) return
@@ -362,7 +380,12 @@ export default function ReportDetail() {
               Vendor workspace
             </Link>
             <Link
-              to={directEvidencePath ?? evidencePath(report.vendor_filter, detailBackPath)}
+              to={directEvidencePath ?? evidencePath(
+                report.vendor_filter,
+                detailBackPath,
+                reportEvidenceAsOfDate,
+                reportEvidenceWindowDays,
+              )}
               className="text-violet-300 hover:text-violet-200 transition-colors"
             >
               Evidence
@@ -518,6 +541,8 @@ export default function ReportDetail() {
         vendorName={drawerVendor}
         witnessId={drawerWitnessId}
         open={drawerOpen}
+        asOfDate={reportEvidenceAsOfDate}
+        windowDays={reportEvidenceWindowDays ?? undefined}
         explorerUrl={drawerExplorerUrl}
         backToPath={detailBackPath}
         onClose={() => {

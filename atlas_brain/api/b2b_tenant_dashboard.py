@@ -34,6 +34,7 @@ from ..services.company_normalization import (
 )
 from ..services.b2b.report_trust import (
     REPORT_QUALITY_STATUSES,
+    report_evidence_snapshot_payload,
     report_freshness_payload,
     report_review_payload,
     report_section_evidence_payload,
@@ -3713,6 +3714,10 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         if isinstance(quality, dict):
             quality_score = quality.get("score")
     section_evidence = report_section_evidence_payload(intelligence_data)
+    evidence_snapshot = report_evidence_snapshot_payload(
+        report_date=row["report_date"],
+        intelligence_data=intelligence_data,
+    )
     data_stale = False
     if isinstance(intelligence_data, dict):
         data_stale = bool(intelligence_data.get("data_stale") is True)
@@ -3752,6 +3757,8 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         "category_filter": row["category_filter"],
         "executive_summary": row["executive_summary"],
         "intelligence_data": intelligence_data,
+        "as_of_date": evidence_snapshot["as_of_date"],
+        "analysis_window_days": evidence_snapshot["analysis_window_days"],
         "section_evidence": section_evidence,
         "data_density": data_density,
         "status": row["status"],

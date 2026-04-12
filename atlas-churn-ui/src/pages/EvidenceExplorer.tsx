@@ -44,6 +44,17 @@ function parseOffset(value: string | null) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0
 }
 
+function parseWindowDays(value: string | null) {
+  if (!value) return 30
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 30
+}
+
+function parseAsOfDate(value: string | null) {
+  const text = value?.trim() || ''
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : ''
+}
+
 function evidenceExplorerUrl(searchParams: URLSearchParams) {
   const query = searchParams.toString()
   return `${window.location.origin}/evidence${query ? `?${query}` : ''}`
@@ -296,10 +307,11 @@ async function copyText(text: string) {
 // -- Main component -----------------------------------------------------------
 
 export default function EvidenceExplorer() {
-  const windowDays = 30
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedVendor = searchParams.get('vendor')?.trim() || ''
   const requestedTab = parseTab(searchParams.get('tab'))
+  const requestedAsOfDate = parseAsOfDate(searchParams.get('as_of_date'))
+  const windowDays = parseWindowDays(searchParams.get('window_days'))
   const requestedPain = searchParams.get('pain_category')?.trim() || ''
   const requestedSource = searchParams.get('source')?.trim() || ''
   const requestedWitnessType = searchParams.get('witness_type')?.trim() || ''
@@ -517,6 +529,7 @@ export default function EvidenceExplorer() {
     try {
       const res = await fetchWitnesses({
         vendor_name: activeVendor,
+        as_of_date: requestedAsOfDate || undefined,
         window_days: windowDays,
         pain_category: filterPain || undefined,
         source: filterSource || undefined,
@@ -536,7 +549,7 @@ export default function EvidenceExplorer() {
     } finally {
       if (version === requestVersionRef.current) setLoading(false)
     }
-  }, [activeVendor, filterPain, filterSource, filterType, offset, windowDays])
+  }, [activeVendor, filterPain, filterSource, filterType, offset, requestedAsOfDate, windowDays])
 
   useEffect(() => {
     if (activeTab === 'witnesses') loadWitnesses()
@@ -546,7 +559,11 @@ export default function EvidenceExplorer() {
     if (activeTab === 'vault' && activeVendor && !vault && !vaultLoading) {
       const version = ++requestVersionRef.current
       setVaultLoading(true)
-      fetchEvidenceVault({ vendor_name: activeVendor, window_days: windowDays })
+      fetchEvidenceVault({
+        vendor_name: activeVendor,
+        as_of_date: requestedAsOfDate || undefined,
+        window_days: windowDays,
+      })
         .then(res => {
           if (version !== requestVersionRef.current) return
           if ('weakness_evidence' in res) {
@@ -563,13 +580,17 @@ export default function EvidenceExplorer() {
           if (version === requestVersionRef.current) setVaultLoading(false)
         })
     }
-  }, [activeTab, activeVendor, vault, vaultLoading, windowDays])
+  }, [activeTab, activeVendor, requestedAsOfDate, vault, vaultLoading, windowDays])
 
   useEffect(() => {
     if (activeTab === 'trace' && activeVendor && !trace && !traceLoading) {
       const version = ++requestVersionRef.current
       setTraceLoading(true)
-      fetchEvidenceTrace({ vendor_name: activeVendor, window_days: windowDays })
+      fetchEvidenceTrace({
+        vendor_name: activeVendor,
+        as_of_date: requestedAsOfDate || undefined,
+        window_days: windowDays,
+      })
         .then(res => {
           if (version !== requestVersionRef.current) return
           setTrace(res)
@@ -582,7 +603,7 @@ export default function EvidenceExplorer() {
           if (version === requestVersionRef.current) setTraceLoading(false)
         })
     }
-  }, [activeTab, activeVendor, trace, traceLoading, windowDays])
+  }, [activeTab, activeVendor, requestedAsOfDate, trace, traceLoading, windowDays])
 
   // Reset vault/trace when vendor changes
   useEffect(() => {

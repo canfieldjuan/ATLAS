@@ -597,6 +597,8 @@ async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
         "executive_summary": "Summary",
         "intelligence_data": {
             "data_stale": False,
+            "data_as_of_date": "2026-04-09",
+            "window_days": 60,
             "key_insights": [{"label": "Pricing", "summary": "Pricing churn risk"}],
             "key_insights_reference_ids": {"witness_ids": ["w1"]},
             "recommended_plays": {"summary": "Lead with migration support"},
@@ -622,6 +624,8 @@ async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
 
     assert result["artifact_state"] == "ready"
     assert result["has_pdf_export"] is True
+    assert result["as_of_date"] == "2026-04-09"
+    assert result["analysis_window_days"] == 60
     assert result["report_subscription"] is None
     assert result["artifact_label"] == "Ready"
     assert result["freshness_state"] == "fresh"

@@ -27,7 +27,11 @@ from ..services.b2b.source_impact import (
     get_consumer_wiring_baseline,
     summarize_source_field_baseline,
 )
-from ..services.b2b.report_trust import report_section_evidence_payload, report_trust_payload
+from ..services.b2b.report_trust import (
+    report_evidence_snapshot_payload,
+    report_section_evidence_payload,
+    report_trust_payload,
+)
 from ..services.tracing import (
     build_business_trace_context,
     build_reasoning_trace_context,
@@ -1794,6 +1798,10 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
     warning_count = row["warning_count"] or 0
     open_issue_count = unresolved_issue_count or 0
     section_evidence = report_section_evidence_payload(intelligence_data)
+    evidence_snapshot = report_evidence_snapshot_payload(
+        report_date=row["report_date"],
+        intelligence_data=intelligence_data,
+    )
     trust = report_trust_payload(
         report_date=row["report_date"],
         created_at=row["created_at"],
@@ -1812,6 +1820,8 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
         "category_filter": row["category_filter"],
         "executive_summary": row["executive_summary"],
         "intelligence_data": intelligence_data,
+        "as_of_date": evidence_snapshot["as_of_date"],
+        "analysis_window_days": evidence_snapshot["analysis_window_days"],
         "section_evidence": section_evidence,
         "data_density": _safe_json(row["data_density"]),
         "status": row["status"],

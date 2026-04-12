@@ -162,7 +162,7 @@ describe('EvidenceExplorer', () => {
 
   it('hydrates vendor, filters, and witness focus from the URL', async () => {
     render(
-      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk']}>
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk']}>
         <EvidenceExplorer />
       </MemoryRouter>,
     )
@@ -176,7 +176,8 @@ describe('EvidenceExplorer', () => {
     await waitFor(() => {
       expect(api.fetchWitnesses).toHaveBeenLastCalledWith({
         vendor_name: 'Zendesk',
-        window_days: 30,
+        as_of_date: '2026-04-08',
+        window_days: 45,
         pain_category: 'pricing',
         source: 'reddit',
         witness_type: 'pricing',
@@ -189,7 +190,7 @@ describe('EvidenceExplorer', () => {
     await waitFor(() => {
       expect(api.fetchWitness).toHaveBeenLastCalledWith('witness:zendesk:1', 'Zendesk', {
         as_of_date: '2026-04-09',
-        window_days: 30,
+        window_days: 45,
       })
     })
     const accountReviewLinks = await screen.findAllByRole('link', { name: 'Open account review' })
@@ -197,7 +198,7 @@ describe('EvidenceExplorer', () => {
     for (const link of accountReviewLinks) {
       expect(link).toHaveAttribute(
         'href',
-        '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
+        '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26as_of_date%3D2026-04-08%26window_days%3D45%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
       )
     }
   })
@@ -208,7 +209,7 @@ describe('EvidenceExplorer', () => {
 
     try {
       render(
-        <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk']}>
+        <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk']}>
           <EvidenceExplorer />
         </MemoryRouter>,
       )
@@ -216,13 +217,13 @@ describe('EvidenceExplorer', () => {
       const explorerLink = await screen.findByRole('link', { name: 'Open in Evidence Explorer' })
       expect(explorerLink).toHaveAttribute(
         'href',
-        '/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk',
+        '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk',
       )
 
       await user.click(screen.getByRole('button', { name: 'Copy evidence explorer link' }))
       await waitFor(() => {
         expect(clipboardSpy).toHaveBeenCalledWith(
-          `${window.location.origin}/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk`,
+          `${window.location.origin}/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk`,
         )
       })
     } finally {

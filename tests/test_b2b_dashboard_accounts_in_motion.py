@@ -2286,6 +2286,8 @@ async def test_get_report_handles_null_battle_card_quality():
             "category_filter": "Help Desk",
             "executive_summary": "summary",
             "intelligence_data": {
+                "data_as_of_date": "2026-03-20",
+                "evidence_window_days": 45,
                 "quality_status": None,
                 "battle_card_quality": None,
                 "key_insights": [{"label": "Pricing", "summary": "Pricing churn risk"}],
@@ -2313,6 +2315,8 @@ async def test_get_report_handles_null_battle_card_quality():
     assert result["quality_score"] is None
     assert result["report_type"] == "battle_card"
     assert result["has_pdf_export"] is True
+    assert result["as_of_date"] == "2026-03-20"
+    assert result["analysis_window_days"] == 45
     assert result["artifact_state"] == "ready"
     assert result["artifact_label"] == "Ready"
     assert result["freshness_state"] == "stale"

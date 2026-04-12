@@ -77,6 +77,8 @@ describe('ReportDetail', () => {
       executive_summary: 'Executive summary',
       created_at: '2026-04-10T00:00:00Z',
       report_date: '2026-04-10',
+      as_of_date: '2026-04-08',
+      analysis_window_days: 45,
       llm_model: 'gpt-test',
       status: 'completed',
       blocker_count: 0,
@@ -593,7 +595,7 @@ describe('ReportDetail', () => {
     )
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
     expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',
@@ -640,6 +642,21 @@ describe('ReportDetail', () => {
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
       'href',
       '/evidence?vendor=Zendesk&tab=witnesses&witness_id=wit-1&source=reddit&offset=20&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('preserves report evidence snapshot context in the evidence shortcut', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      { initialEntries: ['/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
   })
 
@@ -699,9 +716,11 @@ describe('ReportDetail', () => {
 
     expect(drawerState.lastProps.vendorName).toBe('Zendesk')
     expect(drawerState.lastProps.witnessId).toBe('w1')
+    expect(drawerState.lastProps.asOfDate).toBe('2026-04-08')
+    expect(drawerState.lastProps.windowDays).toBe(45)
     expect(drawerState.lastProps.backToPath).toBe('/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1')
     expect(drawerState.lastProps.explorerUrl).toBe(
-      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=w1&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&witness_id=w1&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
     expect(screen.getByTestId('evidence-drawer')).toHaveTextContent('Zendesk:w1')
   })
