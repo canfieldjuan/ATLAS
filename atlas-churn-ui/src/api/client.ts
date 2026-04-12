@@ -516,6 +516,7 @@ export interface WebhookSubscription {
   latest_test_report_id?: string | null
   latest_test_vendor_name?: string | null
   latest_test_company_name?: string | null
+  latest_crm_push?: WebhookCrmPushLogEntry | null
 }
 
 export interface WebhookDeliverySummary {

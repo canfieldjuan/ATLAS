@@ -288,6 +288,77 @@ describe('IncidentAlerts', () => {
     )
   })
 
+
+  it('shows the latest CRM push summary on CRM webhook cards', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-crm-summary',
+          url: 'https://hooks.example.com/crm-summary',
+          event_types: ['high_intent_push'],
+          channel: 'crm_hubspot',
+          enabled: true,
+          description: 'CRM summary endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 2,
+          recent_success_rate_7d: 1,
+          latest_crm_push: {
+            id: 'push-latest',
+            signal_type: 'company_signal',
+            signal_id: 'sig-crm',
+            vendor_name: 'Acme Rival',
+            company_name: 'Acme Bank',
+            review_id: null,
+            report_id: null,
+            report_type: null,
+            report_title: null,
+            crm_record_id: 'deal-42',
+            crm_record_type: 'deal',
+            status: 'failed',
+            error: 'crm timeout',
+            pushed_at: '2026-04-10T03:05:00Z',
+          },
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('CRM summary endpoint')).toBeInTheDocument()
+    expect(screen.getByText('Latest CRM push failed')).toBeInTheDocument()
+    expect(screen.getByText((text) => text.includes("company_signal") && text.includes("deal") && text.includes("deal-42"))).toBeInTheDocument()
+    expect(screen.getByText('sig-crm')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open Review' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open Report' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?vendor_name=Acme+Rival&back_to=%2Falerts',
+    )
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Acme%20Rival?back_to=%2Falerts',
+    )
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Acme+Rival&back_to=%2Falerts',
+    )
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Acme+Rival&back_to=%2Falerts',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Acme+Rival&back_to=%2Falerts',
+    )
+    expect(screen.getByText('crm timeout')).toBeInTheDocument()
+  })
+
   it('shows the latest manual test result on the webhook card', async () => {
     const user = userEvent.setup()
 

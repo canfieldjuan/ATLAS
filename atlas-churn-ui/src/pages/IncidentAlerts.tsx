@@ -369,6 +369,22 @@ function formatManualTestSummary(result: ManualTestResult) {
   return 'Manual test failed'
 }
 
+function formatCrmPushSummary(push: {
+  signal_type?: string | null
+  report_type?: string | null
+  crm_record_type?: string | null
+  crm_record_id?: string | null
+  pushed_at?: string | null
+}) {
+  const parts = [
+    push.report_type || push.signal_type || 'crm_push',
+    push.crm_record_type || 'record',
+    push.crm_record_id || null,
+    formatTs(push.pushed_at),
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
+
 function generateWebhookSecret() {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
   const bytes = new Uint8Array(24)
@@ -1129,6 +1145,7 @@ export default function IncidentAlerts() {
                     vendor_name: webhook.latest_test_vendor_name,
                   }
                 : null
+              const latestCrmPush = webhook.latest_crm_push ?? null
               const hasLatestFailure = Boolean(webhook.latest_failure_at)
               const latestFailureIsManualTest = webhook.latest_failure_event_type === 'test'
               const testButtonLabel = manualTestButtonLabel(latestManualTest, hasLatestFailure, latestFailureIsManualTest)
@@ -1192,6 +1209,20 @@ export default function IncidentAlerts() {
                           {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
                           {latestManualTestContext ? renderActivityDetailShortcuts(latestManualTestContext, currentAlertsUrl) : null}
                           {latestManualTestContext ? renderActivityVendorShortcuts(latestManualTestContext, currentAlertsUrl) : null}
+                        </div>
+                      ) : null}
+                      {latestCrmPush ? (
+                        <div className={`rounded-lg border px-3 py-2 text-xs ${deliveryTone(latestCrmPush.status === 'success')}`}>
+                          <div className="font-medium text-current">
+                            Latest CRM push {latestCrmPush.status === 'success' ? 'succeeded' : 'failed'}
+                          </div>
+                          <div className="mt-1">{formatCrmPushSummary(latestCrmPush)}</div>
+                          {renderActivityReferences(latestCrmPush)}
+                          {renderActivityDetailShortcuts(latestCrmPush, currentAlertsUrl)}
+                          {renderActivityVendorShortcuts(latestCrmPush, currentAlertsUrl)}
+                          {latestCrmPush.error ? (
+                            <div className="mt-2 text-xs text-rose-200">{latestCrmPush.error}</div>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

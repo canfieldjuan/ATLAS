@@ -105,6 +105,81 @@ async def test_list_webhooks_exposes_latest_test_summary():
     assert webhook['latest_test_company_name'] == 'Acme Bank'
 
 
+
+@pytest.mark.asyncio
+async def test_list_webhooks_exposes_latest_crm_push_summary():
+    created_at = datetime.now(timezone.utc) - timedelta(days=1)
+    pushed_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    pool = MagicMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+                'url': 'https://hooks.example.com/crm',
+                'event_types': ['high_intent_push'],
+                'channel': 'crm_hubspot',
+                'enabled': True,
+                'description': 'CRM bridge',
+                'created_at': created_at,
+                'updated_at': created_at,
+                'recent_deliveries': 4,
+                'recent_successes': 4,
+                'latest_failure_event_type': None,
+                'latest_failure_status_code': None,
+                'latest_failure_error': None,
+                'latest_failure_at': None,
+                'latest_test_success': None,
+                'latest_test_status_code': None,
+                'latest_test_error': None,
+                'latest_test_at': None,
+                'latest_crm_id': 'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44',
+                'latest_crm_signal_type': 'company_signal',
+                'latest_crm_signal_id': '22222222-2222-2222-2222-222222222222',
+                'latest_crm_review_id': None,
+                'latest_crm_vendor_name': None,
+                'latest_crm_company_name': None,
+                'latest_crm_record_id': 'deal-42',
+                'latest_crm_record_type': 'deal',
+                'latest_crm_status': 'failed',
+                'latest_crm_error': 'crm timeout',
+                'latest_crm_at': pushed_at,
+            }
+        ]
+    )
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            '_fetch_company_signal_focus_context',
+            AsyncMock(return_value={
+                'signal_id': '22222222-2222-2222-2222-222222222222',
+                'company_name': 'Acme Bank',
+                'vendor_name': 'Acme Rival',
+                'review_id': '33333333-3333-4333-8333-333333333334',
+            }),
+        ) as fetch_signal_context:
+            result = await b2b_dashboard.list_webhooks(user=user)
+
+    webhook = result['webhooks'][0]
+    assert webhook['latest_crm_push'] == {
+        'id': 'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44',
+        'signal_type': 'company_signal',
+        'signal_id': '22222222-2222-2222-2222-222222222222',
+        'vendor_name': 'Acme Rival',
+        'company_name': 'Acme Bank',
+        'review_id': '33333333-3333-4333-8333-333333333334',
+        'report_id': None,
+        'report_type': None,
+        'report_title': None,
+        'crm_record_id': 'deal-42',
+        'crm_record_type': 'deal',
+        'status': 'failed',
+        'error': 'crm timeout',
+        'pushed_at': pushed_at.isoformat(),
+    }
+    fetch_signal_context.assert_awaited_once()
+
 @pytest.mark.asyncio
 async def test_list_webhooks_tolerates_missing_latest_test_summary_fields():
     created_at = datetime.now(timezone.utc) - timedelta(days=1)

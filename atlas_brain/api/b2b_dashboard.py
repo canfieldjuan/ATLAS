@@ -5907,7 +5907,18 @@ async def list_webhooks(
                latest_test.review_id AS latest_test_review_id,
                latest_test.report_id AS latest_test_report_id,
                latest_test.vendor_name AS latest_test_vendor_name,
-               latest_test.company_name AS latest_test_company_name
+               latest_test.company_name AS latest_test_company_name,
+               latest_crm.id AS latest_crm_id,
+               latest_crm.signal_type AS latest_crm_signal_type,
+               latest_crm.signal_id AS latest_crm_signal_id,
+               latest_crm.review_id AS latest_crm_review_id,
+               latest_crm.vendor_name AS latest_crm_vendor_name,
+               latest_crm.company_name AS latest_crm_company_name,
+               latest_crm.crm_record_id AS latest_crm_record_id,
+               latest_crm.crm_record_type AS latest_crm_record_type,
+               latest_crm.status AS latest_crm_status,
+               latest_crm.error AS latest_crm_error,
+               latest_crm.pushed_at AS latest_crm_at
         FROM b2b_webhook_subscriptions ws
         LEFT JOIN LATERAL (
             SELECT COUNT(*) AS recent_deliveries,
@@ -5932,12 +5943,23 @@ async def list_webhooks(
             ORDER BY dl.delivered_at DESC
             LIMIT 1
         ) AS latest_test ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT id, signal_type, signal_id, review_id, vendor_name, company_name,
+                   crm_record_id, crm_record_type, status, error, pushed_at
+            FROM b2b_crm_push_log cp
+            WHERE cp.subscription_id = ws.id
+            ORDER BY cp.pushed_at DESC
+            LIMIT 1
+        ) AS latest_crm ON TRUE
         WHERE ws.account_id = $1::uuid
         ORDER BY ws.created_at DESC
         """,
         user.account_id,
     )
 
+    report_cache: dict[str, Any] = {}
+    signal_cache: dict[str, Any] = {}
+    report_activity_cache: dict[str, Any] = {}
     webhooks = []
     for r in rows:
         recent_total = r["recent_deliveries"] or 0
@@ -5945,6 +5967,45 @@ async def list_webhooks(
         latest_test_status_code = r["latest_test_status_code"] if "latest_test_status_code" in r else None
         latest_test_error = r["latest_test_error"] if "latest_test_error" in r else None
         latest_test_at = r["latest_test_at"] if "latest_test_at" in r else None
+        latest_crm_push = None
+        latest_crm_id = r["latest_crm_id"] if "latest_crm_id" in r else None
+        if latest_crm_id:
+            latest_crm_signal_type = str(r["latest_crm_signal_type"] or "").strip()
+            latest_crm_signal_id = str(r["latest_crm_signal_id"]) if "latest_crm_signal_id" in r and r["latest_crm_signal_id"] else None
+            latest_crm_signal_context = None
+            if latest_crm_signal_id and latest_crm_signal_type != "report_generated":
+                latest_crm_signal_context = signal_cache.get(latest_crm_signal_id)
+                if latest_crm_signal_context is None and latest_crm_signal_id not in signal_cache:
+                    latest_crm_signal_context = await _fetch_company_signal_focus_context(pool, latest_crm_signal_id)
+                    signal_cache[latest_crm_signal_id] = latest_crm_signal_context
+            latest_crm_report_context = None
+            if latest_crm_signal_type == "report_generated" and latest_crm_signal_id:
+                latest_crm_report_context = await _fetch_webhook_activity_report_context(
+                    pool,
+                    latest_crm_signal_id,
+                    report_activity_cache,
+                )
+            latest_crm_review_id = _normalize_webhook_activity_uuid_text(r["latest_crm_review_id"]) if "latest_crm_review_id" in r and r["latest_crm_review_id"] else None
+            latest_crm_push = {
+                "id": str(latest_crm_id),
+                "signal_type": latest_crm_signal_type,
+                "signal_id": latest_crm_signal_id,
+                "vendor_name": _optional_query_text(r["latest_crm_vendor_name"]) if "latest_crm_vendor_name" in r and r["latest_crm_vendor_name"] else None,
+                "company_name": _optional_query_text(r["latest_crm_company_name"]) if "latest_crm_company_name" in r and r["latest_crm_company_name"] else None,
+                "review_id": latest_crm_review_id or (latest_crm_signal_context or {}).get("review_id"),
+                "report_id": latest_crm_signal_id if latest_crm_signal_type == "report_generated" else None,
+                "report_type": (latest_crm_report_context or {}).get("report_type"),
+                "report_title": (latest_crm_report_context or {}).get("report_title"),
+                "crm_record_id": r["latest_crm_record_id"] if "latest_crm_record_id" in r else None,
+                "crm_record_type": r["latest_crm_record_type"] if "latest_crm_record_type" in r else None,
+                "status": r["latest_crm_status"] if "latest_crm_status" in r else None,
+                "error": r["latest_crm_error"] if "latest_crm_error" in r else None,
+                "pushed_at": r["latest_crm_at"].isoformat() if "latest_crm_at" in r and r["latest_crm_at"] else None,
+            }
+            if not latest_crm_push["vendor_name"]:
+                latest_crm_push["vendor_name"] = (latest_crm_signal_context or {}).get("vendor_name") or (latest_crm_report_context or {}).get("vendor_name")
+            if not latest_crm_push["company_name"]:
+                latest_crm_push["company_name"] = (latest_crm_signal_context or {}).get("company_name")
         webhooks.append({
             "id": str(r["id"]),
             "url": r["url"],
@@ -5974,6 +6035,7 @@ async def list_webhooks(
             "latest_test_report_id": str(r["latest_test_report_id"]) if "latest_test_report_id" in r and r["latest_test_report_id"] else None,
             "latest_test_vendor_name": r["latest_test_vendor_name"] if "latest_test_vendor_name" in r and r["latest_test_vendor_name"] else None,
             "latest_test_company_name": r["latest_test_company_name"] if "latest_test_company_name" in r and r["latest_test_company_name"] else None,
+            "latest_crm_push": latest_crm_push,
         })
 
     return {"webhooks": webhooks, "count": len(webhooks)}
