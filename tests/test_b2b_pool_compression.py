@@ -923,7 +923,8 @@ class TestCompressVendorPoolsIntegration:
         assert "temporal" not in payload
         assert "category" not in payload
         witness = payload["witness_pack"][0]
-        assert witness["witness_id"] == witness["_sid"]
+        assert witness["_sid"]
+        assert "witness_id" not in witness
         assert "vendor_name" not in witness
         assert "review_id" not in witness
         assert "source_span_id" not in witness

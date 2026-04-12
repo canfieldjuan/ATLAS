@@ -129,12 +129,25 @@ def _collect_reference_source_ids(value: Any, sink: set[str]) -> None:
             _collect_reference_source_ids(item, sink)
 
 
+def _packet_artifact_witness_from_payload(witness: dict[str, Any]) -> dict[str, Any]:
+    entry = dict(witness)
+    sid = str(entry.get("_sid") or entry.get("witness_id") or "").strip()
+    if sid:
+        entry.setdefault("_sid", sid)
+        entry.setdefault("witness_id", sid)
+    return entry
+
+
 def _packet_artifacts_from_payload(packet_payload: dict[str, Any]) -> dict[str, Any]:
     witness_pack = packet_payload.get("witness_pack")
     section_packets = packet_payload.get("section_packets")
     artifacts: dict[str, Any] = {}
     if isinstance(witness_pack, list) and witness_pack:
-        artifacts["witness_pack"] = [dict(item) for item in witness_pack if isinstance(item, dict)]
+        artifacts["witness_pack"] = [
+            _packet_artifact_witness_from_payload(item)
+            for item in witness_pack
+            if isinstance(item, dict)
+        ]
     if isinstance(section_packets, dict) and section_packets:
         artifacts["section_packets"] = dict(section_packets)
     return artifacts

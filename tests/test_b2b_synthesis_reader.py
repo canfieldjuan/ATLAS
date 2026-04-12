@@ -254,7 +254,6 @@ class TestLoadBestReasoningViewPackets:
                 "prompt_payload": {
                     "witness_pack": [
                         {
-                            "witness_id": "witness:prompt",
                             "_sid": "witness:prompt",
                             "excerpt_text": "Prompt witness.",
                         },

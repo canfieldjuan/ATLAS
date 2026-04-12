@@ -116,6 +116,7 @@ _REASONING_PROMPT_WITNESS_OMIT_FIELDS = frozenset({
     "candidate_types",
     "specificity_score",
     "witness_hash",
+    "witness_id",
     "generic_reason",
 })
 

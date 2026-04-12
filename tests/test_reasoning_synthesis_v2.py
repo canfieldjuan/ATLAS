@@ -6151,7 +6151,8 @@ class TestReasoningSynthesisTask:
         assert "precomputed_aggregates" not in payload
         assert "metric_ledger" not in payload
         prompt_witness = payload["witness_pack"][0]
-        assert prompt_witness["witness_id"] == prompt_witness["_sid"]
+        assert prompt_witness["_sid"]
+        assert "witness_id" not in prompt_witness
         assert "vendor_name" not in prompt_witness
         assert "review_id" not in prompt_witness
         assert "source_span_id" not in prompt_witness
@@ -6179,7 +6180,8 @@ class TestReasoningSynthesisTask:
         assert persisted_packet["meta"]["payload_mode"] == "full"
         assert persisted_packet["meta"]["prompt_executed"] is True
         persisted_prompt_witness = persisted_packet["prompt_payload"]["witness_pack"][0]
-        assert persisted_prompt_witness["witness_id"] == persisted_prompt_witness["_sid"]
+        assert persisted_prompt_witness["_sid"]
+        assert "witness_id" not in persisted_prompt_witness
         assert "vendor_name" not in persisted_prompt_witness
         assert "review_id" not in persisted_prompt_witness
         assert "source_span_id" not in persisted_prompt_witness
