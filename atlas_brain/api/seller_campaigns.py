@@ -14,6 +14,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.params import Param
 from pydantic import BaseModel
 
 from ..config import settings
@@ -31,9 +32,45 @@ def _pool_or_503():
     return pool
 
 
+def _unwrap_param_default(value: object | None) -> object | None:
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
+def _clean_optional_text(value: object | None) -> str | None:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _clean_int_query(value: object | None, *, default: int) -> int:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return int(value)
+
+
+def _clean_required_text(value: object | None, field_name: str) -> str:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise HTTPException(422, f"{field_name} is required")
+    return text
+
+
+def _clean_optional_text_list(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    cleaned = [text for value in values if (text := _clean_optional_text(value))]
+    return cleaned
+
+
 def _parse_uuid(val: str) -> UUID:
+    cleaned = _clean_required_text(val, "target_id")
     try:
-        return UUID(val)
+        return UUID(cleaned)
     except ValueError:
         raise HTTPException(400, "Invalid UUID format")
 
@@ -97,6 +134,11 @@ async def list_seller_targets(
     offset: int = Query(0, ge=0),
 ):
     """List seller targets with optional filters."""
+    status = _clean_optional_text(status)
+    seller_type = _clean_optional_text(seller_type)
+    category = _clean_optional_text(category)
+    limit = _clean_int_query(limit, default=100)
+    offset = _clean_int_query(offset, default=0)
     pool = _pool_or_503()
 
     conditions = []
@@ -145,7 +187,16 @@ async def list_seller_targets(
 @router.post("/targets")
 async def create_seller_target(body: SellerTargetCreate):
     """Create a new seller target."""
-    if not body.seller_name and not body.company_name:
+    seller_name = _clean_optional_text(body.seller_name)
+    company_name = _clean_optional_text(body.company_name)
+    email = _clean_optional_text(body.email)
+    seller_type = _clean_required_text(body.seller_type, "seller_type")
+    categories = _clean_optional_text_list(body.categories) or []
+    storefront_url = _clean_optional_text(body.storefront_url)
+    notes = _clean_optional_text(body.notes)
+    source = _clean_required_text(body.source, "source")
+
+    if not seller_name and not company_name:
         raise HTTPException(400, "At least one of seller_name or company_name is required")
 
     pool = _pool_or_503()
@@ -158,14 +209,14 @@ async def create_seller_target(body: SellerTargetCreate):
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
-        body.seller_name,
-        body.company_name,
-        body.email,
-        body.seller_type,
-        body.categories,
-        body.storefront_url,
-        body.notes,
-        body.source,
+        seller_name,
+        company_name,
+        email,
+        seller_type,
+        categories,
+        storefront_url,
+        notes,
+        source,
     )
     return _row_to_dict(row)
 
@@ -173,10 +224,11 @@ async def create_seller_target(body: SellerTargetCreate):
 @router.get("/targets/{target_id}")
 async def get_seller_target(target_id: str):
     """Get a single seller target."""
+    tid = _parse_uuid(target_id)
     pool = _pool_or_503()
     row = await pool.fetchrow(
         "SELECT * FROM seller_targets WHERE id = $1",
-        _parse_uuid(target_id),
+        tid,
     )
     if not row:
         raise HTTPException(404, "Seller target not found")
@@ -186,6 +238,26 @@ async def get_seller_target(target_id: str):
 @router.patch("/targets/{target_id}")
 async def update_seller_target(target_id: str, body: SellerTargetUpdate):
     """Update a seller target."""
+    tid = _parse_uuid(target_id)
+
+    normalized: dict[str, object] = {}
+    if body.seller_name is not None:
+        normalized["seller_name"] = _clean_required_text(body.seller_name, "seller_name")
+    if body.company_name is not None:
+        normalized["company_name"] = _clean_required_text(body.company_name, "company_name")
+    if body.email is not None:
+        normalized["email"] = _clean_optional_text(body.email)
+    if body.seller_type is not None:
+        normalized["seller_type"] = _clean_required_text(body.seller_type, "seller_type")
+    if body.storefront_url is not None:
+        normalized["storefront_url"] = _clean_optional_text(body.storefront_url)
+    if body.notes is not None:
+        normalized["notes"] = _clean_optional_text(body.notes)
+    if body.status is not None:
+        normalized["status"] = _clean_required_text(body.status, "status")
+    if body.categories is not None:
+        normalized["categories"] = _clean_optional_text_list(body.categories) or []
+
     pool = _pool_or_503()
 
     updates = []
@@ -193,23 +265,17 @@ async def update_seller_target(target_id: str, body: SellerTargetUpdate):
     idx = 1
 
     for field in ["seller_name", "company_name", "email", "seller_type",
-                   "storefront_url", "notes", "status"]:
-        val = getattr(body, field, None)
-        if val is not None:
+                   "storefront_url", "notes", "status", "categories"]:
+        if field in normalized:
             updates.append(f"{field} = ${idx}")
-            params.append(val)
+            params.append(normalized[field])
             idx += 1
-
-    if body.categories is not None:
-        updates.append(f"categories = ${idx}")
-        params.append(body.categories)
-        idx += 1
 
     if not updates:
         raise HTTPException(400, "No fields to update")
 
     updates.append(f"updated_at = NOW()")
-    params.append(_parse_uuid(target_id))
+    params.append(tid)
 
     result = await pool.execute(
         f"UPDATE seller_targets SET {', '.join(updates)} WHERE id = ${idx}",
@@ -221,7 +287,7 @@ async def update_seller_target(target_id: str, body: SellerTargetUpdate):
 
     row = await pool.fetchrow(
         "SELECT * FROM seller_targets WHERE id = $1",
-        _parse_uuid(target_id),
+        tid,
     )
     return _row_to_dict(row)
 
@@ -229,10 +295,11 @@ async def update_seller_target(target_id: str, body: SellerTargetUpdate):
 @router.delete("/targets/{target_id}")
 async def delete_seller_target(target_id: str):
     """Delete a seller target."""
+    tid = _parse_uuid(target_id)
     pool = _pool_or_503()
     result = await pool.execute(
         "DELETE FROM seller_targets WHERE id = $1",
-        _parse_uuid(target_id),
+        tid,
     )
     if result.split()[-1] == "0":
         raise HTTPException(404, "Seller target not found")
@@ -250,13 +317,14 @@ async def trigger_generation(body: GenerateRequest):
     if not settings.seller_campaign.enabled:
         raise HTTPException(400, "Amazon seller campaign engine is disabled")
 
+    category = _clean_optional_text(body.category)
     pool = _pool_or_503()
 
     from ..autonomous.tasks.amazon_seller_campaign_generation import generate_campaigns
 
     result = await generate_campaigns(
         pool=pool,
-        category_filter=body.category,
+        category_filter=category,
         limit=body.limit,
     )
     return result
@@ -277,6 +345,12 @@ async def list_seller_campaigns(
     offset: int = Query(0, ge=0),
 ):
     """List campaigns with target_mode='amazon_seller'."""
+    status = _clean_optional_text(status)
+    category = _clean_optional_text(category)
+    channel = _clean_optional_text(channel)
+    batch_id = _clean_optional_text(batch_id)
+    limit = _clean_int_query(limit, default=50)
+    offset = _clean_int_query(offset, default=0)
     pool = _pool_or_503()
 
     conditions = ["target_mode = 'amazon_seller'"]
@@ -341,6 +415,7 @@ async def list_category_intelligence(
     category: Optional[str] = Query(None),
 ):
     """List latest category intelligence snapshots."""
+    category = _clean_optional_text(category)
     pool = _pool_or_503()
 
     if category:
@@ -373,6 +448,7 @@ async def refresh_category_intelligence(
     category: Optional[str] = Query(None),
 ):
     """Manually refresh category intelligence snapshot(s)."""
+    category = _clean_optional_text(category)
     pool = _pool_or_503()
 
     from ..autonomous.tasks.amazon_seller_campaign_generation import (
