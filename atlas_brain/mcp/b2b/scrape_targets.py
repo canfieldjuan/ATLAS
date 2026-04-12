@@ -7,6 +7,29 @@ from ._shared import _is_uuid, _safe_json, logger, get_pool, VALID_SOURCES
 from .server import mcp
 
 
+def _clean_optional_text(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _clean_required_text(value: Optional[str]) -> str | None:
+    return _clean_optional_text(value)
+
+
+def _clean_source(value: Optional[str]) -> str | None:
+    text = _clean_optional_text(value)
+    if text is None:
+        return None
+    return text.lower()
+
+
+def _clean_scrape_mode(value: Optional[str]) -> str | None:
+    text = _clean_optional_text(value)
+    if text is None:
+        return None
+    return text.lower()
+
+
 @mcp.tool()
 async def list_scrape_targets(
     source: Optional[str] = None,
@@ -22,10 +45,12 @@ async def list_scrape_targets(
     enabled_only: Only show enabled targets (default true)
     limit: Maximum results (default 20, cap 100)
     """
+    clean_source = _clean_source(source)
+    clean_scrape_mode = _clean_scrape_mode(scrape_mode)
     limit = max(1, min(limit, 100))
-    if source and source not in VALID_SOURCES:
+    if clean_source and clean_source not in VALID_SOURCES:
         return json.dumps({"error": f"source must be one of {sorted(s.value for s in VALID_SOURCES)}", "targets": [], "count": 0})
-    if scrape_mode and scrape_mode not in ("incremental", "exhaustive"):
+    if clean_scrape_mode and clean_scrape_mode not in ("incremental", "exhaustive"):
         return json.dumps({"error": "scrape_mode must be 'incremental' or 'exhaustive'", "targets": [], "count": 0})
 
     try:
@@ -37,14 +62,14 @@ async def list_scrape_targets(
         if enabled_only:
             conditions.append("enabled = true")
 
-        if source:
+        if clean_source:
             conditions.append(f"source = ${idx}")
-            params.append(source)
+            params.append(clean_source)
             idx += 1
 
-        if scrape_mode:
+        if clean_scrape_mode:
             conditions.append(f"scrape_mode = ${idx}")
-            params.append(scrape_mode)
+            params.append(clean_scrape_mode)
             idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -142,26 +167,33 @@ async def add_scrape_target(
     from ...config import settings
     from ...services.scraping.target_validation import is_source_allowed, validate_target_input
 
-    source = source.strip().lower()
-    if source not in VALID_SOURCES:
+    clean_source = _clean_source(source)
+    clean_vendor_name = _clean_required_text(vendor_name)
+    clean_product_slug = _clean_required_text(product_slug)
+    clean_product_name = _clean_optional_text(product_name)
+    clean_product_category = _clean_optional_text(product_category)
+    clean_scrape_mode = _clean_scrape_mode(scrape_mode)
+    clean_metadata_json = _clean_optional_text(metadata_json)
+
+    if clean_source is None or clean_source not in VALID_SOURCES:
         return json.dumps({"success": False, "error": f"source must be one of {sorted(s.value for s in VALID_SOURCES)}"})
-    if not vendor_name or not vendor_name.strip():
+    if clean_vendor_name is None:
         return json.dumps({"success": False, "error": "vendor_name is required"})
-    if not product_slug or not product_slug.strip():
+    if clean_product_slug is None:
         return json.dumps({"success": False, "error": "product_slug is required"})
-    if scrape_mode not in ("incremental", "exhaustive"):
+    if clean_scrape_mode not in ("incremental", "exhaustive"):
         return json.dumps({"success": False, "error": "scrape_mode must be 'incremental' or 'exhaustive'"})
-    if not is_source_allowed(source, settings.b2b_scrape.source_allowlist):
+    if not is_source_allowed(clean_source, settings.b2b_scrape.source_allowlist):
         return json.dumps({
             "success": False,
             "error": (
-                f"Source '{source}' is currently disabled by "
+                f"Source '{clean_source}' is currently disabled by "
                 "ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST"
             ),
         })
 
     try:
-        source, product_slug = validate_target_input(source, product_slug)
+        clean_source, clean_product_slug = validate_target_input(clean_source, clean_product_slug)
     except ValueError as exc:
         return json.dumps({"success": False, "error": str(exc)})
 
@@ -171,12 +203,12 @@ async def add_scrape_target(
 
     # Resolve to canonical vendor name
     from ...services.vendor_registry import resolve_vendor_name
-    vendor_name = await resolve_vendor_name(vendor_name)
+    clean_vendor_name = await resolve_vendor_name(clean_vendor_name)
 
     meta = {}
-    if metadata_json:
+    if clean_metadata_json:
         try:
-            meta = json.loads(metadata_json)
+            meta = json.loads(clean_metadata_json)
             if not isinstance(meta, dict):
                 return json.dumps({"success": False, "error": "metadata_json must be a JSON object"})
         except (json.JSONDecodeError, TypeError):
@@ -188,12 +220,12 @@ async def add_scrape_target(
         # Check for duplicate (same source + slug + mode)
         existing = await pool.fetchrow(
             "SELECT id FROM b2b_scrape_targets WHERE source = $1 AND product_slug = $2 AND scrape_mode = $3",
-            source, product_slug, scrape_mode,
+            clean_source, clean_product_slug, clean_scrape_mode,
         )
         if existing:
             return json.dumps({
                 "success": False,
-                "error": f"Target already exists for {source}/{product_slug}/{scrape_mode} (id: {existing['id']})",
+                "error": f"Target already exists for {clean_source}/{clean_product_slug}/{clean_scrape_mode} (id: {existing['id']})",
             })
 
         row = await pool.fetchrow(
@@ -204,15 +236,15 @@ async def add_scrape_target(
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
             RETURNING id, source, vendor_name, product_slug, enabled, priority, scrape_mode
             """,
-            source,
-            vendor_name.strip(),
-            product_name.strip() if product_name else None,
-            product_slug,
-            product_category.strip() if product_category else None,
+            clean_source,
+            clean_vendor_name,
+            clean_product_name,
+            clean_product_slug,
+            clean_product_category,
             max_pages,
             priority,
             scrape_interval_hours,
-            scrape_mode,
+            clean_scrape_mode,
             json.dumps(meta),
         )
 
@@ -297,7 +329,7 @@ async def manage_scrape_target(
 
         if metadata_json is not None:
             try:
-                meta = json.loads(metadata_json)
+                meta = json.loads(clean_metadata_json)
                 if not isinstance(meta, dict):
                     return json.dumps({"success": False, "error": "metadata_json must be a JSON object"})
             except (json.JSONDecodeError, TypeError):
