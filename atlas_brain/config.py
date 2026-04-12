@@ -3033,7 +3033,7 @@ class B2BChurnConfig(BaseSettings):
         description="Max scored items per pool in the default vendor reasoning payload",
     )
     reasoning_synthesis_max_tokens: int = Field(
-        default=4096,
+        default=12288,
         ge=256,
         le=16384,
         description="Max completion tokens for vendor or cross-vendor reasoning synthesis calls",
