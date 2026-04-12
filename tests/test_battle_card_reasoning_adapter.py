@@ -64,6 +64,31 @@ def _make_synthesis_view(
     return SynthesisView(vendor, raw, "v2", date(2026, 3, 29))
 
 
+def _make_sparse_account_preview_view(vendor: str = "TestVendor") -> SynthesisView:
+    raw = {
+        "reasoning_contracts": {
+            "schema_version": "v2",
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "high",
+                    "trigger": "Q1 price hike",
+                },
+            },
+            "account_reasoning": {
+                "confidence": "insufficient",
+                "market_summary": "A single named account is showing early evaluation pressure.",
+                "total_accounts": {"value": 1, "source_id": "accounts:summary:total_accounts"},
+                "top_accounts": [
+                    {"name": "Concentrix", "source_id": "accounts:item:concentrix"},
+                ],
+            },
+        },
+    }
+    from datetime import date
+    return SynthesisView(vendor, raw, "v2", date(2026, 3, 29))
+
+
 def _make_legacy_lookup(
     vendor: str = "TestVendor",
     archetype: str = "pricing_shock",
@@ -240,6 +265,17 @@ class TestInjectionPrefersTypedViews:
         assert "reasoning_contracts" in card
         contracts = card["reasoning_contracts"]
         assert "vendor_core_reasoning" in contracts
+
+    def test_inject_from_typed_view_surfaces_sparse_account_preview(self):
+        view = _make_sparse_account_preview_view()
+        card: dict[str, Any] = {"vendor": "TestVendor"}
+
+        inject_synthesis_into_card(card, view, requested_as_of=None)
+
+        assert "account_reasoning" not in card.get("reasoning_contracts", {})
+        assert card["account_reasoning_preview"]["priority_account_names"] == ["Concentrix"]
+        assert "account_reasoning" in card["section_disclaimers"]
+        assert "Early account signal only" in card["section_disclaimers"]["account_reasoning"]
 
     def test_inject_sets_freshness(self):
         """Injected card should have data_as_of_date from the view."""

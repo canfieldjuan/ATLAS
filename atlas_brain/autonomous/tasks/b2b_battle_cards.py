@@ -320,16 +320,31 @@ def _battle_card_account_reasoning(card: dict[str, Any]) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _battle_card_account_preview(card: dict[str, Any]) -> dict[str, Any]:
+    """Resolve sparse account preview attached by synthesis consumers."""
+    raw = card.get("account_reasoning_preview")
+    return raw if isinstance(raw, dict) else {}
+
+
 def _battle_card_account_summary_payload(
     account_reasoning: dict[str, Any] | None,
+    account_preview: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, int], list[str]]:
     """Derive readable account-pressure fields from account reasoning."""
     if not isinstance(account_reasoning, dict):
-        return "", {}, []
+        account_reasoning = {}
+    if not isinstance(account_preview, dict):
+        account_preview = {}
     summary = str(account_reasoning.get("market_summary") or "").strip()
+    if not summary:
+        summary = str(account_preview.get("account_pressure_summary") or "").strip()
     metrics: dict[str, int] = {}
     for key in ("total_accounts", "high_intent_count", "active_eval_count"):
         value = _reasoning_int(account_reasoning.get(key))
+        if value is None:
+            preview_metrics = account_preview.get("account_pressure_metrics")
+            if isinstance(preview_metrics, dict):
+                value = _reasoning_int(preview_metrics.get(key))
         if value is not None:
             metrics[key] = value
     priority_names: list[str] = []
@@ -339,17 +354,60 @@ def _battle_card_account_summary_payload(
         name = str(item.get("name") or "").strip()
         if name and name not in priority_names:
             priority_names.append(name)
+    if not priority_names:
+        for item in account_preview.get("priority_account_names") or []:
+            name = str(item or "").strip()
+            if name and name not in priority_names:
+                priority_names.append(name)
     return summary, metrics, priority_names[:3]
+
+
+def _battle_card_compact_account_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    """Compact sparse account preview for battle-card prompt payloads."""
+    if not isinstance(preview, dict):
+        return {}
+    compact = {
+        key: preview.get(key)
+        for key in ("preview_mode", "disclaimer", "account_pressure_summary")
+        if preview.get(key) not in (None, "", [], {})
+    }
+    metrics = preview.get("account_pressure_metrics")
+    if isinstance(metrics, dict):
+        compact_metrics = {
+            key: _reasoning_int(metrics.get(key))
+            for key in ("total_accounts", "high_intent_count", "active_eval_count")
+            if _reasoning_int(metrics.get(key)) is not None
+        }
+        if compact_metrics:
+            compact["account_pressure_metrics"] = compact_metrics
+    priority_names = [
+        str(item or "").strip()
+        for item in preview.get("priority_account_names") or []
+        if str(item or "").strip()
+    ]
+    if priority_names:
+        compact["priority_account_names"] = priority_names[:3]
+    nested = _battle_card_compact_account_reasoning(
+        preview.get("account_reasoning") if isinstance(preview.get("account_reasoning"), dict) else {},
+    )
+    if nested:
+        compact["account_reasoning"] = nested
+    return compact
 
 
 def _promote_account_reasoning_to_battle_card(card: dict[str, Any]) -> None:
     """Surface account reasoning into battle-card fields used by renderers and UI."""
     account_reasoning = _battle_card_account_reasoning(card)
-    if not account_reasoning:
+    account_preview = _battle_card_account_preview(card)
+    if not account_reasoning and not account_preview:
         return
-    card["account_reasoning"] = account_reasoning
+    if account_reasoning:
+        card["account_reasoning"] = account_reasoning
+    if account_preview and not card.get("account_reasoning_preview"):
+        card["account_reasoning_preview"] = account_preview
     summary, metrics, priority_names = _battle_card_account_summary_payload(
         account_reasoning,
+        account_preview,
     )
     if summary and not card.get("account_pressure_summary"):
         card["account_pressure_summary"] = summary
@@ -1703,6 +1761,7 @@ def _build_battle_card_render_payload(
     displacement_reasoning = _battle_card_contract(card, "displacement_reasoning")
     category_reasoning = _battle_card_category_reasoning(card)
     account_reasoning = _battle_card_account_reasoning(card)
+    account_reasoning_preview = _battle_card_account_preview(card)
     reasoning_contracts = card.get("reasoning_contracts")
     section_contracts_present = any(
         (
@@ -1757,6 +1816,12 @@ def _build_battle_card_render_payload(
         payload["account_reasoning"] = _battle_card_compact_account_reasoning(
             account_reasoning,
         )
+    if account_reasoning_preview:
+        preview_bundle = _battle_card_compact_account_preview(
+            account_reasoning_preview,
+        )
+        if preview_bundle:
+            payload["account_reasoning_preview"] = preview_bundle
 
     payload["locked_facts"] = _build_battle_card_locked_facts(card)
     payload["render_packet_version"] = "contract_first_v1"

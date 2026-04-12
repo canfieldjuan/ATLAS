@@ -100,6 +100,7 @@ _PACKET_SCHEMA_VERSION = "witness_packet_v1"
 
 _ACCOUNT_REASONING_PREVIEW_CONSUMERS = frozenset({
     "accounts_in_motion",
+    "battle_card",
     "blog_reranker",
     "campaign",
     "challenger_brief",
@@ -1246,6 +1247,9 @@ def inject_synthesis_into_card(
     if contracts:
         card_entry["reasoning_contracts"] = contracts
         card_entry["reasoning_source"] = "b2b_reasoning_synthesis"
+    account_preview = context.get("account_reasoning_preview")
+    if isinstance(account_preview, dict) and account_preview:
+        card_entry["account_reasoning_preview"] = account_preview
     anchors = context.get("anchor_examples")
     if isinstance(anchors, dict) and anchors:
         card_entry["anchor_examples"] = anchors
@@ -1293,7 +1297,16 @@ def inject_synthesis_into_card(
     if flagged:
         card_entry["low_confidence_sections"] = flagged
     # Inject disclaimers for degraded sections
-    disclaimers: dict[str, str] = {}
+    disclaimers = {}
+    context_disclaimers = context.get("reasoning_section_disclaimers")
+    if isinstance(context_disclaimers, dict):
+        disclaimers.update(
+            {
+                str(key): str(value)
+                for key, value in context_disclaimers.items()
+                if str(key).strip() and str(value).strip()
+            },
+        )
     for s in _REQUIRED_SECTIONS:
         disc = view.get_disclaimer(s, vendor_evidence)
         if disc:

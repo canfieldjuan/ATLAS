@@ -606,6 +606,25 @@ class TestChurnReportReasoningContracts:
         assert card["account_pressure_metrics"]["high_intent_count"] == 4
         assert card["priority_account_names"] == ["Acme Corp", "Globex"]
 
+    def test_promote_account_reasoning_to_battle_card_uses_sparse_preview(self):
+        card = _sample_battle_card()
+        card["account_reasoning_preview"] = {
+            "preview_mode": "early_account_signal",
+            "disclaimer": "Early account signal only.",
+            "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+            "account_pressure_metrics": {"total_accounts": 1},
+            "priority_account_names": ["Concentrix"],
+        }
+
+        _promote_account_reasoning_to_battle_card(card)
+
+        assert "account_reasoning" not in card
+        assert card["account_pressure_summary"] == (
+            "A single named account is showing early evaluation pressure."
+        )
+        assert card["account_pressure_metrics"]["total_accounts"] == 1
+        assert card["priority_account_names"] == ["Concentrix"]
+
 
 class TestChurnReportCrossVendorHelpers:
     def test_pair_opponent_returns_empty_for_self_only_pair(self):
@@ -2973,6 +2992,33 @@ class TestBattleCardLlmRouting:
         payload = _build_battle_card_render_payload(card)
 
         assert payload["category_reasoning"]["market_regime"] == "fragmented"
+
+    def test_render_payload_includes_sparse_account_preview(self):
+        card = _sample_battle_card() | {
+            "account_reasoning_preview": {
+                "preview_mode": "early_account_signal",
+                "disclaimer": "Early account signal only.",
+                "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                "account_pressure_metrics": {"total_accounts": 1},
+                "priority_account_names": ["Concentrix"],
+                "account_reasoning": {
+                    "confidence": "insufficient",
+                    "market_summary": "A single named account is showing early evaluation pressure.",
+                    "top_accounts": [
+                        {"name": "Concentrix", "source_id": "accounts:item:concentrix"},
+                    ],
+                },
+            },
+        }
+
+        payload = _build_battle_card_render_payload(card)
+
+        assert payload["account_reasoning_preview"]["preview_mode"] == "early_account_signal"
+        assert payload["account_reasoning_preview"]["priority_account_names"] == ["Concentrix"]
+        assert (
+            payload["account_reasoning_preview"]["account_reasoning"]["top_accounts"][0]["name"]
+            == "Concentrix"
+        )
 
     def test_render_payload_includes_retry_fields(self):
         payload = _build_battle_card_render_payload(
