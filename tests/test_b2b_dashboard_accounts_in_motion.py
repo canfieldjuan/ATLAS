@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 _asyncpg_mock = MagicMock()
 _asyncpg_exceptions = MagicMock()
@@ -2471,6 +2473,80 @@ async def test_export_high_intent_normalizes_blank_vendor_filter():
         limit=b2b_dashboard.EXPORT_ROW_LIMIT,
     )
     assert result == {"rows": [], "filename": "high_intent_leads.csv"}
+
+
+def test_create_correction_rejects_blank_reason_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(b2b_dashboard.router)
+
+    def fail_pool():
+        raise AssertionError("DB pool should not be acquired for blank correction reason")
+
+    monkeypatch.setattr(b2b_dashboard, 'get_db_pool', fail_pool)
+
+    with TestClient(app) as client:
+        response = client.post(
+            '/b2b/dashboard/corrections',
+            json={
+                'entity_type': 'vendor',
+                'entity_id': '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+                'correction_type': 'merge_vendor',
+                'old_value': 'Salesforce',
+                'new_value': 'HubSpot',
+                'reason': '   ',
+            },
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_correction_trims_body_text_before_insert_and_merge():
+    correction_id = 'c86d95bb-58bb-44cc-b7be-3ae905600001'
+    entity_id = '2ea3fd03-7fd9-4b72-8f24-117667f723e9'
+    created_at = datetime(2026, 4, 12, tzinfo=timezone.utc)
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(return_value={
+        'id': correction_id,
+        'entity_type': 'vendor',
+        'entity_id': entity_id,
+        'correction_type': 'merge_vendor',
+        'status': 'applied',
+        'created_at': created_at,
+    })
+    pool.execute = AsyncMock(return_value='UPDATE 1')
+
+    body = b2b_dashboard.CreateCorrectionBody(
+        entity_type='  vendor  ',
+        entity_id=f'  {entity_id}  ',
+        correction_type='  merge_vendor  ',
+        old_value='  Salesforce  ',
+        new_value='  HubSpot  ',
+        reason='  duplicate vendor  ',
+    )
+
+    merge_mock = AsyncMock(return_value={'total_affected': 7})
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch('atlas_brain.services.b2b.vendor_merge.execute_vendor_merge', merge_mock):
+            result = await b2b_dashboard.create_correction(body, user=None)
+
+    assert result == {
+        'id': correction_id,
+        'entity_type': 'vendor',
+        'entity_id': entity_id,
+        'correction_type': 'merge_vendor',
+        'status': 'applied',
+        'created_at': created_at.isoformat(),
+    }
+    fetch_args = pool.fetchrow.await_args.args
+    assert fetch_args[1] == 'vendor'
+    assert str(fetch_args[2]) == entity_id
+    assert fetch_args[3] == 'merge_vendor'
+    assert fetch_args[5] == 'Salesforce'
+    assert fetch_args[6] == 'HubSpot'
+    assert fetch_args[7] == 'duplicate vendor'
+    merge_mock.assert_awaited_once_with(pool, 'Salesforce', 'HubSpot')
 
 
 @pytest.mark.asyncio

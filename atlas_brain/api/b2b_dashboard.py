@@ -98,9 +98,33 @@ class CreateCorrectionBody(BaseModel):
     reason: str = Field(..., min_length=1, max_length=2000)
     metadata: dict | None = None
 
+    @field_validator("entity_type", "entity_id", "correction_type", "reason", mode="before")
+    @classmethod
+    def _trim_required_text(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("value is required")
+        return text
+
+    @field_validator("field_name", "old_value", "new_value", mode="before")
+    @classmethod
+    def _trim_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
 
 class RevertCorrectionBody(BaseModel):
     reason: str | None = None
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _trim_reason(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
 
 class CompanySignalCandidateReviewBody(BaseModel):
