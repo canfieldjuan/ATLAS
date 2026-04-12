@@ -3457,6 +3457,8 @@ async def list_tenant_reports(
 ):
     """Reports scoped to tracked vendors."""
     _require_b2b_product(user)
+    report_type = _clean_optional_text(report_type)
+    vendor_filter = _clean_optional_text(vendor_filter)
     pool = _pool_or_503()
     normalized_quality_status = _normalize_report_list_filter("quality_status", quality_status)
     normalized_freshness_state = _normalize_report_list_filter("freshness_state", freshness_state)

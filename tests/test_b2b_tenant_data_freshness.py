@@ -320,6 +320,45 @@ async def test_list_tenant_reports_excludes_stale_and_allows_global_rows(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_list_tenant_reports_normalizes_blank_and_trimmed_text_filters(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_reports(
+        report_type="  challenger_intel  ",
+        vendor_filter="   ",
+        include_stale=True,
+        limit=10,
+        user=user,
+    )
+
+    assert result == {"reports": [], "count": 0}
+    sql, *params = pool.fetch.await_args.args
+    assert "vendor_filter ILIKE" not in sql
+    assert any(param == "challenger_brief" for param in params)
+
+    pool.fetch.reset_mock(return_value=True)
+    pool.fetch.return_value = []
+
+    await mod.list_tenant_reports(
+        report_type=None,
+        vendor_filter="  Zendesk  ",
+        include_stale=True,
+        limit=10,
+        user=user,
+    )
+
+    sql, *params = pool.fetch.await_args.args
+    assert "vendor_filter ILIKE" in sql
+    assert any(param == "Zendesk" for param in params)
+    assert not any(param == "  Zendesk  " for param in params)
+
+
+@pytest.mark.asyncio
 async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
