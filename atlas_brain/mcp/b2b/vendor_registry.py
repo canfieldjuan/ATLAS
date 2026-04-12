@@ -6,6 +6,26 @@ from ._shared import logger
 from .server import mcp
 
 
+def _clean_optional_text(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _clean_required_text(value: Optional[str]) -> str | None:
+    return _clean_optional_text(value)
+
+
+def _clean_alias_csv(value: Optional[str]) -> list[str]:
+    if value is None:
+        return []
+    cleaned = []
+    for raw_alias in value.split(","):
+        alias = _clean_optional_text(raw_alias)
+        if alias:
+            cleaned.append(alias)
+    return cleaned
+
+
 @mcp.tool()
 async def list_vendors_registry(limit: int = 100) -> str:
     """
@@ -49,15 +69,16 @@ async def fuzzy_vendor_search(
     limit: Max results (default 10, max 100)
     min_similarity: Minimum similarity threshold 0.0-1.0 (default 0.3)
     """
-    if not query or not query.strip():
+    clean_query = _clean_required_text(query)
+    if clean_query is None:
         return json.dumps({"error": "query is required"})
     try:
         from atlas_brain.services.vendor_registry import fuzzy_search_vendors
 
         results = await fuzzy_search_vendors(
-            query.strip(), limit=limit, min_similarity=min_similarity,
+            clean_query, limit=limit, min_similarity=min_similarity,
         )
-        return json.dumps({"query": query.strip(), "results": results, "count": len(results)}, default=str)
+        return json.dumps({"query": clean_query, "results": results, "count": len(results)}, default=str)
     except Exception:
         logger.exception("fuzzy_vendor_search error")
         return json.dumps({"error": "Internal error"})
@@ -80,17 +101,19 @@ async def fuzzy_company_search(
     limit: Max results (default 10, max 100)
     min_similarity: Minimum similarity threshold 0.0-1.0 (default 0.3)
     """
-    if not query or not query.strip():
+    clean_query = _clean_required_text(query)
+    if clean_query is None:
         return json.dumps({"error": "query is required"})
+    clean_vendor_name = _clean_optional_text(vendor_name)
     try:
         from atlas_brain.services.vendor_registry import fuzzy_search_companies
 
         results = await fuzzy_search_companies(
-            query.strip(), vendor_name=vendor_name, limit=limit, min_similarity=min_similarity,
+            clean_query, vendor_name=clean_vendor_name, limit=limit, min_similarity=min_similarity,
         )
         return json.dumps({
-            "query": query.strip(),
-            "vendor_filter": vendor_name,
+            "query": clean_query,
+            "vendor_filter": clean_vendor_name,
             "results": results,
             "count": len(results),
         }, default=str)
@@ -110,16 +133,15 @@ async def add_vendor_to_registry(
     canonical_name: The official vendor name (e.g. "Salesforce")
     aliases: Comma-separated lowercase aliases (e.g. "sf,sfdc,salesforce.com")
     """
-    if not canonical_name or not canonical_name.strip():
+    clean_canonical_name = _clean_required_text(canonical_name)
+    if clean_canonical_name is None:
         return json.dumps({"success": False, "error": "canonical_name is required"})
     try:
         from atlas_brain.services.vendor_registry import add_vendor
 
-        alias_list = []
-        if aliases:
-            alias_list = [a.strip() for a in aliases.split(",") if a.strip()]
+        alias_list = _clean_alias_csv(aliases)
 
-        row = await add_vendor(canonical_name.strip(), alias_list)
+        row = await add_vendor(clean_canonical_name, alias_list)
         return json.dumps({
             "success": True,
             "vendor": {
@@ -146,18 +168,20 @@ async def add_vendor_alias(
     canonical_name: Existing canonical vendor name (e.g. "Salesforce")
     alias: New alias to add (e.g. "salesforce.com")
     """
-    if not canonical_name or not canonical_name.strip():
+    clean_canonical_name = _clean_required_text(canonical_name)
+    if clean_canonical_name is None:
         return json.dumps({"success": False, "error": "canonical_name is required"})
-    if not alias or not alias.strip():
+    clean_alias = _clean_required_text(alias)
+    if clean_alias is None:
         return json.dumps({"success": False, "error": "alias is required"})
     try:
         from atlas_brain.services.vendor_registry import add_alias
 
-        row = await add_alias(canonical_name.strip(), alias.strip())
+        row = await add_alias(clean_canonical_name, clean_alias)
         if row is None:
             return json.dumps({
                 "success": False,
-                "error": f"Vendor '{canonical_name}' not found in registry",
+                "error": f"Vendor '{clean_canonical_name}' not found in registry",
             })
         return json.dumps({
             "success": True,
