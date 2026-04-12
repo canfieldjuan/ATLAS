@@ -3148,6 +3148,7 @@ async def list_leads(
 ):
     """High-intent companies leaving tracked vendors."""
     _require_b2b_product(user)
+    vendor_name = _clean_optional_text(vendor_name)
     pool = _pool_or_503()
     from ..autonomous.tasks._b2b_shared import read_high_intent_companies
 

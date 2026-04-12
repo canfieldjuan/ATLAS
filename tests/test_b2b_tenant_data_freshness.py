@@ -1193,6 +1193,57 @@ async def test_list_leads_uses_event_recency_and_company_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_leads_normalizes_blank_and_trimmed_vendor_name(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = SimpleNamespace(is_initialized=True)
+    read_mock = AsyncMock(return_value=[])
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_tenant_params", lambda _user: [])
+    monkeypatch.setattr(shared_mod, "read_high_intent_companies", read_mock)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_leads(
+        vendor_name="   ",
+        min_urgency=7,
+        window_days=30,
+        limit=20,
+        user=user,
+    )
+
+    assert result == {"leads": [], "count": 0}
+    read_mock.assert_awaited_once_with(
+        pool,
+        min_urgency=7,
+        window_days=30,
+        vendor_name=None,
+        scoped_vendors=None,
+        limit=20,
+    )
+
+    read_mock.reset_mock()
+
+    await mod.list_leads(
+        vendor_name="  Zendesk  ",
+        min_urgency=7,
+        window_days=30,
+        limit=20,
+        user=user,
+    )
+
+    read_mock.assert_awaited_once_with(
+        pool,
+        min_urgency=7,
+        window_days=30,
+        vendor_name="Zendesk",
+        scoped_vendors=None,
+        limit=20,
+    )
+
+
+@pytest.mark.asyncio
 async def test_list_tenant_reviews_uses_event_recency_and_company_fallback(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
