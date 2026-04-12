@@ -4957,6 +4957,7 @@ async def get_calibration_weights(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """View score calibration weights derived from campaign outcomes."""
+    dimension = _optional_query_text(dimension)
     valid_dims = {"role_type", "buying_stage", "urgency_bucket", "seat_bucket", "context_keyword"}
     if dimension and dimension not in valid_dims:
         raise HTTPException(

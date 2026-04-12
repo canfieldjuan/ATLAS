@@ -2110,6 +2110,46 @@ async def test_outcome_analytics_endpoints_normalize_blank_vendor_filters():
 
 
 @pytest.mark.asyncio
+async def test_get_calibration_weights_normalizes_blank_dimension():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=3)
+    pool.fetch = AsyncMock(return_value=[])
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.get_calibration_weights(
+            dimension="   ",
+            model_version=None,
+            user=None,
+        )
+
+    assert result == {"model_version": 3, "weights": [], "count": 0}
+    pool.fetchval.assert_awaited_once_with(
+        "SELECT MAX(model_version) FROM score_calibration_weights"
+    )
+    query, *params = pool.fetch.await_args.args
+    assert "dimension = $" not in query
+    assert params == [3]
+
+
+@pytest.mark.asyncio
+async def test_get_calibration_weights_preserves_active_dimension_filter():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.get_calibration_weights(
+            dimension="role_type",
+            model_version=4,
+            user=None,
+        )
+
+    assert result == {"model_version": 4, "weights": [], "count": 0}
+    query, *params = pool.fetch.await_args.args
+    assert "dimension = $2" in query
+    assert params == [4, "role_type"]
+
+
+@pytest.mark.asyncio
 async def test_list_webhooks_exposes_latest_failure_summary():
     created_at = datetime.now(timezone.utc) - timedelta(days=1)
     failed_at = datetime.now(timezone.utc) - timedelta(hours=2)
