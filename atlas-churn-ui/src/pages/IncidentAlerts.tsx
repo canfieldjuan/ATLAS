@@ -824,6 +824,19 @@ export default function IncidentAlerts() {
     }
   }
 
+  async function copyCurrentViewLink() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
+      const path = `${window.location.origin}${currentAlertsUrl}`
+      await navigator.clipboard.writeText(path)
+      setActionError(null)
+      setMessage('Copied current alerts view')
+    } catch (err) {
+      setMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy current alerts view')
+    }
+  }
+
   function renderActivityReferences(activity: AlertActivityReferenceSource) {
     const references = buildActivityReferences(activity)
     if (!references.length) return null
@@ -1110,6 +1123,14 @@ export default function IncidentAlerts() {
               <option key={days} value={days}>{days} days</option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => void copyCurrentViewLink()}
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-800/60 hover:text-white"
+          >
+            <Copy className="h-4 w-4" />
+            Copy View Link
+          </button>
           <button
             type="button"
             onClick={() => void refreshAll()}
