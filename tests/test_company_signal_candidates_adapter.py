@@ -845,6 +845,52 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["pending_sla_reasons"][0]["overdue_review_count"] == 3
     assert summary["oldest_pending_group"]["vendor"] == "Zendesk"
     assert summary["oldest_pending_group"]["pending_age_days"] == 5.5
+    assert summary["queue_recommendation"] == {
+        "status": "act",
+        "action_type": "review_queue",
+        "action": "clear_overdue_review_queue",
+        "priority": "high",
+        "owner": "review_ops",
+        "reason": "overdue_actionable_backlog",
+        "rationale": "This queue slice has actionable pending groups that are already overdue and should be cleared before lower-yield backlog.",
+        "queue_filters": {
+            "review_status": "pending",
+            "company_name": "Acme",
+            "source_name": "reddit",
+            "candidate_bucket": "analyst_review",
+            "review_priority_band": "medium",
+            "review_priority_reason": "cross_source_corroboration",
+            "min_urgency": 6.0,
+            "min_confidence": 0.25,
+            "min_reviews": 2,
+            "decision_makers_only": True,
+            "signal_evidence_present": True,
+        },
+        "queue_snapshot": {
+            "total_groups": 12,
+            "total_reviews": 37,
+            "pending_groups": 8,
+            "actionable_pending_groups": 6,
+            "actionable_pending_reviews": 17,
+            "blocked_pending_groups": 2,
+            "blocked_pending_reviews": 4,
+            "avg_pending_age_days": 2.75,
+            "oldest_pending_age_days": 5.5,
+            "overdue_pending_groups": 3,
+            "overdue_pending_reviews": 9,
+            "near_threshold_blocked_groups": 1,
+            "near_threshold_blocked_reviews": 2,
+        },
+        "primary_driver": {
+            "kind": "queue_totals",
+            "label": "overdue_actionable_backlog",
+            "pending_groups": 8,
+            "actionable_pending_groups": 6,
+            "blocked_pending_groups": 2,
+            "overdue_pending_groups": 3,
+            "oldest_pending_age_days": 5.5,
+        },
+    }
 
 
 @pytest.mark.asyncio

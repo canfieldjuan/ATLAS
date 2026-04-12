@@ -12155,9 +12155,22 @@ async def read_company_signal_candidate_group_summary(
             "pending_sla_bands": [],
             "pending_sla_reasons": [],
             "oldest_pending_group": None,
+            "queue_recommendation": {
+                "status": "no_data",
+                "action_type": None,
+                "action": None,
+                "priority": None,
+                "owner": None,
+                "reason": None,
+                "rationale": None,
+                "queue_filters": {},
+                "queue_snapshot": None,
+                "primary_driver": None,
+            },
         }
 
     where_clause = " AND ".join(conditions)
+    requested_canonical_gap_reason = canonical_gap_reason
     top_n_param = idx
     pending_age_days_sql = _company_signal_candidate_group_pending_age_days_sql()
     pending_priority_band_sql = _company_signal_candidate_group_priority_band_sql()
@@ -13090,11 +13103,11 @@ async def read_company_signal_candidate_group_summary(
         low_confidence_count = int(row.get("low_confidence_group_count") or 0)
         below_threshold_count = int(row.get("below_threshold_group_count") or 0)
         if low_confidence_count > 0 and below_threshold_count <= 0:
-            canonical_gap_reason = "low_confidence_low_trust_source"
+            row_gap_reason = "low_confidence_low_trust_source"
         elif below_threshold_count > 0 and low_confidence_count <= 0:
-            canonical_gap_reason = "below_high_intent_threshold"
+            row_gap_reason = "below_high_intent_threshold"
         else:
-            canonical_gap_reason = "mixed"
+            row_gap_reason = "mixed"
         unlock_candidates.append({
             "unlock_candidate_type": "trusted_source_urgency_gap",
             "unlock_reason": "closest_trusted_urgency_gap",
@@ -13104,7 +13117,7 @@ async def read_company_signal_candidate_group_summary(
             "source": row.get("source"),
             "group_count": row.get("blocked_group_count") or 0,
             "review_count": row.get("blocked_review_count") or 0,
-            "canonical_gap_reason": canonical_gap_reason,
+            "canonical_gap_reason": row_gap_reason,
             "confidence_gap_to_canonical": row.get("min_confidence_gap_to_canonical"),
             "urgency_gap_to_high_intent": row.get("min_urgency_gap_to_high_intent"),
         })
@@ -13201,6 +13214,79 @@ async def read_company_signal_candidate_group_summary(
             filters["canonical_gap_reason"] = canonical_gap_reason
         return filters
 
+    def _build_queue_summary_filters() -> dict[str, Any]:
+        filters: dict[str, Any] = {
+            "review_status": review_status or "pending",
+        }
+        if vendor_name:
+            filters["vendor_name"] = vendor_name
+        if company_name:
+            filters["company_name"] = company_name
+        if source_name:
+            filters["source_name"] = source_name
+        if candidate_bucket:
+            filters["candidate_bucket"] = candidate_bucket
+        if requested_canonical_gap_reason:
+            filters["canonical_gap_reason"] = requested_canonical_gap_reason
+        if review_priority_band:
+            filters["review_priority_band"] = review_priority_band
+        if review_priority_reason:
+            filters["review_priority_reason"] = review_priority_reason
+        if min_urgency > 0:
+            filters["min_urgency"] = min_urgency
+        if min_confidence is not None:
+            filters["min_confidence"] = min_confidence
+        if min_reviews > 1:
+            filters["min_reviews"] = min_reviews
+        if decision_makers_only:
+            filters["decision_makers_only"] = True
+        if signal_evidence_present is not None:
+            filters["signal_evidence_present"] = signal_evidence_present
+        return filters
+
+    def _build_queue_summary_snapshot() -> dict[str, Any]:
+        totals_payload = dict(totals or {})
+        return {
+            "total_groups": int(totals_payload.get("total_groups") or 0),
+            "total_reviews": int(totals_payload.get("total_reviews") or 0),
+            "pending_groups": int(totals_payload.get("pending_groups") or 0),
+            "actionable_pending_groups": int(totals_payload.get("actionable_pending_groups") or 0),
+            "actionable_pending_reviews": int(totals_payload.get("actionable_pending_reviews") or 0),
+            "blocked_pending_groups": int(totals_payload.get("blocked_pending_groups") or 0),
+            "blocked_pending_reviews": int(totals_payload.get("blocked_pending_reviews") or 0),
+            "avg_pending_age_days": float(totals_payload.get("avg_pending_age_days") or 0.0),
+            "oldest_pending_age_days": float(totals_payload.get("oldest_pending_age_days") or 0.0),
+            "overdue_pending_groups": int(totals_payload.get("overdue_pending_groups") or 0),
+            "overdue_pending_reviews": int(totals_payload.get("overdue_pending_reviews") or 0),
+            "near_threshold_blocked_groups": int(totals_payload.get("near_threshold_blocked_groups") or 0),
+            "near_threshold_blocked_reviews": int(totals_payload.get("near_threshold_blocked_reviews") or 0),
+        }
+
+    def _build_queue_summary_driver(kind: str) -> dict[str, Any] | None:
+        if kind == "unlock_focus" and unlock_focus is not None:
+            return {
+                "kind": "unlock_focus",
+                "label": unlock_focus.get("recommended_action") or "unlock_focus",
+                "recommended_action": unlock_focus.get("recommended_action"),
+                "rationale": unlock_focus.get("rationale"),
+                "primary_unlock_candidate_type": unlock_focus.get("primary_unlock_candidate_type"),
+                "primary_vendor": unlock_focus.get("primary_vendor"),
+                "primary_company": unlock_focus.get("primary_company"),
+                "primary_source": unlock_focus.get("primary_source"),
+                "primary_confidence_gap_to_canonical": unlock_focus.get("primary_confidence_gap_to_canonical"),
+                "primary_urgency_gap_to_high_intent": unlock_focus.get("primary_urgency_gap_to_high_intent"),
+            }
+        snapshot = _build_queue_summary_snapshot()
+        return {
+            "kind": "queue_totals",
+            "label": kind,
+            "pending_groups": snapshot.get("pending_groups"),
+            "actionable_pending_groups": snapshot.get("actionable_pending_groups"),
+            "blocked_pending_groups": snapshot.get("blocked_pending_groups"),
+            "overdue_pending_groups": snapshot.get("overdue_pending_groups"),
+            "oldest_pending_age_days": snapshot.get("oldest_pending_age_days"),
+        }
+
     unlock_focus = None
     if unlock_candidates:
         primary_unlock_candidate = unlock_candidates[0]
@@ -13283,6 +13369,119 @@ async def read_company_signal_candidate_group_summary(
             ),
             "alternate_queue_filters": _unlock_queue_filters(alternate_unlock_candidate),
         }
+    queue_filters = _build_queue_summary_filters()
+    queue_snapshot = _build_queue_summary_snapshot()
+    actionable_pending_groups = int(queue_snapshot.get("actionable_pending_groups") or 0)
+    blocked_pending_groups = int(queue_snapshot.get("blocked_pending_groups") or 0)
+    overdue_pending_groups = int(queue_snapshot.get("overdue_pending_groups") or 0)
+    near_threshold_blocked_groups = int(queue_snapshot.get("near_threshold_blocked_groups") or 0)
+    pending_groups = int(queue_snapshot.get("pending_groups") or 0)
+    if pending_groups <= 0:
+        queue_recommendation = {
+            "status": "monitor",
+            "action_type": "monitor",
+            "action": "monitor_queue",
+            "priority": "low",
+            "owner": "review_ops",
+            "reason": "no_backlog_pressure",
+            "rationale": "The current queue slice does not have pending backlog pressure.",
+            "queue_filters": queue_filters,
+            "queue_snapshot": queue_snapshot,
+            "primary_driver": _build_queue_summary_driver("queue_totals"),
+        }
+    elif actionable_pending_groups > 0 and overdue_pending_groups > 0:
+        queue_recommendation = {
+            "status": "act",
+            "action_type": "review_queue",
+            "action": "clear_overdue_review_queue",
+            "priority": "high",
+            "owner": "review_ops",
+            "reason": "overdue_actionable_backlog",
+            "rationale": "This queue slice has actionable pending groups that are already overdue and should be cleared before lower-yield backlog.",
+            "queue_filters": queue_filters,
+            "queue_snapshot": queue_snapshot,
+            "primary_driver": _build_queue_summary_driver("overdue_actionable_backlog"),
+        }
+    elif blocked_pending_groups > actionable_pending_groups and blocked_pending_groups > 0:
+        if unlock_focus is not None and unlock_focus.get("recommended_action") == "review_near_threshold_low_trust":
+            queue_recommendation = {
+                "status": "act",
+                "action_type": "policy_threshold",
+                "action": "review_low_trust_policy",
+                "priority": "high" if near_threshold_blocked_groups > 0 else "medium",
+                "owner": "intelligence_policy",
+                "reason": "blocked_low_trust_policy",
+                "rationale": "Blocked low-trust backlog is outweighing actionable review work in this queue slice.",
+                "queue_filters": queue_filters,
+                "queue_snapshot": queue_snapshot,
+                "primary_driver": _build_queue_summary_driver("unlock_focus"),
+            }
+        else:
+            queue_recommendation = {
+                "status": "act",
+                "action_type": "policy_threshold",
+                "action": "review_threshold_policy",
+                "priority": "medium",
+                "owner": "intelligence_policy",
+                "reason": "blocked_canonical_threshold",
+                "rationale": "Blocked canonical-threshold backlog is outweighing actionable review work in this queue slice.",
+                "queue_filters": queue_filters,
+                "queue_snapshot": queue_snapshot,
+                "primary_driver": _build_queue_summary_driver("unlock_focus"),
+            }
+    elif actionable_pending_groups > 0:
+        queue_recommendation = {
+            "status": "act",
+            "action_type": "review_queue",
+            "action": "review_prioritized_queue",
+            "priority": "medium",
+            "owner": "review_ops",
+            "reason": "actionable_backlog",
+            "rationale": "This queue slice is actionable and should be worked in priority order.",
+            "queue_filters": queue_filters,
+            "queue_snapshot": queue_snapshot,
+            "primary_driver": _build_queue_summary_driver("actionable_backlog"),
+        }
+    elif blocked_pending_groups > 0:
+        if unlock_focus is not None and unlock_focus.get("recommended_action") == "review_near_threshold_low_trust":
+            queue_recommendation = {
+                "status": "act",
+                "action_type": "policy_threshold",
+                "action": "review_low_trust_policy",
+                "priority": "medium",
+                "owner": "intelligence_policy",
+                "reason": "blocked_low_trust_policy",
+                "rationale": "This queue slice is blocked mainly by low-trust confidence policy rather than missing analyst review work.",
+                "queue_filters": queue_filters,
+                "queue_snapshot": queue_snapshot,
+                "primary_driver": _build_queue_summary_driver("unlock_focus"),
+            }
+        else:
+            queue_recommendation = {
+                "status": "watch",
+                "action_type": "policy_threshold",
+                "action": "review_threshold_policy",
+                "priority": "medium",
+                "owner": "intelligence_policy",
+                "reason": "blocked_backlog",
+                "rationale": "This queue slice has blocked backlog but little actionable review work, so policy thresholds are the main lever.",
+                "queue_filters": queue_filters,
+                "queue_snapshot": queue_snapshot,
+                "primary_driver": _build_queue_summary_driver("queue_totals"),
+            }
+    else:
+        queue_recommendation = {
+            "status": "monitor",
+            "action_type": "monitor",
+            "action": "monitor_queue",
+            "priority": "low",
+            "owner": "review_ops",
+            "reason": "no_backlog_pressure",
+            "rationale": "The current queue slice does not have material pending backlog pressure.",
+            "queue_filters": queue_filters,
+            "queue_snapshot": queue_snapshot,
+            "primary_driver": _build_queue_summary_driver("queue_totals"),
+        }
     return {
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
@@ -13309,6 +13508,7 @@ async def read_company_signal_candidate_group_summary(
         "pending_sla_bands": [dict(row) for row in pending_sla_band_rows],
         "pending_sla_reasons": [dict(row) for row in pending_sla_reason_rows],
         "oldest_pending_group": oldest_pending_group,
+        "queue_recommendation": queue_recommendation,
     }
 
 
