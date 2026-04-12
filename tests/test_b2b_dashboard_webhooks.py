@@ -126,6 +126,77 @@ async def test_list_webhooks_tolerates_missing_latest_test_summary_fields():
 
 
 @pytest.mark.asyncio
+async def test_create_webhook_rejects_high_intent_push_for_generic_channel():
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.CreateWebhookBody(
+        url='https://hooks.example.com/churn',
+        secret='a' * 24,
+        event_types=['high_intent_push'],
+        channel='generic',
+    )
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.create_webhook(body, user=user)
+
+    assert exc_info.value.status_code == 400
+    assert 'require a CRM channel' in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_create_webhook_allows_high_intent_push_for_crm_channel():
+    created_at = datetime.now(timezone.utc)
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        return_value={
+            'id': '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+            'account_id': 'account-1',
+            'url': 'https://hooks.example.com/crm',
+            'event_types': ['high_intent_push', 'report_generated'],
+            'channel': 'crm_hubspot',
+            'enabled': True,
+            'description': 'CRM escalation',
+            'created_at': created_at,
+        }
+    )
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.CreateWebhookBody(
+        url='https://hooks.example.com/crm',
+        secret='a' * 24,
+        event_types=['high_intent_push', 'report_generated'],
+        channel='crm_hubspot',
+        auth_header='Bearer pat-123',
+        description='CRM escalation',
+    )
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.create_webhook(body, user=user)
+
+    assert result['event_types'] == ['high_intent_push', 'report_generated']
+    assert result['channel'] == 'crm_hubspot'
+
+
+@pytest.mark.asyncio
+async def test_update_webhook_rejects_high_intent_push_for_generic_channel():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value='generic')
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.UpdateWebhookBody(event_types=['high_intent_push'])
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.update_webhook(
+                '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+                body,
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert 'require a CRM channel' in exc_info.value.detail
+    pool.fetchval.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=1)

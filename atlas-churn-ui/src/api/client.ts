@@ -484,7 +484,7 @@ export async function pushToCrm(
   )
 }
 
-export type WebhookEventType = 'change_event' | 'churn_alert' | 'report_generated' | 'signal_update'
+export type WebhookEventType = 'change_event' | 'churn_alert' | 'report_generated' | 'signal_update' | 'high_intent_push'
 export type WebhookChannel = 'generic' | 'slack' | 'teams' | 'crm_hubspot' | 'crm_salesforce' | 'crm_pipedrive'
 
 export interface WebhookSubscription {

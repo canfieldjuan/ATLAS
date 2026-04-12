@@ -5696,7 +5696,10 @@ async def export_source_health(
 # Webhook subscription management
 # ---------------------------------------------------------------------------
 
-VALID_WEBHOOK_EVENT_TYPES = {"change_event", "churn_alert", "report_generated", "signal_update"}
+VALID_WEBHOOK_EVENT_TYPES = {"change_event", "churn_alert", "report_generated", "signal_update", "high_intent_push"}
+
+
+CRM_ONLY_WEBHOOK_EVENT_TYPES = {"high_intent_push"}
 
 
 VALID_WEBHOOK_CHANNELS = {
@@ -5721,6 +5724,23 @@ class UpdateWebhookBody(BaseModel):
     description: str | None = None
 
 
+def _validate_webhook_event_types_for_channel(event_types: list[str], channel: str) -> None:
+    invalid = set(event_types) - VALID_WEBHOOK_EVENT_TYPES
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_types: {sorted(invalid)}. Must be from: {sorted(VALID_WEBHOOK_EVENT_TYPES)}",
+        )
+    if not event_types:
+        raise HTTPException(status_code=400, detail="event_types must not be empty")
+    crm_only = set(event_types) & CRM_ONLY_WEBHOOK_EVENT_TYPES
+    if crm_only and not str(channel or "").startswith("crm_"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_types for channel {channel}: {sorted(crm_only)} require a CRM channel",
+        )
+
+
 @router.post("/webhooks")
 async def create_webhook(
     body: CreateWebhookBody,
@@ -5734,21 +5754,13 @@ async def create_webhook(
     if not body.url.startswith(("https://", "http://")):
         raise HTTPException(status_code=400, detail="url must begin with https:// or http://")
 
-    # Validate event types
-    invalid = set(body.event_types) - VALID_WEBHOOK_EVENT_TYPES
-    if invalid:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid event_types: {sorted(invalid)}. Must be from: {sorted(VALID_WEBHOOK_EVENT_TYPES)}",
-        )
-    if not body.event_types:
-        raise HTTPException(status_code=400, detail="event_types must not be empty")
-
     if body.channel not in VALID_WEBHOOK_CHANNELS:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid channel: {body.channel}. Must be one of: {sorted(VALID_WEBHOOK_CHANNELS)}",
         )
+
+    _validate_webhook_event_types_for_channel(body.event_types, body.channel)
 
     # CRM channels require auth_header
     if body.channel.startswith("crm_") and not body.auth_header:
@@ -6038,14 +6050,14 @@ async def update_webhook(
         params.append(body.enabled)
         idx += 1
     if body.event_types is not None:
-        invalid = set(body.event_types) - VALID_WEBHOOK_EVENT_TYPES
-        if invalid:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid event_types: {sorted(invalid)}. Must be from: {sorted(VALID_WEBHOOK_EVENT_TYPES)}",
-            )
-        if not body.event_types:
-            raise HTTPException(status_code=400, detail="event_types must not be empty")
+        current_channel = await pool.fetchval(
+            "SELECT COALESCE(channel, 'generic') AS channel FROM b2b_webhook_subscriptions WHERE id = $1 AND account_id = $2::uuid",
+            wid,
+            user.account_id,
+        )
+        if current_channel is None:
+            raise HTTPException(status_code=404, detail="Webhook not found")
+        _validate_webhook_event_types_for_channel(body.event_types, current_channel)
         sets.append(f"event_types = ${idx}")
         params.append(body.event_types)
         idx += 1

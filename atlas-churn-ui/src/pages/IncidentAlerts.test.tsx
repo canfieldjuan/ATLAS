@@ -471,7 +471,7 @@ describe('IncidentAlerts', () => {
     expect(screen.getByLabelText('Channel')).toHaveValue('crm_hubspot')
     expect(screen.getByLabelText('Auth Header')).toBeInTheDocument()
     expect(screen.getByText(/Requires an auth header/i)).toBeInTheDocument()
-    expect(screen.getByText('2 event types selected')).toBeInTheDocument()
+    expect(screen.getByText('3 event types selected')).toBeInTheDocument()
   })
 
   it('shows live setup checks before save', async () => {
@@ -523,6 +523,9 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText(/"dealname": "Churn Signal: Acme Rival"/)).toBeInTheDocument()
     expect(screen.getByText(/"Authorization": "Bearer atlas-token"/)).toBeInTheDocument()
 
+    await user.selectOptions(screen.getByLabelText('Preview Event'), 'high_intent_push')
+    expect(screen.getByText(/"atlas_review_id": "33333333-3333-4333-8333-333333333334"/)).toBeInTheDocument()
+
     await user.selectOptions(screen.getByLabelText('Preview Event'), 'report_generated')
     expect(screen.getByText(/"hs_note_body": "Atlas Intelligence: report_generated for Acme Rival/)).toBeInTheDocument()
   })
@@ -545,6 +548,44 @@ describe('IncidentAlerts', () => {
 
     await user.click(screen.getByRole('button', { name: 'Copy cURL' }))
     expect(await screen.findByText('Copied sample cURL')).toBeInTheDocument()
+  })
+
+  it('creates a CRM webhook with high intent pushes from the preset', async () => {
+    const user = userEvent.setup()
+    api.createWebhook.mockResolvedValueOnce({
+      id: 'wh-crm-new',
+      url: 'https://hooks.example.com/crm',
+      event_types: ['churn_alert', 'report_generated', 'high_intent_push'],
+      channel: 'crm_hubspot',
+      enabled: true,
+      description: 'CRM escalation',
+      created_at: '2026-04-10T04:00:00Z',
+      updated_at: '2026-04-10T04:00:00Z',
+      recent_deliveries_7d: 0,
+      recent_success_rate_7d: null,
+    })
+
+    render(
+      <MemoryRouter>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+    await user.click(screen.getByRole('button', { name: /CRM Escalation/i }))
+    await user.type(screen.getByLabelText('Endpoint URL'), 'https://hooks.example.com/crm')
+    await user.type(screen.getByLabelText('Auth Header'), 'Bearer atlas-token')
+    await user.click(screen.getByRole('button', { name: 'Add Webhook' }))
+
+    await waitFor(() => {
+      expect(api.createWebhook).toHaveBeenCalledWith(expect.objectContaining({
+        url: 'https://hooks.example.com/crm',
+        event_types: ['churn_alert', 'report_generated', 'high_intent_push'],
+        channel: 'crm_hubspot',
+        auth_header: 'Bearer atlas-token',
+      }))
+    })
+    expect(await screen.findByText('Added crm_hubspot webhook')).toBeInTheDocument()
   })
 
   it('creates a webhook from the form', async () => {

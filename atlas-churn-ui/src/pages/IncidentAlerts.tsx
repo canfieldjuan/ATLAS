@@ -24,6 +24,7 @@ const EVENT_TYPE_OPTIONS: Array<{ value: WebhookEventType; label: string; descri
   { value: 'change_event', label: 'Change Event', description: 'Material changes in vendor or market signals.' },
   { value: 'signal_update', label: 'Signal Update', description: 'Ongoing evidence refreshes for monitored vendors.' },
   { value: 'report_generated', label: 'Report Generated', description: 'New persisted battle cards or reports.' },
+  { value: 'high_intent_push', label: 'High Intent Push', description: 'Selected high-intent opportunities pushed into CRM workflows.' },
 ]
 
 const CHANNEL_OPTIONS: Array<{ value: WebhookChannel; label: string }> = [
@@ -66,9 +67,9 @@ const WEBHOOK_PRESETS: Array<{
   {
     id: 'crm-escalation',
     label: 'CRM Escalation',
-    description: 'Push urgent churn incidents into CRM workflows with authenticated delivery.',
+    description: 'Push urgent churn incidents and selected high-intent opportunities into CRM workflows.',
     channel: 'crm_hubspot',
-    event_types: ['churn_alert', 'report_generated'],
+    event_types: ['churn_alert', 'report_generated', 'high_intent_push'],
   },
 ]
 
@@ -108,6 +109,7 @@ function parseSummaryWindow(value: string | null) {
     : 7
 }
 const MIN_SECRET_LENGTH = 16
+const CRM_ONLY_EVENT_TYPES = new Set<WebhookEventType>(['high_intent_push'])
 
 const SAMPLE_EVENT_PAYLOADS: Record<WebhookEventType, Record<string, string | number>> = {
   churn_alert: {
@@ -134,6 +136,13 @@ const SAMPLE_EVENT_PAYLOADS: Record<WebhookEventType, Record<string, string | nu
     report_title: 'Acme Rival Battle Card',
     report_id: 'report_123',
     freshness_state: 'fresh',
+  },
+  high_intent_push: {
+    company_name: 'Acme Bank',
+    role_type: 'revops',
+    trust_tier: 'high',
+    review_id: '33333333-3333-4333-8333-333333333334',
+    buying_stage: 'evaluation',
   },
 }
 
@@ -201,7 +210,7 @@ function formatTeamsPreview(envelope: ReturnType<typeof buildPreviewEnvelope>) {
 }
 
 function formatHubSpotPreview(envelope: ReturnType<typeof buildPreviewEnvelope>) {
-  if (envelope.event === 'churn_alert' || envelope.event === 'signal_update') {
+  if (envelope.event === 'churn_alert' || envelope.event === 'signal_update' || envelope.event === 'high_intent_push') {
     const properties: Record<string, string> = {
       dealname: `Churn Signal: ${envelope.vendor}`,
       pipeline: 'default',
@@ -243,7 +252,7 @@ function formatSalesforcePreview(envelope: ReturnType<typeof buildPreviewEnvelop
 }
 
 function formatPipedrivePreview(envelope: ReturnType<typeof buildPreviewEnvelope>) {
-  if (envelope.event === 'churn_alert' || envelope.event === 'signal_update') {
+  if (envelope.event === 'churn_alert' || envelope.event === 'signal_update' || envelope.event === 'high_intent_push') {
     return {
       title: `Churn Signal: ${envelope.vendor}`,
       status: 'open',
@@ -290,6 +299,9 @@ function validateWebhookForm(form: WebhookCreateBody) {
   }
   if (form.event_types.length === 0) {
     issues.push('Select at least one event type')
+  }
+  if (form.event_types.includes('high_intent_push') && !form.channel.startsWith('crm_')) {
+    issues.push('High Intent Push requires a CRM channel')
   }
   if (form.channel.startsWith('crm_') && !authHeader) {
     issues.push('CRM channels require an auth header')
@@ -702,9 +714,24 @@ export default function IncidentAlerts() {
     }
   }
 
+  function normalizeEventTypesForChannel(channel: WebhookChannel, eventTypes: WebhookEventType[]): WebhookEventType[] {
+    if (channel.startsWith('crm_')) return eventTypes
+    const filtered = eventTypes.filter((eventType): eventType is WebhookEventType => !CRM_ONLY_EVENT_TYPES.has(eventType))
+    return filtered.length ? filtered : ['churn_alert']
+  }
+
   function setFormValue<K extends keyof WebhookCreateBody>(key: K, value: WebhookCreateBody[K]) {
     setSelectedPresetId(null)
     setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  function handleChannelChange(channel: WebhookChannel) {
+    setSelectedPresetId(null)
+    setForm((current) => ({
+      ...current,
+      channel,
+      event_types: normalizeEventTypesForChannel(channel, current.event_types),
+    }))
   }
 
   function toggleEventType(eventType: WebhookEventType) {
@@ -1392,7 +1419,7 @@ export default function IncidentAlerts() {
                 <select
                   id="webhook-channel"
                   value={form.channel}
-                  onChange={(event) => setFormValue('channel', event.target.value as WebhookChannel)}
+                  onChange={(event) => handleChannelChange(event.target.value as WebhookChannel)}
                   className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
                 >
                   {CHANNEL_OPTIONS.map((option) => (
@@ -1460,23 +1487,28 @@ export default function IncidentAlerts() {
                 Event Types
               </legend>
               <div className="grid gap-2">
-                {EVENT_TYPE_OPTIONS.map((option) => (
-                  <label
-                    key={option.value}
-                    className="flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-3 text-sm text-slate-200"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={sortedEvents.has(option.value)}
-                      onChange={() => toggleEventType(option.value)}
-                      className="mt-1 rounded border-slate-600 bg-slate-900 text-cyan-400"
-                    />
-                    <span>
-                      <span className="block font-medium text-white">{option.label}</span>
-                      <span className="mt-1 block text-xs text-slate-400">{option.description}</span>
-                    </span>
-                  </label>
-                ))}
+                {EVENT_TYPE_OPTIONS.map((option) => {
+                  const crmOnly = CRM_ONLY_EVENT_TYPES.has(option.value)
+                  const disabled = crmOnly && !requiresAuthHeader
+                  return (
+                    <label
+                      key={option.value}
+                      className={`flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-3 text-sm ${disabled ? 'text-slate-500' : 'text-slate-200'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={sortedEvents.has(option.value)}
+                        disabled={disabled}
+                        onChange={() => toggleEventType(option.value)}
+                        className="mt-1 rounded border-slate-600 bg-slate-900 text-cyan-400"
+                      />
+                      <span>
+                        <span className="block font-medium text-white">{option.label}{crmOnly ? ' (CRM only)' : ''}</span>
+                        <span className="mt-1 block text-xs text-slate-400">{option.description}</span>
+                      </span>
+                    </label>
+                  )
+                })}
               </div>
               <div className="mt-2 text-xs text-slate-500">
                 {selectedEventCount} event type{selectedEventCount === 1 ? '' : 's'} selected

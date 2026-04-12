@@ -1355,6 +1355,7 @@ async def push_to_crm(
         WHERE enabled = true
           AND account_id = $1
           AND channel LIKE 'crm_%'
+          AND 'high_intent_push' = ANY(event_types)
         """,
         user.account_id,
     )

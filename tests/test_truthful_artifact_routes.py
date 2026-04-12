@@ -788,6 +788,7 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
 
         async def fetch(self, query, *_args):
             if "FROM b2b_webhook_subscriptions" in query:
+                captured['subscription_query'] = query
                 return [
                     {
                         "id": "sub-1",
@@ -796,6 +797,7 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
                         "account_id": _auth_user().account_id,
                         "channel": "crm_hubspot",
                         "auth_header": None,
+                        "event_types": ["high_intent_push"],
                     }
                 ]
             if "FROM b2b_company_signals" in query:
@@ -863,6 +865,7 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
     assert response.status_code == 200
     assert response.json()["pushed"] == 1
     assert response.json()["failed"] == []
+    assert captured['subscription_query'].count('high_intent_push') >= 1
     assert captured["channel"] == "crm_hubspot"
     envelope = captured["envelope"]
     assert isinstance(envelope, dict)
@@ -896,6 +899,7 @@ def test_push_to_crm_omits_company_signal_id_without_canonical_match(monkeypatch
                         "account_id": _auth_user().account_id,
                         "channel": "crm_hubspot",
                         "auth_header": None,
+                        "event_types": ["high_intent_push"],
                     }
                 ]
             if "FROM b2b_company_signals" in query:
@@ -969,6 +973,7 @@ def test_push_to_crm_skips_payloads_above_size_limit(monkeypatch):
                     "account_id": _auth_user().account_id,
                     "channel": "crm_hubspot",
                     "auth_header": None,
+                    "event_types": ["high_intent_push"],
                 }
             ]
 
