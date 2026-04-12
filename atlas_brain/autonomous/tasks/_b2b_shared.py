@@ -12099,6 +12099,100 @@ def _company_signal_action_priority_rank(value: Any) -> int:
     return order.get(str(value or "").lower(), 0)
 
 
+def _company_signal_action_type(action: Any) -> str | None:
+    action_name = str(action or "").strip()
+    if not action_name:
+        return None
+    if action_name in {
+        "clear_overdue_review_queue",
+        "review_prioritized_queue",
+        "increase_review_throughput",
+    }:
+        return "review_queue"
+    if action_name in {"review_low_trust_policy", "review_threshold_policy"}:
+        return "policy_threshold"
+    if action_name == "inspect_rebuild_pipeline":
+        return "rebuild_pipeline"
+    if action_name == "review_effect_quality":
+        return "review_quality"
+    if action_name == "monitor_queue":
+        return "monitor"
+    return None
+
+
+def _empty_company_signal_operator_action() -> dict[str, Any]:
+    return {
+        "status": "no_data",
+        "action_type": None,
+        "action": None,
+        "priority": None,
+        "owner": None,
+        "reason": None,
+        "rationale": None,
+        "queue_filters": {},
+        "queue_snapshot": None,
+        "primary_driver": None,
+    }
+
+
+def _build_company_signal_operator_action(
+    payload: Mapping[str, Any] | None,
+    *,
+    primary_driver: Any = None,
+    queue_filters: Mapping[str, Any] | None = None,
+    queue_snapshot: Mapping[str, Any] | None = None,
+    action_type: str | None = None,
+    reason: Any = None,
+    use_reason_override: bool = False,
+) -> dict[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    action = payload.get("action")
+    if not action:
+        return None
+
+    payload_queue_filters = payload.get("queue_filters")
+    if queue_filters is None and isinstance(payload_queue_filters, Mapping):
+        normalized_queue_filters = dict(payload_queue_filters)
+    else:
+        normalized_queue_filters = dict(queue_filters or {})
+
+    payload_queue_snapshot = payload.get("queue_snapshot")
+    if queue_snapshot is None and isinstance(payload_queue_snapshot, Mapping):
+        normalized_queue_snapshot = dict(payload_queue_snapshot)
+    elif isinstance(queue_snapshot, Mapping):
+        normalized_queue_snapshot = dict(queue_snapshot)
+    else:
+        normalized_queue_snapshot = None
+
+    payload_primary_driver = payload.get("primary_driver")
+    if primary_driver is None and isinstance(payload_primary_driver, Mapping):
+        normalized_primary_driver = dict(payload_primary_driver)
+    elif primary_driver is None:
+        normalized_primary_driver = payload_primary_driver
+    elif isinstance(primary_driver, Mapping):
+        normalized_primary_driver = dict(primary_driver)
+    else:
+        normalized_primary_driver = primary_driver
+
+    normalized = _empty_company_signal_operator_action()
+    normalized.update(
+        {
+            "status": payload.get("status"),
+            "action_type": action_type or payload.get("action_type") or _company_signal_action_type(action),
+            "action": action,
+            "priority": payload.get("priority"),
+            "owner": payload.get("owner"),
+            "reason": reason if use_reason_override else payload.get("reason"),
+            "rationale": payload.get("rationale"),
+            "queue_filters": normalized_queue_filters,
+            "queue_snapshot": normalized_queue_snapshot,
+            "primary_driver": normalized_primary_driver,
+        }
+    )
+    return normalized
+
+
 async def read_company_signal_candidate_group_summary(
     pool,
     *,
@@ -13421,44 +13515,24 @@ async def read_company_signal_candidate_group_summary(
         queue_recommendation: Mapping[str, Any] | None,
         unlock_focus: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        default = {
-            "status": "no_data",
-            "action_type": None,
-            "action": None,
-            "priority": None,
-            "owner": None,
-            "reason": None,
-            "rationale": None,
-            "queue_filters": {},
-            "queue_snapshot": None,
-            "primary_driver": None,
-        }
-        queue_payload = dict(queue_recommendation or {})
-        unlock_payload = dict(unlock_focus or {})
-        queue_action = queue_payload.get("action")
-        unlock_action = unlock_payload.get("action")
+        default = _empty_company_signal_operator_action()
+        queue_payload = _build_company_signal_operator_action(queue_recommendation)
+        unlock_payload = _build_company_signal_operator_action(
+            unlock_focus,
+            primary_driver=_build_queue_summary_driver("unlock_focus"),
+        )
+        queue_action = queue_payload.get("action") if isinstance(queue_payload, Mapping) else None
+        unlock_action = unlock_payload.get("action") if isinstance(unlock_payload, Mapping) else None
         if queue_action and unlock_action:
-            if _company_signal_action_priority_rank(unlock_payload.get("priority")) > _company_signal_action_priority_rank(queue_payload.get("priority")):
-                return {
-                    **default,
-                    **unlock_payload,
-                    "primary_driver": _build_queue_summary_driver("unlock_focus"),
-                }
-            return {
-                **default,
-                **queue_payload,
-            }
+            if _company_signal_action_priority_rank(unlock_payload.get("priority")) > _company_signal_action_priority_rank(
+                queue_payload.get("priority")
+            ):
+                return unlock_payload
+            return queue_payload
         if queue_action:
-            return {
-                **default,
-                **queue_payload,
-            }
+            return queue_payload
         if unlock_action:
-            return {
-                **default,
-                **unlock_payload,
-                "primary_driver": _build_queue_summary_driver("unlock_focus"),
-            }
+            return unlock_payload
         return default
 
     queue_filters = _build_queue_summary_filters()
@@ -14806,69 +14880,28 @@ async def read_company_signal_review_impact_summary(
         trend_focus: Mapping[str, Any],
         trend_queue_recommendation: Mapping[str, Any],
     ) -> dict[str, Any]:
-        default = {
-            "status": "no_data",
-            "action_type": None,
-            "action": None,
-            "priority": None,
-            "owner": None,
-            "reason": None,
-            "rationale": None,
-            "queue_filters": {},
-            "queue_snapshot": None,
-            "primary_driver": None,
-        }
-
-        trend_payload: dict[str, Any] | None = None
-        trend_action = trend_recommendation.get("action") if isinstance(trend_recommendation, Mapping) else None
-        if trend_action:
-            if trend_action == "inspect_rebuild_pipeline":
-                action_type = "rebuild_pipeline"
-            elif trend_action == "review_effect_quality":
-                action_type = "review_quality"
-            elif trend_action == "increase_review_throughput":
-                action_type = "review_queue"
-            else:
-                action_type = "monitor"
-            trend_payload = {
-                "status": trend_recommendation.get("status"),
-                "action_type": action_type,
-                "action": trend_action,
-                "priority": trend_recommendation.get("priority"),
-                "owner": trend_recommendation.get("owner"),
-                "reason": trend_focus.get("focus") if isinstance(trend_focus, Mapping) else None,
-                "rationale": trend_recommendation.get("rationale"),
-                "queue_filters": dict(trend_recommendation_queue_filters or {}),
-                "queue_snapshot": (
-                    dict(trend_recommendation_queue_snapshot)
-                    if isinstance(trend_recommendation_queue_snapshot, Mapping)
-                    else None
-                ),
-                "primary_driver": _build_trend_queue_driver("trend_recommendation", trend_recommendation),
-            }
-
-        queue_payload = None
-        queue_action = trend_queue_recommendation.get("action") if isinstance(trend_queue_recommendation, Mapping) else None
+        default = _empty_company_signal_operator_action()
+        trend_payload = _build_company_signal_operator_action(
+            trend_recommendation,
+            primary_driver=_build_trend_queue_driver("trend_recommendation", trend_recommendation),
+            queue_filters=trend_recommendation_queue_filters,
+            queue_snapshot=trend_recommendation_queue_snapshot,
+            reason=trend_focus.get("focus") if isinstance(trend_focus, Mapping) else None,
+            use_reason_override=True,
+        )
+        queue_payload = _build_company_signal_operator_action(trend_queue_recommendation)
+        trend_action = trend_payload.get("action") if isinstance(trend_payload, Mapping) else None
+        queue_action = queue_payload.get("action") if isinstance(queue_payload, Mapping) else None
+        if trend_action and queue_action:
+            if _company_signal_action_priority_rank(trend_payload.get("priority")) > _company_signal_action_priority_rank(
+                queue_payload.get("priority")
+            ):
+                return trend_payload
+            return queue_payload
         if queue_action:
-            queue_payload = {
-                **default,
-                **dict(trend_queue_recommendation),
-            }
-
-        if trend_payload and queue_payload:
-            if _company_signal_action_priority_rank(trend_payload.get("priority")) > _company_signal_action_priority_rank(queue_payload.get("priority")):
-                return {
-                    **default,
-                    **trend_payload,
-                }
             return queue_payload
-        if queue_payload:
-            return queue_payload
-        if trend_payload:
-            return {
-                **default,
-                **trend_payload,
-            }
+        if trend_action:
+            return trend_payload
         return default
 
     def _build_trend_queue_recommendation(
