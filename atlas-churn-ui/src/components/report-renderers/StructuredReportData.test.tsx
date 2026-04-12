@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { StructuredReportData } from './StructuredReportData'
 
@@ -41,6 +42,34 @@ describe('StructuredReportData', () => {
 
     fireEvent.click(citationButtons[0])
     expect(onOpenWitness).toHaveBeenCalledWith('w1', 'Zendesk')
+  })
+
+  it('falls back to the evidence explorer when witness-backed sections do not have an open handler', () => {
+    render(
+      <MemoryRouter>
+        <StructuredReportData
+          data={{
+            key_insights: [
+              { label: 'Pricing friction', summary: 'Pricing created churn risk' },
+            ],
+            key_insights_reference_ids: {
+              witness_ids: ['w1', 'w2'],
+            },
+            key_insights_witness_highlights: [
+              { witness_id: 'w1', reviewer_company: 'Acme', excerpt_text: 'Pricing changed overnight' },
+              { witness_id: 'w2', reviewer_company: 'Bravo', excerpt_text: 'Costs increased too fast' },
+            ],
+          }}
+          vendorName="Zendesk"
+          backTo="/report?vendor=Zendesk&ref=test-token&mode=view"
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('link', { name: 'View 2 witness citations' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freport%3Fvendor%3DZendesk%26ref%3Dtest-token%26mode%3Dview',
+    )
   })
 
   it('shows explicit partial and thin evidence states when sections lack witness citations', () => {

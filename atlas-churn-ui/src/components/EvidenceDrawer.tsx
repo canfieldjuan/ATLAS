@@ -448,14 +448,19 @@ export default function EvidenceDrawer({
               <div>
                 <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                   <FileText className="w-3 h-3" /> Source Review
-                  {vendorName && (
+                  {vendorName && (() => {
+                    const params = new URLSearchParams()
+                    params.set('vendor_filter', vendorName)
+                    if (backToPath) params.set('back_to', backToPath)
+                    return (
                     <a
-                      href={`/reports?vendor_filter=${encodeURIComponent(vendorName)}`}
+                      href={`/reports?${params.toString()}`}
                       className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
                     >
                       View library <ExternalLink className="h-3 w-3" />
                     </a>
-                  )}
+                    )
+                  })()}
                   {witness.review_id && (
                     <Link
                       to={reviewDetailPath(witness.review_id, backToPath)}

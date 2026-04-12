@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   fetchAnnotations: vi.fn(),
   setAnnotation: vi.fn(),
   removeAnnotations: vi.fn(),
+  fetchAccountsInMotionFeed: vi.fn(),
 }))
 
 vi.mock('../api/client', () => api)
@@ -45,6 +46,7 @@ describe('EvidenceDrawer', () => {
       updated_at: '2026-04-08T12:00:00Z',
     })
     api.removeAnnotations.mockResolvedValue({ removed: 1 })
+    api.fetchAccountsInMotionFeed.mockResolvedValue({ accounts: [] })
   })
 
   it('loads witness annotations and lets analysts pin a witness', async () => {
@@ -55,12 +57,17 @@ describe('EvidenceDrawer', () => {
         vendorName="Salesforce"
         witnessId="w1"
         open
+        backToPath="/report?vendor=Salesforce&ref=test-token&mode=view"
         onClose={() => {}}
       />,
     )
 
     expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: 'Pin' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /View library/i })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Salesforce&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
+    )
 
     await user.click(screen.getByRole('button', { name: 'Pin' }))
 

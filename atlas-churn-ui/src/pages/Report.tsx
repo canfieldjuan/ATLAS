@@ -275,6 +275,11 @@ function PricingModal({ vendorName, onClose }: { vendorName: string; onClose: ()
 }
 
 function ReportView({ data }: { data: ReportData }) {
+  const [searchParams] = useSearchParams()
+  const reportBackTo = (() => {
+    const query = searchParams.toString()
+    return query ? `/report?${query}` : '/report'
+  })()
   const [showPricing, setShowPricing] = useState(false)
   const b = asRecord(data.briefing)
   const score = Number(b.churn_pressure_score) || 0
@@ -570,7 +575,7 @@ function ReportView({ data }: { data: ReportData }) {
                   {report.executive_summary && (
                     <p className="text-sm text-slate-300 mb-4 break-words whitespace-pre-wrap">{report.executive_summary}</p>
                   )}
-                  <IntelligenceData reportType={report.report_type} data={report.data} />
+                  <IntelligenceData reportType={report.report_type} data={report.data} vendorName={data.vendor_name} backTo={reportBackTo} />
                 </div>
               ))}
             </div>
@@ -645,14 +650,16 @@ function ReportView({ data }: { data: ReportData }) {
 }
 
 /** Render intelligence data fields as key-value cards */
-function IntelligenceData({ reportType, data }: { reportType: string; data: unknown }) {
+function IntelligenceData({ reportType, data, vendorName, backTo }: { reportType: string; data: unknown; vendorName: string; backTo: string }) {
   if (isSpecializedReportType(reportType)) {
-    return <SpecializedReportData reportType={reportType} data={data} />
+    return <SpecializedReportData reportType={reportType} data={data} vendorName={vendorName} backTo={backTo} />
   }
   return (
     <StructuredReportData
       data={normalizeReportObject(isRecord(data) ? data : {})}
       skipKeys={['report_date', 'window_days', 'primary_vendor', 'comparison_vendor']}
+      vendorName={vendorName}
+      backTo={backTo}
     />
   )
 }

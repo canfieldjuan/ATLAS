@@ -90,9 +90,12 @@ function backToLabel(value: string) {
     return 'Back to Watchlists'
   }
   if (value.startsWith('/evidence')) return 'Back to Evidence'
+  if (value.startsWith('/reports/')) return 'Back to Report'
   if (value.startsWith('/reports')) return 'Back to Reports'
+  if (value.startsWith('/report')) return 'Back to Report'
   if (value.startsWith('/opportunities')) return 'Back to Opportunities'
   if (value.startsWith('/alerts')) return 'Back to Alerts'
+  if (value.startsWith('/pipeline-review')) return 'Back to Pipeline Review'
   return 'Back to Reviews'
 }
 
@@ -174,8 +177,10 @@ export default function ReviewDetail() {
       || (location.state as { backTo: string }).backTo.startsWith('/watchlists')
       || (location.state as { backTo: string }).backTo.startsWith('/evidence')
       || (location.state as { backTo: string }).backTo.startsWith('/reports')
+      || (location.state as { backTo: string }).backTo.startsWith('/report')
       || (location.state as { backTo: string }).backTo.startsWith('/alerts')
       || (location.state as { backTo: string }).backTo.startsWith('/opportunities')
+      || (location.state as { backTo: string }).backTo.startsWith('/pipeline-review')
     )
     ? (location.state as { backTo: string }).backTo
     : null
@@ -187,8 +192,10 @@ export default function ReviewDetail() {
       || value.startsWith('/watchlists')
       || value.startsWith('/evidence')
       || value.startsWith('/reports')
+      || value.startsWith('/report')
       || value.startsWith('/alerts')
       || value.startsWith('/opportunities')
+      || value.startsWith('/pipeline-review')
     ) ? value : null
   })()
   const backToReviews = stateBackTo ?? queryBackTo ?? '/reviews'

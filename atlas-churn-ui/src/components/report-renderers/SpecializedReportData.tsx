@@ -79,12 +79,14 @@ function ProvenanceStrip({
   extraBadges = [],
   vendorName,
   onOpenWitness,
+  backTo,
 }: {
   source?: string
   referenceIds?: ReasoningReferenceIdsViewModel
   extraBadges?: string[]
   vendorName?: string
   onOpenWitness?: (witnessId: string, vendorName: string) => void
+  backTo?: string | null
 }) {
   const counts = referenceIdCounts(referenceIds)
   const badges = [
@@ -113,15 +115,21 @@ function ProvenanceStrip({
           <Fingerprint className="w-3 h-3" />
           {counts.witnesses} witnesses
         </button>
-      ) : counts.witnesses > 0 ? (
-        <Link
-          to={vendorName ? `/evidence?vendor_name=${encodeURIComponent(vendorName)}` : '/evidence'}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-900/30 text-cyan-300 border border-cyan-700/40 hover:bg-cyan-900/50 transition-colors"
-        >
+      ) : counts.witnesses > 0 ? (() => {
+        const params = new URLSearchParams()
+        if (vendorName) params.set('vendor', vendorName)
+        params.set('tab', 'witnesses')
+        if (backTo?.trim()) params.set('back_to', backTo)
+        return (
+          <Link
+            to={`/evidence?${params.toString()}`}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-900/30 text-cyan-300 border border-cyan-700/40 hover:bg-cyan-900/50 transition-colors"
+          >
           <Fingerprint className="w-3 h-3" />
           {counts.witnesses} witnesses
-        </Link>
-      ) : null}
+          </Link>
+        )
+      })() : null}
     </div>
   )
 }
@@ -226,7 +234,7 @@ function registerWitnessIds(
   return registry.getAll()
 }
 
-function ChallengerBriefDetail({ data, onOpenWitness }: { data: ChallengerBriefViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void }) {
+function ChallengerBriefDetail({ data, onOpenWitness, backTo }: { data: ChallengerBriefViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null }) {
   const registry = createCitationRegistry()
   const disp = data.displacement_summary
   const inc = data.incumbent_profile
@@ -252,6 +260,7 @@ function ChallengerBriefDetail({ data, onOpenWitness }: { data: ChallengerBriefV
         extraBadges={h2h.reference_ids ? [`Head-to-head refs: ${referenceIdCounts(h2h.reference_ids).total}`] : []}
         vendorName={data.incumbent}
         onOpenWitness={onOpenWitness}
+        backTo={backTo}
       />
       <div className="flex flex-wrap gap-1.5">
         {Object.entries(sources).map(([key, value]) => (
@@ -489,6 +498,7 @@ function ChallengerBriefDetail({ data, onOpenWitness }: { data: ChallengerBriefV
               referenceIds={h2h.reference_ids}
               vendorName={data.incumbent}
               onOpenWitness={onOpenWitness}
+              backTo={backTo}
             />
           </div>
           <div className="space-y-1">
@@ -663,7 +673,7 @@ function ChallengerBriefDetail({ data, onOpenWitness }: { data: ChallengerBriefV
   )
 }
 
-function AccountsInMotionDetail({ data, vendorName, onOpenWitness }: { data: AccountsInMotionViewModel; vendorName?: string; onOpenWitness?: (witnessId: string, vendorName: string) => void }) {
+function AccountsInMotionDetail({ data, vendorName, onOpenWitness, backTo }: { data: AccountsInMotionViewModel; vendorName?: string; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null }) {
   const pricing = data.pricing_pressure
   const gaps = data.feature_gaps
   const xvc = data.cross_vendor_context
@@ -677,6 +687,7 @@ function AccountsInMotionDetail({ data, vendorName, onOpenWitness }: { data: Acc
         extraBadges={data.category_council?.reference_ids ? [`Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}`] : []}
         vendorName={vendorName}
         onOpenWitness={onOpenWitness}
+        backTo={backTo}
       />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
@@ -795,6 +806,7 @@ function AccountsInMotionDetail({ data, vendorName, onOpenWitness }: { data: Acc
               referenceIds={data.category_council.reference_ids}
               vendorName={vendorName}
               onOpenWitness={onOpenWitness}
+              backTo={backTo}
             />
           </div>
           <div className="space-y-1">
@@ -877,7 +889,7 @@ function normalizeLabel(label: string | undefined, context: 'pain' | 'satisfacti
   return label
 }
 
-function BattleCardDetail({ data, onOpenWitness }: { data: BattleCardViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void }) {
+function BattleCardDetail({ data, onOpenWitness, backTo }: { data: BattleCardViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null }) {
   const registry = createCitationRegistry()
   const weaknesses = data.weakness_analysis.length > 0 ? data.weakness_analysis : data.vendor_weaknesses
   const qualityClass = data.quality_status === 'sales_ready'
@@ -897,6 +909,7 @@ function BattleCardDetail({ data, onOpenWitness }: { data: BattleCardViewModel; 
         referenceIds={data.reasoning_reference_ids}
         vendorName={data.vendor}
         onOpenWitness={onOpenWitness}
+        backTo={backTo}
         extraBadges={[
           data.cross_vendor_battles.length > 0 ? `${data.cross_vendor_battles.length} battle refs` : '',
           data.category_council?.reference_ids ? `Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}` : '',
@@ -1493,7 +1506,7 @@ function BattleCardDetail({ data, onOpenWitness }: { data: BattleCardViewModel; 
   )
 }
 
-function ComparisonReportDetail({ data, rawData }: { data: ComparisonReportViewModel; rawData: Record<string, unknown> }) {
+function ComparisonReportDetail({ data, rawData, backTo }: { data: ComparisonReportViewModel; rawData: Record<string, unknown>; backTo?: string | null }) {
   const skipKeys = [
     'primary_vendor', 'comparison_vendor', 'primary_company', 'comparison_company',
     'report_date', 'window_days', 'primary_metrics', 'comparison_metrics',
@@ -1599,12 +1612,12 @@ function ComparisonReportDetail({ data, rawData }: { data: ComparisonReportViewM
         </div>
       )}
 
-      <StructuredReportData data={rawData} skipKeys={skipKeys} />
+      <StructuredReportData data={rawData} skipKeys={skipKeys} backTo={backTo} />
     </div>
   )
 }
 
-function WeeklyChurnFeedDetail({ items, onOpenWitness }: { items: WeeklyChurnFeedItemViewModel[]; onOpenWitness?: (witnessId: string, vendorName: string) => void }) {
+function WeeklyChurnFeedDetail({ items, onOpenWitness, backTo }: { items: WeeklyChurnFeedItemViewModel[]; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null }) {
   return (
     <div className="space-y-3 min-w-0 [overflow-wrap:anywhere]">
       {items.map((item, index) => {
@@ -1620,6 +1633,7 @@ function WeeklyChurnFeedDetail({ items, onOpenWitness }: { items: WeeklyChurnFee
               extraBadges={item.category_council?.reference_ids ? [`Council refs: ${referenceIdCounts(item.category_council.reference_ids).total}`] : []}
               vendorName={item.vendor}
               onOpenWitness={onOpenWitness}
+              backTo={backTo}
             />
             {/* Header row */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -2499,21 +2513,23 @@ export function SpecializedReportData({
   data,
   vendorName,
   onOpenWitness,
+  backTo,
 }: {
   reportType: string
   data: unknown
   vendorName?: string
   onOpenWitness?: (witnessId: string, vendorName: string) => void
+  backTo?: string | null
 }) {
   const normalizedValue = normalizeUnknown(data, reportType)
   const normalized = normalizeReportObject(Array.isArray(normalizedValue) ? {} : (normalizedValue as Record<string, unknown> | null | undefined))
-  if (reportType === 'challenger_brief') return <ChallengerBriefDetail data={toChallengerBriefViewModel(normalized)} onOpenWitness={onOpenWitness} />
-  if (reportType === 'accounts_in_motion') return <AccountsInMotionDetail data={toAccountsInMotionViewModel(normalized)} vendorName={vendorName} onOpenWitness={onOpenWitness} />
-  if (reportType === 'battle_card') return <BattleCardDetail data={toBattleCardViewModel(normalized)} onOpenWitness={onOpenWitness} />
+  if (reportType === 'challenger_brief') return <ChallengerBriefDetail data={toChallengerBriefViewModel(normalized)} onOpenWitness={onOpenWitness} backTo={backTo} />
+  if (reportType === 'accounts_in_motion') return <AccountsInMotionDetail data={toAccountsInMotionViewModel(normalized)} vendorName={vendorName} onOpenWitness={onOpenWitness} backTo={backTo} />
+  if (reportType === 'battle_card') return <BattleCardDetail data={toBattleCardViewModel(normalized)} onOpenWitness={onOpenWitness} backTo={backTo} />
   if (reportType === 'vendor_comparison' || reportType === 'account_comparison') {
-    return <ComparisonReportDetail data={toComparisonReportViewModel(normalized)} rawData={normalized} />
+    return <ComparisonReportDetail data={toComparisonReportViewModel(normalized)} rawData={normalized} backTo={backTo} />
   }
-  if (reportType === 'weekly_churn_feed') return <WeeklyChurnFeedDetail items={toWeeklyChurnFeedItems(normalizedValue)} onOpenWitness={onOpenWitness} />
+  if (reportType === 'weekly_churn_feed') return <WeeklyChurnFeedDetail items={toWeeklyChurnFeedItems(normalizedValue)} onOpenWitness={onOpenWitness} backTo={backTo} />
   if (reportType === 'vendor_scorecard') return <VendorScorecardDetail items={toVendorScorecards(normalizedValue)} />
   if (reportType === 'displacement_report') return <DisplacementReportDetail data={normalized} />
   if (reportType === 'vendor_deep_dive') return <VendorDeepDiveDetail items={toVendorDeepDives(normalizedValue)} />

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { clsx } from 'clsx'
 import ArchetypeBadge from '../ArchetypeBadge'
 import CitationBar from './CitationBar'
@@ -596,6 +597,14 @@ function MixedObjectCard({ obj, label }: { obj: AnyObject; label?: string }) {
   )
 }
 
+function evidenceExplorerPath(vendorName: string, backTo?: string | null) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  if (backTo?.trim()) params.set('back_to', backTo)
+  return `/evidence?${params.toString()}`
+}
+
 export function StructuredReportValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
   if (value === null || value === undefined) return <span className="text-sm text-slate-500">--</span>
   if (typeof value === 'string') return <p className="text-sm text-slate-300 whitespace-pre-wrap break-words">{value}</p>
@@ -635,6 +644,7 @@ export function StructuredReportData({
   vendorName,
   onOpenWitness,
   sectionEvidence,
+  backTo,
 }: {
   data: AnyObject
   skipKeys?: string[]
@@ -642,6 +652,7 @@ export function StructuredReportData({
   vendorName?: string
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   sectionEvidence?: Record<string, SectionEvidenceSummary> | null
+  backTo?: string | null
 }) {
   const registry = createCitationRegistry()
   const entries = Object.entries(data).filter(([key, value]) => {
@@ -662,7 +673,7 @@ export function StructuredReportData({
         const evidence = decorateSectionEvidenceMeta(
           sectionEvidence?.[key] ?? sectionEvidenceMeta(key, value, data),
         )
-        const citations = vendorName && onOpenWitness
+        const citations = vendorName
           ? citationEntriesForSection(registry, key, value, data)
           : []
         return (
@@ -679,13 +690,22 @@ export function StructuredReportData({
             <p className="mt-3 text-xs text-slate-500">
               {evidence.detail}
             </p>
-            {vendorName && onOpenWitness && citations.length > 0 && (
+            {vendorName && citations.length > 0 && (
               <div className="mt-3">
-                <CitationBar
-                  citations={citations}
-                  vendorName={vendorName}
-                  onOpenWitness={onOpenWitness}
-                />
+                {onOpenWitness ? (
+                  <CitationBar
+                    citations={citations}
+                    vendorName={vendorName}
+                    onOpenWitness={onOpenWitness}
+                  />
+                ) : (
+                  <Link
+                    to={evidenceExplorerPath(vendorName, backTo)}
+                    className="inline-flex items-center gap-1 rounded border border-cyan-700/40 bg-cyan-900/30 px-2 py-1 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-900/50"
+                  >
+                    View {citations.length} witness citation{citations.length === 1 ? '' : 's'}
+                  </Link>
+                )}
               </div>
             )}
           </div>

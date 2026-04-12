@@ -123,6 +123,57 @@ describe('ReviewDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1')
   })
 
+  it('returns to report detail when back_to points at a report detail page', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to Report' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1')
+  })
+
+  it('returns to the public report when back_to points at the public report page', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Freport%3Fvendor%3DZendesk%26ref%3Dtest-token%26mode%3Dview']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to Report' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/report?vendor=Zendesk&ref=test-token&mode=view')
+  })
+
+  it('returns to pipeline review when back_to points at the grouped review queue', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fpipeline-review%3Fqueue_vendor%3DZendesk']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to Pipeline Review' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/pipeline-review?queue_vendor=Zendesk')
+  })
+
   it('copies a shareable review detail link with preserved back context', async () => {
     const user = userEvent.setup()
 

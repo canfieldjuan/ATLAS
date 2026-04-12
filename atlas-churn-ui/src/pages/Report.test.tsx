@@ -10,6 +10,12 @@ const auth = vi.hoisted(() => ({
 const router = vi.hoisted(() => ({
   navigate: vi.fn(),
 }))
+const specializedRenderer = vi.hoisted(() => ({
+  lastProps: null as any,
+}))
+const structuredRenderer = vi.hoisted(() => ({
+  lastProps: null as any,
+}))
 
 vi.mock('../auth/AuthContext', () => auth)
 vi.mock('react-router-dom', async () => {
@@ -25,12 +31,14 @@ vi.mock('../components/SeoHead', () => ({
   },
 }))
 vi.mock('../components/report-renderers/StructuredReportData', () => ({
-  StructuredReportData: function StructuredReportData() {
+  StructuredReportData: function StructuredReportData(props: any) {
+    structuredRenderer.lastProps = props
     return <div>Structured Report</div>
   },
 }))
 vi.mock('../components/report-renderers/SpecializedReportData', () => ({
-  SpecializedReportData: function SpecializedReportData() {
+  SpecializedReportData: function SpecializedReportData(props: any) {
+    specializedRenderer.lastProps = props
     return <div>Specialized Report</div>
   },
 }))
@@ -46,6 +54,8 @@ describe('Report', () => {
     signup.mockResolvedValue(undefined)
     login.mockResolvedValue(undefined)
     router.navigate.mockReset()
+    specializedRenderer.lastProps = null
+    structuredRenderer.lastProps = null
     auth.useAuth.mockReturnValue({
       user: null,
       signup,
@@ -82,6 +92,91 @@ describe('Report', () => {
       'href',
       '/signup?product=b2b_challenger&redirect_to=%2Fchallengers',
     )
+  })
+
+
+  it('passes the vendor context into structured report renderers on direct report load', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        vendor_name: 'Zendesk',
+        briefing: {},
+        intelligence_reports: [
+          {
+            report_type: 'exploratory_overview',
+            executive_summary: 'Structured summary',
+            data: {
+              key_insights: [
+                { label: 'Pricing friction', summary: 'Pricing created churn risk' },
+              ],
+              key_insights_reference_ids: {
+                witness_ids: ['w1'],
+              },
+            },
+            report_date: '2026-04-10',
+          },
+        ],
+        product_profile: null,
+      }),
+    } as Response)
+
+    render(
+      <MemoryRouter initialEntries={['/report?vendor=Zendesk&ref=test-token&mode=view']}>
+        <Routes>
+          <Route path="/report" element={<Report />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Structured Report')
+    await waitFor(() => {
+      expect(structuredRenderer.lastProps?.vendorName).toBe('Zendesk')
+      expect(structuredRenderer.lastProps?.backTo).toBe('/report?vendor=Zendesk&ref=test-token&mode=view')
+    })
+  })
+
+  it('passes the vendor context into specialized report renderers on direct report load', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        vendor_name: 'Zendesk',
+        briefing: {},
+        intelligence_reports: [
+          {
+            report_type: 'accounts_in_motion',
+            executive_summary: 'Specialized summary',
+            data: {
+              reference_ids: {
+                witness_ids: ['witness-1'],
+              },
+              accounts: [
+                {
+                  company: 'Acme Corp',
+                  opportunity_score: 72,
+                },
+              ],
+            },
+            report_date: '2026-04-10',
+          },
+        ],
+        product_profile: null,
+      }),
+    } as Response)
+
+    render(
+      <MemoryRouter initialEntries={['/report?vendor=Zendesk&ref=test-token&mode=view']}>
+        <Routes>
+          <Route path="/report" element={<Report />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Specialized Report')
+    await waitFor(() => {
+      expect(specializedRenderer.lastProps?.vendorName).toBe('Zendesk')
+      expect(specializedRenderer.lastProps?.backTo).toBe('/report?vendor=Zendesk&ref=test-token&mode=view')
+    })
+    expect(specializedRenderer.lastProps?.reportType).toBe('accounts_in_motion')
   })
 
   it('redirects checkout-created accounts into watchlists', async () => {

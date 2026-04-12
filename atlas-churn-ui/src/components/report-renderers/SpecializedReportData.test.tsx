@@ -49,6 +49,36 @@ describe('SpecializedReportData', () => {
     expect(onOpenWitness).toHaveBeenNthCalledWith(2, 'witness-1', 'Zendesk')
   })
 
+
+  it('links witness fallbacks to the evidence explorer with the active vendor filter', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="accounts_in_motion"
+          vendorName="Zendesk"
+          backTo="/report?vendor=Zendesk&ref=test-token&mode=view"
+          data={{
+            reference_ids: {
+              witness_ids: ['witness-1'],
+            },
+            accounts: [
+              {
+                company: 'Acme Corp',
+                opportunity_score: 72,
+                top_quote: 'Pricing pressure is accelerating.',
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('link', { name: '1 witnesses' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freport%3Fvendor%3DZendesk%26ref%3Dtest-token%26mode%3Dview',
+    )
+  })
+
   it('renders category overview arrays directly', () => {
     render(
       <MemoryRouter>
