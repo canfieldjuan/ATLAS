@@ -657,8 +657,8 @@ async def _log_crm_push(
             """
             INSERT INTO b2b_crm_push_log
                 (subscription_id, signal_type, signal_id, review_id, vendor_name, company_name,
-                 crm_record_id, crm_record_type)
-            VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, $8)
+                 crm_record_id, crm_record_type, status)
+            VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, $8, $9)
             """,
             subscription_id,
             signal_type,
@@ -668,6 +668,7 @@ async def _log_crm_push(
             activity_context["company_name"],
             crm_record_id,
             "deal" if event_type in ("churn_alert", "signal_update", "high_intent_push") else "note",
+            "success",
         )
     except Exception:
         logger.debug("Failed to log CRM push")

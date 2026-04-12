@@ -1701,7 +1701,7 @@ async def list_reports(
                 "executive_summary": r["executive_summary"],
                 "vendor_filter": r["vendor_filter"],
                 "category_filter": r["category_filter"],
-                "status": r["status"],
+                "status": _normalize_crm_push_status(r["status"]),
                 "latest_failure_step": r["latest_failure_step"],
                 "latest_error_code": r["latest_error_code"],
                 "latest_error_summary": r["latest_error_summary"],
@@ -5998,7 +5998,7 @@ async def list_webhooks(
                 "report_title": (latest_crm_report_context or {}).get("report_title"),
                 "crm_record_id": r["latest_crm_record_id"] if "latest_crm_record_id" in r else None,
                 "crm_record_type": r["latest_crm_record_type"] if "latest_crm_record_type" in r else None,
-                "status": r["latest_crm_status"] if "latest_crm_status" in r else None,
+                "status": _normalize_crm_push_status(r["latest_crm_status"] if "latest_crm_status" in r else None),
                 "error": r["latest_crm_error"] if "latest_crm_error" in r else None,
                 "pushed_at": r["latest_crm_at"].isoformat() if "latest_crm_at" in r and r["latest_crm_at"] else None,
             }
@@ -6496,7 +6496,7 @@ async def list_crm_push_log(
             "report_title": (report_context or {}).get("report_title"),
             "crm_record_id": r["crm_record_id"],
             "crm_record_type": r["crm_record_type"],
-            "status": r["status"],
+            "status": _normalize_crm_push_status(r["status"]),
             "error": r["error"],
             "pushed_at": r["pushed_at"].isoformat(),
             "account_review_focus": account_review_focus,
@@ -7421,6 +7421,16 @@ def _normalize_webhook_activity_uuid_text(value: Any) -> str | None:
         return str(_uuid.UUID(raw))
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+def _normalize_crm_push_status(value: Any) -> str | None:
+    status = _optional_query_text(value)
+    if status is None:
+        return None
+    normalized = status.lower()
+    if normalized == "pushed":
+        return "success"
+    return normalized
 
 
 def _extract_webhook_activity_context(payload: Any) -> dict[str, str | None]:

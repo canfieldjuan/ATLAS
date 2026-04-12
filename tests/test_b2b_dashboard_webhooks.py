@@ -140,7 +140,7 @@ async def test_list_webhooks_exposes_latest_crm_push_summary():
                 'latest_crm_company_name': None,
                 'latest_crm_record_id': 'deal-42',
                 'latest_crm_record_type': 'deal',
-                'latest_crm_status': 'failed',
+                'latest_crm_status': 'pushed',
                 'latest_crm_error': 'crm timeout',
                 'latest_crm_at': pushed_at,
             }
@@ -174,7 +174,7 @@ async def test_list_webhooks_exposes_latest_crm_push_summary():
         'report_title': None,
         'crm_record_id': 'deal-42',
         'crm_record_type': 'deal',
-        'status': 'failed',
+        'status': 'success',
         'error': 'crm timeout',
         'pushed_at': pushed_at.isoformat(),
     }
@@ -663,7 +663,7 @@ async def test_list_crm_push_log_exposes_review_id_from_signal_context():
                 'company_name': 'Acme Bank',
                 'crm_record_id': 'crm-43',
                 'crm_record_type': 'deal',
-                'status': 'success',
+                'status': 'pushed',
                 'error': None,
                 'pushed_at': datetime(2026, 4, 11, 2, 30, tzinfo=timezone.utc),
             }
@@ -716,7 +716,7 @@ async def test_list_crm_push_log_exposes_direct_review_id_without_signal_context
                 'company_name': 'Acme Bank',
                 'crm_record_id': 'crm-44',
                 'crm_record_type': 'deal',
-                'status': 'success',
+                'status': 'pushed',
                 'error': None,
                 'pushed_at': datetime(2026, 4, 11, 2, 45, tzinfo=timezone.utc),
             }
@@ -738,6 +738,7 @@ async def test_list_crm_push_log_exposes_direct_review_id_without_signal_context
 
     push = result['pushes'][0]
     assert push['signal_id'] is None
+    assert push['status'] == 'success'
     assert push['review_id'] == '33333333-3333-4333-8333-333333333334'
     resolve_focus.assert_awaited_once()
     _, kwargs = resolve_focus.await_args
@@ -1135,9 +1136,11 @@ async def test_log_crm_push_persists_report_id_for_report_generated():
     args = pool.execute.call_args[0][1:]
     assert 'signal_id' in sql
     assert 'review_id' in sql
+    assert 'status' in sql
     assert args[1] == 'report_generated'
     assert args[2] == '33333333-3333-4333-8333-333333333333'
     assert args[3] is None
     assert args[4] == 'Acme Rival'
     assert args[5] is None
     assert args[7] == 'note'
+    assert args[8] == 'success'
