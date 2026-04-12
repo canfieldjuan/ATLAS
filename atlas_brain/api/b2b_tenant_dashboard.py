@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.params import Param
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, EmailStr, Field
 
@@ -141,7 +142,11 @@ def _matches_source_filter(account: dict[str, Any], source: str | None) -> bool:
 
 
 def _clean_optional_text(value: Any) -> str | None:
-    text = str(value or "").strip()
+    if isinstance(value, Param):
+        value = value.default
+    if value is None:
+        return None
+    text = str(value).strip()
     return text or None
 
 
@@ -160,6 +165,8 @@ def _clean_required_watchlist_view_name(value: Any) -> str:
 
 
 def _clean_optional_text_list(value: Any) -> list[str] | None:
+    if isinstance(value, Param):
+        value = value.default
     if isinstance(value, (list, tuple)):
         cleaned = [_clean_optional_text(item) for item in value]
         values = [item for item in cleaned if item]
@@ -2018,10 +2025,10 @@ async def list_tenant_accounts_in_motion_feed(
     _require_b2b_product(user)
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
-    vendor_name = vendor_name if isinstance(vendor_name, str) else None
-    vendor_names = [v.strip() for v in vendor_names if v and v.strip()] if isinstance(vendor_names, (list, tuple)) else ([vendor_names.strip()] if isinstance(vendor_names, str) and vendor_names.strip() else None)
-    category = category if isinstance(category, str) else None
-    source = source if isinstance(source, str) else None
+    vendor_name = _clean_optional_text(vendor_name)
+    vendor_names = _clean_optional_text_list(vendor_names)
+    category = _clean_optional_text(category)
+    source = _clean_optional_text(source)
     include_stale = include_stale if isinstance(include_stale, bool) else True
     min_urgency = _safe_float(min_urgency, settings.b2b_churn.accounts_in_motion_min_urgency)
     account_alert_threshold = _safe_float(account_alert_threshold)

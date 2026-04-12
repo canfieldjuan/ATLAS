@@ -2769,6 +2769,63 @@ async def test_accounts_in_motion_feed_sorts_and_applies_total_limit(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_accounts_in_motion_feed_normalizes_blank_and_trimmed_text_filters(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {"vendor_name": "Zendesk", "track_mode": "competitor", "label": "Support", "added_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    helper = AsyncMock(
+        return_value={
+            "accounts": [
+                {
+                    "company": "Acme Corp",
+                    "vendor": "Zendesk",
+                    "category": "Helpdesk",
+                    "urgency": 8.5,
+                    "opportunity_score": 82,
+                    "pain_categories": [{"category": "pricing", "severity": ""}],
+                    "evidence": ["We need to move fast."],
+                    "source_distribution": {"reddit": 2},
+                    "source_reviews": [{"id": "review-1", "source": "reddit"}],
+                },
+            ],
+            "report_date": "2026-04-04",
+            "stale_days": 0,
+            "is_stale": False,
+            "data_source": "persisted_report",
+        }
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_list_accounts_in_motion_from_report", helper)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        vendor_name="   ",
+        vendor_names=[" Zendesk ", "  "],
+        category="  Helpdesk  ",
+        source="  reddit  ",
+        min_urgency=7,
+        include_stale=False,
+        per_vendor_limit=5,
+        limit=10,
+        user=user,
+    )
+
+    assert result["count"] == 1
+    assert result["vendors_with_accounts"] == 1
+    assert result["accounts"][0]["company"] == "Acme Corp"
+    assert result["accounts"][0]["watch_vendor"] == "Zendesk"
+    assert helper.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_accounts_in_motion_feed_filters_by_vendor_category_source_and_stale(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
