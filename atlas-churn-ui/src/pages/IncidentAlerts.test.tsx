@@ -373,6 +373,7 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    expect(await screen.findByText('Acme Bank')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Copy Signal ID' }))
 
     await waitFor(() => {
