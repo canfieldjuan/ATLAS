@@ -6273,7 +6273,7 @@ async def list_crm_push_log(
 
     rows = await pool.fetch(
         """
-        SELECT id, signal_type, signal_id, vendor_name, company_name,
+        SELECT id, signal_type, signal_id, review_id, vendor_name, company_name,
                crm_record_id, crm_record_type, status, error, pushed_at
         FROM b2b_crm_push_log
         WHERE subscription_id = $1
@@ -6300,7 +6300,7 @@ async def list_crm_push_log(
         report_context = None
         if signal_type == "report_generated" and signal_id:
             report_context = await _fetch_webhook_activity_report_context(pool, signal_id, report_activity_cache)
-        resolved_review_id = (signal_context or {}).get("review_id")
+        resolved_review_id = _normalize_webhook_activity_uuid_text(r.get("review_id")) or (signal_context or {}).get("review_id")
         account_review_focus = await _resolve_webhook_activity_account_focus(
             pool,
             user,

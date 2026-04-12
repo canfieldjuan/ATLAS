@@ -43,7 +43,7 @@ async def list_crm_pushes(
 
         rows = await pool.fetch(
             f"""
-            SELECT pl.id, pl.subscription_id, pl.signal_type, pl.vendor_name,
+            SELECT pl.id, pl.subscription_id, pl.signal_type, pl.review_id, pl.vendor_name,
                    pl.company_name, pl.crm_record_id, pl.crm_record_type,
                    pl.status, pl.error, pl.pushed_at,
                    COALESCE(ws.channel, 'generic') AS channel,
@@ -65,6 +65,7 @@ async def list_crm_pushes(
                 "channel": r["channel"],
                 "webhook_url": r["webhook_url"],
                 "signal_type": r["signal_type"],
+                "review_id": str(r["review_id"]) if r.get("review_id") else None,
                 "vendor_name": r["vendor_name"],
                 "company_name": r["company_name"],
                 "crm_record_id": r["crm_record_id"],

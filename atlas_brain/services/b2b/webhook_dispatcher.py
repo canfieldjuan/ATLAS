@@ -20,6 +20,7 @@ import hmac
 import json
 import logging
 import time
+import uuid as _uuid
 from datetime import datetime, timezone
 
 import httpx
@@ -547,6 +548,16 @@ async def _deliver_single(
     return False
 
 
+def _normalize_uuid_text(value: object) -> str | None:
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    try:
+        return str(_uuid.UUID(raw))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 async def _log_crm_push(
     pool,
     subscription_id,
@@ -579,7 +590,8 @@ async def _log_crm_push(
             signal_id_value = data.get("signal_id")
         if signal_id_value is None and event_type == "report_generated":
             signal_id_value = data.get("report_id")
-        signal_id = str(signal_id_value).strip() if signal_id_value is not None else ""
+        signal_id = _normalize_uuid_text(signal_id_value)
+        review_id = _normalize_uuid_text(data.get("review_id"))
         if event_type == "high_intent_push":
             signal_type = "high_intent_push"
         elif event_type == "change_event":
@@ -593,13 +605,14 @@ async def _log_crm_push(
         await pool.execute(
             """
             INSERT INTO b2b_crm_push_log
-                (subscription_id, signal_type, signal_id, vendor_name, company_name,
+                (subscription_id, signal_type, signal_id, review_id, vendor_name, company_name,
                  crm_record_id, crm_record_type)
-            VALUES ($1, $2, $3::uuid, $4, $5, $6, $7)
+            VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, $8)
             """,
             subscription_id,
             signal_type,
-            signal_id or None,
+            signal_id,
+            review_id,
             vendor,
             data.get("company_name") or data.get("company"),
             crm_record_id,

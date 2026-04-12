@@ -246,6 +246,50 @@ async def test_list_crm_push_log_exposes_review_id_from_signal_context():
 
 
 @pytest.mark.asyncio
+async def test_list_crm_push_log_exposes_direct_review_id_without_signal_context():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': 'dd5659f4-dfe6-4c12-8fd6-e6eb5579cc47',
+                'signal_type': 'high_intent_push',
+                'signal_id': None,
+                'review_id': '33333333-3333-4333-8333-333333333334',
+                'vendor_name': 'Acme Rival',
+                'company_name': 'Acme Bank',
+                'crm_record_id': 'crm-44',
+                'crm_record_type': 'deal',
+                'status': 'success',
+                'error': None,
+                'pushed_at': datetime(2026, 4, 11, 2, 45, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            '_resolve_webhook_activity_account_focus',
+            AsyncMock(return_value=None),
+        ) as resolve_focus:
+            result = await b2b_dashboard.list_crm_push_log(
+                'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44',
+                limit=50,
+                user=user,
+            )
+
+    push = result['pushes'][0]
+    assert push['signal_id'] is None
+    assert push['review_id'] == '33333333-3333-4333-8333-333333333334'
+    resolve_focus.assert_awaited_once()
+    _, kwargs = resolve_focus.await_args
+    assert kwargs['signal_id'] is None
+    assert kwargs['review_id'] == '33333333-3333-4333-8333-333333333334'
+
+
+@pytest.mark.asyncio
 async def test_list_crm_push_log_exposes_account_review_focus():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=1)
@@ -419,10 +463,42 @@ async def test_log_crm_push_persists_signal_id_from_envelope():
     sql = pool.execute.call_args[0][0]
     args = pool.execute.call_args[0][1:]
     assert 'signal_id' in sql
+    assert 'review_id' in sql
     assert args[1] == 'company_signal'
     assert args[2] == '22222222-2222-2222-2222-222222222222'
-    assert args[3] == 'Acme Rival'
-    assert args[4] == 'Acme Bank'
+    assert args[3] is None
+    assert args[4] == 'Acme Rival'
+    assert args[5] == 'Acme Bank'
+
+
+@pytest.mark.asyncio
+async def test_log_crm_push_persists_review_id_from_envelope():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
+
+    await webhook_dispatcher._log_crm_push(
+        pool,
+        '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+        'high_intent_push',
+        {
+            'vendor': 'Acme Rival',
+            'data': {
+                'company_name': 'Acme Bank',
+                'review_id': '33333333-3333-4333-8333-333333333334',
+            },
+        },
+        crm_record_id='crm-43',
+    )
+
+    sql = pool.execute.call_args[0][0]
+    args = pool.execute.call_args[0][1:]
+    assert 'review_id' in sql
+    assert args[1] == 'high_intent_push'
+    assert args[2] is None
+    assert args[3] == '33333333-3333-4333-8333-333333333334'
+    assert args[4] == 'Acme Rival'
+    assert args[5] == 'Acme Bank'
+    assert args[7] == 'deal'
 
 
 @pytest.mark.asyncio
@@ -530,6 +606,7 @@ async def test_list_crm_push_log_exposes_report_context_for_report_generated():
                 )
 
     push = result['pushes'][0]
+    assert push['review_id'] is None
     assert push['report_id'] == '33333333-3333-4333-8333-333333333333'
     assert push['report_type'] == 'battle_card'
     assert push['report_title'] == 'Acme Rival Battle Card'
@@ -562,8 +639,10 @@ async def test_log_crm_push_persists_report_id_for_report_generated():
     sql = pool.execute.call_args[0][0]
     args = pool.execute.call_args[0][1:]
     assert 'signal_id' in sql
+    assert 'review_id' in sql
     assert args[1] == 'report_generated'
     assert args[2] == '33333333-3333-4333-8333-333333333333'
-    assert args[3] == 'Acme Rival'
-    assert args[4] is None
-    assert args[6] == 'note'
+    assert args[3] is None
+    assert args[4] == 'Acme Rival'
+    assert args[5] is None
+    assert args[7] == 'note'
