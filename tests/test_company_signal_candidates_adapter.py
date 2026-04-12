@@ -1126,6 +1126,10 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["trend_recommendation"]["priority"] == "high"
     assert summary["trend_recommendation"]["owner"] == "review_ops"
     assert summary["trend_recommendation"]["supporting_focuses"] == ["effect_rate_down", "approval_volume_up"]
+    assert summary["trend_recommendation_filters"]["review_scope"] == "bulk_group"
+    assert summary["trend_recommendation_filters"]["canonical_gap_reason"] == "low_confidence_low_trust_source"
+    assert summary["trend_recommendation_filters"]["candidate_source"] == "reddit"
+    assert summary["trend_recommendation_filters"]["company_signal_action"] == "none"
 
 
 def _make_review_impact_summary_pool(*, totals=None, daily_trends=None):

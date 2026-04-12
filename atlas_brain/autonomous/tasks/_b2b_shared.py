@@ -13501,6 +13501,7 @@ async def read_company_signal_review_impact_summary(
                 "rationale": None,
                 "supporting_focuses": [],
             },
+            "trend_recommendation_filters": {},
         }
 
     where_clause = " AND ".join(conditions)
@@ -14306,12 +14307,57 @@ async def read_company_signal_review_impact_summary(
             "supporting_focuses": supporting_focuses,
         }
 
+    def _build_trend_recommendation_filters(
+        recommendation: Mapping[str, Any],
+        focus: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        filters: dict[str, Any] = {}
+        if vendor_name:
+            filters["vendor_name"] = vendor_name
+        if review_scope:
+            filters["review_scope"] = review_scope
+        if review_action:
+            filters["review_action"] = review_action
+        if company_signal_action:
+            filters["company_signal_action"] = company_signal_action
+        if canonical_gap_reason:
+            filters["canonical_gap_reason"] = canonical_gap_reason
+        if review_priority_band:
+            filters["review_priority_band"] = review_priority_band
+        if review_priority_reason:
+            filters["review_priority_reason"] = review_priority_reason
+        if review_unlock_path:
+            filters["review_unlock_path"] = review_unlock_path
+        if review_unlock_reason:
+            filters["review_unlock_reason"] = review_unlock_reason
+        if candidate_source:
+            filters["candidate_source"] = candidate_source
+        if rebuild_reason:
+            filters["rebuild_reason"] = rebuild_reason
+        focus_name = focus.get("focus") if isinstance(focus, Mapping) else None
+        if focus_name == "rebuild_blocks_up":
+            filters["rebuild_outcome"] = "blocked"
+        elif focus_name == "rebuild_trigger_rate_down":
+            filters["rebuild_outcome"] = "requested"
+        elif focus_name == "effect_rate_down":
+            filters["company_signal_action"] = "none"
+        elif focus_name == "approval_volume_down":
+            filters["review_action"] = "approved"
+        elif focus_name == "effect_rate_up":
+            filters["company_signal_action"] = "created"
+        elif focus_name == "approval_volume_up":
+            filters["review_action"] = "approved"
+        elif rebuild_outcome:
+            filters["rebuild_outcome"] = rebuild_outcome
+        return filters
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     daily_trends = [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows]
     trend_comparison = _build_trend_comparison(daily_trends)
     trend_alerts = _build_trend_alerts(trend_comparison)
     trend_focus = _build_trend_focus(trend_comparison, trend_alerts)
     trend_recommendation = _build_trend_recommendation(trend_comparison, trend_focus, trend_alerts)
+    trend_recommendation_filters = _build_trend_recommendation_filters(trend_recommendation, trend_focus)
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -14330,6 +14376,7 @@ async def read_company_signal_review_impact_summary(
         "trend_focus": trend_focus,
         "trend_alerts": trend_alerts,
         "trend_recommendation": trend_recommendation,
+        "trend_recommendation_filters": trend_recommendation_filters,
     }
 
 

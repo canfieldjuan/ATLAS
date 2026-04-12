@@ -385,6 +385,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "trend_focus": {"status": "watch", "focus": "effect_rate_down"},
         "trend_alerts": [{"status": "watch", "focus": "effect_rate_down"}],
         "trend_recommendation": {"status": "act", "action": "review_effect_quality"},
+        "trend_recommendation_filters": {"company_signal_action": "none"},
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         with patch.object(
