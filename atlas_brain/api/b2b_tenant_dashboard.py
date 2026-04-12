@@ -3889,6 +3889,8 @@ async def list_tenant_reviews(
 ):
     """Reviews scoped to tracked vendors."""
     _require_b2b_product(user)
+    pain_category = _clean_optional_text(pain_category)
+    company = _clean_optional_text(company)
     pool = _pool_or_503()
     from ..autonomous.tasks._b2b_shared import read_review_details
 

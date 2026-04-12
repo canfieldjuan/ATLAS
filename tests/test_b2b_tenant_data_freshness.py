@@ -1312,6 +1312,67 @@ async def test_list_tenant_reviews_uses_event_recency_and_company_fallback(monke
 
 
 @pytest.mark.asyncio
+async def test_list_tenant_reviews_normalizes_blank_and_trimmed_text_filters(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = SimpleNamespace(is_initialized=True)
+    read_mock = AsyncMock(return_value=[])
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_tenant_params", lambda _user: [])
+    monkeypatch.setattr(shared_mod, "read_review_details", read_mock)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_reviews(
+        pain_category="   ",
+        min_urgency=6,
+        company="   ",
+        has_churn_intent=False,
+        window_days=90,
+        limit=20,
+        user=user,
+    )
+
+    assert result == {"reviews": [], "count": 0}
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        scoped_vendors=None,
+        pain_category=None,
+        min_urgency=6,
+        company=None,
+        has_churn_intent=False,
+        recency_column="coalesce",
+        limit=20,
+    )
+
+    read_mock.reset_mock()
+
+    await mod.list_tenant_reviews(
+        pain_category="  pricing  ",
+        min_urgency=6,
+        company="  Acme  ",
+        has_churn_intent=False,
+        window_days=90,
+        limit=20,
+        user=user,
+    )
+
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        scoped_vendors=None,
+        pain_category="pricing",
+        min_urgency=6,
+        company="Acme",
+        has_churn_intent=False,
+        recency_column="coalesce",
+        limit=20,
+    )
+
+
+@pytest.mark.asyncio
 async def test_tenant_vendor_history_requires_tracked_vendor_and_reads_snapshots(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
