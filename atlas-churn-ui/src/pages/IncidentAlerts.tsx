@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
-import { ArrowRight, BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
@@ -464,18 +464,71 @@ function deliveryTone(success: boolean) {
     : 'border-rose-500/20 bg-rose-500/5 text-rose-100'
 }
 
+function parseBackTo(value: string | null) {
+  if (!value) return null
+  if (
+    value.startsWith('/watchlists')
+    || value.startsWith('/evidence')
+    || value.startsWith('/vendors/')
+    || value.startsWith('/reports')
+    || value.startsWith('/reviews')
+    || value.startsWith('/opportunities')
+  ) return value
+  try {
+    const url = new URL(value, window.location.origin)
+    if (
+      url.origin === window.location.origin
+      && (
+        url.pathname === '/watchlists'
+        || url.pathname === '/evidence'
+        || url.pathname.startsWith('/vendors/')
+        || url.pathname === '/reports'
+        || url.pathname.startsWith('/reviews')
+        || url.pathname === '/opportunities'
+      )
+    ) {
+      return `${url.pathname}${url.search}`
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function backToLabel(value: string | null) {
+  if (!value) return 'Back'
+  if (value.startsWith('/watchlists')) {
+    try {
+      const url = new URL(value, window.location.origin)
+      if (url.searchParams.get('account_company')?.trim()) return 'Back to Account Review'
+    } catch {
+      return 'Back to Watchlists'
+    }
+    return 'Back to Watchlists'
+  }
+  if (value.startsWith('/evidence')) return 'Back to Evidence'
+  if (value.startsWith('/vendors/')) return 'Back to Vendor'
+  if (value.startsWith('/reports/')) return 'Back to Report'
+  if (value.startsWith('/reports')) return 'Back to Reports'
+  if (value.startsWith('/reviews')) return 'Back to Review'
+  if (value.startsWith('/opportunities')) return 'Back to Opportunities'
+  return 'Back'
+}
+
 function buildActivitySearchParams({
   webhookId,
   deliveryStatus,
   deliveryEvent,
   crmStatus,
   summaryWindow,
+  backTo,
 }: {
   webhookId: string | null
   deliveryStatus: 'all' | 'success' | 'failed'
   deliveryEvent: 'all' | WebhookEventType
   crmStatus: 'all' | 'success' | 'failed'
   summaryWindow: (typeof SUMMARY_WINDOWS)[number]
+  backTo?: string | null
 }) {
   const next = new URLSearchParams()
   if (summaryWindow !== 7) next.set('days', String(summaryWindow))
@@ -485,6 +538,7 @@ function buildActivitySearchParams({
     if (deliveryEvent !== 'all') next.set('delivery_event', deliveryEvent)
     if (crmStatus !== 'all') next.set('crm_status', crmStatus)
   }
+  if (backTo) next.set('back_to', backTo)
   return next
 }
 
@@ -585,6 +639,7 @@ export default function IncidentAlerts() {
     ? (searchParams.get('crm_status') as 'success' | 'failed')
     : 'all'
   const requestedSummaryWindow = parseSummaryWindow(searchParams.get('days'))
+  const requestedBackTo = parseBackTo(searchParams.get('back_to'))
   const [summaryWindow, setSummaryWindow] = useState<(typeof SUMMARY_WINDOWS)[number]>(requestedSummaryWindow)
   const [form, setForm] = useState<WebhookCreateBody>({
     url: '',
@@ -718,6 +773,7 @@ export default function IncidentAlerts() {
       deliveryEvent: deliveryEventFilter,
       crmStatus: crmStatusFilter,
       summaryWindow,
+      backTo: requestedBackTo,
     })
     const query = next.toString()
     return query ? `${location.pathname}?${query}` : location.pathname
@@ -726,6 +782,7 @@ export default function IncidentAlerts() {
     deliveryEventFilter,
     deliveryStatusFilter,
     location.pathname,
+    requestedBackTo,
     selectedWebhookId,
     summaryWindow,
   ])
@@ -751,6 +808,7 @@ export default function IncidentAlerts() {
       deliveryEvent: deliveryEventFilter,
       crmStatus: crmStatusFilter,
       summaryWindow,
+      backTo: requestedBackTo,
     })
     if (next.toString() === searchParams.toString()) return
     setSearchParams(next, { replace: true })
@@ -758,6 +816,7 @@ export default function IncidentAlerts() {
     crmStatusFilter,
     deliveryEventFilter,
     deliveryStatusFilter,
+    requestedBackTo,
     searchParams,
     selectedWebhookId,
     setSearchParams,
@@ -793,6 +852,7 @@ export default function IncidentAlerts() {
         deliveryEvent: selectedWebhookId === webhookId ? deliveryEventFilter : 'all',
         crmStatus: selectedWebhookId === webhookId ? crmStatusFilter : 'all',
         summaryWindow,
+        backTo: requestedBackTo,
       })
       const path = `${window.location.origin}${location.pathname}?${next.toString()}`
       await navigator.clipboard.writeText(path)
@@ -813,6 +873,7 @@ export default function IncidentAlerts() {
         deliveryEvent: 'all',
         crmStatus: 'all',
         summaryWindow,
+        backTo: requestedBackTo,
       })
       const path = `${window.location.origin}${location.pathname}?${next.toString()}`
       await navigator.clipboard.writeText(path)
@@ -1106,6 +1167,15 @@ export default function IncidentAlerts() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
+          {requestedBackTo ? (
+            <Link
+              to={requestedBackTo}
+              className="mb-3 inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              {backToLabel(requestedBackTo)}
+            </Link>
+          ) : null}
           <h1 className="text-2xl font-bold text-white">Incident Alerts API</h1>
           <p className="mt-1 max-w-3xl text-sm text-slate-400">
             Configure outbound webhooks for churn incidents, signal changes, and durable artifact updates without leaving the product.

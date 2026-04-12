@@ -1839,6 +1839,19 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Copied vendor link for Zendesk')).toBeInTheDocument()
   })
 
+  it('links saved alert events into the alerts api with preserved watchlist context', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
   it('evaluates persisted alert events for the active saved view', async () => {
     const user = userEvent.setup()
     api.listWatchlistViews.mockResolvedValue({

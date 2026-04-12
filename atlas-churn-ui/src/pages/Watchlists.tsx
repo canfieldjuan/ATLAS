@@ -368,6 +368,12 @@ function watchlistPath(searchParams: URLSearchParams) {
   return `/watchlists${query ? `?${query}` : ''}`
 }
 
+function watchlistAlertsPath(searchParams: URLSearchParams) {
+  const params = new URLSearchParams()
+  params.set('back_to', watchlistPath(searchParams))
+  return `/alerts?${params.toString()}`
+}
+
 function watchlistVendorPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('back_to', watchlistPath(searchParams))
@@ -3026,6 +3032,12 @@ export default function Watchlists() {
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
+            <Link
+              to={watchlistAlertsPath(searchParams)}
+              className="rounded-md bg-violet-500/10 px-3 py-2 text-center text-sm font-medium text-violet-300 hover:bg-violet-500/20"
+            >
+              Alerts API
+            </Link>
             <button
               className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
               onClick={handleEvaluateWatchlistAlerts}

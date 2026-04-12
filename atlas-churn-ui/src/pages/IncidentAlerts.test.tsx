@@ -724,12 +724,25 @@ describe('IncidentAlerts', () => {
     expect(screen.getByLabelText('Window')).toHaveValue('30')
   })
 
+  it('renders a watchlists return link when alerts is opened from a saved view', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts?back_to=%2Fwatchlists%3Fview%3Dview-1']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Back to Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-1',
+    )
+  })
+
   it('copies the current alerts view from the page header', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
 
     render(
-      <MemoryRouter initialEntries={['/alerts?days=30&webhook=wh-1&delivery_status=failed&delivery_event=signal_update']}>
+      <MemoryRouter initialEntries={['/alerts?days=30&webhook=wh-1&delivery_status=failed&delivery_event=signal_update&back_to=%2Fwatchlists%3Fview%3Dview-1']}>
         <IncidentAlerts />
       </MemoryRouter>,
     )
@@ -739,7 +752,7 @@ describe('IncidentAlerts', () => {
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/alerts?days=30&webhook=wh-1&delivery_status=failed&delivery_event=signal_update`,
+        `${window.location.origin}/alerts?days=30&webhook=wh-1&delivery_status=failed&delivery_event=signal_update&back_to=%2Fwatchlists%3Fview%3Dview-1`,
       )
     })
     expect(await screen.findByText('Copied current alerts view')).toBeInTheDocument()
@@ -751,7 +764,7 @@ describe('IncidentAlerts', () => {
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
 
     render(
-      <MemoryRouter initialEntries={['/alerts?days=30&webhook=wh-1&delivery_status=failed&delivery_event=signal_update']}>
+      <MemoryRouter initialEntries={['/alerts?days=30&webhook=wh-1&delivery_status=failed&delivery_event=signal_update&back_to=%2Fwatchlists%3Fview%3Dview-1']}>
         <IncidentAlerts />
       </MemoryRouter>,
     )
@@ -761,7 +774,7 @@ describe('IncidentAlerts', () => {
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/alerts?days=30&webhook=wh-1`,
+        `${window.location.origin}/alerts?days=30&webhook=wh-1&back_to=%2Fwatchlists%3Fview%3Dview-1`,
       )
     })
     expect(await screen.findByText('Copied webhook link')).toBeInTheDocument()
@@ -866,6 +879,20 @@ describe('IncidentAlerts', () => {
       expect(clipboardSpy).toHaveBeenCalledWith('sig-1')
     })
     expect(await screen.findByText('Copied signal id')).toBeInTheDocument()
+  })
+
+  it('preserves upstream watchlists context in delivery drillthrough links', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-1&back_to=%2Fwatchlists%3Fview%3Dview-1']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: 'Review' })).toHaveAttribute(
+      'href',
+      '/reviews/33333333-3333-4333-8333-333333333334?back_to=%2Falerts%3Fwebhook%3Dwh-1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
   })
 
   it('links delivery activity back into watchlists and vendor workflows', async () => {
