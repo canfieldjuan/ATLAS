@@ -82,6 +82,7 @@ def test_ingest_crm_event_trims_text_fields_before_persistence(monkeypatch):
     assert body["event_type"] == "deal_won"
 
     args = pool.fetchval.await_args.args
+    assert "account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in args[0]
     assert args[1] == "hubspot"
     assert args[2] == "evt-1"
     assert args[3] == "deal_won"
@@ -131,6 +132,7 @@ def test_ingest_crm_events_batch_trims_text_fields_before_persistence(monkeypatc
     assert body["created_ids"] == ["22222222-2222-2222-2222-222222222222"]
 
     args = pool.fetchval.await_args.args
+    assert "account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in args[0]
     assert args[1] == "salesforce"
     assert args[2] == "batch-1"
     assert args[3] == "meeting_booked"
@@ -334,3 +336,60 @@ def test_ingest_hubspot_webhook_persists_account_id(monkeypatch):
     assert "$12::uuid" in query
     assert "COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in query
     assert params[-1] == "11111111-1111-1111-1111-111111111111"
+
+
+def test_salesforce_and_pipedrive_webhooks_preserve_account_id_on_upsert(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+    app.dependency_overrides[crm_events_api.optional_auth] = lambda: SimpleNamespace(
+        account_id="11111111-1111-1111-1111-111111111111"
+    )
+
+    monkeypatch.setattr(crm_events_api.settings.crm_event, "enabled", True)
+
+    cases = [
+        (
+            "/b2b/crm/events/salesforce",
+            {
+                "sobject": "Opportunity",
+                "record": {
+                    "Id": "sf-1",
+                    "StageName": "Closed Won",
+                    "AccountName": "Acme Corp",
+                    "ContactEmail": "owner@acme.test",
+                    "Name": "Renewal",
+                    "Amount": "1200",
+                    "LastModifiedDate": "2026-04-12T10:00:00Z",
+                },
+            },
+        ),
+        (
+            "/b2b/crm/events/pipedrive",
+            {
+                "event": "updated.deal",
+                "current": {
+                    "id": 123,
+                    "status": "won",
+                    "title": "Renewal",
+                    "org_name": "Acme Corp",
+                    "email": "owner@acme.test",
+                    "value": "1200",
+                    "update_time": "2026-04-12T10:00:00Z",
+                },
+            },
+        ),
+    ]
+
+    with TestClient(app) as client:
+        for path_name, payload in cases:
+            pool = MagicMock()
+            pool.is_initialized = True
+            pool.execute = AsyncMock(return_value="INSERT 0 1")
+            monkeypatch.setattr(crm_events_api, "get_db_pool", lambda pool=pool: pool)
+
+            response = client.post(path_name, json=payload)
+
+            assert response.status_code == 200
+            query, *params = pool.execute.await_args.args
+            assert "account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in query
+            assert params[-1] == "11111111-1111-1111-1111-111111111111"

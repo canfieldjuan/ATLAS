@@ -197,6 +197,7 @@ async def ingest_crm_event(
                 deal_amount = EXCLUDED.deal_amount,
                 event_data = EXCLUDED.event_data,
                 event_timestamp = EXCLUDED.event_timestamp,
+                account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                 status = 'pending',
                 processed_at = NULL
             RETURNING id
@@ -326,6 +327,7 @@ async def ingest_crm_events_batch(
                     deal_amount = EXCLUDED.deal_amount,
                     event_data = EXCLUDED.event_data,
                     event_timestamp = EXCLUDED.event_timestamp,
+                    account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                     status = 'pending',
                     processed_at = NULL
                 RETURNING id
@@ -622,6 +624,7 @@ async def ingest_salesforce_webhook(
                     deal_stage = EXCLUDED.deal_stage,
                     deal_amount = EXCLUDED.deal_amount,
                     event_data = EXCLUDED.event_data,
+                    account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                     status = 'pending',
                     processed_at = NULL
                 """,
@@ -774,6 +777,7 @@ async def ingest_pipedrive_webhook(
                     deal_stage = EXCLUDED.deal_stage,
                     deal_amount = EXCLUDED.deal_amount,
                     event_data = EXCLUDED.event_data,
+                    account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                     status = 'pending',
                     processed_at = NULL
                 """,
