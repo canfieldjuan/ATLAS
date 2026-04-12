@@ -1697,6 +1697,26 @@ async def test_get_report_handles_null_battle_card_quality():
 
 
 @pytest.mark.asyncio
+async def test_list_reports_normalizes_blank_filters():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.list_reports(
+            report_type="   ",
+            vendor_filter="",
+            include_stale=False,
+            limit=10,
+            user=None,
+        )
+
+    assert result == {"reports": [], "count": 0}
+    query, *params = pool.fetch.await_args.args
+    assert "vendor_filter ILIKE % || $" not in query
+    assert params == [10]
+
+
+@pytest.mark.asyncio
 async def test_list_reports_exposes_normalized_trust_fields():
     created_at = datetime.now(timezone.utc) - timedelta(hours=8)
     pool = MagicMock()
@@ -1748,6 +1768,130 @@ async def test_list_reports_exposes_normalized_trust_fields():
         "review_state": "warnings",
         "review_label": "Warnings",
     }
+
+
+@pytest.mark.asyncio
+async def test_search_reviews_normalizes_blank_filters():
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = MagicMock()
+    read_mock = AsyncMock(return_value=[])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(shared_mod, "read_review_details", read_mock):
+            result = await b2b_dashboard.search_reviews(
+                vendor_name="   ",
+                pain_category="",
+                min_urgency=None,
+                min_relevance=None,
+                company="  ",
+                has_churn_intent=None,
+                exclude_low_fidelity=False,
+                window_days=30,
+                limit=20,
+                user=None,
+            )
+
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=30,
+        vendor_name=None,
+        scoped_vendors=None,
+        pain_category=None,
+        min_urgency=None,
+        company=None,
+        has_churn_intent=None,
+        min_relevance=None,
+        exclude_low_fidelity=False,
+        recency_column="enriched_at",
+        limit=20,
+    )
+    assert result == {"reviews": [], "count": 0}
+
+
+@pytest.mark.asyncio
+async def test_export_reviews_normalizes_blank_filters():
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = MagicMock()
+    read_mock = AsyncMock(return_value=[])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(shared_mod, "read_review_details", read_mock):
+            with patch.object(b2b_dashboard, "_csv_response", lambda payload, filename: {"rows": payload, "filename": filename}):
+                result = await b2b_dashboard.export_reviews(
+                    vendor_name="   ",
+                    pain_category="",
+                    min_urgency=None,
+                    company="  ",
+                    has_churn_intent=None,
+                    window_days=90,
+                    user=None,
+                )
+
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        vendor_name=None,
+        scoped_vendors=None,
+        pain_category=None,
+        min_urgency=None,
+        company=None,
+        has_churn_intent=None,
+        recency_column="enriched_at",
+        limit=b2b_dashboard.EXPORT_ROW_LIMIT,
+    )
+    assert result == {"rows": [], "filename": "enriched_reviews.csv"}
+
+
+@pytest.mark.asyncio
+async def test_list_high_intent_normalizes_blank_vendor_filter():
+    pool = MagicMock()
+    read_mock = AsyncMock(return_value=[])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(b2b_dashboard, "_get_scoped_vendors", new=AsyncMock(return_value=None)):
+            with patch.object(b2b_dashboard, "read_high_intent_companies", read_mock):
+                result = await b2b_dashboard.list_high_intent(
+                    vendor_name="   ",
+                    min_urgency=7.0,
+                    window_days=30,
+                    limit=20,
+                    user=None,
+                )
+
+    read_mock.assert_awaited_once_with(
+        pool,
+        min_urgency=7.0,
+        window_days=30,
+        vendor_name=None,
+        scoped_vendors=None,
+        limit=20,
+    )
+    assert result == {"companies": [], "count": 0}
+
+
+@pytest.mark.asyncio
+async def test_export_high_intent_normalizes_blank_vendor_filter():
+    pool = MagicMock()
+    read_mock = AsyncMock(return_value=[])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(b2b_dashboard, "_get_scoped_vendors", new=AsyncMock(return_value=None)):
+            with patch.object(b2b_dashboard, "read_high_intent_companies", read_mock):
+                with patch.object(b2b_dashboard, "_csv_response", lambda payload, filename: {"rows": payload, "filename": filename}):
+                    result = await b2b_dashboard.export_high_intent(
+                        vendor_name="  ",
+                        min_urgency=7.0,
+                        window_days=90,
+                        user=None,
+                    )
+
+    read_mock.assert_awaited_once_with(
+        pool,
+        min_urgency=7.0,
+        window_days=90,
+        vendor_name=None,
+        scoped_vendors=None,
+        limit=b2b_dashboard.EXPORT_ROW_LIMIT,
+    )
+    assert result == {"rows": [], "filename": "high_intent_leads.csv"}
 
 
 @pytest.mark.asyncio

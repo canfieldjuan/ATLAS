@@ -98,6 +98,47 @@ async def test_dashboard_list_signals_overlays_synthesis_reasoning(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_list_signals_normalizes_blank_filters(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]), fetchrow=AsyncMock(return_value=None))
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    read_rows = AsyncMock(return_value=[])
+    read_summary = AsyncMock(return_value=None)
+    monkeypatch.setattr(mod, "read_vendor_signal_rows", read_rows)
+    monkeypatch.setattr(mod, "read_vendor_signal_summary", read_summary)
+    monkeypatch.setattr(mod, "_load_reasoning_views_for_vendors", AsyncMock(return_value={}))
+
+    result = await mod.list_signals(
+        vendor_name="   ",
+        min_urgency=0,
+        category="",
+        limit=20,
+        user=None,
+    )
+
+    read_rows.assert_awaited_once_with(
+        pool,
+        vendor_name_query=None,
+        min_urgency=0,
+        product_category=None,
+        tracked_account_id=None,
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+        limit=20,
+    )
+    read_summary.assert_awaited_once_with(
+        pool,
+        vendor_name_query=None,
+        min_urgency=0,
+        product_category=None,
+        tracked_account_id=None,
+        exclude_suppressed=True,
+    )
+    assert result["count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_dashboard_list_signals_does_not_fallback_to_legacy_reasoning(monkeypatch):
     from atlas_brain.api import b2b_dashboard as mod
 
@@ -152,6 +193,101 @@ async def test_dashboard_list_signals_does_not_fallback_to_legacy_reasoning(monk
     assert signal["archetype_confidence"] is None
     assert signal["reasoning_mode"] is None
     assert signal["reasoning_risk_level"] is None
+
+
+@pytest.mark.asyncio
+async def test_dashboard_list_slow_burn_watchlist_normalizes_blank_filters(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace()
+    read_rows = AsyncMock(return_value=[])
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "read_ranked_vendor_signal_rows", read_rows)
+    monkeypatch.setattr(mod, "_load_reasoning_views_for_vendors", AsyncMock(return_value={}))
+
+    result = await mod.list_slow_burn_watchlist(
+        vendor_name="   ",
+        category="",
+        limit=10,
+        user=None,
+    )
+
+    read_rows.assert_awaited_once_with(
+        pool,
+        vendor_name_query=None,
+        product_category=None,
+        tracked_account_id=None,
+        exclude_suppressed=True,
+        require_snapshot_activity=True,
+        limit=10,
+    )
+    assert result == {"signals": [], "count": 0}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_get_signal_normalizes_blank_product_category(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace()
+    row = {
+        "id": "sig-1",
+        "vendor_name": "Zendesk",
+        "product_category": "CRM",
+        "total_reviews": 1,
+        "negative_reviews": 0,
+        "churn_intent_count": 0,
+        "avg_urgency_score": 0.0,
+        "avg_rating_normalized": 0.0,
+        "nps_proxy": 0.0,
+        "price_complaint_rate": 0.0,
+        "decision_maker_churn_rate": 0.0,
+        "support_sentiment": 0.0,
+        "legacy_support_score": 0.0,
+        "new_feature_velocity": 0.0,
+        "employee_growth_rate": 0.0,
+        "top_pain_categories": [],
+        "top_competitors": [],
+        "top_feature_gaps": [],
+        "company_churn_list": [],
+        "quotable_evidence": [],
+        "top_use_cases": [],
+        "top_integration_stacks": [],
+        "budget_signal_summary": {},
+        "sentiment_distribution": {},
+        "buyer_authority_summary": {},
+        "timeline_summary": {},
+        "source_distribution": {},
+        "sample_review_ids": [],
+        "review_window_start": None,
+        "review_window_end": None,
+        "confidence_score": 0.4,
+        "insider_signal_count": 0,
+        "insider_org_health_summary": None,
+        "insider_talent_drain_rate": None,
+        "insider_quotable_evidence": [],
+        "keyword_spike_count": 0,
+        "keyword_spike_keywords": [],
+        "keyword_trend_summary": None,
+        "last_computed_at": None,
+        "created_at": None,
+    }
+    read_detail = AsyncMock(return_value=row)
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "read_vendor_signal_detail", read_detail)
+    monkeypatch.setattr(mod, "_load_reasoning_views_for_vendors", AsyncMock(return_value={}))
+    monkeypatch.setattr(mod, "_apply_field_overrides", AsyncMock(side_effect=lambda pool, entity_type, entity_id, payload: payload))
+
+    result = await mod.get_signal("Zendesk", product_category="   ", user=None)
+
+    read_detail.assert_awaited_once_with(
+        pool,
+        vendor_name_query="Zendesk",
+        product_category=None,
+        tracked_account_id=None,
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+    )
+    assert result["vendor_name"] == "Zendesk"
 
 
 @pytest.mark.asyncio
@@ -229,6 +365,40 @@ async def test_dashboard_get_signal_overlays_synthesis_detail(monkeypatch):
     assert result["reasoning_executive_summary"] == "Pricing pressure is driving evaluation activity."
     assert result["reasoning_reference_ids"]["witness_ids"] == ["witness:test:1"]
     assert result["reasoning_source"] == "b2b_reasoning_synthesis"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_export_signals_normalizes_blank_filters(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = SimpleNamespace()
+    read_rows = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(shared_mod, "read_vendor_signal_rows", read_rows)
+    monkeypatch.setattr(mod, "_load_reasoning_views_for_vendors", AsyncMock(return_value={}))
+    monkeypatch.setattr(mod, "_csv_response", lambda payload, filename: {"rows": payload, "filename": filename})
+
+    result = await mod.export_signals(
+        vendor_name="  ",
+        min_urgency=5.0,
+        category="",
+        user=None,
+    )
+
+    read_rows.assert_awaited_once_with(
+        pool,
+        vendor_name_query=None,
+        min_urgency=5.0,
+        product_category=None,
+        tracked_account_id=None,
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+        limit=mod.EXPORT_ROW_LIMIT,
+    )
+    assert result == {"rows": [], "filename": "churn_signals.csv"}
 
 
 @pytest.mark.asyncio

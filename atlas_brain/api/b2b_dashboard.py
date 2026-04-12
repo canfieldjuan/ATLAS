@@ -862,6 +862,8 @@ async def list_signals(
     limit: int = Query(20, ge=1, le=100),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _optional_query_text(vendor_name)
+    category = _optional_query_text(category)
     pool = _pool_or_503()
     tracked_account_id = user.account_id if _should_scope(user) else None
     rows = await read_vendor_signal_rows(
@@ -934,6 +936,8 @@ async def list_slow_burn_watchlist(
     limit: int = Query(10, ge=1, le=100),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _optional_query_text(vendor_name)
+    category = _optional_query_text(category)
     pool = _pool_or_503()
     rows = await read_ranked_vendor_signal_rows(
         pool,
@@ -996,6 +1000,7 @@ async def get_signal(
     product_category: Optional[str] = Query(None),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    product_category = _optional_query_text(product_category)
     pool = _pool_or_503()
     vname = vendor_name.strip()
     row = await read_vendor_signal_detail(
@@ -1084,6 +1089,7 @@ async def list_high_intent(
     limit: int = Query(20, ge=1, le=100),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _optional_query_text(vendor_name)
     pool = _pool_or_503()
     scoped_vendors = await _get_scoped_vendors(pool, user)
     capped = min(limit, 100)
@@ -1504,6 +1510,8 @@ async def list_reports(
     limit: int = Query(50, ge=1, le=500),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    report_type = _optional_query_text(report_type)
+    vendor_filter = _optional_query_text(vendor_filter)
     if report_type and report_type not in VALID_REPORT_TYPES:
         raise HTTPException(status_code=400, detail=f"report_type must be one of {VALID_REPORT_TYPES}")
 
@@ -1788,6 +1796,9 @@ async def search_reviews(
 ):
     from ..autonomous.tasks._b2b_shared import read_review_details
 
+    vendor_name = _optional_query_text(vendor_name)
+    pain_category = _optional_query_text(pain_category)
+    company = _optional_query_text(company)
     pool = _pool_or_503()
 
     scoped_vendors: list[str] | None = None
@@ -5218,6 +5229,8 @@ async def export_signals(
     category: Optional[str] = Query(None),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _optional_query_text(vendor_name)
+    category = _optional_query_text(category)
     pool = _pool_or_503()
     from ..autonomous.tasks._b2b_shared import read_vendor_signal_rows
 
@@ -5286,6 +5299,9 @@ async def export_reviews(
 ):
     from ..autonomous.tasks._b2b_shared import read_review_details
 
+    vendor_name = _optional_query_text(vendor_name)
+    pain_category = _optional_query_text(pain_category)
+    company = _optional_query_text(company)
     pool = _pool_or_503()
 
     scoped_vendors: list[str] | None = None
@@ -5339,6 +5355,7 @@ async def export_high_intent(
     window_days: int = Query(90, ge=1, le=3650),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _optional_query_text(vendor_name)
     pool = _pool_or_503()
     scoped_vendors = await _get_scoped_vendors(pool, user)
 
