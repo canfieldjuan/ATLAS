@@ -5961,17 +5961,19 @@ async def list_webhooks(
     tracked_vendor_cache: dict[str, Any] = {}
     signal_cache: dict[str, Any] = {}
     report_activity_cache: dict[str, Any] = {}
+    await _prime_webhook_list_summary_context_caches(
+        pool,
+        rows,
+        report_cache=report_activity_cache,
+        signal_cache=signal_cache,
+    )
     webhooks = []
     for r in rows:
         recent_total = r["recent_deliveries"] or 0
         latest_failure_signal_id = _normalize_webhook_activity_uuid_text(r["latest_failure_signal_id"]) if "latest_failure_signal_id" in r and r["latest_failure_signal_id"] else None
         latest_failure_review_id = _normalize_webhook_activity_uuid_text(r["latest_failure_review_id"]) if "latest_failure_review_id" in r and r["latest_failure_review_id"] else None
         latest_failure_report_id = _normalize_webhook_activity_uuid_text(r["latest_failure_report_id"]) if "latest_failure_report_id" in r and r["latest_failure_report_id"] else None
-        latest_failure_report_context = await _fetch_webhook_activity_report_context(
-            pool,
-            latest_failure_report_id,
-            report_activity_cache,
-        )
+        latest_failure_report_context = report_activity_cache.get(latest_failure_report_id) if latest_failure_report_id else None
         latest_failure_vendor_name = (
             _optional_query_text(r["latest_failure_vendor_name"]) if "latest_failure_vendor_name" in r and r["latest_failure_vendor_name"] else None
         ) or (latest_failure_report_context or {}).get("vendor_name")
@@ -5998,11 +6000,7 @@ async def list_webhooks(
         latest_test_signal_id = _normalize_webhook_activity_uuid_text(r["latest_test_signal_id"]) if "latest_test_signal_id" in r and r["latest_test_signal_id"] else None
         latest_test_review_id = _normalize_webhook_activity_uuid_text(r["latest_test_review_id"]) if "latest_test_review_id" in r and r["latest_test_review_id"] else None
         latest_test_report_id = _normalize_webhook_activity_uuid_text(r["latest_test_report_id"]) if "latest_test_report_id" in r and r["latest_test_report_id"] else None
-        latest_test_report_context = await _fetch_webhook_activity_report_context(
-            pool,
-            latest_test_report_id,
-            report_activity_cache,
-        )
+        latest_test_report_context = report_activity_cache.get(latest_test_report_id) if latest_test_report_id else None
         latest_test_vendor_name = (
             _optional_query_text(r["latest_test_vendor_name"]) if "latest_test_vendor_name" in r and r["latest_test_vendor_name"] else None
         ) or (latest_test_report_context or {}).get("vendor_name")
@@ -7640,6 +7638,54 @@ async def _fetch_company_signal_focus_context(
         "vendor_name": row["vendor_name"],
         "review_id": str(row["review_id"]) if row.get("review_id") else None,
     }
+
+
+async def _prime_webhook_list_summary_context_caches(
+    pool,
+    rows: list[Any],
+    report_cache: dict[str, Any] | None = None,
+    signal_cache: dict[str, Any] | None = None,
+) -> None:
+    report_ids: list[str] = []
+    signal_ids: list[str] = []
+    for row in rows:
+        for key in ("latest_failure_report_id", "latest_test_report_id"):
+            normalized = _normalize_webhook_activity_uuid_text(row.get(key)) if row.get(key) else None
+            if normalized:
+                report_ids.append(normalized)
+        for key in ("latest_failure_signal_id", "latest_test_signal_id"):
+            normalized = _normalize_webhook_activity_uuid_text(row.get(key)) if row.get(key) else None
+            if normalized:
+                signal_ids.append(normalized)
+        latest_crm_signal_type = str(row.get("latest_crm_signal_type") or "").strip()
+        latest_crm_signal_id = _normalize_webhook_activity_uuid_text(row.get("latest_crm_signal_id")) if row.get("latest_crm_signal_id") else None
+        if not latest_crm_signal_id:
+            continue
+        if latest_crm_signal_type == "report_generated":
+            report_ids.append(latest_crm_signal_id)
+        else:
+            signal_ids.append(latest_crm_signal_id)
+
+    unique_report_ids = list(dict.fromkeys(report_ids))
+    unique_signal_ids = list(dict.fromkeys(signal_ids))
+
+    if unique_report_ids:
+        async def load_report_context(report_id: str):
+            context = await _fetch_webhook_activity_report_context(pool, report_id, report_cache)
+            if report_cache is not None:
+                report_cache[report_id] = context
+            return context
+
+        await asyncio.gather(*(load_report_context(report_id) for report_id in unique_report_ids))
+
+    if unique_signal_ids:
+        async def load_signal_context(signal_id: str):
+            context = await _fetch_company_signal_focus_context(pool, signal_id)
+            if signal_cache is not None:
+                signal_cache[signal_id] = context
+            return context
+
+        await asyncio.gather(*(load_signal_context(signal_id) for signal_id in unique_signal_ids))
 
 
 async def _resolve_webhook_activity_account_focus(
