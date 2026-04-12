@@ -1419,9 +1419,9 @@ async def generate_comparison_report(
     comparison_vendor = _optional_query_text(body.comparison_vendor)
     if not primary_vendor or not comparison_vendor:
         raise HTTPException(status_code=400, detail="Both vendors are required")
-    pool = _pool_or_503()
     if primary_vendor.lower() == comparison_vendor.lower():
         raise HTTPException(status_code=400, detail="Choose two different vendors")
+    pool = _pool_or_503()
     if _should_scope(user):
         tracked = await pool.fetchval(
             "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2 LIMIT 1",
@@ -1453,9 +1453,9 @@ async def generate_account_comparison_report(
     comparison_company = _optional_query_text(body.comparison_company)
     if not primary_company or not comparison_company:
         raise HTTPException(status_code=400, detail="Both companies are required")
-    pool = _pool_or_503()
     if primary_company.lower() == comparison_company.lower():
         raise HTTPException(status_code=400, detail="Choose two different companies")
+    pool = _pool_or_503()
     from ..autonomous.tasks.b2b_churn_intelligence import generate_company_comparison_report
 
     report = await generate_company_comparison_report(

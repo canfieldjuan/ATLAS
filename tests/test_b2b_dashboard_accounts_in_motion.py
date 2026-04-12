@@ -111,6 +111,20 @@ async def test_dashboard_report_actions_validate_required_body_text_before_db_to
             "Both companies are required",
         ),
         (
+            lambda: b2b_dashboard.generate_comparison_report(
+                b2b_dashboard.VendorComparisonRequest(primary_vendor="Zendesk", comparison_vendor=" zendesk "),
+                user=None,
+            ),
+            "Choose two different vendors",
+        ),
+        (
+            lambda: b2b_dashboard.generate_account_comparison_report(
+                b2b_dashboard.AccountComparisonRequest(primary_company="Acme", comparison_company=" acme "),
+                user=None,
+            ),
+            "Choose two different companies",
+        ),
+        (
             lambda: b2b_dashboard.generate_account_deep_dive_report(
                 b2b_dashboard.AccountDeepDiveRequest(company_name="   "),
                 user=None,
