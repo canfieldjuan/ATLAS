@@ -38,6 +38,11 @@ import type {
   ArtifactAttempt,
   EnrichmentQuarantine,
   ExtractionHealthAudit,
+  CompanySignalCandidateGroupListResponse,
+  CompanySignalCandidateGroupReviewResult,
+  BulkCompanySignalCandidateGroupReviewResult,
+  CompanySignalCandidateGroupSummary,
+  CompanySignalReviewImpactSummary,
   SynthesisValidationResult,
   AdminCostSummary,
   AdminCostOperation,
@@ -69,6 +74,7 @@ const EVIDENCE_BASE = `${API_BASE}/api/v1/b2b/evidence`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
+const B2B_DASHBOARD_BASE = `${API_BASE}/api/v1/b2b/dashboard`
 const WEBHOOKS_BASE = TENANT_BASE
 const AUTONOMOUS_BASE = `${API_BASE}/api/v1/autonomous`
 const CACHE_BUSTER_PARAM = '_ts'
@@ -1554,6 +1560,137 @@ export async function fetchExtractionHealth(params?: {
     VISIBILITY_BASE,
     '/extraction-health',
     params as Record<string, string | number>,
+  )
+}
+
+export async function fetchCompanySignalReviewImpactSummary(params?: {
+  vendor_name?: string
+  review_scope?: string
+  review_action?: string
+  company_signal_action?: string
+  canonical_gap_reason?: string
+  review_priority_band?: string
+  review_priority_reason?: string
+  review_unlock_path?: string
+  review_unlock_reason?: string
+  candidate_source?: string
+  rebuild_outcome?: string
+  rebuild_reason?: string
+  window_days?: number
+  top_n?: number
+}) {
+  return get<CompanySignalReviewImpactSummary>(
+    B2B_DASHBOARD_BASE,
+    '/company-signal-review-impact-summary',
+    params as Record<string, string | number>,
+  )
+}
+
+export async function fetchCompanySignalCandidateGroupSummary(params?: {
+  vendor_name?: string
+  company_name?: string
+  source_name?: string
+  candidate_bucket?: string
+  review_status?: string
+  canonical_gap_reason?: string
+  review_priority_band?: string
+  review_priority_reason?: string
+  min_urgency?: number
+  min_confidence?: number
+  min_reviews?: number
+  decision_makers_only?: boolean
+  signal_evidence_present?: boolean
+  window_days?: number
+  top_n?: number
+}) {
+  return get<CompanySignalCandidateGroupSummary>(
+    B2B_DASHBOARD_BASE,
+    '/company-signal-candidate-group-summary',
+    params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function fetchCompanySignalCandidateGroups(params?: {
+  vendor_name?: string
+  company_name?: string
+  source_name?: string
+  candidate_bucket?: string
+  review_status?: string
+  canonical_gap_reason?: string
+  review_priority_band?: string
+  review_priority_reason?: string
+  min_urgency?: number
+  min_confidence?: number
+  min_reviews?: number
+  decision_makers_only?: boolean
+  signal_evidence_present?: boolean
+  window_days?: number
+  limit?: number
+}) {
+  return get<CompanySignalCandidateGroupListResponse>(
+    B2B_DASHBOARD_BASE,
+    '/company-signal-candidate-groups',
+    params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function approveCompanySignalCandidateGroup(
+  groupId: string,
+  body?: { notes?: string; trigger_rebuild?: boolean },
+) {
+  return post<CompanySignalCandidateGroupReviewResult>(
+    B2B_DASHBOARD_BASE,
+    `/company-signal-candidate-groups/${encodeURIComponent(groupId)}/approve`,
+    {
+      trigger_rebuild: body?.trigger_rebuild ?? true,
+      ...(body?.notes ? { notes: body.notes } : {}),
+    },
+  )
+}
+
+export async function suppressCompanySignalCandidateGroup(
+  groupId: string,
+  body?: { notes?: string; trigger_rebuild?: boolean },
+) {
+  return post<CompanySignalCandidateGroupReviewResult>(
+    B2B_DASHBOARD_BASE,
+    `/company-signal-candidate-groups/${encodeURIComponent(groupId)}/suppress`,
+    {
+      trigger_rebuild: body?.trigger_rebuild ?? true,
+      ...(body?.notes ? { notes: body.notes } : {}),
+    },
+  )
+}
+
+export async function approveCompanySignalCandidateGroups(body: {
+  group_ids: string[]
+  notes?: string
+  trigger_rebuild?: boolean
+}) {
+  return post<BulkCompanySignalCandidateGroupReviewResult>(
+    B2B_DASHBOARD_BASE,
+    '/company-signal-candidate-groups/approve',
+    {
+      group_ids: body.group_ids,
+      trigger_rebuild: body.trigger_rebuild ?? true,
+      ...(body.notes ? { notes: body.notes } : {}),
+    },
+  )
+}
+
+export async function suppressCompanySignalCandidateGroups(body: {
+  group_ids: string[]
+  notes?: string
+  trigger_rebuild?: boolean
+}) {
+  return post<BulkCompanySignalCandidateGroupReviewResult>(
+    B2B_DASHBOARD_BASE,
+    '/company-signal-candidate-groups/suppress',
+    {
+      group_ids: body.group_ids,
+      trigger_rebuild: body.trigger_rebuild ?? true,
+      ...(body.notes ? { notes: body.notes } : {}),
+    },
   )
 }
 

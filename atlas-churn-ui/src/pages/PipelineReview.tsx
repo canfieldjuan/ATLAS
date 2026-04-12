@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Shield,
@@ -29,10 +29,16 @@ import type {
   VisibilityEvent,
   ArtifactAttempt,
   EnrichmentQuarantine,
+  CompanySignalCandidateGroup,
+  CompanySignalCandidateGroupListResponse,
   ExtractionHealthDailyRow,
   ExtractionHealthSourceRow,
   ExtractionHealthRunRow,
   ExtractionHealthVendorRow,
+  CompanySignalCandidateGroupSummary,
+  CompanySignalCandidateGroupSummaryPriorityReasonRow,
+  CompanySignalCandidateGroupSummaryVendorRow,
+  CompanySignalReviewImpactSummary,
   SynthesisValidationResult,
   AdminCostSummary,
   AdminCostOperation,
@@ -76,7 +82,12 @@ import {
   fetchVisibilityEvents,
   fetchArtifactAttempts,
   fetchEnrichmentQuarantines,
+  approveCompanySignalCandidateGroup,
+  approveCompanySignalCandidateGroups,
+  fetchCompanySignalCandidateGroups,
   fetchExtractionHealth,
+  fetchCompanySignalCandidateGroupSummary,
+  fetchCompanySignalReviewImpactSummary,
   fetchSynthesisValidationResults,
   resolveVisibilityReview,
   fetchAdminCostSummary,
@@ -96,10 +107,46 @@ import {
   runWatchlistDeliveryForView,
   disableWatchlistDeliveryForView,
   runAutonomousTask,
+  suppressCompanySignalCandidateGroup,
+  suppressCompanySignalCandidateGroups,
 } from '../api/client'
 
 type TabKey = 'queue' | 'failures' | 'quality' | 'audit' | 'costs'
 const DEFAULT_PIPELINE_TAB: TabKey = 'queue'
+const PIPELINE_QUEUE_BUCKETS = ['analyst_review', 'canonical_ready'] as const
+const PIPELINE_QUEUE_STATUSES = ['pending', 'approved', 'suppressed'] as const
+const PIPELINE_QUEUE_PRIORITY_BANDS = ['promote_now', 'high', 'medium', 'low'] as const
+
+type PipelineQueueFilters = {
+  vendorName: string
+  candidateBucket: string
+  reviewStatus: string
+  reviewPriorityBand: string
+  reviewPriorityReason: string
+  sourceName: string
+}
+
+const DEFAULT_PIPELINE_QUEUE_FILTERS: PipelineQueueFilters = {
+  vendorName: '',
+  candidateBucket: 'analyst_review',
+  reviewStatus: 'pending',
+  reviewPriorityBand: '',
+  reviewPriorityReason: '',
+  sourceName: '',
+}
+
+function normalizePipelineQueryValue(value: string | null): string {
+  return String(value || '').trim()
+}
+
+function parsePipelineEnumFilter(
+  value: string | null,
+  allowed: readonly string[],
+  fallback: string,
+): string {
+  const normalized = normalizePipelineQueryValue(value)
+  return allowed.includes(normalized) ? normalized : fallback
+}
 
 function parsePipelineTab(value: string | null): TabKey {
   return value === 'failures' || value === 'quality' || value === 'audit' || value === 'costs'
@@ -107,47 +154,114 @@ function parsePipelineTab(value: string | null): TabKey {
     : DEFAULT_PIPELINE_TAB
 }
 
-function buildPipelineReviewSearchParams(activeTab: TabKey) {
+function parsePipelineQueueFilters(searchParams: URLSearchParams): PipelineQueueFilters {
+  return {
+    vendorName: normalizePipelineQueryValue(searchParams.get('queue_vendor')),
+    candidateBucket: parsePipelineEnumFilter(
+      searchParams.get('queue_bucket'),
+      PIPELINE_QUEUE_BUCKETS,
+      DEFAULT_PIPELINE_QUEUE_FILTERS.candidateBucket,
+    ),
+    reviewStatus: parsePipelineEnumFilter(
+      searchParams.get('queue_status'),
+      PIPELINE_QUEUE_STATUSES,
+      DEFAULT_PIPELINE_QUEUE_FILTERS.reviewStatus,
+    ),
+    reviewPriorityBand: parsePipelineEnumFilter(
+      searchParams.get('queue_priority_band'),
+      PIPELINE_QUEUE_PRIORITY_BANDS,
+      DEFAULT_PIPELINE_QUEUE_FILTERS.reviewPriorityBand,
+    ),
+    reviewPriorityReason: normalizePipelineQueryValue(searchParams.get('queue_priority_reason')),
+    sourceName: normalizePipelineQueryValue(searchParams.get('queue_source')),
+  }
+}
+
+function buildPipelineReviewSearchParams(
+  activeTab: TabKey,
+  queueFilters: PipelineQueueFilters = DEFAULT_PIPELINE_QUEUE_FILTERS,
+) {
   const params = new URLSearchParams()
   if (activeTab !== DEFAULT_PIPELINE_TAB) params.set('tab', activeTab)
+  if (queueFilters.vendorName) params.set('queue_vendor', queueFilters.vendorName)
+  if (queueFilters.candidateBucket !== DEFAULT_PIPELINE_QUEUE_FILTERS.candidateBucket) {
+    params.set('queue_bucket', queueFilters.candidateBucket)
+  }
+  if (queueFilters.reviewStatus !== DEFAULT_PIPELINE_QUEUE_FILTERS.reviewStatus) {
+    params.set('queue_status', queueFilters.reviewStatus)
+  }
+  if (queueFilters.reviewPriorityBand) params.set('queue_priority_band', queueFilters.reviewPriorityBand)
+  if (queueFilters.reviewPriorityReason) params.set('queue_priority_reason', queueFilters.reviewPriorityReason)
+  if (queueFilters.sourceName) params.set('queue_source', queueFilters.sourceName)
   return params
 }
 
-function pipelineReviewPath(activeTab: TabKey) {
-  const params = buildPipelineReviewSearchParams(activeTab)
+function pipelineReviewPath(
+  activeTab: TabKey,
+  queueFilters: PipelineQueueFilters = DEFAULT_PIPELINE_QUEUE_FILTERS,
+) {
+  const params = buildPipelineReviewSearchParams(activeTab, queueFilters)
   const query = params.toString()
   return query ? `/pipeline-review?${query}` : '/pipeline-review'
 }
 
-function pipelineVendorWorkspacePath(activeTab: TabKey, vendorName: string) {
+function pipelineVendorWorkspacePath(
+  activeTab: TabKey,
+  vendorName: string,
+  queueFilters: PipelineQueueFilters = DEFAULT_PIPELINE_QUEUE_FILTERS,
+) {
   const params = new URLSearchParams()
-  params.set('back_to', pipelineReviewPath(activeTab))
+  params.set('back_to', pipelineReviewPath(activeTab, queueFilters))
   return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
 }
 
-function pipelineEvidencePath(activeTab: TabKey, vendorName: string) {
+function pipelineReviewDetailPath(
+  activeTab: TabKey,
+  reviewId: string,
+  queueFilters: PipelineQueueFilters = DEFAULT_PIPELINE_QUEUE_FILTERS,
+) {
+  const params = new URLSearchParams()
+  params.set('back_to', pipelineReviewPath(activeTab, queueFilters))
+  return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
+}
+
+function pipelineEvidencePath(
+  activeTab: TabKey,
+  vendorName: string,
+  queueFilters: PipelineQueueFilters = DEFAULT_PIPELINE_QUEUE_FILTERS,
+) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
   params.set('tab', 'witnesses')
-  params.set('back_to', pipelineReviewPath(activeTab))
+  params.set('back_to', pipelineReviewPath(activeTab, queueFilters))
   return `/evidence?${params.toString()}`
 }
 
-function pipelineReportsPath(activeTab: TabKey, vendorName: string) {
+function pipelineReportsPath(
+  activeTab: TabKey,
+  vendorName: string,
+  queueFilters: PipelineQueueFilters = DEFAULT_PIPELINE_QUEUE_FILTERS,
+) {
   const params = new URLSearchParams()
   params.set('vendor_filter', vendorName)
-  params.set('back_to', pipelineReviewPath(activeTab))
+  params.set('back_to', pipelineReviewPath(activeTab, queueFilters))
   return `/reports?${params.toString()}`
 }
 
-function pipelineOpportunitiesPath(activeTab: TabKey, vendorName: string) {
+function pipelineOpportunitiesPath(
+  activeTab: TabKey,
+  vendorName: string,
+  queueFilters: PipelineQueueFilters = DEFAULT_PIPELINE_QUEUE_FILTERS,
+) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
-  params.set('back_to', pipelineReviewPath(activeTab))
+  params.set('back_to', pipelineReviewPath(activeTab, queueFilters))
   return `/opportunities?${params.toString()}`
 }
 
 const EXTRACTION_HEALTH_TOP_N = 12
+const COMPANY_SIGNAL_SUMMARY_TOP_N = 6
+const REVIEW_IMPACT_TOP_N = 10
 const COST_VENDOR_LIMIT = 100
 const B2B_EFFICIENCY_TOP_N = 25
 const B2B_EFFICIENCY_RUN_LIMIT = 25
@@ -304,6 +418,106 @@ function formatVisibilityCode(code: string | null | undefined): string {
   return visibilityCodeLabels[key] || key.replace(/_/g, ' ')
 }
 
+function formatPipelineLabel(value: string | null | undefined): string {
+  const key = String(value || '').trim()
+  if (!key) return '--'
+  return key.replace(/_/g, ' ')
+}
+
+function formatReviewImpactMetric(metric: string | null | undefined): string {
+  const key = String(metric || '').trim()
+  if (!key) return 'Selected Metric'
+  const labels: Record<string, string> = {
+    approvals: 'Approvals',
+    approval_rate: 'Approval Rate',
+    effect_count: 'Effects',
+    effect_rate: 'Effect Rate',
+    rebuild_block_rate: 'Blocked Rebuild Rate',
+    rebuild_trigger_rate: 'Rebuild Trigger Rate',
+    rebuild_requested: 'Rebuild Requests',
+    rebuild_triggered: 'Rebuild Triggered',
+    rebuild_blocked: 'Rebuild Blocked',
+  }
+  return labels[key] || formatPipelineLabel(key)
+}
+
+function formatReviewImpactMetricValue(metric: string | null | undefined, value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '--'
+  if (String(metric || '').includes('rate')) {
+    return `${(value * 100).toFixed(1)}%`
+  }
+  if (Number.isInteger(value)) return formatNumber(value)
+  return value.toFixed(2)
+}
+
+function formatReviewImpactDelta(metric: string | null | undefined, value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '--'
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  const absValue = Math.abs(value)
+  if (String(metric || '').includes('rate')) {
+    return `${sign}${(absValue * 100).toFixed(1)} pts`
+  }
+  if (Number.isInteger(absValue)) return `${sign}${formatNumber(absValue)}`
+  return `${sign}${absValue.toFixed(2)}`
+}
+
+function summarizeCandidateSupport(
+  row: CompanySignalCandidateGroup,
+  activeTab: TabKey,
+  queueFilters: PipelineQueueFilters,
+) {
+  const supportingReviews = row.supporting_reviews ?? []
+  if (supportingReviews.length === 0) {
+    return <span className="text-xs text-slate-500">--</span>
+  }
+  return (
+    <div className="max-w-[280px] space-y-2">
+      {supportingReviews.slice(0, 2).map((review) => {
+        const reviewLabel = review.source ? formatPipelineLabel(review.source) : 'Supporting review'
+        const reviewSummary =
+          review.quote_excerpt || review.summary || review.review_excerpt || 'No excerpt available'
+        return (
+          <div key={review.review_id} className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
+                {reviewLabel}
+              </span>
+              {review.review_id ? (
+                <Link
+                  to={pipelineReviewDetailPath(activeTab, review.review_id, queueFilters)}
+                  className="text-cyan-300 transition hover:text-cyan-200"
+                >
+                  Review
+                </Link>
+              ) : null}
+              <span className="text-slate-500">{formatTs(review.reviewed_at)}</span>
+            </div>
+            <p className="line-clamp-2 text-[11px] text-slate-400">{reviewSummary}</p>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function PriorityBadge({ priority }: { priority: string }) {
+  const styles: Record<string, string> = {
+    high: 'bg-red-500/20 text-red-400',
+    medium: 'bg-amber-500/20 text-amber-400',
+    low: 'bg-slate-500/20 text-slate-400',
+  }
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+        styles[priority] || 'bg-slate-500/20 text-slate-400',
+      )}
+    >
+      {formatPipelineLabel(priority)}
+    </span>
+  )
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -419,6 +633,7 @@ function FilterSelect({
     <div className="flex items-center gap-1.5">
       <label className="text-xs text-slate-500">{label}</label>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="bg-slate-800/50 border border-slate-700/50 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
@@ -429,6 +644,31 @@ function FilterSelect({
           </option>
         ))}
       </select>
+    </div>
+  )
+}
+
+function FilterInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="text-xs text-slate-500">{label}</label>
+      <input
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-32 rounded border border-slate-700/50 bg-slate-800/50 px-2 py-1 text-xs text-white placeholder:text-slate-500 focus:border-cyan-500/50 focus:outline-none"
+      />
     </div>
   )
 }
@@ -634,7 +874,17 @@ function WatchlistDeliveryDetailDrawer({
 // Tab: Queue
 // ---------------------------------------------------------------------------
 
-function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: TabKey }) {
+function QueueTab({
+  onRefresh,
+  backToTab,
+  queueFilters,
+  onQueueFiltersChange,
+}: {
+  onRefresh: () => void
+  backToTab: TabKey
+  queueFilters: PipelineQueueFilters
+  onQueueFiltersChange: (filters: PipelineQueueFilters) => void
+}) {
   const [stageFilter, setStageFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
   const [viewStatusFilter, setViewStatusFilter] = useState('')
@@ -646,8 +896,15 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
   const [viewActionLoading, setViewActionLoading] = useState(false)
   const [viewActionMessage, setViewActionMessage] = useState<string | null>(null)
   const [viewActionError, setViewActionError] = useState<string | null>(null)
+  const [companySignalActionGroupId, setCompanySignalActionGroupId] = useState<string | null>(null)
+  const [companySignalActionMessage, setCompanySignalActionMessage] = useState<string | null>(null)
+  const [companySignalActionError, setCompanySignalActionError] = useState<string | null>(null)
+  const [companySignalActionNotes, setCompanySignalActionNotes] = useState('')
+  const [companySignalActionTriggerRebuild, setCompanySignalActionTriggerRebuild] = useState(true)
+  const [selectedCompanySignalGroupIds, setSelectedCompanySignalGroupIds] = useState<string[]>([])
+  const [companySignalBulkActionMode, setCompanySignalBulkActionMode] = useState<'approve' | 'suppress' | null>(null)
 
-  const { data, loading, error, refresh, refreshing } = useApiData(
+  const { data, loading, error, refresh: refreshQueue, refreshing } = useApiData(
     () =>
       fetchVisibilityQueue({
         limit: 100,
@@ -655,6 +912,40 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
         severity: severityFilter || undefined,
       }),
     [stageFilter, severityFilter],
+  )
+  const {
+    data: companySignalSummary,
+    loading: companySignalSummaryLoading,
+    error: companySignalSummaryError,
+    refresh: refreshCompanySignalSummary,
+    refreshing: companySignalSummaryRefreshing,
+  } = useApiData<CompanySignalCandidateGroupSummary>(
+    () =>
+      fetchCompanySignalCandidateGroupSummary({
+        window_days: 90,
+        top_n: COMPANY_SIGNAL_SUMMARY_TOP_N,
+      }),
+    [],
+  )
+  const {
+    data: companySignalGroupsData,
+    loading: companySignalGroupsLoading,
+    error: companySignalGroupsError,
+    refresh: refreshCompanySignalGroups,
+    refreshing: companySignalGroupsRefreshing,
+  } = useApiData<CompanySignalCandidateGroupListResponse>(
+    () =>
+      fetchCompanySignalCandidateGroups({
+        candidate_bucket: queueFilters.candidateBucket,
+        review_status: queueFilters.reviewStatus,
+        vendor_name: queueFilters.vendorName || undefined,
+        source_name: queueFilters.sourceName || undefined,
+        review_priority_band: queueFilters.reviewPriorityBand || undefined,
+        review_priority_reason: queueFilters.reviewPriorityReason || undefined,
+        window_days: 90,
+        limit: 10,
+      }),
+    [queueFilters.vendorName, queueFilters.candidateBucket, queueFilters.reviewStatus, queueFilters.reviewPriorityBand, queueFilters.reviewPriorityReason, queueFilters.sourceName],
   )
   const {
     data: watchlistDelivery,
@@ -683,8 +974,16 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
   )
 
   const handleResolved = () => {
-    refresh()
+    refreshQueue()
     onRefresh()
+  }
+
+  const handleRefresh = () => {
+    refreshQueue()
+    refreshCompanySignalSummary()
+    refreshCompanySignalGroups()
+    refreshWatchlistDelivery()
+    refreshSelectedWatchlistViewDetail()
   }
 
   async function handleRunWatchlistDelivery() {
@@ -731,6 +1030,50 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
       setViewActionError(err instanceof Error ? err.message : 'Failed to disable saved view email')
     } finally {
       setViewActionLoading(false)
+    }
+  }
+
+  async function handleApproveCompanySignalGroup(row: CompanySignalCandidateGroup) {
+    if (!row.group_id) return
+    const reviewNotes = companySignalActionNotes.trim()
+    setCompanySignalActionMessage(null)
+    setCompanySignalActionError(null)
+    setCompanySignalActionGroupId(row.group_id)
+    try {
+      await approveCompanySignalCandidateGroup(row.group_id, {
+        trigger_rebuild: companySignalActionTriggerRebuild,
+        ...(reviewNotes ? { notes: reviewNotes } : {}),
+      })
+      setCompanySignalActionMessage(`Approved ${row.display_company || row.company || row.group_id} for ${row.vendor || '--'}`)
+      refreshCompanySignalSummary()
+      refreshCompanySignalGroups()
+      onRefresh()
+    } catch (err) {
+      setCompanySignalActionError(err instanceof Error ? err.message : 'Failed to approve candidate group')
+    } finally {
+      setCompanySignalActionGroupId(null)
+    }
+  }
+
+  async function handleSuppressCompanySignalGroup(row: CompanySignalCandidateGroup) {
+    if (!row.group_id) return
+    const reviewNotes = companySignalActionNotes.trim()
+    setCompanySignalActionMessage(null)
+    setCompanySignalActionError(null)
+    setCompanySignalActionGroupId(row.group_id)
+    try {
+      await suppressCompanySignalCandidateGroup(row.group_id, {
+        trigger_rebuild: companySignalActionTriggerRebuild,
+        ...(reviewNotes ? { notes: reviewNotes } : {}),
+      })
+      setCompanySignalActionMessage(`Suppressed ${row.display_company || row.company || row.group_id} for ${row.vendor || '--'}`)
+      refreshCompanySignalSummary()
+      refreshCompanySignalGroups()
+      onRefresh()
+    } catch (err) {
+      setCompanySignalActionError(err instanceof Error ? err.message : 'Failed to suppress candidate group')
+    } finally {
+      setCompanySignalActionGroupId(null)
     }
   }
 
@@ -803,6 +1146,13 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
   ]
 
   const items = data?.items ?? []
+  const companySignalTopVendors = companySignalSummary?.top_vendors ?? []
+  const companySignalPriorityReasons = companySignalSummary?.pending_priority_reasons ?? []
+  const companySignalTotals = companySignalSummary?.totals
+  const companySignalGroups = companySignalGroupsData?.groups ?? []
+  const visibleCompanySignalGroupIds = companySignalGroups
+    .map((row) => row.group_id)
+    .filter((value): value is string => Boolean(value))
   const watchlistTask = watchlistDelivery?.task ?? null
   const watchlistViews = (watchlistDelivery?.views ?? []).filter((row) => {
     if (!viewStatusFilter) return true
@@ -817,6 +1167,399 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
     return row.status === deliveryStatusFilter
   })
   const watchlistSummary = watchlistDelivery?.summary
+  const hasActiveCompanySignalQueueFilters =
+    queueFilters.vendorName !== '' ||
+    queueFilters.candidateBucket !== DEFAULT_PIPELINE_QUEUE_FILTERS.candidateBucket ||
+    queueFilters.reviewStatus !== DEFAULT_PIPELINE_QUEUE_FILTERS.reviewStatus ||
+    queueFilters.reviewPriorityBand !== '' ||
+    queueFilters.reviewPriorityReason !== '' ||
+    queueFilters.sourceName !== ''
+  const companySignalActiveFilters = [
+    queueFilters.vendorName ? `Vendor: ${queueFilters.vendorName}` : null,
+    queueFilters.candidateBucket !== DEFAULT_PIPELINE_QUEUE_FILTERS.candidateBucket
+      ? `Bucket: ${formatPipelineLabel(queueFilters.candidateBucket)}`
+      : null,
+    queueFilters.reviewStatus !== DEFAULT_PIPELINE_QUEUE_FILTERS.reviewStatus
+      ? `Status: ${formatPipelineLabel(queueFilters.reviewStatus)}`
+      : null,
+    queueFilters.reviewPriorityBand ? `Priority: ${formatPipelineLabel(queueFilters.reviewPriorityBand)}` : null,
+    queueFilters.reviewPriorityReason ? `Reason: ${formatPipelineLabel(queueFilters.reviewPriorityReason)}` : null,
+    queueFilters.sourceName ? `Source: ${queueFilters.sourceName}` : null,
+  ].filter(Boolean) as string[]
+  const allVisibleCompanySignalGroupsSelected =
+    visibleCompanySignalGroupIds.length > 0 &&
+    visibleCompanySignalGroupIds.every((groupId) => selectedCompanySignalGroupIds.includes(groupId))
+  const companySignalBulkActionLoading = companySignalBulkActionMode !== null
+
+  useEffect(() => {
+    const visibleGroupIds = new Set(visibleCompanySignalGroupIds)
+    setSelectedCompanySignalGroupIds((current) => {
+      const next = current.filter((groupId) => visibleGroupIds.has(groupId))
+      return next.length === current.length && next.every((groupId, index) => groupId === current[index])
+        ? current
+        : next
+    })
+  }, [companySignalGroups])
+
+  function updateQueueFilters(partial: Partial<PipelineQueueFilters>) {
+    const nextFilters = {
+      ...queueFilters,
+      ...partial,
+    }
+    if (!nextFilters.reviewPriorityBand) {
+      nextFilters.reviewPriorityReason = ''
+    }
+    onQueueFiltersChange(nextFilters)
+  }
+
+  function clearQueueFilters() {
+    onQueueFiltersChange(DEFAULT_PIPELINE_QUEUE_FILTERS)
+  }
+
+  function toggleCompanySignalGroupSelection(groupId: string) {
+    setSelectedCompanySignalGroupIds((current) =>
+      current.includes(groupId)
+        ? current.filter((value) => value !== groupId)
+        : [...current, groupId],
+    )
+  }
+
+  function selectVisibleCompanySignalGroups() {
+    setSelectedCompanySignalGroupIds(visibleCompanySignalGroupIds)
+  }
+
+  function clearSelectedCompanySignalGroups() {
+    setSelectedCompanySignalGroupIds([])
+  }
+
+  async function handleBulkApproveCompanySignalGroups() {
+    if (selectedCompanySignalGroupIds.length === 0) return
+    const reviewNotes = companySignalActionNotes.trim()
+    setCompanySignalActionMessage(null)
+    setCompanySignalActionError(null)
+    setCompanySignalBulkActionMode('approve')
+    try {
+      const result = await approveCompanySignalCandidateGroups({
+        group_ids: selectedCompanySignalGroupIds,
+        trigger_rebuild: companySignalActionTriggerRebuild,
+        ...(reviewNotes ? { notes: reviewNotes } : {}),
+      })
+      setCompanySignalActionMessage(`Approved ${result.count} candidate group${result.count === 1 ? '' : 's'}`)
+      setSelectedCompanySignalGroupIds([])
+      refreshCompanySignalSummary()
+      refreshCompanySignalGroups()
+      onRefresh()
+    } catch (err) {
+      setCompanySignalActionError(err instanceof Error ? err.message : 'Failed to approve selected candidate groups')
+    } finally {
+      setCompanySignalBulkActionMode(null)
+    }
+  }
+
+  async function handleBulkSuppressCompanySignalGroups() {
+    if (selectedCompanySignalGroupIds.length === 0) return
+    const reviewNotes = companySignalActionNotes.trim()
+    setCompanySignalActionMessage(null)
+    setCompanySignalActionError(null)
+    setCompanySignalBulkActionMode('suppress')
+    try {
+      const result = await suppressCompanySignalCandidateGroups({
+        group_ids: selectedCompanySignalGroupIds,
+        trigger_rebuild: companySignalActionTriggerRebuild,
+        ...(reviewNotes ? { notes: reviewNotes } : {}),
+      })
+      setCompanySignalActionMessage(`Suppressed ${result.count} candidate group${result.count === 1 ? '' : 's'}`)
+      setSelectedCompanySignalGroupIds([])
+      refreshCompanySignalSummary()
+      refreshCompanySignalGroups()
+      onRefresh()
+    } catch (err) {
+      setCompanySignalActionError(err instanceof Error ? err.message : 'Failed to suppress selected candidate groups')
+    } finally {
+      setCompanySignalBulkActionMode(null)
+    }
+  }
+
+  const companySignalVendorColumns: Column<CompanySignalCandidateGroupSummaryVendorRow>[] = [
+    {
+      key: 'vendor_name',
+      header: 'Vendor',
+      render: (row) => (
+        <div className="max-w-[260px] space-y-1">
+          <Link
+            to={pipelineVendorWorkspacePath(backToTab, row.vendor_name, queueFilters)}
+            className="text-sm font-medium text-white transition hover:text-cyan-300"
+          >
+            {row.vendor_name}
+          </Link>
+          <div className="flex flex-wrap gap-2 text-[11px]">
+            <Link
+              to={pipelineEvidencePath(backToTab, row.vendor_name, queueFilters)}
+              className="text-slate-400 transition hover:text-cyan-300"
+            >
+              Evidence
+            </Link>
+            <Link
+              to={pipelineReportsPath(backToTab, row.vendor_name, queueFilters)}
+              className="text-slate-400 transition hover:text-cyan-300"
+            >
+              Reports
+            </Link>
+            <Link
+              to={pipelineOpportunitiesPath(backToTab, row.vendor_name, queueFilters)}
+              className="text-slate-400 transition hover:text-cyan-300"
+            >
+              Opportunities
+            </Link>
+          </div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.vendor_name,
+    },
+    {
+      key: 'pending_groups',
+      header: 'Pending',
+      render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.pending_groups)}</span>,
+      sortable: true,
+      sortValue: (row) => row.pending_groups,
+    },
+    {
+      key: 'group_count',
+      header: 'Groups',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.group_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.group_count,
+    },
+    {
+      key: 'review_count',
+      header: 'Reviews',
+      render: (row) => <span className="text-xs text-cyan-300">{formatNumber(row.review_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.review_count,
+    },
+    {
+      key: 'focus',
+      header: 'Focus',
+      render: (row) => (
+        <button
+          aria-label={`Focus queue for ${row.vendor_name}`}
+          onClick={() =>
+            updateQueueFilters({
+              vendorName: row.vendor_name,
+            })
+          }
+          className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
+        >
+          Focus
+        </button>
+      ),
+      sortable: false,
+    },
+  ]
+
+  const companySignalPriorityReasonColumns: Column<CompanySignalCandidateGroupSummaryPriorityReasonRow>[] = [
+    {
+      key: 'review_priority_band',
+      header: 'Priority',
+      render: (row) => <PriorityBadge priority={row.review_priority_band} />,
+      sortable: true,
+      sortValue: (row) => row.review_priority_band,
+    },
+    {
+      key: 'review_priority_reason',
+      header: 'Reason',
+      render: (row) => <span className="text-xs text-slate-300">{formatPipelineLabel(row.review_priority_reason)}</span>,
+      sortable: true,
+      sortValue: (row) => row.review_priority_reason,
+    },
+    {
+      key: 'group_count',
+      header: 'Groups',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.group_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.group_count,
+    },
+    {
+      key: 'review_count',
+      header: 'Reviews',
+      render: (row) => <span className="text-xs text-cyan-300">{formatNumber(row.review_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.review_count,
+    },
+    {
+      key: 'focus',
+      header: 'Focus',
+      render: (row) => (
+        <button
+          aria-label={`Focus queue for ${row.review_priority_reason}`}
+          onClick={() =>
+            updateQueueFilters({
+              reviewPriorityBand: row.review_priority_band,
+              reviewPriorityReason: row.review_priority_reason,
+            })
+          }
+          className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
+        >
+          Focus
+        </button>
+      ),
+      sortable: false,
+    },
+  ]
+
+  const companySignalGroupColumns: Column<CompanySignalCandidateGroup>[] = [
+    {
+      key: 'select',
+      header: 'Select',
+      render: (row) =>
+        row.group_id ? (
+          <input
+            aria-label={`Select group ${row.display_company || row.company || row.group_id}`}
+            type="checkbox"
+            checked={selectedCompanySignalGroupIds.includes(row.group_id)}
+            onChange={() => toggleCompanySignalGroupSelection(row.group_id!)}
+            className="accent-cyan-500"
+          />
+        ) : (
+          <span className="text-xs text-slate-500">--</span>
+        ),
+      sortable: false,
+    },
+    {
+      key: 'display_company',
+      header: 'Company / Vendor',
+      render: (row) => (
+        <div className="max-w-[320px] space-y-1">
+          <p className="text-sm font-medium text-white">{row.display_company || row.company || '--'}</p>
+          <p className="text-xs text-slate-500">
+            {row.vendor || '--'}
+            {row.category ? ` | ${row.category}` : ''}
+          </p>
+          {row.vendor ? (
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <Link
+                to={pipelineVendorWorkspacePath(backToTab, row.vendor, queueFilters)}
+                className="text-slate-400 transition hover:text-cyan-300"
+              >
+                Vendor
+              </Link>
+              <Link
+                to={pipelineEvidencePath(backToTab, row.vendor, queueFilters)}
+                className="text-slate-400 transition hover:text-cyan-300"
+              >
+                Evidence
+              </Link>
+              <Link
+                to={pipelineReportsPath(backToTab, row.vendor, queueFilters)}
+                className="text-slate-400 transition hover:text-cyan-300"
+              >
+                Reports
+              </Link>
+              <Link
+                to={pipelineOpportunitiesPath(backToTab, row.vendor, queueFilters)}
+                className="text-slate-400 transition hover:text-cyan-300"
+              >
+                Opportunities
+              </Link>
+            </div>
+          ) : null}
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.display_company || row.company || ''}:${row.vendor || ''}`,
+    },
+    {
+      key: 'priority',
+      header: 'Priority',
+      render: (row) => (
+        <div className="space-y-1">
+          {row.review_priority_band ? <PriorityBadge priority={row.review_priority_band} /> : <span className="text-xs text-slate-500">--</span>}
+          <p className="max-w-[220px] text-[11px] text-slate-400">
+            {row.review_priority_reason ? formatPipelineLabel(row.review_priority_reason) : '--'}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.review_priority_band || ''}:${row.review_priority_reason || ''}`,
+    },
+    {
+      key: 'reviews',
+      header: 'Reviews',
+      render: (row) => (
+        <div className="space-y-1 text-xs">
+          <p className="text-slate-300">{formatNumber(row.review_count)} total</p>
+          <p className="text-cyan-300">{formatNumber(row.canonical_ready_review_count)} canonical ready</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.review_count,
+    },
+    {
+      key: 'evidence',
+      header: 'Evidence',
+      render: (row) => (
+        <div className="space-y-1 text-xs">
+          <p className="text-slate-300">{formatNumber(row.signal_evidence_count)} signal evidence</p>
+          <p className="text-slate-500">{formatNumber(row.decision_maker_count)} decision-maker reviews</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.signal_evidence_count,
+    },
+    {
+      key: 'review_link',
+      header: 'Representative',
+      render: (row) =>
+        row.representative_review_id ? (
+          <Link
+            aria-label={`Open representative review ${row.display_company || row.company || row.representative_review_id}`}
+            to={pipelineReviewDetailPath(backToTab, row.representative_review_id, queueFilters)}
+            className="text-xs text-cyan-300 transition hover:text-cyan-200"
+          >
+            Review detail
+          </Link>
+        ) : (
+          <span className="text-xs text-slate-500">--</span>
+      ),
+      sortable: true,
+      sortValue: (row) => row.representative_review_id || '',
+    },
+    {
+      key: 'support',
+      header: 'Support',
+      render: (row) => summarizeCandidateSupport(row, backToTab, queueFilters),
+      sortable: false,
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (row) => {
+        const loading = companySignalActionGroupId === row.group_id
+        return (
+          <div className="flex flex-wrap gap-2">
+            <button
+              aria-label={`Approve group ${row.display_company || row.company || row.group_id}`}
+              onClick={() => handleApproveCompanySignalGroup(row)}
+              disabled={loading || !row.group_id || companySignalBulkActionLoading}
+              className="rounded border border-green-500/30 bg-green-500/10 px-2 py-1 text-xs text-green-300 transition hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {loading ? 'Working...' : 'Approve'}
+            </button>
+            <button
+              aria-label={`Suppress group ${row.display_company || row.company || row.group_id}`}
+              onClick={() => handleSuppressCompanySignalGroup(row)}
+              disabled={loading || !row.group_id || companySignalBulkActionLoading}
+              className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {loading ? 'Working...' : 'Suppress'}
+            </button>
+          </div>
+        )
+      },
+      sortable: false,
+    },
+  ]
 
   const watchlistViewColumns: Column<WatchlistDeliveryOpsSummary['views'][number]>[] = [
     {
@@ -1000,11 +1743,21 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
           ]}
         />
         <button
-          onClick={refresh}
-          disabled={refreshing || watchlistDeliveryRefreshing}
+          onClick={handleRefresh}
+          disabled={
+            refreshing ||
+            companySignalSummaryRefreshing ||
+            companySignalGroupsRefreshing ||
+            watchlistDeliveryRefreshing
+          }
           className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
         >
-          <RefreshCw className={clsx('h-3 w-3', (refreshing || watchlistDeliveryRefreshing) && 'animate-spin')} />
+          <RefreshCw
+            className={clsx(
+              'h-3 w-3',
+              (refreshing || companySignalSummaryRefreshing || companySignalGroupsRefreshing || watchlistDeliveryRefreshing) && 'animate-spin',
+            )}
+          />
           Refresh
         </button>
         <FilterSelect
@@ -1039,11 +1792,268 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
           {error.message}
         </div>
       )}
+      {companySignalSummaryError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {companySignalSummaryError.message}
+        </div>
+      )}
+      {companySignalGroupsError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {companySignalGroupsError.message}
+        </div>
+      )}
       {watchlistDeliveryError && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
           {watchlistDeliveryError.message}
         </div>
       )}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        <div className="border-b border-slate-700/50 px-4 py-3">
+          <h2 className="text-sm font-medium text-white">Company Signal Review Queue</h2>
+          <p className="text-xs text-slate-500">
+            Pending grouped review work, highest-pressure vendor pockets, and priority reasons.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-3 xl:grid-cols-6">
+          <StatCard
+            label="Pending Groups"
+            value={formatNumber(companySignalTotals?.pending_groups)}
+            icon={<Clock className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Actionable Pending"
+            value={formatNumber(companySignalTotals?.actionable_pending_groups)}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Blocked Pending"
+            value={formatNumber(companySignalTotals?.blocked_pending_groups)}
+            icon={<Ban className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Overdue Pending"
+            value={formatNumber(companySignalTotals?.overdue_pending_groups)}
+            icon={<Bell className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Canonical Ready"
+            value={formatNumber(companySignalTotals?.canonical_ready_groups)}
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Analyst Review"
+            value={formatNumber(companySignalTotals?.analyst_review_groups)}
+            icon={<Workflow className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+        </div>
+
+        <div className="grid gap-4 p-4 xl:grid-cols-2">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="border-b border-slate-700/50 px-4 py-3">
+              <h3 className="text-sm font-medium text-white">Top Vendors</h3>
+              <p className="text-xs text-slate-500">Vendors carrying the most grouped review pressure right now.</p>
+            </div>
+            {companySignalSummaryLoading ? (
+              <DataTable columns={companySignalVendorColumns} data={[]} skeletonRows={4} />
+            ) : (
+              <DataTable
+                columns={companySignalVendorColumns}
+                data={companySignalTopVendors}
+                emptyMessage="No grouped company-signal vendors in the current review queue"
+              />
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="border-b border-slate-700/50 px-4 py-3">
+              <h3 className="text-sm font-medium text-white">Priority Reasons</h3>
+              <p className="text-xs text-slate-500">Which review reasons are dominating the pending queue.</p>
+            </div>
+            {companySignalSummaryLoading ? (
+              <DataTable columns={companySignalPriorityReasonColumns} data={[]} skeletonRows={4} />
+            ) : (
+              <DataTable
+                columns={companySignalPriorityReasonColumns}
+                data={companySignalPriorityReasons}
+                emptyMessage="No pending priority-reason clusters in the current review queue"
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        <div className="border-b border-slate-700/50 px-4 py-3">
+          <h3 className="text-sm font-medium text-white">Candidate Groups</h3>
+          <p className="text-xs text-slate-500">
+            The grouped review queue with direct drilldowns into representative reviews and vendor workflows.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 border-b border-slate-700/50 px-4 py-3">
+          <FilterInput
+            label="Vendor"
+            value={queueFilters.vendorName}
+            onChange={(value) => updateQueueFilters({ vendorName: value })}
+            placeholder="Salesforce"
+          />
+          <FilterInput
+            label="Source"
+            value={queueFilters.sourceName}
+            onChange={(value) => updateQueueFilters({ sourceName: value })}
+            placeholder="reddit"
+          />
+          <FilterSelect
+            label="Bucket"
+            value={queueFilters.candidateBucket}
+            onChange={(value) =>
+              updateQueueFilters({
+                candidateBucket: value,
+              })
+            }
+            options={[
+              { value: 'analyst_review', label: 'Analyst review' },
+              { value: 'canonical_ready', label: 'Canonical ready' },
+            ]}
+          />
+          <FilterSelect
+            label="Status"
+            value={queueFilters.reviewStatus}
+            onChange={(value) =>
+              updateQueueFilters({
+                reviewStatus: value,
+              })
+            }
+            options={[
+              { value: 'pending', label: 'Pending' },
+              { value: 'approved', label: 'Approved' },
+              { value: 'suppressed', label: 'Suppressed' },
+            ]}
+          />
+          <FilterSelect
+            label="Priority"
+            value={queueFilters.reviewPriorityBand}
+            onChange={(value) =>
+              updateQueueFilters({
+                reviewPriorityBand: value,
+                reviewPriorityReason:
+                  value && value === queueFilters.reviewPriorityBand ? queueFilters.reviewPriorityReason : '',
+              })
+            }
+            options={[
+              { value: '', label: 'All priorities' },
+              { value: 'promote_now', label: 'Promote now' },
+              { value: 'high', label: 'High' },
+              { value: 'medium', label: 'Medium' },
+              { value: 'low', label: 'Low' },
+            ]}
+          />
+          <button
+            onClick={clearQueueFilters}
+            disabled={!hasActiveCompanySignalQueueFilters}
+            className="ml-auto rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Clear queue filters
+          </button>
+        </div>
+        {hasActiveCompanySignalQueueFilters ? (
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-700/50 px-4 py-3 text-xs">
+            {companySignalActiveFilters.map((label) => (
+              <span
+                key={label}
+                className="rounded bg-cyan-500/10 px-2 py-1 text-cyan-300"
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-3 border-b border-slate-700/50 px-4 py-3">
+          <label className="text-xs text-slate-500">Action defaults</label>
+          <input
+            aria-label="Review notes"
+            value={companySignalActionNotes}
+            onChange={(e) => setCompanySignalActionNotes(e.target.value)}
+            placeholder="Optional review note"
+            className="min-w-[220px] flex-1 rounded border border-slate-700/50 bg-slate-800/50 px-2 py-1 text-xs text-white placeholder:text-slate-500 focus:border-cyan-500/50 focus:outline-none"
+          />
+          <label className="flex items-center gap-1.5 text-xs text-slate-400">
+            <input
+              aria-label="Trigger rebuild after review"
+              type="checkbox"
+              checked={companySignalActionTriggerRebuild}
+              onChange={(e) => setCompanySignalActionTriggerRebuild(e.target.checked)}
+              className="accent-cyan-500"
+            />
+            Trigger rebuild after review
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-700/50 px-4 py-3 text-xs">
+          <span className="text-slate-500">
+            {selectedCompanySignalGroupIds.length > 0
+              ? `${selectedCompanySignalGroupIds.length} selected`
+              : 'No groups selected'}
+          </span>
+          <button
+            aria-label="Select visible candidate groups"
+            onClick={selectVisibleCompanySignalGroups}
+            disabled={visibleCompanySignalGroupIds.length === 0 || allVisibleCompanySignalGroupsSelected}
+            className="rounded border border-slate-700/60 px-2 py-1 text-slate-300 transition hover:border-cyan-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Select visible ({visibleCompanySignalGroupIds.length})
+          </button>
+          <button
+            aria-label="Clear selected candidate groups"
+            onClick={clearSelectedCompanySignalGroups}
+            disabled={selectedCompanySignalGroupIds.length === 0}
+            className="rounded border border-slate-700/60 px-2 py-1 text-slate-300 transition hover:border-cyan-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Clear selection
+          </button>
+          <button
+            aria-label="Approve selected candidate groups"
+            onClick={handleBulkApproveCompanySignalGroups}
+            disabled={selectedCompanySignalGroupIds.length === 0 || companySignalBulkActionLoading}
+            className="rounded border border-green-500/30 bg-green-500/10 px-2 py-1 text-green-300 transition hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {companySignalBulkActionMode === 'approve' ? 'Approving...' : 'Approve selected'}
+          </button>
+          <button
+            aria-label="Suppress selected candidate groups"
+            onClick={handleBulkSuppressCompanySignalGroups}
+            disabled={selectedCompanySignalGroupIds.length === 0 || companySignalBulkActionLoading}
+            className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {companySignalBulkActionMode === 'suppress' ? 'Suppressing...' : 'Suppress selected'}
+          </button>
+        </div>
+        {companySignalActionMessage ? (
+          <div className="border-b border-cyan-500/20 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-300">
+            {companySignalActionMessage}
+          </div>
+        ) : null}
+        {companySignalActionError ? (
+          <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+            {companySignalActionError}
+          </div>
+        ) : null}
+        {companySignalGroupsLoading ? (
+          <DataTable columns={companySignalGroupColumns} data={[]} skeletonRows={6} />
+        ) : (
+          <DataTable
+            columns={companySignalGroupColumns}
+            data={companySignalGroups}
+            emptyMessage="No grouped candidates match the current queue filters"
+          />
+        )}
+      </div>
 
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
@@ -1384,6 +2394,21 @@ function QualityTab() {
       fetchExtractionHealth({
         days: Number(healthDays),
         top_n: EXTRACTION_HEALTH_TOP_N,
+      }),
+    [healthDays],
+  )
+
+  const {
+    data: reviewImpactSummary,
+    loading: reviewImpactLoading,
+    error: reviewImpactError,
+    refresh: refreshReviewImpact,
+    refreshing: reviewImpactRefreshing,
+  } = useApiData(
+    () =>
+      fetchCompanySignalReviewImpactSummary({
+        window_days: Number(healthDays),
+        top_n: REVIEW_IMPACT_TOP_N,
       }),
     [healthDays],
   )
@@ -1788,18 +2813,30 @@ function QualityTab() {
   ]
 
   const loading = quarantinesLoading || validationsLoading || extractionHealthLoading
-  const refreshing = quarantinesRefreshing || validationsRefreshing || extractionHealthRefreshing
+  const refreshing =
+    quarantinesRefreshing ||
+    validationsRefreshing ||
+    extractionHealthRefreshing ||
+    reviewImpactRefreshing
   const error = quarantinesError || validationsError || extractionHealthError
   const snapshot = extractionHealth?.current_snapshot
   const extractionTrend = extractionHealth?.daily_trend ?? []
   const extractionVendors = extractionHealth?.top_vendors ?? []
   const extractionSources = extractionHealth?.top_sources ?? []
   const extractionRuns = extractionHealth?.recent_runs ?? []
+  const reviewImpact = reviewImpactSummary as CompanySignalReviewImpactSummary | null
+  const reviewImpactFocus = reviewImpact?.trend_focus
+  const reviewImpactRecommendation = reviewImpact?.trend_recommendation
+  const reviewImpactAlerts = reviewImpact?.trend_alerts ?? []
+  const reviewImpactFilters = Object.entries(reviewImpact?.trend_recommendation_filters ?? {})
+  const reviewImpactMetric = reviewImpactFocus?.metric ?? null
+  const reviewImpactWindow = reviewImpact?.trend_comparison?.recent_days ?? Number(healthDays)
 
   const refresh = () => {
     refreshQuarantines()
     refreshValidations()
     refreshExtractionHealth()
+    refreshReviewImpact()
   }
 
   return (
@@ -1854,6 +2891,134 @@ function QualityTab() {
           <RefreshCw className={clsx('h-3 w-3', refreshing && 'animate-spin')} />
           Refresh
         </button>
+      </div>
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-medium text-white">Review Impact Recommendation</h2>
+            <p className="text-xs text-slate-500">
+              Recommended review-ops action from recent company-signal impact trends.
+            </p>
+          </div>
+          <div className="text-xs text-slate-500">
+            Window: <span className="text-slate-300">{formatNumber(reviewImpactWindow)}d</span>
+          </div>
+        </div>
+
+        {reviewImpactError ? (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+            {reviewImpactError.message}
+          </div>
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+            <div className="border border-slate-700/50 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {reviewImpactLoading ? (
+                  <div className="h-6 w-28 rounded-full bg-slate-800 animate-pulse" />
+                ) : (
+                  <StatusBadge status={reviewImpactRecommendation?.status || 'no_data'} />
+                )}
+                {!reviewImpactLoading && reviewImpactRecommendation?.priority && (
+                  <PriorityBadge priority={reviewImpactRecommendation.priority} />
+                )}
+                {!reviewImpactLoading && reviewImpactRecommendation?.owner && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300">
+                    {formatPipelineLabel(reviewImpactRecommendation.owner)}
+                  </span>
+                )}
+                {!reviewImpactLoading && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-400">
+                    {formatNumber(reviewImpactAlerts.length)} active alerts
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-sm font-medium text-white">
+                  {reviewImpactLoading
+                    ? 'Loading recommendation...'
+                    : formatPipelineLabel(reviewImpactRecommendation?.action)}
+                </h3>
+                <p className="mt-1 text-sm text-slate-300">
+                  {reviewImpactLoading
+                    ? 'Gathering recent review-impact trend signals.'
+                    : reviewImpactRecommendation?.rationale || 'No review-impact recommendation is available for the selected window.'}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {reviewImpactLoading ? (
+                  <>
+                    <div className="h-6 w-32 rounded bg-slate-800 animate-pulse" />
+                    <div className="h-6 w-28 rounded bg-slate-800 animate-pulse" />
+                  </>
+                ) : (
+                  <>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/10 text-cyan-300">
+                      Primary focus: {formatPipelineLabel(reviewImpactFocus?.focus)}
+                    </span>
+                    {(reviewImpactRecommendation?.supporting_focuses ?? []).map((focus) => (
+                      <span
+                        key={focus}
+                        className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300"
+                      >
+                        {formatPipelineLabel(focus)}
+                      </span>
+                    ))}
+                  </>
+                )}
+              </div>
+
+              {reviewImpactFilters.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Suggested filters</p>
+                  <div className="flex flex-wrap gap-2">
+                    {reviewImpactFilters.map(([key, value]) => (
+                      <span
+                        key={key}
+                        className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300"
+                      >
+                        {formatPipelineLabel(key)}: {formatPipelineLabel(value)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <StatCard
+                label="Focus Metric"
+                value={formatReviewImpactMetric(reviewImpactMetric)}
+                icon={<Bell className="h-4 w-4" />}
+                sub={reviewImpactFocus?.direction ? `Direction: ${formatPipelineLabel(reviewImpactFocus.direction)}` : undefined}
+                skeleton={reviewImpactLoading}
+              />
+              <StatCard
+                label="Recent Window"
+                value={formatReviewImpactMetricValue(reviewImpactMetric, reviewImpactFocus?.recent_value)}
+                icon={<CheckCircle2 className="h-4 w-4" />}
+                sub={`${formatNumber(reviewImpactWindow)}d`}
+                skeleton={reviewImpactLoading}
+              />
+              <StatCard
+                label="Prior Window"
+                value={formatReviewImpactMetricValue(reviewImpactMetric, reviewImpactFocus?.prior_value)}
+                icon={<Clock className="h-4 w-4" />}
+                sub={`${formatNumber(reviewImpactWindow)}d`}
+                skeleton={reviewImpactLoading}
+              />
+              <StatCard
+                label="Delta"
+                value={formatReviewImpactDelta(reviewImpactMetric, reviewImpactFocus?.delta)}
+                icon={<GitCompareArrows className="h-4 w-4" />}
+                sub={reviewImpactFocus?.rationale || undefined}
+                skeleton={reviewImpactLoading}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -5399,6 +6564,11 @@ function CostsTab() {
 export default function PipelineReview() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = parsePipelineTab(searchParams.get('tab'))
+  const queueFilters = parsePipelineQueueFilters(searchParams)
+
+  function handleQueueFiltersChange(nextFilters: PipelineQueueFilters) {
+    setSearchParams(buildPipelineReviewSearchParams(activeTab, nextFilters), { replace: true })
+  }
 
   const {
     data: summary,
@@ -5481,7 +6651,7 @@ export default function PipelineReview() {
         {tabs.map(({ key, label }) => (
           <button
             key={key}
-            onClick={() => setSearchParams(buildPipelineReviewSearchParams(key))}
+            onClick={() => setSearchParams(buildPipelineReviewSearchParams(key, queueFilters))}
             className={clsx(
               'px-4 py-2 text-sm font-medium transition-colors border-b-2',
               activeTab === key
@@ -5495,7 +6665,14 @@ export default function PipelineReview() {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'queue' && <QueueTab onRefresh={refreshSummary} backToTab={activeTab} />}
+      {activeTab === 'queue' && (
+        <QueueTab
+          onRefresh={refreshSummary}
+          backToTab={activeTab}
+          queueFilters={queueFilters}
+          onQueueFiltersChange={handleQueueFiltersChange}
+        />
+      )}
       {activeTab === 'failures' && <FailuresTab />}
       {activeTab === 'quality' && <QualityTab />}
       {activeTab === 'audit' && <AuditTab />}

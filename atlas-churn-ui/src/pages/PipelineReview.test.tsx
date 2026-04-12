@@ -11,6 +11,11 @@ const api = vi.hoisted(() => ({
   fetchArtifactAttempts: vi.fn(),
   fetchEnrichmentQuarantines: vi.fn(),
   fetchExtractionHealth: vi.fn(),
+  fetchCompanySignalCandidateGroups: vi.fn(),
+  fetchCompanySignalCandidateGroupSummary: vi.fn(),
+  fetchCompanySignalReviewImpactSummary: vi.fn(),
+  approveCompanySignalCandidateGroup: vi.fn(),
+  approveCompanySignalCandidateGroups: vi.fn(),
   fetchSynthesisValidationResults: vi.fn(),
   resolveVisibilityReview: vi.fn(),
   fetchAdminCostSummary: vi.fn(),
@@ -30,6 +35,8 @@ const api = vi.hoisted(() => ({
   runWatchlistDeliveryForView: vi.fn(),
   disableWatchlistDeliveryForView: vi.fn(),
   runAutonomousTask: vi.fn(),
+  suppressCompanySignalCandidateGroup: vi.fn(),
+  suppressCompanySignalCandidateGroups: vi.fn(),
 }))
 
 vi.mock('../api/client', () => api)
@@ -59,6 +66,191 @@ describe('PipelineReview watchlist delivery ops', () => {
       top_vendors: [],
       top_sources: [],
       recent_runs: [],
+    })
+    api.fetchCompanySignalCandidateGroupSummary.mockResolvedValue({
+      totals: {
+        pending_groups: 7,
+        actionable_pending_groups: 4,
+        blocked_pending_groups: 3,
+        overdue_pending_groups: 2,
+        canonical_ready_groups: 5,
+        analyst_review_groups: 2,
+      },
+      top_vendors: [
+        {
+          vendor_name: 'Salesforce',
+          group_count: 3,
+          review_count: 7,
+          pending_groups: 2,
+          canonical_ready_groups: 1,
+        },
+      ],
+      pending_priority_reasons: [
+        {
+          review_priority_band: 'high',
+          review_priority_reason: 'cross_source_corroboration',
+          group_count: 2,
+          review_count: 5,
+        },
+      ],
+      candidate_bucket: null,
+      review_status: null,
+      review_priority_band: null,
+      review_priority_reason: null,
+      source_name: null,
+    })
+    api.fetchCompanySignalCandidateGroups.mockResolvedValue({
+      groups: [
+        {
+          group_id: 'group-1',
+          company: 'Acme Corp',
+          display_company: 'Acme Corp',
+          vendor: 'Salesforce',
+          category: 'crm',
+          review_count: 7,
+          distinct_source_count: 3,
+          decision_maker_count: 2,
+          signal_evidence_count: 4,
+          canonical_ready_review_count: 1,
+          avg_urgency: 7.4,
+          max_urgency: 8.8,
+          corroborated_confidence_score: 0.62,
+          confidence_tier: 'medium',
+          representative_review_id: 'rev-1',
+          representative_source: 'reddit',
+          canonical_gap_reason: 'low_confidence_low_trust_source',
+          candidate_bucket: 'analyst_review',
+          review_priority_band: 'high',
+          review_priority_reason: 'cross_source_corroboration',
+          review_status: 'pending',
+          review_status_updated_at: null,
+          first_seen_at: '2026-04-07T18:00:00Z',
+          last_seen_at: '2026-04-08T18:00:00Z',
+          supporting_reviews: [
+            {
+              review_id: 'rev-2',
+              source: 'g2',
+              summary: 'Admins needed evidence before cutting over.',
+              review_excerpt: 'Admins needed evidence before cutting over.',
+              source_url: 'https://example.com/rev-2',
+              reviewed_at: '2026-04-06T18:00:00Z',
+              quote_excerpt: 'Needed evidence before cutting over.',
+            },
+          ],
+        },
+      ],
+      count: 1,
+      candidate_bucket: 'analyst_review',
+      review_status: 'pending',
+      review_priority_band: null,
+      review_priority_reason: null,
+      source_name: null,
+    })
+    api.fetchCompanySignalReviewImpactSummary.mockResolvedValue({
+      totals: {},
+      review_scope: null,
+      canonical_gap_reason: null,
+      rebuild_outcome: null,
+      rebuild_reason: null,
+      scopes: [],
+      unlock_paths: [],
+      priority_bands: [],
+      priority_reasons: [],
+      top_vendors: [],
+      top_vendor_reasons: [],
+      rebuild_reasons: [],
+      daily_trends: [],
+      trend_comparison: {
+        anchor_day: '2026-04-07',
+        recent_days: 15,
+        prior_days: 15,
+        recent_effect_rate: 0.5,
+        prior_effect_rate: 0.75,
+      },
+      trend_focus: {
+        status: 'alert',
+        focus: 'effect_rate_down',
+        metric: 'effect_rate',
+        direction: 'down',
+        delta: -0.25,
+        recent_value: 0.5,
+        prior_value: 0.75,
+        rationale: 'Recent review actions are producing fewer downstream effects per action.',
+      },
+      trend_alerts: [
+        {
+          status: 'alert',
+          focus: 'effect_rate_down',
+          metric: 'effect_rate',
+          direction: 'down',
+          delta: -0.25,
+          recent_value: 0.5,
+          prior_value: 0.75,
+          rationale: 'Recent review actions are producing fewer downstream effects per action.',
+        },
+      ],
+      trend_recommendation: {
+        status: 'act',
+        action: 'review_effect_quality',
+        priority: 'high',
+        owner: 'review_ops',
+        rationale: 'Recent review actions are producing fewer downstream company-signal effects per action.',
+        supporting_focuses: ['effect_rate_down', 'approval_volume_up'],
+      },
+      trend_recommendation_filters: {
+        company_signal_action: 'none',
+        review_action: 'approved',
+      },
+    })
+    api.approveCompanySignalCandidateGroup.mockResolvedValue({
+      review_batch_id: 'batch-1',
+      group_id: 'group-1',
+      review_status: 'approved',
+      company_name: 'Acme Corp',
+      vendor_name: 'Salesforce',
+      review_count: 7,
+      company_signal_action: 'created',
+      rebuild: { triggered: true },
+    })
+    api.approveCompanySignalCandidateGroups.mockResolvedValue({
+      review_batch_id: 'batch-3',
+      count: 1,
+      groups: [
+        {
+          group_id: 'group-1',
+          review_status: 'approved',
+          company_name: 'Acme Corp',
+          vendor_name: 'Salesforce',
+          review_count: 7,
+          company_signal_action: 'created',
+        },
+      ],
+      rebuilds: [{ vendor_name: 'Salesforce', triggered: true }],
+    })
+    api.suppressCompanySignalCandidateGroup.mockResolvedValue({
+      review_batch_id: 'batch-2',
+      group_id: 'group-1',
+      review_status: 'suppressed',
+      company_name: 'Acme Corp',
+      vendor_name: 'Salesforce',
+      review_count: 7,
+      company_signal_action: 'deleted',
+      rebuild: { triggered: true },
+    })
+    api.suppressCompanySignalCandidateGroups.mockResolvedValue({
+      review_batch_id: 'batch-4',
+      count: 1,
+      groups: [
+        {
+          group_id: 'group-1',
+          review_status: 'suppressed',
+          company_name: 'Acme Corp',
+          vendor_name: 'Salesforce',
+          review_count: 7,
+          company_signal_action: 'deleted',
+        },
+      ],
+      rebuilds: [{ vendor_name: 'Salesforce', triggered: true }],
     })
     api.fetchSynthesisValidationResults.mockResolvedValue({ results: [], total: 0, limit: 100, offset: 0 })
     api.resolveVisibilityReview.mockResolvedValue({ status: 'ok' })
@@ -452,6 +644,186 @@ describe('PipelineReview watchlist delivery ops', () => {
     expect(await screen.findByText('Triggered delivery run')).toBeInTheDocument()
   })
 
+  it('renders company signal queue summary with vendor shortcuts', async () => {
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Company Signal Review Queue')).toBeInTheDocument()
+    expect(screen.getAllByText('cross source corroboration').length).toBeGreaterThan(0)
+    expect(screen.getByRole('link', { name: 'Salesforce' })).toHaveAttribute(
+      'href',
+      '/vendors/Salesforce?back_to=%2Fpipeline-review',
+    )
+    expect(screen.getByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open representative review Acme Corp' })).toHaveAttribute(
+      'href',
+      '/reviews/rev-1?back_to=%2Fpipeline-review',
+    )
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Review' })
+        .some((link) => link.getAttribute('href') === '/reviews/rev-2?back_to=%2Fpipeline-review'),
+    ).toBe(true)
+    expect(screen.getByText('Needed evidence before cutting over.')).toBeInTheDocument()
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Evidence' })
+        .some((link) => link.getAttribute('href') === '/evidence?vendor=Salesforce&tab=witnesses&back_to=%2Fpipeline-review'),
+    ).toBe(true)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Reports' })
+        .some((link) => link.getAttribute('href') === '/reports?vendor_filter=Salesforce&back_to=%2Fpipeline-review'),
+    ).toBe(true)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Opportunities' })
+        .some((link) => link.getAttribute('href') === '/opportunities?vendor=Salesforce&back_to=%2Fpipeline-review'),
+    ).toBe(true)
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenCalledWith({
+        window_days: 90,
+        top_n: 6,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        window_days: 90,
+        limit: 10,
+      })
+    })
+  })
+
+  it('hydrates company signal queue filters from the URL and preserves drilldown context', async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          '/pipeline-review?queue_vendor=Salesforce&queue_priority_band=high&queue_priority_reason=cross_source_corroboration',
+        ]}
+      >
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Salesforce')).toBeInTheDocument()
+    expect(screen.getByLabelText('Priority')).toHaveValue('high')
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: 'Salesforce',
+        source_name: undefined,
+        review_priority_band: 'high',
+        review_priority_reason: 'cross_source_corroboration',
+        window_days: 90,
+        limit: 10,
+      })
+    })
+
+    expect(screen.getByRole('link', { name: 'Open representative review Acme Corp' })).toHaveAttribute(
+      'href',
+      '/reviews/rev-1?back_to=%2Fpipeline-review%3Fqueue_vendor%3DSalesforce%26queue_priority_band%3Dhigh%26queue_priority_reason%3Dcross_source_corroboration',
+    )
+  })
+
+  it('focuses the company signal queue from summary rows', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Company Signal Review Queue')
+    await user.click(screen.getByRole('button', { name: 'Focus queue for Salesforce' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: 'Salesforce',
+        source_name: undefined,
+        review_priority_band: undefined,
+        review_priority_reason: undefined,
+        window_days: 90,
+        limit: 10,
+      })
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Focus queue for cross_source_corroboration' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        vendor_name: 'Salesforce',
+        source_name: undefined,
+        review_priority_band: 'high',
+        review_priority_reason: 'cross_source_corroboration',
+        window_days: 90,
+        limit: 10,
+      })
+    })
+
+    expect(screen.getByRole('link', { name: 'Open representative review Acme Corp' })).toHaveAttribute(
+      'href',
+      '/reviews/rev-1?back_to=%2Fpipeline-review%3Fqueue_vendor%3DSalesforce%26queue_priority_band%3Dhigh%26queue_priority_reason%3Dcross_source_corroboration',
+    )
+  })
+
+  it('approves candidate groups from the queue with action defaults', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Candidate Groups')
+    await user.type(screen.getByLabelText('Review notes'), 'Needs manual rebuild review')
+    await user.click(screen.getByLabelText('Trigger rebuild after review'))
+    await user.click(screen.getByRole('button', { name: 'Approve group Acme Corp' }))
+
+    await waitFor(() => {
+      expect(api.approveCompanySignalCandidateGroup).toHaveBeenCalledWith('group-1', {
+        notes: 'Needs manual rebuild review',
+        trigger_rebuild: false,
+      })
+    })
+    expect(await screen.findByText('Approved Acme Corp for Salesforce')).toBeInTheDocument()
+  })
+
+  it('bulk approves selected candidate groups from the queue', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Candidate Groups')
+    await user.click(screen.getByRole('button', { name: 'Select visible candidate groups' }))
+    await user.click(screen.getByRole('button', { name: 'Approve selected candidate groups' }))
+
+    await waitFor(() => {
+      expect(api.approveCompanySignalCandidateGroups).toHaveBeenCalledWith({
+        group_ids: ['group-1'],
+        trigger_rebuild: true,
+      })
+    })
+    expect(await screen.findByText('Approved 1 candidate group')).toBeInTheDocument()
+  })
+
   it('renders B2B token cards and run-level tier splits', async () => {
     const user = userEvent.setup()
 
@@ -491,6 +863,28 @@ describe('PipelineReview watchlist delivery ops', () => {
     expect(screen.getByRole('button', { name: 'Costs' })).toHaveClass('text-cyan-400')
   })
 
+  it('renders review impact recommendations in the quality tab', async () => {
+    render(
+      <MemoryRouter initialEntries={['/pipeline-review?tab=quality']}>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Review Impact Recommendation')).toBeInTheDocument()
+    expect(screen.getByText('review effect quality')).toBeInTheDocument()
+    expect(screen.getByText('Recent review actions are producing fewer downstream company-signal effects per action.')).toBeInTheDocument()
+    expect(screen.getByText('Primary focus: effect rate down')).toBeInTheDocument()
+    expect(screen.getByText('company signal action: none')).toBeInTheDocument()
+    expect(screen.getByText('review action: approved')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalReviewImpactSummary).toHaveBeenCalledWith({
+        window_days: 30,
+        top_n: 10,
+      })
+    })
+  })
+
   it('opens the saved-view drawer and runs per-view delivery actions', async () => {
     const user = userEvent.setup()
 
@@ -522,18 +916,21 @@ describe('PipelineReview watchlist delivery ops', () => {
       'href',
       '/vendors/Salesforce?back_to=%2Fpipeline-review',
     )
-    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
-      'href',
-      '/evidence?vendor=Salesforce&tab=witnesses&back_to=%2Fpipeline-review',
-    )
-    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
-      'href',
-      '/reports?vendor_filter=Salesforce&back_to=%2Fpipeline-review',
-    )
-    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
-      'href',
-      '/opportunities?vendor=Salesforce&back_to=%2Fpipeline-review',
-    )
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Evidence' })
+        .some((link) => link.getAttribute('href') === '/evidence?vendor=Salesforce&tab=witnesses&back_to=%2Fpipeline-review'),
+    ).toBe(true)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Reports' })
+        .some((link) => link.getAttribute('href') === '/reports?vendor_filter=Salesforce&back_to=%2Fpipeline-review'),
+    ).toBe(true)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Opportunities' })
+        .some((link) => link.getAttribute('href') === '/opportunities?vendor=Salesforce&back_to=%2Fpipeline-review'),
+    ).toBe(true)
 
     await user.click(screen.getByRole('button', { name: 'Deliver Now' }))
     await waitFor(() => {

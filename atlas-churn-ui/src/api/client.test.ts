@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  approveCompanySignalCandidateGroup,
+  approveCompanySignalCandidateGroups,
   buildReportLibraryViewScopeKey,
   downloadReportPdf,
+  fetchCompanySignalCandidateGroupSummary,
+  fetchCompanySignalCandidateGroups,
+  fetchCompanySignalReviewImpactSummary,
   listWebhooks,
   normalizeReportLibraryViewFilters,
+  suppressCompanySignalCandidateGroup,
+  suppressCompanySignalCandidateGroups,
 } from './client'
 
 describe('api client helpers', () => {
@@ -72,5 +79,115 @@ describe('api client helpers', () => {
     const legacyDashboardPrefix = ['/api/v1', '/b2b', '/dashboard'].join('')
     expect(requestedUrl).toContain('/api/v1/b2b/tenant/webhooks')
     expect(requestedUrl).not.toContain(legacyDashboardPrefix)
+  })
+
+  it('uses the grouped review dashboard routes for queue summaries and actions', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ trend_recommendation: {}, trend_recommendation_filters: {} }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ totals: {}, top_vendors: [], pending_priority_reasons: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ groups: [], count: 0, candidate_bucket: 'analyst_review', review_status: 'pending' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ review_status: 'approved' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ review_status: 'suppressed' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ count: 2, groups: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ count: 2, groups: [] }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchCompanySignalReviewImpactSummary({
+      window_days: 30,
+      top_n: 10,
+      review_action: 'approved',
+    })
+    await fetchCompanySignalCandidateGroupSummary({
+      candidate_bucket: 'analyst_review',
+      review_status: 'pending',
+      top_n: 6,
+    })
+    await fetchCompanySignalCandidateGroups({
+      candidate_bucket: 'analyst_review',
+      review_status: 'pending',
+      vendor_name: 'Salesforce',
+      review_priority_band: 'high',
+      review_priority_reason: 'cross_source_corroboration',
+      limit: 10,
+    })
+    await approveCompanySignalCandidateGroup('group-1', {
+      notes: 'Promote this group',
+      trigger_rebuild: false,
+    })
+    await suppressCompanySignalCandidateGroup('group-2')
+    await approveCompanySignalCandidateGroups({
+      group_ids: ['group-1', 'group-2'],
+      notes: 'Bulk approve',
+    })
+    await suppressCompanySignalCandidateGroups({
+      group_ids: ['group-3', 'group-4'],
+      trigger_rebuild: false,
+    })
+
+    expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/dashboard/company-signal-review-impact-summary',
+    )
+    expect(String(fetchMock.mock.calls[1]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/dashboard/company-signal-candidate-group-summary',
+    )
+    expect(String(fetchMock.mock.calls[2]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/dashboard/company-signal-candidate-groups',
+    )
+    expect(fetchMock.mock.calls[2]?.[0]).toContain('vendor_name=Salesforce')
+    expect(fetchMock.mock.calls[2]?.[0]).toContain('review_priority_band=high')
+    expect(fetchMock.mock.calls[2]?.[0]).toContain('review_priority_reason=cross_source_corroboration')
+    expect(String(fetchMock.mock.calls[3]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/dashboard/company-signal-candidate-groups/group-1/approve',
+    )
+    expect(fetchMock.mock.calls[3]?.[1]?.body).toBe(
+      JSON.stringify({ trigger_rebuild: false, notes: 'Promote this group' }),
+    )
+    expect(String(fetchMock.mock.calls[4]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/dashboard/company-signal-candidate-groups/group-2/suppress',
+    )
+    expect(fetchMock.mock.calls[4]?.[1]?.body).toBe(
+      JSON.stringify({ trigger_rebuild: true }),
+    )
+    expect(String(fetchMock.mock.calls[5]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/dashboard/company-signal-candidate-groups/approve',
+    )
+    expect(fetchMock.mock.calls[5]?.[1]?.body).toBe(
+      JSON.stringify({ group_ids: ['group-1', 'group-2'], trigger_rebuild: true, notes: 'Bulk approve' }),
+    )
+    expect(String(fetchMock.mock.calls[6]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/dashboard/company-signal-candidate-groups/suppress',
+    )
+    expect(fetchMock.mock.calls[6]?.[1]?.body).toBe(
+      JSON.stringify({ group_ids: ['group-3', 'group-4'], trigger_rebuild: false }),
+    )
   })
 })
