@@ -61,6 +61,15 @@ function evidencePath(vendorName: string, backTo: string) {
   return `/evidence?${next.toString()}`
 }
 
+function evidenceWitnessPath(vendorName: string, witnessId: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('witness_id', witnessId)
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
 function opportunitiesPath(vendorName: string, backTo: string) {
   const next = new URLSearchParams()
   next.set('vendor', vendorName)
@@ -235,6 +244,9 @@ export default function ReportDetail() {
     const qs = next.toString()
     return qs ? `/reports/${report.id}?${qs}` : `/reports/${report.id}`
   })()
+  const drawerExplorerUrl = drawerWitnessId && drawerVendor
+    ? evidenceWitnessPath(drawerVendor, drawerWitnessId, detailBackPath)
+    : null
   const handleCopyDirectWatchlistsLink = () => {
     if (!directWatchlistsPath) return
     void navigator.clipboard.writeText(`${window.location.origin}${directWatchlistsPath}`).then(() => {
@@ -506,6 +518,8 @@ export default function ReportDetail() {
         vendorName={drawerVendor}
         witnessId={drawerWitnessId}
         open={drawerOpen}
+        explorerUrl={drawerExplorerUrl}
+        backToPath={detailBackPath}
         onClose={() => {
           setDrawerOpen(false)
           setDrawerWitnessId(null)

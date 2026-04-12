@@ -685,7 +685,7 @@ describe('ReportDetail', () => {
   it('opens the evidence drawer from executive summary citations', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports/:id', element: <ReportDetail /> }],
-      { initialEntries: ['/reports/report-1'] },
+      { initialEntries: ['/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1'] },
     )
 
     render(<RouterProvider router={router} />)
@@ -699,6 +699,10 @@ describe('ReportDetail', () => {
 
     expect(drawerState.lastProps.vendorName).toBe('Zendesk')
     expect(drawerState.lastProps.witnessId).toBe('w1')
+    expect(drawerState.lastProps.backToPath).toBe('/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1')
+    expect(drawerState.lastProps.explorerUrl).toBe(
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=w1&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
     expect(screen.getByTestId('evidence-drawer')).toHaveTextContent('Zendesk:w1')
   })
 
