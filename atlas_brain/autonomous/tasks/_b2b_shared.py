@@ -14956,7 +14956,7 @@ async def read_company_signal_review_impact_summary(
                     "status": "act",
                     "action_type": "policy_threshold",
                     "action": "review_low_trust_policy",
-                    "priority": "high" if overdue_pending_groups > 0 or oldest_pending_age_days >= 7.0 else "medium",
+                    "priority": "high" if overdue_pending_groups > 0 else "medium",
                     "owner": "intelligence_policy",
                     "reason": "blocked_low_trust_policy",
                     "rationale": "The top queue slice is dominated by low-trust candidates blocked on canonical confidence policy, not waiting for analyst approvals.",

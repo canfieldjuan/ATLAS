@@ -1548,6 +1548,59 @@ async def test_read_company_signal_review_impact_summary_recommends_policy_revie
 
 
 @pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_keeps_low_trust_queue_priority_medium_when_not_overdue():
+    pool = _make_review_impact_summary_pool(
+        totals={
+            "total_actions": 2,
+            "approvals": 1,
+            "company_signal_creations": 0,
+            "total_groups": 6,
+            "total_reviews": 8,
+            "pending_groups": 5,
+            "actionable_pending_groups": 1,
+            "actionable_pending_reviews": 2,
+            "blocked_pending_groups": 4,
+            "blocked_pending_reviews": 6,
+            "avg_pending_age_days": 6.0,
+            "oldest_pending_age_days": 8.0,
+            "overdue_pending_groups": 0,
+            "overdue_pending_reviews": 0,
+        },
+        daily_trends=[
+            _make_review_impact_daily_trend(
+                "2026-04-10",
+                approvals=1,
+                company_signal_creations=0,
+                company_signal_noops=1,
+            ),
+            _make_review_impact_daily_trend(
+                "2026-04-03",
+                approvals=1,
+                company_signal_creations=1,
+                company_signal_noops=0,
+            ),
+        ],
+    )
+
+    summary = await read_company_signal_review_impact_summary(
+        pool,
+        window_days=30,
+        canonical_gap_reason="low_confidence_low_trust_source",
+        review_priority_band="high",
+        review_priority_reason="has_signal_evidence",
+        candidate_source="reddit",
+        top_n=5,
+    )
+
+    assert summary["trend_queue_recommendation"]["action"] == "review_low_trust_policy"
+    assert summary["trend_queue_recommendation"]["priority"] == "medium"
+    assert summary["trend_queue_recommendation"]["queue_snapshot"]["oldest_pending_age_days"] == 8.0
+    assert summary["trend_queue_recommendation"]["queue_snapshot"]["overdue_pending_groups"] == 0
+    assert summary["operator_focus"]["action"] == "review_effect_quality"
+    assert summary["operator_focus"]["priority"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_read_company_signal_review_impact_summary_marks_flat_windows_as_stable():
     pool = _make_review_impact_summary_pool(
         totals={
