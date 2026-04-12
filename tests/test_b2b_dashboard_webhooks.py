@@ -232,11 +232,10 @@ async def test_create_webhook_trims_body_text_before_validation_and_persistence(
 
 @pytest.mark.asyncio
 async def test_update_webhook_blank_url_is_treated_as_no_update():
-    pool = MagicMock()
     user = MagicMock(account_id='account-1')
     body = b2b_dashboard.UpdateWebhookBody(url='   ')
 
-    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
         with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
             await b2b_dashboard.update_webhook(
                 '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
@@ -246,8 +245,23 @@ async def test_update_webhook_blank_url_is_treated_as_no_update():
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == 'No fields to update'
-    pool.fetchval.assert_not_called()
-    pool.fetchrow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_webhook_rejects_invalid_url_before_db_touch():
+    user = MagicMock(account_id='account-1')
+    body = b2b_dashboard.UpdateWebhookBody(url='ftp://hooks.example.com/fail')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', side_effect=AssertionError('DB pool should not be acquired')):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc_info:
+            await b2b_dashboard.update_webhook(
+                '2ea3fd03-7fd9-4b72-8f24-117667f723e9',
+                body,
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == 'url must begin with https:// or http://'
 
 
 @pytest.mark.asyncio

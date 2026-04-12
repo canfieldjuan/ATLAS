@@ -6100,6 +6100,16 @@ async def update_webhook(
     except ValueError:
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
+    if body.url is not None and not body.url.startswith(("https://", "http://")):
+        raise HTTPException(status_code=400, detail="url must begin with https:// or http://")
+    if (
+        body.enabled is None
+        and body.event_types is None
+        and body.url is None
+        and body.description is None
+    ):
+        raise HTTPException(status_code=400, detail="No fields to update")
+
     pool = _pool_or_503()
     # Build dynamic SET clause
     sets: list[str] = []
@@ -6123,8 +6133,6 @@ async def update_webhook(
         params.append(body.event_types)
         idx += 1
     if body.url is not None:
-        if not body.url.startswith(("https://", "http://")):
-            raise HTTPException(status_code=400, detail="url must begin with https:// or http://")
         sets.append(f"url = ${idx}")
         params.append(body.url)
         idx += 1
