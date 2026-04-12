@@ -218,8 +218,12 @@ function buildSubscriptionManageLocation(subscriptionId: string) {
   return `/reports?${next.toString()}`
 }
 
-function vendorDetailPath(vendorName: string) {
-  return `/vendors/${encodeURIComponent(vendorName)}`
+function vendorDetailPath(vendorName: string, backTo?: string) {
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  if (!backTo) return base
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `${base}?${next.toString()}`
 }
 
 function evidencePath(vendorName: string, backTo: string) {
@@ -807,7 +811,7 @@ export default function Reports() {
                     Filtered to <span className="text-slate-300">{activeVendorFilter}</span>
                   </span>
                   <Link
-                    to={vendorDetailPath(activeVendorFilter)}
+                    to={vendorDetailPath(activeVendorFilter, currentLibraryPath)}
                     className="text-cyan-400 hover:text-cyan-300 transition-colors"
                   >
                     Vendor workspace

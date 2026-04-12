@@ -45,8 +45,12 @@ function DetailSkeleton() {
   )
 }
 
-function vendorDetailPath(vendorName: string) {
-  return `/vendors/${encodeURIComponent(vendorName)}`
+function vendorDetailPath(vendorName: string, backTo?: string) {
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  if (!backTo) return base
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `${base}?${next.toString()}`
 }
 
 function evidencePath(vendorName: string, backTo: string) {
@@ -247,7 +251,7 @@ export default function ReportDetail() {
               Focused on <span className="text-slate-300">{report.vendor_filter}</span>
             </span>
             <Link
-              to={vendorDetailPath(report.vendor_filter)}
+              to={vendorDetailPath(report.vendor_filter, detailBackPath)}
               className="text-cyan-400 hover:text-cyan-300 transition-colors"
             >
               Vendor workspace

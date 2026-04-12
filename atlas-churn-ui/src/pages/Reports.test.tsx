@@ -1001,7 +1001,7 @@ describe('Reports', () => {
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
         'href',
-        '/vendors/Zendesk',
+        '/vendors/Zendesk?back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
       )
     })
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
