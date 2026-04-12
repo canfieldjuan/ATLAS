@@ -4113,8 +4113,9 @@ async def generate_campaigns(
     user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Generate campaign drafts for a tracked vendor's high-intent leads."""
+    vname = _clean_required_text(req.vendor_name, "vendor_name")
+    company_filter = _clean_optional_text(req.company_filter)
     pool = _pool_or_503()
-    vname = req.vendor_name.strip()
 
     # Verify vendor is tracked
     if settings.saas_auth.enabled and not _is_admin_user(user):
@@ -4134,7 +4135,7 @@ async def generate_campaigns(
         result = await _generate_campaigns(
             pool,
             vendor_filter=vname,
-            company_filter=req.company_filter or None,
+            company_filter=company_filter,
             target_mode=cfg.target_mode,
             min_score=cfg.min_opportunity_score,
             limit=cfg.max_campaigns_per_run,
@@ -4252,8 +4253,9 @@ async def list_opportunity_dispositions(
         acct,
     )
 
-    if disposition:
-        if disposition not in _VALID_DISPOSITIONS:
+    disposition_value = _clean_optional_text(disposition)
+    if disposition_value:
+        if disposition_value not in _VALID_DISPOSITIONS:
             raise HTTPException(status_code=422, detail=f"disposition must be one of: {', '.join(sorted(_VALID_DISPOSITIONS))}")
         rows = await pool.fetch(
             """
@@ -4264,7 +4266,7 @@ async def list_opportunity_dispositions(
             ORDER BY updated_at DESC
             """,
             acct,
-            disposition,
+            disposition_value,
         )
     else:
         rows = await pool.fetch(
@@ -4290,6 +4292,9 @@ async def set_opportunity_disposition(
     """Upsert a single opportunity disposition (save, snooze, or dismiss)."""
     _require_b2b_product(user)
     parsed_snooze = _validate_disposition(req.disposition, req.snoozed_until)
+    opportunity_key = _clean_required_text(req.opportunity_key, "opportunity_key")
+    company = _clean_required_text(req.company, "company")
+    vendor = _clean_required_text(req.vendor, "vendor")
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
     now = datetime.now(timezone.utc)
@@ -4309,9 +4314,9 @@ async def set_opportunity_disposition(
         """,
         _uuid.uuid4(),
         acct,
-        req.opportunity_key.strip(),
-        req.company.strip(),
-        req.vendor.strip(),
+        opportunity_key,
+        company,
+        vendor,
         _clean_optional_text(req.review_id),
         req.disposition,
         parsed_snooze,
@@ -4328,12 +4333,20 @@ async def bulk_set_opportunity_dispositions(
     """Bulk upsert opportunity dispositions."""
     _require_b2b_product(user)
     parsed_snooze = _validate_disposition(req.disposition, req.snoozed_until)
+    normalized_items: list[tuple[str, str, str, str | None]] = []
+    for item in req.items:
+        normalized_items.append((
+            _clean_required_text(item.opportunity_key, "opportunity_key"),
+            _clean_required_text(item.company, "company"),
+            _clean_required_text(item.vendor, "vendor"),
+            _clean_optional_text(item.review_id),
+        ))
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
     now = datetime.now(timezone.utc)
 
     updated = 0
-    for item in req.items:
+    for opportunity_key, company, vendor, review_id in normalized_items:
         await pool.execute(
             """
             INSERT INTO b2b_opportunity_dispositions
@@ -4347,10 +4360,10 @@ async def bulk_set_opportunity_dispositions(
             """,
             _uuid.uuid4(),
             acct,
-            item.opportunity_key.strip(),
-            item.company.strip(),
-            item.vendor.strip(),
-            _clean_optional_text(item.review_id),
+            opportunity_key,
+            company,
+            vendor,
+            review_id,
             req.disposition,
             parsed_snooze,
             now,
@@ -4367,12 +4380,16 @@ async def remove_opportunity_dispositions(
 ):
     """Remove dispositions (restore opportunities to active)."""
     _require_b2b_product(user)
-    pool = _pool_or_503()
-    acct = _uuid.UUID(user.account_id)
-
-    keys = [k.strip() for k in req.opportunity_keys if k.strip()]
+    keys: list[str] = []
+    for key in req.opportunity_keys:
+        cleaned = _clean_optional_text(key)
+        if cleaned:
+            keys.append(cleaned)
     if not keys:
         return {"removed": 0}
+
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
 
     result = await pool.execute(
         """

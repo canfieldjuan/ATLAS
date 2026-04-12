@@ -919,6 +919,217 @@ async def test_upsert_report_subscription_trims_scope_label_and_delivery_note(mo
 
 
 @pytest.mark.asyncio
+async def test_generate_campaigns_rejects_blank_vendor_name_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_growth", role="member", is_admin=False)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.generate_campaigns(
+            mod.GenerateCampaignRequest(vendor_name="   ", company_filter="   "),
+            user=user,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "vendor_name is required"
+
+
+@pytest.mark.asyncio
+async def test_generate_campaigns_trims_vendor_and_normalizes_blank_company_filter(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetchval=AsyncMock(return_value=1))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_growth", role="member", is_admin=False)
+    generate = AsyncMock(return_value={"generated": 2, "campaigns": []})
+    cfg = mod.settings.b2b_campaign
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_generate_campaigns", generate)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.generate_campaigns(
+        mod.GenerateCampaignRequest(vendor_name=" Zendesk ", company_filter="   "),
+        user=user,
+    )
+
+    assert result["campaigns_created"] == 2
+    assert pool.fetchval.await_args.args[1:] == (UUID(user.account_id), "Zendesk")
+    generate.assert_awaited_once_with(
+        pool,
+        vendor_filter="Zendesk",
+        company_filter=None,
+        target_mode=cfg.target_mode,
+        min_score=cfg.min_opportunity_score,
+        limit=cfg.max_campaigns_per_run,
+    )
+
+
+@pytest.mark.asyncio
+async def test_opportunity_disposition_routes_reject_blank_required_text_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+
+    cases = [
+        (
+            lambda: mod.set_opportunity_disposition(
+                mod.SetDispositionRequest(
+                    opportunity_key="   ",
+                    company="Acme",
+                    vendor="Zendesk",
+                    disposition="saved",
+                ),
+                user=user,
+            ),
+            "opportunity_key is required",
+        ),
+        (
+            lambda: mod.set_opportunity_disposition(
+                mod.SetDispositionRequest(
+                    opportunity_key="opp-1",
+                    company="   ",
+                    vendor="Zendesk",
+                    disposition="saved",
+                ),
+                user=user,
+            ),
+            "company is required",
+        ),
+        (
+            lambda: mod.bulk_set_opportunity_dispositions(
+                mod.BulkSetDispositionRequest(
+                    items=[
+                        mod.BulkDispositionItem(
+                            opportunity_key="opp-1",
+                            company="Acme",
+                            vendor="   ",
+                            review_id="review-1",
+                        )
+                    ],
+                    disposition="saved",
+                ),
+                user=user,
+            ),
+            "vendor is required",
+        ),
+    ]
+
+    for call, detail in cases:
+        monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        with pytest.raises(mod.HTTPException) as exc:
+            await call()
+        assert exc.value.status_code == 400
+        assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+async def test_opportunity_disposition_routes_trim_fields_before_persistence(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    now = datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc)
+
+    async def fetchrow(query, *args):
+        assert args[1] == UUID(str(account_id))
+        assert args[2:6] == ("opp-1", "Acme", "Zendesk", "review-1")
+        return {
+            "id": uuid4(),
+            "opportunity_key": args[2],
+            "company": args[3],
+            "vendor": args[4],
+            "review_id": args[5],
+            "disposition": args[6],
+            "snoozed_until": args[7],
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(side_effect=fetchrow),
+        execute=AsyncMock(return_value="DELETE 2"),
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+
+    single = await mod.set_opportunity_disposition(
+        mod.SetDispositionRequest(
+            opportunity_key=" opp-1 ",
+            company=" Acme ",
+            vendor=" Zendesk ",
+            review_id=" review-1 ",
+            disposition="saved",
+        ),
+        user=user,
+    )
+    bulk = await mod.bulk_set_opportunity_dispositions(
+        mod.BulkSetDispositionRequest(
+            items=[
+                mod.BulkDispositionItem(
+                    opportunity_key=" opp-1 ",
+                    company=" Acme ",
+                    vendor=" Zendesk ",
+                    review_id=" review-1 ",
+                )
+            ],
+            disposition="saved",
+        ),
+        user=user,
+    )
+    removed = await mod.remove_opportunity_dispositions(
+        mod.RemoveDispositionsRequest(opportunity_keys=[" opp-1 ", "   ", "opp-2"]),
+        user=user,
+    )
+
+    assert single["opportunity_key"] == "opp-1"
+    assert single["company"] == "Acme"
+    assert single["vendor"] == "Zendesk"
+    assert single["review_id"] == "review-1"
+    execute_calls = pool.execute.await_args_list
+    bulk_args = execute_calls[0].args
+    remove_args = execute_calls[1].args
+    assert bulk_args[3:7] == ("opp-1", "Acme", "Zendesk", "review-1")
+    assert remove_args[1] == UUID(str(account_id))
+    assert remove_args[2] == ["opp-1", "opp-2"]
+    assert bulk == {"updated": 1}
+    assert removed == {"removed": 2}
+
+
+@pytest.mark.asyncio
+async def test_list_opportunity_dispositions_normalizes_blank_filter(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        execute=AsyncMock(),
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+
+    result = await mod.list_opportunity_dispositions(disposition="   ", user=user)
+
+    assert result == {"dispositions": [], "count": 0}
+    assert pool.fetch.await_args.args == (
+        """
+            SELECT id, opportunity_key, company, vendor, review_id,
+                   disposition, snoozed_until, created_at, updated_at
+            FROM b2b_opportunity_dispositions
+            WHERE account_id = $1
+            ORDER BY updated_at DESC
+            """,
+        UUID(user.account_id),
+    )
+
+
+@pytest.mark.asyncio
 async def test_list_leads_uses_event_recency_and_company_fallback(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
