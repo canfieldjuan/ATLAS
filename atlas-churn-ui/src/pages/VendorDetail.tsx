@@ -202,6 +202,23 @@ function upstreamWatchlistsPath(backTo: string | null): string | null {
   return null
 }
 
+function upstreamNestedPath(backTo: string | null, prefix: string): string | null {
+  let current = normalizeBackTo(backTo)
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith(prefix)) return current
+
+    try {
+      const url = new URL(current, window.location.origin)
+      current = normalizeBackTo(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 function upstreamWatchlistsLabel(backTo: string | null): string {
   if (!backTo) return 'Open Watchlists'
   try {
@@ -362,8 +379,8 @@ export default function VendorDetail() {
   const watchlistsReturnPath = upstreamWatchlistsPath(backTo)
   const watchlistsReturnLabel = upstreamWatchlistsLabel(watchlistsReturnPath)
   const evidenceExplorerPath = upstreamEvidencePath(backTo, profile.vendor_name) ?? vendorEvidenceExplorerPath(profile.vendor_name)
-  const reportsPath = vendorReportsPath(profile.vendor_name)
-  const opportunitiesPath = vendorOpportunitiesPath(profile.vendor_name)
+  const reportsPath = upstreamNestedPath(backTo, '/reports') ?? vendorReportsPath(profile.vendor_name)
+  const opportunitiesPath = upstreamNestedPath(backTo, '/opportunities') ?? vendorOpportunitiesPath(profile.vendor_name)
   const handleCopyLink = () => {
     navigator.clipboard.writeText(`${window.location.origin}${vendorSharePath}`).then(() => {
       setCopied(true)
