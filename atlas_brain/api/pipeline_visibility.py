@@ -62,6 +62,15 @@ def _campaign_batch_stale_minutes() -> int:
     return int(getattr(settings.b2b_campaign, "anthropic_batch_stale_minutes", 30) or 30)
 
 
+def _clean_watchlist_event_status(value: str | None) -> str:
+    status_value = (value or "").strip().lower()
+    if not status_value:
+        return "open"
+    if status_value not in {"open", "resolved", "all"}:
+        raise HTTPException(status_code=422, detail="status must be one of: open, resolved, all")
+    return status_value
+
+
 def _managed_health_key(
     *,
     stage: str,
@@ -754,6 +763,7 @@ async def get_watchlist_delivery_view_detail(
     from . import b2b_tenant_dashboard as tenant_dashboard_api
 
     tenant_dashboard_api._require_b2b_product(user)
+    status_value = _clean_watchlist_event_status(event_status)
     pool = get_db_pool()
     account_id = UUID(user.account_id)
     view_row = await tenant_dashboard_api._fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
@@ -766,7 +776,7 @@ async def get_watchlist_delivery_view_detail(
     )
     events = await tenant_dashboard_api.list_watchlist_alert_events(
         view_id=view_id,
-        status=event_status,
+        status=status_value,
         limit=event_limit,
         user=user,
     )
