@@ -14,6 +14,18 @@ logger = logging.getLogger("atlas.api.proactive_actions")
 
 router = APIRouter(prefix="/actions", tags=["actions"])
 
+_VALID_STATUSES = {"pending", "done", "dismissed", "all"}
+
+
+def _clean_status_filter(status: str | None) -> str:
+    cleaned = str(status or "").strip().lower()
+    if not cleaned:
+        return "pending"
+    if cleaned not in _VALID_STATUSES:
+        raise HTTPException(400, "Invalid status")
+    return cleaned
+
+
 
 def _affected_rows(result: str) -> int:
     """Parse affected row count from asyncpg execute result (e.g. 'UPDATE 1')."""
@@ -31,6 +43,7 @@ async def list_actions(
     """List proactive actions with optional status filter."""
     from ..storage.database import get_db_pool
 
+    status = _clean_status_filter(status)
     pool = get_db_pool()
     if not pool.is_initialized:
         return {"count": 0, "actions": []}
