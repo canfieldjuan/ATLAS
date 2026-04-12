@@ -192,6 +192,9 @@ async def list_prospects(
     _user: AuthUser = Depends(require_auth),
 ):
     """List enriched prospects with optional filters."""
+    company = _clean_text(company)
+    status = _clean_text(status)
+    seniority = _clean_text(seniority)
     pool = _pool_or_503()
 
     conditions = []
@@ -285,6 +288,7 @@ async def list_manual_prospect_queue(
     _user: AuthUser = Depends(require_auth),
 ):
     """List prospect-org entries routed to manual/domain-assisted enrichment."""
+    company = _clean_text(company)
     pool = _pool_or_503()
 
     conditions = ["status = 'manual_review'"]
@@ -328,6 +332,7 @@ async def list_company_overrides(
     _user: AuthUser = Depends(require_auth),
 ):
     """List DB-backed Apollo company overrides."""
+    company = _clean_text(company)
     pool = _pool_or_503()
     overrides = list((await fetch_company_override_map(pool)).values())
     if company:
@@ -439,6 +444,9 @@ async def export_prospects(
     _user: AuthUser = Depends(require_auth),
 ):
     """Export prospects as CSV with current filters."""
+    company = _clean_text(company)
+    status = _clean_text(status)
+    seniority = _clean_text(seniority)
     pool = _pool_or_503()
 
     conditions: list[str] = []

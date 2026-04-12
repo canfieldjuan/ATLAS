@@ -4,6 +4,7 @@ import csv
 import io
 
 import pytest
+from unittest.mock import AsyncMock
 
 from atlas_brain.api import prospects as mod
 
@@ -28,6 +29,112 @@ class _ProspectPool:
         if "COUNT(*) AS total FROM prospects" in query:
             return {"total": len(self._prospect_rows)}
         return None
+
+
+@pytest.mark.asyncio
+async def test_list_prospects_normalizes_blank_and_trimmed_filters(monkeypatch):
+    from atlas_brain.api import prospects as mod
+
+    class Pool:
+        async def fetch(self, query, *args):
+            assert "LOWER(company_name) LIKE $1" not in query
+            assert "status = $1" in query
+            assert "seniority = $2" not in query
+            assert args == ("active", 50, 0)
+            return []
+
+        async def fetchrow(self, query, *args):
+            assert args == ("active",)
+            return {"total": 0}
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+
+    result = await mod.list_prospects(
+        company="   ",
+        status="  active  ",
+        seniority="	",
+        limit=50,
+        offset=0,
+        _user=object(),
+    )
+
+    assert result == {"prospects": [], "count": 0}
+
+
+@pytest.mark.asyncio
+async def test_list_manual_prospect_queue_normalizes_blank_company(monkeypatch):
+    from atlas_brain.api import prospects as mod
+
+    class Pool:
+        async def fetch(self, query, *args):
+            assert "LOWER(company_name_raw) LIKE $1" not in query
+            assert args == (25, 0)
+            return []
+
+        async def fetchrow(self, query, *args):
+            assert args == ()
+            return {"total": 0}
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+
+    result = await mod.list_manual_prospect_queue(
+        company="   ",
+        limit=25,
+        offset=0,
+        _user=object(),
+    )
+
+    assert result == {"queue": [], "count": 0}
+
+
+@pytest.mark.asyncio
+async def test_list_company_overrides_normalizes_blank_company(monkeypatch):
+    from atlas_brain.api import prospects as mod
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: object())
+    monkeypatch.setattr(
+        mod,
+        "fetch_company_override_map",
+        AsyncMock(return_value={
+            "acme": {"company_name_raw": "Acme Inc", "company_name_norm": "acme"},
+            "globex": {"company_name_raw": "Globex Corp", "company_name_norm": "globex"},
+        }),
+    )
+
+    result = await mod.list_company_overrides(company="   ", _user=object())
+
+    assert result["count"] == 2
+    assert {row["company_name_norm"] for row in result["overrides"]} == {"acme", "globex"}
+
+
+@pytest.mark.asyncio
+async def test_export_prospects_normalizes_blank_and_trimmed_filters(monkeypatch):
+    from atlas_brain.api import prospects as mod
+
+    class Pool:
+        async def fetch(self, query, *args):
+            assert "LOWER(p.company_name) LIKE $1" not in query
+            assert "p.status = $1" in query
+            assert "p.seniority = $2" not in query
+            assert args == ("active",)
+            return []
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+
+    response = await mod.export_prospects(
+        company="   ",
+        status="  active  ",
+        seniority="  ",
+        _user=object(),
+    )
+
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = "".join(
+        chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+        for chunk in chunks
+    )
+    assert body == ""
+
 
 
 @pytest.mark.asyncio
