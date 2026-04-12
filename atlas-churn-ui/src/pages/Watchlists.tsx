@@ -378,6 +378,17 @@ function watchlistAlertsUrl(searchParams: URLSearchParams) {
   return `${window.location.origin}${watchlistAlertsPath(searchParams)}`
 }
 
+function watchlistVendorAlertsPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', watchlistPath(searchParams))
+  return `/alerts?${params.toString()}`
+}
+
+function watchlistVendorAlertsUrl(searchParams: URLSearchParams, vendorName: string) {
+  return `${window.location.origin}${watchlistVendorAlertsPath(searchParams, vendorName)}`
+}
+
 function watchlistVendorPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('back_to', watchlistPath(searchParams))
@@ -549,10 +560,7 @@ function watchlistAlertEventVendorPath(searchParams: URLSearchParams, event: Wat
 function watchlistAlertEventAlertsPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
   const vendorName = watchlistAlertEventVendorName(event)
   if (!vendorName) return null
-  const params = new URLSearchParams()
-  params.set('vendor', vendorName)
-  params.set('back_to', watchlistPath(watchlistAlertEventContextParams(searchParams, event)))
-  return `/alerts?${params.toString()}`
+  return watchlistVendorAlertsPath(watchlistAlertEventContextParams(searchParams, event), vendorName)
 }
 
 function watchlistAlertEventReportsPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
@@ -1939,7 +1947,7 @@ export default function Watchlists() {
   async function handleCopySelectedAlertsLink() {
     if (!selectedAccount) return
     try {
-      await navigator.clipboard.writeText(watchlistAlertsUrl(selectedAccountSearchParams))
+      await navigator.clipboard.writeText(watchlistVendorAlertsUrl(selectedAccountSearchParams, selectedAccount.vendor))
       setActionError(null)
       setActionMessage(`Copied Alerts API link for ${selectedAccount.company || selectedAccount.vendor}`)
     } catch (err) {
@@ -1967,6 +1975,19 @@ export default function Watchlists() {
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy vendor link')
+    }
+  }
+
+  async function handleCopyAccountRowAlertsLink(row: AccountsInMotionFeedItem) {
+    try {
+      await navigator.clipboard.writeText(
+        watchlistVendorAlertsUrl(accountFocusParams(outboundWatchlistSearchParams, row), row.vendor),
+      )
+      setActionError(null)
+      setActionMessage(`Copied Alerts API link for ${row.company || row.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy Alerts API link')
     }
   }
 
@@ -2117,6 +2138,17 @@ export default function Watchlists() {
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy evidence link')
+    }
+  }
+
+  async function handleCopyVendorAlertsLink(vendorName: string) {
+    try {
+      await navigator.clipboard.writeText(watchlistVendorAlertsUrl(searchParams, vendorName))
+      setActionError(null)
+      setActionMessage(`Copied Alerts API link for ${vendorName}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy Alerts API link')
     }
   }
 
@@ -2639,6 +2671,25 @@ export default function Watchlists() {
             Evidence
           </Link>
           <Link
+            to={watchlistVendorAlertsPath(searchParams, row.vendor_name)}
+            onClick={(event) => event.stopPropagation()}
+            aria-label={`Open alerts for ${row.vendor_name}`}
+            className="rounded-md bg-violet-500/10 px-2.5 py-1 text-xs font-medium text-violet-200 hover:bg-violet-500/20"
+          >
+            Alerts
+          </Link>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void handleCopyVendorAlertsLink(row.vendor_name)
+            }}
+            aria-label={`Copy alerts link for ${row.vendor_name}`}
+            className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+          >
+            Copy Alerts
+          </button>
+          <Link
             to={watchlistReportsPath(searchParams, row.vendor_name)}
             onClick={(event) => event.stopPropagation()}
             aria-label={`Open reports for ${row.vendor_name}`}
@@ -2774,6 +2825,25 @@ export default function Watchlists() {
               className="text-slate-300 hover:text-slate-200"
             >
               Copy evidence
+            </button>
+            <Link
+              to={watchlistVendorAlertsPath(searchParams, row.vendor_name)}
+              onClick={(event) => event.stopPropagation()}
+              aria-label={`Open vendor alerts for ${row.vendor_name}`}
+              className="text-violet-200 hover:text-violet-100"
+            >
+              Alerts
+            </Link>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCopyVendorAlertsLink(row.vendor_name)
+              }}
+              aria-label={`Copy vendor alerts link for ${row.vendor_name}`}
+              className="text-slate-300 hover:text-slate-200"
+            >
+              Copy alerts
             </button>
           </div>
           <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
@@ -3145,6 +3215,31 @@ export default function Watchlists() {
                 title="Copy account link"
               >
                 Copy Link
+              </button>
+            )}
+            {row.company && (
+              <Link
+                to={watchlistVendorAlertsPath(accountFocusParams(outboundWatchlistSearchParams, row), row.vendor)}
+                onClick={(e) => e.stopPropagation()}
+                aria-label={`View alerts for ${row.vendor}`}
+                className="rounded-md bg-violet-500/10 px-2 py-1 text-xs font-medium text-violet-200 hover:bg-violet-500/20"
+                title="View alerts"
+              >
+                Alerts
+              </Link>
+            )}
+            {row.company && (
+              <button
+                type="button"
+                className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyAccountRowAlertsLink(row)
+                }}
+                aria-label={`Copy account alerts link for ${row.vendor}`}
+                title="Copy alerts link"
+              >
+                Copy alerts
               </button>
             )}
             {row.company && (
@@ -4701,7 +4796,7 @@ export default function Watchlists() {
         open={selectedAccount != null}
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(watchlistVendorPath(selectedAccountSearchParams, vendorName))}
-        alertsApiUrl={selectedAccount ? watchlistAlertsPath(selectedAccountSearchParams) : null}
+        alertsApiUrl={selectedAccount ? watchlistVendorAlertsPath(selectedAccountSearchParams, selectedAccount.vendor) : null}
         onCopyAlertsLink={() => void handleCopySelectedAlertsLink()}
         onCopyVendorLink={() => void handleCopySelectedVendorLink()}
         onCopyWitnessLink={(witnessId) => void handleCopySelectedWitnessLink(witnessId)}

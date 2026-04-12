@@ -483,6 +483,41 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Copied opportunity link for Acme Corp')).toBeInTheDocument()
   })
 
+  it('preserves focused watchlist context when opening alerts from an account row', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'View alerts for Zendesk' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+    )
+  })
+
+  it('copies an alerts link directly from an account row', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy account alerts link for Zendesk' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/alerts?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor`,
+      )
+    })
+    expect(await screen.findByText('Copied Alerts API link for Acme Corp')).toBeInTheDocument()
+  })
+
   it('preserves watchlist context when opening reports from an account row', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
@@ -1623,6 +1658,34 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Copied evidence link for Zendesk')).toBeInTheDocument()
   })
 
+  it('copies a vendor-scoped alerts link directly from the movement feed', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy vendor alerts link for Zendesk' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/alerts')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Zendesk')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('source')).toBe('reddit')
+    expect(await screen.findByText('Copied Alerts API link for Zendesk')).toBeInTheDocument()
+  })
+
   it('copies a vendor-scoped opportunities link directly from the movement feed', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
@@ -1737,6 +1800,10 @@ describe('Watchlists', () => {
       'href',
       '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists',
     )
+    expect(screen.getByRole('link', { name: 'Open vendor alerts for Zendesk' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Zendesk&back_to=%2Fwatchlists',
+    )
     expect(screen.getByRole('link', { name: 'Open vendor reports for Zendesk' })).toHaveAttribute(
       'href',
       '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists',
@@ -1763,6 +1830,10 @@ describe('Watchlists', () => {
     expect(screen.getByRole('link', { name: 'Open reports for Intercom' })).toHaveAttribute(
       'href',
       '/reports?vendor_filter=Intercom&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Open alerts for Intercom' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Intercom&back_to=%2Fwatchlists%3Fview%3Dview-1',
     )
     expect(screen.getByRole('link', { name: 'Open opportunities for Intercom' })).toHaveAttribute(
       'href',
@@ -1841,6 +1912,35 @@ describe('Watchlists', () => {
     expect(backToUrl.searchParams.get('category')).toBe('Helpdesk')
     expect(backToUrl.searchParams.get('source')).toBe('reddit')
     expect(await screen.findByText('Copied evidence link for Intercom')).toBeInTheDocument()
+  })
+
+  it('copies a vendor-scoped alerts link from the tracked vendor list', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit&category=Helpdesk']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy alerts link for Intercom' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/alerts')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Intercom')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('category')).toBe('Helpdesk')
+    expect(backToUrl.searchParams.get('source')).toBe('reddit')
+    expect(await screen.findByText('Copied Alerts API link for Intercom')).toBeInTheDocument()
   })
 
   it('copies a vendor-scoped opportunities link from the tracked vendor list', async () => {
