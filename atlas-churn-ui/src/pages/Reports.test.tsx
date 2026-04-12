@@ -1022,6 +1022,32 @@ describe('Reports', () => {
     })
   })
 
+  it('copies the direct account review shortcut for nested watchlist report context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26back_to%3D%252Fwatchlists%253Faccount_vendor%253DZendesk%2526account_company%253DAcme%252BCorp%2526account_report_date%253D2026-04-05%2526account_watch_vendor%253DZendesk%2526account_category%253DHelpdesk%2526account_track_mode%253Dcompetitor',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Copy Account Review Link' })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Account Review Link' }))
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor`,
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+    })
+  })
+
   it('shows vendor workspace, evidence, and opportunity shortcuts for an active vendor filter', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports', element: <Reports /> }],

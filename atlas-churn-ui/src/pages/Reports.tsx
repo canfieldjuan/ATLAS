@@ -319,6 +319,7 @@ export default function Reports() {
   const [requestedReportFallback, setRequestedReportFallback] = useState<Report | null>(null)
   const [copiedReportLinkId, setCopiedReportLinkId] = useState<string | null>(null)
   const [copiedSubscriptionLinkId, setCopiedSubscriptionLinkId] = useState<string | null>(null)
+  const [copiedDirectWatchlistsLink, setCopiedDirectWatchlistsLink] = useState(false)
   const activeVendorFilter = debouncedVendor.trim()
   const requestedReportSubscriptionId = searchParams.get('report_subscription') ?? ''
   const requestedReportFocusType = searchParams.get('report_focus_type') ?? ''
@@ -662,6 +663,16 @@ export default function Reports() {
     })
   }, [])
 
+  const handleCopyDirectWatchlistsLink = useCallback(() => {
+    if (!directWatchlistsPath) return
+    void navigator.clipboard.writeText(`${window.location.origin}${directWatchlistsPath}`).then(() => {
+      setCopiedDirectWatchlistsLink(true)
+      window.setTimeout(() => {
+        setCopiedDirectWatchlistsLink(false)
+      }, 2000)
+    })
+  }, [directWatchlistsPath])
+
   function clearFilters() {
     setTypeFilter('')
     setQualityFilter('')
@@ -846,14 +857,33 @@ export default function Reports() {
                     Filtered to <span className="text-slate-300">{activeVendorFilter}</span>
                   </span>
                   {directWatchlistsPath ? (
-                    <Link
-                      to={directWatchlistsPath}
-                      className={directWatchlistsLabel === 'Account Review'
-                        ? 'text-amber-300 hover:text-amber-200 transition-colors'
-                        : 'text-violet-300 hover:text-violet-200 transition-colors'}
-                    >
-                      {directWatchlistsLabel}
-                    </Link>
+                    <>
+                      <Link
+                        to={directWatchlistsPath}
+                        className={directWatchlistsLabel === 'Account Review'
+                          ? 'text-amber-300 hover:text-amber-200 transition-colors'
+                          : 'text-violet-300 hover:text-violet-200 transition-colors'}
+                      >
+                        {directWatchlistsLabel}
+                      </Link>
+                      <button
+                        onClick={() => void handleCopyDirectWatchlistsLink()}
+                        className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+                        title={directWatchlistsLabel === 'Account Review' ? 'Copy account review link' : 'Copy watchlists link'}
+                      >
+                        {copiedDirectWatchlistsLink ? (
+                          <>
+                            <Check className="h-3.5 w-3.5 text-emerald-400" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5" />
+                            {directWatchlistsLabel === 'Account Review' ? 'Copy Account Review Link' : 'Copy Watchlists Link'}
+                          </>
+                        )}
+                      </button>
+                    </>
                   ) : null}
                   <Link
                     to={vendorDetailPath(activeVendorFilter, currentLibraryPath)}

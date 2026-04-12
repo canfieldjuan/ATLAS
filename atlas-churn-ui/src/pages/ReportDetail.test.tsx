@@ -64,6 +64,11 @@ describe('ReportDetail', () => {
     modalState.lastProps = null
     drawerState.lastProps = null
     actionBarState.lastProps = null
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
+    })
     api.fetchReport.mockResolvedValue({
       id: 'report-1',
       report_type: 'vendor_scorecard',
@@ -424,6 +429,29 @@ describe('ReportDetail', () => {
       'href',
       '/opportunities?vendor=Zendesk&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
+  })
+
+  it('copies the direct account review shortcut for nested watchlist report detail context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Faccount_vendor%253DZendesk%2526account_company%253DAcme%252BCorp%2526account_report_date%253D2026-04-05%2526account_watch_vendor%253DZendesk%2526account_category%253DHelpdesk%2526account_track_mode%253Dcompetitor',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Account Review Link' }))
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor`,
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+    })
   })
 
   it('passes a normalized share URL to the detail action bar', async () => {

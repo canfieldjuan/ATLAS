@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import { Link, useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
-import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import ReportTrustPanel from '../components/ReportTrustPanel'
@@ -128,6 +128,7 @@ export default function ReportDetail() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(null)
   const [drawerVendor, setDrawerVendor] = useState('')
+  const [copiedDirectWatchlistsLink, setCopiedDirectWatchlistsLink] = useState(false)
 
   const handleOpenWitness = useCallback((witnessId: string, vendorName: string) => {
     setDrawerWitnessId(witnessId)
@@ -208,6 +209,15 @@ export default function ReportDetail() {
     const qs = next.toString()
     return qs ? `/reports/${report.id}?${qs}` : `/reports/${report.id}`
   })()
+  const handleCopyDirectWatchlistsLink = () => {
+    if (!directWatchlistsPath) return
+    void navigator.clipboard.writeText(`${window.location.origin}${directWatchlistsPath}`).then(() => {
+      setCopiedDirectWatchlistsLink(true)
+      window.setTimeout(() => {
+        setCopiedDirectWatchlistsLink(false)
+      }, 2000)
+    })
+  }
   const badgeColor = REPORT_TYPE_COLORS[report.report_type] ?? 'bg-slate-500/20 text-slate-400'
   const title = ['vendor_comparison', 'account_comparison'].includes(report.report_type) && report.vendor_filter && report.category_filter
     ? `${report.vendor_filter} vs ${report.category_filter}`
@@ -279,14 +289,33 @@ export default function ReportDetail() {
               Focused on <span className="text-slate-300">{report.vendor_filter}</span>
             </span>
             {directWatchlistsPath ? (
-              <Link
-                to={directWatchlistsPath}
-                className={directWatchlistsLabel === 'Account Review'
-                  ? 'text-amber-300 hover:text-amber-200 transition-colors'
-                  : 'text-violet-300 hover:text-violet-200 transition-colors'}
-              >
-                {directWatchlistsLabel}
-              </Link>
+              <>
+                <Link
+                  to={directWatchlistsPath}
+                  className={directWatchlistsLabel === 'Account Review'
+                    ? 'text-amber-300 hover:text-amber-200 transition-colors'
+                    : 'text-violet-300 hover:text-violet-200 transition-colors'}
+                >
+                  {directWatchlistsLabel}
+                </Link>
+                <button
+                  onClick={() => void handleCopyDirectWatchlistsLink()}
+                  className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+                  title={directWatchlistsLabel === 'Account Review' ? 'Copy account review link' : 'Copy watchlists link'}
+                >
+                  {copiedDirectWatchlistsLink ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5" />
+                      {directWatchlistsLabel === 'Account Review' ? 'Copy Account Review Link' : 'Copy Watchlists Link'}
+                    </>
+                  )}
+                </button>
+              </>
             ) : null}
             <Link
               to={vendorDetailPath(report.vendor_filter, detailBackPath)}
