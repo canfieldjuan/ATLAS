@@ -13491,6 +13491,8 @@ async def read_company_signal_review_impact_summary(
                 "recent_value": 0.0,
                 "prior_value": 0.0,
                 "rationale": None,
+                "impact_filters": {},
+                "queue_filters": {},
             },
             "trend_alerts": [],
             "trend_recommendation": {
@@ -14399,6 +14401,19 @@ async def read_company_signal_review_impact_summary(
         for alert in raw_trend_alerts
     ]
     trend_focus = _build_trend_focus(trend_comparison, trend_alerts)
+    trend_focus = {
+        **dict(trend_focus),
+        "impact_filters": (
+            _build_trend_recommendation_filters({}, trend_focus)
+            if trend_focus.get("focus")
+            else {}
+        ),
+        "queue_filters": (
+            _build_trend_alert_queue_filters(trend_focus)
+            if trend_focus.get("focus")
+            else {}
+        ),
+    }
     trend_recommendation = _build_trend_recommendation(trend_comparison, trend_focus, trend_alerts)
     trend_recommendation_filters = _build_trend_recommendation_filters(trend_recommendation, trend_focus)
     trend_recommendation_queue_filters = _build_trend_recommendation_queue_filters(trend_recommendation, trend_focus)

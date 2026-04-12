@@ -1118,6 +1118,15 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["trend_focus"]["direction"] == "down"
     assert summary["trend_focus"]["recent_value"] == 0.5
     assert summary["trend_focus"]["prior_value"] == 1.0
+    assert summary["trend_focus"]["impact_filters"]["company_signal_action"] == "none"
+    assert summary["trend_focus"]["queue_filters"] == {
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "canonical_gap_reason": "low_confidence_low_trust_source",
+        "review_priority_band": "promote_now",
+        "review_priority_reason": "canonical_ready",
+        "source_name": "reddit",
+    }
     assert len(summary["trend_alerts"]) == 2
     assert summary["trend_alerts"][0]["focus"] == "effect_rate_down"
     assert summary["trend_alerts"][0]["impact_filters"]["company_signal_action"] == "none"
@@ -1181,6 +1190,8 @@ async def test_read_company_signal_review_impact_summary_returns_no_data_without
     assert summary["trend_comparison"]["prior_days_present"] == 0
     assert summary["trend_focus"]["status"] == "no_data"
     assert summary["trend_focus"]["focus"] is None
+    assert summary["trend_focus"]["impact_filters"] == {}
+    assert summary["trend_focus"]["queue_filters"] == {}
     assert summary["trend_alerts"] == []
 
 

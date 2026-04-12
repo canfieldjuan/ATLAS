@@ -422,6 +422,8 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
             "recent_value": 0.5,
             "prior_value": 0.75,
             "rationale": "Recent review actions are producing fewer downstream effects per action.",
+            "impact_filters": {"company_signal_action": "none"},
+            "queue_filters": {"candidate_bucket": "analyst_review", "review_status": "pending"},
         },
         "trend_alerts": [{
             "status": "watch",
