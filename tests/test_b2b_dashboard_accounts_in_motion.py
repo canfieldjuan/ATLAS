@@ -2628,6 +2628,151 @@ async def test_get_calibration_weights_preserves_active_dimension_filter():
 
 
 @pytest.mark.asyncio
+async def test_required_single_vendor_query_routes_reject_blank_vendor_name_without_db_touch():
+    cases = [
+        (
+            lambda: b2b_dashboard.get_vendor_history(vendor_name="   ", days=90, limit=90, user=None),
+            "vendor_name is required",
+        ),
+        (
+            lambda: b2b_dashboard.get_product_profile(vendor_name="	", user=None),
+            "vendor_name is required",
+        ),
+        (
+            lambda: b2b_dashboard.get_product_profile_history(vendor_name="  ", days=90, limit=90, user=None),
+            "vendor_name is required",
+        ),
+        (
+            lambda: b2b_dashboard.compare_vendor_periods(vendor_name="	", period_a_days_ago=30, period_b_days_ago=0, user=None),
+            "vendor_name is required",
+        ),
+        (
+            lambda: b2b_dashboard.list_accounts_in_motion(vendor_name="   ", min_urgency=5, window_days=30, limit=25, user=None),
+            "vendor_name is required",
+        ),
+        (
+            lambda: b2b_dashboard.list_accounts_in_motion_live(vendor_name="  ", min_urgency=5, window_days=30, limit=25, user=None),
+            "vendor_name is required",
+        ),
+    ]
+
+    for call, detail in cases:
+        with patch.object(b2b_dashboard, "_pool_or_503", side_effect=AssertionError("db should not be touched")):
+            with pytest.raises(b2b_dashboard.HTTPException) as exc:
+                await call()
+        assert exc.value.status_code == 400
+        assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+async def test_required_pair_vendor_query_routes_reject_blank_vendor_names_without_db_touch():
+    cases = [
+        (
+            lambda: b2b_dashboard.get_displacement_history(from_vendor="   ", to_vendor="HubSpot", window_days=30, user=None),
+            "from_vendor is required",
+        ),
+        (
+            lambda: b2b_dashboard.get_displacement_history(from_vendor="Salesforce", to_vendor="	", window_days=30, user=None),
+            "to_vendor is required",
+        ),
+        (
+            lambda: b2b_dashboard.get_vendor_correlation(vendor_a="   ", vendor_b="HubSpot", days=90, metric="churn_density", user=None),
+            "vendor_a is required",
+        ),
+        (
+            lambda: b2b_dashboard.get_vendor_correlation(vendor_a="Salesforce", vendor_b="  ", days=90, metric="churn_density", user=None),
+            "vendor_b is required",
+        ),
+    ]
+
+    for call, detail in cases:
+        with patch.object(b2b_dashboard, "_pool_or_503", side_effect=AssertionError("db should not be touched")):
+            with pytest.raises(b2b_dashboard.HTTPException) as exc:
+                await call()
+        assert exc.value.status_code == 400
+        assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+async def test_get_displacement_history_trims_active_vendor_names():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.get_displacement_history(
+            from_vendor=" Salesforce ",
+            to_vendor=" HubSpot ",
+            window_days=30,
+            user=None,
+        )
+
+    assert result == {
+        "from_vendor": "Salesforce",
+        "to_vendor": "HubSpot",
+        "window_days": 30,
+        "history": [],
+        "data_points": 0,
+    }
+    query, *params = pool.fetch.await_args.args
+    assert "LOWER(from_vendor) = LOWER($1)" in query
+    assert "LOWER(to_vendor) = LOWER($2)" in query
+    assert params == ["Salesforce", "HubSpot", 30]
+
+
+@pytest.mark.asyncio
+async def test_accounts_in_motion_routes_trim_active_vendor_name_before_downstream_calls():
+    pool = MagicMock()
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(b2b_dashboard, "_validate_accounts_in_motion_window"):
+            with patch.object(
+                b2b_dashboard,
+                "_list_accounts_in_motion_from_report",
+                new=AsyncMock(return_value={"vendor": "Zendesk", "accounts": [], "count": 0}),
+            ) as report_mock:
+                result = await b2b_dashboard.list_accounts_in_motion(
+                    vendor_name=" Zendesk ",
+                    min_urgency=5,
+                    window_days=30,
+                    limit=25,
+                    user=None,
+                )
+
+    assert result == {"vendor": "Zendesk", "accounts": [], "count": 0}
+    report_mock.assert_awaited_once_with(
+        pool,
+        "Zendesk",
+        min_urgency=5,
+        limit=25,
+        user=None,
+    )
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_list_accounts_in_motion_from_reviews",
+            new=AsyncMock(return_value={"vendor": "Zendesk", "accounts": [], "count": 0}),
+        ) as reviews_mock:
+            result = await b2b_dashboard.list_accounts_in_motion_live(
+                vendor_name=" Zendesk ",
+                min_urgency=5,
+                window_days=30,
+                limit=25,
+                user=None,
+            )
+
+    assert result == {"vendor": "Zendesk", "accounts": [], "count": 0}
+    reviews_mock.assert_awaited_once_with(
+        pool,
+        "Zendesk",
+        min_urgency=5,
+        window_days=30,
+        limit=25,
+        user=None,
+    )
+
+
+@pytest.mark.asyncio
 async def test_list_webhooks_exposes_latest_failure_summary():
     created_at = datetime.now(timezone.utc) - timedelta(days=1)
     failed_at = datetime.now(timezone.utc) - timedelta(hours=2)

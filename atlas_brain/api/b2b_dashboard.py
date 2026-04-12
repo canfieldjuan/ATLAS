@@ -639,6 +639,13 @@ def _optional_query_text(value: Any) -> str | None:
     return value or None
 
 
+def _required_query_text(value: Any, field_name: str) -> str:
+    normalized = _optional_query_text(value)
+    if normalized is None:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    return normalized
+
+
 def _normalize_source_query(value: Any) -> str | None:
     value = _optional_query_text(value)
     return value.lower() if value else None
@@ -2723,6 +2730,8 @@ async def get_displacement_history(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Time-series of displacement edge strength for a vendor pair."""
+    from_vendor = _required_query_text(from_vendor, "from_vendor")
+    to_vendor = _required_query_text(to_vendor, "to_vendor")
     pool = _pool_or_503()
     rows = await pool.fetch(
         """
@@ -4367,6 +4376,7 @@ async def get_vendor_history(
     limit: int = Query(90, ge=1, le=365),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
     rows = await pool.fetch(
         """
@@ -4420,6 +4430,7 @@ async def get_product_profile(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Fetch pre-computed product profile knowledge card for a vendor."""
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
     row = await pool.fetchrow(
         """
@@ -4434,7 +4445,7 @@ async def get_product_profile(
         ORDER BY total_reviews_analyzed DESC
         LIMIT 1
         """,
-        vendor_name.strip(),
+        vendor_name,
     )
     if not row:
         raise HTTPException(404, f"No product profile found for '{vendor_name}'")
@@ -4474,6 +4485,7 @@ async def get_product_profile_history(
     limit: int = Query(90, ge=1, le=365),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
     rows = await pool.fetch(
         """
@@ -4796,6 +4808,8 @@ async def get_vendor_correlation(
     Supported metrics: churn_density, avg_urgency, recommend_ratio, total_reviews,
     displacement_edge_count, high_intent_company_count.
     """
+    vendor_a = _required_query_text(vendor_a, "vendor_a")
+    vendor_b = _required_query_text(vendor_b, "vendor_b")
     pool = _pool_or_503()
 
     valid_metrics = {
@@ -4906,6 +4920,7 @@ async def compare_vendor_periods(
     period_b_days_ago: int = Query(0, ge=0, le=365),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
 
     async def _nearest_snapshot(target_days_ago: int):
@@ -7480,6 +7495,7 @@ async def list_accounts_in_motion(
     data (from Apollo), and decision-maker contacts with verified emails.
     Designed for SDR prospecting lists.
     """
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
     _validate_accounts_in_motion_window(window_days)
     persisted = await _list_accounts_in_motion_from_report(
@@ -7506,6 +7522,7 @@ async def list_accounts_in_motion_live(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Live exploratory accounts-in-motion view rebuilt directly from reviews."""
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
     return await _list_accounts_in_motion_from_reviews(
         pool,
