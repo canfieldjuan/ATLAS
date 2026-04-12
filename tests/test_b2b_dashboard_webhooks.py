@@ -358,6 +358,34 @@ async def test_list_crm_push_log_rejects_invalid_uuid_before_db_touch():
 
 
 @pytest.mark.asyncio
+async def test_test_webhook_dispatches_after_ownership_check():
+    user = MagicMock(account_id='account-1')
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch(
+            'atlas_brain.services.b2b.webhook_dispatcher.send_test_webhook',
+            new=AsyncMock(return_value={'ok': True, 'delivery_id': 'deliv-1'}),
+        ) as send_mock:
+            result = await b2b_dashboard.test_webhook(
+                '3df7f790-6afc-4e0f-b40e-a78f77e60dd2',
+                user=user,
+            )
+
+    pool.fetchval.assert_awaited_once_with(
+        'SELECT 1 FROM b2b_webhook_subscriptions WHERE id = $1 AND account_id = $2::uuid',
+        b2b_dashboard._uuid.UUID('3df7f790-6afc-4e0f-b40e-a78f77e60dd2'),
+        'account-1',
+    )
+    send_mock.assert_awaited_once_with(
+        pool,
+        b2b_dashboard._uuid.UUID('3df7f790-6afc-4e0f-b40e-a78f77e60dd2'),
+    )
+    assert result == {'ok': True, 'delivery_id': 'deliv-1'}
+
+
+@pytest.mark.asyncio
 async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=1)

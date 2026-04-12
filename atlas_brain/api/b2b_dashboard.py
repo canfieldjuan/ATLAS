@@ -6316,6 +6316,8 @@ async def test_webhook(
     except ValueError:
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
+    pool = _pool_or_503()
+
     # Verify ownership
     owns = await pool.fetchval(
         "SELECT 1 FROM b2b_webhook_subscriptions WHERE id = $1 AND account_id = $2::uuid",
