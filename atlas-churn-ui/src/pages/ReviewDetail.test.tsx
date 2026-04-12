@@ -158,6 +158,38 @@ describe('ReviewDetail', () => {
     )
   })
 
+  it('shows a direct watchlists shortcut for generic watchlist context', async () => {
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1%26vendor_name%3DZendesk']}> 
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-1&vendor_name=Zendesk',
+    )
+  })
+
+  it('surfaces the watchlists shortcut through nested evidence context', async () => {
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526vendor_name%253DZendesk']}> 
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-1&vendor_name=Zendesk',
+    )
+  })
+
   it('shows a direct account review shortcut for focused watchlist context', async () => {
     render(
       <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor']}>
@@ -188,6 +220,28 @@ describe('ReviewDetail', () => {
       'href',
       '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor',
     )
+  })
+
+  it('copies the direct watchlists shortcut link', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1%26vendor_name%3DZendesk']}> 
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy watchlists link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/watchlists?view=view-1&vendor_name=Zendesk`,
+      )
+    })
   })
 
   it('copies the direct account review shortcut link', async () => {

@@ -95,17 +95,12 @@ function backToLabel(value: string) {
   return 'Back to Reviews'
 }
 
-function accountReviewPath(backTo: string | null): string | null {
+function watchlistsPath(backTo: string | null): string | null {
   let current = backTo?.trim() || ''
 
   for (let depth = 0; depth < 4 && current; depth += 1) {
     if (current.startsWith('/watchlists')) {
-      try {
-        const url = new URL(current, window.location.origin)
-        return url.searchParams.get('account_company')?.trim() ? current : null
-      } catch {
-        return null
-      }
+      return current
     }
 
     try {
@@ -119,13 +114,25 @@ function accountReviewPath(backTo: string | null): string | null {
   return null
 }
 
+function accountReviewPath(backTo: string | null): string | null {
+  const value = watchlistsPath(backTo)
+  if (!value) return null
+
+  try {
+    const url = new URL(value, window.location.origin)
+    return url.searchParams.get('account_company')?.trim() ? value : null
+  } catch {
+    return null
+  }
+}
+
 export default function ReviewDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
   const [copied, setCopied] = useState(false)
-  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'account' | 'evidence' | 'vendor' | 'reports' | 'opportunities'; status: 'copied' | 'error' } | null>(null)
+  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'watchlists' | 'account' | 'evidence' | 'vendor' | 'reports' | 'opportunities'; status: 'copied' | 'error' } | null>(null)
 
   const { data: review, loading, error, refresh, refreshing } = useApiData<ReviewDetailType>(
     () => {
@@ -164,6 +171,7 @@ export default function ReviewDetail() {
   })()
   const backToReviews = stateBackTo ?? queryBackTo ?? '/reviews'
   const upstreamEvidencePath = backToReviews.startsWith('/evidence') ? backToReviews : null
+  const directWatchlistsPath = watchlistsPath(backToReviews)
   const directAccountReviewPath = accountReviewPath(backToReviews)
   const reviewDetailBackPath = (() => {
     const next = new URLSearchParams()
@@ -182,7 +190,7 @@ export default function ReviewDetail() {
     })
   }
   const handleCopyShortcutLink = (
-    key: 'account' | 'evidence' | 'vendor' | 'reports' | 'opportunities',
+    key: 'watchlists' | 'account' | 'evidence' | 'vendor' | 'reports' | 'opportunities',
     path: string,
   ) => {
     navigator.clipboard.writeText(`${window.location.origin}${path}`).then(() => {
@@ -242,6 +250,27 @@ export default function ReviewDetail() {
         <div>
           <h1 className="text-2xl font-bold text-white">{review.vendor_name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+            {directWatchlistsPath && !directAccountReviewPath ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Link
+                  to={directWatchlistsPath}
+                  className="text-violet-300 hover:text-violet-200 transition-colors"
+                >
+                  Watchlists
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => handleCopyShortcutLink('watchlists', directWatchlistsPath)}
+                  className="text-slate-400 hover:text-white transition-colors"
+                  aria-label="Copy watchlists link"
+                  title="Copy watchlists link"
+                >
+                  {copiedShortcutState?.key === 'watchlists' && copiedShortcutState.status === 'copied'
+                    ? <Check className="h-3.5 w-3.5 text-green-400" />
+                    : <Copy className="h-3.5 w-3.5" />}
+                </button>
+              </span>
+            ) : null}
             {directAccountReviewPath ? (
               <span className="inline-flex items-center gap-1.5">
                 <Link
