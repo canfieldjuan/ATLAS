@@ -2259,6 +2259,27 @@ async def test_create_watchlist_view_falls_back_to_legacy_vendor_name_when_vendo
 
 
 @pytest.mark.asyncio
+async def test_create_watchlist_view_rejects_invalid_alert_frequency_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetchval=AsyncMock(), fetchrow=AsyncMock())
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.create_watchlist_view(
+            req=mod.WatchlistViewRequest(name="My alerts", alert_delivery_frequency="monthly"),
+            user=user,
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "alert_delivery_frequency must be one of: daily, weekly"
+    assert pool.fetchval.await_count == 0
+    assert pool.fetchrow.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_create_watchlist_view_rejects_blank_name_without_db_touch(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -2407,7 +2428,31 @@ async def test_update_watchlist_view_rejects_blank_name_without_duplicate_lookup
 
     assert exc.value.status_code == 422
     assert exc.value.detail == "Saved view name is required"
-    assert pool.fetchrow.await_count == 1
+    assert pool.fetchrow.await_count == 0
+    assert pool.fetchval.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_watchlist_view_rejects_invalid_alert_frequency_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    view_id = uuid4()
+    account_id = uuid4()
+    pool = SimpleNamespace(is_initialized=True, fetchrow=AsyncMock(), fetchval=AsyncMock())
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.update_watchlist_view(
+            view_id=view_id,
+            req=mod.WatchlistViewRequest(name="Changed wedges only", alert_delivery_frequency="monthly"),
+            user=user,
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "alert_delivery_frequency must be one of: daily, weekly"
+    assert pool.fetchrow.await_count == 0
     assert pool.fetchval.await_count == 0
 
 

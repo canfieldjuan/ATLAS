@@ -164,6 +164,13 @@ def _clean_required_watchlist_view_name(value: Any) -> str:
     return text
 
 
+def _clean_watchlist_alert_delivery_frequency(value: Any) -> str:
+    try:
+        return watchlist_alert_service.clean_watchlist_alert_delivery_frequency(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _clean_optional_text_list(value: Any) -> list[str] | None:
     if isinstance(value, Param):
         value = value.default
@@ -2231,6 +2238,7 @@ async def create_watchlist_view(
     _require_b2b_product(user)
     account_id = _uuid.UUID(user.account_id)
     name = _clean_required_watchlist_view_name(req.name)
+    alert_delivery_frequency = _clean_watchlist_alert_delivery_frequency(req.alert_delivery_frequency)
     pool = _pool_or_503()
     existing = await pool.fetchval(
         """
@@ -2247,7 +2255,6 @@ async def create_watchlist_view(
         raise HTTPException(status_code=409, detail="Saved view name already exists")
     vendor_names = await _resolve_tracked_vendors_for_view(pool, account_id, _merge_vendor_names_from_request(req))
     now = datetime.now(timezone.utc)
-    alert_delivery_frequency = watchlist_alert_service.clean_watchlist_alert_delivery_frequency(req.alert_delivery_frequency)
     next_alert_delivery_at = watchlist_alert_service.resolve_watchlist_alert_next_delivery_at(
         existing_row=None,
         alert_email_enabled=req.alert_email_enabled,
@@ -2302,6 +2309,9 @@ async def update_watchlist_view(
     user: AuthUser = Depends(require_auth),
 ):
     _require_b2b_product(user)
+    name = _clean_required_watchlist_view_name(req.name)
+    request_fields = set(getattr(req, "model_fields_set", set()))
+    requested_alert_delivery_frequency = _clean_watchlist_alert_delivery_frequency(req.alert_delivery_frequency)
     pool = _pool_or_503()
     account_id = _uuid.UUID(user.account_id)
     existing = await pool.fetchrow(
@@ -2319,7 +2329,6 @@ async def update_watchlist_view(
     )
     if not existing:
         raise HTTPException(status_code=404, detail="Saved view not found")
-    name = _clean_required_watchlist_view_name(req.name)
     duplicate = await pool.fetchval(
         """
         SELECT 1
@@ -2335,7 +2344,6 @@ async def update_watchlist_view(
     )
     if duplicate:
         raise HTTPException(status_code=409, detail="Saved view name already exists")
-    request_fields = set(getattr(req, "model_fields_set", set()))
     vendor_names = await _resolve_tracked_vendors_for_view(
         pool,
         account_id,
@@ -2386,10 +2394,10 @@ async def update_watchlist_view(
         if "alert_email_enabled" in request_fields
         else bool(existing["alert_email_enabled"])
     )
-    alert_delivery_frequency = watchlist_alert_service.clean_watchlist_alert_delivery_frequency(
-        req.alert_delivery_frequency
+    alert_delivery_frequency = (
+        requested_alert_delivery_frequency
         if "alert_delivery_frequency" in request_fields
-        else existing["alert_delivery_frequency"]
+        else watchlist_alert_service.clean_watchlist_alert_delivery_frequency(existing["alert_delivery_frequency"])
     )
     next_alert_delivery_at = watchlist_alert_service.resolve_watchlist_alert_next_delivery_at(
         existing_row=existing,
