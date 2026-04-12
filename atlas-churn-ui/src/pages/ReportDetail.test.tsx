@@ -576,7 +576,7 @@ describe('ReportDetail', () => {
     expect(router.state.location.search).toBe(expectedSearch)
   })
 
-  it('shows vendor workspace, evidence, and opportunity shortcuts for the report vendor', async () => {
+  it('shows vendor workspace, evidence, opportunity, and alerts shortcuts for the report vendor', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports/:id', element: <ReportDetail /> }],
       {
@@ -600,6 +600,10 @@ describe('ReportDetail', () => {
     expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',
       '/opportunities?vendor=Zendesk&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
   })
 
@@ -642,6 +646,25 @@ describe('ReportDetail', () => {
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
       'href',
       '/evidence?vendor=Zendesk&tab=witnesses&witness_id=wit-1&source=reddit&offset=20&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('prefers the exact upstream alerts shortcut for nested report detail context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fdays%253D30%2526webhook%253Dwh_1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?days=30&webhook=wh_1',
     )
   })
 

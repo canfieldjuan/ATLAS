@@ -1237,7 +1237,28 @@ describe('Reports', () => {
     })
   })
 
-  it('shows vendor workspace, evidence, and opportunity shortcuts for an active vendor filter', async () => {
+  it('prefers the exact upstream alerts shortcut for nested report context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fdays%253D30%2526webhook%253Dwh_1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+        'href',
+        '/alerts?days=30&webhook=wh_1',
+      )
+    })
+  })
+
+  it('shows vendor workspace, evidence, opportunity, and alerts shortcuts for an active vendor filter', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports', element: <Reports /> }],
       {
@@ -1263,6 +1284,10 @@ describe('Reports', () => {
     expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',
       '/opportunities?vendor=Zendesk&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
   })
 

@@ -251,6 +251,22 @@ function upstreamEvidencePath(value: string | null): string | null {
   return null
 }
 
+function upstreamAlertsPath(value: string | null): string | null {
+  let current = value?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/alerts')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 function buildReportSubscriptionLocation(searchParams: URLSearchParams, report: Report) {
   const backTarget = buildReportsBackTarget(searchParams)
   const next = new URLSearchParams(
@@ -303,6 +319,12 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   next.set('vendor', vendorName)
   next.set('back_to', backTo)
   return `/opportunities?${next.toString()}`
+}
+
+function alertsPath(backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/alerts?${next.toString()}`
 }
 
 type ReportComposer =
@@ -370,6 +392,7 @@ export default function Reports() {
   const directWatchlistsPath = useMemo(() => upstreamWatchlistsPath(reportsBackTarget), [reportsBackTarget])
   const directWatchlistsLabel = useMemo(() => watchlistsShortcutLabel(directWatchlistsPath), [directWatchlistsPath])
   const directEvidencePath = useMemo(() => upstreamEvidencePath(reportsBackTarget), [reportsBackTarget])
+  const directAlertsPath = useMemo(() => upstreamAlertsPath(reportsBackTarget), [reportsBackTarget])
   const currentLibraryPath = useMemo(
     () => `${location.pathname}${location.search}`,
     [location.pathname, location.search],
@@ -999,6 +1022,12 @@ export default function Reports() {
                     className="text-emerald-300 hover:text-emerald-200 transition-colors"
                   >
                     Opportunities
+                  </Link>
+                  <Link
+                    to={directAlertsPath ?? alertsPath(currentLibraryPath)}
+                    className="text-rose-300 hover:text-rose-200 transition-colors"
+                  >
+                    Alerts API
                   </Link>
                 </div>
               ) : null}

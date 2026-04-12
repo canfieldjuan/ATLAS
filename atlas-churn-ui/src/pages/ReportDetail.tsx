@@ -87,6 +87,12 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   return `/opportunities?${next.toString()}`
 }
 
+function alertsPath(backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/alerts?${next.toString()}`
+}
+
 // Shared specialized and structured report rendering is imported for this page.
 
 const REPORT_DETAIL_BACK_TARGET_RULES = [
@@ -168,6 +174,22 @@ function upstreamEvidencePath(value: string | null): string | null {
   return null
 }
 
+function upstreamAlertsPath(value: string | null): string | null {
+  let current = value?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/alerts')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -234,6 +256,7 @@ export default function ReportDetail() {
   const directWatchlistsPath = upstreamWatchlistsPath(backToReports)
   const directWatchlistsLabel = watchlistsShortcutLabel(directWatchlistsPath)
   const directEvidencePath = upstreamEvidencePath(backToReports)
+  const directAlertsPath = upstreamAlertsPath(backToReports)
   const detailShareUrl = (() => {
     const next = new URLSearchParams()
     if (subModalOpen) {
@@ -395,6 +418,12 @@ export default function ReportDetail() {
               className="text-emerald-300 hover:text-emerald-200 transition-colors"
             >
               Opportunities
+            </Link>
+            <Link
+              to={directAlertsPath ?? alertsPath(detailBackPath)}
+              className="text-rose-300 hover:text-rose-200 transition-colors"
+            >
+              Alerts API
             </Link>
           </div>
         ) : null}
