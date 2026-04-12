@@ -338,6 +338,17 @@ type ManualTestResult = {
   error?: string | null
 }
 
+function manualTestButtonLabel(
+  latestManualTest: ManualTestResult | null,
+  hasLatestFailure: boolean,
+  latestFailureIsManualTest: boolean,
+) {
+  if (latestManualTest && !latestManualTest.success) return 'Retry Failed Test'
+  if (!latestManualTest && hasLatestFailure && !latestFailureIsManualTest) return 'Retry Failed Test'
+  if (latestManualTest) return 'Re-test Endpoint'
+  return 'Send Test'
+}
+
 function formatManualTestSummary(result: ManualTestResult) {
   if (result.success) return null
   if (result.error?.trim()) return result.error.trim()
@@ -856,7 +867,7 @@ export default function IncidentAlerts() {
               const latestManualTest = manualTestResults[webhook.id] ?? persistedManualTest
               const hasLatestFailure = Boolean(webhook.latest_failure_at)
               const latestFailureIsManualTest = webhook.latest_failure_event_type === 'test'
-              const testButtonLabel = hasLatestFailure || Boolean(latestManualTest) ? 'Re-test Endpoint' : 'Send Test'
+              const testButtonLabel = manualTestButtonLabel(latestManualTest, hasLatestFailure, latestFailureIsManualTest)
               return (
                 <article key={webhook.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

@@ -127,7 +127,7 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('PagerDuty bridge')).toBeInTheDocument()
     expect(screen.getByText('18')).toBeInTheDocument()
     expect(screen.getByText('89%')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Re-test Endpoint' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry Failed Test' })).toBeInTheDocument()
     expect(screen.getByText('Latest failure · signal_update · 500')).toBeInTheDocument()
     expect(screen.getByText(/downstream timeout/)).toBeInTheDocument()
   })
@@ -154,10 +154,11 @@ describe('IncidentAlerts', () => {
     )
 
     await screen.findByRole('heading', { name: 'Incident Alerts API' })
-    await user.click(screen.getByRole('button', { name: 'Re-test Endpoint' }))
+    await user.click(screen.getByRole('button', { name: 'Retry Failed Test' }))
 
     expect(await screen.findByText('Latest manual test passed')).toBeInTheDocument()
     expect(await screen.findByText('Test webhook delivered')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Re-test Endpoint' })).toBeInTheDocument()
   })
 
 
@@ -196,6 +197,43 @@ describe('IncidentAlerts', () => {
 
     expect(await screen.findByText('Latest manual test failed')).toBeInTheDocument()
     expect(screen.queryByText(/Latest failure/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry Failed Test' })).toBeInTheDocument()
+  })
+
+  it('shows Send Test when the endpoint has no persisted test or failure history', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-fresh',
+          url: 'https://hooks.example.com/new-endpoint',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Fresh endpoint',
+          created_at: '2026-04-10T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 0,
+          recent_success_rate_7d: null,
+          latest_failure_at: null,
+          latest_failure_event_type: null,
+          latest_failure_status_code: null,
+          latest_failure_error: null,
+          latest_test_at: null,
+          latest_test_success: null,
+          latest_test_status_code: null,
+          latest_test_error: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('button', { name: 'Send Test' })).toBeInTheDocument()
   })
 
 
