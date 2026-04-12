@@ -4,7 +4,7 @@ interface UseApiDataResult<T> {
   data: T | null
   loading: boolean
   error: Error | null
-  refresh: () => void
+  refresh: () => Promise<void>
   refreshing: boolean
 }
 
@@ -120,9 +120,7 @@ export default function useApiData<T>(
     return () => clearInterval(id)
   }, [load, pollIntervalMs, minRefreshIntervalMs])
 
-  const refresh = useCallback(() => {
-    load(true)
-  }, [load])
+  const refresh = useCallback(() => load(true), [load])
 
   return { data, loading, error, refresh, refreshing }
 }

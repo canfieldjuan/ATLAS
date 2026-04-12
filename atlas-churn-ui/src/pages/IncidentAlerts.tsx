@@ -738,12 +738,11 @@ export default function IncidentAlerts() {
   ])
 
   async function refreshAll() {
-    refreshSummary()
-    refreshWebhooks()
+    const tasks: Promise<void>[] = [refreshSummary(), refreshWebhooks()]
     if (selectedWebhookId) {
-      refreshDeliveries()
-      refreshCrmPushLog()
+      tasks.push(refreshDeliveries(), refreshCrmPushLog())
     }
+    await Promise.all(tasks)
   }
 
   async function copyText(text: string, label: string) {
@@ -1022,10 +1021,20 @@ export default function IncidentAlerts() {
       const result = await testWebhookSubscription(webhookId)
       setManualTestResults((current) => ({
         ...current,
-        [webhookId]: { success: result.success, testedAt: new Date().toISOString() },
+        [webhookId]: {
+          success: result.success,
+          testedAt: new Date().toISOString(),
+          error: result.error ?? null,
+        },
       }))
       setMessage(result.success ? 'Test webhook delivered' : 'Test webhook failed')
       await refreshAll()
+      setManualTestResults((current) => {
+        if (!(webhookId in current)) return current
+        const next = { ...current }
+        delete next[webhookId]
+        return next
+      })
     } catch (err) {
       setMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to test webhook')

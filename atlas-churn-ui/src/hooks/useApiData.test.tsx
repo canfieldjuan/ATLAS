@@ -63,6 +63,41 @@ describe('useApiData', () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
+  it('returns a refresh promise that resolves after refreshed data is applied', async () => {
+    const first = deferred<number>()
+    const second = deferred<number>()
+    const fetcher = vi
+      .fn<() => Promise<number>>()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+
+    const { result } = renderHook(() => useApiData(fetcher, []))
+
+    await act(async () => {
+      first.resolve(1)
+      await first.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.data).toBe(1)
+    })
+
+    let refreshPromise: Promise<void> | null = null
+    act(() => {
+      refreshPromise = result.current.refresh()
+    })
+
+    expect(result.current.refreshing).toBe(true)
+
+    await act(async () => {
+      second.resolve(2)
+      await refreshPromise
+    })
+
+    expect(result.current.data).toBe(2)
+    expect(result.current.refreshing).toBe(false)
+  })
+
   it('ignores stale responses after deps change', async () => {
     const first = deferred<string>()
     const second = deferred<string>()

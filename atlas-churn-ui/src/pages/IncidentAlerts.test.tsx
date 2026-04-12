@@ -498,8 +498,66 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('crm timeout')).toBeInTheDocument()
   })
 
-  it('shows the latest manual test result on the webhook card', async () => {
+  it('shows the refreshed persisted manual test context after a test webhook run', async () => {
     const user = userEvent.setup()
+    api.listWebhooks
+      .mockResolvedValueOnce({
+        webhooks: [
+          {
+            id: 'wh-1',
+            url: 'https://hooks.example.com/churn',
+            event_types: ['churn_alert', 'signal_update'],
+            channel: 'generic',
+            enabled: true,
+            description: 'PagerDuty bridge',
+            created_at: '2026-04-09T03:00:00Z',
+            updated_at: '2026-04-10T03:00:00Z',
+            recent_deliveries_7d: 12,
+            recent_success_rate_7d: 0.917,
+            latest_failure_event_type: 'signal_update',
+            latest_failure_status_code: 500,
+            latest_failure_error: 'downstream timeout',
+            latest_failure_at: '2026-04-10T02:55:00Z',
+            latest_test_success: false,
+            latest_test_status_code: 504,
+            latest_test_error: 'test timeout',
+            latest_test_at: '2026-04-10T02:40:00Z',
+          },
+        ],
+        count: 1,
+      })
+      .mockResolvedValueOnce({
+        webhooks: [
+          {
+            id: 'wh-1',
+            url: 'https://hooks.example.com/churn',
+            event_types: ['churn_alert', 'signal_update'],
+            channel: 'generic',
+            enabled: true,
+            description: 'PagerDuty bridge',
+            created_at: '2026-04-09T03:00:00Z',
+            updated_at: '2026-04-10T03:05:00Z',
+            recent_deliveries_7d: 13,
+            recent_success_rate_7d: 0.923,
+            latest_failure_event_type: 'signal_update',
+            latest_failure_status_code: 500,
+            latest_failure_error: 'downstream timeout',
+            latest_failure_at: '2026-04-10T02:55:00Z',
+            latest_test_success: true,
+            latest_test_status_code: 202,
+            latest_test_error: null,
+            latest_test_at: '2026-04-10T03:10:00Z',
+            latest_test_signal_id: null,
+            latest_test_review_id: null,
+            latest_test_report_id: 'report-refresh',
+            latest_test_report_type: 'battle_card',
+            latest_test_report_title: 'Battle Card · Acme Rival',
+            latest_test_vendor_name: 'Acme Rival',
+            latest_test_company_name: 'Acme Bank',
+          },
+        ],
+        count: 1,
+      })
 
     render(
       <MemoryRouter>
@@ -512,6 +570,8 @@ describe('IncidentAlerts', () => {
 
     expect(await screen.findByText('Latest manual test passed')).toBeInTheDocument()
     expect(await screen.findByText('Test webhook delivered')).toBeInTheDocument()
+    expect(screen.getByText('report-refresh')).toBeInTheDocument()
+    expect(screen.getByText('Report target: Battle Card · Acme Rival')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Re-test Endpoint' })).toBeInTheDocument()
   })
 
