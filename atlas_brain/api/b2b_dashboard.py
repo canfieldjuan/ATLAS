@@ -633,7 +633,10 @@ def _company_signal_review_priority_snapshot(
 
 
 def _optional_query_text(value: Any) -> str | None:
-    return value if isinstance(value, str) else None
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
 
 
 def _company_signal_review_unlock_snapshot(
@@ -2783,6 +2786,13 @@ async def list_company_signal_candidate_groups(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """List grouped company-signal candidates as the primary operator queue."""
+    vendor_name = _optional_query_text(vendor_name)
+    company_name = _optional_query_text(company_name)
+    source_name = _optional_query_text(source_name)
+    canonical_gap_reason = _optional_query_text(canonical_gap_reason)
+    review_priority_band = _optional_query_text(review_priority_band)
+    review_priority_reason = _optional_query_text(review_priority_reason)
+
     if candidate_bucket not in {"analyst_review", "canonical_ready"}:
         raise HTTPException(
             status_code=400,
@@ -2851,6 +2861,15 @@ async def get_company_signal_candidate_group_summary(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Summarize grouped company-signal queue health for analyst review."""
+    vendor_name = _optional_query_text(vendor_name)
+    company_name = _optional_query_text(company_name)
+    source_name = _optional_query_text(source_name)
+    candidate_bucket = _optional_query_text(candidate_bucket)
+    review_status = _optional_query_text(review_status)
+    canonical_gap_reason = _optional_query_text(canonical_gap_reason)
+    review_priority_band = _optional_query_text(review_priority_band)
+    review_priority_reason = _optional_query_text(review_priority_reason)
+
     if candidate_bucket is not None and candidate_bucket not in {"analyst_review", "canonical_ready"}:
         raise HTTPException(
             status_code=400,
@@ -3004,6 +3023,10 @@ async def list_company_signal_candidates(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """List analyst-assist company-signal candidates without mixing them into canonical signals."""
+    vendor_name = _optional_query_text(vendor_name)
+    company_name = _optional_query_text(company_name)
+    canonical_gap_reason = _optional_query_text(canonical_gap_reason)
+
     if candidate_bucket not in {"analyst_review", "canonical_ready"}:
         raise HTTPException(
             status_code=400,

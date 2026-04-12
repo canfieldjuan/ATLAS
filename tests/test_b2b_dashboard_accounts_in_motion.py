@@ -185,6 +185,59 @@ async def test_list_company_signal_candidates_uses_analyst_review_bucket_by_defa
 
 
 @pytest.mark.asyncio
+async def test_list_company_signal_candidates_normalizes_blank_optional_filters():
+    pool = MagicMock()
+    returned = [{"company": "Acme Corp", "candidate_bucket": "analyst_review"}]
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_candidates",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.list_company_signal_candidates(
+                    vendor_name="   ",
+                    company_name="",
+                    candidate_bucket="analyst_review",
+                    review_status="pending",
+                    canonical_gap_reason="  ",
+                    min_urgency=0,
+                    min_confidence=None,
+                    decision_makers_only=False,
+                    signal_evidence_present=None,
+                    window_days=90,
+                    limit=50,
+                    user=None,
+                )
+
+    assert result == {
+        "candidates": returned,
+        "count": 1,
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+    }
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        vendor_name=None,
+        company_name=None,
+        scoped_vendors=None,
+        candidate_bucket="analyst_review",
+        review_status="pending",
+        canonical_gap_reason=None,
+        min_urgency=0,
+        min_confidence=None,
+        decision_makers_only=False,
+        signal_evidence_present=None,
+        limit=50,
+    )
+
+
+@pytest.mark.asyncio
 async def test_list_company_signal_candidate_groups_uses_group_reader_by_default():
     pool = MagicMock()
     returned = [{"group_id": "group-1", "display_company": "Acme Corp"}]
@@ -240,6 +293,70 @@ async def test_list_company_signal_candidate_groups_uses_group_reader_by_default
         canonical_gap_reason=None,
         review_priority_band="medium",
         review_priority_reason="cross_source_corroboration",
+        min_urgency=0,
+        min_confidence=None,
+        min_reviews=1,
+        decision_makers_only=False,
+        signal_evidence_present=None,
+        limit=50,
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_company_signal_candidate_groups_normalizes_blank_optional_filters():
+    pool = MagicMock()
+    returned = [{"group_id": "group-1", "display_company": "Acme Corp"}]
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_candidate_groups",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.list_company_signal_candidate_groups(
+                    vendor_name="   ",
+                    company_name="",
+                    source_name="  ",
+                    candidate_bucket="analyst_review",
+                    review_status="pending",
+                    canonical_gap_reason="",
+                    review_priority_band="  ",
+                    review_priority_reason="	",
+                    min_urgency=0,
+                    min_confidence=None,
+                    min_reviews=1,
+                    decision_makers_only=False,
+                    signal_evidence_present=None,
+                    window_days=90,
+                    limit=50,
+                    user=None,
+                )
+
+    assert result == {
+        "groups": returned,
+        "count": 1,
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "review_priority_band": None,
+        "review_priority_reason": None,
+        "source_name": None,
+    }
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        vendor_name=None,
+        company_name=None,
+        source_name=None,
+        scoped_vendors=None,
+        candidate_bucket="analyst_review",
+        review_status="pending",
+        canonical_gap_reason=None,
+        review_priority_band=None,
+        review_priority_reason=None,
         min_urgency=0,
         min_confidence=None,
         min_reviews=1,
@@ -334,6 +451,69 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
         canonical_gap_reason=None,
         review_priority_band="medium",
         review_priority_reason="cross_source_corroboration",
+        min_urgency=0,
+        min_confidence=None,
+        min_reviews=1,
+        decision_makers_only=False,
+        signal_evidence_present=None,
+        top_n=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_company_signal_candidate_group_summary_normalizes_blank_optional_filters():
+    pool = MagicMock()
+    returned = {"totals": {"total_groups": 0, "pending_groups": 0}}
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_candidate_group_summary",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.get_company_signal_candidate_group_summary(
+                    vendor_name="   ",
+                    company_name="",
+                    source_name="  ",
+                    candidate_bucket="	",
+                    review_status="  ",
+                    canonical_gap_reason="",
+                    review_priority_band="  ",
+                    review_priority_reason="	",
+                    min_urgency=0,
+                    min_confidence=None,
+                    min_reviews=1,
+                    decision_makers_only=False,
+                    signal_evidence_present=None,
+                    window_days=90,
+                    top_n=10,
+                    user=None,
+                )
+
+    assert result == {
+        **returned,
+        "candidate_bucket": None,
+        "review_status": None,
+        "review_priority_band": None,
+        "review_priority_reason": None,
+        "source_name": None,
+    }
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        vendor_name=None,
+        company_name=None,
+        source_name=None,
+        scoped_vendors=None,
+        candidate_bucket=None,
+        review_status=None,
+        canonical_gap_reason=None,
+        review_priority_band=None,
+        review_priority_reason=None,
         min_urgency=0,
         min_confidence=None,
         min_reviews=1,
@@ -645,6 +825,73 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         rebuild_outcome="triggered",
         rebuild_reason="ok",
         top_n=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_company_signal_review_impact_summary_normalizes_blank_optional_filters():
+    pool = MagicMock()
+    returned = {"totals": {"total_actions": 0}}
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_review_impact_summary",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.get_company_signal_review_impact_summary(
+                    vendor_name="   ",
+                    review_scope="",
+                    review_action="  ",
+                    company_signal_action="	",
+                    canonical_gap_reason="",
+                    review_priority_band="  ",
+                    review_priority_reason="	",
+                    review_unlock_path="",
+                    review_unlock_reason="  ",
+                    candidate_source="	",
+                    rebuild_outcome="",
+                    rebuild_reason="  ",
+                    window_days=30,
+                    top_n=10,
+                    user=None,
+                )
+
+    assert result == {
+        **returned,
+        "review_scope": None,
+        "review_action": None,
+        "company_signal_action": None,
+        "canonical_gap_reason": None,
+        "review_priority_band": None,
+        "review_priority_reason": None,
+        "review_unlock_path": None,
+        "review_unlock_reason": None,
+        "candidate_source": None,
+        "rebuild_outcome": None,
+        "rebuild_reason": None,
+    }
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=30,
+        vendor_name=None,
+        scoped_vendors=None,
+        review_scope=None,
+        review_action=None,
+        company_signal_action=None,
+        canonical_gap_reason=None,
+        review_priority_band=None,
+        review_priority_reason=None,
+        review_unlock_path=None,
+        review_unlock_reason=None,
+        candidate_source=None,
+        rebuild_outcome=None,
+        rebuild_reason=None,
+        top_n=10,
     )
 
 
