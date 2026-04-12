@@ -1408,6 +1408,7 @@ function EvidencePanel({
   const quotes = Array.isArray(row.quotes)
     ? row.quotes.filter((q) => typeof q === 'string' && q.trim())
     : []
+  const vendorWatchlistsPath = watchlistsPath(row.vendor, currentPagePath)
   const vendorPath = vendorDetailPath(row.vendor, currentPagePath)
   const vendorEvidencePath = evidencePath(row.vendor, currentPagePath)
   const vendorReportsLibraryPath = reportsPath(row.vendor, currentPagePath)
@@ -1452,6 +1453,12 @@ function EvidencePanel({
             </span>
           )}
           <div className="flex flex-wrap gap-3 pt-1">
+            <Link
+              to={vendorWatchlistsPath}
+              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+            >
+              View watchlists <ExternalLink className="h-3 w-3" />
+            </Link>
             <Link
               to={vendorPath}
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"

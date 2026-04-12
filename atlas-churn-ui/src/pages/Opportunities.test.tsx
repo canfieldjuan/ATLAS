@@ -334,6 +334,10 @@ describe('Opportunities', () => {
 
     await user.click(screen.getByText('Acme Corp'))
 
+    expect(await screen.findByRole('link', { name: 'View watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?vendor_name=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
+    )
     expect(await screen.findByRole('link', { name: 'View vendor' })).toHaveAttribute(
       'href',
       '/vendors/Zendesk?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
