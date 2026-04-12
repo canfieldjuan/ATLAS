@@ -1291,6 +1291,11 @@ export default function IncidentAlerts() {
                               {formatAccountReviewTargetLabel(latestCrmPush.account_review_focus)}
                             </div>
                           ) : null}
+                          {formatReportTargetLabel(latestCrmPush) ? (
+                            <div className="mt-1 text-[11px] font-medium text-current/90">
+                              {formatReportTargetLabel(latestCrmPush)}
+                            </div>
+                          ) : null}
                           {renderActivityReferences(latestCrmPush)}
                           {renderActivityDetailShortcuts(latestCrmPush, currentAlertsUrl)}
                           {renderActivityVendorShortcuts(latestCrmPush, currentAlertsUrl)}

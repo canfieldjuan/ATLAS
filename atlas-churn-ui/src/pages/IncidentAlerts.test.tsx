@@ -498,6 +498,59 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('crm timeout')).toBeInTheDocument()
   })
 
+  it('shows report target context on report-generated CRM summary cards', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-crm-report',
+          url: 'https://hooks.example.com/crm-report',
+          event_types: ['report_generated'],
+          channel: 'crm_hubspot',
+          enabled: true,
+          description: 'CRM report endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 1,
+          recent_success_rate_7d: 1,
+          latest_crm_push: {
+            id: 'push-report',
+            signal_type: 'report_generated',
+            signal_id: 'report-crm',
+            vendor_name: 'Acme Rival',
+            company_name: null,
+            review_id: null,
+            report_id: 'report-crm',
+            report_type: 'battle_card',
+            report_title: 'Battle Card · Acme Rival',
+            account_review_focus: null,
+            crm_record_id: 'deal-99',
+            crm_record_type: 'deal',
+            status: 'success',
+            error: null,
+            pushed_at: '2026-04-10T03:05:00Z',
+          },
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('CRM report endpoint')).toBeInTheDocument()
+    expect(screen.getByText('Latest CRM push succeeded')).toBeInTheDocument()
+    expect(screen.getByText('Report target: Battle Card · Acme Rival')).toBeInTheDocument()
+    expect(screen.getByText('report-crm')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open Report' })).toHaveAttribute(
+      'href',
+      '/reports/report-crm?back_to=%2Falerts',
+    )
+    expect(screen.queryByRole('link', { name: 'Account Review' })).not.toBeInTheDocument()
+  })
+
   it('shows the refreshed persisted manual test context after a test webhook run', async () => {
     const user = userEvent.setup()
     api.listWebhooks
