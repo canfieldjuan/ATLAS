@@ -1257,6 +1257,46 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["trend_queue_rankings"][0]["actionable_pending_groups"] == 3
     assert summary["trend_queue_rankings"][0]["pending_groups"] == 4
     assert summary["trend_queue_focus"] == summary["trend_queue_rankings"][0]
+    assert summary["trend_queue_recommendation"] == {
+        "status": "act",
+        "action_type": "review_queue",
+        "action": "clear_overdue_review_queue",
+        "priority": "high",
+        "owner": "review_ops",
+        "reason": "overdue_actionable_backlog",
+        "rationale": "The top queue slice has actionable pending groups that are already overdue and should be cleared first.",
+        "queue_filters": {
+            "candidate_bucket": "analyst_review",
+            "review_status": "pending",
+            "canonical_gap_reason": "low_confidence_low_trust_source",
+            "review_priority_band": "promote_now",
+            "review_priority_reason": "canonical_ready",
+            "source_name": "reddit",
+        },
+        "queue_snapshot": {
+            "total_groups": 6,
+            "total_reviews": 10,
+            "pending_groups": 4,
+            "actionable_pending_groups": 3,
+            "actionable_pending_reviews": 6,
+            "blocked_pending_groups": 1,
+            "blocked_pending_reviews": 2,
+            "avg_pending_age_days": 2.5,
+            "oldest_pending_age_days": 5.0,
+            "overdue_pending_groups": 1,
+            "overdue_pending_reviews": 2,
+        },
+        "primary_driver": {
+            "kind": "trend_focus",
+            "status": "watch",
+            "focus": "effect_rate_down",
+            "action": None,
+            "metric": "company_signal_effect_rate",
+            "direction": "down",
+            "rationale": "Review actions are producing fewer downstream company-signal effects per action than in the prior window.",
+            "label": "effect_rate_down",
+        },
+    }
 
 
 def _make_review_impact_summary_pool(*, totals=None, daily_trends=None):
@@ -1296,6 +1336,139 @@ async def test_read_company_signal_review_impact_summary_returns_no_data_without
     assert summary["trend_recommendation_queue_snapshot"] is None
     assert summary["trend_queue_rankings"] == []
     assert summary["trend_queue_focus"] is None
+    assert summary["trend_queue_recommendation"] == {
+        "status": "no_data",
+        "action_type": None,
+        "action": None,
+        "priority": None,
+        "owner": None,
+        "reason": None,
+        "rationale": None,
+        "queue_filters": {},
+        "queue_snapshot": None,
+        "primary_driver": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_recommends_policy_review_for_blocked_low_trust_queue_focus():
+    pool = _make_review_impact_summary_pool(
+        totals={
+            "total_actions": 2,
+            "approvals": 1,
+            "company_signal_noops": 2,
+        },
+        daily_trends=[
+            _make_review_impact_daily_trend(
+                "2026-04-10",
+                approvals=1,
+                company_signal_creations=0,
+                company_signal_noops=1,
+                rebuild_requests=0,
+                rebuild_triggered=0,
+                rebuild_blocked=0,
+                rebuild_persisted_runs=0,
+                rebuild_persisted_reports=0,
+                rebuild_total_accounts=0,
+            ),
+            _make_review_impact_daily_trend(
+                "2026-04-03",
+                approvals=1,
+                company_signal_creations=1,
+                company_signal_noops=0,
+                rebuild_requests=0,
+                rebuild_triggered=0,
+                rebuild_blocked=0,
+                rebuild_persisted_runs=0,
+                rebuild_persisted_reports=0,
+                rebuild_total_accounts=0,
+            ),
+        ],
+    )
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "total_actions": 2,
+                "approvals": 1,
+                "suppressions": 0,
+                "company_signal_creations": 0,
+                "company_signal_updates": 0,
+                "company_signal_deletions": 0,
+                "company_signal_noops": 2,
+                "rebuild_requests": 0,
+                "rebuild_triggered": 0,
+                "rebuild_blocked": 0,
+                "rebuild_persisted_runs": 0,
+                "rebuild_persisted_reports": 0,
+                "rebuild_total_accounts": 0,
+            },
+            {
+                "total_groups": 7,
+                "total_reviews": 9,
+                "pending_groups": 5,
+                "actionable_pending_groups": 1,
+                "actionable_pending_reviews": 2,
+                "blocked_pending_groups": 4,
+                "blocked_pending_reviews": 7,
+                "avg_pending_age_days": 4.0,
+                "oldest_pending_age_days": 8.0,
+                "overdue_pending_groups": 2,
+                "overdue_pending_reviews": 4,
+            },
+        ]
+    )
+
+    summary = await read_company_signal_review_impact_summary(
+        pool,
+        window_days=30,
+        canonical_gap_reason="low_confidence_low_trust_source",
+        review_priority_band="high",
+        review_priority_reason="has_signal_evidence",
+        candidate_source="reddit",
+        top_n=5,
+    )
+
+    assert summary["trend_focus"]["focus"] == "effect_rate_down"
+    assert summary["trend_queue_recommendation"] == {
+        "status": "act",
+        "action_type": "policy_threshold",
+        "action": "review_low_trust_policy",
+        "priority": "high",
+        "owner": "intelligence_policy",
+        "reason": "blocked_low_trust_policy",
+        "rationale": "The top queue slice is dominated by low-trust candidates blocked on canonical confidence policy, not waiting for analyst approvals.",
+        "queue_filters": {
+            "candidate_bucket": "analyst_review",
+            "review_status": "pending",
+            "canonical_gap_reason": "low_confidence_low_trust_source",
+            "review_priority_band": "high",
+            "review_priority_reason": "has_signal_evidence",
+            "source_name": "reddit",
+        },
+        "queue_snapshot": {
+            "total_groups": 7,
+            "total_reviews": 9,
+            "pending_groups": 5,
+            "actionable_pending_groups": 1,
+            "actionable_pending_reviews": 2,
+            "blocked_pending_groups": 4,
+            "blocked_pending_reviews": 7,
+            "avg_pending_age_days": 4.0,
+            "oldest_pending_age_days": 8.0,
+            "overdue_pending_groups": 2,
+            "overdue_pending_reviews": 4,
+        },
+        "primary_driver": {
+            "kind": "trend_focus",
+            "status": "watch",
+            "focus": "effect_rate_down",
+            "action": None,
+            "metric": "company_signal_effect_rate",
+            "direction": "down",
+            "rationale": "Review actions are producing fewer downstream company-signal effects per action than in the prior window.",
+            "label": "effect_rate_down",
+        },
+    }
 
 
 @pytest.mark.asyncio

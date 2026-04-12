@@ -452,6 +452,18 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "trend_recommendation_queue_snapshot": {"pending_groups": 2, "blocked_pending_groups": 1},
         "trend_queue_rankings": [{"primary_driver": {"kind": "trend_focus", "label": "effect_rate_down"}, "pending_groups": 2}],
         "trend_queue_focus": {"primary_driver": {"kind": "trend_focus", "label": "effect_rate_down"}, "pending_groups": 2},
+        "trend_queue_recommendation": {
+            "status": "act",
+            "action_type": "review_queue",
+            "action": "clear_overdue_review_queue",
+            "priority": "high",
+            "owner": "review_ops",
+            "reason": "overdue_actionable_backlog",
+            "rationale": "The top queue slice has actionable pending groups that are already overdue and should be cleared first.",
+            "queue_filters": {"candidate_bucket": "analyst_review", "review_status": "pending"},
+            "queue_snapshot": {"pending_groups": 2, "blocked_pending_groups": 1},
+            "primary_driver": {"kind": "trend_focus", "label": "effect_rate_down"},
+        },
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         with patch.object(

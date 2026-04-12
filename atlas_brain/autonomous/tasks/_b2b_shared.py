@@ -13578,6 +13578,18 @@ async def read_company_signal_review_impact_summary(
             "trend_recommendation_queue_snapshot": None,
             "trend_queue_rankings": [],
             "trend_queue_focus": None,
+            "trend_queue_recommendation": {
+                "status": "no_data",
+                "action_type": None,
+                "action": None,
+                "priority": None,
+                "owner": None,
+                "reason": None,
+                "rationale": None,
+                "queue_filters": {},
+                "queue_snapshot": None,
+                "primary_driver": None,
+            },
         }
 
     where_clause = " AND ".join(conditions)
@@ -14480,6 +14492,130 @@ async def read_company_signal_review_impact_summary(
             "overdue_pending_reviews": int(totals.get("overdue_pending_reviews") or 0),
         }
 
+    def _build_trend_queue_recommendation(
+        queue_focus: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        default = {
+            "status": "no_data",
+            "action_type": None,
+            "action": None,
+            "priority": None,
+            "owner": None,
+            "reason": None,
+            "rationale": None,
+            "queue_filters": {},
+            "queue_snapshot": None,
+            "primary_driver": None,
+        }
+        if not isinstance(queue_focus, Mapping):
+            return default
+        queue_filters = dict(queue_focus.get("queue_filters") or {})
+        queue_snapshot = queue_focus.get("queue_snapshot")
+        primary_driver = queue_focus.get("primary_driver")
+        if not isinstance(queue_snapshot, Mapping):
+            return default
+        actionable_pending_groups = int(
+            queue_focus.get("actionable_pending_groups")
+            or queue_snapshot.get("actionable_pending_groups")
+            or 0
+        )
+        blocked_pending_groups = int(
+            queue_focus.get("blocked_pending_groups")
+            or queue_snapshot.get("blocked_pending_groups")
+            or 0
+        )
+        overdue_pending_groups = int(
+            queue_focus.get("overdue_pending_groups")
+            or queue_snapshot.get("overdue_pending_groups")
+            or 0
+        )
+        oldest_pending_age_days = float(
+            queue_focus.get("oldest_pending_age_days")
+            or queue_snapshot.get("oldest_pending_age_days")
+            or 0.0
+        )
+        canonical_reason = str(queue_filters.get("canonical_gap_reason") or "")
+        snapshot_payload = dict(queue_snapshot)
+        primary_driver_payload = dict(primary_driver) if isinstance(primary_driver, Mapping) else primary_driver
+
+        if blocked_pending_groups > actionable_pending_groups and blocked_pending_groups > 0:
+            if canonical_reason == "low_confidence_low_trust_source":
+                return {
+                    "status": "act",
+                    "action_type": "policy_threshold",
+                    "action": "review_low_trust_policy",
+                    "priority": "high" if overdue_pending_groups > 0 or oldest_pending_age_days >= 7.0 else "medium",
+                    "owner": "intelligence_policy",
+                    "reason": "blocked_low_trust_policy",
+                    "rationale": "The top queue slice is dominated by low-trust candidates blocked on canonical confidence policy, not waiting for analyst approvals.",
+                    "queue_filters": queue_filters,
+                    "queue_snapshot": snapshot_payload,
+                    "primary_driver": primary_driver_payload,
+                }
+            return {
+                "status": "act",
+                "action_type": "policy_threshold",
+                "action": "review_threshold_policy",
+                "priority": "medium",
+                "owner": "intelligence_policy",
+                "reason": "blocked_canonical_threshold",
+                "rationale": "The top queue slice is dominated by candidates blocked on canonical readiness thresholds instead of pending analyst review.",
+                "queue_filters": queue_filters,
+                "queue_snapshot": snapshot_payload,
+                "primary_driver": primary_driver_payload,
+            }
+        if actionable_pending_groups > 0 and overdue_pending_groups > 0:
+            return {
+                "status": "act",
+                "action_type": "review_queue",
+                "action": "clear_overdue_review_queue",
+                "priority": "high",
+                "owner": "review_ops",
+                "reason": "overdue_actionable_backlog",
+                "rationale": "The top queue slice has actionable pending groups that are already overdue and should be cleared first.",
+                "queue_filters": queue_filters,
+                "queue_snapshot": snapshot_payload,
+                "primary_driver": primary_driver_payload,
+            }
+        if actionable_pending_groups > 0:
+            return {
+                "status": "act",
+                "action_type": "review_queue",
+                "action": "review_prioritized_queue",
+                "priority": "medium",
+                "owner": "review_ops",
+                "reason": "actionable_backlog",
+                "rationale": "The top queue slice is actionable and should be worked in priority order before lower-yield backlog.",
+                "queue_filters": queue_filters,
+                "queue_snapshot": snapshot_payload,
+                "primary_driver": primary_driver_payload,
+            }
+        if blocked_pending_groups > 0:
+            return {
+                "status": "watch",
+                "action_type": "policy_threshold",
+                "action": "review_threshold_policy",
+                "priority": "medium",
+                "owner": "intelligence_policy",
+                "reason": "blocked_backlog",
+                "rationale": "The top queue slice has blocked backlog but little actionable review work, so threshold policy is the main lever.",
+                "queue_filters": queue_filters,
+                "queue_snapshot": snapshot_payload,
+                "primary_driver": primary_driver_payload,
+            }
+        return {
+            "status": "monitor",
+            "action_type": "monitor",
+            "action": "monitor_queue",
+            "priority": "low",
+            "owner": "review_ops",
+            "reason": "no_backlog_pressure",
+            "rationale": "The current impact focus does not map to material pending queue work.",
+            "queue_filters": queue_filters,
+            "queue_snapshot": snapshot_payload,
+            "primary_driver": primary_driver_payload,
+        }
+
     def _queue_snapshot_cache_key(filters: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
         return tuple(sorted((str(key), value) for key, value in filters.items()))
 
@@ -14623,6 +14759,7 @@ async def read_company_signal_review_impact_summary(
         )
     trend_queue_rankings = _sort_trend_queue_rankings(trend_queue_rankings)
     trend_queue_focus = trend_queue_rankings[0] if trend_queue_rankings else None
+    trend_queue_recommendation = _build_trend_queue_recommendation(trend_queue_focus)
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -14646,6 +14783,7 @@ async def read_company_signal_review_impact_summary(
         "trend_recommendation_queue_snapshot": trend_recommendation_queue_snapshot,
         "trend_queue_rankings": trend_queue_rankings,
         "trend_queue_focus": trend_queue_focus,
+        "trend_queue_recommendation": trend_queue_recommendation,
     }
 
 
