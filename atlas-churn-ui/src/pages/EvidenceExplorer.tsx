@@ -233,6 +233,33 @@ function upstreamOpportunitiesPath(value: string | null): string | null {
   return null
 }
 
+function upstreamReviewPath(value: string | null, reviewId: string): string | null {
+  let current = parseBackTo(value)
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/reviews/')) {
+      try {
+        const url = new URL(current, window.location.origin)
+        const currentReviewId = decodeURIComponent(url.pathname.replace(/^\/reviews\//, ''))
+        if (currentReviewId === reviewId) return current
+        current = parseBackTo(url.searchParams.get('back_to'))
+        continue
+      } catch {
+        return null
+      }
+    }
+
+    try {
+      const url = new URL(current, window.location.origin)
+      current = parseBackTo(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -684,9 +711,9 @@ export default function EvidenceExplorer() {
     }
   }
 
-  async function handleCopyReviewLink(witnessId: string, reviewId: string) {
+  async function handleCopyReviewLink(witnessId: string, path: string) {
     try {
-      await copyText(`${window.location.origin}${reviewDetailPath(searchParams, reviewId)}`)
+      await copyText(`${window.location.origin}${path}`)
       setCopiedReviewState({ id: witnessId, status: 'copied' })
     } catch {
       setCopiedReviewState({ id: witnessId, status: 'error' })
@@ -1075,12 +1102,15 @@ export default function EvidenceExplorer() {
                                 </Link>
                               </>
                             ) : null}
-                            {w.review_id ? (
-                              <>
+                            {w.review_id ? (() => {
+                              const directReviewPath = upstreamReviewPath(requestedBackTo, w.review_id)
+                              const witnessReviewPath = directReviewPath ?? reviewDetailPath(searchParams, w.review_id)
+                              return (
+                                <>
                                 <button
                                   type="button"
                                   aria-label={`Copy review link for witness ${w.witness_id}`}
-                                  onClick={() => void handleCopyReviewLink(w.witness_id, w.review_id)}
+                                  onClick={() => void handleCopyReviewLink(w.witness_id, witnessReviewPath)}
                                   className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-white"
                                 >
                                   <Copy className="h-3 w-3" />
@@ -1089,14 +1119,15 @@ export default function EvidenceExplorer() {
                                     : 'Copy review link'}
                                 </button>
                                 <Link
-                                  to={reviewDetailPath(searchParams, w.review_id)}
+                                  to={witnessReviewPath}
                                   className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
                                 >
                                   Open review detail
                                   <ExternalLink className="h-3 w-3" />
                                 </Link>
                               </>
-                            ) : null}
+                              )
+                            })() : null}
                           </div>
                         </div>
                       ))}

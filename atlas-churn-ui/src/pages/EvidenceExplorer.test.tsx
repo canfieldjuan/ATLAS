@@ -715,6 +715,20 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('prefers the exact upstream review detail path on witness cards', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open review detail' })).toHaveAttribute(
+      'href',
+      '/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
 
   it('copies a direct review detail link from a witness card', async () => {
     const user = userEvent.setup()
@@ -765,6 +779,27 @@ describe('EvidenceExplorer', () => {
       )
     })
     expect(screen.getByRole('button', { name: 'Copy review link for witness witness:zendesk:31' })).toHaveTextContent('Copied')
+  })
+
+  it('copies the exact upstream review detail path from a witness card', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy review link for witness witness:zendesk:1' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1`,
+      )
+    })
+    expect(screen.getByRole('button', { name: 'Copy review link for witness witness:zendesk:1' })).toHaveTextContent('Copied')
   })
 
   it('shows a direct account review shortcut on witness cards when the reviewer company matches a tracked account', async () => {
