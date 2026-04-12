@@ -159,6 +159,15 @@ def _clean_required_watchlist_view_name(value: Any) -> str:
     return text
 
 
+def _clean_optional_text_list(value: Any) -> list[str] | None:
+    if isinstance(value, (list, tuple)):
+        cleaned = [_clean_optional_text(item) for item in value]
+        values = [item for item in cleaned if item]
+        return values or None
+    text = _clean_optional_text(value)
+    return [text] if text is not None else None
+
+
 def _company_signal_lookup_key(company_name: Any, vendor_name: Any) -> tuple[str, str] | None:
     company_key = normalize_company_name(str(company_name or "").strip())
     vendor_key = _normalize_vendor_name(vendor_name)
@@ -1700,7 +1709,9 @@ async def list_tenant_signals(
     """Churn signals for tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
-    vendor_names = [v.strip() for v in vendor_names if v and v.strip()] if isinstance(vendor_names, (list, tuple)) else ([vendor_names.strip()] if isinstance(vendor_names, str) and vendor_names.strip() else None)
+    vendor_name = _clean_optional_text(vendor_name)
+    vendor_names = _clean_optional_text_list(vendor_names)
+    category = _clean_optional_text(category)
     t_params = _tenant_params(user)
     tracked_account_id = t_params[0] if t_params else None
     from ..autonomous.tasks._b2b_shared import (
@@ -1781,9 +1792,9 @@ async def list_tenant_slow_burn_watchlist(
     """Slow-burn watchlist for tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
-    vendor_name = vendor_name if isinstance(vendor_name, str) else None
-    vendor_names = [v.strip() for v in vendor_names if v and v.strip()] if isinstance(vendor_names, (list, tuple)) else ([vendor_names.strip()] if isinstance(vendor_names, str) and vendor_names.strip() else None)
-    category = category if isinstance(category, str) else None
+    vendor_name = _clean_optional_text(vendor_name)
+    vendor_names = _clean_optional_text_list(vendor_names)
+    category = _clean_optional_text(category)
     vendor_alert_threshold = _safe_float(vendor_alert_threshold)
     stale_days_threshold = _coerce_optional_int(stale_days_threshold)
     limit = _coerce_optional_int(limit) or 10

@@ -1350,6 +1350,107 @@ async def test_get_vendor_target_prefers_new_report_types(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_tenant_signals_normalizes_text_filters(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = SimpleNamespace(is_initialized=True)
+    rows_mock = AsyncMock(return_value=[])
+    summary_mock = AsyncMock(
+        return_value={
+            "total_vendors": 0,
+            "high_urgency_count": 0,
+            "total_signal_reviews": 0,
+        }
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_tenant_params", lambda _user: [])
+    monkeypatch.setattr(mod, "_load_reasoning_views_for_vendors", AsyncMock(return_value={}))
+    monkeypatch.setattr(shared_mod, "read_vendor_signal_rows", rows_mock)
+    monkeypatch.setattr(shared_mod, "read_vendor_signal_summary", summary_mock)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_signals(
+        vendor_name="   ",
+        vendor_names=[" Zendesk ", " ", "HubSpot  "],
+        min_urgency=6,
+        category="  CRM  ",
+        limit=10,
+        user=user,
+    )
+
+    rows_mock.assert_awaited_once_with(
+        pool,
+        vendor_name_query=None,
+        vendor_names=["Zendesk", "HubSpot"],
+        min_urgency=6,
+        product_category="CRM",
+        tracked_account_id=None,
+        include_snapshot_metrics=True,
+        limit=10,
+    )
+    summary_mock.assert_awaited_once_with(
+        pool,
+        vendor_name_query=None,
+        vendor_names=["Zendesk", "HubSpot"],
+        min_urgency=6,
+        product_category="CRM",
+        tracked_account_id=None,
+    )
+    assert result == {
+        "signals": [],
+        "count": 0,
+        "total_vendors": 0,
+        "high_urgency_count": 0,
+        "total_signal_reviews": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_slow_burn_watchlist_normalizes_text_filters(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = SimpleNamespace(is_initialized=True)
+    read_mock = AsyncMock(return_value=[])
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_tenant_params", lambda _user: [])
+    monkeypatch.setattr(mod, "_load_reasoning_views_for_vendors", AsyncMock(return_value={}))
+    monkeypatch.setattr(shared_mod, "read_ranked_vendor_signal_rows", read_mock)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_slow_burn_watchlist(
+        vendor_name="  Zendesk  ",
+        vendor_names=None,
+        category="  CRM  ",
+        vendor_alert_threshold=None,
+        stale_days_threshold=None,
+        limit=5,
+        user=user,
+    )
+
+    read_mock.assert_awaited_once_with(
+        pool,
+        vendor_name_query="Zendesk",
+        vendor_names=None,
+        product_category="CRM",
+        tracked_account_id=None,
+        require_snapshot_activity=True,
+        limit=5,
+    )
+    assert result == {
+        "signals": [],
+        "count": 0,
+        "vendor_alert_threshold": None,
+        "vendor_alert_hit_count": 0,
+        "stale_days_threshold": None,
+        "stale_threshold_hit_count": 0,
+    }
+
+
+@pytest.mark.asyncio
 async def test_slow_burn_watchlist_applies_threshold_flags(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
