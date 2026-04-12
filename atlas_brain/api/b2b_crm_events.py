@@ -193,10 +193,15 @@ async def ingest_crm_event(
                 WHERE crm_event_id IS NOT NULL
             DO UPDATE SET
                 event_type = EXCLUDED.event_type,
-                deal_stage = EXCLUDED.deal_stage,
-                deal_amount = EXCLUDED.deal_amount,
+                company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name),
+                contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email),
+                contact_name = COALESCE(EXCLUDED.contact_name, b2b_crm_events.contact_name),
+                deal_id = COALESCE(EXCLUDED.deal_id, b2b_crm_events.deal_id),
+                deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name),
+                deal_stage = COALESCE(EXCLUDED.deal_stage, b2b_crm_events.deal_stage),
+                deal_amount = COALESCE(EXCLUDED.deal_amount, b2b_crm_events.deal_amount),
                 event_data = EXCLUDED.event_data,
-                event_timestamp = EXCLUDED.event_timestamp,
+                event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp),
                 account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                 status = 'pending',
                 processed_at = NULL
@@ -323,10 +328,15 @@ async def ingest_crm_events_batch(
                     WHERE crm_event_id IS NOT NULL
                 DO UPDATE SET
                     event_type = EXCLUDED.event_type,
-                    deal_stage = EXCLUDED.deal_stage,
-                    deal_amount = EXCLUDED.deal_amount,
+                    company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name),
+                    contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email),
+                    contact_name = COALESCE(EXCLUDED.contact_name, b2b_crm_events.contact_name),
+                    deal_id = COALESCE(EXCLUDED.deal_id, b2b_crm_events.deal_id),
+                    deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name),
+                    deal_stage = COALESCE(EXCLUDED.deal_stage, b2b_crm_events.deal_stage),
+                    deal_amount = COALESCE(EXCLUDED.deal_amount, b2b_crm_events.deal_amount),
                     event_data = EXCLUDED.event_data,
-                    event_timestamp = EXCLUDED.event_timestamp,
+                    event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp),
                     account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                     status = 'pending',
                     processed_at = NULL
@@ -474,8 +484,15 @@ async def ingest_hubspot_webhook(
                     WHERE crm_event_id IS NOT NULL
                 DO UPDATE SET
                     event_type = EXCLUDED.event_type,
-                    deal_stage = EXCLUDED.deal_stage,
+                    company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name),
+                    contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email),
+                    deal_id = COALESCE(EXCLUDED.deal_id, b2b_crm_events.deal_id),
+                    deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name),
+                    deal_stage = COALESCE(EXCLUDED.deal_stage, b2b_crm_events.deal_stage),
+                    deal_amount = COALESCE(EXCLUDED.deal_amount, b2b_crm_events.deal_amount),
                     event_data = EXCLUDED.event_data,
+                    event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp),
+                    processing_notes = EXCLUDED.processing_notes,
                     account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                     status = 'pending',
                     processed_at = NULL
@@ -621,9 +638,14 @@ async def ingest_salesforce_webhook(
                     WHERE crm_event_id IS NOT NULL
                 DO UPDATE SET
                     event_type = EXCLUDED.event_type,
-                    deal_stage = EXCLUDED.deal_stage,
-                    deal_amount = EXCLUDED.deal_amount,
+                    company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name),
+                    contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email),
+                    deal_id = COALESCE(EXCLUDED.deal_id, b2b_crm_events.deal_id),
+                    deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name),
+                    deal_stage = COALESCE(EXCLUDED.deal_stage, b2b_crm_events.deal_stage),
+                    deal_amount = COALESCE(EXCLUDED.deal_amount, b2b_crm_events.deal_amount),
                     event_data = EXCLUDED.event_data,
+                    event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp),
                     account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                     status = 'pending',
                     processed_at = NULL
@@ -774,9 +796,14 @@ async def ingest_pipedrive_webhook(
                     WHERE crm_event_id IS NOT NULL
                 DO UPDATE SET
                     event_type = EXCLUDED.event_type,
-                    deal_stage = EXCLUDED.deal_stage,
-                    deal_amount = EXCLUDED.deal_amount,
+                    company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name),
+                    contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email),
+                    deal_id = COALESCE(EXCLUDED.deal_id, b2b_crm_events.deal_id),
+                    deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name),
+                    deal_stage = COALESCE(EXCLUDED.deal_stage, b2b_crm_events.deal_stage),
+                    deal_amount = COALESCE(EXCLUDED.deal_amount, b2b_crm_events.deal_amount),
                     event_data = EXCLUDED.event_data,
+                    event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp),
                     account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id),
                     status = 'pending',
                     processed_at = NULL

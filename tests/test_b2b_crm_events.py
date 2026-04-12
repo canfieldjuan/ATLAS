@@ -82,6 +82,10 @@ def test_ingest_crm_event_trims_text_fields_before_persistence(monkeypatch):
     assert body["event_type"] == "deal_won"
 
     args = pool.fetchval.await_args.args
+    assert "company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name)" in args[0]
+    assert "contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email)" in args[0]
+    assert "deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name)" in args[0]
+    assert "event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp)" in args[0]
     assert "account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in args[0]
     assert args[1] == "hubspot"
     assert args[2] == "evt-1"
@@ -132,6 +136,10 @@ def test_ingest_crm_events_batch_trims_text_fields_before_persistence(monkeypatc
     assert body["created_ids"] == ["22222222-2222-2222-2222-222222222222"]
 
     args = pool.fetchval.await_args.args
+    assert "company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name)" in args[0]
+    assert "contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email)" in args[0]
+    assert "deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name)" in args[0]
+    assert "event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp)" in args[0]
     assert "account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in args[0]
     assert args[1] == "salesforce"
     assert args[2] == "batch-1"
@@ -334,6 +342,11 @@ def test_ingest_hubspot_webhook_persists_account_id(monkeypatch):
     query, *params = pool.execute.await_args.args
     assert "processing_notes, account_id" in query
     assert "$12::uuid" in query
+    assert "company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name)" in query
+    assert "contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email)" in query
+    assert "deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name)" in query
+    assert "event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp)" in query
+    assert "processing_notes = EXCLUDED.processing_notes" in query
     assert "COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in query
     assert params[-1] == "11111111-1111-1111-1111-111111111111"
 
@@ -391,5 +404,9 @@ def test_salesforce_and_pipedrive_webhooks_preserve_account_id_on_upsert(monkeyp
 
             assert response.status_code == 200
             query, *params = pool.execute.await_args.args
+            assert "company_name = COALESCE(EXCLUDED.company_name, b2b_crm_events.company_name)" in query
+            assert "contact_email = COALESCE(EXCLUDED.contact_email, b2b_crm_events.contact_email)" in query
+            assert "deal_name = COALESCE(EXCLUDED.deal_name, b2b_crm_events.deal_name)" in query
+            assert "event_timestamp = COALESCE(EXCLUDED.event_timestamp, b2b_crm_events.event_timestamp)" in query
             assert "account_id = COALESCE(b2b_crm_events.account_id, EXCLUDED.account_id)" in query
             assert params[-1] == "11111111-1111-1111-1111-111111111111"
