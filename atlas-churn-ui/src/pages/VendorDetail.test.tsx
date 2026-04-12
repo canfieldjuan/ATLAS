@@ -277,6 +277,47 @@ describe('VendorDetail', () => {
     })
   })
 
+  it('preserves the exact upstream evidence path through nested review detail context', async () => {
+    const user = userEvent.setup()
+    const directEvidencePath = '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1'
+    const nestedReviewPath = `/reviews/review-1?back_to=${encodeURIComponent(directEvidencePath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/vendors/Zendesk?back_to=${encodeURIComponent(nestedReviewPath)}`]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Validate Evidence' })[0])
+
+    expect(mockNavigate).toHaveBeenCalledWith(directEvidencePath)
+  })
+
+  it('copies the exact upstream evidence path through nested review detail context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const directEvidencePath = '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1'
+    const nestedReviewPath = `/reviews/review-1?back_to=${encodeURIComponent(directEvidencePath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/vendors/Zendesk?back_to=${encodeURIComponent(nestedReviewPath)}`]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy evidence link' })[0])
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${directEvidencePath}`)
+    })
+  })
+
   it('copies the upstream watchlists shortcut link through nested review detail context', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)

@@ -233,7 +233,8 @@ function upstreamWatchlistsLabel(backTo: string | null): string {
 
 function upstreamEvidencePath(backTo: string | null, vendorName: string): string | null {
   if (!backTo) return null
-  if (backTo.startsWith('/evidence')) return normalizeBackTo(backTo)
+  const directEvidencePath = upstreamNestedPath(backTo, '/evidence')
+  if (directEvidencePath?.startsWith('/evidence')) return directEvidencePath
   if (!backTo.startsWith('/watchlists')) return null
 
   const params = new URLSearchParams()
