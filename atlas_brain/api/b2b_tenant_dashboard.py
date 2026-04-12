@@ -61,6 +61,7 @@ from ..templates.email.watchlist_alert_delivery import (
     render_watchlist_alert_delivery_html,
 )
 from .b2b_dashboard import (
+    _extract_report_account_preview_fields,
     _list_accounts_in_motion_from_report,
     _load_reasoning_views_for_vendors,
     _normalize_vendor_name,
@@ -3568,6 +3569,7 @@ async def list_tenant_reports(
         f"""
         SELECT b2b_intelligence.id, report_date, report_type, executive_summary,
                vendor_filter, category_filter, status, b2b_intelligence.created_at,
+               intelligence_data,
                latest_failure_step, latest_error_code, latest_error_summary,
                COALESCE((intelligence_data->>'data_stale')::boolean, false) AS data_stale,
                intelligence_data->>'data_as_of_date' AS evidence_data_as_of_date,
@@ -3633,6 +3635,7 @@ async def list_tenant_reports(
         blocker_count = r["blocker_count"] or 0
         warning_count = r["warning_count"] or 0
         unresolved_issue_count = r["unresolved_issue_count"] or 0
+        preview_fields = _extract_report_account_preview_fields(r.get("intelligence_data"))
         evidence_snapshot = report_evidence_snapshot_payload(
             report_date=r["report_date"],
             intelligence_data={
@@ -3691,6 +3694,7 @@ async def list_tenant_reports(
                 "as_of_date": evidence_snapshot["as_of_date"],
                 "analysis_window_days": evidence_snapshot["analysis_window_days"],
                 "created_at": str(r["created_at"]) if r["created_at"] else None,
+                **preview_fields,
             }
         )
 

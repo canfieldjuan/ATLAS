@@ -374,6 +374,14 @@ async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
             "category_filter": None,
             "status": "published",
             "created_at": created_at,
+            "intelligence_data": {
+                "account_reasoning_preview_only": True,
+                "account_reasoning_preview": {
+                    "disclaimer": "Early account signal only.",
+                    "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                    "priority_account_names": ["Concentrix", "Concentrix"],
+                },
+            },
             "latest_failure_step": None,
             "latest_error_code": None,
             "latest_error_summary": None,
@@ -416,6 +424,12 @@ async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
     assert report["review_label"] == "Blocked"
     assert report["as_of_date"] == "2026-04-08"
     assert report["analysis_window_days"] == 60
+    assert report["account_reasoning_preview_only"] is True
+    assert report["account_pressure_summary"] == (
+        "A single named account is showing early evaluation pressure."
+    )
+    assert report["priority_account_names"] == ["Concentrix"]
+    assert report["account_pressure_disclaimer"] == "Early account signal only."
     assert report["trust"] == {
         "artifact_state": "ready",
         "artifact_label": "Ready",

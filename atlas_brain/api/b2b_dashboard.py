@@ -195,6 +195,47 @@ def _normalize_vendor_name(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
+def _extract_report_account_preview_fields(intelligence_data: Any) -> dict[str, Any]:
+    payload = _safe_dict(_safe_json(intelligence_data))
+    preview = _safe_dict(payload.get("account_reasoning_preview"))
+    summary = str(
+        payload.get("account_pressure_summary")
+        or preview.get("account_pressure_summary")
+        or ""
+    ).strip()
+    disclaimer = str(preview.get("disclaimer") or "").strip()
+    preview_only = bool(payload.get("account_reasoning_preview_only"))
+
+    priority_names: list[str] = []
+    raw_priority_names = payload.get("priority_account_names")
+    if not isinstance(raw_priority_names, list):
+        raw_priority_names = preview.get("priority_account_names")
+    if isinstance(raw_priority_names, list):
+        seen: set[str] = set()
+        for item in raw_priority_names:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            priority_names.append(text)
+            if len(priority_names) >= 5:
+                break
+
+    result: dict[str, Any] = {}
+    if summary:
+        result["account_pressure_summary"] = summary
+    if priority_names:
+        result["priority_account_names"] = priority_names
+    if preview_only:
+        result["account_reasoning_preview_only"] = True
+    if disclaimer and (preview_only or summary or priority_names):
+        result["account_pressure_disclaimer"] = disclaimer
+    return result
+
+
 async def _load_reasoning_views_for_vendors(pool, vendor_names: list[str]) -> dict[str, Any]:
     requested = [
         str(vendor_name).strip()
@@ -1710,6 +1751,7 @@ async def list_reports(
         f"""
         SELECT id, report_date, report_type, executive_summary,
              vendor_filter, category_filter, status, created_at,
+             intelligence_data,
              COALESCE((intelligence_data->>'data_stale')::boolean, false) AS data_stale,
              intelligence_data->>'data_as_of_date' AS evidence_data_as_of_date,
              intelligence_data->>'as_of_date' AS evidence_as_of_date,
@@ -1753,6 +1795,7 @@ async def list_reports(
         blocker_count = r["blocker_count"] or 0
         warning_count = r["warning_count"] or 0
         unresolved_issue_count = r["unresolved_issue_count"] or 0
+        preview_fields = _extract_report_account_preview_fields(r.get("intelligence_data"))
         evidence_snapshot = report_evidence_snapshot_payload(
             report_date=r["report_date"],
             intelligence_data={
@@ -1801,6 +1844,7 @@ async def list_reports(
                 "as_of_date": evidence_snapshot["as_of_date"],
                 "analysis_window_days": evidence_snapshot["analysis_window_days"],
                 "created_at": str(r["created_at"]) if r["created_at"] else None,
+                **preview_fields,
             }
         )
 
