@@ -80,6 +80,14 @@ describe('IncidentAlerts', () => {
           vendor_name: 'Acme Rival',
           company_name: 'Acme Bank',
           signal_type: 'competitive_displacement',
+          account_review_focus: {
+            vendor: 'Acme Rival',
+            company: 'Acme Bank',
+            report_date: '2026-04-10',
+            watch_vendor: 'Acme Rival',
+            category: 'Switch Risk',
+            track_mode: 'competitor',
+          },
         },
         {
           id: 'delivery-2',
@@ -306,7 +314,11 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
-    expect(await screen.findByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor&back_to=%2Falerts%3Fwebhook%3Dwh-1',
+    )
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?vendor_name=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-1',
     )
@@ -374,6 +386,14 @@ describe('IncidentAlerts', () => {
           status: 'success',
           error: null,
           pushed_at: '2026-04-10T03:05:00Z',
+          account_review_focus: {
+            vendor: 'Acme Rival',
+            company: 'Acme Bank',
+            report_date: '2026-04-10',
+            watch_vendor: 'Acme Rival',
+            category: 'Switch Risk',
+            track_mode: 'competitor',
+          },
         },
       ],
       count: 1,
@@ -386,7 +406,10 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
-    expect(await screen.findAllByRole('link', { name: 'Watchlists' })).toSatisfy((links) => (
+    expect(await screen.findAllByRole('link', { name: 'Account Review' })).toSatisfy((links) => (
+      links.some((link: HTMLAnchorElement) => link.getAttribute('href') === '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess')
+    ))
+    expect(screen.getAllByRole('link', { name: 'Watchlists' })).toSatisfy((links) => (
       links.some((link: HTMLAnchorElement) => link.getAttribute('href') === '/watchlists?vendor_name=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess')
     ))
     expect(screen.getAllByRole('link', { name: 'Vendor workspace' })).toSatisfy((links) => (

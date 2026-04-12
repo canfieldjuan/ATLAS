@@ -13,6 +13,7 @@ import {
   listWebhooks,
   testWebhookSubscription,
   updateWebhookSubscription,
+  type AlertAccountReviewFocus,
   type WebhookChannel,
   type WebhookCreateBody,
   type WebhookEventType,
@@ -418,6 +419,18 @@ function buildVendorWorkspacePath(vendorName: string, backTo: string) {
 function buildWatchlistsPath(vendorName: string, backTo: string) {
   const next = new URLSearchParams()
   next.set('vendor_name', vendorName)
+  next.set('back_to', backTo)
+  return `/watchlists?${next.toString()}`
+}
+
+function buildAccountReviewPath(focus: AlertAccountReviewFocus, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('account_vendor', focus.vendor)
+  next.set('account_company', focus.company)
+  next.set('account_report_date', focus.report_date)
+  next.set('account_watch_vendor', focus.watch_vendor)
+  next.set('account_category', focus.category)
+  next.set('account_track_mode', focus.track_mode)
   next.set('back_to', backTo)
   return `/watchlists?${next.toString()}`
 }
@@ -1110,6 +1123,14 @@ export default function IncidentAlerts() {
                                   </div>
                                   {delivery.vendor_name ? (
                                     <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                      {delivery.account_review_focus ? (
+                                        <Link
+                                          to={buildAccountReviewPath(delivery.account_review_focus, activityBackTo)}
+                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                        >
+                                          Account Review
+                                        </Link>
+                                      ) : null}
                                       <Link
                                         to={buildWatchlistsPath(delivery.vendor_name, activityBackTo)}
                                         className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
@@ -1189,6 +1210,14 @@ export default function IncidentAlerts() {
                                     </div>
                                     {push.vendor_name ? (
                                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                        {push.account_review_focus ? (
+                                          <Link
+                                            to={buildAccountReviewPath(push.account_review_focus, activityBackTo)}
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                          >
+                                            Account Review
+                                          </Link>
+                                        ) : null}
                                         <Link
                                           to={buildWatchlistsPath(push.vendor_name, activityBackTo)}
                                           className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"

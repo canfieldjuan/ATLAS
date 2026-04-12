@@ -5907,7 +5907,7 @@ async def list_webhook_deliveries(
 
     rows = await pool.fetch(
         f"""
-        SELECT id, event_type, status_code, duration_ms, attempt, success, error, delivered_at
+        SELECT id, event_type, payload, status_code, duration_ms, attempt, success, error, delivered_at
         FROM b2b_webhook_delivery_log
         WHERE {where}
         ORDER BY delivered_at DESC
@@ -5916,8 +5916,23 @@ async def list_webhook_deliveries(
         *params,
     )
 
+    report_cache: dict[str, Any] = {}
+    tracked_vendor_cache: dict[str, Any] = {}
+    signal_cache: dict[str, Any] = {}
     deliveries = []
     for r in rows:
+        context = _extract_webhook_activity_context(r.get("payload"))
+        account_review_focus = await _resolve_webhook_activity_account_focus(
+            pool,
+            user,
+            vendor_name=context.get("vendor_name"),
+            company_name=context.get("company_name"),
+            signal_id=context.get("signal_id"),
+            review_id=context.get("review_id"),
+            report_cache=report_cache,
+            tracked_vendor_cache=tracked_vendor_cache,
+            signal_cache=signal_cache,
+        )
         deliveries.append({
             "id": str(r["id"]),
             "event_type": r["event_type"],
@@ -5927,6 +5942,10 @@ async def list_webhook_deliveries(
             "success": r["success"],
             "error": r["error"],
             "delivered_at": r["delivered_at"].isoformat(),
+            "vendor_name": context.get("vendor_name"),
+            "company_name": context.get("company_name"),
+            "signal_type": context.get("signal_type") or r["event_type"],
+            "account_review_focus": account_review_focus,
         })
 
     return {"deliveries": deliveries, "count": len(deliveries)}
@@ -6001,12 +6020,26 @@ async def list_crm_push_log(
         wid, limit,
     )
 
+    report_cache: dict[str, Any] = {}
+    tracked_vendor_cache: dict[str, Any] = {}
+    signal_cache: dict[str, Any] = {}
     pushes = []
     for r in rows:
+        signal_id = str(r["signal_id"]) if r["signal_id"] else None
+        account_review_focus = await _resolve_webhook_activity_account_focus(
+            pool,
+            user,
+            vendor_name=r["vendor_name"],
+            company_name=r["company_name"],
+            signal_id=signal_id,
+            report_cache=report_cache,
+            tracked_vendor_cache=tracked_vendor_cache,
+            signal_cache=signal_cache,
+        )
         pushes.append({
             "id": str(r["id"]),
             "signal_type": r["signal_type"],
-            "signal_id": str(r["signal_id"]) if r["signal_id"] else None,
+            "signal_id": signal_id,
             "vendor_name": r["vendor_name"],
             "company_name": r["company_name"],
             "crm_record_id": r["crm_record_id"],
@@ -6014,6 +6047,7 @@ async def list_crm_push_log(
             "status": r["status"],
             "error": r["error"],
             "pushed_at": r["pushed_at"].isoformat(),
+            "account_review_focus": account_review_focus,
         })
 
     return {"pushes": pushes, "count": len(pushes)}
@@ -6912,6 +6946,175 @@ async def _list_accounts_in_motion_from_report(
         "freshness_status": freshness_status,
         "freshness_reason": freshness_reason,
         "freshness_timestamp": freshness_timestamp,
+    }
+
+
+def _extract_webhook_activity_context(payload: Any) -> dict[str, str | None]:
+    envelope = _safe_json(payload)
+    if not isinstance(envelope, dict):
+        envelope = {}
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    vendor_name = str(envelope.get("vendor") or data.get("vendor_name") or "").strip() or None
+    company_name = str(data.get("company_name") or data.get("company") or "").strip() or None
+    signal_type = str(data.get("signal_type") or "").strip() or None
+    signal_id_value = data.get("company_signal_id")
+    if signal_id_value is None:
+        signal_id_value = data.get("signal_id")
+    signal_id = str(signal_id_value).strip() if signal_id_value is not None else ""
+    review_id = str(data.get("review_id") or "").strip()
+    return {
+        "vendor_name": vendor_name,
+        "company_name": company_name,
+        "signal_type": signal_type,
+        "signal_id": signal_id or None,
+        "review_id": review_id or None,
+    }
+
+
+async def _fetch_company_signal_focus_context(
+    pool,
+    signal_id: str | None,
+) -> dict[str, str | None] | None:
+    raw = str(signal_id or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = _uuid.UUID(raw)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    row = await pool.fetchrow(
+        """
+        SELECT id, company_name, vendor_name, review_id
+        FROM b2b_company_signals
+        WHERE id = $1::uuid
+        """,
+        parsed,
+    )
+    if not row:
+        return None
+    return {
+        "signal_id": str(row["id"]),
+        "company_name": row["company_name"],
+        "vendor_name": row["vendor_name"],
+        "review_id": str(row["review_id"]) if row.get("review_id") else None,
+    }
+
+
+async def _resolve_webhook_activity_account_focus(
+    pool,
+    user: AuthUser | None,
+    *,
+    vendor_name: str | None,
+    company_name: str | None,
+    signal_id: str | None = None,
+    review_id: str | None = None,
+    report_cache: dict[str, Any] | None = None,
+    tracked_vendor_cache: dict[str, Any] | None = None,
+    signal_cache: dict[str, Any] | None = None,
+) -> dict[str, str] | None:
+    if not user or not getattr(user, "account_id", None):
+        return None
+
+    signal_key = str(signal_id or "").strip()
+    signal_context = None
+    if signal_key:
+        if signal_cache is not None and signal_key in signal_cache:
+            signal_context = signal_cache[signal_key]
+        else:
+            signal_context = await _fetch_company_signal_focus_context(pool, signal_key)
+            if signal_cache is not None:
+                signal_cache[signal_key] = signal_context
+
+    resolved_vendor = str((signal_context or {}).get("vendor_name") or vendor_name or "").strip()
+    resolved_company = str((signal_context or {}).get("company_name") or company_name or "").strip()
+    resolved_review_id = str(review_id or (signal_context or {}).get("review_id") or "").strip()
+    if not resolved_vendor or not resolved_company:
+        return None
+
+    vendor_key = _normalize_vendor_name(resolved_vendor)
+    if tracked_vendor_cache is not None and vendor_key in tracked_vendor_cache:
+        tracked_row = tracked_vendor_cache[vendor_key]
+    else:
+        tracked_row = await pool.fetchrow(
+            """
+            SELECT vendor_name, track_mode
+            FROM tracked_vendors
+            WHERE account_id = $1::uuid
+              AND LOWER(vendor_name) = LOWER($2)
+            ORDER BY added_at ASC
+            LIMIT 1
+            """,
+            user.account_id,
+            resolved_vendor,
+        )
+        if tracked_vendor_cache is not None:
+            tracked_vendor_cache[vendor_key] = tracked_row
+    if not tracked_row:
+        return None
+
+    watch_vendor = str(tracked_row["vendor_name"] or resolved_vendor).strip()
+    watch_vendor_key = _normalize_vendor_name(watch_vendor)
+    if report_cache is not None and watch_vendor_key in report_cache:
+        report_row = report_cache[watch_vendor_key]
+    else:
+        report_row = await _fetch_latest_accounts_in_motion_report(pool, watch_vendor, user)
+        if report_cache is not None:
+            report_cache[watch_vendor_key] = report_row
+    if not report_row:
+        return None
+
+    report = _safe_json(report_row["intelligence_data"])
+    if not isinstance(report, dict):
+        return None
+    report_date = str(report_row["report_date"]) if report_row.get("report_date") else ""
+    if not report_date:
+        return None
+
+    target_company_key = _company_lookup_key(resolved_company)
+    target_vendor_key = _normalize_vendor_name(resolved_vendor)
+    strong_matches: list[dict[str, Any]] = []
+    fallback_matches: list[dict[str, Any]] = []
+    for account in report.get("accounts") or []:
+        if not isinstance(account, dict):
+            continue
+        shaped = _shape_persisted_accounts_in_motion_account(account, watch_vendor)
+        if _company_lookup_key(shaped.get("company")) != target_company_key:
+            continue
+        if _normalize_vendor_name(shaped.get("vendor")) != target_vendor_key:
+            continue
+        source_review_ids = {
+            str(item).strip()
+            for item in (account.get("source_reviews") or [])
+            if str(item or "").strip()
+        }
+        if resolved_review_id and resolved_review_id in source_review_ids:
+            strong_matches.append(shaped)
+        else:
+            fallback_matches.append(shaped)
+
+    match = None
+    if resolved_review_id:
+        if len(strong_matches) == 1:
+            match = strong_matches[0]
+        elif len(strong_matches) > 1:
+            return None
+    if match is None:
+        if len(fallback_matches) == 1:
+            match = fallback_matches[0]
+        elif len(fallback_matches) > 1:
+            return None
+    if match is None:
+        return None
+
+    return {
+        "vendor": str(match.get("vendor") or resolved_vendor),
+        "company": str(match.get("company") or resolved_company),
+        "report_date": report_date,
+        "watch_vendor": watch_vendor,
+        "category": str(match.get("category") or ""),
+        "track_mode": str(tracked_row.get("track_mode") or ""),
     }
 
 

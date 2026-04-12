@@ -520,6 +520,15 @@ export interface WebhookDeliverySummary {
   last_delivery_at: string | null
 }
 
+export interface AlertAccountReviewFocus {
+  vendor: string
+  company: string
+  report_date: string
+  watch_vendor: string
+  category: string
+  track_mode: string
+}
+
 export interface WebhookDelivery {
   id: string
   event_type: string
@@ -532,6 +541,7 @@ export interface WebhookDelivery {
   vendor_name: string | null
   company_name: string | null
   signal_type: string | null
+  account_review_focus?: AlertAccountReviewFocus | null
 }
 
 export interface WebhookCrmPushLogEntry {
@@ -545,6 +555,7 @@ export interface WebhookCrmPushLogEntry {
   status: string
   error: string | null
   pushed_at: string
+  account_review_focus?: AlertAccountReviewFocus | null
 }
 
 export interface WebhookCreateBody {
