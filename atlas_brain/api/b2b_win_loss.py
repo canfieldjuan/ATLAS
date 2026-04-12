@@ -960,6 +960,21 @@ async def _compute_prediction(
     return response
 
 
+def _clean_required_text(value: str, field_name: str) -> str:
+    cleaned = str(value).strip() if value is not None else ""
+    if not cleaned:
+        raise HTTPException(status_code=422, detail=f"{field_name} is required")
+    return cleaned
+
+
+def _parse_prediction_id(prediction_id: str) -> _uuid.UUID:
+    try:
+        return _uuid.UUID(str(prediction_id).strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid prediction ID")
+
+
+
 # -- Main endpoint ------------------------------------------------------------
 
 @router.post("/win-loss", response_model=WinLossResponse)
@@ -970,13 +985,13 @@ async def predict_win_loss(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Predict win probability when selling against a given vendor."""
-    pool = get_db_pool()
-    vendor = req.vendor_name.strip()
+    vendor = _clean_required_text(req.vendor_name, "vendor_name")
 
     resolved = await resolve_vendor_name(vendor)
     if resolved:
         vendor = resolved
 
+    pool = get_db_pool()
     response = await _compute_prediction(pool, vendor, req.company_size, req.industry)
     pid = await _persist_prediction(pool, user.account_id, req, response)
     response.prediction_id = pid
@@ -1015,11 +1030,10 @@ async def compare_win_loss(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Compare win probability between two vendors side by side."""
-    pool = get_db_pool()
+    vendor_a = _clean_required_text(req.vendor_a, "vendor_a")
+    vendor_b = _clean_required_text(req.vendor_b, "vendor_b")
 
     # Resolve vendor names
-    vendor_a = req.vendor_a.strip()
-    vendor_b = req.vendor_b.strip()
     resolved_a = await resolve_vendor_name(vendor_a)
     resolved_b = await resolve_vendor_name(vendor_b)
     if resolved_a:
@@ -1029,6 +1043,8 @@ async def compare_win_loss(
 
     if vendor_a.lower() == vendor_b.lower():
         raise HTTPException(status_code=400, detail="Cannot compare a vendor against itself")
+
+    pool = get_db_pool()
 
     # Run both predictions
     resp_a, resp_b = await asyncio.gather(
@@ -1125,11 +1141,8 @@ async def get_prediction(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Fetch a stored win/loss prediction by ID."""
+    pid = _parse_prediction_id(prediction_id)
     pool = get_db_pool()
-    try:
-        pid = _uuid.UUID(prediction_id)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="Invalid prediction ID")
 
     row = await pool.fetchrow(
         """
@@ -1196,11 +1209,8 @@ async def export_prediction_csv(
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Export a stored prediction as CSV."""
+    pid = _parse_prediction_id(prediction_id)
     pool = get_db_pool()
-    try:
-        pid = _uuid.UUID(prediction_id)
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail="Invalid prediction ID")
 
     row = await pool.fetchrow(
         "SELECT * FROM b2b_win_loss_predictions WHERE id = $1 AND account_id = $2",
