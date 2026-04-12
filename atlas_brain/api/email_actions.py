@@ -19,10 +19,18 @@ logger = logging.getLogger("atlas.api.email_actions")
 router = APIRouter(prefix="/email/actions", tags=["email-actions"])
 
 
+def _clean_required_text(value: object | None, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise HTTPException(422, f"{field_name} is required")
+    return text
+
+
 async def _load_email(gmail_message_id: str) -> dict:
     """Load a processed email row by gmail_message_id.  Raises 404 if not found."""
     from ..storage.database import get_db_pool
 
+    gmail_message_id = _clean_required_text(gmail_message_id, "gmail_message_id")
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(503, "Database not available")
@@ -42,6 +50,7 @@ async def _load_email(gmail_message_id: str) -> dict:
 
 @router.post("/{gmail_message_id}/quote")
 async def generate_quote(gmail_message_id: str):
+    gmail_message_id = _clean_required_text(gmail_message_id, "gmail_message_id")
     """Generate a quote/estimate draft reply for the email.
 
     Internally delegates to the email draft generation endpoint with
@@ -84,6 +93,7 @@ async def escalate_email(gmail_message_id: str):
     - Sends an urgent ntfy with full email body + customer history
     - Creates a 1-hour callback reminder
     """
+    gmail_message_id = _clean_required_text(gmail_message_id, "gmail_message_id")
     import httpx
 
     from ..config import settings
@@ -187,6 +197,7 @@ async def show_slots(gmail_message_id: str):
     appointment (if a contact exists), and sends a formatted ntfy notification
     with a [Draft Reply] button.
     """
+    gmail_message_id = _clean_required_text(gmail_message_id, "gmail_message_id")
     import httpx
     from itertools import groupby
 
@@ -327,6 +338,7 @@ async def send_info(gmail_message_id: str):
     - Logs a CRM interaction if a contact exists
     - Sends a confirmation ntfy so you know the draft is ready
     """
+    gmail_message_id = _clean_required_text(gmail_message_id, "gmail_message_id")
     import httpx
 
     from ..config import settings
@@ -413,6 +425,7 @@ async def archive_email(gmail_message_id: str):
     - Logs a CRM interaction if a contact exists
     - Sends a confirmation ntfy so you know it worked
     """
+    gmail_message_id = _clean_required_text(gmail_message_id, "gmail_message_id")
     import httpx
 
     from ..config import settings
