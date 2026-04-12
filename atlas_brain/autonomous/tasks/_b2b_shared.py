@@ -13577,6 +13577,7 @@ async def read_company_signal_review_impact_summary(
             "trend_recommendation_queue_filters": {},
             "trend_recommendation_queue_snapshot": None,
             "trend_queue_rankings": [],
+            "trend_queue_focus": None,
         }
 
     where_clause = " AND ".join(conditions)
@@ -14621,6 +14622,7 @@ async def read_company_signal_review_impact_summary(
             }
         )
     trend_queue_rankings = _sort_trend_queue_rankings(trend_queue_rankings)
+    trend_queue_focus = trend_queue_rankings[0] if trend_queue_rankings else None
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -14643,6 +14645,7 @@ async def read_company_signal_review_impact_summary(
         "trend_recommendation_queue_filters": trend_recommendation_queue_filters,
         "trend_recommendation_queue_snapshot": trend_recommendation_queue_snapshot,
         "trend_queue_rankings": trend_queue_rankings,
+        "trend_queue_focus": trend_queue_focus,
     }
 
 

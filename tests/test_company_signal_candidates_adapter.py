@@ -1256,6 +1256,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     }
     assert summary["trend_queue_rankings"][0]["actionable_pending_groups"] == 3
     assert summary["trend_queue_rankings"][0]["pending_groups"] == 4
+    assert summary["trend_queue_focus"] == summary["trend_queue_rankings"][0]
 
 
 def _make_review_impact_summary_pool(*, totals=None, daily_trends=None):
@@ -1294,6 +1295,7 @@ async def test_read_company_signal_review_impact_summary_returns_no_data_without
     assert summary["trend_alerts"] == []
     assert summary["trend_recommendation_queue_snapshot"] is None
     assert summary["trend_queue_rankings"] == []
+    assert summary["trend_queue_focus"] is None
 
 
 @pytest.mark.asyncio
