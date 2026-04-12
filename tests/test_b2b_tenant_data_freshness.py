@@ -2701,17 +2701,29 @@ async def test_list_watchlist_alert_events_returns_view_scoped_rows(monkeypatch)
                 {
                     "id": event_id,
                     "watchlist_view_id": view_id,
-                    "event_type": "vendor_alert",
-                    "threshold_field": "vendor_alert_threshold",
-                    "entity_type": "vendor",
-                    "entity_key": "vendor_alert:vendor:salesforce",
+                    "event_type": "account_alert",
+                    "threshold_field": "account_alert_threshold",
+                    "entity_type": "account",
+                    "entity_key": "account_alert:account:salesforce:acme corp:crm:reddit:2026-04-05",
                     "vendor_name": "Salesforce",
-                    "company_name": None,
+                    "company_name": "Acme Corp",
                     "category": "CRM",
-                    "source": None,
-                    "threshold_value": 7.5,
-                    "summary": "Salesforce crossed the vendor alert threshold at 8.2",
-                    "payload": {"avg_urgency_score": 8.2},
+                    "source": "reddit",
+                    "threshold_value": 8.5,
+                    "summary": "Acme Corp crossed the account alert threshold at 8.2",
+                    "payload": {
+                        "urgency": 8.2,
+                        "reasoning_reference_ids": {"witness_ids": ["w1"]},
+                        "source_review_ids": ["r1", "r2"],
+                        "account_review_focus": {
+                            "vendor": "Salesforce",
+                            "company": "Acme Corp",
+                            "report_date": "2026-04-05",
+                            "watch_vendor": "Salesforce",
+                            "category": "CRM",
+                            "track_mode": "competitor",
+                        },
+                    },
                     "status": "open",
                     "first_seen_at": None,
                     "last_seen_at": None,
@@ -2731,7 +2743,17 @@ async def test_list_watchlist_alert_events_returns_view_scoped_rows(monkeypatch)
     assert result["watchlist_view_id"] == str(view_id)
     assert result["watchlist_view_name"] == "Hot CRM alerts"
     assert result["count"] == 1
-    assert result["events"][0]["event_type"] == "vendor_alert"
+    assert result["events"][0]["event_type"] == "account_alert"
+    assert result["events"][0]["source_review_ids"] == ["r1", "r2"]
+    assert result["events"][0]["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
+    assert result["events"][0]["account_review_focus"] == {
+        "vendor": "Salesforce",
+        "company": "Acme Corp",
+        "report_date": "2026-04-05",
+        "watch_vendor": "Salesforce",
+        "category": "CRM",
+        "track_mode": "competitor",
+    }
     sql = pool.fetch.await_args.args[0]
     assert "FROM b2b_watchlist_alert_events" in sql
     assert "status = $3" in sql
@@ -2864,7 +2886,7 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
                     "source": None,
                     "threshold_value": 7.5,
                     "summary": "Salesforce crossed the vendor alert threshold at 8.2",
-                    "payload": {"avg_urgency_score": 8.2},
+                    "payload": {"avg_urgency_score": 8.2, "reasoning_reference_ids": {"witness_ids": ["vw1"]}},
                     "status": "open",
                     "first_seen_at": None,
                     "last_seen_at": None,
@@ -2885,7 +2907,19 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
                     "source": "reddit",
                     "threshold_value": 8.5,
                     "summary": "Acme Corp crossed the account alert threshold at 9.0",
-                    "payload": {"urgency": 9.0},
+                    "payload": {
+                        "urgency": 9.0,
+                        "reasoning_reference_ids": {"witness_ids": ["w1"]},
+                        "source_review_ids": ["r1"],
+                        "account_review_focus": {
+                            "vendor": "Salesforce",
+                            "company": "Acme Corp",
+                            "report_date": "2026-04-05",
+                            "watch_vendor": "Salesforce",
+                            "category": "CRM",
+                            "track_mode": "competitor",
+                        },
+                    },
                     "status": "open",
                     "first_seen_at": None,
                     "last_seen_at": None,
@@ -2943,6 +2977,8 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
                         "company": "Acme Corp",
                         "vendor": "Salesforce",
                         "category": "CRM",
+                        "watch_vendor": "Salesforce",
+                        "track_mode": "competitor",
                         "urgency": 9.0,
                         "account_alert_hit": True,
                         "stale_threshold_hit": False,
@@ -2962,6 +2998,16 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
     assert result["count"] == 2
     assert result["new_open_event_count"] == 1
     assert result["resolved_event_count"] == 1
+    assert result["events"][0]["reasoning_reference_ids"] == {"witness_ids": ["vw1"]}
+    assert result["events"][1]["source_review_ids"] == ["r1"]
+    assert result["events"][1]["account_review_focus"] == {
+        "vendor": "Salesforce",
+        "company": "Acme Corp",
+        "report_date": "2026-04-05",
+        "watch_vendor": "Salesforce",
+        "category": "CRM",
+        "track_mode": "competitor",
+    }
     assert pool.fetchrow.await_count == 3
     resolve_sql = pool.execute.await_args.args[0]
     assert "UPDATE b2b_watchlist_alert_events" in resolve_sql

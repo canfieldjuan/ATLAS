@@ -55,6 +55,51 @@ def _coerce_optional_int(value: Any) -> int | None:
         return None
 
 
+def _clean_text_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    cleaned: list[str] = []
+    for item in value:
+        text = _clean_optional_text(item)
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def _watchlist_alert_account_focus_payload(row: dict[str, Any]) -> dict[str, str] | None:
+    vendor_name = _clean_optional_text(row.get("vendor"))
+    company_name = _clean_optional_text(row.get("company"))
+    report_date = _clean_optional_text(row.get("report_date"))
+    if not vendor_name or not company_name or not report_date:
+        return None
+    return {
+        "vendor": vendor_name,
+        "company": company_name,
+        "report_date": report_date,
+        "watch_vendor": _clean_optional_text(row.get("watch_vendor")) or vendor_name,
+        "category": _clean_optional_text(row.get("category")) or "",
+        "track_mode": _clean_optional_text(row.get("track_mode")) or "",
+    }
+
+
+def _normalize_watchlist_alert_account_focus(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    vendor_name = _clean_optional_text(value.get("vendor"))
+    company_name = _clean_optional_text(value.get("company"))
+    report_date = _clean_optional_text(value.get("report_date"))
+    if not vendor_name or not company_name or not report_date:
+        return None
+    return {
+        "vendor": vendor_name,
+        "company": company_name,
+        "report_date": report_date,
+        "watch_vendor": _clean_optional_text(value.get("watch_vendor")) or vendor_name,
+        "category": _clean_optional_text(value.get("category")) or "",
+        "track_mode": _clean_optional_text(value.get("track_mode")) or "",
+    }
+
+
 def _parse_timestamp_value(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -159,6 +204,8 @@ def watchlist_view_payload(row: Any) -> dict[str, Any]:
 
 def serialize_watchlist_alert_event(row: Any) -> dict[str, Any]:
     payload = _row_value(row, "payload")
+    payload_json = _safe_json(payload) if payload is not None else {}
+    payload_dict = payload_json if isinstance(payload_json, dict) else {}
     return {
         "id": str(_row_value(row, "id")),
         "watchlist_view_id": str(_row_value(row, "watchlist_view_id")),
@@ -172,7 +219,10 @@ def serialize_watchlist_alert_event(row: Any) -> dict[str, Any]:
         "source": _row_value(row, "source"),
         "threshold_value": _safe_float(_row_value(row, "threshold_value")),
         "summary": _row_value(row, "summary"),
-        "payload": _safe_json(payload) if payload is not None else {},
+        "payload": payload_json,
+        "reasoning_reference_ids": payload_dict.get("reasoning_reference_ids") if isinstance(payload_dict.get("reasoning_reference_ids"), dict) else None,
+        "source_review_ids": _clean_text_list(payload_dict.get("source_review_ids")),
+        "account_review_focus": _normalize_watchlist_alert_account_focus(payload_dict.get("account_review_focus")),
         "status": _row_value(row, "status"),
         "first_seen_at": str(_row_value(row, "first_seen_at")) if _row_value(row, "first_seen_at") else None,
         "last_seen_at": str(_row_value(row, "last_seen_at")) if _row_value(row, "last_seen_at") else None,
@@ -240,6 +290,7 @@ def build_watchlist_alert_candidates(
     for signal in feed.get("signals") or []:
         vendor_name = _clean_optional_text(signal.get("vendor_name"))
         category = _clean_optional_text(signal.get("product_category"))
+        signal_reasoning_reference_ids = signal.get("reasoning_reference_ids")
         if signal.get("vendor_alert_hit") and vendor_threshold is not None:
             candidates.append({
                 "event_type": "vendor_alert",
@@ -264,6 +315,7 @@ def build_watchlist_alert_candidates(
                     "freshness_status": signal.get("freshness_status"),
                     "freshness_timestamp": signal.get("freshness_timestamp"),
                     "synthesis_wedge_label": signal.get("synthesis_wedge_label"),
+                    "reasoning_reference_ids": signal_reasoning_reference_ids,
                 },
             })
         if signal.get("stale_threshold_hit") and stale_threshold is not None:
@@ -286,6 +338,7 @@ def build_watchlist_alert_candidates(
                     "freshness_status": signal.get("freshness_status"),
                     "freshness_reason": signal.get("freshness_reason"),
                     "freshness_timestamp": signal.get("freshness_timestamp"),
+                    "reasoning_reference_ids": signal_reasoning_reference_ids,
                 },
             })
 
@@ -294,6 +347,9 @@ def build_watchlist_alert_candidates(
         company_name = _clean_optional_text(account.get("company"))
         category = _clean_optional_text(account.get("category"))
         source_name = _watchlist_alert_source_name(account)
+        reasoning_reference_ids = account.get("reasoning_reference_ids")
+        source_review_ids = account.get("source_review_ids")
+        account_review_focus = _watchlist_alert_account_focus_payload(account)
         entity_type = "account" if company_name else "signal_cluster"
         entity_key = _watchlist_alert_entity_key(
             event_type="account_alert",
@@ -325,8 +381,9 @@ def build_watchlist_alert_candidates(
                     "confidence": account.get("confidence"),
                     "report_date": account.get("report_date"),
                     "freshness_status": account.get("freshness_status"),
-                    "reasoning_reference_ids": account.get("reasoning_reference_ids"),
-                    "source_review_ids": account.get("source_review_ids"),
+                    "reasoning_reference_ids": reasoning_reference_ids,
+                    "source_review_ids": source_review_ids,
+                    "account_review_focus": account_review_focus,
                 },
             })
         if account.get("stale_threshold_hit") and stale_threshold is not None:
@@ -354,6 +411,9 @@ def build_watchlist_alert_candidates(
                     "report_date": account.get("report_date"),
                     "freshness_status": account.get("freshness_status"),
                     "freshness_reason": account.get("freshness_reason"),
+                    "reasoning_reference_ids": reasoning_reference_ids,
+                    "source_review_ids": source_review_ids,
+                    "account_review_focus": account_review_focus,
                 },
             })
     return candidates

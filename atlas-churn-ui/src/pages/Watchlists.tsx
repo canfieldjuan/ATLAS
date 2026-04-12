@@ -400,9 +400,18 @@ function watchlistReviewDetailPath(searchParams: URLSearchParams, row: AccountsI
   return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
 }
 
-function accountFocusParams(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
+function accountFocusParamsFromFocus(
+  searchParams: URLSearchParams,
+  focus: {
+    vendor: string
+    company: string
+    report_date: string
+    watch_vendor: string
+    category: string
+    track_mode: string
+  },
+) {
   const next = new URLSearchParams(searchParams)
-  const focus = accountFocusFromRow(row)
   next.set('account_vendor', focus.vendor)
   next.set('account_company', focus.company)
   next.set('account_report_date', focus.report_date)
@@ -410,6 +419,10 @@ function accountFocusParams(searchParams: URLSearchParams, row: AccountsInMotion
   next.set('account_category', focus.category)
   next.set('account_track_mode', focus.track_mode)
   return next
+}
+
+function accountFocusParams(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
+  return accountFocusParamsFromFocus(searchParams, accountFocusFromRow(row))
 }
 
 function vendorFocusParams(searchParams: URLSearchParams, vendorName: string) {
@@ -473,6 +486,47 @@ function watchlistAccountEvidenceExplorerPath(
   source?: string | null,
 ) {
   return watchlistEvidenceExplorerPath(accountFocusParams(searchParams, row), row.vendor, witnessId, source)
+}
+
+function watchlistAlertEventPrimaryWitnessId(event: WatchlistAlertEvent) {
+  const witnessIds = event.reasoning_reference_ids?.witness_ids
+  if (!Array.isArray(witnessIds) || witnessIds.length === 0) return ''
+  const firstWitnessId = witnessIds[0]
+  return typeof firstWitnessId === 'string' ? firstWitnessId : String(firstWitnessId || '')
+}
+
+function watchlistAlertEventPrimaryReviewId(event: WatchlistAlertEvent) {
+  return event.source_review_ids[0] || ''
+}
+
+function watchlistAlertEventAccountPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
+  if (!event.account_review_focus) return null
+  return watchlistPath(accountFocusParamsFromFocus(searchParams, event.account_review_focus))
+}
+
+function watchlistAlertEventReviewDetailPath(
+  searchParams: URLSearchParams,
+  event: WatchlistAlertEvent,
+  reviewId: string,
+) {
+  if (!event.account_review_focus) return null
+  const params = new URLSearchParams()
+  params.set('back_to', watchlistPath(accountFocusParamsFromFocus(searchParams, event.account_review_focus)))
+  return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
+}
+
+function watchlistAlertEventEvidencePath(
+  searchParams: URLSearchParams,
+  event: WatchlistAlertEvent,
+  witnessId?: string | null,
+  source?: string | null,
+) {
+  const vendorName = event.vendor_name?.trim() || event.account_review_focus?.vendor || ''
+  if (!vendorName) return null
+  const contextParams = event.account_review_focus
+    ? accountFocusParamsFromFocus(searchParams, event.account_review_focus)
+    : searchParams
+  return watchlistEvidenceExplorerPath(contextParams, vendorName, witnessId, source)
 }
 
 function accountFocusFromRow(row: AccountsInMotionFeedItem) {
@@ -3084,37 +3138,117 @@ export default function Watchlists() {
               </div>
             ) : (
               <div className="space-y-2">
-                {activeAlertEvents.map((event) => (
-                  <div
-                    key={event.id}
-                    className={clsx('rounded-lg border px-3 py-3', alertEventTone(event))}
-                  >
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className="rounded-full border border-current/30 px-2 py-0.5">
-                            {alertEventLabel(event)}
-                          </span>
-                          {event.vendor_name ? (
-                            <span className="text-slate-100">{event.vendor_name}</span>
-                          ) : null}
-                          {event.company_name ? (
-                            <span className="text-slate-300">- {event.company_name}</span>
-                          ) : null}
+                {activeAlertEvents.map((event) => {
+                  const vendorName = event.vendor_name?.trim() || event.account_review_focus?.vendor || ''
+                  const primaryReviewId = watchlistAlertEventPrimaryReviewId(event)
+                  const primaryWitnessId = watchlistAlertEventPrimaryWitnessId(event)
+                  const eventSource = event.source || selectedSourceFilter || null
+                  const accountReviewPath = watchlistAlertEventAccountPath(searchParams, event)
+                  const reviewPath = primaryReviewId
+                    ? watchlistAlertEventReviewDetailPath(searchParams, event, primaryReviewId)
+                    : null
+                  const evidencePath = watchlistAlertEventEvidencePath(searchParams, event, null, eventSource)
+                  const witnessPath = primaryWitnessId
+                    ? watchlistAlertEventEvidencePath(searchParams, event, primaryWitnessId, eventSource)
+                    : null
+                  const eventLabel = event.company_name || vendorName
+                  return (
+                    <div
+                      key={event.id}
+                      className={clsx('rounded-lg border px-3 py-3', alertEventTone(event))}
+                    >
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="rounded-full border border-current/30 px-2 py-0.5">
+                              {alertEventLabel(event)}
+                            </span>
+                            {event.vendor_name ? (
+                              <span className="text-slate-100">{event.vendor_name}</span>
+                            ) : null}
+                            {event.company_name ? (
+                              <span className="text-slate-300">- {event.company_name}</span>
+                            ) : null}
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-white">{event.summary}</div>
+                          <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-400">
+                            {event.category ? <span>Category: {event.category}</span> : null}
+                            {event.source ? <span>Source: {event.source}</span> : null}
+                            {event.threshold_value != null ? <span>Threshold: {event.threshold_value}</span> : null}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-3 text-[11px]">
+                            {accountReviewPath ? (
+                              <Link
+                                to={accountReviewPath}
+                                aria-label={`Open alert account review for ${eventLabel}`}
+                                className="text-emerald-300 hover:text-emerald-200"
+                              >
+                                Account Review
+                              </Link>
+                            ) : null}
+                            {reviewPath ? (
+                              <Link
+                                to={reviewPath}
+                                aria-label={`Open alert review detail for ${eventLabel}`}
+                                className="text-sky-300 hover:text-sky-200"
+                              >
+                                Review
+                              </Link>
+                            ) : null}
+                            {witnessPath ? (
+                              <Link
+                                to={witnessPath}
+                                aria-label={`Open alert witness for ${eventLabel}`}
+                                className="text-cyan-300 hover:text-cyan-200"
+                              >
+                                Witness
+                              </Link>
+                            ) : null}
+                            {evidencePath ? (
+                              <Link
+                                to={evidencePath}
+                                aria-label={`Open alert evidence for ${vendorName}`}
+                                className="text-violet-300 hover:text-violet-200"
+                              >
+                                Evidence
+                              </Link>
+                            ) : null}
+                            {vendorName ? (
+                              <Link
+                                to={watchlistVendorPath(searchParams, vendorName)}
+                                aria-label={`Open alert vendor workspace for ${vendorName}`}
+                                className="text-amber-300 hover:text-amber-200"
+                              >
+                                Vendor workspace
+                              </Link>
+                            ) : null}
+                            {vendorName ? (
+                              <Link
+                                to={watchlistReportsPath(searchParams, vendorName)}
+                                aria-label={`Open alert reports for ${vendorName}`}
+                                className="text-fuchsia-300 hover:text-fuchsia-200"
+                              >
+                                Reports
+                              </Link>
+                            ) : null}
+                            {vendorName ? (
+                              <Link
+                                to={watchlistOpportunitiesPath(searchParams, vendorName)}
+                                aria-label={`Open alert opportunities for ${vendorName}`}
+                                className="text-orange-300 hover:text-orange-200"
+                              >
+                                Opportunities
+                              </Link>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="mt-1 text-sm font-medium text-white">{event.summary}</div>
-                        <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-400">
-                          {event.category ? <span>Category: {event.category}</span> : null}
-                          {event.source ? <span>Source: {event.source}</span> : null}
-                          {event.threshold_value != null ? <span>Threshold: {event.threshold_value}</span> : null}
+                        <div className="text-[11px] text-slate-400">
+                          Last seen {formatTs(event.last_seen_at)}
                         </div>
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        Last seen {formatTs(event.last_seen_at)}
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
             <div className="rounded-lg border border-slate-800/60 bg-slate-950/40 p-3">

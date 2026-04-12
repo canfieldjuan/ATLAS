@@ -740,6 +740,9 @@ describe('Watchlists', () => {
           threshold_value: 7.5,
           summary: 'Zendesk crossed the vendor alert threshold at 8.2',
           payload: {},
+          reasoning_reference_ids: null,
+          source_review_ids: [],
+          account_review_focus: null,
           status: 'open',
           first_seen_at: null,
           last_seen_at: '2026-04-07T17:00:00Z',
@@ -813,6 +816,120 @@ describe('Watchlists', () => {
     expect(screen.getByText('vendor alert hit')).toBeInTheDocument()
     expect(screen.getByText('account alert hit')).toBeInTheDocument()
     expect(screen.getAllByText('stale policy hit').length).toBeGreaterThan(0)
+  })
+
+  it('renders exact shortcuts for persisted account alert events', async () => {
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_names: ['Intercom'],
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: '2026-04-08T18:00:00Z',
+          last_alert_delivery_at: '2026-04-07T18:30:00Z',
+          last_alert_delivery_status: 'sent',
+          last_alert_delivery_summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+    api.listWatchlistAlertEvents.mockResolvedValue({
+      watchlist_view_id: 'view-1',
+      watchlist_view_name: 'Fresh named Intercom',
+      status: 'open',
+      events: [
+        {
+          id: 'event-2',
+          watchlist_view_id: 'view-1',
+          event_type: 'account_alert',
+          threshold_field: 'account_alert_threshold',
+          entity_type: 'account',
+          entity_key: 'account_alert:account:zendesk:acme corp:helpdesk:reddit:2026-04-07',
+          vendor_name: 'Zendesk',
+          company_name: 'Acme Corp',
+          category: 'Helpdesk',
+          source: 'reddit',
+          threshold_value: 8.5,
+          summary: 'Acme Corp crossed the account alert threshold at 8.9',
+          payload: {
+            urgency: 8.9,
+          },
+          reasoning_reference_ids: { witness_ids: ['witness:zendesk:1'] },
+          source_review_ids: ['review-1'],
+          account_review_focus: {
+            vendor: 'Zendesk',
+            company: 'Acme Corp',
+            report_date: '2026-04-07',
+            watch_vendor: 'Intercom',
+            category: 'Helpdesk',
+            track_mode: 'competitor',
+          },
+          status: 'open',
+          first_seen_at: null,
+          last_seen_at: '2026-04-07T17:00:00Z',
+          resolved_at: null,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const accountReviewLink = await screen.findByLabelText('Open alert account review for Acme Corp')
+    const reviewLink = screen.getByLabelText('Open alert review detail for Acme Corp')
+    const witnessLink = screen.getByLabelText('Open alert witness for Acme Corp')
+    const vendorLink = screen.getByLabelText('Open alert vendor workspace for Zendesk')
+
+    const accountReviewUrl = new URL(accountReviewLink.getAttribute('href') || '', 'https://atlas.test')
+    expect(accountReviewUrl.pathname).toBe('/watchlists')
+    expect(accountReviewUrl.searchParams.get('view')).toBe('view-1')
+    expect(accountReviewUrl.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(accountReviewUrl.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(accountReviewUrl.searchParams.get('account_report_date')).toBe('2026-04-07')
+    expect(accountReviewUrl.searchParams.get('account_watch_vendor')).toBe('Intercom')
+    expect(accountReviewUrl.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(accountReviewUrl.searchParams.get('account_track_mode')).toBe('competitor')
+
+    const reviewUrl = new URL(reviewLink.getAttribute('href') || '', 'https://atlas.test')
+    expect(reviewUrl.pathname).toBe('/reviews/review-1')
+    const reviewBackTo = new URL(reviewUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+    expect(reviewBackTo.pathname).toBe('/watchlists')
+    expect(reviewBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(reviewBackTo.searchParams.get('account_report_date')).toBe('2026-04-07')
+
+    const witnessUrl = new URL(witnessLink.getAttribute('href') || '', 'https://atlas.test')
+    expect(witnessUrl.pathname).toBe('/evidence')
+    expect(witnessUrl.searchParams.get('vendor')).toBe('Zendesk')
+    expect(witnessUrl.searchParams.get('witness_id')).toBe('witness:zendesk:1')
+    expect(witnessUrl.searchParams.get('source')).toBe('reddit')
+    const witnessBackTo = new URL(witnessUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+    expect(witnessBackTo.pathname).toBe('/watchlists')
+    expect(witnessBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(witnessBackTo.searchParams.get('account_report_date')).toBe('2026-04-07')
+
+    const vendorUrl = new URL(vendorLink.getAttribute('href') || '', 'https://atlas.test')
+    expect(vendorUrl.pathname).toBe('/vendors/Zendesk')
+    expect(vendorUrl.searchParams.get('back_to')).toBe('/watchlists?view=view-1')
   })
 
   it('hydrates a saved view from the URL query', async () => {

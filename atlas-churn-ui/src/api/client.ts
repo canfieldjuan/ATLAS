@@ -1208,6 +1208,15 @@ export interface WatchlistView {
   updated_at: string | null
 }
 
+export interface WatchlistAlertAccountReviewFocus {
+  vendor: string
+  company: string
+  report_date: string
+  watch_vendor: string
+  category: string
+  track_mode: string
+}
+
 export interface WatchlistAlertEvent {
   id: string
   watchlist_view_id: string
@@ -1222,6 +1231,9 @@ export interface WatchlistAlertEvent {
   threshold_value: number | null
   summary: string
   payload: Record<string, unknown>
+  reasoning_reference_ids: ReasoningReferenceIds | null
+  source_review_ids: string[]
+  account_review_focus: WatchlistAlertAccountReviewFocus | null
   status: 'open' | 'resolved'
   first_seen_at: string | null
   last_seen_at: string | null
