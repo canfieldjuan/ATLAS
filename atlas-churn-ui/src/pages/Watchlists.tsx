@@ -1614,6 +1614,17 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyVendorWorkspaceLink(vendorName: string) {
+    try {
+      await navigator.clipboard.writeText(watchlistVendorWorkspaceUrl(searchParams, vendorName))
+      setActionError(null)
+      setActionMessage(`Copied vendor workspace link for ${vendorName}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy vendor workspace link')
+    }
+  }
+
   async function handleCopyVendorEvidenceLink(vendorName: string, source?: string | null) {
     try {
       await navigator.clipboard.writeText(
@@ -2737,6 +2748,21 @@ export default function Watchlists() {
         <div className="flex items-center gap-2">
           {currentEvidenceVendor && (
             <div className="flex items-center gap-2">
+              <Link
+                to={watchlistVendorPath(searchParams, currentEvidenceVendor)}
+                className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-cyan-300 transition-colors hover:bg-cyan-500/10 hover:text-cyan-200"
+              >
+                <Building2 className="h-4 w-4" />
+                Open Current View in Vendor Workspace
+              </Link>
+              <button
+                type="button"
+                onClick={() => void handleCopyVendorWorkspaceLink(currentEvidenceVendor)}
+                aria-label="Copy current vendor link"
+                className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white"
+              >
+                Copy Vendor
+              </button>
               <Link
                 to={watchlistEvidenceExplorerPath(searchParams, currentEvidenceVendor, null, selectedSourceFilter)}
                 className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-violet-300 transition-colors hover:bg-violet-500/10 hover:text-violet-200"

@@ -1535,6 +1535,103 @@ describe('Watchlists', () => {
     )
   })
 
+  it('opens the current filtered vendor slice in vendor workspace from the header', async () => {
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_names: ['Intercom'],
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: null,
+          last_alert_delivery_at: null,
+          last_alert_delivery_status: null,
+          last_alert_delivery_summary: null,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Open Current View in Vendor Workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Intercom?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('copies the current vendor workspace shortcut from the header', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_names: ['Intercom'],
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: null,
+          last_alert_delivery_at: null,
+          last_alert_delivery_status: null,
+          last_alert_delivery_summary: null,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('link', { name: 'Open Current View in Vendor Workspace' })
+    await user.click(screen.getByRole('button', { name: 'Copy current vendor link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/vendors/Intercom')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('view')).toBe('view-1')
+    expect(await screen.findByText('Copied vendor workspace link for Intercom')).toBeInTheDocument()
+  })
+
   it('copies the current evidence explorer shortcut from the header', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
