@@ -750,24 +750,34 @@ export default function IncidentAlerts() {
     }
   }
 
-  function renderActivityReferenceButtons(activity: AlertActivityReferenceSource) {
+  function renderActivityReferences(activity: AlertActivityReferenceSource) {
     const references = buildActivityReferences(activity)
     if (!references.length) return null
     return (
-      <div className="mt-2 flex flex-wrap gap-2 text-xs">
-        {references.map((reference) => (
-          <button
-            key={reference.key}
-            type="button"
-            aria-label={`Copy ${reference.label}`}
-            onClick={() => void copyText(reference.value, reference.label.toLowerCase())}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-slate-300 transition-colors hover:bg-slate-900"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            <span>{reference.label}</span>
-            <span className="font-mono text-[11px] text-slate-200">{reference.value}</span>
-          </button>
-        ))}
+      <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
+        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">Reference IDs</div>
+        <div className="space-y-2 text-xs">
+          {references.map((reference) => (
+            <div
+              key={reference.key}
+              className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-2"
+            >
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">{reference.label}</div>
+                <div className="mt-1 break-all font-mono text-[11px] text-slate-200">{reference.value}</div>
+              </div>
+              <button
+                type="button"
+                aria-label={`Copy ${reference.label}`}
+                onClick={() => void copyText(reference.value, reference.label.toLowerCase())}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-[11px] text-slate-300 transition-colors hover:bg-slate-800"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
@@ -1218,7 +1228,7 @@ export default function IncidentAlerts() {
                                     ) : null}
                                     attempt {delivery.attempt} · {formatDurationMs(delivery.duration_ms)} · {formatTs(delivery.delivered_at)}
                                   </div>
-                                  {renderActivityReferenceButtons(delivery)}
+                                  {renderActivityReferences(delivery)}
                                   {delivery.review_id || delivery.account_review_focus || delivery.report_id || delivery.vendor_name ? (
                                     <div className="mt-3 flex flex-wrap gap-2 text-xs">
                                       {delivery.review_id ? (
@@ -1327,7 +1337,7 @@ export default function IncidentAlerts() {
                                       {push.report_type || push.signal_type ? <>{push.report_type || push.signal_type} · </> : null}
                                       {push.crm_record_type || 'record'}{push.crm_record_id ? ` · ${push.crm_record_id}` : ''} · {formatTs(push.pushed_at)}
                                     </div>
-                                    {renderActivityReferenceButtons(push)}
+                                    {renderActivityReferences(push)}
                                     {push.review_id || push.account_review_focus || push.report_id || push.vendor_name ? (
                                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
                                         {push.review_id ? (

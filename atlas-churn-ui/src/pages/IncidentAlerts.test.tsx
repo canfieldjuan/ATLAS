@@ -319,6 +319,9 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    expect(screen.getByText('Reference IDs')).toBeInTheDocument()
+    expect(screen.getByText('Signal ID')).toBeInTheDocument()
+    expect(screen.getByText('22222222-2222-2222-2222-222222222222')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Copy Signal ID' }))
 
     await waitFor(() => {
@@ -374,6 +377,9 @@ describe('IncidentAlerts', () => {
 
     expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
     expect(await screen.findByText('Acme Bank')).toBeInTheDocument()
+    expect(screen.getByText('Reference IDs')).toBeInTheDocument()
+    expect(screen.getByText('Signal ID')).toBeInTheDocument()
+    expect(screen.getByText('sig-1')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Copy Signal ID' }))
 
     await waitFor(() => {
