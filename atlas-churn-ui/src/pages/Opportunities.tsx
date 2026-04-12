@@ -184,8 +184,9 @@ function reportsPath(vendorName: string, returnPath: string): string {
   return `/reports?${params.toString()}`
 }
 
-function alertsPath(returnPath: string): string {
+function alertsPath(returnPath: string, vendorName?: string | null): string {
   const params = new URLSearchParams()
+  if (vendorName?.trim()) params.set('vendor', vendorName.trim())
   params.set('back_to', returnPath)
   return `/alerts?${params.toString()}`
 }
@@ -843,7 +844,7 @@ export default function Opportunities() {
                   Reports
                 </Link>
                 <Link
-                  to={directAlertsPath ?? alertsPath(currentPagePath)}
+                  to={directAlertsPath ?? alertsPath(currentPagePath, activeVendorFilter)}
                   className="text-rose-300 hover:text-rose-200 transition-colors"
                 >
                   Alerts API
@@ -1412,6 +1413,7 @@ function EvidencePanel({
   const vendorPath = vendorDetailPath(row.vendor, currentPagePath)
   const vendorEvidencePath = evidencePath(row.vendor, currentPagePath)
   const vendorReportsLibraryPath = reportsPath(row.vendor, currentPagePath)
+  const vendorAlertsPath = alertsPath(currentPagePath, row.vendor)
   const reviewPath = row.review_id ? reviewDetailPath(row.review_id, currentPagePath) : null
 
   return (
@@ -1476,6 +1478,12 @@ function EvidencePanel({
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
             >
               View reports <ExternalLink className="h-3 w-3" />
+            </Link>
+            <Link
+              to={vendorAlertsPath}
+              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+            >
+              View alerts <ExternalLink className="h-3 w-3" />
             </Link>
             {reviewPath && (
               <Link

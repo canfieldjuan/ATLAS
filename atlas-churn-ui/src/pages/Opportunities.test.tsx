@@ -298,7 +298,7 @@ describe('Opportunities', () => {
     )
     expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
-      '/alerts?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      '/alerts?vendor=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
   })
 
@@ -349,6 +349,10 @@ describe('Opportunities', () => {
     expect(screen.getByRole('link', { name: 'View reports' })).toHaveAttribute(
       'href',
       '/reports?vendor_filter=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
+    )
+    expect(screen.getByRole('link', { name: 'View alerts' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
     )
     expect(screen.getByRole('link', { name: 'View full review' })).toHaveAttribute(
       'href',
