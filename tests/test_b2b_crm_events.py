@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -197,3 +199,32 @@ def test_list_crm_events_normalizes_blank_optional_filters(monkeypatch):
     assert "received_at >= $" not in query
     assert "received_at < $" not in query
     assert params == [50, 0]
+
+
+def test_native_crm_webhooks_reject_invalid_json_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+    app.dependency_overrides[crm_events_api.optional_auth] = lambda: SimpleNamespace(
+        account_id="11111111-1111-1111-1111-111111111111"
+    )
+
+    monkeypatch.setattr(crm_events_api.settings.crm_event, "enabled", True)
+
+    def _boom():
+        raise AssertionError("DB pool should not be acquired")
+
+    monkeypatch.setattr(crm_events_api, "get_db_pool", _boom)
+
+    with TestClient(app) as client:
+        for path in (
+            "/b2b/crm/events/hubspot",
+            "/b2b/crm/events/salesforce",
+            "/b2b/crm/events/pipedrive",
+        ):
+            response = client.post(
+                path,
+                data="{",
+                headers={"content-type": "application/json"},
+            )
+            assert response.status_code == 400
+            assert response.json()["detail"] == "Invalid JSON"

@@ -387,7 +387,6 @@ async def ingest_hubspot_webhook(
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
 
-    pool = _pool_or_503()
     span = _start_crm_trace(
         provider="hubspot",
         account_id=str(user.account_id),
@@ -405,6 +404,7 @@ async def ingest_hubspot_webhook(
         )
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
+    pool = _pool_or_503()
     events = payload if isinstance(payload, list) else [payload]
     ingested = 0
 
@@ -539,7 +539,6 @@ async def ingest_salesforce_webhook(
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
 
-    pool = _pool_or_503()
     span = _start_crm_trace(
         provider="salesforce",
         account_id=str(user.account_id),
@@ -557,6 +556,7 @@ async def ingest_salesforce_webhook(
         )
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
+    pool = _pool_or_503()
     events = payload if isinstance(payload, list) else [payload]
     ingested = 0
 
@@ -691,7 +691,6 @@ async def ingest_pipedrive_webhook(
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
 
-    pool = _pool_or_503()
     span = _start_crm_trace(
         provider="pipedrive",
         account_id=str(user.account_id),
@@ -709,6 +708,7 @@ async def ingest_pipedrive_webhook(
         )
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
+    pool = _pool_or_503()
     events = payload if isinstance(payload, list) else [payload]
     ingested = 0
 
