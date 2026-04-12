@@ -4838,7 +4838,6 @@ async def get_vendor_correlation(
     """
     vendor_a = _required_query_text(vendor_a, "vendor_a")
     vendor_b = _required_query_text(vendor_b, "vendor_b")
-    pool = _pool_or_503()
 
     valid_metrics = {
         "churn_density", "avg_urgency", "recommend_ratio", "total_reviews",
@@ -4849,6 +4848,7 @@ async def get_vendor_correlation(
     if metric not in valid_metrics:
         raise HTTPException(status_code=400, detail=f"metric must be one of: {sorted(valid_metrics)}")
 
+    pool = _pool_or_503()
     # Fetch aligned snapshots for both vendors
     rows = await pool.fetch(
         f"""

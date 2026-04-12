@@ -189,6 +189,26 @@ async def test_dashboard_report_actions_trim_body_text_before_task_calls(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_compare_vendors_history_rejects_invalid_metric_before_db_touch():
+    with patch.object(
+        b2b_dashboard,
+        "_pool_or_503",
+        side_effect=AssertionError("db should not be touched"),
+    ):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.get_vendor_correlation(
+                vendor_a="Zendesk",
+                vendor_b="Intercom",
+                days=90,
+                metric="not_a_metric",
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "metric must be one of:" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_list_accounts_in_motion_raises_when_persisted_missing():
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
         with patch.object(
