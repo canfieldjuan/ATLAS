@@ -807,6 +807,21 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["unlock_path_summary"][1]["lead_vendor"] == "Close"
     assert summary["unlock_path_summary"][1]["lead_source"] == "g2"
     assert summary["unlock_path_summary"][1]["min_urgency_gap_to_high_intent"] == 4.0
+    assert summary["unlock_focus"]["status"] == "act"
+    assert summary["unlock_focus"]["action_type"] == "policy_threshold"
+    assert summary["unlock_focus"]["action"] == "review_low_trust_policy"
+    assert summary["unlock_focus"]["priority"] == "high"
+    assert summary["unlock_focus"]["owner"] == "intelligence_policy"
+    assert summary["unlock_focus"]["reason"] == "blocked_low_trust_policy"
+    assert summary["unlock_focus"]["queue_filters"] == {
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "review_priority_band": "low",
+        "vendor_name": "Copper",
+        "company_name": "coppercorp",
+        "source_name": "reddit",
+        "canonical_gap_reason": "low_confidence_low_trust_source",
+    }
     assert summary["unlock_focus"]["recommended_action"] == "review_near_threshold_low_trust"
     assert summary["unlock_focus"]["rationale"] == "closer_than_trusted_source_backlog"
     assert summary["unlock_focus"]["primary_unlock_candidate_type"] == "low_trust_near_threshold_group"

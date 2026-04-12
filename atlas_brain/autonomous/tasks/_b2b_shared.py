@@ -13266,7 +13266,13 @@ async def read_company_signal_candidate_group_summary(
         if kind == "unlock_focus" and unlock_focus is not None:
             return {
                 "kind": "unlock_focus",
-                "label": unlock_focus.get("recommended_action") or "unlock_focus",
+                "label": unlock_focus.get("action") or unlock_focus.get("recommended_action") or "unlock_focus",
+                "status": unlock_focus.get("status"),
+                "action_type": unlock_focus.get("action_type"),
+                "action": unlock_focus.get("action"),
+                "priority": unlock_focus.get("priority"),
+                "owner": unlock_focus.get("owner"),
+                "reason": unlock_focus.get("reason"),
                 "recommended_action": unlock_focus.get("recommended_action"),
                 "rationale": unlock_focus.get("rationale"),
                 "primary_unlock_candidate_type": unlock_focus.get("primary_unlock_candidate_type"),
@@ -13305,10 +13311,31 @@ async def read_company_signal_candidate_group_summary(
                 if alternate_unlock_candidate is not None
                 else "only_near_threshold_path_available"
             )
+            action_status = "act"
+            action_type = "policy_threshold"
+            action = "review_low_trust_policy"
+            action_priority = "high"
+            action_owner = "intelligence_policy"
+            action_reason = "blocked_low_trust_policy"
         else:
             recommended_action = "review_trusted_source_urgency_gap"
             rationale = "no_near_threshold_low_trust_groups"
+            action_status = "act"
+            action_type = "policy_threshold"
+            action = "review_threshold_policy"
+            action_priority = "medium"
+            action_owner = "intelligence_policy"
+            action_reason = "blocked_canonical_threshold"
+        primary_queue_filters = _unlock_queue_filters(primary_unlock_candidate)
+        alternate_queue_filters = _unlock_queue_filters(alternate_unlock_candidate)
         unlock_focus = {
+            "status": action_status,
+            "action_type": action_type,
+            "action": action,
+            "priority": action_priority,
+            "owner": action_owner,
+            "reason": action_reason,
+            "queue_filters": primary_queue_filters,
             "recommended_action": recommended_action,
             "rationale": rationale,
             "primary_unlock_candidate_type": primary_unlock_candidate.get("unlock_candidate_type"),
@@ -13321,7 +13348,7 @@ async def read_company_signal_candidate_group_summary(
             "primary_review_count": primary_unlock_candidate.get("review_count"),
             "primary_confidence_gap_to_canonical": primary_unlock_candidate.get("confidence_gap_to_canonical"),
             "primary_urgency_gap_to_high_intent": primary_unlock_candidate.get("urgency_gap_to_high_intent"),
-            "primary_queue_filters": _unlock_queue_filters(primary_unlock_candidate),
+            "primary_queue_filters": primary_queue_filters,
             "alternate_unlock_candidate_type": (
                 alternate_unlock_candidate.get("unlock_candidate_type")
                 if alternate_unlock_candidate is not None
@@ -13367,7 +13394,7 @@ async def read_company_signal_candidate_group_summary(
                 if alternate_unlock_candidate is not None
                 else None
             ),
-            "alternate_queue_filters": _unlock_queue_filters(alternate_unlock_candidate),
+            "alternate_queue_filters": alternate_queue_filters,
         }
     queue_filters = _build_queue_summary_filters()
     queue_snapshot = _build_queue_summary_snapshot()
