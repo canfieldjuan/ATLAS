@@ -6150,6 +6150,18 @@ class TestReasoningSynthesisTask:
         payload = json.loads(fake_llm.calls[0][1].content)
         assert "precomputed_aggregates" not in payload
         assert "metric_ledger" not in payload
+        prompt_witness = payload["witness_pack"][0]
+        assert prompt_witness["witness_id"] == prompt_witness["_sid"]
+        assert "vendor_name" not in prompt_witness
+        assert "review_id" not in prompt_witness
+        assert "source_span_id" not in prompt_witness
+        assert "selection_reason" not in prompt_witness
+        assert "salience_score" not in prompt_witness
+        assert "candidate_types" not in prompt_witness
+        assert "specificity_score" not in prompt_witness
+        assert "witness_hash" not in prompt_witness
+        assert "generic_reason" not in prompt_witness
+        assert "_witness_governance" not in payload["section_packets"]
         assert payload["section_packets"]["account_packet"]["numeric_support"]["total_accounts"]["source_id"]
         assert payload["section_packets"]["displacement_packet"]["numeric_support"]["switch_volume"]["source_id"]
         synthesis_writes = [
@@ -6166,7 +6178,22 @@ class TestReasoningSynthesisTask:
         assert persisted["meta"]["packet_items_per_pool"] == 4
         assert persisted_packet["meta"]["payload_mode"] == "full"
         assert persisted_packet["meta"]["prompt_executed"] is True
+        persisted_prompt_witness = persisted_packet["prompt_payload"]["witness_pack"][0]
+        assert persisted_prompt_witness["witness_id"] == persisted_prompt_witness["_sid"]
+        assert "vendor_name" not in persisted_prompt_witness
+        assert "review_id" not in persisted_prompt_witness
+        assert "source_span_id" not in persisted_prompt_witness
+        assert "selection_reason" not in persisted_prompt_witness
+        assert "salience_score" not in persisted_prompt_witness
+        assert "candidate_types" not in persisted_prompt_witness
+        assert "specificity_score" not in persisted_prompt_witness
+        assert "witness_hash" not in persisted_prompt_witness
+        assert "generic_reason" not in persisted_prompt_witness
+        assert "_witness_governance" not in persisted_packet["prompt_payload"]["section_packets"]
         assert persisted_packet["prompt_payload"]["section_packets"]["account_packet"]["numeric_support"]["total_accounts"]["source_id"]
+        assert persisted_packet["payload"]["witness_pack"][0]["candidate_types"]
+        assert persisted_packet["payload"]["witness_pack"][0]["selection_reason"]
+        assert persisted_packet["payload"]["section_packets"]["_witness_governance"]
         assert "full_payload" not in persisted_packet
         component_tokens = persisted["meta"]["payload_component_tokens"]
         assert component_tokens["payload_profile"] > 0

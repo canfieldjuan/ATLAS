@@ -922,6 +922,18 @@ class TestCompressVendorPoolsIntegration:
         assert "displacement" not in payload
         assert "temporal" not in payload
         assert "category" not in payload
+        witness = payload["witness_pack"][0]
+        assert witness["witness_id"] == witness["_sid"]
+        assert "vendor_name" not in witness
+        assert "review_id" not in witness
+        assert "source_span_id" not in witness
+        assert "selection_reason" not in witness
+        assert "salience_score" not in witness
+        assert "candidate_types" not in witness
+        assert "specificity_score" not in witness
+        assert "witness_hash" not in witness
+        assert "generic_reason" not in witness
+        assert "_witness_governance" not in payload["section_packets"]
         assert payload["section_packets"]["account_packet"]["top_accounts"][0]["name"]
         assert payload["section_packets"]["displacement_packet"]["numeric_support"]["switch_volume"]["source_id"]
 

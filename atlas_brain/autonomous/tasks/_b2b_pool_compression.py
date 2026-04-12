@@ -107,6 +107,28 @@ def _reasoning_section_candidate_limit(section: str, default: int) -> int:
     return max(1, value)
 
 
+_REASONING_PROMPT_WITNESS_OMIT_FIELDS = frozenset({
+    "vendor_name",
+    "review_id",
+    "source_span_id",
+    "selection_reason",
+    "salience_score",
+    "candidate_types",
+    "specificity_score",
+    "witness_hash",
+    "generic_reason",
+})
+
+
+def _compact_reasoning_witness_entry(witness: dict[str, Any]) -> dict[str, Any]:
+    """Drop prompt-irrelevant witness selection metadata from the LLM payload."""
+    return {
+        key: value
+        for key, value in witness.items()
+        if key not in _REASONING_PROMPT_WITNESS_OMIT_FIELDS
+    }
+
+
 # ---------------------------------------------------------------------------
 # Source reference
 # ---------------------------------------------------------------------------
@@ -396,7 +418,11 @@ class CompressedPacket:
         if self.retention_proof:
             payload["retention_proof"] = self.retention_proof
         if self.witness_pack:
-            payload["witness_pack"] = self.witness_pack
+            payload["witness_pack"] = [
+                _compact_reasoning_witness_entry(witness)
+                for witness in self.witness_pack
+                if isinstance(witness, dict)
+            ]
         if include_section_packets and self.section_packets:
             payload["section_packets"] = self._reasoning_section_packets()
 
@@ -405,6 +431,7 @@ class CompressedPacket:
 
     def _reasoning_section_packets(self) -> dict[str, Any]:
         packets = json.loads(json.dumps(self.section_packets, default=str))
+        packets.pop("_witness_governance", None)
         packets.setdefault("segment_packet", {})
         packets.setdefault("timing_packet", {})
         packets.setdefault("displacement_packet", {})
