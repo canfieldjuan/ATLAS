@@ -3455,6 +3455,15 @@ async def test_list_watchlist_alert_email_log_returns_view_scoped_rows(monkeypat
                     "delivered_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
                     "created_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
                     "updated_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                    "suppressed_preview_summary": {
+                        "count": 1,
+                        "reasons": {"preview_low_confidence": 1},
+                        "reason_details": {
+                            "preview_low_confidence": {
+                                "summary": "Preview-backed account alerts require confidence >= 0.65."
+                            }
+                        },
+                    },
                 },
             ]
         ),
@@ -3470,6 +3479,15 @@ async def test_list_watchlist_alert_email_log_returns_view_scoped_rows(monkeypat
     assert result["count"] == 1
     assert result["deliveries"][0]["status"] == "sent"
     assert result["deliveries"][0]["recipient_emails"] == ["owner@example.com"]
+    assert result["deliveries"][0]["suppressed_preview_summary"] == {
+        "count": 1,
+        "reasons": {"preview_low_confidence": 1},
+        "reason_details": {
+            "preview_low_confidence": {
+                "summary": "Preview-backed account alerts require confidence >= 0.65."
+            }
+        },
+    }
 
 
 @pytest.mark.asyncio

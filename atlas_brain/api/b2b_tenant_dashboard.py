@@ -69,8 +69,6 @@ from .b2b_dashboard import (
     _normalize_vendor_name,
     _overlay_reasoning_detail_from_view,
     _overlay_reasoning_summary_from_view,
-    _resolve_high_intent_account_review_focuses,
-    _shape_high_intent_company_payload,
 )
 
 logger = logging.getLogger("atlas.api.b2b_tenant")
@@ -2666,7 +2664,8 @@ async def list_watchlist_alert_email_log(
     rows = await pool.fetch(
         """
         SELECT id, recipient_emails, message_ids, event_count, status, summary, error,
-               delivered_at, created_at, updated_at, scheduled_for, delivery_frequency, delivery_mode
+               delivered_at, created_at, updated_at, scheduled_for, delivery_frequency, delivery_mode,
+               suppressed_preview_summary
         FROM b2b_watchlist_alert_email_log
         WHERE account_id = $1
           AND watchlist_view_id = $2
@@ -2692,6 +2691,7 @@ async def list_watchlist_alert_email_log(
             "scheduled_for": str(_row_value(row, "scheduled_for")) if _row_value(row, "scheduled_for") else None,
             "delivery_frequency": _row_value(row, "delivery_frequency"),
             "delivery_mode": _row_value(row, "delivery_mode"),
+            "suppressed_preview_summary": _safe_json(_row_value(row, "suppressed_preview_summary")),
         }
         for row in rows
     ]
@@ -2755,6 +2755,7 @@ async def deliver_watchlist_alert_email(
             error=None,
             delivered_at=now,
             recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
         )
         await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
@@ -2792,6 +2793,7 @@ async def deliver_watchlist_alert_email(
             error="No active owner email is configured for this account",
             delivered_at=None,
             recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
         )
         await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
@@ -2819,6 +2821,7 @@ async def deliver_watchlist_alert_email(
             error="Campaign sender not configured for watchlist alert email delivery",
             delivered_at=None,
             recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
         )
         await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
@@ -2849,6 +2852,7 @@ async def deliver_watchlist_alert_email(
             error=f"Campaign sender unavailable: {exc}",
             delivered_at=None,
             recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
         )
         await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
@@ -2878,6 +2882,7 @@ async def deliver_watchlist_alert_email(
             error="Campaign sender from-address is not configured",
             delivered_at=None,
             recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
         )
         await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
@@ -2947,11 +2952,12 @@ async def deliver_watchlist_alert_email(
         message_ids=message_ids,
         event_count=event_count,
         status=status,
-        summary=summary,
-        error=error_text,
-        delivered_at=delivered_at,
-        recorded_at=now,
-    )
+            summary=summary,
+            error=error_text,
+            delivered_at=delivered_at,
+            recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
+        )
     await watchlist_alert_service.update_watchlist_view_delivery_state(
         pool,
         view_id=view_id,
@@ -3338,10 +3344,40 @@ async def list_leads(
         scoped_vendors=scoped_vendors,
         limit=capped,
     )
-    account_review_focuses = await _resolve_high_intent_account_review_focuses(pool, user, items)
+
     companies = [
-        _shape_high_intent_company_payload(item, account_review_focus=focus)
-        for item, focus in zip(items, account_review_focuses)
+        {
+            "company": item["company"],
+            "vendor": item["vendor"],
+            "category": item.get("category"),
+            "role_level": item.get("role_level"),
+            "decision_maker": item.get("decision_maker"),
+            "urgency": _safe_float(item.get("urgency"), 0),
+            "pain": item.get("pain"),
+            "alternatives": _safe_json(item.get("alternatives")),
+            "contract_signal": item.get("contract_signal"),
+            "seat_count": item.get("seat_count"),
+            "lock_in_level": item.get("lock_in_level"),
+            "contract_end": item.get("contract_end"),
+            "buying_stage": item.get("buying_stage"),
+            "reviewer_title": item.get("title"),
+            "company_size": item.get("company_size"),
+            "industry": item.get("industry"),
+            "review_id": item.get("review_id"),
+            "source": item.get("source"),
+            "quotes": _safe_json(item.get("quotes")),
+            "intent_signals": item.get("intent_signals"),
+            "relevance_score": _safe_float(item.get("relevance_score")),
+            "author_churn_score": _safe_float(item.get("author_churn_score")),
+            "resolution_confidence": item.get("resolution_confidence"),
+            "verified_employee_count": item.get("verified_employee_count"),
+            "company_domain": item.get("company_domain"),
+            "company_country": item.get("company_country"),
+            "revenue_range": item.get("revenue_range"),
+            "founded_year": item.get("founded_year"),
+            "company_description": item.get("company_description"),
+        }
+        for item in items
     ]
 
     return {"leads": companies, "count": len(companies)}

@@ -142,7 +142,15 @@ async def test_scheduled_delivery_reports_blocked_preview_summary_on_no_events(m
                 "watchlist_view_id": str(view_id),
                 "watchlist_view_name": "Quiet CRM watch",
                 "events": [],
-                "suppressed_preview_summary": {"count": 1},
+                "suppressed_preview_summary": {
+                    "count": 1,
+                    "reasons": {"preview_low_confidence": 1},
+                    "reason_details": {
+                        "preview_low_confidence": {
+                            "short_summary": "confidence >= 0.65 required"
+                        }
+                    },
+                },
             }
         ),
     )
@@ -158,10 +166,23 @@ async def test_scheduled_delivery_reports_blocked_preview_summary_on_no_events(m
 
     assert status == "no_events"
     assert watchlist_alert_service.update_watchlist_alert_email_log.await_args.kwargs["summary"] == (
-        "No open alert events to deliver (1 preview-backed account alert blocked by policy)"
+        "No open alert events to deliver "
+        "(1 preview-backed account alert blocked by policy: confidence >= 0.65 required)"
     )
+    assert watchlist_alert_service.update_watchlist_alert_email_log.await_args.kwargs[
+        "suppressed_preview_summary"
+    ] == {
+        "count": 1,
+        "reasons": {"preview_low_confidence": 1},
+        "reason_details": {
+            "preview_low_confidence": {
+                "short_summary": "confidence >= 0.65 required"
+            }
+        },
+    }
     assert mod._advance_view_schedule.await_args.kwargs["summary"] == (
-        "No open alert events to deliver (1 preview-backed account alert blocked by policy)"
+        "No open alert events to deliver "
+        "(1 preview-backed account alert blocked by policy: confidence >= 0.65 required)"
     )
 
 

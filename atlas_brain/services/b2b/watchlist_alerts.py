@@ -961,17 +961,18 @@ async def record_watchlist_alert_email_log(
     scheduled_for: datetime | None = None,
     delivery_frequency: str | None = None,
     delivery_mode: str = "live",
+    suppressed_preview_summary: dict[str, Any] | None = None,
 ) -> None:
     await pool.execute(
         """
         INSERT INTO b2b_watchlist_alert_email_log (
             id, account_id, watchlist_view_id, event_ids, recipient_emails, message_ids,
             event_count, status, summary, error, delivered_at, created_at, updated_at,
-            scheduled_for, delivery_frequency, delivery_mode
+            scheduled_for, delivery_frequency, delivery_mode, suppressed_preview_summary
         )
         VALUES (
             $1, $2, $3, $4::uuid[], $5::text[], $6::text[], $7, $8, $9, $10, $11, $12, $12,
-            $13, $14, $15
+            $13, $14, $15, $16::jsonb
         )
         """,
         log_id,
@@ -989,6 +990,7 @@ async def record_watchlist_alert_email_log(
         scheduled_for,
         delivery_frequency,
         delivery_mode,
+        json.dumps(suppressed_preview_summary) if suppressed_preview_summary else None,
     )
 
 
@@ -1005,6 +1007,7 @@ async def update_watchlist_alert_email_log(
     error: str | None,
     delivered_at: datetime | None,
     recorded_at: datetime,
+    suppressed_preview_summary: dict[str, Any] | None = None,
 ) -> None:
     await pool.execute(
         """
@@ -1017,7 +1020,8 @@ async def update_watchlist_alert_email_log(
             summary = $7,
             error = $8,
             delivered_at = $9,
-            updated_at = $10
+            updated_at = $10,
+            suppressed_preview_summary = $11::jsonb
         WHERE id = $1
         """,
         log_id,
@@ -1030,6 +1034,7 @@ async def update_watchlist_alert_email_log(
         error,
         delivered_at,
         recorded_at,
+        json.dumps(suppressed_preview_summary) if suppressed_preview_summary else None,
     )
 
 

@@ -180,6 +180,7 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
             error=None,
             delivered_at=now,
             recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
         )
         await _advance_view_schedule(
             pool,
@@ -207,6 +208,7 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
             error=error,
             delivered_at=None,
             recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
         )
         await _advance_view_schedule(
             pool,
@@ -235,6 +237,7 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
             error=error,
             delivered_at=None,
             recorded_at=now,
+            suppressed_preview_summary=suppressed_preview_summary,
         )
         await _advance_view_schedule(
             pool,
@@ -312,6 +315,7 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
         error=error_text,
         delivered_at=delivered_at,
         recorded_at=now,
+        suppressed_preview_summary=suppressed_preview_summary,
     )
     await _advance_view_schedule(
         pool,
@@ -375,6 +379,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 error=str(exc),
                 delivered_at=None,
                 recorded_at=datetime.now(timezone.utc),
+                suppressed_preview_summary=None,
             )
             await _advance_view_schedule(
                 pool,
