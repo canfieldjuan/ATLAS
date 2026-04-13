@@ -87,9 +87,29 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   return `/opportunities?${next.toString()}`
 }
 
+function upstreamAccountReviewCompany(value: string | null, vendorName: string): string | null {
+  const watchlistsPath = upstreamWatchlistsPath(value)
+  if (!watchlistsPath) return null
+
+  try {
+    const url = new URL(watchlistsPath, window.location.origin)
+    const accountCompany = url.searchParams.get('account_company')?.trim()
+    const accountVendor = url.searchParams.get('account_vendor')?.trim()
+    if (!accountCompany) return null
+    if (accountVendor && accountVendor.toLowerCase() !== vendorName.trim().toLowerCase()) return null
+    return accountCompany
+  } catch {
+    return null
+  }
+}
+
 function alertsPath(vendorName: string, backTo: string) {
   const next = new URLSearchParams()
   next.set('vendor', vendorName)
+  const accountCompany = upstreamAccountReviewCompany(backTo, vendorName)
+  if (accountCompany) {
+    next.set('company', accountCompany)
+  }
   next.set('back_to', backTo)
   return `/alerts?${next.toString()}`
 }

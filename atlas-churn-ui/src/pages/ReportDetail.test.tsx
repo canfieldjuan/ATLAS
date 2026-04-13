@@ -607,6 +607,25 @@ describe('ReportDetail', () => {
     )
   })
 
+  it('uses a company-scoped alerts shortcut for exact account-review report detail context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Faccount_vendor%253DZendesk%2526account_company%253DAcme%252BCorp%2526account_report_date%253D2026-04-05%2526account_watch_vendor%253DZendesk%2526account_category%253DHelpdesk%2526account_track_mode%253Dcompetitor',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Freviews%252Freview-1%253Fback_to%253D%25252Fwatchlists%25253Faccount_vendor%25253DZendesk%252526account_company%25253DAcme%25252BCorp%252526account_report_date%25253D2026-04-05%252526account_watch_vendor%25253DZendesk%252526account_category%25253DHelpdesk%252526account_track_mode%25253Dcompetitor',
+    )
+  })
+
   it('copies the direct account review shortcut for nested watchlist report detail context', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports/:id', element: <ReportDetail /> }],

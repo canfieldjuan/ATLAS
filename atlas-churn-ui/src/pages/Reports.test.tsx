@@ -1291,6 +1291,27 @@ describe('Reports', () => {
     )
   })
 
+  it('uses a company-scoped alerts shortcut for an active vendor filter with exact account review context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+        'href',
+        '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Faccount_vendor%253DZendesk%2526account_company%253DAcme%252BCorp%2526account_report_date%253D2026-04-05%2526account_watch_vendor%253DZendesk%2526account_category%253DHelpdesk%2526account_track_mode%253Dcompetitor',
+      )
+    })
+  })
+
   it('falls back to vendor evidence when the visible vendor reports disagree on snapshot context', async () => {
     api.fetchReports.mockResolvedValueOnce({
       reports: [
