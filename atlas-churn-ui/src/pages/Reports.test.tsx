@@ -59,6 +59,11 @@ vi.mock('../components/SubscriptionModal', () => ({
   },
 }))
 
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
+}
+
 describe('Reports', () => {
   beforeEach(() => {
     cleanup()
@@ -184,6 +189,79 @@ describe('Reports', () => {
     expect(screen.getByTestId('subscription-modal')).toHaveTextContent(
       'library_view:library-view::battle_card::Zendesk::sales_ready:Battle Card • Zendesk • Sales Ready • Stale • Blocked Library',
     )
+  })
+
+  it('clears same-route library filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <><Reports /><LocationProbe /></> }],
+      {
+        initialEntries: ['/reports?report_type=battle_card&vendor_filter=Zendesk&quality_status=sales_ready&freshness_state=stale&review_state=blocked'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Intelligence Library')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchReports).toHaveBeenLastCalledWith({
+        report_type: 'battle_card',
+        vendor_filter: 'Zendesk',
+        quality_status: 'sales_ready',
+        freshness_state: 'stale',
+        review_state: 'blocked',
+        include_stale: true,
+        limit: 100,
+      })
+    })
+
+    await router.navigate('/reports')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/reports')
+      expect(api.fetchReports).toHaveBeenLastCalledWith({
+        report_type: undefined,
+        vendor_filter: undefined,
+        quality_status: undefined,
+        freshness_state: undefined,
+        review_state: undefined,
+        include_stale: false,
+        limit: 100,
+      })
+    })
+
+    router.dispose()
+  })
+
+  it('canonicalizes invalid library filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <><Reports /><LocationProbe /></> }],
+      {
+        initialEntries: ['/reports?report_type=unknown&vendor_filter=%20Zendesk%20&quality_status=bad&freshness_state=stale-ish&review_state=broken'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Intelligence Library')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchReports).toHaveBeenLastCalledWith({
+        report_type: undefined,
+        vendor_filter: 'Zendesk',
+        quality_status: undefined,
+        freshness_state: undefined,
+        review_state: undefined,
+        include_stale: false,
+        limit: 100,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/reports?vendor_filter=Zendesk')
+    })
+
+    router.dispose()
   })
 
   it('renders API trust states from the report payload', async () => {

@@ -20,7 +20,7 @@ import {
   type ReportSubscription,
   type ReportSubscriptionScopeType,
 } from '../api/client'
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { REPORT_TYPE_COLORS } from '../lib/reportConstants'
 import SubscriptionModal from '../components/SubscriptionModal'
 import type { Report } from '../types'
@@ -361,17 +361,54 @@ const REPORT_COMPOSERS = new Set<ReportComposer>([
   'battle_card',
 ])
 
+const REPORT_TYPE_FILTERS = new Set([
+  'weekly_churn_feed',
+  'vendor_scorecard',
+  'displacement_report',
+  'category_overview',
+  'exploratory_overview',
+  'vendor_comparison',
+  'account_comparison',
+  'account_deep_dive',
+  'vendor_retention',
+  'challenger_intel',
+  'battle_card',
+  'vendor_deep_dive',
+  'challenger_brief',
+])
+
+const REPORT_QUALITY_FILTERS = new Set([
+  'sales_ready',
+  'needs_review',
+  'thin_evidence',
+  'deterministic_fallback',
+])
+
+const REPORT_FRESHNESS_FILTERS = new Set(['fresh', 'monitor', 'stale'])
+const REPORT_REVIEW_FILTERS = new Set(['clean', 'warnings', 'open_review', 'blocked'])
+
+function parseReportFilter(value: string | null, allowed: Set<string>) {
+  const next = value?.trim() ?? ''
+  return allowed.has(next) ? next : ''
+}
+
 export default function Reports() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
+  const searchParamsSignature = searchParams.toString()
   const { canAccessReports } = usePlanGate()
-  const [typeFilter, setTypeFilter] = useState(() => searchParams.get('report_type') ?? '')
-  const [qualityFilter, setQualityFilter] = useState(() => searchParams.get('quality_status') ?? '')
-  const [freshnessFilter, setFreshnessFilter] = useState(() => searchParams.get('freshness_state') ?? '')
-  const [reviewFilter, setReviewFilter] = useState(() => searchParams.get('review_state') ?? '')
-  const [vendorSearch, setVendorSearch] = useState(() => searchParams.get('vendor_filter') ?? '')
-  const [debouncedVendor, setDebouncedVendor] = useState('')
+  const requestedTypeFilter = parseReportFilter(searchParams.get('report_type'), REPORT_TYPE_FILTERS)
+  const requestedQualityFilter = parseReportFilter(searchParams.get('quality_status'), REPORT_QUALITY_FILTERS)
+  const requestedFreshnessFilter = parseReportFilter(searchParams.get('freshness_state'), REPORT_FRESHNESS_FILTERS)
+  const requestedReviewFilter = parseReportFilter(searchParams.get('review_state'), REPORT_REVIEW_FILTERS)
+  const requestedVendorSearch = searchParams.get('vendor_filter')?.trim() ?? ''
+  const [typeFilter, setTypeFilter] = useState(requestedTypeFilter)
+  const [qualityFilter, setQualityFilter] = useState(requestedQualityFilter)
+  const [freshnessFilter, setFreshnessFilter] = useState(requestedFreshnessFilter)
+  const [reviewFilter, setReviewFilter] = useState(requestedReviewFilter)
+  const [vendorSearch, setVendorSearch] = useState(requestedVendorSearch)
+  const [debouncedVendor, setDebouncedVendor] = useState(requestedVendorSearch)
   const [primaryVendor, setPrimaryVendor] = useState('')
   const [comparisonVendor, setComparisonVendor] = useState('')
   const [primaryCompany, setPrimaryCompany] = useState('')
@@ -383,6 +420,7 @@ export default function Reports() {
   const [battleCardVendor, setBattleCardVendor] = useState('')
   const [creatingBattleCard, setCreatingBattleCard] = useState(false)
   const [composerNotice, setComposerNotice] = useState<{ tone: 'error' | 'info'; text: string } | null>(null)
+  const suppressRouteSyncRef = useRef(false)
   const [libSubOpen, setLibSubOpen] = useState(false)
   const [activeComposer, setActiveComposer] = useState<ReportComposer | null>(() => {
     const composer = searchParams.get('composer')
@@ -446,6 +484,74 @@ export default function Reports() {
     const timer = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
     return () => clearTimeout(timer)
   }, [vendorSearch])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setTypeFilter((current) => (current === requestedTypeFilter ? current : requestedTypeFilter))
+  }, [requestedTypeFilter])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setQualityFilter((current) => (current === requestedQualityFilter ? current : requestedQualityFilter))
+  }, [requestedQualityFilter])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setFreshnessFilter((current) => (current === requestedFreshnessFilter ? current : requestedFreshnessFilter))
+  }, [requestedFreshnessFilter])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setReviewFilter((current) => (current === requestedReviewFilter ? current : requestedReviewFilter))
+  }, [requestedReviewFilter])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setVendorSearch(requestedVendorSearch)
+    setDebouncedVendor(requestedVendorSearch)
+  }, [requestedVendorSearch])
+
+  const routeStateSettled =
+    typeFilter === requestedTypeFilter
+    && qualityFilter === requestedQualityFilter
+    && freshnessFilter === requestedFreshnessFilter
+    && reviewFilter === requestedReviewFilter
+    && vendorSearch === requestedVendorSearch
+    && debouncedVendor === requestedVendorSearch
+
+  const buildRouteOwnedReportFilters = useCallback((current: URLSearchParams) => {
+    const next = new URLSearchParams(current)
+    if (typeFilter.trim()) next.set('report_type', typeFilter.trim())
+    else next.delete('report_type')
+    if (vendorSearch.trim()) next.set('vendor_filter', vendorSearch.trim())
+    else next.delete('vendor_filter')
+    if (qualityFilter.trim()) next.set('quality_status', qualityFilter.trim())
+    else next.delete('quality_status')
+    if (freshnessFilter.trim()) next.set('freshness_state', freshnessFilter.trim())
+    else next.delete('freshness_state')
+    if (reviewFilter.trim()) next.set('review_state', reviewFilter.trim())
+    else next.delete('review_state')
+    return next
+  }, [freshnessFilter, qualityFilter, reviewFilter, typeFilter, vendorSearch])
+
+  useEffect(() => {
+    if (!routeStateSettled) return
+    const next = buildRouteOwnedReportFilters(searchParams)
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
+    setSearchParams(next, { replace: true })
+  }, [buildRouteOwnedReportFilters, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
+
+  useEffect(() => {
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = buildRouteOwnedReportFilters(searchParams)
+    if (next.toString() === searchParamsSignature) return
+    setSearchParams(next, { replace: true })
+  }, [buildRouteOwnedReportFilters, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
 
   const updateReportsQuery = useCallback((updates: Record<string, string | null | undefined>) => {
     const next = new URLSearchParams(searchParams)
