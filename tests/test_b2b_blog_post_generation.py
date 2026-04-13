@@ -707,6 +707,7 @@ async def test_fetch_negative_quotes_only_uses_trusted_account_resolution():
 
     sql = pool.fetch.await_args.args[0]
     assert "WHEN ar.confidence_label IN ('high', 'medium')" in sql
+    assert "JOIN b2b_review_vendor_mentions matched_vm" in sql
 
 
 @pytest.mark.asyncio
@@ -723,6 +724,41 @@ async def test_fetch_positive_quotes_only_uses_trusted_account_resolution():
 
     sql = pool.fetch.await_args.args[0]
     assert "WHEN ar.confidence_label IN ('high', 'medium')" in sql
+    assert "JOIN b2b_review_vendor_mentions matched_vm" in sql
+
+
+@pytest.mark.asyncio
+async def test_fetch_negative_quotes_category_uses_primary_vendor_projection():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await _fetch_negative_quotes(
+        pool,
+        vendor_name=None,
+        category="CRM",
+        sources=["g2"],
+        limit=3,
+    )
+
+    sql = pool.fetch.await_args.args[0]
+    assert "LEFT JOIN LATERAL" in sql
+    assert "b2b_review_vendor_mentions vm" in sql
+
+
+@pytest.mark.asyncio
+async def test_fetch_positive_quotes_category_uses_primary_vendor_projection():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await _fetch_positive_quotes(
+        pool,
+        vendor_name=None,
+        category="CRM",
+        sources=["g2"],
+        limit=3,
+    )
+
+    sql = pool.fetch.await_args.args[0]
+    assert "LEFT JOIN LATERAL" in sql
+    assert "b2b_review_vendor_mentions vm" in sql
 
 
 @pytest.mark.asyncio
@@ -1327,6 +1363,116 @@ async def test_build_manual_topic_ctx_uses_category_stats_for_best_fit_guide(mon
     assert ctx["vendor_count"] == 7
     assert ctx["total_reviews"] == 2155
     assert ctx["company_size"] == "51-200"
+
+
+@pytest.mark.asyncio
+async def test_find_migration_guide_candidates_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await blog_mod._find_migration_guide_candidates(pool)
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+
+
+@pytest.mark.asyncio
+async def test_find_pricing_reality_check_candidates_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await blog_mod._find_pricing_reality_check_candidates(pool)
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+    assert "COUNT(DISTINCT r.id)" in sql
+
+
+@pytest.mark.asyncio
+async def test_find_switching_story_candidates_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await blog_mod._find_switching_story_candidates(pool)
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+    assert "COUNT(DISTINCT r.id)" in sql
+
+
+@pytest.mark.asyncio
+async def test_find_pain_point_roundup_candidates_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await blog_mod._find_pain_point_roundup_candidates(pool)
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+    assert "COUNT(DISTINCT vm.vendor_name)" in sql
+
+
+@pytest.mark.asyncio
+async def test_find_vendor_deep_dive_candidates_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await blog_mod._find_vendor_deep_dive_candidates(pool)
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+
+
+@pytest.mark.asyncio
+async def test_batch_vendor_review_counts_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+    candidates = [
+        ("slug-a", 1.0, "vendor_deep_dive", {"vendor": "Jira"}),
+        ("slug-b", 1.0, "vendor_showdown", {"vendor_a": "Notion", "vendor_b": "Airtable"}),
+    ]
+
+    await blog_mod._batch_vendor_review_counts(pool, candidates, ["g2"])
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+    assert "COUNT(DISTINCT r.id)" in sql
+
+
+@pytest.mark.asyncio
+async def test_fetch_pain_category_urgency_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await blog_mod._fetch_pain_category_urgency(pool, "Jira")
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_distribution_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await blog_mod._fetch_source_distribution(pool, ["Jira", "Notion"])
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+    assert "COUNT(DISTINCT r.id)" in sql
+
+
+@pytest.mark.asyncio
+async def test_fetch_vendor_stats_reads_vendor_mentions():
+    pool = SimpleNamespace(fetchrow=AsyncMock(return_value=None))
+
+    await blog_mod._fetch_vendor_stats(pool, "Jira")
+
+    sql = pool.fetchrow.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+
+
+@pytest.mark.asyncio
+async def test_fetch_category_topic_stats_reads_vendor_mentions():
+    pool = SimpleNamespace(fetchrow=AsyncMock(return_value=None), fetchval=AsyncMock(return_value=None))
+
+    await blog_mod._fetch_category_topic_stats(pool, "CRM")
+
+    sql = pool.fetchrow.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+    assert "COUNT(DISTINCT vm.vendor_name)" in sql
 
 
 def test_apply_blog_deterministic_repairs_adds_witness_anchor_note():
