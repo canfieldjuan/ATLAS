@@ -180,6 +180,41 @@ def resolve_watchlist_alert_next_delivery_at(
 
 
 def watchlist_view_payload(row: Any) -> dict[str, Any]:
+    preview_alerts_enabled = bool(_row_value(row, "preview_alerts_enabled", True))
+    preview_alert_min_confidence_override = _safe_float(
+        _row_value(row, "preview_alert_min_confidence")
+    )
+    raw_preview_alert_require_budget_authority = _row_value(
+        row, "preview_alert_require_budget_authority"
+    )
+    preview_alert_require_budget_authority_override = (
+        raw_preview_alert_require_budget_authority
+        if isinstance(raw_preview_alert_require_budget_authority, bool)
+        else None
+    )
+    preview_account_alert_policy = {
+        "applies_to_preview_only": True,
+        "enabled": preview_alerts_enabled,
+        "enabled_source": "view",
+        "min_confidence": (
+            preview_alert_min_confidence_override
+            if preview_alert_min_confidence_override is not None
+            else float(settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence)
+        ),
+        "min_confidence_source": (
+            "view" if preview_alert_min_confidence_override is not None else "global"
+        ),
+        "require_budget_authority": (
+            preview_alert_require_budget_authority_override
+            if preview_alert_require_budget_authority_override is not None
+            else bool(settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority)
+        ),
+        "require_budget_authority_source": (
+            "view" if preview_alert_require_budget_authority_override is not None else "global"
+        ),
+        "override_min_confidence": preview_alert_min_confidence_override,
+        "override_require_budget_authority": preview_alert_require_budget_authority_override,
+    }
     return {
         "id": str(_row_value(row, "id")),
         "name": _row_value(row, "name"),
@@ -193,6 +228,7 @@ def watchlist_view_payload(row: Any) -> dict[str, Any]:
         "changed_wedges_only": bool(_row_value(row, "changed_wedges_only")),
         "vendor_alert_threshold": _safe_float(_row_value(row, "vendor_alert_threshold")),
         "account_alert_threshold": _safe_float(_row_value(row, "account_alert_threshold")),
+        "preview_alerts_enabled": preview_alerts_enabled,
         "stale_days_threshold": _coerce_optional_int(_row_value(row, "stale_days_threshold")),
         "alert_email_enabled": bool(_row_value(row, "alert_email_enabled")),
         "alert_delivery_frequency": str(_row_value(row, "alert_delivery_frequency") or "daily"),
@@ -200,8 +236,54 @@ def watchlist_view_payload(row: Any) -> dict[str, Any]:
         "last_alert_delivery_at": str(_row_value(row, "last_alert_delivery_at")) if _row_value(row, "last_alert_delivery_at") else None,
         "last_alert_delivery_status": _row_value(row, "last_alert_delivery_status"),
         "last_alert_delivery_summary": _row_value(row, "last_alert_delivery_summary"),
+        "preview_account_alert_policy": preview_account_alert_policy,
         "created_at": str(_row_value(row, "created_at")) if _row_value(row, "created_at") else None,
         "updated_at": str(_row_value(row, "updated_at")) if _row_value(row, "updated_at") else None,
+    }
+
+
+def _suppressed_preview_reason_detail(
+    *,
+    policy_reason: str,
+    preview_policy: dict[str, Any] | None,
+) -> dict[str, Any]:
+    policy = preview_policy if isinstance(preview_policy, dict) else {}
+    if policy_reason == "preview_policy_disabled":
+        return {
+            "summary": "Preview-backed account alerts are disabled for this view.",
+            "short_summary": "preview alerts disabled for this view",
+            "enabled": False,
+            "enabled_source": policy.get("enabled_source") or "view",
+        }
+    if policy_reason == "preview_low_confidence":
+        min_confidence = _safe_float(policy.get("min_confidence"))
+        return {
+            "summary": (
+                "Preview-backed account alerts require "
+                f"confidence >= {min_confidence:.2f}."
+                if min_confidence is not None
+                else "Preview-backed account alerts require higher confidence."
+            ),
+            "short_summary": (
+                f"confidence >= {min_confidence:.2f} required"
+                if min_confidence is not None
+                else "higher confidence required"
+            ),
+            "min_confidence": min_confidence,
+            "min_confidence_source": policy.get("min_confidence_source") or "global",
+        }
+    if policy_reason == "preview_missing_budget_authority":
+        return {
+            "summary": "Preview-backed account alerts require budget authority.",
+            "short_summary": "budget authority required",
+            "require_budget_authority": True,
+            "require_budget_authority_source": (
+                policy.get("require_budget_authority_source") or "global"
+            ),
+        }
+    return {
+        "summary": "Preview-backed account alerts were blocked by policy.",
+        "short_summary": "blocked by policy",
     }
 
 
@@ -285,16 +367,20 @@ def summarize_suppressed_preview_accounts(
     accounts_feed: dict[str, Any],
 ) -> dict[str, Any]:
     account_threshold = _safe_float(watchlist_view.get("account_alert_threshold"))
+    preview_policy = watchlist_view.get("preview_account_alert_policy")
     if account_threshold is None:
         return {
             "count": 0,
             "threshold_value": None,
+            "preview_account_alert_policy": preview_policy,
+            "reason_details": {},
             "reasons": {},
             "vendors": [],
             "accounts": [],
         }
 
     reasons: dict[str, int] = {}
+    reason_details: dict[str, dict[str, Any]] = {}
     vendors: dict[str, int] = {}
     accounts: list[dict[str, Any]] = []
     for account in accounts_feed.get("accounts") or []:
@@ -315,6 +401,11 @@ def summarize_suppressed_preview_accounts(
         category = _clean_optional_text(account.get("category"))
         source_name = _watchlist_alert_source_name(account)
         reasons[policy_reason] = reasons.get(policy_reason, 0) + 1
+        if policy_reason not in reason_details:
+            reason_details[policy_reason] = _suppressed_preview_reason_detail(
+                policy_reason=policy_reason,
+                preview_policy=preview_policy if isinstance(preview_policy, dict) else None,
+            )
         if vendor_name:
             vendors[vendor_name] = vendors.get(vendor_name, 0) + 1
         accounts.append(
@@ -348,6 +439,8 @@ def summarize_suppressed_preview_accounts(
     return {
         "count": len(accounts),
         "threshold_value": account_threshold,
+        "preview_account_alert_policy": preview_policy,
+        "reason_details": reason_details,
         "reasons": reasons,
         "vendors": vendor_rows,
         "accounts": accounts,
@@ -361,6 +454,16 @@ def suppressed_preview_summary_suffix(summary: Any) -> str:
     if count <= 0:
         return ""
     label = "preview-backed account alert" if count == 1 else "preview-backed account alerts"
+    reasons = summary.get("reasons")
+    if isinstance(reasons, dict) and len(reasons) == 1:
+        policy_reason = next(iter(reasons))
+        reason_details = summary.get("reason_details")
+        if isinstance(reason_details, dict):
+            reason_detail = reason_details.get(policy_reason)
+            if isinstance(reason_detail, dict):
+                short_summary = _clean_optional_text(reason_detail.get("short_summary"))
+                if short_summary:
+                    return f" ({count} {label} blocked by policy: {short_summary})"
     return f" ({count} {label} blocked by policy)"
 
 

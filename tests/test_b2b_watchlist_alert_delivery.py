@@ -283,7 +283,20 @@ def test_serialize_watchlist_alert_event_surfaces_preview_account_fields():
 
 def test_summarize_suppressed_preview_accounts_reports_blocked_threshold_hits():
     result = watchlist_alert_service.summarize_suppressed_preview_accounts(
-        watchlist_view={"account_alert_threshold": 6.0},
+        watchlist_view={
+            "account_alert_threshold": 6.0,
+            "preview_account_alert_policy": {
+                "applies_to_preview_only": True,
+                "enabled": True,
+                "enabled_source": "view",
+                "min_confidence": 0.55,
+                "min_confidence_source": "view",
+                "require_budget_authority": False,
+                "require_budget_authority_source": "view",
+                "override_min_confidence": 0.55,
+                "override_require_budget_authority": False,
+            },
+        },
         accounts_feed={
             "accounts": [
                 {
@@ -317,6 +330,25 @@ def test_summarize_suppressed_preview_accounts_reports_blocked_threshold_hits():
 
     assert result["count"] == 1
     assert result["threshold_value"] == pytest.approx(6.0)
+    assert result["preview_account_alert_policy"] == {
+        "applies_to_preview_only": True,
+        "enabled": True,
+        "enabled_source": "view",
+        "min_confidence": 0.55,
+        "min_confidence_source": "view",
+        "require_budget_authority": False,
+        "require_budget_authority_source": "view",
+        "override_min_confidence": 0.55,
+        "override_require_budget_authority": False,
+    }
+    assert result["reason_details"] == {
+        "preview_low_confidence": {
+            "summary": "Preview-backed account alerts require confidence >= 0.55.",
+            "short_summary": "confidence >= 0.55 required",
+            "min_confidence": pytest.approx(0.55),
+            "min_confidence_source": "view",
+        }
+    }
     assert result["reasons"] == {"preview_low_confidence": 1}
     assert result["vendors"] == [{"vendor_name": "Salesforce", "count": 1}]
     assert result["accounts"] == [

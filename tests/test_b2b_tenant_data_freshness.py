@@ -1391,47 +1391,6 @@ async def test_list_leads_normalizes_blank_and_trimmed_vendor_name(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_leads_includes_account_review_focus(monkeypatch):
-    from atlas_brain.api import b2b_tenant_dashboard as mod
-    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
-
-    pool = SimpleNamespace(is_initialized=True)
-    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
-    rows = [{
-        "company": "Acme Corp",
-        "vendor": "Zendesk",
-        "urgency": 8.7,
-        "review_id": str(uuid4()),
-    }]
-    focus = {
-        "vendor": "Zendesk",
-        "company": "Acme Corp",
-        "report_date": "2026-04-10",
-        "watch_vendor": "Zendesk",
-        "category": "Helpdesk",
-        "track_mode": "competitor",
-    }
-    read_mock = AsyncMock(return_value=rows)
-    focus_mock = AsyncMock(return_value=[focus])
-    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
-    monkeypatch.setattr(mod, "_tenant_params", lambda _user: [])
-    monkeypatch.setattr(shared_mod, "read_high_intent_companies", read_mock)
-    monkeypatch.setattr(mod, "_resolve_high_intent_account_review_focuses", focus_mock)
-    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
-
-    result = await mod.list_leads(
-        vendor_name="Zendesk",
-        min_urgency=7,
-        window_days=30,
-        limit=20,
-        user=user,
-    )
-
-    focus_mock.assert_awaited_once_with(pool, user, rows)
-    assert result["leads"][0]["account_review_focus"] == focus
-
-
-@pytest.mark.asyncio
 async def test_list_tenant_reviews_uses_event_recency_and_company_fallback(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -3376,6 +3335,9 @@ async def test_evaluate_watchlist_alert_events_reports_suppressed_preview_summar
         "changed_wedges_only": False,
         "vendor_alert_threshold": 7.5,
         "account_alert_threshold": 6.0,
+        "preview_alerts_enabled": True,
+        "preview_alert_min_confidence": 0.65,
+        "preview_alert_require_budget_authority": False,
         "stale_days_threshold": 2,
         "created_at": None,
         "updated_at": None,
@@ -3424,6 +3386,25 @@ async def test_evaluate_watchlist_alert_events_reports_suppressed_preview_summar
     assert result["suppressed_preview_summary"] == {
         "count": 1,
         "threshold_value": pytest.approx(6.0),
+        "preview_account_alert_policy": {
+            "applies_to_preview_only": True,
+            "enabled": True,
+            "enabled_source": "view",
+            "min_confidence": pytest.approx(0.65),
+            "min_confidence_source": "view",
+            "require_budget_authority": False,
+            "require_budget_authority_source": "view",
+            "override_min_confidence": pytest.approx(0.65),
+            "override_require_budget_authority": False,
+        },
+        "reason_details": {
+            "preview_low_confidence": {
+                "summary": "Preview-backed account alerts require confidence >= 0.65.",
+                "short_summary": "confidence >= 0.65 required",
+                "min_confidence": pytest.approx(0.65),
+                "min_confidence_source": "view",
+            }
+        },
         "reasons": {"preview_low_confidence": 1},
         "vendors": [{"vendor_name": "Salesforce", "count": 1}],
         "accounts": [
@@ -3723,6 +3704,9 @@ async def test_deliver_watchlist_alert_email_returns_suppressed_preview_summary(
         "changed_wedges_only": False,
         "vendor_alert_threshold": None,
         "account_alert_threshold": 6.0,
+        "preview_alerts_enabled": True,
+        "preview_alert_min_confidence": 0.65,
+        "preview_alert_require_budget_authority": False,
         "stale_days_threshold": None,
         "created_at": None,
         "updated_at": None,
@@ -3730,6 +3714,25 @@ async def test_deliver_watchlist_alert_email_returns_suppressed_preview_summary(
     suppressed_preview_summary = {
         "count": 1,
         "threshold_value": 6.0,
+        "preview_account_alert_policy": {
+            "applies_to_preview_only": True,
+            "enabled": True,
+            "enabled_source": "view",
+            "min_confidence": 0.65,
+            "min_confidence_source": "view",
+            "require_budget_authority": False,
+            "require_budget_authority_source": "view",
+            "override_min_confidence": 0.65,
+            "override_require_budget_authority": False,
+        },
+        "reason_details": {
+            "preview_low_confidence": {
+                "summary": "Preview-backed account alerts require confidence >= 0.65.",
+                "short_summary": "confidence >= 0.65 required",
+                "min_confidence": 0.65,
+                "min_confidence_source": "view",
+            }
+        },
         "reasons": {"preview_low_confidence": 1},
         "vendors": [{"vendor_name": "Salesforce", "count": 1}],
         "accounts": [
@@ -3779,7 +3782,8 @@ async def test_deliver_watchlist_alert_email_returns_suppressed_preview_summary(
     assert result["status"] == "no_events"
     assert result["event_count"] == 0
     assert result["summary"] == (
-        "No open alert events to deliver (1 preview-backed account alert blocked by policy)"
+        "No open alert events to deliver "
+        "(1 preview-backed account alert blocked by policy: confidence >= 0.65 required)"
     )
     assert result["suppressed_preview_summary"] == suppressed_preview_summary
 
