@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Users,
@@ -175,6 +175,23 @@ function ErrorDetailCell({ detail }: { detail: string | null }) {
 // ---------------------------------------------------------------------------
 
 type ProspectsTab = 'prospects' | 'manual_queue' | 'company_overrides'
+
+const PROSPECT_STATUS_OPTIONS = new Set(['active', 'contacted', 'opted_out', 'bounced', 'suppressed'])
+const PROSPECT_SENIORITY_OPTIONS = new Set(['c_suite', 'vp', 'director', 'manager', 'senior'])
+
+function parseProspectsTab(value: string | null): ProspectsTab {
+  return value === 'manual_queue' || value === 'company_overrides' ? value : 'prospects'
+}
+
+function parseProspectStatus(value: string | null): string {
+  const next = value?.trim() ?? ''
+  return PROSPECT_STATUS_OPTIONS.has(next) ? next : ''
+}
+
+function parseProspectSeniority(value: string | null): string {
+  const next = value?.trim() ?? ''
+  return PROSPECT_SENIORITY_OPTIONS.has(next) ? next : ''
+}
 
 function prospectsPath(
   activeTab: ProspectsTab,
@@ -427,21 +444,24 @@ function ProspectDetailDrawer({
 
 export default function ProspectsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [activeTab, setActiveTab] = useState<ProspectsTab>(() => {
-    const tab = searchParams.get('tab')
-    return tab === 'manual_queue' || tab === 'company_overrides' ? tab : 'prospects'
-  })
+  const searchParamsSignature = searchParams.toString()
+  const requestedActiveTab = parseProspectsTab(searchParams.get('tab'))
+  const requestedCompanySearch = searchParams.get('company')?.trim() ?? ''
+  const requestedStatusFilter = parseProspectStatus(searchParams.get('status'))
+  const requestedSeniorityFilter = parseProspectSeniority(searchParams.get('seniority'))
+  const [activeTab, setActiveTab] = useState<ProspectsTab>(requestedActiveTab)
   const [actionResult, setActionResult] = useState<string | null>(null)
   const [isActionError, setIsActionError] = useState(false)
   const [viewingProspect, setViewingProspect] = useState<Prospect | null>(null)
 
   // ---- Prospects tab state ----
-  const [companySearch, setCompanySearch] = useState(() => searchParams.get('company') ?? '')
-  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('company') ?? '')
-  const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') ?? '')
-  const [seniorityFilter, setSeniorityFilter] = useState(() => searchParams.get('seniority') ?? '')
+  const [companySearch, setCompanySearch] = useState(requestedCompanySearch)
+  const [debouncedSearch, setDebouncedSearch] = useState(requestedCompanySearch)
+  const [statusFilter, setStatusFilter] = useState(requestedStatusFilter)
+  const [seniorityFilter, setSeniorityFilter] = useState(requestedSeniorityFilter)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [enrolling, setEnrolling] = useState<string | null>(null)
+  const suppressRouteSyncRef = useRef(false)
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -458,18 +478,67 @@ export default function ProspectsPage() {
   }, [companySearch])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setActiveTab((current) => (current === requestedActiveTab ? current : requestedActiveTab))
+  }, [requestedActiveTab])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setCompanySearch(requestedCompanySearch)
+    setDebouncedSearch(requestedCompanySearch)
+  }, [requestedCompanySearch])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setStatusFilter((current) => (current === requestedStatusFilter ? current : requestedStatusFilter))
+  }, [requestedStatusFilter])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setSeniorityFilter((current) => (current === requestedSeniorityFilter ? current : requestedSeniorityFilter))
+  }, [requestedSeniorityFilter])
+
+  const routeStateSettled =
+    activeTab === requestedActiveTab
+    && companySearch === requestedCompanySearch
+    && debouncedSearch === requestedCompanySearch
+    && statusFilter === requestedStatusFilter
+    && seniorityFilter === requestedSeniorityFilter
+
+  useEffect(() => {
+    if (!routeStateSettled) return
     const next = new URLSearchParams(searchParams)
     if (activeTab !== 'prospects') next.set('tab', activeTab)
     else next.delete('tab')
-    if (companySearch.trim()) next.set('company', companySearch.trim())
+    if (debouncedSearch.trim()) next.set('company', debouncedSearch.trim())
     else next.delete('company')
     if (statusFilter.trim()) next.set('status', statusFilter.trim())
     else next.delete('status')
     if (seniorityFilter.trim()) next.set('seniority', seniorityFilter.trim())
     else next.delete('seniority')
-    if (next.toString() === searchParams.toString()) return
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
     setSearchParams(next, { replace: true })
-  }, [activeTab, companySearch, searchParams, seniorityFilter, setSearchParams, statusFilter])
+  }, [activeTab, debouncedSearch, routeStateSettled, searchParams, searchParamsSignature, seniorityFilter, setSearchParams, statusFilter])
+
+  useEffect(() => {
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    if (activeTab !== 'prospects') next.set('tab', activeTab)
+    else next.delete('tab')
+    if (debouncedSearch.trim()) next.set('company', debouncedSearch.trim())
+    else next.delete('company')
+    if (statusFilter.trim()) next.set('status', statusFilter.trim())
+    else next.delete('status')
+    if (seniorityFilter.trim()) next.set('seniority', seniorityFilter.trim())
+    else next.delete('seniority')
+    if (next.toString() === searchParamsSignature) return
+    setSearchParams(next, { replace: true })
+  }, [activeTab, debouncedSearch, routeStateSettled, searchParams, searchParamsSignature, seniorityFilter, setSearchParams, statusFilter])
 
   // ---- Manual Queue tab state ----
   const [mqSearch, setMqSearch] = useState('')

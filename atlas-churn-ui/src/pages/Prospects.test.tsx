@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProspectsPage from './Prospects'
 
@@ -18,6 +18,11 @@ const api = vi.hoisted(() => ({
 }))
 
 vi.mock('../api/client', () => api)
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
+}
 
 describe('ProspectsPage', () => {
   beforeEach(() => {
@@ -134,6 +139,75 @@ describe('ProspectsPage', () => {
         'href',
         '/vendors/Zendesk?back_to=%2Fprospects%3Fcompany%3DAcme',
       )
+    })
+  })
+
+  it('clears same-route filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/prospects', element: <><ProspectsPage /><LocationProbe /></> }],
+      { initialEntries: ['/prospects?company=Acme&status=active&seniority=vp'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Acme')).toBeInTheDocument()
+
+    await router.navigate('/prospects')
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search company...')).toHaveValue('')
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/prospects')
+    })
+
+    await waitFor(() => {
+      expect(api.fetchProspects).toHaveBeenLastCalledWith({
+        company: undefined,
+        status: undefined,
+        seniority: undefined,
+        limit: 200,
+      })
+    })
+  })
+
+  it('rehydrates the active tab from same-route URL changes', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/prospects', element: <><ProspectsPage /><LocationProbe /></> }],
+      { initialEntries: ['/prospects?company=Acme&status=active&seniority=vp'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Acme')).toBeInTheDocument()
+
+    await router.navigate('/prospects?tab=manual_queue')
+
+    await waitFor(() => {
+      expect(screen.getByText('0 queue entries')).toBeInTheDocument()
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/prospects?tab=manual_queue')
+    })
+  })
+
+  it('canonicalizes invalid route filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/prospects', element: <><ProspectsPage /><LocationProbe /></> }],
+      { initialEntries: ['/prospects?tab=bogus&company=%20Acme%20&status=wat&seniority=king'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Acme')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchProspects).toHaveBeenLastCalledWith({
+        company: 'Acme',
+        status: undefined,
+        seniority: undefined,
+        limit: 200,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/prospects?company=Acme')
     })
   })
 })
