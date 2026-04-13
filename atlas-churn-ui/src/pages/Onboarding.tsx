@@ -16,13 +16,16 @@ export default function Onboarding() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const returnPath = searchParams.get('back_to')?.trim() || '/'
-  const [query, setQuery] = useState(searchParams.get('q')?.trim() || '')
+  const requestedQuery = searchParams.get('q')?.trim() || ''
+  const [query, setQuery] = useState(requestedQuery)
   const [results, setResults] = useState<VendorSearchResult[]>([])
   const [added, setAdded] = useState<string[]>([])
   const [searching, setSearching] = useState(false)
   const [adding, setAdding] = useState<string | null>(null)
   const [removing, setRemoving] = useState<string | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const searchRequestVersionRef = useRef(0)
+  const initialRouteSyncRef = useRef(true)
 
   const limit = user?.vendor_limit ?? 5
   const onboardingBackTo = query.trim()
@@ -39,28 +42,62 @@ export default function Onboarding() {
     return () => { cancelled = true }
   }, [])
 
-  const doSearch = useCallback(async (q: string) => {
-    if (q.length < 2) { setResults([]); return }
+  const doSearch = useCallback(async (q: string, requestVersion: number) => {
+    if (q.length < 2) {
+      if (requestVersion === searchRequestVersionRef.current) {
+        setResults([])
+        setSearching(false)
+      }
+      return
+    }
     setSearching(true)
     try {
       const data = await searchAvailableVendors(q)
+      if (requestVersion !== searchRequestVersionRef.current) return
       setResults(data.vendors)
     } catch {
+      if (requestVersion !== searchRequestVersionRef.current) return
       setResults([])
     } finally {
-      setSearching(false)
+      if (requestVersion === searchRequestVersionRef.current) setSearching(false)
     }
   }, [])
 
   function handleQueryChange(value: string) {
     setQuery(value)
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (value.length < 2) {
+    searchRequestVersionRef.current += 1
+    const requestVersion = searchRequestVersionRef.current
+    const trimmedValue = value.trim()
+    if (trimmedValue.length < 2) {
       setResults([])
+      setSearching(false)
       return
     }
-    debounceRef.current = setTimeout(() => doSearch(value), 300)
+    debounceRef.current = setTimeout(() => {
+      void doSearch(trimmedValue, requestVersion)
+    }, 300)
   }
+
+  useEffect(() => {
+    const shouldSyncRouteQuery = initialRouteSyncRef.current || requestedQuery !== query
+    initialRouteSyncRef.current = false
+    if (!shouldSyncRouteQuery) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    searchRequestVersionRef.current += 1
+    const requestVersion = searchRequestVersionRef.current
+    setQuery(requestedQuery)
+    if (requestedQuery.length < 2) {
+      setResults([])
+      setSearching(false)
+      return
+    }
+    void doSearch(requestedQuery, requestVersion)
+  }, [doSearch, query, requestedQuery])
+
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+  }, [])
 
   useEffect(() => {
     const next = new URLSearchParams()
