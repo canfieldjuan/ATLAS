@@ -173,6 +173,18 @@ function evidencePath(vendorName: string, returnPath: string): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
   params.set('tab', 'witnesses')
+  const watchlistsTarget = upstreamNestedPath(returnPath, '/watchlists')
+  if (watchlistsTarget) {
+    try {
+      const url = new URL(watchlistsTarget, window.location.origin)
+      const accountReportDate = url.searchParams.get('account_report_date')?.trim()
+      if (accountReportDate && /^\d{4}-\d{2}-\d{2}$/.test(accountReportDate)) {
+        params.set('as_of_date', accountReportDate)
+      }
+    } catch {
+      // Fall through to the generic evidence path.
+    }
+  }
   params.set('back_to', returnPath)
   return `/evidence?${params.toString()}`
 }

@@ -252,6 +252,24 @@ describe('Opportunities', () => {
     )
   })
 
+  it('preserves watchlist snapshot dates on generated evidence shortcuts', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-05&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Faccount_vendor%253DZendesk%2526account_company%253DAcme%252BCorp%2526account_report_date%253D2026-04-05%2526account_watch_vendor%253DZendesk%2526account_category%253DHelpdesk%2526account_track_mode%253Dcompetitor',
+    )
+  })
+
   it('prefers the exact upstream reports shortcut for nested opportunity context', async () => {
     const router = createMemoryRouter(
       [{ path: '/opportunities', element: <Opportunities /> }],
