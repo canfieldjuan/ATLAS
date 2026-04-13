@@ -112,7 +112,20 @@ async def get_review(review_id: str) -> str:
             return json.dumps({"success": False, "error": "Database not ready"})
         rid = _uuid.UUID(review_id)
         row = await pool.fetchrow(
-            "SELECT * FROM b2b_reviews WHERE id = $1",
+            """
+            SELECT
+                r.*,
+                COALESCE(primary_vm.vendor_name, r.vendor_name) AS matched_vendor_name
+            FROM b2b_reviews r
+            LEFT JOIN LATERAL (
+                SELECT vm.vendor_name
+                FROM b2b_review_vendor_mentions vm
+                WHERE vm.review_id = r.id
+                ORDER BY vm.is_primary DESC, vm.id ASC
+                LIMIT 1
+            ) AS primary_vm ON TRUE
+            WHERE r.id = $1
+            """,
             rid,
         )
 
@@ -132,7 +145,7 @@ async def get_review(review_id: str) -> str:
             "id": str(row["id"]),
             "source": row["source"],
             "source_url": row["source_url"],
-            "vendor_name": row["vendor_name"],
+            "vendor_name": row["matched_vendor_name"],
             "product_name": row["product_name"],
             "product_category": row["product_category"],
             "rating": float(row["rating"]) if row["rating"] is not None else None,
