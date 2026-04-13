@@ -78,9 +78,12 @@ function evidenceOpportunitiesPath(searchParams: URLSearchParams, vendorName: st
   return `/opportunities?${params.toString()}`
 }
 
-function evidenceAlertsPath(searchParams: URLSearchParams, vendorName: string) {
+function evidenceAlertsPath(searchParams: URLSearchParams, vendorName: string, companyName?: string | null) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
+  if (companyName?.trim()) {
+    params.set('company', companyName.trim())
+  }
   params.set('back_to', evidenceExplorerPath(searchParams))
   return `/alerts?${params.toString()}`
 }
@@ -461,6 +464,12 @@ export default function EvidenceExplorer() {
     ) as Record<string, string>
   }, [accountReviewRows, searchParams, witnesses])
 
+  const activeWitnessCompany = useMemo(() => {
+    const witnessId = requestedWitnessId.trim()
+    if (!witnessId) return ''
+    return witnesses.find((witness) => witness.witness_id === witnessId)?.reviewer_company?.trim() || ''
+  }, [requestedWitnessId, witnesses])
+
   // -- Search handler ---------------------------------------------------------
 
   const handleSearchInput = useCallback((query: string) => {
@@ -830,14 +839,14 @@ export default function EvidenceExplorer() {
               ) : null}
               <span className="inline-flex items-center gap-2">
                 <Link
-                  to={directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor)}
+                  to={directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor, activeWitnessCompany)}
                   className="text-rose-300 hover:text-rose-200 transition-colors"
                 >
                   Alerts API
                 </Link>
                 <button
                   type="button"
-                  onClick={() => void handleCopyAlertsLink(directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor))}
+                  onClick={() => void handleCopyAlertsLink(directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor, activeWitnessCompany))}
                   className="text-slate-400 hover:text-white transition-colors"
                   aria-label="Copy alerts link"
                 >

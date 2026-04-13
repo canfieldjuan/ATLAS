@@ -240,7 +240,7 @@ describe('EvidenceExplorer', () => {
       )
       expect(drawerShortcuts.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
         'href',
-        '/alerts?vendor=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26as_of_date%3D2026-04-08%26window_days%3D45%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
+        '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26as_of_date%3D2026-04-08%26window_days%3D45%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
       )
       expect(drawerShortcuts.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
         'href',
@@ -629,7 +629,7 @@ describe('EvidenceExplorer', () => {
     )
     expect(headerShortcuts.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
-      '/alerts?vendor=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+      '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
     expect(headerShortcuts.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
