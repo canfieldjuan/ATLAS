@@ -27,11 +27,7 @@ from ..services.b2b.source_impact import (
     get_consumer_wiring_baseline,
     summarize_source_field_baseline,
 )
-from ..services.b2b.report_trust import (
-    report_evidence_snapshot_payload,
-    report_section_evidence_payload,
-    report_trust_payload,
-)
+from ..services.b2b.report_trust import report_section_evidence_payload, report_trust_payload
 from ..services.tracing import (
     build_business_trace_context,
     build_reasoning_trace_context,
@@ -47,7 +43,6 @@ from ..autonomous.tasks._b2b_shared import (
     read_company_signal_candidate_groups,
     read_company_signal_candidate_group_summary,
     read_company_signal_review_impact_summary,
-    read_vendor_company_signal_review_queue,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
     read_vendor_signal_detail,
@@ -267,6 +262,8 @@ def _build_accounts_in_motion_preview_rows(
     *,
     vendor_name: str,
     reasoning_reference_ids: dict[str, Any] | None,
+    preview_account_lookup: Mapping[str, Mapping[str, Any]] | None = None,
+    fallback_category: str | None = None,
 ) -> list[dict[str, Any]]:
     payload = _safe_json(intelligence_data)
     if not isinstance(payload, dict):
@@ -288,30 +285,47 @@ def _build_accounts_in_motion_preview_rows(
 
     rows: list[dict[str, Any]] = []
     for company_name in priority_names:
+        metadata = dict((preview_account_lookup or {}).get(_company_lookup_key(company_name)) or {})
+        company_source_distribution = metadata.get("source_distribution")
+        if not isinstance(company_source_distribution, dict) or not company_source_distribution:
+            company_source_distribution = dict(source_distribution)
+        company_source_review_ids = [
+            str(review_id).strip()
+            for review_id in (metadata.get("source_review_ids") or [])
+            if str(review_id or "").strip()
+        ]
+        pain_categories = []
+        pain_category = str(metadata.get("pain_category") or "").strip()
+        if pain_category:
+            pain_categories.append({"category": pain_category, "severity": ""})
         rows.append(
             {
                 "company": company_name,
                 "vendor": vendor_name,
-                "category": category,
+                "category": (
+                    str(metadata.get("category") or "").strip()
+                    or fallback_category
+                    or category
+                ),
                 "urgency": None,
-                "role_type": None,
-                "buying_stage": None,
-                "budget_authority": False,
-                "pain_categories": [],
+                "role_type": metadata.get("buyer_role"),
+                "buying_stage": metadata.get("buying_stage"),
+                "budget_authority": bool(metadata.get("decision_maker")),
+                "pain_categories": pain_categories,
                 "evidence": [],
                 "alternatives_considering": [],
-                "contract_signal": None,
+                "contract_signal": metadata.get("contract_end"),
                 "reviewer_title": None,
                 "company_size_raw": None,
                 "quality_flags": ["account_reasoning_preview_only"],
                 "opportunity_score": None,
                 "quote_match_type": "account_reasoning_preview",
-                "confidence": None,
-                "source_distribution": dict(source_distribution),
-                "source_review_ids": [],
+                "confidence": _safe_float(metadata.get("confidence_score")),
+                "source_distribution": dict(company_source_distribution),
+                "source_review_ids": company_source_review_ids,
                 "source_reviews": [],
-                "evidence_count": 0,
-                "enriched_at": None,
+                "evidence_count": len(company_source_review_ids),
+                "enriched_at": metadata.get("last_seen_at"),
                 "reasoning_reference_ids": reasoning_reference_ids,
                 "account_reasoning_preview_only": True,
                 "account_pressure_summary": preview_fields.get("account_pressure_summary"),
@@ -320,6 +334,163 @@ def _build_accounts_in_motion_preview_rows(
             }
         )
     return rows
+
+
+async def _fetch_accounts_in_motion_preview_account_lookup(
+    pool,
+    *,
+    vendor_name: str,
+    company_names: list[str],
+) -> dict[str, dict[str, Any]]:
+    normalized_names = [
+        _company_lookup_key(company_name)
+        for company_name in company_names
+        if _company_lookup_key(company_name)
+    ]
+    if not normalized_names:
+        return {}
+
+    lookup: dict[str, dict[str, Any]] = {}
+
+    account_row = await pool.fetchrow(
+        """
+        SELECT accounts
+        FROM b2b_account_intelligence
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY as_of_date DESC, created_at DESC
+        LIMIT 1
+        """,
+        vendor_name,
+    )
+    account_payload = _safe_json(account_row.get("accounts") if account_row else None)
+    if isinstance(account_payload, dict):
+        for item in account_payload.get("accounts") or []:
+            if not isinstance(item, dict):
+                continue
+            company_key = _company_lookup_key(
+                item.get("company_name") or item.get("company")
+            )
+            if company_key not in normalized_names:
+                continue
+            source_distribution: dict[str, int] = {}
+            source_name = str(item.get("source") or "").strip()
+            if source_name:
+                source_distribution[source_name] = 1
+            review_id = str(item.get("review_id") or "").strip()
+            lookup[company_key] = {
+                "buyer_role": item.get("buyer_role"),
+                "decision_maker": bool(item.get("decision_maker")),
+                "buying_stage": item.get("buying_stage"),
+                "contract_end": item.get("contract_end"),
+                "pain_category": item.get("pain_category"),
+                "confidence_score": item.get("confidence_score"),
+                "last_seen_at": item.get("last_seen_at"),
+                "source_distribution": source_distribution,
+                "source_review_ids": [review_id] if review_id else [],
+            }
+
+    signal_rows = await pool.fetch(
+        """
+        SELECT company_name, source, review_id, pain_category,
+               buyer_role, decision_maker, seat_count, contract_end,
+               buying_stage, confidence_score, last_seen_at
+        FROM b2b_company_signals
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND LOWER(company_name) = ANY($2::text[])
+        ORDER BY last_seen_at DESC NULLS LAST, first_seen_at DESC NULLS LAST
+        """,
+        vendor_name,
+        normalized_names,
+    )
+    for row in signal_rows:
+        company_key = _company_lookup_key(row.get("company_name"))
+        if not company_key:
+            continue
+        entry = lookup.setdefault(
+            company_key,
+            {
+                "source_distribution": {},
+                "source_review_ids": [],
+            },
+        )
+        source_name = str(row.get("source") or "").strip()
+        if source_name:
+            distribution = entry.setdefault("source_distribution", {})
+        review_id = str(row.get("review_id") or "").strip()
+        if source_name:
+            should_increment = True
+            if review_id and review_id in entry["source_review_ids"]:
+                should_increment = False
+            elif not review_id and source_name in distribution:
+                should_increment = False
+            if should_increment:
+                distribution[source_name] = int(distribution.get(source_name) or 0) + 1
+        if review_id and review_id not in entry["source_review_ids"]:
+            entry["source_review_ids"].append(review_id)
+        if row.get("pain_category") and not entry.get("pain_category"):
+            entry["pain_category"] = row.get("pain_category")
+        if row.get("buyer_role") and not entry.get("buyer_role"):
+            entry["buyer_role"] = row.get("buyer_role")
+        if row.get("decision_maker"):
+            entry["decision_maker"] = True
+        if row.get("contract_end") and not entry.get("contract_end"):
+            entry["contract_end"] = row.get("contract_end")
+        if row.get("buying_stage") and not entry.get("buying_stage"):
+            entry["buying_stage"] = row.get("buying_stage")
+        confidence_value = _safe_float(row.get("confidence_score"))
+        if confidence_value is not None:
+            current_confidence = _safe_float(entry.get("confidence_score"))
+            if current_confidence is None or confidence_value > current_confidence:
+                entry["confidence_score"] = confidence_value
+        if row.get("last_seen_at") and not entry.get("last_seen_at"):
+            entry["last_seen_at"] = row.get("last_seen_at")
+
+    return lookup
+
+
+async def _fetch_accounts_in_motion_vendor_category(
+    pool,
+    *,
+    vendor_name: str,
+) -> str | None:
+    for query in (
+        """
+        SELECT product_category
+        FROM b2b_vendor_signals
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY last_computed_at DESC NULLS LAST, created_at DESC NULLS LAST
+        LIMIT 1
+        """,
+        """
+        SELECT product_category
+        FROM b2b_scrape_targets
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND product_category IS NOT NULL
+          AND BTRIM(product_category) <> ''
+        ORDER BY source, product_name NULLS LAST
+        LIMIT 1
+        """,
+        """
+        SELECT product_category
+        FROM b2b_product_profiles
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY last_computed_at DESC NULLS LAST, created_at DESC NULLS LAST
+        LIMIT 1
+        """,
+    ):
+        try:
+            row = await pool.fetchrow(query, vendor_name)
+        except Exception:
+            logger.debug(
+                "Accounts-in-motion preview category lookup failed for %s",
+                vendor_name,
+                exc_info=True,
+            )
+            continue
+        category = str(row.get("product_category") or "").strip() if row else ""
+        if category:
+            return category
+    return None
 
 
 async def _load_reasoning_views_for_vendors(pool, vendor_names: list[str]) -> dict[str, Any]:
@@ -399,19 +570,6 @@ def _overlay_reasoning_detail_from_view(
     contracts = context.get("reasoning_contracts")
     if isinstance(contracts, dict) and contracts:
         target["reasoning_contracts"] = contracts
-    account_preview = context.get("account_reasoning_preview")
-    if isinstance(account_preview, dict) and account_preview:
-        preview_contract = account_preview.get("account_reasoning")
-        if isinstance(preview_contract, dict) and preview_contract:
-            target["account_reasoning_preview"] = preview_contract
-        for key in (
-            "account_pressure_summary",
-            "account_pressure_metrics",
-            "priority_account_names",
-        ):
-            value = account_preview.get(key)
-            if value not in (None, "", [], {}):
-                target[key] = value
     reference_ids = context.get("reference_ids")
     if isinstance(reference_ids, dict) and reference_ids:
         target["reasoning_reference_ids"] = reference_ids
@@ -442,24 +600,6 @@ def _overlay_reasoning_detail_from_view(
         view,
         requested_as_of=requested_as_of,
     )
-
-
-async def _attach_company_signal_review_queue(
-    pool,
-    target: dict[str, Any],
-    *,
-    vendor_name: str,
-) -> None:
-    try:
-        queue = await read_vendor_company_signal_review_queue(
-            pool,
-            vendor_name=vendor_name,
-        )
-    except Exception:
-        logger.debug("Company signal review queue load failed", exc_info=True)
-        return
-    if queue:
-        target["company_signal_review_queue"] = queue
 
 
 def _should_scope(user: AuthUser | None) -> bool:
@@ -1343,11 +1483,6 @@ async def get_signal(
             view,
             requested_as_of=date.today(),
         )
-    await _attach_company_signal_review_queue(
-        pool,
-        result,
-        vendor_name=row["vendor_name"],
-    )
     result = await _apply_field_overrides(pool, "churn_signal", str(row["id"]), result)
     return result
 
@@ -1528,11 +1663,6 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
                 view,
                 requested_as_of=date.today(),
             )
-        await _attach_company_signal_review_queue(
-            pool,
-            sig,
-            vendor_name=signal_row["vendor_name"],
-        )
         sig = await _apply_field_overrides(pool, "churn_signal", str(signal_row["id"]), sig)
         profile["churn_signal"] = sig
     else:
@@ -1837,14 +1967,7 @@ async def list_reports(
         f"""
         SELECT id, report_date, report_type, executive_summary,
              vendor_filter, category_filter, status, created_at,
-             intelligence_data,
              COALESCE((intelligence_data->>'data_stale')::boolean, false) AS data_stale,
-             intelligence_data->>'data_as_of_date' AS evidence_data_as_of_date,
-             intelligence_data->>'as_of_date' AS evidence_as_of_date,
-             intelligence_data->>'report_date' AS evidence_report_date,
-             intelligence_data->>'analysis_window_days' AS evidence_analysis_window_days,
-             intelligence_data->>'window_days' AS evidence_window_days,
-             intelligence_data->>'evidence_window_days' AS evidence_fallback_window_days,
              latest_failure_step, latest_error_code, latest_error_summary,
              blocker_count, warning_count,
              (
@@ -1881,18 +2004,6 @@ async def list_reports(
         blocker_count = r["blocker_count"] or 0
         warning_count = r["warning_count"] or 0
         unresolved_issue_count = r["unresolved_issue_count"] or 0
-        preview_fields = _extract_report_account_preview_fields(r.get("intelligence_data"))
-        evidence_snapshot = report_evidence_snapshot_payload(
-            report_date=r["report_date"],
-            intelligence_data={
-                "data_as_of_date": r.get("evidence_data_as_of_date"),
-                "as_of_date": r.get("evidence_as_of_date"),
-                "report_date": r.get("evidence_report_date"),
-                "analysis_window_days": r.get("evidence_analysis_window_days"),
-                "window_days": r.get("evidence_window_days"),
-                "evidence_window_days": r.get("evidence_fallback_window_days"),
-            },
-        )
         trust = report_trust_payload(
             report_date=r["report_date"],
             created_at=r["created_at"],
@@ -1927,10 +2038,7 @@ async def list_reports(
                 "review_label": trust["review_label"],
                 "trust": trust,
                 "has_pdf_export": trust["artifact_state"] == "ready",
-                "as_of_date": evidence_snapshot["as_of_date"],
-                "analysis_window_days": evidence_snapshot["analysis_window_days"],
                 "created_at": str(r["created_at"]) if r["created_at"] else None,
-                **preview_fields,
             }
         )
 
@@ -1989,10 +2097,6 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
     warning_count = row["warning_count"] or 0
     open_issue_count = unresolved_issue_count or 0
     section_evidence = report_section_evidence_payload(intelligence_data)
-    evidence_snapshot = report_evidence_snapshot_payload(
-        report_date=row["report_date"],
-        intelligence_data=intelligence_data,
-    )
     trust = report_trust_payload(
         report_date=row["report_date"],
         created_at=row["created_at"],
@@ -2011,8 +2115,6 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
         "category_filter": row["category_filter"],
         "executive_summary": row["executive_summary"],
         "intelligence_data": intelligence_data,
-        "as_of_date": evidence_snapshot["as_of_date"],
-        "analysis_window_days": evidence_snapshot["analysis_window_days"],
         "section_evidence": section_evidence,
         "data_density": _safe_json(row["data_density"]),
         "status": row["status"],
@@ -6101,27 +6203,14 @@ async def create_webhook(
 
 @router.get("/webhooks")
 async def list_webhooks(
-    vendor_name: Optional[str] = Query(None),
     user: AuthUser | None = Depends(optional_auth),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
     pool = _pool_or_503()
-    vendor_name = _optional_query_text(vendor_name)
-    delivery_vendor_sql = _webhook_activity_vendor_context_sql(
-        "dl",
-        "dl_signal",
-        "dl_report",
-        "dl_signal_report",
-    )
-    crm_vendor_sql = _webhook_activity_vendor_context_sql(
-        "cp",
-        "cp_signal",
-        "cp_report",
-    )
 
     rows = await pool.fetch(
-        f"""
+        """
         SELECT ws.id, ws.url, ws.event_types,
                COALESCE(ws.channel, 'generic') AS channel,
                ws.enabled, ws.description, ws.created_at, ws.updated_at,
@@ -6163,23 +6252,15 @@ async def list_webhooks(
             SELECT COUNT(*) AS recent_deliveries,
                    COUNT(*) FILTER (WHERE dl.success) AS recent_successes
             FROM b2b_webhook_delivery_log dl
-            LEFT JOIN b2b_company_signals dl_signal ON dl_signal.id = dl.signal_id
-            LEFT JOIN b2b_intelligence dl_report ON dl_report.id = dl.report_id
-            LEFT JOIN b2b_intelligence dl_signal_report ON dl_signal_report.id = dl.signal_id
             WHERE dl.subscription_id = ws.id
               AND dl.delivered_at > NOW() - INTERVAL '7 days'
               AND dl.event_type <> 'test'
-              AND ($2::text IS NULL OR LOWER({delivery_vendor_sql}) = LOWER($2))
         ) AS recent_activity ON TRUE
         LEFT JOIN LATERAL (
             SELECT event_type, status_code, response_body, error, delivered_at, signal_id, review_id, report_id, vendor_name, company_name
             FROM b2b_webhook_delivery_log dl
-            LEFT JOIN b2b_company_signals dl_signal ON dl_signal.id = dl.signal_id
-            LEFT JOIN b2b_intelligence dl_report ON dl_report.id = dl.report_id
-            LEFT JOIN b2b_intelligence dl_signal_report ON dl_signal_report.id = dl.signal_id
             WHERE dl.subscription_id = ws.id
               AND NOT dl.success
-              AND ($2::text IS NULL OR LOWER({delivery_vendor_sql}) = LOWER($2))
             ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC
             LIMIT 1
         ) AS latest_failure ON TRUE
@@ -6195,10 +6276,7 @@ async def list_webhooks(
             SELECT id, signal_type, signal_id, review_id, vendor_name, company_name,
                    crm_record_id, crm_record_type, status, error, pushed_at
             FROM b2b_crm_push_log cp
-            LEFT JOIN b2b_company_signals cp_signal ON cp_signal.id = cp.signal_id
-            LEFT JOIN b2b_intelligence cp_report ON cp_report.id = cp.signal_id
             WHERE cp.subscription_id = ws.id
-              AND ($2::text IS NULL OR LOWER({crm_vendor_sql}) = LOWER($2))
             ORDER BY cp.pushed_at DESC, cp.id DESC
             LIMIT 1
         ) AS latest_crm ON TRUE
@@ -6206,7 +6284,6 @@ async def list_webhooks(
         ORDER BY ws.created_at DESC
         """,
         user.account_id,
-        vendor_name,
     )
 
     report_cache: dict[str, Any] = {}
@@ -6406,25 +6483,17 @@ async def list_webhooks(
 @router.get("/webhooks/delivery-summary")
 async def webhook_delivery_summary(
     days: int = Query(7, ge=1, le=90),
-    vendor_name: Optional[str] = Query(None),
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Aggregate delivery health across all webhooks for the authenticated account."""
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
     pool = _pool_or_503()
-    vendor_name = _optional_query_text(vendor_name)
-    delivery_vendor_sql = _webhook_activity_vendor_context_sql(
-        "dl",
-        "dl_signal",
-        "dl_report",
-        "dl_signal_report",
-    )
 
     row = await pool.fetchrow(
-        f"""
+        """
         SELECT
-            COUNT(DISTINCT ws.id) FILTER (WHERE dl.id IS NOT NULL) AS active_subscriptions,
+            COUNT(DISTINCT ws.id) AS active_subscriptions,
             COUNT(dl.id) AS total_deliveries,
             COUNT(dl.id) FILTER (WHERE dl.success) AS successful,
             COUNT(dl.id) FILTER (WHERE NOT dl.success) AS failed,
@@ -6433,23 +6502,14 @@ async def webhook_delivery_summary(
                 FILTER (WHERE dl.success) AS p95_success_duration_ms,
             MAX(dl.delivered_at) AS last_delivery_at
         FROM b2b_webhook_subscriptions ws
-        LEFT JOIN LATERAL (
-            SELECT dl.id, dl.success, dl.duration_ms, dl.delivered_at
-            FROM b2b_webhook_delivery_log dl
-            LEFT JOIN b2b_company_signals dl_signal ON dl_signal.id = dl.signal_id
-            LEFT JOIN b2b_intelligence dl_report ON dl_report.id = dl.report_id
-            LEFT JOIN b2b_intelligence dl_signal_report ON dl_signal_report.id = dl.signal_id
-            WHERE dl.subscription_id = ws.id
-              AND dl.delivered_at > NOW() - ($2 || ' days')::interval
-              AND dl.event_type <> 'test'
-              AND ($3::text IS NULL OR LOWER({delivery_vendor_sql}) = LOWER($3))
-        ) AS dl ON TRUE
+        LEFT JOIN b2b_webhook_delivery_log dl
+            ON dl.subscription_id = ws.id
+            AND dl.delivered_at > NOW() - ($2 || ' days')::interval
+            AND dl.event_type <> 'test'
         WHERE ws.account_id = $1::uuid
           AND ws.enabled = true
         """,
-        user.account_id,
-        str(days),
-        vendor_name,
+        user.account_id, str(days),
     )
 
     total = row["total_deliveries"] or 0
@@ -6629,7 +6689,6 @@ async def list_webhook_deliveries(
     webhook_id: str,
     success: Optional[bool] = Query(None, description="Filter by delivery success"),
     event_type: Optional[str] = Query(None, description="Filter by event type"),
-    vendor_name: Optional[str] = Query(None, description="Filter by exact vendor context"),
     start_date: Optional[str] = Query(None, description="Deliveries on or after (ISO 8601)"),
     end_date: Optional[str] = Query(None, description="Deliveries before (ISO 8601)"),
     limit: int = Query(50, ge=1, le=200),
@@ -6644,7 +6703,6 @@ async def list_webhook_deliveries(
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
     event_type = _optional_query_text(event_type)
-    vendor_name = _optional_query_text(vendor_name)
     start_date = _optional_query_text(start_date)
     end_date = _optional_query_text(end_date)
 
@@ -6671,31 +6729,24 @@ async def list_webhook_deliveries(
     if not owns:
         raise HTTPException(status_code=404, detail="Webhook not found")
 
-    conditions = ["dl.subscription_id = $1"]
+    conditions = ["subscription_id = $1"]
     params: list = [wid]
     idx = 2
 
     if success is not None:
-        conditions.append(f"dl.success = ${idx}")
+        conditions.append(f"success = ${idx}")
         params.append(success)
         idx += 1
     if event_type:
-        conditions.append(f"dl.event_type = ${idx}")
+        conditions.append(f"event_type = ${idx}")
         params.append(event_type)
         idx += 1
-    if vendor_name:
-        conditions.append(
-            "LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = LOWER($%d)"
-            % idx
-        )
-        params.append(vendor_name)
-        idx += 1
     if parsed_start_date is not None:
-        conditions.append(f"dl.delivered_at >= ${idx}")
+        conditions.append(f"delivered_at >= ${idx}")
         params.append(parsed_start_date)
         idx += 1
     if parsed_end_date is not None:
-        conditions.append(f"dl.delivered_at < ${idx}")
+        conditions.append(f"delivered_at < ${idx}")
         params.append(parsed_end_date)
         idx += 1
 
@@ -6704,15 +6755,12 @@ async def list_webhook_deliveries(
 
     rows = await pool.fetch(
         f"""
-        SELECT dl.id, dl.event_type, dl.payload, dl.signal_id, dl.review_id, dl.report_id,
-               dl.vendor_name, dl.company_name, dl.status_code, dl.duration_ms,
-               dl.attempt, dl.success, dl.error, dl.delivered_at
-        FROM b2b_webhook_delivery_log dl
-        LEFT JOIN b2b_company_signals dl_signal ON dl_signal.id = dl.signal_id
-        LEFT JOIN b2b_intelligence dl_report ON dl_report.id = dl.report_id
-        LEFT JOIN b2b_intelligence dl_signal_report ON dl_signal_report.id = dl.signal_id
+        SELECT id, event_type, payload, signal_id, review_id, report_id,
+               vendor_name, company_name, status_code, duration_ms,
+               attempt, success, error, delivered_at
+        FROM b2b_webhook_delivery_log
         WHERE {where}
-        ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC
+        ORDER BY delivered_at DESC, attempt DESC, id DESC
         LIMIT ${idx}
         """,
         *params,
@@ -6831,7 +6879,6 @@ async def list_crm_push_log(
     webhook_id: str,
     limit: int = 50,
     status: Optional[str] = Query(None, description="Filter by normalized CRM push status"),
-    vendor_name: Optional[str] = Query(None, description="Filter by exact vendor context"),
     user: AuthUser | None = Depends(optional_auth),
 ):
     if not user:
@@ -6845,7 +6892,6 @@ async def list_crm_push_log(
     limit = max(1, min(limit, 200))
     raw_status = status if isinstance(status, str) or status is None else None
     normalized_status = _normalize_crm_push_status(raw_status)
-    vendor_name = _optional_query_text(vendor_name)
     if raw_status is not None and normalized_status not in {"success", "failed"}:
         raise HTTPException(status_code=400, detail="status must be one of: success, failed")
     pool = _pool_or_503()
@@ -6859,10 +6905,10 @@ async def list_crm_push_log(
         raise HTTPException(status_code=404, detail="Webhook not found")
 
     normalized_status_sql = (
-        "CASE WHEN lower(coalesce(cp.status, '')) = 'pushed' THEN 'success' "
-        "ELSE lower(coalesce(cp.status, '')) END"
+        "CASE WHEN lower(coalesce(status, '')) = 'pushed' THEN 'success' "
+        "ELSE lower(coalesce(status, '')) END"
     )
-    conditions = ["cp.subscription_id = $1"]
+    conditions = ["subscription_id = $1"]
     params: list[Any] = [wid]
     idx = 2
     if normalized_status == "success":
@@ -6871,23 +6917,14 @@ async def list_crm_push_log(
         idx += 1
     elif normalized_status == "failed":
         conditions.append(f"coalesce({normalized_status_sql}, '') <> 'success'")
-    if vendor_name:
-        conditions.append(
-            "LOWER(COALESCE(cp.vendor_name, cp_signal.vendor_name, cp_report.vendor_filter)) = LOWER($%d)"
-            % idx
-        )
-        params.append(vendor_name)
-        idx += 1
     params.append(limit)
     rows = await pool.fetch(
         f"""
-        SELECT cp.id, cp.signal_type, cp.signal_id, cp.review_id, cp.vendor_name, cp.company_name,
-               cp.crm_record_id, cp.crm_record_type, cp.status, cp.error, cp.pushed_at
-        FROM b2b_crm_push_log cp
-        LEFT JOIN b2b_company_signals cp_signal ON cp_signal.id = cp.signal_id
-        LEFT JOIN b2b_intelligence cp_report ON cp_report.id = cp.signal_id
+        SELECT id, signal_type, signal_id, review_id, vendor_name, company_name,
+               crm_record_id, crm_record_type, status, error, pushed_at
+        FROM b2b_crm_push_log
         WHERE {' AND '.join(conditions)}
-        ORDER BY cp.pushed_at DESC, cp.id DESC
+        ORDER BY pushed_at DESC, id DESC
         LIMIT ${idx}
         """,
         *params,
@@ -7835,10 +7872,27 @@ async def _list_accounts_in_motion_from_report(
             if str(account.get("company") or "").strip()
         ]
         if not shaped:
+            preview_account_lookup = await _fetch_accounts_in_motion_preview_account_lookup(
+                pool,
+                vendor_name=vendor,
+                company_names=[
+                    str(item).strip()
+                    for item in (preview_fields.get("priority_account_names") or [])
+                    if str(item or "").strip()
+                ],
+            )
+            preview_category = str(report.get("category") or "").strip() or None
+            if not preview_category:
+                preview_category = await _fetch_accounts_in_motion_vendor_category(
+                    pool,
+                    vendor_name=vendor,
+                )
             shaped = _build_accounts_in_motion_preview_rows(
                 report,
                 vendor_name=vendor,
                 reasoning_reference_ids=reasoning_reference_ids,
+                preview_account_lookup=preview_account_lookup,
+                fallback_category=preview_category,
             )
             if shaped:
                 preview_fields["account_reasoning_preview_only"] = True
@@ -7886,22 +7940,6 @@ def _normalize_webhook_activity_uuid_text(value: Any) -> str | None:
         return str(_uuid.UUID(raw))
     except (ValueError, TypeError, AttributeError):
         return None
-
-
-def _webhook_activity_vendor_context_sql(
-    activity_alias: str,
-    signal_alias: str,
-    report_alias: str,
-    signal_report_alias: str | None = None,
-) -> str:
-    columns = [
-        f"{activity_alias}.vendor_name",
-        f"{signal_alias}.vendor_name",
-        f"{report_alias}.vendor_filter",
-    ]
-    if signal_report_alias:
-        columns.append(f"{signal_report_alias}.vendor_filter")
-    return f"COALESCE({', '.join(columns)})"
 
 
 def _normalize_crm_push_status(value: Any) -> str | None:

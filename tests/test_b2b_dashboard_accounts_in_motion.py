@@ -5,6 +5,7 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
@@ -2286,8 +2287,6 @@ async def test_get_report_handles_null_battle_card_quality():
             "category_filter": "Help Desk",
             "executive_summary": "summary",
             "intelligence_data": {
-                "data_as_of_date": "2026-03-20",
-                "evidence_window_days": 45,
                 "quality_status": None,
                 "battle_card_quality": None,
                 "key_insights": [{"label": "Pricing", "summary": "Pricing churn risk"}],
@@ -2315,8 +2314,6 @@ async def test_get_report_handles_null_battle_card_quality():
     assert result["quality_score"] is None
     assert result["report_type"] == "battle_card"
     assert result["has_pdf_export"] is True
-    assert result["as_of_date"] == "2026-03-20"
-    assert result["analysis_window_days"] == 45
     assert result["artifact_state"] == "ready"
     assert result["artifact_label"] == "Ready"
     assert result["freshness_state"] == "stale"
@@ -2375,21 +2372,7 @@ async def test_list_reports_exposes_normalized_trust_fields():
                 "category_filter": None,
                 "status": "published",
                 "created_at": created_at,
-                "intelligence_data": {
-                    "account_reasoning_preview_only": True,
-                    "account_reasoning_preview": {
-                        "disclaimer": "Early account signal only.",
-                        "account_pressure_summary": "A single named account is showing early evaluation pressure.",
-                        "priority_account_names": ["Concentrix", "Concentrix"],
-                    },
-                },
                 "data_stale": False,
-                "evidence_data_as_of_date": "2026-03-18",
-                "evidence_as_of_date": None,
-                "evidence_report_date": None,
-                "evidence_analysis_window_days": "45",
-                "evidence_window_days": None,
-                "evidence_fallback_window_days": None,
                 "latest_failure_step": None,
                 "latest_error_code": None,
                 "latest_error_summary": None,
@@ -2418,14 +2401,6 @@ async def test_list_reports_exposes_normalized_trust_fields():
     assert report["artifact_label"] == "Ready"
     assert report["freshness_state"] == "monitor"
     assert report["review_state"] == "warnings"
-    assert report["as_of_date"] == "2026-03-18"
-    assert report["analysis_window_days"] == 45
-    assert report["account_reasoning_preview_only"] is True
-    assert report["account_pressure_summary"] == (
-        "A single named account is showing early evaluation pressure."
-    )
-    assert report["priority_account_names"] == ["Concentrix"]
-    assert report["account_pressure_disclaimer"] == "Early account signal only."
     assert report["trust"] == {
         "artifact_state": "ready",
         "artifact_label": "Ready",
@@ -3455,48 +3430,102 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
 
 
 @pytest.mark.asyncio
-async def test_list_accounts_in_motion_from_report_named_accounts_only_falls_back_to_preview_rows():
+async def test_list_accounts_in_motion_from_report_named_accounts_only_backfills_preview_row_metadata():
     pool = MagicMock()
+    review_id = "4b3798fc-99e1-4b30-a226-3e6fe054f6fc"
     pool.fetchrow = AsyncMock(
-        return_value={
-            "report_date": "2026-04-11",
-            "vendor_filter": "Salesforce",
-            "intelligence_data": {
-                "vendor": "Salesforce",
-                "category": "CRM",
-                "reference_ids": {
-                    "metric_ids": ["metric:salesforce:1"],
-                    "witness_ids": ["witness:salesforce:1"],
-                },
-                "source_distribution": {"reddit": 3},
-                "accounts": [
-                    {
-                        "company": None,
-                        "vendor": "Salesforce",
-                        "category": "CRM",
-                        "urgency": 8.7,
-                        "opportunity_score": 84,
-                        "source_distribution": {"reddit": 2},
-                    }
-                ],
-                "account_pressure_summary": "A single named account is showing early evaluation pressure.",
-                "priority_account_names": ["Concentrix", "Concentrix"],
-                "account_reasoning_preview": {
-                    "disclaimer": "Early account signal only.",
-                    "account_reasoning": {
-                        "top_accounts": [
-                            {
-                                "name": "Concentrix",
-                                "intent_score": 0.41,
-                                "source_id": "accounts:company:concentrix",
-                            }
-                        ]
+        side_effect=[
+            {
+                "report_date": "2026-04-11",
+                "vendor_filter": "Salesforce",
+                "intelligence_data": {
+                    "vendor": "Salesforce",
+                    "reference_ids": {
+                        "metric_ids": ["metric:salesforce:1"],
+                        "witness_ids": ["witness:salesforce:1"],
+                    },
+                    "accounts": [
+                        {
+                            "company": None,
+                            "vendor": "Salesforce",
+                            "urgency": 8.7,
+                            "opportunity_score": 84,
+                        }
+                    ],
+                    "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                    "priority_account_names": ["Concentrix", "Concentrix"],
+                    "account_reasoning_preview": {
+                        "disclaimer": "Early account signal only.",
+                        "account_reasoning": {
+                            "top_accounts": [
+                                {
+                                    "name": "Concentrix",
+                                    "intent_score": 0.41,
+                                    "source_id": "accounts:company:concentrix",
+                                }
+                            ]
+                        },
                     },
                 },
             },
-        }
+            {
+                "accounts": {
+                    "accounts": [
+                        {
+                            "company_name": "Concentrix",
+                            "source": "reddit",
+                            "review_id": review_id,
+                            "buyer_role": "economic_buyer",
+                            "buying_stage": "post_purchase",
+                            "pain_category": "support",
+                            "decision_maker": True,
+                            "confidence_score": 0.41,
+                            "last_seen_at": "2026-04-11T10:00:00Z",
+                        }
+                    ]
+                }
+            },
+            {
+                "product_category": "CRM",
+            },
+        ]
     )
-    pool.fetch = AsyncMock(side_effect=[[], [], []])
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "company_name": "Concentrix",
+                    "source": "reddit",
+                    "review_id": review_id,
+                    "pain_category": "support",
+                    "buyer_role": "economic_buyer",
+                    "decision_maker": True,
+                    "seat_count": None,
+                    "contract_end": None,
+                    "buying_stage": "post_purchase",
+                    "confidence_score": 0.41,
+                    "last_seen_at": "2026-04-11T10:00:00Z",
+                }
+            ],
+            [],
+            [],
+            [
+                {
+                    "id": UUID(review_id),
+                    "source": "reddit",
+                    "source_url": "https://example.com/review",
+                    "vendor_name": "Salesforce",
+                    "rating": 2.0,
+                    "summary": "Concentrix is evaluating alternatives.",
+                    "review_excerpt": "Concentrix is evaluating alternatives.",
+                    "reviewer_name": "Taylor",
+                    "reviewer_title": "VP Support",
+                    "reviewer_company": "Concentrix",
+                    "reviewed_at": datetime(2026, 4, 11, 12, 0, tzinfo=timezone.utc),
+                }
+            ],
+        ]
+    )
 
     result = await b2b_dashboard._list_accounts_in_motion_from_report(
         pool,
@@ -3509,9 +3538,28 @@ async def test_list_accounts_in_motion_from_report_named_accounts_only_falls_bac
 
     assert result["count"] == 1
     assert result["account_reasoning_preview_only"] is True
+    assert result["account_pressure_summary"] == (
+        "A single named account is showing early evaluation pressure."
+    )
     assert result["priority_account_names"] == ["Concentrix"]
-    assert result["accounts"][0]["company"] == "Concentrix"
-    assert result["accounts"][0]["account_reasoning_preview_only"] is True
+    account = result["accounts"][0]
+    assert account["company"] == "Concentrix"
+    assert account["category"] == "CRM"
+    assert account["account_reasoning_preview_only"] is True
+    assert account["role_type"] == "economic_buyer"
+    assert account["buying_stage"] == "post_purchase"
+    assert account["budget_authority"] is True
+    assert account["pain_categories"] == [{"category": "support", "severity": ""}]
+    assert account["confidence"] == pytest.approx(0.41)
+    assert account["account_pressure_summary"] == (
+        "A single named account is showing early evaluation pressure."
+    )
+    assert account["account_pressure_disclaimer"] == "Early account signal only."
+    assert account["source_distribution"] == {"reddit": 1}
+    assert account["source_review_ids"] == [review_id]
+    assert account["source_reviews"][0]["source"] == "reddit"
+    assert account["evidence"] == ["Concentrix is evaluating alternatives."]
+    assert account["reasoning_reference_ids"]["witness_ids"] == ["witness:salesforce:1"]
 
 
 def test_accounts_in_motion_report_freshness_treats_published_as_healthy():
