@@ -24,6 +24,10 @@ const api = vi.hoisted(() => ({
   updateCampaign: vi.fn(),
 }))
 
+const clipboard = vi.hoisted(() => ({
+  writeText: vi.fn(),
+}))
+
 vi.mock('../api/client', () => api)
 vi.mock('../hooks/usePlanGate', () => ({
   usePlanGate: () => planGate,
@@ -40,6 +44,11 @@ describe('Opportunities', () => {
     cleanup()
     vi.clearAllMocks()
     planGate.canAccessCampaigns = true
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: clipboard,
+    })
+    clipboard.writeText.mockResolvedValue(undefined)
     api.fetchHighIntent.mockResolvedValue({ companies: [] })
     api.fetchCampaigns.mockResolvedValue({ campaigns: [] })
     api.fetchCampaignStats.mockResolvedValue({
@@ -136,6 +145,31 @@ describe('Opportunities', () => {
       vendor_name: 'Zendesk',
       window_days: 30,
     })
+  })
+
+  it('copies the current workbench view link', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&min_urgency=8&window_days=30&stage=evaluation&intent=cancel&back_to=%2Fwatchlists%3Fview%3Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findAllByPlaceholderText('Filter vendor...')
+    await user.click(screen.getByRole('button', { name: 'Copy View Link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/opportunities?vendor=Zendesk&min_urgency=8&window_days=30&stage=evaluation&intent=cancel&back_to=%2Fwatchlists%3Fview%3Dview-1`,
+      )
+    })
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
   })
 
   it('supports vendor workspace back_to navigation', async () => {

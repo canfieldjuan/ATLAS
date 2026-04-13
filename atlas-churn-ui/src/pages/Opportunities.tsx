@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Zap,
   Download,
+  Copy,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -349,6 +350,8 @@ export default function Opportunities() {
   const [bulkGenerating, setBulkGenerating] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null)
   const [genResult, setGenResult] = useState<string | null>(null)
+  const [copiedViewLink, setCopiedViewLink] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
@@ -908,6 +911,29 @@ export default function Opportunities() {
   const directEvidencePath = activeVendorFilter ? upstreamNestedPath(backTarget, '/evidence') : null
   const directReportsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/reports') : null
 
+  const copyCurrentViewLink = useCallback(async () => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
+      await navigator.clipboard.writeText(`${window.location.origin}${currentPagePath}`)
+      setActionError(null)
+      setCopiedViewLink(true)
+    } catch (err) {
+      setCopiedViewLink(false)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy current opportunity view')
+    }
+  }, [currentPagePath])
+
+  useEffect(() => {
+    setCopiedViewLink(false)
+    setActionError(null)
+  }, [currentPagePath])
+
+  useEffect(() => {
+    if (!copiedViewLink) return
+    const timeoutId = window.setTimeout(() => setCopiedViewLink(false), 2000)
+    return () => window.clearTimeout(timeoutId)
+  }, [copiedViewLink])
+
   useEffect(() => {
     const next = buildOpportunitiesSearchParams({
       vendorName: debouncedVendor,
@@ -985,6 +1011,14 @@ export default function Opportunities() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
+            onClick={() => void copyCurrentViewLink()}
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white"
+          >
+            <Copy className="h-4 w-4" />
+            {copiedViewLink ? 'Copied' : 'Copy View Link'}
+          </button>
+          <button
             onClick={() =>
               downloadCsv('/export/high-intent', {
                 vendor_name: debouncedVendor || undefined,
@@ -1015,6 +1049,11 @@ export default function Opportunities() {
           <button onClick={() => setGenResult(null)} className="text-slate-500 hover:text-white ml-3 shrink-0">
             <X className="h-3.5 w-3.5" />
           </button>
+        </div>
+      )}
+      {actionError && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm text-rose-200">
+          {actionError}
         </div>
       )}
 
