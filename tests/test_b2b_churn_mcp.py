@@ -786,6 +786,7 @@ class TestB2BChurnMCPTools:
         from atlas_brain.mcp.b2b.reviews import get_review
 
         row = _make_review_row()
+        row["matched_vendor_name"] = "Zendesk"
         pool = _mock_pool(fetchrow_return=row)
 
         with _patch_pool(pool):
@@ -796,6 +797,7 @@ class TestB2BChurnMCPTools:
         assert data["review"]["vendor_name"] == "Zendesk"
         assert data["review"]["review_text"] is not None
         assert isinstance(data["review"]["enrichment"], dict)
+        assert "b2b_review_vendor_mentions vm" in pool.fetchrow.await_args.args[0]
 
     async def test_get_review_not_found(self):
         from atlas_brain.mcp.b2b.reviews import get_review
@@ -895,6 +897,7 @@ class TestB2BChurnMCPTools:
         review_sql = pool.fetchrow.call_args_list[2][0][0]
         assert "duplicate_of_review_id IS NULL" in pipeline_sql
         assert "duplicate_of_review_id IS NULL" in review_sql
+        assert "JOIN b2b_review_vendor_mentions vm" in review_sql
 
     async def test_get_pipeline_status_error(self):
         from atlas_brain.mcp.b2b.pipeline import get_pipeline_status
