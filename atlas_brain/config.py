@@ -2482,7 +2482,7 @@ class B2BChurnConfig(BaseSettings):
         description="Minimum number of repair rows required before using Anthropic batching",
     )
     enrichment_repair_strict_discussion_sources: str = Field(
-        default="reddit",
+        default="reddit,hackernews",
         description=(
             "Comma-separated community discussion sources that require stronger commercial signal before repair"
         ),
@@ -2540,7 +2540,7 @@ class B2BChurnConfig(BaseSettings):
         description="Enable deterministic quarantine of low-fidelity enriched rows",
     )
     enrichment_low_fidelity_noisy_sources: str = Field(
-        default="hackernews,quora,twitter,github,stackoverflow",
+        default="reddit,hackernews,quora,twitter,software_advice,github,stackoverflow",
         description="Comma-separated noisy sources eligible for low-fidelity quarantine heuristics",
     )
 

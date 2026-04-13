@@ -1581,7 +1581,7 @@ async def test_run_query_includes_strategic_adjudication_conditions(monkeypatch)
     assert "review_text ILIKE ('%' || vendor_name || '%')" in query
     assert "trustradius" not in trusted_sources
     assert "trustpilot" in excluded_sources
-    assert strict_discussion_sources == ["reddit"]
+    assert strict_discussion_sources == ["hackernews", "reddit"]
     assert strict_discussion_content_types == ["comment", "community_discussion", "insider_account"]
 
 

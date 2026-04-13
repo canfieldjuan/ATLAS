@@ -957,7 +957,7 @@ async def test_enrich_single_uses_single_pass_tier1_only(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
     row = {
         "id": uuid4(),
-        "source": "reddit",
+        "source": "g2",
         "enrichment_attempts": 0,
         "vendor_name": "Example",
         "product_name": "Example Product",
@@ -1054,6 +1054,21 @@ def test_detect_low_fidelity_reasons_flags_vendor_absent_noisy_source(monkeypatc
 
     assert "vendor_absent_noisy_source" in reasons
     assert "competitor_only_context" in reasons
+
+
+def test_normalized_low_fidelity_noisy_sources_merges_required_defaults(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "hackernews,quora,twitter,github,stackoverflow",
+        raising=False,
+    )
+
+    values = b2b_enrichment._normalized_low_fidelity_noisy_sources()
+
+    assert "reddit" in values
+    assert "software_advice" in values
+    assert "hackernews" in values
 
 
 def test_detect_low_fidelity_reasons_keeps_vendor_present_context(monkeypatch):

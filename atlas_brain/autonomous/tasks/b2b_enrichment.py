@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
-from ...config import settings
+from ...config import B2BChurnConfig, settings
 from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
 from ...services.scraping.sources import filter_deprecated_sources, parse_source_allowlist
@@ -1350,11 +1350,7 @@ def _has_timeline_commercial_signal(
         bool(result.get("event_mentions")),
     ))
     if source_row is not None:
-        noisy_sources = {
-            item.strip().lower()
-            for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
-            if item.strip()
-        }
+        noisy_sources = _normalized_low_fidelity_noisy_sources()
         if source in noisy_sources:
             vendor_norm = _normalize_compare_text(source_row.get("vendor_name"))
             product_norm = _normalize_compare_text(source_row.get("product_name"))
@@ -1618,11 +1614,7 @@ def _has_budget_commercial_signal(
     if source_row is None:
         return True
 
-    noisy_sources = {
-        item.strip().lower()
-        for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
-        if item.strip()
-    }
+    noisy_sources = _normalized_low_fidelity_noisy_sources()
     source = str(source_row.get("source") or "").strip().lower()
     if source not in noisy_sources:
         return True
@@ -3971,13 +3963,24 @@ def _has_consumer_context(text: str) -> bool:
     return any(re.search(pattern, text) for pattern in _LOW_FIDELITY_CONSUMER_PATTERNS)
 
 
-def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) -> list[str]:
-    source = str(row.get("source") or "").strip().lower()
-    noisy_sources = {
+def _normalized_low_fidelity_noisy_sources() -> set[str]:
+    configured = {
         item.strip().lower()
         for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
         if item.strip()
     }
+    default_raw = B2BChurnConfig.model_fields["enrichment_low_fidelity_noisy_sources"].default
+    default_values = {
+        item.strip().lower()
+        for item in str(default_raw or "").split(",")
+        if item.strip()
+    }
+    return configured | default_values
+
+
+def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) -> list[str]:
+    source = str(row.get("source") or "").strip().lower()
+    noisy_sources = _normalized_low_fidelity_noisy_sources()
     if source not in noisy_sources and source != "trustpilot":
         return []
 
