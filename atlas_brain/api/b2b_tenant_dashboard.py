@@ -69,6 +69,8 @@ from .b2b_dashboard import (
     _normalize_vendor_name,
     _overlay_reasoning_detail_from_view,
     _overlay_reasoning_summary_from_view,
+    _resolve_high_intent_account_review_focuses,
+    _shape_high_intent_company_payload,
 )
 
 logger = logging.getLogger("atlas.api.b2b_tenant")
@@ -3258,40 +3260,10 @@ async def list_leads(
         scoped_vendors=scoped_vendors,
         limit=capped,
     )
-
+    account_review_focuses = await _resolve_high_intent_account_review_focuses(pool, user, items)
     companies = [
-        {
-            "company": item["company"],
-            "vendor": item["vendor"],
-            "category": item.get("category"),
-            "role_level": item.get("role_level"),
-            "decision_maker": item.get("decision_maker"),
-            "urgency": _safe_float(item.get("urgency"), 0),
-            "pain": item.get("pain"),
-            "alternatives": _safe_json(item.get("alternatives")),
-            "contract_signal": item.get("contract_signal"),
-            "seat_count": item.get("seat_count"),
-            "lock_in_level": item.get("lock_in_level"),
-            "contract_end": item.get("contract_end"),
-            "buying_stage": item.get("buying_stage"),
-            "reviewer_title": item.get("title"),
-            "company_size": item.get("company_size"),
-            "industry": item.get("industry"),
-            "review_id": item.get("review_id"),
-            "source": item.get("source"),
-            "quotes": _safe_json(item.get("quotes")),
-            "intent_signals": item.get("intent_signals"),
-            "relevance_score": _safe_float(item.get("relevance_score")),
-            "author_churn_score": _safe_float(item.get("author_churn_score")),
-            "resolution_confidence": item.get("resolution_confidence"),
-            "verified_employee_count": item.get("verified_employee_count"),
-            "company_domain": item.get("company_domain"),
-            "company_country": item.get("company_country"),
-            "revenue_range": item.get("revenue_range"),
-            "founded_year": item.get("founded_year"),
-            "company_description": item.get("company_description"),
-        }
-        for item in items
+        _shape_high_intent_company_payload(item, account_review_focus=focus)
+        for item, focus in zip(items, account_review_focuses)
     ]
 
     return {"leads": companies, "count": len(companies)}

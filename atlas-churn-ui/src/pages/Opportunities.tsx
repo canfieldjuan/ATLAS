@@ -236,6 +236,45 @@ function watchlistsPath(vendorName: string, returnPath: string): string {
   return `/watchlists?${params.toString()}`
 }
 
+function accountReviewPath(
+  returnPath: string,
+  focus: NonNullable<HighIntentCompany['account_review_focus']>,
+): string {
+  const params = new URLSearchParams()
+  params.set('account_vendor', focus.vendor)
+  params.set('account_company', focus.company)
+  params.set('account_report_date', focus.report_date)
+  params.set('account_watch_vendor', focus.watch_vendor)
+  params.set('account_category', focus.category)
+  params.set('account_track_mode', focus.track_mode)
+  params.set('back_to', returnPath)
+  return `/watchlists?${params.toString()}`
+}
+
+function normalizeFocusValue(value: string | null | undefined) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function matchesAccountReviewPath(
+  path: string | null,
+  focus: NonNullable<HighIntentCompany['account_review_focus']>,
+): boolean {
+  if (!path) return false
+  try {
+    const url = new URL(path, window.location.origin)
+    return (
+      normalizeFocusValue(url.searchParams.get('account_vendor')) === normalizeFocusValue(focus.vendor)
+      && normalizeFocusValue(url.searchParams.get('account_company')) === normalizeFocusValue(focus.company)
+      && normalizeFocusValue(url.searchParams.get('account_report_date')) === normalizeFocusValue(focus.report_date)
+      && normalizeFocusValue(url.searchParams.get('account_watch_vendor')) === normalizeFocusValue(focus.watch_vendor)
+      && normalizeFocusValue(url.searchParams.get('account_category')) === normalizeFocusValue(focus.category)
+      && normalizeFocusValue(url.searchParams.get('account_track_mode')) === normalizeFocusValue(focus.track_mode)
+    )
+  } catch {
+    return false
+  }
+}
+
 function evidencePath(vendorName: string, returnPath: string): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -1683,7 +1722,17 @@ function EvidencePanel({
     ? row.quotes.filter((q) => typeof q === 'string' && q.trim())
     : []
   const reusesActiveVendorContext = row.vendor === activeVendorFilter
-  const vendorWatchlistsPath = watchlistsPath(row.vendor, currentPagePath)
+  const exactAccountReviewPath = row.account_review_focus
+    ? upstreamNestedPath(currentPagePath, '/watchlists')
+    : null
+  const reusedAccountReviewPath = row.account_review_focus && matchesAccountReviewPath(exactAccountReviewPath, row.account_review_focus)
+    ? exactAccountReviewPath
+    : null
+  const vendorWatchlistsPath = row.account_review_focus
+    ? (reusedAccountReviewPath ?? accountReviewPath(currentPagePath, row.account_review_focus))
+    : watchlistsPath(row.vendor, currentPagePath)
+  const watchlistsLinkLabel = row.account_review_focus ? 'View account review' : 'View watchlists'
+  const watchlistsCopyLabel = row.account_review_focus ? 'account review' : 'watchlists'
   const vendorPath = reusesActiveVendorContext && directVendorWorkspacePath
     ? directVendorWorkspacePath
     : vendorDetailPath(row.vendor, currentPagePath)
@@ -1776,9 +1825,9 @@ function EvidencePanel({
                 to={vendorWatchlistsPath}
                 className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
               >
-                View watchlists <ExternalLink className="h-3 w-3" />
+                {watchlistsLinkLabel} <ExternalLink className="h-3 w-3" />
               </Link>
-              {renderShortcutCopyButton(vendorWatchlistsPath, 'watchlists')}
+              {renderShortcutCopyButton(vendorWatchlistsPath, watchlistsCopyLabel)}
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Link

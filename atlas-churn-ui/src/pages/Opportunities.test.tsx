@@ -498,6 +498,55 @@ describe('Opportunities', () => {
     )
   })
 
+  it('uses exact account review links for expanded opportunity rows when focus is provided', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.7,
+          pain: 'support',
+          category: 'helpdesk',
+          review_id: 'review-1',
+          source: 'g2',
+          quotes: ['Support has regressed since renewal.'],
+          intent_signals: { cancel: true, migration: true, evaluation: false, completed_switch: false },
+          alternatives: [{ name: 'Freshdesk' }],
+          account_review_focus: {
+            vendor: 'Zendesk',
+            company: 'Acme Corp',
+            report_date: '2026-04-10',
+            watch_vendor: 'Zendesk',
+            category: 'Helpdesk',
+            track_mode: 'competitor',
+          },
+        },
+      ],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities?vendor=Zendesk&back_to=%2Fvendors%2FZendesk'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText(/Acme Corp/)).toBeInTheDocument()
+    await user.click(screen.getByText(/Acme Corp/))
+
+    const expectedPath = '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-10&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk'
+    expect(await screen.findByRole('link', { name: 'View account review' })).toHaveAttribute('href', expectedPath)
+
+    await user.click(screen.getByRole('button', { name: 'Copy account review' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${expectedPath}`)
+    })
+    expect(screen.getByRole('button', { name: 'Copied account review' })).toBeInTheDocument()
+  })
+
   it('copies expanded opportunity links scoped back to the current workbench context', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
@@ -537,6 +586,50 @@ describe('Opportunities', () => {
       )
     })
     expect(screen.getByRole('button', { name: 'Copied alerts' })).toBeInTheDocument()
+  })
+
+  it('reuses the exact upstream account review shortcut on expanded rows', async () => {
+    const user = userEvent.setup()
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.6,
+          category: 'helpdesk',
+          review_id: 'review-1',
+          source: 'g2',
+          quotes: ['Support has regressed since renewal.'],
+          intent_signals: { cancel: true, migration: true, evaluation: false, completed_switch: false },
+          alternatives: [{ name: 'Freshdesk' }],
+          account_review_focus: {
+            vendor: 'Zendesk',
+            company: 'Acme Corp',
+            report_date: '2026-04-10',
+            watch_vendor: 'Zendesk',
+            category: 'Helpdesk',
+            track_mode: 'competitor',
+          },
+        },
+      ],
+    })
+
+    const exactAccountReviewPath = '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-10&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor'
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          `/opportunities?vendor=Zendesk&back_to=${encodeURIComponent(`/reviews/review-1?back_to=${encodeURIComponent(exactAccountReviewPath)}`)}`,
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText(/Acme Corp/)).toBeInTheDocument()
+    await user.click(screen.getByText(/Acme Corp/))
+
+    expect(await screen.findByRole('link', { name: 'View account review' })).toHaveAttribute('href', exactAccountReviewPath)
   })
 
   it.each([

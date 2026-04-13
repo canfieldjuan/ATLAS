@@ -120,6 +120,14 @@ export interface HighIntentCompany {
   revenue_range?: string | null
   founded_year?: number | null
   company_description?: string | null
+  account_review_focus?: {
+    vendor: string
+    company: string
+    report_date: string
+    watch_vendor: string
+    category: string
+    track_mode: string
+  } | null
 }
 
 export interface VendorProfile {

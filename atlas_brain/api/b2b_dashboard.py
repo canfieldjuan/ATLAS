@@ -1534,6 +1534,94 @@ async def get_signal(
 # ---------------------------------------------------------------------------
 
 
+def _shape_high_intent_company_payload(
+    row: dict[str, Any],
+    *,
+    account_review_focus: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "company": row.get("company"),
+        "vendor": row.get("vendor"),
+        "category": row.get("category"),
+        "role_level": row.get("role_level"),
+        "decision_maker": row.get("decision_maker"),
+        "urgency": _safe_float(row.get("urgency"), 0),
+        "pain": row.get("pain"),
+        "alternatives": _safe_json(row.get("alternatives")),
+        "contract_signal": row.get("contract_signal"),
+        "seat_count": row.get("seat_count"),
+        "lock_in_level": row.get("lock_in_level"),
+        "contract_end": row.get("contract_end"),
+        "buying_stage": row.get("buying_stage"),
+        "reviewer_title": row.get("title"),
+        "company_size": row.get("company_size"),
+        "industry": row.get("industry"),
+        "review_id": row.get("review_id"),
+        "source": row.get("source"),
+        "quotes": _safe_json(row.get("quotes")),
+        "intent_signals": row.get("intent_signals"),
+        "relevance_score": _safe_float(row.get("relevance_score")),
+        "author_churn_score": _safe_float(row.get("author_churn_score")),
+        "resolution_confidence": row.get("resolution_confidence"),
+        "verified_employee_count": row.get("verified_employee_count"),
+        "company_domain": row.get("company_domain"),
+        "company_country": row.get("company_country"),
+        "revenue_range": row.get("revenue_range"),
+        "founded_year": row.get("founded_year"),
+        "company_description": row.get("company_description"),
+        "account_review_focus": account_review_focus,
+    }
+
+
+async def _resolve_high_intent_account_review_focuses(
+    pool,
+    user: AuthUser | None,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, str] | None]:
+    if not rows:
+        return []
+    if not user or not getattr(user, "account_id", None):
+        return [None for _ in rows]
+
+    tracked_vendor_cache: dict[str, Any] = {}
+    report_cache: dict[str, Any] = {}
+    account_focus_index_cache: dict[str, Any] = {}
+    candidates: list[dict[str, str | None]] = []
+    for row in rows:
+        candidates.append({
+            "signal_id": None,
+            "review_id": _normalize_webhook_activity_uuid_text(row.get("review_id")),
+            "report_id": None,
+            "signal_type": None,
+            "vendor_name": _optional_query_text(row.get("vendor")),
+            "company_name": _optional_query_text(row.get("company")),
+        })
+
+    await _prime_webhook_account_focus_caches(
+        pool,
+        user,
+        candidates=candidates,
+        tracked_vendor_cache=tracked_vendor_cache,
+        report_cache=report_cache,
+    )
+
+    focuses: list[dict[str, str] | None] = []
+    for candidate in candidates:
+        focuses.append(
+            await _resolve_webhook_activity_account_focus(
+                pool,
+                user,
+                vendor_name=candidate.get("vendor_name"),
+                company_name=candidate.get("company_name"),
+                review_id=candidate.get("review_id"),
+                tracked_vendor_cache=tracked_vendor_cache,
+                report_cache=report_cache,
+                account_focus_index_cache=account_focus_index_cache,
+            )
+        )
+    return focuses
+
+
 @router.get("/high-intent")
 async def list_high_intent(
     vendor_name: Optional[str] = Query(None),
@@ -1555,40 +1643,12 @@ async def list_high_intent(
         scoped_vendors=scoped_vendors,
         limit=capped,
     )
+    account_review_focuses = await _resolve_high_intent_account_review_focuses(pool, user, rows)
 
-    companies = []
-    for r in rows:
-        companies.append({
-            "company": r.get("company"),
-            "vendor": r.get("vendor"),
-            "category": r.get("category"),
-            "role_level": r.get("role_level"),
-            "decision_maker": r.get("decision_maker"),
-            "urgency": _safe_float(r.get("urgency"), 0),
-            "pain": r.get("pain"),
-            "alternatives": r.get("alternatives"),
-            "contract_signal": r.get("contract_signal"),
-            "seat_count": r.get("seat_count"),
-            "lock_in_level": r.get("lock_in_level"),
-            "contract_end": r.get("contract_end"),
-            "buying_stage": r.get("buying_stage"),
-            "reviewer_title": r.get("title"),
-            "company_size": r.get("company_size"),
-            "industry": r.get("industry"),
-            "review_id": r.get("review_id"),
-            "source": r.get("source"),
-            "quotes": _safe_json(r.get("quotes")),
-            "intent_signals": r.get("intent_signals"),
-            "relevance_score": _safe_float(r.get("relevance_score")),
-            "author_churn_score": _safe_float(r.get("author_churn_score")),
-            "resolution_confidence": r.get("resolution_confidence"),
-            "verified_employee_count": r.get("verified_employee_count"),
-            "company_domain": r.get("company_domain"),
-            "company_country": r.get("company_country"),
-            "revenue_range": r.get("revenue_range"),
-            "founded_year": r.get("founded_year"),
-            "company_description": r.get("company_description"),
-        })
+    companies = [
+        _shape_high_intent_company_payload(row, account_review_focus=focus)
+        for row, focus in zip(rows, account_review_focuses)
+    ]
 
     return {"companies": companies, "count": len(companies)}
 

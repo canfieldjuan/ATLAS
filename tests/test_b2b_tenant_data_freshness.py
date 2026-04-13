@@ -1391,6 +1391,47 @@ async def test_list_leads_normalizes_blank_and_trimmed_vendor_name(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_leads_includes_account_review_focus(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = SimpleNamespace(is_initialized=True)
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    rows = [{
+        "company": "Acme Corp",
+        "vendor": "Zendesk",
+        "urgency": 8.7,
+        "review_id": str(uuid4()),
+    }]
+    focus = {
+        "vendor": "Zendesk",
+        "company": "Acme Corp",
+        "report_date": "2026-04-10",
+        "watch_vendor": "Zendesk",
+        "category": "Helpdesk",
+        "track_mode": "competitor",
+    }
+    read_mock = AsyncMock(return_value=rows)
+    focus_mock = AsyncMock(return_value=[focus])
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_tenant_params", lambda _user: [])
+    monkeypatch.setattr(shared_mod, "read_high_intent_companies", read_mock)
+    monkeypatch.setattr(mod, "_resolve_high_intent_account_review_focuses", focus_mock)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_leads(
+        vendor_name="Zendesk",
+        min_urgency=7,
+        window_days=30,
+        limit=20,
+        user=user,
+    )
+
+    focus_mock.assert_awaited_once_with(pool, user, rows)
+    assert result["leads"][0]["account_review_focus"] == focus
+
+
+@pytest.mark.asyncio
 async def test_list_tenant_reviews_uses_event_recency_and_company_fallback(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 

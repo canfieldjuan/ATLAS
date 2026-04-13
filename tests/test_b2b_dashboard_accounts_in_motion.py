@@ -2510,6 +2510,42 @@ async def test_list_high_intent_normalizes_blank_vendor_filter():
 
 
 @pytest.mark.asyncio
+async def test_list_high_intent_includes_account_review_focus():
+    pool = MagicMock()
+    user = SimpleNamespace(account_id=str(uuid4()))
+    rows = [{
+        "company": "Acme Corp",
+        "vendor": "Zendesk",
+        "urgency": 8.4,
+        "review_id": str(uuid4()),
+    }]
+    focus = {
+        "vendor": "Zendesk",
+        "company": "Acme Corp",
+        "report_date": "2026-04-10",
+        "watch_vendor": "Zendesk",
+        "category": "Helpdesk",
+        "track_mode": "competitor",
+    }
+    read_mock = AsyncMock(return_value=rows)
+    focus_mock = AsyncMock(return_value=[focus])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(b2b_dashboard, "_get_scoped_vendors", new=AsyncMock(return_value=None)):
+            with patch.object(b2b_dashboard, "read_high_intent_companies", read_mock):
+                with patch.object(b2b_dashboard, "_resolve_high_intent_account_review_focuses", focus_mock):
+                    result = await b2b_dashboard.list_high_intent(
+                        vendor_name="Zendesk",
+                        min_urgency=7.0,
+                        window_days=30,
+                        limit=20,
+                        user=user,
+                    )
+
+    focus_mock.assert_awaited_once_with(pool, user, rows)
+    assert result["companies"][0]["account_review_focus"] == focus
+
+
+@pytest.mark.asyncio
 async def test_export_high_intent_normalizes_blank_vendor_filter():
     pool = MagicMock()
     read_mock = AsyncMock(return_value=[])
