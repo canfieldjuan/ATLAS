@@ -1125,6 +1125,11 @@ export default function Opportunities() {
         <EvidencePanel
           row={expandedRow}
           currentPagePath={currentPagePath}
+          activeVendorFilter={activeVendorFilter}
+          directVendorWorkspacePath={directVendorWorkspacePath}
+          directEvidencePath={directEvidencePath}
+          directReportsPath={directReportsPath}
+          directAlertsPath={directAlertsPath}
           disposition={dispositionMap.get(rowKey(expandedRow)) ?? null}
           canAccessCampaigns={canAccessCampaigns}
           onClose={() => setExpandedId(null)}
@@ -1392,6 +1397,11 @@ function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: str
 function EvidencePanel({
   row,
   currentPagePath,
+  activeVendorFilter,
+  directVendorWorkspacePath,
+  directEvidencePath,
+  directReportsPath,
+  directAlertsPath,
   disposition,
   canAccessCampaigns,
   onClose,
@@ -1404,6 +1414,11 @@ function EvidencePanel({
 }: {
   row: HighIntentCompany
   currentPagePath: string
+  activeVendorFilter: string
+  directVendorWorkspacePath: string | null
+  directEvidencePath: string | null
+  directReportsPath: string | null
+  directAlertsPath: string | null
   disposition: OpportunityDisposition | null
   canAccessCampaigns: boolean
   onClose: () => void
@@ -1421,11 +1436,20 @@ function EvidencePanel({
   const quotes = Array.isArray(row.quotes)
     ? row.quotes.filter((q) => typeof q === 'string' && q.trim())
     : []
+  const reusesActiveVendorContext = row.vendor === activeVendorFilter
   const vendorWatchlistsPath = watchlistsPath(row.vendor, currentPagePath)
-  const vendorPath = vendorDetailPath(row.vendor, currentPagePath)
-  const vendorEvidencePath = evidencePath(row.vendor, currentPagePath)
-  const vendorReportsLibraryPath = reportsPath(row.vendor, currentPagePath)
-  const vendorAlertsPath = alertsPath(currentPagePath, row.vendor)
+  const vendorPath = reusesActiveVendorContext && directVendorWorkspacePath
+    ? directVendorWorkspacePath
+    : vendorDetailPath(row.vendor, currentPagePath)
+  const vendorEvidencePath = reusesActiveVendorContext && directEvidencePath
+    ? directEvidencePath
+    : evidencePath(row.vendor, currentPagePath)
+  const vendorReportsLibraryPath = reusesActiveVendorContext && directReportsPath
+    ? directReportsPath
+    : reportsPath(row.vendor, currentPagePath)
+  const vendorAlertsPath = reusesActiveVendorContext && directAlertsPath
+    ? directAlertsPath
+    : alertsPath(currentPagePath, row.vendor)
   const reviewPath = row.review_id ? reviewDetailPath(row.review_id, currentPagePath) : null
 
   return (

@@ -358,7 +358,7 @@ describe('Opportunities', () => {
     )
     expect(await screen.findByRole('link', { name: 'View vendor' })).toHaveAttribute(
       'href',
-      '/vendors/Zendesk?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
+      '/vendors/Zendesk',
     )
     expect(screen.getByRole('link', { name: 'Validate evidence' })).toHaveAttribute(
       'href',
@@ -376,6 +376,59 @@ describe('Opportunities', () => {
       'href',
       '/reviews/review-1?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
     )
+  })
+
+  it.each([
+    {
+      name: 'reuses the exact upstream evidence shortcut on expanded rows',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fevidence%253Fvendor%253DZendesk%2526tab%253Dwitnesses%2526source%253Dreddit',
+      linkName: 'Validate evidence',
+      expectedHref: '/evidence?vendor=Zendesk&tab=witnesses&source=reddit',
+    },
+    {
+      name: 'reuses the exact upstream reports shortcut on expanded rows',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Freports%253Fvendor_filter%253DZendesk%2526back_to%253D%25252Fwatchlists%25253Fview%25253Dview-1',
+      linkName: 'View reports',
+      expectedHref: '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    },
+    {
+      name: 'reuses the exact upstream alerts shortcut on expanded rows',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fwebhook%253Dwh-1%2526days%253D30',
+      linkName: 'View alerts',
+      expectedHref: '/alerts?webhook=wh-1&days=30',
+    },
+  ])('$name', async ({ initialEntry, linkName, expectedHref }) => {
+    const user = userEvent.setup()
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.6,
+          category: 'helpdesk',
+          review_id: 'review-1',
+          source: 'g2',
+          quotes: ['Support has regressed since renewal.'],
+          intent_signals: { cancel: true, migration: true, evaluation: false, completed_switch: false },
+          alternatives: [{ name: 'Freshdesk' }],
+          company_size: '201-1000',
+          reviewer_title: 'VP Support',
+        },
+      ],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: [initialEntry] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+
+    await user.click(screen.getByText('Acme Corp'))
+
+    expect(await screen.findByRole('link', { name: linkName })).toHaveAttribute('href', expectedHref)
   })
 
   it('hides campaign-only analytics when the plan gate is off', async () => {
