@@ -835,8 +835,18 @@ function DestructiveActionModal({
 export default function Watchlists() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const searchParamsSignature = searchParams.toString()
   const requestedVendorName = searchParams.get('vendor_name')?.trim() || ''
   const requestedBackTo = parseBackTo(searchParams.get('back_to'))
+  const rawRequestedCategoryFilter = searchParams.get('category')?.trim() || ''
+  const rawRequestedSourceFilter = searchParams.get('source')?.trim() || ''
+  const rawRequestedMinUrgency = searchParams.get('min_urgency')?.trim() || ''
+  const rawRequestedFreshOnly = parseBooleanSearchParam(searchParams.get('fresh_only'))
+  const rawRequestedNamedAccountsOnly = parseBooleanSearchParam(searchParams.get('named_accounts_only'))
+  const rawRequestedChangedWedgesOnly = parseBooleanSearchParam(searchParams.get('changed_wedges_only'))
+  const rawRequestedVendorAlertThreshold = searchParams.get('vendor_alert_threshold')?.trim() || ''
+  const rawRequestedAccountAlertThreshold = searchParams.get('account_alert_threshold')?.trim() || ''
+  const rawRequestedStaleDaysThreshold = searchParams.get('stale_days_threshold')?.trim() || ''
   const [searchInput, setSearchInput] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [savedViewName, setSavedViewName] = useState('')
@@ -850,15 +860,15 @@ export default function Watchlists() {
     setEvidenceDrawerVendor(vendorName)
     setEvidenceDrawerOpen(true)
   }, [])
-  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState(searchParams.get('category')?.trim() || '')
-  const [selectedSourceFilter, setSelectedSourceFilter] = useState(searchParams.get('source')?.trim() || '')
-  const [selectedMinUrgency, setSelectedMinUrgency] = useState(searchParams.get('min_urgency')?.trim() || '')
-  const [freshOnly, setFreshOnly] = useState(() => parseBooleanSearchParam(searchParams.get('fresh_only')))
-  const [namedAccountsOnly, setNamedAccountsOnly] = useState(() => parseBooleanSearchParam(searchParams.get('named_accounts_only')))
-  const [changedWedgesOnly, setChangedWedgesOnly] = useState(() => parseBooleanSearchParam(searchParams.get('changed_wedges_only')))
-  const [vendorAlertThreshold, setVendorAlertThreshold] = useState(searchParams.get('vendor_alert_threshold')?.trim() || '')
-  const [accountAlertThreshold, setAccountAlertThreshold] = useState(searchParams.get('account_alert_threshold')?.trim() || '')
-  const [staleDaysThreshold, setStaleDaysThreshold] = useState(searchParams.get('stale_days_threshold')?.trim() || '')
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState(rawRequestedCategoryFilter)
+  const [selectedSourceFilter, setSelectedSourceFilter] = useState(rawRequestedSourceFilter)
+  const [selectedMinUrgency, setSelectedMinUrgency] = useState(rawRequestedMinUrgency)
+  const [freshOnly, setFreshOnly] = useState(rawRequestedFreshOnly)
+  const [namedAccountsOnly, setNamedAccountsOnly] = useState(rawRequestedNamedAccountsOnly)
+  const [changedWedgesOnly, setChangedWedgesOnly] = useState(rawRequestedChangedWedgesOnly)
+  const [vendorAlertThreshold, setVendorAlertThreshold] = useState(rawRequestedVendorAlertThreshold)
+  const [accountAlertThreshold, setAccountAlertThreshold] = useState(rawRequestedAccountAlertThreshold)
+  const [staleDaysThreshold, setStaleDaysThreshold] = useState(rawRequestedStaleDaysThreshold)
   const [alertEmailEnabled, setAlertEmailEnabled] = useState(false)
   const [alertDeliveryFrequency, setAlertDeliveryFrequency] = useState<'daily' | 'weekly'>('daily')
   const [trackMode, setTrackMode] = useState<'own' | 'competitor'>('competitor')
@@ -888,6 +898,7 @@ export default function Watchlists() {
   const [selectedAccount, setSelectedAccount] = useState<AccountsInMotionFeedItem | null>(null)
   const [showReviewAccounts, setShowReviewAccounts] = useState(false)
   const [generatingCampaignFor, setGeneratingCampaignFor] = useState<string | null>(null)
+  const suppressRouteSyncRef = useRef(false)
 
   async function handleGenerateCampaign(item: AccountsInMotionFeedItem) {
     const key = `${item.company}::${item.vendor}`
@@ -1161,6 +1172,108 @@ export default function Watchlists() {
       : null),
     [requestedWatchlistViewId, watchlistViews],
   )
+  const requestedCategoryFilter = requestedWatchlistView ? (requestedWatchlistView.category || '') : rawRequestedCategoryFilter
+  const requestedSourceFilter = requestedWatchlistView ? (requestedWatchlistView.source || '') : rawRequestedSourceFilter
+  const requestedMinUrgency = requestedWatchlistView ? String(requestedWatchlistView.min_urgency ?? '') : rawRequestedMinUrgency
+  const requestedFreshOnly = requestedWatchlistView ? !requestedWatchlistView.include_stale : rawRequestedFreshOnly
+  const requestedNamedAccountsOnly = requestedWatchlistView ? requestedWatchlistView.named_accounts_only : rawRequestedNamedAccountsOnly
+  const requestedChangedWedgesOnly = requestedWatchlistView ? requestedWatchlistView.changed_wedges_only : rawRequestedChangedWedgesOnly
+  const requestedVendorAlertThreshold = requestedWatchlistView
+    ? String(requestedWatchlistView.vendor_alert_threshold ?? '')
+    : rawRequestedVendorAlertThreshold
+  const requestedAccountAlertThreshold = requestedWatchlistView
+    ? String(requestedWatchlistView.account_alert_threshold ?? '')
+    : rawRequestedAccountAlertThreshold
+  const requestedStaleDaysThreshold = requestedWatchlistView
+    ? String(requestedWatchlistView.stale_days_threshold ?? '')
+    : rawRequestedStaleDaysThreshold
+  const routeStateSettled =
+    selectedCategoryFilter === requestedCategoryFilter
+    && selectedSourceFilter === requestedSourceFilter
+    && selectedMinUrgency === requestedMinUrgency
+    && freshOnly === requestedFreshOnly
+    && namedAccountsOnly === requestedNamedAccountsOnly
+    && changedWedgesOnly === requestedChangedWedgesOnly
+    && vendorAlertThreshold === requestedVendorAlertThreshold
+    && accountAlertThreshold === requestedAccountAlertThreshold
+    && staleDaysThreshold === requestedStaleDaysThreshold
+  const buildRouteOwnedWatchlistSearchParams = useCallback((current: URLSearchParams) => {
+    const next = new URLSearchParams(current)
+    if (selectedSourceFilter.trim()) next.set('source', selectedSourceFilter.trim())
+    else next.delete('source')
+    if (selectedCategoryFilter.trim()) next.set('category', selectedCategoryFilter.trim())
+    else next.delete('category')
+    if (selectedMinUrgency.trim()) next.set('min_urgency', selectedMinUrgency.trim())
+    else next.delete('min_urgency')
+    if (freshOnly) next.set('fresh_only', 'true')
+    else next.delete('fresh_only')
+    if (namedAccountsOnly) next.set('named_accounts_only', 'true')
+    else next.delete('named_accounts_only')
+    if (changedWedgesOnly) next.set('changed_wedges_only', 'true')
+    else next.delete('changed_wedges_only')
+    if (vendorAlertThreshold.trim()) next.set('vendor_alert_threshold', vendorAlertThreshold.trim())
+    else next.delete('vendor_alert_threshold')
+    if (accountAlertThreshold.trim()) next.set('account_alert_threshold', accountAlertThreshold.trim())
+    else next.delete('account_alert_threshold')
+    if (staleDaysThreshold.trim()) next.set('stale_days_threshold', staleDaysThreshold.trim())
+    else next.delete('stale_days_threshold')
+    return next
+  }, [
+    accountAlertThreshold,
+    changedWedgesOnly,
+    freshOnly,
+    namedAccountsOnly,
+    selectedCategoryFilter,
+    selectedMinUrgency,
+    selectedSourceFilter,
+    staleDaysThreshold,
+    vendorAlertThreshold,
+  ])
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setSelectedCategoryFilter((current) => (current === requestedCategoryFilter ? current : requestedCategoryFilter))
+  }, [requestedCategoryFilter])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setSelectedSourceFilter((current) => (current === requestedSourceFilter ? current : requestedSourceFilter))
+  }, [requestedSourceFilter])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setSelectedMinUrgency((current) => (current === requestedMinUrgency ? current : requestedMinUrgency))
+  }, [requestedMinUrgency])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setFreshOnly((current) => (current === requestedFreshOnly ? current : requestedFreshOnly))
+  }, [requestedFreshOnly])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setNamedAccountsOnly((current) => (current === requestedNamedAccountsOnly ? current : requestedNamedAccountsOnly))
+  }, [requestedNamedAccountsOnly])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setChangedWedgesOnly((current) => (current === requestedChangedWedgesOnly ? current : requestedChangedWedgesOnly))
+  }, [requestedChangedWedgesOnly])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setVendorAlertThreshold((current) => (current === requestedVendorAlertThreshold ? current : requestedVendorAlertThreshold))
+  }, [requestedVendorAlertThreshold])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setAccountAlertThreshold((current) => (current === requestedAccountAlertThreshold ? current : requestedAccountAlertThreshold))
+  }, [requestedAccountAlertThreshold])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setStaleDaysThreshold((current) => (current === requestedStaleDaysThreshold ? current : requestedStaleDaysThreshold))
+  }, [requestedStaleDaysThreshold])
+
   const initialRequestedWatchlistViewIdRef = useRef(requestedWatchlistViewId)
   const outboundWatchlistSearchParams = useMemo(() => {
     const next = new URLSearchParams(searchParams)
@@ -1583,6 +1696,11 @@ export default function Watchlists() {
   useEffect(() => {
     if (loading) return
     if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
     const currentViewId = searchParams.get('view')?.trim() || ''
     const nextViewId = activeWatchlistView?.id || ''
     if (currentViewId === nextViewId) return
@@ -1599,6 +1717,7 @@ export default function Watchlists() {
     activeWatchlistView?.id,
     loading,
     requestedWatchlistView,
+    routeStateSettled,
     searchParams,
     setSearchParams,
   ])
@@ -1631,219 +1750,34 @@ export default function Watchlists() {
   ])
 
   useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentSource = searchParams.get('source')?.trim() || ''
-    const nextSource = selectedSourceFilter.trim()
-    if (currentSource === nextSource) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (nextSource) {
-        next.set('source', nextSource)
-      } else {
-        next.delete('source')
-      }
-      return next
-    }, { replace: true })
+    if (!routeStateSettled) return
+    const next = buildRouteOwnedWatchlistSearchParams(searchParams)
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
+    setSearchParams(next, { replace: true })
   }, [
-    activeWatchlistView?.id,
-    loading,
-    requestedWatchlistView,
+    buildRouteOwnedWatchlistSearchParams,
+    routeStateSettled,
     searchParams,
-    selectedSourceFilter,
+    searchParamsSignature,
     setSearchParams,
   ])
 
   useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentCategory = searchParams.get('category')?.trim() || ''
-    const nextCategory = selectedCategoryFilter.trim()
-    if (currentCategory === nextCategory) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (nextCategory) {
-        next.set('category', nextCategory)
-      } else {
-        next.delete('category')
-      }
-      return next
-    }, { replace: true })
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = buildRouteOwnedWatchlistSearchParams(searchParams)
+    if (next.toString() === searchParamsSignature) return
+    setSearchParams(next, { replace: true })
   }, [
-    activeWatchlistView?.id,
-    loading,
-    requestedWatchlistView,
+    buildRouteOwnedWatchlistSearchParams,
+    routeStateSettled,
     searchParams,
-    selectedCategoryFilter,
+    searchParamsSignature,
     setSearchParams,
-  ])
-
-
-  useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentMinUrgency = searchParams.get('min_urgency')?.trim() || ''
-    const nextMinUrgency = selectedMinUrgency.trim()
-    if (currentMinUrgency === nextMinUrgency) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (nextMinUrgency) {
-        next.set('min_urgency', nextMinUrgency)
-      } else {
-        next.delete('min_urgency')
-      }
-      return next
-    }, { replace: true })
-  }, [
-    activeWatchlistView?.id,
-    loading,
-    requestedWatchlistView,
-    searchParams,
-    selectedMinUrgency,
-    setSearchParams,
-  ])
-
-  useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentFreshOnly = parseBooleanSearchParam(searchParams.get('fresh_only'))
-    if (currentFreshOnly === freshOnly) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (freshOnly) {
-        next.set('fresh_only', 'true')
-      } else {
-        next.delete('fresh_only')
-      }
-      return next
-    }, { replace: true })
-  }, [
-    activeWatchlistView?.id,
-    freshOnly,
-    loading,
-    requestedWatchlistView,
-    searchParams,
-    setSearchParams,
-  ])
-
-
-  useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentNamedAccountsOnly = parseBooleanSearchParam(searchParams.get('named_accounts_only'))
-    if (currentNamedAccountsOnly === namedAccountsOnly) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (namedAccountsOnly) {
-        next.set('named_accounts_only', 'true')
-      } else {
-        next.delete('named_accounts_only')
-      }
-      return next
-    }, { replace: true })
-  }, [
-    activeWatchlistView?.id,
-    loading,
-    namedAccountsOnly,
-    requestedWatchlistView,
-    searchParams,
-    setSearchParams,
-  ])
-
-  useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentChangedWedgesOnly = parseBooleanSearchParam(searchParams.get('changed_wedges_only'))
-    if (currentChangedWedgesOnly === changedWedgesOnly) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (changedWedgesOnly) {
-        next.set('changed_wedges_only', 'true')
-      } else {
-        next.delete('changed_wedges_only')
-      }
-      return next
-    }, { replace: true })
-  }, [
-    activeWatchlistView?.id,
-    changedWedgesOnly,
-    loading,
-    requestedWatchlistView,
-    searchParams,
-    setSearchParams,
-  ])
-
-
-  useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentVendorAlertThreshold = searchParams.get('vendor_alert_threshold')?.trim() || ''
-    const nextVendorAlertThreshold = vendorAlertThreshold.trim()
-    if (currentVendorAlertThreshold === nextVendorAlertThreshold) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (nextVendorAlertThreshold) {
-        next.set('vendor_alert_threshold', nextVendorAlertThreshold)
-      } else {
-        next.delete('vendor_alert_threshold')
-      }
-      return next
-    }, { replace: true })
-  }, [
-    activeWatchlistView?.id,
-    loading,
-    requestedWatchlistView,
-    searchParams,
-    setSearchParams,
-    vendorAlertThreshold,
-  ])
-
-  useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentAccountAlertThreshold = searchParams.get('account_alert_threshold')?.trim() || ''
-    const nextAccountAlertThreshold = accountAlertThreshold.trim()
-    if (currentAccountAlertThreshold === nextAccountAlertThreshold) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (nextAccountAlertThreshold) {
-        next.set('account_alert_threshold', nextAccountAlertThreshold)
-      } else {
-        next.delete('account_alert_threshold')
-      }
-      return next
-    }, { replace: true })
-  }, [
-    accountAlertThreshold,
-    activeWatchlistView?.id,
-    loading,
-    requestedWatchlistView,
-    searchParams,
-    setSearchParams,
-  ])
-
-  useEffect(() => {
-    if (loading) return
-    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
-    const currentStaleDaysThreshold = searchParams.get('stale_days_threshold')?.trim() || ''
-    const nextStaleDaysThreshold = staleDaysThreshold.trim()
-    if (currentStaleDaysThreshold === nextStaleDaysThreshold) return
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (nextStaleDaysThreshold) {
-        next.set('stale_days_threshold', nextStaleDaysThreshold)
-      } else {
-        next.delete('stale_days_threshold')
-      }
-      return next
-    }, { replace: true })
-  }, [
-    activeWatchlistView?.id,
-    loading,
-    requestedWatchlistView,
-    searchParams,
-    setSearchParams,
-    staleDaysThreshold,
   ])
 
   async function handleCopyCurrentViewLink() {

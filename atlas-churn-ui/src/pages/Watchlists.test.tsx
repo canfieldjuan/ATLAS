@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Watchlists from './Watchlists'
 
@@ -847,6 +847,89 @@ describe('Watchlists', () => {
       text.includes('No alert email sent because local filters suppressed all candidates')
       && text.includes('local filters: named accounts only + changed wedges only'),
     ).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('clears same-route feed filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/watchlists', element: <><Watchlists /><LocationSearchProbe /></> }],
+      {
+        initialEntries: ['/watchlists?category=Helpdesk&source=reddit&min_urgency=8&fresh_only=true&named_accounts_only=true&changed_wedges_only=true&vendor_alert_threshold=7.5&account_alert_threshold=8.5&stale_days_threshold=3'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('heading', { name: 'Watchlists' })).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
+        vendor_names: undefined,
+        category: 'Helpdesk',
+        vendor_alert_threshold: 7.5,
+        stale_days_threshold: 3,
+      })
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_names: undefined,
+        category: 'Helpdesk',
+        source: 'reddit',
+        min_urgency: 8,
+        include_stale: false,
+        account_alert_threshold: 8.5,
+        stale_days_threshold: 3,
+      })
+    })
+
+    await router.navigate('/watchlists')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search').textContent).toBe('')
+    })
+
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith(undefined)
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith(undefined)
+    })
+
+    router.dispose()
+  })
+
+  it('canonicalizes route-owned feed filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/watchlists', element: <><Watchlists /><LocationSearchProbe /></> }],
+      {
+        initialEntries: ['/watchlists?category=%20Helpdesk%20&source=%20reddit%20&min_urgency=%208%20&fresh_only=1&named_accounts_only=TRUE&changed_wedges_only=1&vendor_alert_threshold=%207.5%20&account_alert_threshold=%208.5%20&stale_days_threshold=%203%20'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('heading', { name: 'Watchlists' })).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
+        vendor_names: undefined,
+        category: 'Helpdesk',
+        vendor_alert_threshold: 7.5,
+        stale_days_threshold: 3,
+      })
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_names: undefined,
+        category: 'Helpdesk',
+        source: 'reddit',
+        min_urgency: 8,
+        include_stale: false,
+        account_alert_threshold: 8.5,
+        stale_days_threshold: 3,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search').textContent).toBe(
+        '?category=Helpdesk&source=reddit&min_urgency=8&fresh_only=true&named_accounts_only=true&changed_wedges_only=true&vendor_alert_threshold=7.5&account_alert_threshold=8.5&stale_days_threshold=3',
+      )
+    })
+
+    router.dispose()
   })
 
   it('saves the current filtered view with persisted thresholds', async () => {
