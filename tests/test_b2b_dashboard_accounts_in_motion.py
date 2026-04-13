@@ -3454,6 +3454,66 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
     assert account["reasoning_reference_ids"]["witness_ids"] == ["witness:zendesk:1"]
 
 
+@pytest.mark.asyncio
+async def test_list_accounts_in_motion_from_report_named_accounts_only_falls_back_to_preview_rows():
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "report_date": "2026-04-11",
+            "vendor_filter": "Salesforce",
+            "intelligence_data": {
+                "vendor": "Salesforce",
+                "category": "CRM",
+                "reference_ids": {
+                    "metric_ids": ["metric:salesforce:1"],
+                    "witness_ids": ["witness:salesforce:1"],
+                },
+                "source_distribution": {"reddit": 3},
+                "accounts": [
+                    {
+                        "company": None,
+                        "vendor": "Salesforce",
+                        "category": "CRM",
+                        "urgency": 8.7,
+                        "opportunity_score": 84,
+                        "source_distribution": {"reddit": 2},
+                    }
+                ],
+                "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                "priority_account_names": ["Concentrix", "Concentrix"],
+                "account_reasoning_preview": {
+                    "disclaimer": "Early account signal only.",
+                    "account_reasoning": {
+                        "top_accounts": [
+                            {
+                                "name": "Concentrix",
+                                "intent_score": 0.41,
+                                "source_id": "accounts:company:concentrix",
+                            }
+                        ]
+                    },
+                },
+            },
+        }
+    )
+    pool.fetch = AsyncMock(side_effect=[[], [], []])
+
+    result = await b2b_dashboard._list_accounts_in_motion_from_report(
+        pool,
+        "Salesforce",
+        7,
+        25,
+        None,
+        named_accounts_only=True,
+    )
+
+    assert result["count"] == 1
+    assert result["account_reasoning_preview_only"] is True
+    assert result["priority_account_names"] == ["Concentrix"]
+    assert result["accounts"][0]["company"] == "Concentrix"
+    assert result["accounts"][0]["account_reasoning_preview_only"] is True
+
+
 def test_accounts_in_motion_report_freshness_treats_published_as_healthy():
     status, reason, timestamp = b2b_dashboard._accounts_in_motion_report_freshness(
         {

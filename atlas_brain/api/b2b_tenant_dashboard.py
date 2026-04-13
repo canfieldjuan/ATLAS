@@ -2071,6 +2071,7 @@ async def list_tenant_accounts_in_motion_feed(
     source: Optional[str] = Query(None),
     min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
     include_stale: bool = Query(True),
+    named_accounts_only: bool = Query(False),
     account_alert_threshold: float | None = Query(None, ge=0, le=10),
     stale_days_threshold: int | None = Query(None, ge=0, le=365),
     per_vendor_limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
@@ -2086,6 +2087,7 @@ async def list_tenant_accounts_in_motion_feed(
     category = _clean_optional_text(category)
     source = _clean_optional_text(source)
     include_stale = include_stale if isinstance(include_stale, bool) else True
+    named_accounts_only = bool(named_accounts_only)
     min_urgency = _safe_float(min_urgency, settings.b2b_churn.accounts_in_motion_min_urgency)
     account_alert_threshold = _safe_float(account_alert_threshold)
     stale_days_threshold = _coerce_optional_int(stale_days_threshold)
@@ -2124,6 +2126,7 @@ async def list_tenant_accounts_in_motion_feed(
                 min_urgency=min_urgency,
                 limit=per_vendor_limit,
                 user=user,
+                named_accounts_only=named_accounts_only,
             )
             for row in tracked_rows
         ]

@@ -1887,6 +1887,42 @@ async def test_accounts_in_motion_feed_aggregates_tracked_vendor_reports(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_accounts_in_motion_feed_passes_named_accounts_only_to_report_helper(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {"vendor_name": "Salesforce", "track_mode": "competitor", "label": "CRM", "added_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    helper = AsyncMock(
+        return_value={
+            "accounts": [],
+            "report_date": "2026-04-11",
+            "stale_days": 0,
+            "is_stale": False,
+            "data_source": "persisted_report",
+        }
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_list_accounts_in_motion_from_report", helper)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        named_accounts_only=True,
+        user=user,
+    )
+
+    assert result["count"] == 0
+    assert helper.await_count == 1
+    assert helper.await_args.kwargs["named_accounts_only"] is True
+
+
+@pytest.mark.asyncio
 async def test_accounts_in_motion_feed_applies_threshold_flags(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -3024,6 +3060,7 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
     assert result["count"] == 2
     assert result["new_open_event_count"] == 1
     assert result["resolved_event_count"] == 1
+    assert mod.list_tenant_accounts_in_motion_feed.await_args.kwargs["named_accounts_only"] is True
     assert result["events"][0]["reasoning_reference_ids"] == {"witness_ids": ["vw1"]}
     assert result["events"][1]["source_review_ids"] == ["r1"]
     assert result["events"][1]["account_review_focus"] == {

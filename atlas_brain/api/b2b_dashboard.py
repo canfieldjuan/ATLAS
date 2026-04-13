@@ -196,44 +196,130 @@ def _normalize_vendor_name(value: str | None) -> str:
 
 
 def _extract_report_account_preview_fields(intelligence_data: Any) -> dict[str, Any]:
-    payload = _safe_dict(_safe_json(intelligence_data))
-    preview = _safe_dict(payload.get("account_reasoning_preview"))
+    payload = _safe_json(intelligence_data)
+    if not isinstance(payload, dict):
+        payload = {}
+
+    preview = payload.get("account_reasoning_preview")
+    if not isinstance(preview, dict):
+        preview = {}
+    preview_contract = preview.get("account_reasoning")
+    if not isinstance(preview_contract, dict):
+        preview_contract = {}
+
     summary = str(
         payload.get("account_pressure_summary")
         or preview.get("account_pressure_summary")
+        or preview_contract.get("market_summary")
         or ""
     ).strip()
     disclaimer = str(preview.get("disclaimer") or "").strip()
-    preview_only = bool(payload.get("account_reasoning_preview_only"))
 
     priority_names: list[str] = []
+    seen_names: set[str] = set()
     raw_priority_names = payload.get("priority_account_names")
     if not isinstance(raw_priority_names, list):
         raw_priority_names = preview.get("priority_account_names")
-    if isinstance(raw_priority_names, list):
-        seen: set[str] = set()
-        for item in raw_priority_names:
-            text = str(item or "").strip()
-            if not text:
-                continue
-            lowered = text.lower()
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            priority_names.append(text)
-            if len(priority_names) >= 5:
-                break
+    if not isinstance(raw_priority_names, list):
+        raw_priority_names = []
+    for item in raw_priority_names:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered in seen_names:
+            continue
+        seen_names.add(lowered)
+        priority_names.append(text)
+        if len(priority_names) >= 5:
+            break
+    if not priority_names:
+        top_accounts = preview_contract.get("top_accounts")
+        if isinstance(top_accounts, list):
+            for item in top_accounts:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("name") or "").strip()
+                if not text:
+                    continue
+                lowered = text.lower()
+                if lowered in seen_names:
+                    continue
+                seen_names.add(lowered)
+                priority_names.append(text)
+                if len(priority_names) >= 5:
+                    break
 
     result: dict[str, Any] = {}
     if summary:
         result["account_pressure_summary"] = summary
     if priority_names:
         result["priority_account_names"] = priority_names
-    if preview_only:
-        result["account_reasoning_preview_only"] = True
-    if disclaimer and (preview_only or summary or priority_names):
+    if disclaimer:
         result["account_pressure_disclaimer"] = disclaimer
+    if bool(payload.get("account_reasoning_preview_only")):
+        result["account_reasoning_preview_only"] = True
     return result
+
+
+def _build_accounts_in_motion_preview_rows(
+    intelligence_data: Any,
+    *,
+    vendor_name: str,
+    reasoning_reference_ids: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    payload = _safe_json(intelligence_data)
+    if not isinstance(payload, dict):
+        payload = {}
+
+    preview_fields = _extract_report_account_preview_fields(payload)
+    priority_names = [
+        str(item).strip()
+        for item in (preview_fields.get("priority_account_names") or [])
+        if str(item or "").strip()
+    ]
+    if not priority_names:
+        return []
+
+    category = str(payload.get("category") or "").strip() or None
+    source_distribution = payload.get("source_distribution")
+    if not isinstance(source_distribution, dict):
+        source_distribution = {}
+
+    rows: list[dict[str, Any]] = []
+    for company_name in priority_names:
+        rows.append(
+            {
+                "company": company_name,
+                "vendor": vendor_name,
+                "category": category,
+                "urgency": None,
+                "role_type": None,
+                "buying_stage": None,
+                "budget_authority": False,
+                "pain_categories": [],
+                "evidence": [],
+                "alternatives_considering": [],
+                "contract_signal": None,
+                "reviewer_title": None,
+                "company_size_raw": None,
+                "quality_flags": ["account_reasoning_preview_only"],
+                "opportunity_score": None,
+                "quote_match_type": "account_reasoning_preview",
+                "confidence": None,
+                "source_distribution": dict(source_distribution),
+                "source_review_ids": [],
+                "source_reviews": [],
+                "evidence_count": 0,
+                "enriched_at": None,
+                "reasoning_reference_ids": reasoning_reference_ids,
+                "account_reasoning_preview_only": True,
+                "account_pressure_summary": preview_fields.get("account_pressure_summary"),
+                "account_pressure_disclaimer": preview_fields.get("account_pressure_disclaimer"),
+                "priority_account_names": priority_names,
+            }
+        )
+    return rows
 
 
 async def _load_reasoning_views_for_vendors(pool, vendor_names: list[str]) -> dict[str, Any]:
@@ -7721,6 +7807,7 @@ async def _list_accounts_in_motion_from_report(
     min_urgency: float,
     limit: int,
     user: AuthUser | None,
+    named_accounts_only: bool = False,
 ):
     row = await _fetch_latest_accounts_in_motion_report(pool, vendor_name, user)
     if not row:
@@ -7732,6 +7819,7 @@ async def _list_accounts_in_motion_from_report(
     reasoning_reference_ids = report.get("reference_ids")
     if not isinstance(reasoning_reference_ids, dict):
         reasoning_reference_ids = None
+    preview_fields = _extract_report_account_preview_fields(report)
     shaped = [
         {
             **_shape_persisted_accounts_in_motion_account(account, vendor),
@@ -7740,6 +7828,20 @@ async def _list_accounts_in_motion_from_report(
         for account in (report.get("accounts") or [])
         if isinstance(account, dict) and _safe_float(account.get("urgency"), 0) >= min_urgency
     ]
+    if named_accounts_only:
+        shaped = [
+            account
+            for account in shaped
+            if str(account.get("company") or "").strip()
+        ]
+        if not shaped:
+            shaped = _build_accounts_in_motion_preview_rows(
+                report,
+                vendor_name=vendor,
+                reasoning_reference_ids=reasoning_reference_ids,
+            )
+            if shaped:
+                preview_fields["account_reasoning_preview_only"] = True
     shaped.sort(
         key=lambda account: (
             -(account.get("opportunity_score") or 0),
@@ -7772,6 +7874,7 @@ async def _list_accounts_in_motion_from_report(
         "freshness_status": freshness_status,
         "freshness_reason": freshness_reason,
         "freshness_timestamp": freshness_timestamp,
+        **preview_fields,
     }
 
 
