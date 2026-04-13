@@ -270,6 +270,90 @@ def _watchlist_alert_source_name(row: dict[str, Any]) -> str | None:
     return None
 
 
+def _threshold_hit_numeric(value: Any, threshold: float | None) -> bool:
+    if threshold is None:
+        return False
+    score = _safe_float(value)
+    if score is None:
+        return False
+    return score >= threshold
+
+
+def summarize_suppressed_preview_accounts(
+    *,
+    watchlist_view: dict[str, Any],
+    accounts_feed: dict[str, Any],
+) -> dict[str, Any]:
+    account_threshold = _safe_float(watchlist_view.get("account_alert_threshold"))
+    if account_threshold is None:
+        return {
+            "count": 0,
+            "threshold_value": None,
+            "reasons": {},
+            "vendors": [],
+            "accounts": [],
+        }
+
+    reasons: dict[str, int] = {}
+    vendors: dict[str, int] = {}
+    accounts: list[dict[str, Any]] = []
+    for account in accounts_feed.get("accounts") or []:
+        if not isinstance(account, dict):
+            continue
+        if not bool(account.get("account_reasoning_preview_only")):
+            continue
+        if bool(account.get("account_alert_eligible", True)):
+            continue
+        policy_reason = _clean_optional_text(account.get("account_alert_policy_reason"))
+        if not policy_reason:
+            continue
+        account_alert_score, account_alert_score_source = _accounts_in_motion_alert_basis(account)
+        if not _threshold_hit_numeric(account_alert_score, account_threshold):
+            continue
+        vendor_name = _clean_optional_text(account.get("vendor"))
+        company_name = _clean_optional_text(account.get("company"))
+        category = _clean_optional_text(account.get("category"))
+        source_name = _watchlist_alert_source_name(account)
+        reasons[policy_reason] = reasons.get(policy_reason, 0) + 1
+        if vendor_name:
+            vendors[vendor_name] = vendors.get(vendor_name, 0) + 1
+        accounts.append(
+            {
+                "vendor_name": vendor_name,
+                "company_name": company_name,
+                "category": category,
+                "source": source_name,
+                "account_alert_score": account_alert_score,
+                "account_alert_score_source": account_alert_score_source,
+                "account_alert_policy_reason": policy_reason,
+                "confidence": _safe_float(account.get("confidence")),
+                "budget_authority": bool(account.get("budget_authority")),
+                "account_pressure_disclaimer": _clean_optional_text(
+                    account.get("account_pressure_disclaimer")
+                ),
+            }
+        )
+
+    accounts.sort(
+        key=lambda row: (
+            -(row.get("account_alert_score") or 0.0),
+            str(row.get("vendor_name") or "").lower(),
+            str(row.get("company_name") or "").lower(),
+        )
+    )
+    vendor_rows = [
+        {"vendor_name": vendor_name, "count": count}
+        for vendor_name, count in sorted(vendors.items(), key=lambda item: (-item[1], item[0].lower()))
+    ]
+    return {
+        "count": len(accounts),
+        "threshold_value": account_threshold,
+        "reasons": reasons,
+        "vendors": vendor_rows,
+        "accounts": accounts,
+    }
+
+
 def _watchlist_alert_entity_key(
     *,
     event_type: str,
@@ -486,6 +570,10 @@ async def evaluate_watchlist_alert_events_for_view(
         feed=feed,
         accounts_feed=accounts_feed,
     )
+    suppressed_preview_summary = summarize_suppressed_preview_accounts(
+        watchlist_view=watchlist_view_payload(view_row),
+        accounts_feed=accounts_feed,
+    )
     now = datetime.now(timezone.utc)
     # Use a transaction when available (real asyncpg pool) to prevent
     # concurrent evaluate/resolve race conditions.
@@ -603,6 +691,7 @@ async def evaluate_watchlist_alert_events_for_view(
         "count": len(events),
         "new_open_event_count": new_open_count,
         "resolved_event_count": len(resolved_ids),
+        "suppressed_preview_summary": suppressed_preview_summary,
     }
 
 

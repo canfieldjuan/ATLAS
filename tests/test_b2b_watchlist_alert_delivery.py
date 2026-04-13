@@ -220,3 +220,57 @@ def test_serialize_watchlist_alert_event_surfaces_preview_account_fields():
     assert result["preview_signal_score"] == pytest.approx(6.2)
     assert result["account_reasoning_preview_only"] is True
     assert result["account_pressure_disclaimer"] == "Early account signal only."
+
+
+def test_summarize_suppressed_preview_accounts_reports_blocked_threshold_hits():
+    result = watchlist_alert_service.summarize_suppressed_preview_accounts(
+        watchlist_view={"account_alert_threshold": 6.0},
+        accounts_feed={
+            "accounts": [
+                {
+                    "company": "Concentrix",
+                    "vendor": "Salesforce",
+                    "category": "CRM",
+                    "preview_signal_score": 6.2,
+                    "confidence": 0.2,
+                    "budget_authority": True,
+                    "account_reasoning_preview_only": True,
+                    "account_alert_eligible": False,
+                    "account_alert_policy_reason": "preview_low_confidence",
+                    "source_distribution": {"reddit": 1},
+                    "account_pressure_disclaimer": "Early account signal only.",
+                },
+                {
+                    "company": "Later Corp",
+                    "vendor": "Salesforce",
+                    "category": "CRM",
+                    "preview_signal_score": 5.2,
+                    "confidence": 0.2,
+                    "budget_authority": True,
+                    "account_reasoning_preview_only": True,
+                    "account_alert_eligible": False,
+                    "account_alert_policy_reason": "preview_low_confidence",
+                    "source_distribution": {"reddit": 1},
+                },
+            ]
+        },
+    )
+
+    assert result["count"] == 1
+    assert result["threshold_value"] == pytest.approx(6.0)
+    assert result["reasons"] == {"preview_low_confidence": 1}
+    assert result["vendors"] == [{"vendor_name": "Salesforce", "count": 1}]
+    assert result["accounts"] == [
+        {
+            "vendor_name": "Salesforce",
+            "company_name": "Concentrix",
+            "category": "CRM",
+            "source": "reddit",
+            "account_alert_score": pytest.approx(6.2),
+            "account_alert_score_source": "preview_signal_score",
+            "account_alert_policy_reason": "preview_low_confidence",
+            "confidence": pytest.approx(0.2),
+            "budget_authority": True,
+            "account_pressure_disclaimer": "Early account signal only.",
+        }
+    ]

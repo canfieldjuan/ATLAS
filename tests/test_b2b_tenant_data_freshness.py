@@ -3193,6 +3193,94 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_evaluate_watchlist_alert_events_reports_suppressed_preview_summary(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    view_row = {
+        "id": view_id,
+        "account_id": account_id,
+        "name": "Preview-gated CRM",
+        "vendor_name": "Salesforce",
+        "category": "CRM",
+        "source": "reddit",
+        "min_urgency": 8.0,
+        "include_stale": False,
+        "named_accounts_only": True,
+        "changed_wedges_only": False,
+        "vendor_alert_threshold": 7.5,
+        "account_alert_threshold": 6.0,
+        "stale_days_threshold": 2,
+        "created_at": None,
+        "updated_at": None,
+    }
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(return_value=view_row),
+        fetch=AsyncMock(return_value=[]),
+        execute=AsyncMock(),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(mod, "list_tenant_slow_burn_watchlist", AsyncMock(return_value={"signals": []}))
+    monkeypatch.setattr(
+        mod,
+        "list_tenant_accounts_in_motion_feed",
+        AsyncMock(
+            return_value={
+                "accounts": [
+                    {
+                        "company": "Concentrix",
+                        "vendor": "Salesforce",
+                        "category": "CRM",
+                        "watch_vendor": "Salesforce",
+                        "track_mode": "competitor",
+                        "urgency": None,
+                        "preview_signal_score": 6.2,
+                        "account_alert_hit": False,
+                        "account_alert_eligible": False,
+                        "account_alert_policy_reason": "preview_low_confidence",
+                        "account_reasoning_preview_only": True,
+                        "confidence": 0.2,
+                        "budget_authority": True,
+                        "source_distribution": {"reddit": 1},
+                        "account_pressure_disclaimer": "Early account signal only.",
+                    }
+                ]
+            }
+        ),
+    )
+
+    result = await mod.evaluate_watchlist_alert_events(view_id=view_id, user=user)
+
+    assert result["count"] == 0
+    assert result["suppressed_preview_summary"] == {
+        "count": 1,
+        "threshold_value": pytest.approx(6.0),
+        "reasons": {"preview_low_confidence": 1},
+        "vendors": [{"vendor_name": "Salesforce", "count": 1}],
+        "accounts": [
+            {
+                "vendor_name": "Salesforce",
+                "company_name": "Concentrix",
+                "category": "CRM",
+                "source": "reddit",
+                "account_alert_score": pytest.approx(6.2),
+                "account_alert_score_source": "preview_signal_score",
+                "account_alert_policy_reason": "preview_low_confidence",
+                "confidence": pytest.approx(0.2),
+                "budget_authority": True,
+                "account_pressure_disclaimer": "Early account signal only.",
+            }
+        ],
+    }
+    assert pool.fetch.await_count == 1
+    assert pool.execute.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_list_watchlist_alert_email_log_returns_view_scoped_rows(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -3448,6 +3536,83 @@ async def test_deliver_watchlist_alert_email_records_no_events(monkeypatch):
     update_call = next(call for call in pool.execute.await_args_list if "UPDATE b2b_watchlist_views" in call.args[0])
     assert update_call.args[3] == "no_events"
     assert update_call.args[4] == "No open alert events to deliver"
+
+
+@pytest.mark.asyncio
+async def test_deliver_watchlist_alert_email_returns_suppressed_preview_summary(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    view_row = {
+        "id": view_id,
+        "account_id": account_id,
+        "name": "Quiet view",
+        "vendor_name": None,
+        "category": None,
+        "source": None,
+        "min_urgency": None,
+        "include_stale": True,
+        "named_accounts_only": False,
+        "changed_wedges_only": False,
+        "vendor_alert_threshold": None,
+        "account_alert_threshold": 6.0,
+        "stale_days_threshold": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+    suppressed_preview_summary = {
+        "count": 1,
+        "threshold_value": 6.0,
+        "reasons": {"preview_low_confidence": 1},
+        "vendors": [{"vendor_name": "Salesforce", "count": 1}],
+        "accounts": [
+            {
+                "vendor_name": "Salesforce",
+                "company_name": "Concentrix",
+                "category": "CRM",
+                "source": "reddit",
+                "account_alert_score": 6.2,
+                "account_alert_score_source": "preview_signal_score",
+                "account_alert_policy_reason": "preview_low_confidence",
+                "confidence": 0.2,
+                "budget_authority": True,
+                "account_pressure_disclaimer": "Early account signal only.",
+            }
+        ],
+    }
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(return_value=view_row),
+        fetch=AsyncMock(return_value=[]),
+        fetchval=AsyncMock(return_value="Acme Account"),
+        execute=AsyncMock(),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(
+        mod,
+        "evaluate_watchlist_alert_events",
+        AsyncMock(
+            return_value={
+                "watchlist_view_id": str(view_id),
+                "watchlist_view_name": "Quiet view",
+                "events": [],
+                "suppressed_preview_summary": suppressed_preview_summary,
+            }
+        ),
+    )
+
+    result = await mod.deliver_watchlist_alert_email(
+        view_id=view_id,
+        body=mod.WatchlistAlertEmailRequest(evaluate_before_send=True),
+        user=user,
+    )
+
+    assert result["status"] == "no_events"
+    assert result["event_count"] == 0
+    assert result["suppressed_preview_summary"] == suppressed_preview_summary
 
 
 @pytest.mark.asyncio

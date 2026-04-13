@@ -2631,9 +2631,11 @@ async def deliver_watchlist_alert_email(
     if body.evaluate_before_send:
         evaluation = await evaluate_watchlist_alert_events(view_id=view_id, user=user)
         events = evaluation["events"]
+        suppressed_preview_summary = evaluation.get("suppressed_preview_summary")
     else:
         existing = await list_watchlist_alert_events(view_id=view_id, status="open", limit=25, user=user)
         events = existing["events"]
+        suppressed_preview_summary = None
 
     now = datetime.now(timezone.utc)
     event_ids = [_uuid.UUID(str(event["id"])) for event in events]
@@ -2679,6 +2681,7 @@ async def deliver_watchlist_alert_email(
             "recipient_emails": recipient_emails,
             "event_count": 0,
             "message_ids": [],
+            "suppressed_preview_summary": suppressed_preview_summary,
         }
 
     if not recipient_emails:
@@ -2875,6 +2878,7 @@ async def deliver_watchlist_alert_email(
         "message_ids": message_ids,
         "summary": summary,
         "error": error_text,
+        "suppressed_preview_summary": suppressed_preview_summary,
     }
 
 
