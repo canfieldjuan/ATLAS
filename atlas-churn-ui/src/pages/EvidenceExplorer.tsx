@@ -88,6 +88,17 @@ function evidenceAlertsPath(searchParams: URLSearchParams, vendorName: string, c
   return `/alerts?${params.toString()}`
 }
 
+function evidenceWitnessAlertsPath(
+  searchParams: URLSearchParams,
+  vendorName: string,
+  witnessId: string,
+  companyName?: string | null,
+) {
+  const next = new URLSearchParams(searchParams.toString())
+  next.set('witness_id', witnessId)
+  return evidenceAlertsPath(next, vendorName, companyName)
+}
+
 function evidenceReportsPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('vendor_filter', vendorName)
@@ -408,6 +419,7 @@ export default function EvidenceExplorer() {
   const [copiedOpportunitiesState, setCopiedOpportunitiesState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedReportsState, setCopiedReportsState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWitnessState, setCopiedWitnessState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
+  const [copiedWitnessAlertsState, setCopiedWitnessAlertsState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const directWatchlistsShortcutPath = useMemo(() => upstreamWatchlistsPath(requestedBackTo), [requestedBackTo])
@@ -811,6 +823,15 @@ export default function EvidenceExplorer() {
     }
   }
 
+  async function handleCopyWitnessAlertsLink(witnessId: string, path: string) {
+    try {
+      await copyText(`${window.location.origin}${path}`)
+      setCopiedWitnessAlertsState({ id: witnessId, status: 'copied' })
+    } catch {
+      setCopiedWitnessAlertsState({ id: witnessId, status: 'error' })
+    }
+  }
+
   // -- Render -----------------------------------------------------------------
 
   return (
@@ -1203,12 +1224,38 @@ export default function EvidenceExplorer() {
                                 <Link
                                   to={matchedAccountReviewPaths[w.witness_id]}
                                   className="inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
-                                >
-                                  Open account review
+                              >
+                                Open account review
                                   <ExternalLink className="h-3 w-3" />
                                 </Link>
                               </>
                             ) : null}
+                            {activeVendor && w.reviewer_company?.trim() ? (() => {
+                              const witnessAlertsPath = evidenceWitnessAlertsPath(searchParams, activeVendor, w.witness_id, w.reviewer_company)
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    aria-label={`Copy alerts link for witness ${w.witness_id}`}
+                                    onClick={() => void handleCopyWitnessAlertsLink(w.witness_id, witnessAlertsPath)}
+                                    className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-white"
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                    {copiedWitnessAlertsState?.id === w.witness_id
+                                      ? (copiedWitnessAlertsState.status === 'copied' ? 'Copied' : 'Copy Failed')
+                                      : 'Copy alerts link'}
+                                  </button>
+                                  <Link
+                                    to={witnessAlertsPath}
+                                    aria-label={`Open alerts for witness ${w.witness_id}`}
+                                    className="inline-flex items-center gap-1 text-xs text-rose-300 hover:text-rose-200"
+                                  >
+                                    Open alerts
+                                    <ExternalLink className="h-3 w-3" />
+                                  </Link>
+                                </>
+                              )
+                            })() : null}
                             {w.review_id ? (() => {
                               const directReviewPath = upstreamReviewPath(requestedBackTo, w.review_id)
                               const witnessReviewPath = directReviewPath ?? reviewDetailPath(searchParams, w.review_id)
