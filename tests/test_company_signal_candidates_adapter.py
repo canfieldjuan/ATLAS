@@ -241,6 +241,25 @@ async def test_review_candidates_reject_ineligible_company_names():
 
 
 @pytest.mark.asyncio
+async def test_review_candidates_use_vendor_mentions_for_scoped_filters():
+    pool = FakePool([_make_review_row()])
+
+    await shared_mod._fetch_company_signal_review_candidates(
+        pool,
+        window_days=90,
+        urgency_threshold=7.0,
+        vendor_name="Zendesk",
+        scoped_vendors=["Zendesk"],
+    )
+
+    sql = pool.fetch.call_args[0][0]
+    assert "JOIN LATERAL (" in sql
+    assert "FROM b2b_review_vendor_mentions vm" in sql
+    assert "matched_vm.vendor_name AS vendor_name" in sql
+    assert "ANY(" in sql
+
+
+@pytest.mark.asyncio
 async def test_read_company_signal_candidates_maps_rows_and_filters_in_sql():
     pool = FakePool([_make_candidate_row()])
 

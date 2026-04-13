@@ -335,7 +335,11 @@ async def get_vendor_profile(vendor_name: str) -> str:
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
 
-        from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_signal_detail, read_high_intent_companies
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            read_vendor_signal_detail,
+            read_high_intent_companies,
+            _review_vendor_match_join,
+        )
 
         signal_row = await read_vendor_signal_detail(
             pool,
@@ -344,16 +348,22 @@ async def get_vendor_profile(vendor_name: str) -> str:
         )
 
         # Live review counts
+        vendor_join = _review_vendor_match_join(
+            review_alias="r",
+            vendor_param=1,
+            output_alias="matched_vm",
+        )
+
         counts = await pool.fetchrow(
             f"""
             SELECT
-                COUNT(*) AS total_reviews,
-                COUNT(*) FILTER (WHERE enrichment_status = 'pending') AS pending_enrichment,
-                COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched
-            FROM b2b_reviews
-            WHERE vendor_name ILIKE '%' || $1 || '%'
-              AND {_canonical_review_predicate()}
-              AND {_suppress_predicate('review')}
+                COUNT(DISTINCT r.id) AS total_reviews,
+                COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'pending') AS pending_enrichment,
+                COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'enriched') AS enriched
+            FROM b2b_reviews r
+            {vendor_join}
+            WHERE {_canonical_review_predicate('r')}
+              AND {_suppress_predicate('review', id_expr='r.id', source_expr='r.source', vendor_expr='matched_vm.vendor_name')}
             """,
             vname,
         )
@@ -371,14 +381,14 @@ async def get_vendor_profile(vendor_name: str) -> str:
         # Pain distribution
         pain_rows = await pool.fetch(
             f"""
-            SELECT enrichment->>'pain_category' AS pain, COUNT(*) AS cnt
-            FROM b2b_reviews
-            WHERE vendor_name ILIKE '%' || $1 || '%'
-              AND {_canonical_review_predicate()}
-              AND enrichment_status = 'enriched'
-              AND enrichment->>'pain_category' IS NOT NULL
-              AND {_suppress_predicate('review')}
-            GROUP BY enrichment->>'pain_category'
+            SELECT r.enrichment->>'pain_category' AS pain, COUNT(*) AS cnt
+            FROM b2b_reviews r
+            {vendor_join}
+            WHERE {_canonical_review_predicate('r')}
+              AND r.enrichment_status = 'enriched'
+              AND r.enrichment->>'pain_category' IS NOT NULL
+              AND {_suppress_predicate('review', id_expr='r.id', source_expr='r.source', vendor_expr='matched_vm.vendor_name')}
+            GROUP BY r.enrichment->>'pain_category'
             ORDER BY cnt DESC
             """,
             vname,

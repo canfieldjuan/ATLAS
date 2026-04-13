@@ -1,3 +1,4 @@
+import inspect
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -17,6 +18,38 @@ class CapturePool:
 
     async def executemany(self, query, rows):
         self.executemany_calls.append((str(query), list(rows)))
+
+
+@pytest.mark.asyncio
+async def test_generate_vendor_report_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    result = await mod.generate_vendor_report(pool, "Zendesk", window_days=90)
+
+    assert result is None
+    sql, window_days, vendor_name, sources = pool.fetch.await_args.args
+    assert window_days == 90
+    assert vendor_name == "Zendesk"
+    assert isinstance(sources, list)
+    assert "JOIN LATERAL" in sql
+    assert "FROM b2b_review_vendor_mentions vm" in sql
+    assert "vm.vendor_name ILIKE '%' || $2 || '%'" in sql
+
+
+@pytest.mark.asyncio
+async def test_generate_challenger_report_reads_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    result = await mod.generate_challenger_report(pool, "HubSpot", window_days=90)
+
+    assert result is None
+    sql, window_days, challenger_name, sources = pool.fetch.await_args.args
+    assert window_days == 90
+    assert challenger_name == "HubSpot"
+    assert isinstance(sources, list)
+    assert "JOIN LATERAL" in sql
+    assert "FROM b2b_review_vendor_mentions vm" in sql
+    assert "matched_vm.vendor_name AS vendor_name" in sql
 
 
 @pytest.mark.asyncio
@@ -370,3 +403,9 @@ async def test_rebuild_company_signal_candidate_materializations_returns_counts(
     upsert_candidates_mock.assert_awaited_once()
     upsert_groups_mock.assert_awaited_once()
     sync_mock.assert_awaited_once_with(pool, materialization_run_id="run-backfill")
+
+
+def test_run_uses_scoped_vendors_for_company_signal_candidate_materializations():
+    source = inspect.getsource(mod.run)
+
+    assert "vendors=scoped_vendors or None" in source

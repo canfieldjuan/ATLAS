@@ -242,6 +242,9 @@ async def test_vendor_name_filter_in_sql():
     pool = FakePool([_make_db_row()])
     await read_high_intent_companies(pool, min_urgency=7.0, window_days=30, vendor_name="Zendesk")
     sql = pool.fetch.call_args[0][0]
+    assert "JOIN LATERAL (" in sql
+    assert "FROM b2b_review_vendor_mentions vm" in sql
+    assert "matched_vm.vendor_name AS vendor_name" in sql
     assert "ILIKE" in sql
 
 
@@ -251,6 +254,7 @@ async def test_scoped_vendors_filter_in_sql():
     pool = FakePool([_make_db_row()])
     await read_high_intent_companies(pool, min_urgency=7.0, window_days=30, scoped_vendors=["Zendesk", "HubSpot"])
     sql = pool.fetch.call_args[0][0]
+    assert "matched_vm.vendor_name AS vendor_name" in sql
     assert "ANY(" in sql
 
 

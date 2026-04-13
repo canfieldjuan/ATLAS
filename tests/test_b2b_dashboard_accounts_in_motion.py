@@ -3398,6 +3398,31 @@ async def test_list_webhooks_exposes_latest_failure_summary():
     assert webhook["latest_failure_at"] == failed_at.isoformat()
 
 
+@pytest.mark.asyncio
+async def test_get_source_correction_impact_reads_vendor_mentions():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                "source_name": "reddit",
+                "vendor_scope": "Zendesk",
+                "reason": "noise",
+                "created_at": datetime(2026, 4, 13, 9, 0, tzinfo=timezone.utc),
+                "affected_review_count": 4,
+            }
+        ]
+    )
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.get_source_correction_impact(user=None)
+
+    sql = pool.fetch.await_args.args[0]
+    assert "b2b_review_vendor_mentions vm" in sql
+    assert "EXISTS (" in sql
+    assert "LOWER(vm.vendor_name) = LOWER(dc.field_name)" in sql
+    assert result["active_source_suppressions"][0]["affected_review_count"] == 4
+
+
 def test_validate_accounts_in_motion_window_rejects_custom_window():
     configured = b2b_dashboard.settings.b2b_churn.intelligence_window_days
     with pytest.raises(b2b_dashboard.HTTPException) as exc:

@@ -36,7 +36,10 @@ from ._b2b_specificity import (
     specificity_audit_snapshot,
     surface_specificity_context,
 )
-from ._b2b_shared import _battle_card_company_is_display_safe
+from ._b2b_shared import (
+    _battle_card_company_is_display_safe,
+    _review_vendor_association_join,
+)
 from .b2b_vendor_briefing import build_gate_url
 from .campaign_audit import log_campaign_event
 
@@ -2281,18 +2284,21 @@ async def _compute_vendor_trend(
     # APPROVED-ENRICHMENT-READ: urgency_score
     # Reason: COUNT-only aggregation with urgency threshold, not a row-level extraction
     try:
-        # Build vendor name match condition
+        # Count distinct reviews through canonical vendor mentions so alias/product
+        # matching follows the same scope as the rest of the vendor readers.
         names = [vendor_name]
         if products:
             names.extend(products)
         name_conditions = " OR ".join(
-            f"r.vendor_name ILIKE '%' || ${i + 1} || '%'" for i in range(len(names))
+            f"vm.vendor_name ILIKE '%' || ${i + 1} || '%'" for i in range(len(names))
         )
         base_idx = len(names) + 1
+        vendor_join = _review_vendor_association_join(review_alias="r", output_alias="vm")
 
         current = await pool.fetchval(
             f"""
-            SELECT COUNT(*) FROM b2b_reviews r
+            SELECT COUNT(DISTINCT r.id) FROM b2b_reviews r
+            {vendor_join}
             WHERE r.enrichment_status = 'enriched'
               AND r.duplicate_of_review_id IS NULL
               AND r.enriched_at > NOW() - INTERVAL '30 days'
@@ -2303,7 +2309,8 @@ async def _compute_vendor_trend(
         )
         previous = await pool.fetchval(
             f"""
-            SELECT COUNT(*) FROM b2b_reviews r
+            SELECT COUNT(DISTINCT r.id) FROM b2b_reviews r
+            {vendor_join}
             WHERE r.enrichment_status = 'enriched'
               AND r.duplicate_of_review_id IS NULL
               AND r.enriched_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days'

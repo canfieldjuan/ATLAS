@@ -57,6 +57,27 @@ class _FakePool:
         return "OK"
 
 
+@pytest.mark.asyncio
+async def test_compute_vendor_trend_reads_vendor_mentions():
+    fetchval = AsyncMock(side_effect=[5, 3])
+    pool = SimpleNamespace(fetchval=fetchval)
+
+    result = await mod._compute_vendor_trend(pool, "Zendesk", products=["Zendesk Sell"])
+
+    assert result == "increasing"
+    assert len(fetchval.await_args_list) == 2
+    current_sql, *current_args = fetchval.await_args_list[0].args
+    previous_sql, *previous_args = fetchval.await_args_list[1].args
+    assert current_args == ["Zendesk", "Zendesk Sell", 3.0]
+    assert previous_args == ["Zendesk", "Zendesk Sell", 3.0]
+    assert "COUNT(DISTINCT r.id)" in current_sql
+    assert "JOIN b2b_review_vendor_mentions vm" in current_sql
+    assert "vm.vendor_name ILIKE '%' || $1 || '%'" in current_sql
+    assert "vm.vendor_name ILIKE '%' || $2 || '%'" in current_sql
+    assert "COUNT(DISTINCT r.id)" in previous_sql
+    assert "JOIN b2b_review_vendor_mentions vm" in previous_sql
+
+
 def _html_body(*paragraphs: str) -> str:
     return "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
 

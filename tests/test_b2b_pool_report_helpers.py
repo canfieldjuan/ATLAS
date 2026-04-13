@@ -909,6 +909,803 @@ async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
 
 
 @pytest.mark.asyncio
+async def test_fetch_pain_distribution_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "FROM pain_labels": [
+                {
+                    "vendor_name": "Zendesk",
+                    "pain": "pricing",
+                    "complaint_count": 3.4,
+                    "avg_urgency": 6.2,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_pain_distribution(pool, 90)
+
+    fetch_call = next(call for call in pool.calls if "FROM pain_labels" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "SELECT vm.vendor_name" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "Zendesk",
+            "pain": "pricing",
+            "complaint_count": 3.4,
+            "avg_urgency": 6.2,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_feature_gaps_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'feature_gaps')": [
+                {
+                    "vendor_name": "Intercom",
+                    "feature_gap": "automation",
+                    "mentions": 4,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_feature_gaps(pool, 30, min_mentions=2)
+
+    fetch_call = next(
+        call for call in pool.calls
+        if "CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'feature_gaps')" in call[0]
+    )
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "Intercom",
+            "feature_gap": "automation",
+            "mentions": 4,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_competitive_displacement_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'competitors_mentioned')": [
+                {
+                    "vendor_name": "Zendesk",
+                    "competitor": "Freshdesk",
+                    "evidence_type": "active_evaluation",
+                    "displacement_confidence": "high",
+                    "reason_category": "pricing",
+                    "direction": "considering",
+                    "mention_count": 2,
+                    "sizes": ["201-500"],
+                    "industries": ["SaaS"],
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_competitive_displacement(pool, 90)
+
+    fetch_call = next(
+        call for call in pool.calls
+        if "CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'competitors_mentioned')" in call[0]
+    )
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows[0]["vendor"] == "Zendesk"
+    assert rows[0]["competitor"] == "Freshdesk"
+
+
+@pytest.mark.asyncio
+async def test_fetch_displacement_provenance_reads_vendor_mentions():
+    review_id = uuid4()
+    pool = FakePool(
+        fetch_map={
+            "array_agg(r.id ORDER BY": [
+                {
+                    "vendor_name": "Zendesk",
+                    "competitor": "Freshdesk",
+                    "source": "g2",
+                    "cnt": 2,
+                    "review_ids": [review_id],
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_displacement_provenance(pool, 90)
+
+    fetch_call = next(call for call in pool.calls if "array_agg(r.id ORDER BY" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows[("Zendesk", "Freshdesk")]["source_distribution"] == {"g2": 2}
+    assert rows[("Zendesk", "Freshdesk")]["sample_review_ids"] == [str(review_id)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_price_complaint_rates_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "price_complaint_count": [
+                {
+                    "vendor_name": "HubSpot",
+                    "pricing_count": 3,
+                    "price_complaint_count": 2,
+                    "pricing_phrases_count": 4,
+                    "total": 10,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_price_complaint_rates(pool, 60)
+
+    fetch_call = next(call for call in pool.calls if "price_complaint_count" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "HubSpot",
+            "price_complaint_rate": 0.3,
+            "pricing_phrases_rate": 0.4,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_negative_review_counts_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "negative_count": [
+                {
+                    "vendor_name": "Asana",
+                    "negative_count": 3,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_negative_review_counts(pool, 60, threshold=0.5)
+
+    fetch_call = next(call for call in pool.calls if "negative_count" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [{"vendor": "Asana", "negative_count": 3}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_dm_churn_rates_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "dm_total": [
+                {
+                    "vendor_name": "Asana",
+                    "dm_churning": 2,
+                    "dm_total": 4,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_dm_churn_rates(pool, 60)
+
+    fetch_call = next(call for call in pool.calls if "dm_total" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [{"vendor": "Asana", "dm_churn_rate": 0.5}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_churning_companies_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "jsonb_agg(jsonb_build_object(": [
+                {
+                    "vendor_name": "Asana",
+                    "companies": json.dumps([
+                        {
+                            "company": "Acme",
+                            "urgency": 8.1,
+                        },
+                    ]),
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_churning_companies(pool, 60)
+
+    fetch_call = next(call for call in pool.calls if "jsonb_agg(jsonb_build_object(" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [{"vendor": "Asana", "companies": [{"company": "Acme", "urgency": 8.1}]}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_quotable_evidence_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "WITH review_best AS": [
+                {
+                    "vendor_name": "Salesforce",
+                    "quotes": json.dumps([
+                        {
+                            "quote": "Pricing got out of hand",
+                            "urgency": 7.1,
+                            "review_id": str(uuid4()),
+                        },
+                    ]),
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_quotable_evidence(pool, 90, min_urgency=4.5)
+
+    fetch_call = next(call for call in pool.calls if "WITH review_best AS" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "PARTITION BY vendor_name" in fetch_call[0]
+    assert rows[0]["vendor"] == "Salesforce"
+    assert rows[0]["quotes"][0]["quote"] == "Pricing got out of hand"
+
+
+@pytest.mark.asyncio
+async def test_fetch_evidence_vault_review_rows_reads_vendor_mentions():
+    review_id = uuid4()
+    pool = FakePool(
+        fetch_map={
+            "SELECT r.id AS review_id": [
+                {
+                    "review_id": review_id,
+                    "vendor_name": "Asana",
+                    "source": "g2",
+                    "reviewed_at": None,
+                    "enriched_at": None,
+                    "rating": 3.0,
+                    "rating_max": 5.0,
+                    "reviewer_title": "VP Ops",
+                    "company_size_raw": "201-500",
+                    "industry": "SaaS",
+                    "role_level": "vp",
+                    "pain_category": "pricing",
+                    "feature_gaps": json.dumps(["automation"]),
+                    "positive_aspects": json.dumps(["ease of use"]),
+                    "urgency": 7.2,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_evidence_vault_review_rows(pool, 60)
+
+    fetch_call = next(call for call in pool.calls if "SELECT r.id AS review_id" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert rows[0]["vendor_name"] == "Asana"
+    assert rows[0]["feature_gaps"] == ["automation"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_insider_aggregates_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "WHERE r.content_type = 'insider_account'": [
+                {
+                    "vendor_name": "Notion",
+                    "signal_count": 2,
+                    "talent_drain_rate": 0.5,
+                    "org_health_array": [],
+                    "quotable_phrases": [],
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_insider_aggregates(pool, 30)
+
+    fetch_call = next(call for call in pool.calls if "WHERE r.content_type = 'insider_account'" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor_name": "Notion",
+            "signal_count": 2,
+            "talent_drain_rate": 0.5,
+            "org_health_array": [],
+            "quotable_phrases": [],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_pain_provenance_reads_vendor_mentions():
+    review_id = uuid4()
+    pool = FakePool(
+        fetch_map={
+            "avg((r.enrichment->>'urgency_score')::numeric) AS avg_urgency": [
+                {
+                    "vendor_name": "Zendesk",
+                    "pain_category": "pricing",
+                    "source": "g2",
+                    "cnt": 2,
+                    "avg_urgency": 6.5,
+                    "avg_rating": 2.5,
+                    "review_ids": [review_id],
+                },
+            ],
+            "p.value->>'severity' AS severity": [
+                {
+                    "vendor_name": "Zendesk",
+                    "pain_category": "pricing",
+                    "severity": "primary",
+                    "cnt": 2,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_pain_provenance(pool, 90)
+
+    core_call = next(call for call in pool.calls if "avg((r.enrichment->>'urgency_score')::numeric) AS avg_urgency" in call[0])
+    severity_call = next(call for call in pool.calls if "p.value->>'severity' AS severity" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in core_call[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in severity_call[0]
+    assert rows[("Zendesk", "pricing")] == {
+        "mention_count": 2,
+        "primary_count": 2,
+        "secondary_count": 0,
+        "minor_count": 0,
+        "avg_urgency": 6.5,
+        "avg_rating": 2.5,
+        "source_distribution": {"g2": 2},
+        "sample_review_ids": [str(review_id)],
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_use_case_provenance_reads_vendor_mentions():
+    review_id = uuid4()
+    pool = FakePool(
+        fetch_map={
+            "avg((r.enrichment->>'urgency_score')::numeric) AS avg_urgency": [
+                {
+                    "vendor_name": "HubSpot",
+                    "module_name": "analytics",
+                    "source": "g2",
+                    "cnt": 3,
+                    "avg_urgency": 5.5,
+                    "review_ids": [review_id],
+                },
+            ],
+            "lock_in_level": [
+                {
+                    "vendor_name": "HubSpot",
+                    "module_name": "analytics",
+                    "lock_in_level": "high",
+                    "cnt": 2,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_use_case_provenance(pool, 90)
+
+    module_call = next(call for call in pool.calls if "modules_mentioned" in call[0])
+    lock_call = next(call for call in pool.calls if "lock_in_level" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in module_call[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in lock_call[0]
+    assert rows[("HubSpot", "analytics")] == {
+        "mention_count": 3,
+        "avg_urgency": 5.5,
+        "lock_in_distribution": {"high": 2},
+        "source_distribution": {"g2": 3},
+        "sample_review_ids": [str(review_id)],
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_integration_provenance_reads_vendor_mentions():
+    review_id = uuid4()
+    pool = FakePool(
+        fetch_map={
+            "integration_stack": [
+                {
+                    "vendor_name": "HubSpot",
+                    "tool_name": "Salesforce",
+                    "source": "g2",
+                    "cnt": 2,
+                    "review_ids": [review_id],
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_integration_provenance(pool, 90)
+
+    fetch_call = next(call for call in pool.calls if "integration_stack" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert rows[("HubSpot", "Salesforce")] == {
+        "mention_count": 2,
+        "source_distribution": {"g2": 2},
+        "sample_review_ids": [str(review_id)],
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_budget_signals_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "AS annual_spend_values": [
+                {
+                    "vendor_name": "Zendesk",
+                    "avg_seat_count": 120.0,
+                    "median_seat_count": 100.0,
+                    "max_seat_count": 200.0,
+                    "price_increase_count": 2,
+                    "total": 4,
+                    "annual_spend_values": ["50k-100k"],
+                    "price_per_seat_values": ["$89"],
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_budget_signals(pool, 90)
+
+    fetch_call = next(call for call in pool.calls if "AS annual_spend_values" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "Zendesk",
+            "avg_seat_count": 120.0,
+            "median_seat_count": 100.0,
+            "max_seat_count": 200.0,
+            "price_increase_count": 2,
+            "price_increase_rate": 0.5,
+            "annual_spend_signals": ["50k-100k"],
+            "price_per_seat_signals": ["$89"],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_use_case_distribution_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "modules_mentioned": [
+                {"vendor_name": "Zendesk", "module_name": "ticketing", "mentions": 3},
+            ],
+            "integration_stack": [
+                {"vendor_name": "Zendesk", "tool_name": "Slack", "mentions": 2},
+            ],
+            "lock_in_level": [
+                {"vendor_name": "Zendesk", "lock_in_level": "high", "cnt": 4},
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_use_case_distribution(pool, 90)
+
+    for needle in ("modules_mentioned", "integration_stack", "lock_in_level"):
+        fetch_call = next(call for call in pool.calls if needle in call[0])
+        assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert rows == [
+        {"type": "modules", "data": [{"vendor_name": "Zendesk", "module_name": "ticketing", "mentions": 3}]},
+        {"type": "stacks", "data": [{"vendor_name": "Zendesk", "tool_name": "Slack", "mentions": 2}]},
+        {"type": "lock_in", "data": [{"vendor_name": "Zendesk", "lock_in_level": "high", "cnt": 4}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_sentiment_trajectory_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "sentiment_direction AS direction": [
+                {"vendor_name": "HubSpot", "direction": "declining", "cnt": 5},
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_sentiment_trajectory(pool, 30)
+
+    fetch_call = next(call for call in pool.calls if "sentiment_direction AS direction" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [{"vendor": "HubSpot", "direction": "declining", "count": 5}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_sentiment_tenure_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "sentiment_tenure AS tenure": [
+                {"vendor_name": "HubSpot", "tenure": "12-24m", "cnt": 4},
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_sentiment_tenure(pool, 30)
+
+    fetch_call = next(call for call in pool.calls if "sentiment_tenure AS tenure" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [{"vendor": "HubSpot", "tenure": "12-24m", "count": 4}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_turning_points_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "sentiment_turning_point AS turning_point": [
+                {"vendor_name": "Intercom", "turning_point": "renewal", "cnt": 3},
+            ],
+            "ev.value->>'event' AS event_text": [
+                {"vendor_name": "Intercom", "event_text": "migration project", "timeframe": "Q2", "cnt": 2},
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_turning_points(pool, 60)
+
+    base_call = next(call for call in pool.calls if "sentiment_turning_point AS turning_point" in call[0])
+    event_call = next(call for call in pool.calls if "ev.value->>'event' AS event_text" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in base_call[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in event_call[0]
+    assert rows == [
+        {"vendor": "Intercom", "trigger": "renewal", "mentions": 3},
+        {"vendor": "Intercom", "trigger": "migration project (Q2)", "mentions": 2},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_review_text_aggregates_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "specific_complaints": [
+                {"vendor_name": "Asana", "text": "pricing", "mentions": 3},
+            ],
+            "positive_aspects": [
+                {"vendor_name": "Asana", "text": "ease of use", "mentions": 4},
+            ],
+        },
+    )
+
+    complaints, positives = await shared_mod._fetch_review_text_aggregates(pool, 90)
+
+    complaint_call = next(call for call in pool.calls if "specific_complaints" in call[0])
+    positive_call = next(call for call in pool.calls if "positive_aspects" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in complaint_call[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in positive_call[0]
+    assert complaints == [{"vendor": "Asana", "text": "pricing", "mentions": 3}]
+    assert positives == [{"vendor": "Asana", "aspect": "ease of use", "mentions": 4}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_department_distribution_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "reviewer_context'->>'department' AS department": [
+                {
+                    "vendor_name": "Notion",
+                    "department": "IT",
+                    "review_count": 5,
+                    "churning_count": 2,
+                    "avg_urgency": 6.8,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_department_distribution(pool, 60)
+
+    fetch_call = next(call for call in pool.calls if "reviewer_context'->>'department' AS department" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "Notion",
+            "department": "IT",
+            "review_count": 5,
+            "churn_rate": 0.4,
+            "avg_urgency": 6.8,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_company_size_distribution_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "company_size_segment": [
+                {
+                    "vendor_name": "Salesforce",
+                    "segment": "enterprise",
+                    "review_count": 6,
+                    "churning_count": 3,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_company_size_distribution(pool, 60)
+
+    fetch_call = next(call for call in pool.calls if "company_size_segment" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "Salesforce",
+            "segment": "enterprise",
+            "review_count": 6,
+            "churn_rate": 0.5,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_contract_context_distribution_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "contract_value_signal": [
+                {"vendor_name": "Asana", "segment": "mid_market", "cnt": 4, "churning": 1},
+            ],
+            "usage_duration": [
+                {"vendor_name": "Asana", "duration": "1-2 years", "cnt": 3, "churning": 2},
+            ],
+        },
+    )
+
+    value_rows, duration_rows = await shared_mod._fetch_contract_context_distribution(pool, 60)
+
+    value_call = next(call for call in pool.calls if "contract_value_signal" in call[0])
+    duration_call = next(call for call in pool.calls if "usage_duration" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in value_call[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in duration_call[0]
+    assert value_rows == [{"vendor": "Asana", "segment": "mid_market", "count": 4, "churn_rate": 0.25}]
+    assert duration_rows == [{"vendor": "Asana", "duration": "1-2 years", "count": 3, "churn_rate": 0.67}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_buyer_authority_summary_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "buyer_authority'->>'role_type' AS role_type": [
+                {
+                    "vendor_name": "Zendesk",
+                    "role_type": "champion",
+                    "buying_stage": "active_purchase",
+                    "cnt": 4,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_buyer_authority_summary(pool, 60)
+
+    fetch_call = next(call for call in pool.calls if "buyer_authority'->>'role_type' AS role_type" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "Zendesk",
+            "role_type": "champion",
+            "buying_stage": "active_purchase",
+            "count": 4,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_role_churn_summary_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "mode() WITHIN GROUP": [
+                {
+                    "vendor_name": "Zendesk",
+                    "role_type": "decision_maker",
+                    "total": 5,
+                    "churn_count": 2,
+                    "top_pain": "pricing",
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_role_churn_summary(pool, 60)
+
+    fetch_call = next(call for call in pool.calls if "mode() WITHIN GROUP" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "Zendesk",
+            "role_type": "decision_maker",
+            "total": 5,
+            "churn_count": 2,
+            "churn_rate": 0.4,
+            "top_pain": "pricing",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_timeline_signals_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "evaluation_deadline": [
+                {
+                    "reviewer_company": "Acme",
+                    "vendor_name": "HubSpot",
+                    "contract_end": "2026-05-01",
+                    "evaluation_deadline": "2026-04-15",
+                    "decision_timeline": "30 days",
+                    "urgency": 7.5,
+                    "reviewer_title": "VP Operations",
+                    "company_size_raw": "201-500",
+                    "industry": "SaaS",
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_timeline_signals(pool, 45)
+
+    fetch_call = next(call for call in pool.calls if "evaluation_deadline" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert rows == [
+        {
+            "company": "Acme",
+            "vendor": "HubSpot",
+            "contract_end": "2026-05-01",
+            "evaluation_deadline": "2026-04-15",
+            "decision_timeline": "30 days",
+            "urgency": 7.5,
+            "title": "VP Operations",
+            "company_size": "201-500",
+            "industry": "SaaS",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_competitor_reasons_reads_vendor_mentions():
+    pool = FakePool(
+        fetch_map={
+            "WITH ranked_reasons AS": [
+                {
+                    "vendor_name": "Zendesk",
+                    "competitor": "Freshdesk",
+                    "direction": "considering",
+                    "reason": "pricing",
+                    "reason_category": "pricing",
+                    "reason_detail": "lower seat cost",
+                    "mention_count": 3,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod._fetch_competitor_reasons(pool, 90)
+
+    fetch_call = next(call for call in pool.calls if "WITH ranked_reasons AS" in call[0])
+    assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
+    assert "GROUP BY vm.vendor_name" in fetch_call[0]
+    assert rows == [
+        {
+            "vendor": "Zendesk",
+            "competitor": "Freshdesk",
+            "direction": "considering",
+            "reason": "pricing",
+            "reason_category": "pricing",
+            "reason_detail": "lower seat cost",
+            "mention_count": 3,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_read_vendor_intelligence_record_prefers_latest_exact_vendor_row():
     pool = FakePool(
         fetch_map={
@@ -1679,7 +2476,7 @@ async def test_fetch_all_pool_layers_applies_vendor_filter_to_queries():
                 {"vendor_name": "Zendesk", "product_category": "Helpdesk"},
             ],
             "FROM b2b_category_dynamics": [],
-            "FROM b2b_reviews r LEFT JOIN b2b_account_resolution ar": [],
+            "JOIN b2b_review_vendor_mentions vm": [],
         },
     )
 
@@ -1695,9 +2492,9 @@ async def test_fetch_all_pool_layers_applies_vendor_filter_to_queries():
     assert evidence_call[1][2] == ["zendesk"]
     profile_call = next(call for call in pool.calls if "FROM b2b_product_profiles" in call[0])
     assert profile_call[1][0] == ["zendesk"]
-    review_call = next(call for call in pool.calls if "FROM b2b_reviews r LEFT JOIN b2b_account_resolution ar" in call[0])
+    review_call = next(call for call in pool.calls if "JOIN b2b_review_vendor_mentions vm" in call[0])
     assert review_call[1][2] == ["zendesk"]
-    assert "LOWER(r.vendor_name) = ANY($3::text[])" in review_call[0]
+    assert "LOWER(vm.vendor_name) = ANY($3::text[])" in review_call[0]
 
 
 @pytest.mark.asyncio
@@ -1711,7 +2508,7 @@ async def test_fetch_all_pool_layers_uses_resolved_company_for_review_candidates
             "FROM b2b_displacement_dynamics": [],
             "FROM b2b_product_profiles": [],
             "FROM b2b_category_dynamics": [],
-            "FROM b2b_reviews r LEFT JOIN b2b_account_resolution ar": [
+            "JOIN b2b_review_vendor_mentions vm": [
                 {
                     "vendor_name": "Zendesk",
                     "id": uuid4(),
@@ -1758,7 +2555,7 @@ async def test_fetch_all_pool_layers_ignores_low_confidence_resolved_company_for
             "FROM b2b_displacement_dynamics": [],
             "FROM b2b_product_profiles": [],
             "FROM b2b_category_dynamics": [],
-            "FROM b2b_reviews r LEFT JOIN b2b_account_resolution ar": [
+            "JOIN b2b_review_vendor_mentions vm": [
                 {
                     "vendor_name": "Zendesk",
                     "id": uuid4(),

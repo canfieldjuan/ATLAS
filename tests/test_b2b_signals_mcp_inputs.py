@@ -188,6 +188,10 @@ async def test_get_vendor_profile_trims_vendor_name_before_queries(monkeypatch):
         vendor_name="Zendesk",
         limit=5,
     )
+    counts_sql = pool.fetchrow.await_args_list[0].args[0]
+    pain_sql = pool.fetch.await_args_list[0].args[0]
+    assert "b2b_review_vendor_mentions vm" in counts_sql
+    assert "b2b_review_vendor_mentions vm" in pain_sql
     counts_query, counts_vendor = pool.fetchrow.await_args.args
     pain_query, pain_vendor = pool.fetch.await_args.args
     assert counts_vendor == "Zendesk"

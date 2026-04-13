@@ -77,6 +77,7 @@ from ._b2b_shared import (  # noqa: E402
     _safe_json,
     _intelligence_source_allowlist,
     _eligible_review_filters,
+    _review_vendor_match_join,
     _normalize_generic_pain_label,
     _build_deterministic_vendor_feed,
     _build_deterministic_displacement_map,
@@ -2954,7 +2955,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         company_signal_candidate_stats = await rebuild_company_signal_candidate_materializations(
             pool,
             window_days=window_days,
-            vendors=selected_vendors or None,
+            vendors=scoped_vendors or None,
             urgency_threshold=getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0),
             materialization_run_id=materialization_run_id,
         )
@@ -4187,14 +4188,24 @@ async def generate_vendor_report(
     """
     today = date.today()
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=3, alias="r")
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=3,
+        alias="r",
+        vendor_expr="matched_vm.vendor_name",
+    )
+    vendor_join = _review_vendor_match_join(
+        review_alias="r",
+        vendor_param=2,
+        output_alias="matched_vm",
+    )
 
     # Fetch signals for this vendor
     # APPROVED-ENRICHMENT-READ: urgency_score, reviewer_context.decision_maker, buyer_authority.role_type, buyer_authority.buying_stage, budget_signals.seat_count, timeline.contract_end, timeline.decision_timeline, competitors_mentioned, pain_categories, quotable_phrases, feature_gaps, reviewer_context.industry
     # Reason: core pipeline report generator, feeds reasoning pools
     rows = await pool.fetch(
         f"""
-        SELECT r.id AS review_id, r.vendor_name, r.reviewer_company, r.product_category,
+        SELECT r.id AS review_id, matched_vm.vendor_name AS vendor_name, r.reviewer_company, r.product_category,
                (r.enrichment->>'urgency_score')::numeric AS urgency,
                (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
                r.enrichment->'buyer_authority'->>'role_type' AS role_type,
@@ -4211,8 +4222,8 @@ async def generate_vendor_report(
                r.reviewer_title, r.company_size_raw,
                COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r
-                WHERE {filters}
-          AND r.vendor_name ILIKE '%' || $2 || '%'
+        {vendor_join}
+        WHERE {filters}
           AND (r.enrichment->>'urgency_score')::numeric >= 3
         ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
         LIMIT 500
@@ -5419,13 +5430,22 @@ async def generate_challenger_report(
     """
     today = date.today()
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=3, alias="r")
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=3,
+        alias="r",
+        vendor_expr="matched_vm.vendor_name",
+    )
+    vendor_join = _review_vendor_match_join(
+        review_alias="r",
+        output_alias="matched_vm",
+    )
 
     # APPROVED-ENRICHMENT-READ: urgency_score, reviewer_context.decision_maker, buyer_authority.role_type, buyer_authority.buying_stage, budget_signals.seat_count, competitors_mentioned, pain_categories, quotable_phrases, feature_gaps, reviewer_context.industry
     # Reason: core pipeline challenger report generator, feeds reasoning pools
     rows = await pool.fetch(
         f"""
-        SELECT r.id AS review_id, r.vendor_name, r.reviewer_company, r.product_category,
+        SELECT r.id AS review_id, matched_vm.vendor_name AS vendor_name, r.reviewer_company, r.product_category,
                (r.enrichment->>'urgency_score')::numeric AS urgency,
                (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
                r.enrichment->'buyer_authority'->>'role_type' AS role_type,
@@ -5439,7 +5459,8 @@ async def generate_challenger_report(
                r.reviewer_title, r.company_size_raw,
                COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r
-                WHERE {filters}
+        {vendor_join}
+        WHERE {filters}
           AND (r.enrichment->>'urgency_score')::numeric >= 3
           AND EXISTS (
                 SELECT 1 FROM jsonb_array_elements(r.enrichment->'competitors_mentioned') AS comp(value)

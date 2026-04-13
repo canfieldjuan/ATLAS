@@ -16,6 +16,7 @@ from ...config import settings
 from ...services.campaign_sender import get_campaign_sender
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_shared import _review_vendor_match_join
 
 logger = logging.getLogger("atlas.tasks.b2b_churn_alert")
 
@@ -64,18 +65,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         # APPROVED-ENRICHMENT-READ: urgency_score, competitors_mentioned
         # Reason: 7-day signal aggregation for churn alerts
         current = await pool.fetchrow(
-            """
+            f"""
             SELECT
-                count(*) AS signal_count,
-                COALESCE(avg((enrichment->>'urgency_score')::numeric), 0) AS avg_urgency,
-                count(*) FILTER (
-                    WHERE jsonb_array_length(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)) > 0
+                count(DISTINCT r.id) AS signal_count,
+                COALESCE(avg((r.enrichment->>'urgency_score')::numeric), 0) AS avg_urgency,
+                count(DISTINCT r.id) FILTER (
+                    WHERE jsonb_array_length(COALESCE(r.enrichment->'competitors_mentioned', '[]'::jsonb)) > 0
                 ) AS displacement_count
-            FROM b2b_reviews
-            WHERE enrichment_status = 'enriched'
-              AND duplicate_of_review_id IS NULL
-              AND vendor_name ILIKE '%' || $1 || '%'
-              AND enriched_at > NOW() - INTERVAL '7 days'
+            FROM b2b_reviews r
+            {_review_vendor_match_join(review_alias='r', vendor_param=1, output_alias='matched_vm')}
+            WHERE r.enrichment_status = 'enriched'
+              AND r.duplicate_of_review_id IS NULL
+              AND r.enriched_at > NOW() - INTERVAL '7 days'
             """,
             vendor_name,
         )

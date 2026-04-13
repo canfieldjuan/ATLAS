@@ -680,7 +680,13 @@ def _eligible_review_timestamp_expr(*, alias: str = "") -> str:
     return f"COALESCE({p}reviewed_at, {p}imported_at, {p}enriched_at)"
 
 
-def _eligible_review_filters(*, window_param: int | None = 1, source_param: int = 2, alias: str = "") -> str:
+def _eligible_review_filters(
+    *,
+    window_param: int | None = 1,
+    source_param: int = 2,
+    alias: str = "",
+    vendor_expr: str | None = None,
+) -> str:
     """Build a reusable SQL predicate for eligible intelligence review rows.
 
     When *alias* is set (e.g. ``"r"``), column references are prefixed
@@ -688,6 +694,7 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
     """
     p = f"{alias}." if alias else ""
     time_expr = _eligible_review_timestamp_expr(alias=alias)
+    vendor_ref = vendor_expr or f"{p}vendor_name"
     status_list = ", ".join(
         f"'{status}'"
         for status in _INTELLIGENCE_ELIGIBLE_STATUSES
@@ -711,10 +718,52 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
         f" AND dc2.correction_type = 'suppress_source'"
         f" AND dc2.status = 'applied'"
         f" AND LOWER(dc2.metadata->>'source_name') = LOWER({p}source)"
-        f" AND (dc2.field_name IS NULL OR LOWER(dc2.field_name) = LOWER({p}vendor_name))"
+        f" AND (dc2.field_name IS NULL OR LOWER(dc2.field_name) = LOWER({vendor_ref}))"
         f")"
     )
     return "\n          AND ".join(parts)
+
+
+def _review_vendor_match_join(
+    *,
+    review_alias: str = "r",
+    vendor_param: int | None = None,
+    scoped_param: int | None = None,
+    output_alias: str = "matched_vm",
+) -> str:
+    """Return a lateral join that resolves a review row to one matched vendor."""
+    conditions = [f"vm.review_id = {review_alias}.id"]
+    if vendor_param is None and scoped_param is None:
+        conditions.append("vm.is_primary = TRUE")
+    if vendor_param is not None:
+        conditions.append(f"vm.vendor_name ILIKE '%' || ${vendor_param} || '%'")
+    if scoped_param is not None:
+        conditions.append(f"vm.vendor_name = ANY(${scoped_param}::text[])")
+    where_sql = "\n              AND ".join(conditions)
+    return f"""
+        JOIN LATERAL (
+            SELECT vm.vendor_name
+            FROM b2b_review_vendor_mentions vm
+            WHERE {where_sql}
+            ORDER BY vm.is_primary DESC, vm.vendor_name ASC
+        ) {output_alias} ON TRUE
+    """
+
+
+def _review_vendor_association_join(
+    *,
+    review_alias: str = "r",
+    output_alias: str = "vm",
+    primary_only: bool = False,
+) -> str:
+    """Return a join that expands a review row to vendor associations."""
+    conditions = [f"{output_alias}.review_id = {review_alias}.id"]
+    if primary_only:
+        conditions.append(f"{output_alias}.is_primary = TRUE")
+    return (
+        f"JOIN b2b_review_vendor_mentions {output_alias}"
+        f" ON {' AND '.join(conditions)}"
+    )
 
 
 def _parse_task_result_payload(result_text: Any) -> dict[str, Any]:
@@ -4137,16 +4186,22 @@ async def _fetch_vendor_provenance(pool, window_days: int) -> dict[str, dict]:
              "review_window_start": dt, "review_window_end": dt}}.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
-    time_expr = _eligible_review_timestamp_expr()
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
+    time_expr = _eligible_review_timestamp_expr(alias="r")
 
     # Source distribution per vendor
     dist_rows = await pool.fetch(
         f"""
-        SELECT vendor_name, source, count(*) AS cnt
-        FROM b2b_reviews
+        SELECT vm.vendor_name AS vendor_name, r.source, count(*) AS cnt
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-        GROUP BY vendor_name, source
+        GROUP BY vm.vendor_name, r.source
         """,
         window_days,
         sources,
@@ -4158,14 +4213,15 @@ async def _fetch_vendor_provenance(pool, window_days: int) -> dict[str, dict]:
     # Sample review IDs (top 50 by urgency) + window per vendor
     sample_rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            (ARRAY_AGG(id ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST))[1:50]
+        SELECT vm.vendor_name AS vendor_name,
+            (ARRAY_AGG(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST))[1:50]
                 AS sample_ids,
             MIN({time_expr}) AS window_start,
             MAX({time_expr}) AS window_end
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-        GROUP BY vendor_name
+        GROUP BY vm.vendor_name
         """,
         window_days,
         sources,
@@ -4195,90 +4251,96 @@ async def _fetch_vendor_provenance(pool, window_days: int) -> dict[str, dict]:
 async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -> list[dict[str, Any]]:
     """Per-vendor health metrics from enriched reviews."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=3)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
         WITH review_scores AS (
-            SELECT vendor_name,
-                MODE() WITHIN GROUP (ORDER BY product_category) AS product_category,
+            SELECT vm.vendor_name AS vendor_name,
+                MODE() WITHIN GROUP (ORDER BY r.product_category) AS product_category,
                 count(*) AS total_reviews,
                 count(*) FILTER (
-                    WHERE COALESCE((enrichment->>'urgency_score')::numeric, 0) > 0
-                       OR (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
-                       OR jsonb_array_length(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)) > 0
+                    WHERE COALESCE((r.enrichment->>'urgency_score')::numeric, 0) > 0
+                       OR (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                       OR jsonb_array_length(COALESCE(r.enrichment->'competitors_mentioned', '[]'::jsonb)) > 0
                 ) AS signal_reviews,
                 count(*) FILTER (
-                    WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                    WHERE (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
                 ) AS churn_intent,
                 avg(
-                    (enrichment->>'urgency_score')::numeric
-                    * COALESCE(source_weight, 0.7)
-                    * (0.7 + 0.3 * COALESCE(relevance_score, 0.5))
+                    (r.enrichment->>'urgency_score')::numeric
+                    * COALESCE(r.source_weight, 0.7)
+                    * (0.7 + 0.3 * COALESCE(r.relevance_score, 0.5))
                 ) / NULLIF(avg(
-                    COALESCE(source_weight, 0.7)
-                    * (0.7 + 0.3 * COALESCE(relevance_score, 0.5))
+                    COALESCE(r.source_weight, 0.7)
+                    * (0.7 + 0.3 * COALESCE(r.relevance_score, 0.5))
                 ), 0)
                 AS avg_urgency,
-                avg(author_churn_score) FILTER (WHERE author_churn_score IS NOT NULL)
+                avg(r.author_churn_score) FILTER (WHERE r.author_churn_score IS NOT NULL)
                 AS avg_author_churn_score,
-                avg(rating / NULLIF(rating_max, 0)) AS avg_rating_normalized,
+                avg(r.rating / NULLIF(r.rating_max, 0)) AS avg_rating_normalized,
                 count(*) FILTER (
-                    WHERE (enrichment->>'would_recommend')::boolean = true
+                    WHERE (r.enrichment->>'would_recommend')::boolean = true
                 ) AS recommend_yes,
                 count(*) FILTER (
-                    WHERE (enrichment->>'would_recommend')::boolean = false
+                    WHERE (r.enrichment->>'would_recommend')::boolean = false
                 ) AS recommend_no,
                 count(*) FILTER (
-                    WHERE enrichment->>'would_recommend' IS NOT NULL
+                    WHERE r.enrichment->>'would_recommend' IS NOT NULL
                 ) AS recommend_total,
                 ROUND(
                     count(*) FILTER (
-                        WHERE rating IS NOT NULL AND rating_max > 0
-                          AND (rating / rating_max) >= 0.7
+                        WHERE r.rating IS NOT NULL AND r.rating_max > 0
+                          AND (r.rating / r.rating_max) >= 0.7
                     ) * 100.0 / NULLIF(count(*) FILTER (
-                        WHERE rating IS NOT NULL AND rating_max > 0
+                        WHERE r.rating IS NOT NULL AND r.rating_max > 0
                     ), 0),
                     1
                 ) AS positive_review_pct,
                 AVG(rating / NULLIF(rating_max, 0)) FILTER (
-                    WHERE review_text ILIKE '%support%' OR review_text ILIKE '%service%'
+                    WHERE r.review_text ILIKE '%support%' OR r.review_text ILIKE '%service%'
                 ) AS support_sentiment,
                 AVG(rating / NULLIF(rating_max, 0)) FILTER (
-                    WHERE review_text ILIKE '%legacy%' OR review_text ILIKE '%old version%' OR review_text ILIKE '%deprecated%'
+                    WHERE r.review_text ILIKE '%legacy%' OR r.review_text ILIKE '%old version%' OR r.review_text ILIKE '%deprecated%'
                 ) AS legacy_support_score,
                 COUNT(*) FILTER (
-                    WHERE review_text ILIKE '%new feature%' OR review_text ILIKE '%update%' OR review_text ILIKE '%release%'
+                    WHERE r.review_text ILIKE '%new feature%' OR r.review_text ILIKE '%update%' OR r.review_text ILIKE '%release%'
                 ) * 1.0 / NULLIF(count(*), 0) AS new_feature_velocity,
                 -- v2 urgency indicator counts (from three-layer extraction)
                 count(*) FILTER (
-                    WHERE (enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean = true
+                    WHERE (r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean = true
                 ) AS indicator_cancel_count,
                 count(*) FILTER (
-                    WHERE (enrichment->'urgency_indicators'->>'active_migration_language')::boolean = true
+                    WHERE (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean = true
                 ) AS indicator_migration_count,
                 count(*) FILTER (
-                    WHERE (enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean = true
+                    WHERE (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean = true
                 ) AS indicator_evaluation_count,
                 count(*) FILTER (
-                    WHERE (enrichment->'urgency_indicators'->>'completed_switch_language')::boolean = true
+                    WHERE (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean = true
                 ) AS indicator_switch_count,
                 count(*) FILTER (
-                    WHERE (enrichment->'urgency_indicators'->>'named_alternative_with_reason')::boolean = true
+                    WHERE (r.enrichment->'urgency_indicators'->>'named_alternative_with_reason')::boolean = true
                 ) AS indicator_named_alt_count,
                 count(*) FILTER (
-                    WHERE (enrichment->'urgency_indicators'->>'decision_maker_language')::boolean = true
+                    WHERE (r.enrichment->'urgency_indicators'->>'decision_maker_language')::boolean = true
                 ) AS indicator_dm_language_count,
                 -- v2 pricing phrase count
                 count(*) FILTER (
-                    WHERE jsonb_array_length(COALESCE(enrichment->'pricing_phrases', '[]'::jsonb)) > 0
+                    WHERE jsonb_array_length(COALESCE(r.enrichment->'pricing_phrases', '[]'::jsonb)) > 0
                 ) AS has_pricing_phrases_count,
                 -- v2 recommendation language count
                 count(*) FILTER (
-                    WHERE jsonb_array_length(COALESCE(enrichment->'recommendation_language', '[]'::jsonb)) > 0
+                    WHERE jsonb_array_length(COALESCE(r.enrichment->'recommendation_language', '[]'::jsonb)) > 0
                 ) AS has_recommendation_language_count
-            FROM b2b_reviews
+            FROM b2b_reviews r
+            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
             WHERE {filters}
-            GROUP BY vendor_name
+            GROUP BY vm.vendor_name
             HAVING count(*) >= $2
         )
         SELECT rs.*,
@@ -5867,9 +5929,7 @@ async def _fetch_high_intent_companies(
 ) -> list[dict[str, Any]]:
     """Companies showing high churn intent -- the money feed."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=2, source_param=3, alias="r")
     params: list = [urgency_threshold, window_days, sources]
-    extra_where = ""
     signal_where = ""
     if _high_intent_signal_evidence_enabled():
         signal_where = """
@@ -5884,16 +5944,29 @@ async def _fetch_high_intent_companies(
           )
         """
     idx = 4
+    vendor_param = None
+    scoped_param = None
     if vendor_name:
-        extra_where += f"\n          AND r.vendor_name ILIKE '%' || ${idx} || '%'"
+        vendor_param = idx
         params.append(vendor_name)
         idx += 1
     if scoped_vendors is not None:
         if not scoped_vendors:
             return []  # scoped user with no tracked vendors = zero results
-        extra_where += f"\n          AND r.vendor_name = ANY(${idx}::text[])"
+        scoped_param = idx
         params.append(scoped_vendors)
         idx += 1
+    filters = _eligible_review_filters(
+        window_param=2,
+        source_param=3,
+        alias="r",
+        vendor_expr="matched_vm.vendor_name",
+    )
+    vendor_join = _review_vendor_match_join(
+        review_alias="r",
+        vendor_param=vendor_param,
+        scoped_param=scoped_param,
+    )
     limit_clause = ""
     if limit is not None:
         limit_clause = f"\n        LIMIT ${idx}"
@@ -5912,7 +5985,8 @@ async def _fetch_high_intent_companies(
             ) AS reviewer_company,
             r.reviewer_company AS raw_reviewer_company,
             ar.confidence_label AS resolution_confidence,
-            r.vendor_name, r.product_category,
+            matched_vm.vendor_name AS vendor_name,
+            r.product_category,
             r.reviewer_title,
             r.company_size_raw,
             COALESCE(poc.industry, r.reviewer_industry,
@@ -5952,6 +6026,7 @@ async def _fetch_high_intent_companies(
             (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
             (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
         FROM b2b_reviews r
+        {vendor_join}
         LEFT JOIN b2b_account_resolution ar
             ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
         LEFT JOIN prospect_org_cache poc
@@ -5960,7 +6035,7 @@ async def _fetch_high_intent_companies(
                 THEN ar.normalized_company_name
                 ELSE NULL
             END
-        WHERE {filters}{extra_where}
+        WHERE {filters}
           AND (r.enrichment->>'urgency_score')::numeric >= $1
           AND r.reviewer_company IS NOT NULL AND r.reviewer_company != ''
           AND COALESCE(r.relevance_score, 0.5) >= 0.3
@@ -6063,20 +6138,31 @@ async def _fetch_company_signal_review_candidates(
 ) -> list[dict[str, Any]]:
     """Fetch review-level company-signal candidates for analyst-assist workflows."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
     params: list[Any] = [window_days, sources]
-    extra_where = ""
     idx = 3
+    vendor_param = None
+    scoped_param = None
     if vendor_name:
-        extra_where += f"\n          AND r.vendor_name ILIKE '%' || ${idx} || '%'"
+        vendor_param = idx
         params.append(vendor_name)
         idx += 1
     if scoped_vendors is not None:
         if not scoped_vendors:
             return []
-        extra_where += f"\n          AND r.vendor_name = ANY(${idx}::text[])"
+        scoped_param = idx
         params.append(scoped_vendors)
         idx += 1
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="matched_vm.vendor_name",
+    )
+    vendor_join = _review_vendor_match_join(
+        review_alias="r",
+        vendor_param=vendor_param,
+        scoped_param=scoped_param,
+    )
     limit_clause = ""
     if limit is not None:
         limit_clause = f"\n        LIMIT ${idx}"
@@ -6096,7 +6182,7 @@ async def _fetch_company_signal_review_candidates(
                ) AS reviewer_company,
                r.reviewer_company AS raw_reviewer_company,
                ar.confidence_label AS resolution_confidence,
-               r.vendor_name,
+               matched_vm.vendor_name AS vendor_name,
                r.product_category,
                COALESCE(r.reviewed_at, r.imported_at, r.enriched_at) AS reviewed_at,
                r.reviewer_title,
@@ -6125,6 +6211,7 @@ async def _fetch_company_signal_review_candidates(
                (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
                (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
         FROM b2b_reviews r
+        {vendor_join}
         LEFT JOIN b2b_account_resolution ar
             ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
         LEFT JOIN prospect_org_cache poc
@@ -6133,7 +6220,7 @@ async def _fetch_company_signal_review_candidates(
                 THEN ar.normalized_company_name
                 ELSE NULL
             END
-        WHERE {filters}{extra_where}
+        WHERE {filters}
           AND r.reviewer_company IS NOT NULL AND r.reviewer_company <> ''
           AND COALESCE(r.relevance_score, 0.5) >= 0.3
         ORDER BY COALESCE((r.enrichment->>'urgency_score')::numeric, 0) DESC,
@@ -6328,10 +6415,15 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
     Excludes reverse_flow, neutral_mention, and low-confidence implied_preference.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             comp.value->>'name' AS competitor,
             COALESCE(
                 comp.value->>'evidence_type',
@@ -6352,8 +6444,9 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
             array_agg(DISTINCT company_size_raw) FILTER (WHERE company_size_raw IS NOT NULL) AS sizes,
             array_agg(DISTINCT COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry'))
                 FILTER (WHERE COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') IS NOT NULL) AS industries
-        FROM b2b_reviews
-        CROSS JOIN LATERAL jsonb_array_elements(enrichment->'competitors_mentioned') AS comp(value)
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
+        CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'competitors_mentioned') AS comp(value)
         WHERE {filters}
           AND COALESCE(
                 comp.value->>'evidence_type',
@@ -6375,7 +6468,7 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
               ) = 'implied_preference'
               AND COALESCE(comp.value->>'displacement_confidence', 'low') = 'low'
           )
-        GROUP BY vendor_name, comp.value->>'name',
+        GROUP BY vm.vendor_name, comp.value->>'name',
                  evidence_type, displacement_confidence, reason_category,
                  comp.value->>'context'
         HAVING count(*) >= 2
@@ -6435,19 +6528,25 @@ async def _fetch_displacement_provenance(pool, window_days: int) -> dict[tuple[s
       - ``sample_review_ids``:   list of UUID strings (top 20 by urgency)
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             comp.value->>'name' AS competitor,
             r.source,
             count(*) AS cnt,
             array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
                 FILTER (WHERE r.id IS NOT NULL) AS review_ids
         FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'competitors_mentioned') AS comp(value)
         WHERE {filters}
-        GROUP BY r.vendor_name, comp.value->>'name', r.source
+        GROUP BY vm.vendor_name, comp.value->>'name', r.source
         HAVING count(*) >= 1
         ORDER BY cnt DESC
         """,
@@ -6487,12 +6586,17 @@ async def _fetch_pain_provenance(
     source_distribution, sample_review_ids}}``.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
 
     # 1. Core counts + averages grouped by vendor, pain_category, source
     core_rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             r.enrichment->>'pain_category' AS pain_category,
             r.source,
             count(*) AS cnt,
@@ -6501,9 +6605,10 @@ async def _fetch_pain_provenance(
             array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
                 FILTER (WHERE r.id IS NOT NULL) AS review_ids
         FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
           AND r.enrichment->>'pain_category' IS NOT NULL
-        GROUP BY r.vendor_name, r.enrichment->>'pain_category', r.source
+        GROUP BY vm.vendor_name, r.enrichment->>'pain_category', r.source
         """,
         window_days,
         sources,
@@ -6512,17 +6617,18 @@ async def _fetch_pain_provenance(
     # 2. Severity breakdown from the pain_categories array
     severity_rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             p.value->>'category' AS pain_category,
             p.value->>'severity' AS severity,
             count(*) AS cnt
         FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         CROSS JOIN LATERAL jsonb_array_elements(
             COALESCE(r.enrichment->'pain_categories', '[]'::jsonb)
         ) AS p(value)
         WHERE {filters}
           AND p.value->>'category' IS NOT NULL
-        GROUP BY r.vendor_name, p.value->>'category', p.value->>'severity'
+        GROUP BY vm.vendor_name, p.value->>'category', p.value->>'severity'
         """,
         window_days,
         sources,
@@ -6601,12 +6707,17 @@ async def _fetch_use_case_provenance(
     lock_in_distribution, source_distribution, sample_review_ids}}``.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
 
     # 1. Module mentions with source + urgency + sample IDs
     module_rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             mod.value #>> '{{}}' AS module_name,
             r.source,
             count(*) AS cnt,
@@ -6614,11 +6725,12 @@ async def _fetch_use_case_provenance(
             array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
                 FILTER (WHERE r.id IS NOT NULL) AS review_ids
         FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         CROSS JOIN LATERAL jsonb_array_elements(
             COALESCE(r.enrichment->'use_case'->'modules_mentioned', '[]'::jsonb)
         ) AS mod(value)
         WHERE {filters}
-        GROUP BY r.vendor_name, mod.value #>> '{{}}', r.source
+        GROUP BY vm.vendor_name, mod.value #>> '{{}}', r.source
         """,
         window_days,
         sources,
@@ -6627,17 +6739,18 @@ async def _fetch_use_case_provenance(
     # 2. Lock-in distribution per vendor/module
     lock_rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             mod.value #>> '{{}}' AS module_name,
             r.enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
             count(*) AS cnt
         FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         CROSS JOIN LATERAL jsonb_array_elements(
             COALESCE(r.enrichment->'use_case'->'modules_mentioned', '[]'::jsonb)
         ) AS mod(value)
         WHERE {filters}
           AND r.enrichment->'use_case'->>'lock_in_level' IS NOT NULL
-        GROUP BY r.vendor_name, mod.value #>> '{{}}', r.enrichment->'use_case'->>'lock_in_level'
+        GROUP BY vm.vendor_name, mod.value #>> '{{}}', r.enrichment->'use_case'->>'lock_in_level'
         """,
         window_days,
         sources,
@@ -6701,22 +6814,28 @@ async def _fetch_integration_provenance(
     sample_review_ids}}``.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
 
     rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             tool.value #>> '{{}}' AS tool_name,
             r.source,
             count(*) AS cnt,
             array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
                 FILTER (WHERE r.id IS NOT NULL) AS review_ids
         FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         CROSS JOIN LATERAL jsonb_array_elements(
             COALESCE(r.enrichment->'use_case'->'integration_stack', '[]'::jsonb)
         ) AS tool(value)
         WHERE {filters}
-        GROUP BY r.vendor_name, tool.value #>> '{{}}', r.source
+        GROUP BY vm.vendor_name, tool.value #>> '{{}}', r.source
         """,
         window_days,
         sources,
@@ -6758,29 +6877,35 @@ async def _fetch_buyer_profile_provenance(
     avg_urgency, source_distribution, sample_review_ids}}``.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
 
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            COALESCE(enrichment->'buyer_authority'->>'role_type', 'unknown') AS role_type,
-            COALESCE(enrichment->'buyer_authority'->>'buying_stage', 'unknown') AS buying_stage,
-            source,
+        SELECT vm.vendor_name AS vendor_name,
+            COALESCE(r.enrichment->'buyer_authority'->>'role_type', 'unknown') AS role_type,
+            COALESCE(r.enrichment->'buyer_authority'->>'buying_stage', 'unknown') AS buying_stage,
+            r.source,
             count(*) AS cnt,
             count(*) FILTER (
-                WHERE (enrichment->'reviewer_context'->>'decision_maker')::boolean IS TRUE
+                WHERE (r.enrichment->'reviewer_context'->>'decision_maker')::boolean IS TRUE
             ) AS dm_cnt,
-            avg((enrichment->>'urgency_score')::numeric) AS avg_urg,
-            array_agg(id ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST)
-                FILTER (WHERE id IS NOT NULL) AS review_ids
-        FROM b2b_reviews
+            avg((r.enrichment->>'urgency_score')::numeric) AS avg_urg,
+            array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
+                FILTER (WHERE r.id IS NOT NULL) AS review_ids
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND enrichment->'buyer_authority' IS NOT NULL
-          AND enrichment->'buyer_authority' != 'null'::jsonb
-        GROUP BY vendor_name,
-            enrichment->'buyer_authority'->>'role_type',
-            enrichment->'buyer_authority'->>'buying_stage',
-            source
+          AND r.enrichment->'buyer_authority' IS NOT NULL
+          AND r.enrichment->'buyer_authority' != 'null'::jsonb
+        GROUP BY vm.vendor_name,
+            r.enrichment->'buyer_authority'->>'role_type',
+            r.enrichment->'buyer_authority'->>'buying_stage',
+            r.source
         """,
         window_days,
         sources,
@@ -6833,16 +6958,22 @@ async def _fetch_pain_distribution(pool, window_days: int) -> list[dict[str, Any
     reviews that pre-date the multi-label schema.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
         WITH base AS (
-            SELECT vendor_name,
-                   (enrichment->>'urgency_score')::numeric AS urgency,
-                   enrichment->'pain_categories'           AS cats,
-                   enrichment->>'pain_category'            AS fallback_pain,
-                   enrichment->>'pain_cluster'             AS pain_cluster
-            FROM b2b_reviews
+            SELECT vm.vendor_name,
+                   (r.enrichment->>'urgency_score')::numeric AS urgency,
+                   r.enrichment->'pain_categories'           AS cats,
+                   r.enrichment->>'pain_category'            AS fallback_pain,
+                   r.enrichment->>'pain_cluster'             AS pain_cluster
+            FROM b2b_reviews r
+            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
             WHERE {filters}
         ),
         pain_labels AS (
@@ -6916,16 +7047,22 @@ async def _fetch_pain_distribution(pool, window_days: int) -> list[dict[str, Any
 async def _fetch_feature_gaps(pool, window_days: int, *, min_mentions: int = 2) -> list[dict[str, Any]]:
     """Most-mentioned missing features per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=3)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             gap.value #>> '{{}}' AS feature_gap,
             count(*) AS mentions
-        FROM b2b_reviews
-        CROSS JOIN LATERAL jsonb_array_elements(enrichment->'feature_gaps') AS gap(value)
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
+        CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'feature_gaps') AS gap(value)
         WHERE {filters}
-        GROUP BY vendor_name, gap.value #>> '{{}}'
+        GROUP BY vm.vendor_name, gap.value #>> '{{}}'
         HAVING count(*) >= $2
         ORDER BY mentions DESC
         """,
@@ -6946,15 +7083,21 @@ async def _fetch_feature_gaps(pool, window_days: int, *, min_mentions: int = 2) 
 async def _fetch_negative_review_counts(pool, window_days: int, *, threshold: float = 0.5) -> list[dict[str, Any]]:
     """Count reviews with below-threshold ratings per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=3)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name, count(*) AS negative_count
-        FROM b2b_reviews
+        SELECT vm.vendor_name AS vendor_name, count(*) AS negative_count
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND rating IS NOT NULL AND rating_max > 0
-          AND (rating / rating_max) < $2
-        GROUP BY vendor_name
+          AND r.rating IS NOT NULL AND r.rating_max > 0
+          AND (r.rating / r.rating_max) < $2
+        GROUP BY vm.vendor_name
         """,
         window_days,
         threshold,
@@ -6966,21 +7109,27 @@ async def _fetch_negative_review_counts(pool, window_days: int, *, threshold: fl
 async def _fetch_price_complaint_rates(pool, window_days: int) -> list[dict[str, Any]]:
     """Fraction of reviews with pain_category='pricing' per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            count(*) FILTER (WHERE enrichment->>'pain_category' = 'pricing') AS pricing_count,
+        SELECT vm.vendor_name AS vendor_name,
+            count(*) FILTER (WHERE r.enrichment->>'pain_category' = 'pricing') AS pricing_count,
             count(*) FILTER (
-                WHERE (enrichment->'contract_context'->>'price_complaint')::boolean = true
+                WHERE (r.enrichment->'contract_context'->>'price_complaint')::boolean = true
             ) AS price_complaint_count,
             count(*) FILTER (
-                WHERE jsonb_array_length(COALESCE(enrichment->'pricing_phrases', '[]'::jsonb)) > 0
+                WHERE jsonb_array_length(COALESCE(r.enrichment->'pricing_phrases', '[]'::jsonb)) > 0
             ) AS pricing_phrases_count,
             count(*) AS total
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-        GROUP BY vendor_name
+        GROUP BY vm.vendor_name
         HAVING count(*) > 0
         """,
         window_days,
@@ -7002,22 +7151,28 @@ async def _fetch_price_complaint_rates(pool, window_days: int) -> list[dict[str,
 async def _fetch_dm_churn_rates(pool, window_days: int) -> list[dict[str, Any]]:
     """Decision-maker churn rate: DMs with intent_to_leave / total DMs, per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             count(*) FILTER (
-                WHERE (enrichment->'reviewer_context'->>'decision_maker')::boolean = true
-                  AND (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                WHERE (r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true
+                  AND (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
             ) AS dm_churning,
             count(*) FILTER (
-                WHERE (enrichment->'reviewer_context'->>'decision_maker')::boolean = true
+                WHERE (r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true
             ) AS dm_total
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-        GROUP BY vendor_name
+        GROUP BY vm.vendor_name
         HAVING count(*) FILTER (
-            WHERE (enrichment->'reviewer_context'->>'decision_maker')::boolean = true
+            WHERE (r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true
         ) > 0
         """,
         window_days,
@@ -7035,27 +7190,33 @@ async def _fetch_dm_churn_rates(pool, window_days: int) -> list[dict[str, Any]]:
 async def _fetch_churning_companies(pool, window_days: int) -> list[dict[str, Any]]:
     """Companies with high churn intent, aggregated per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             jsonb_agg(jsonb_build_object(
-                'company', reviewer_company,
-                'urgency', (enrichment->>'urgency_score')::numeric,
-                'role', enrichment->'reviewer_context'->>'role_level',
-                'pain', enrichment->>'pain_category',
-                'decision_maker', (enrichment->'reviewer_context'->>'decision_maker')::boolean,
-                'buying_stage', enrichment->'buyer_authority'->>'buying_stage',
-                'title', reviewer_title,
-                'company_size', company_size_raw,
-                'industry', COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry')
-            ) ORDER BY (enrichment->>'urgency_score')::numeric DESC)
+                'company', r.reviewer_company,
+                'urgency', (r.enrichment->>'urgency_score')::numeric,
+                'role', r.enrichment->'reviewer_context'->>'role_level',
+                'pain', r.enrichment->>'pain_category',
+                'decision_maker', (r.enrichment->'reviewer_context'->>'decision_maker')::boolean,
+                'buying_stage', r.enrichment->'buyer_authority'->>'buying_stage',
+                'title', r.reviewer_title,
+                'company_size', r.company_size_raw,
+                'industry', COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry')
+            ) ORDER BY (r.enrichment->>'urgency_score')::numeric DESC)
             AS companies
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
-          AND reviewer_company IS NOT NULL AND reviewer_company != ''
-        GROUP BY vendor_name
+          AND (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+          AND r.reviewer_company IS NOT NULL AND r.reviewer_company != ''
+        GROUP BY vm.vendor_name
         """,
         window_days,
         sources,
@@ -7073,25 +7234,38 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
     Each quote is a dict with 'quote', 'urgency', and 'review_id' for provenance.
     """
     sources = _executive_source_list()
-    filters = _eligible_review_filters(window_param=1, source_param=3)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
         WITH review_best AS (
-            SELECT DISTINCT ON (vendor_name, id)
-                vendor_name, id AS review_id, phrase.value AS quote,
-                (enrichment->>'urgency_score')::numeric AS urgency,
-                source, reviewed_at, rating, rating_max,
-                reviewer_company, reviewer_title, company_size_raw,
-                COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
-                enrichment->'churn_signals' AS churn_signals,
-                enrichment->'salience_flags' AS salience_flags
-            FROM b2b_reviews
+            SELECT DISTINCT ON (vm.vendor_name, r.id)
+                vm.vendor_name AS vendor_name,
+                r.id AS review_id,
+                phrase.value AS quote,
+                (r.enrichment->>'urgency_score')::numeric AS urgency,
+                r.source,
+                r.reviewed_at,
+                r.rating,
+                r.rating_max,
+                r.reviewer_company,
+                r.reviewer_title,
+                r.company_size_raw,
+                COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
+                r.enrichment->'churn_signals' AS churn_signals,
+                r.enrichment->'salience_flags' AS salience_flags
+            FROM b2b_reviews r
+            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
             CROSS JOIN LATERAL jsonb_array_elements_text(
-                COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
+                COALESCE(r.enrichment->'quotable_phrases', '[]'::jsonb)
             ) AS phrase(value)
             WHERE {filters}
-              AND (enrichment->>'urgency_score')::numeric >= $2
-            ORDER BY vendor_name, id, length(phrase.value) DESC
+              AND (r.enrichment->>'urgency_score')::numeric >= $2
+            ORDER BY vm.vendor_name, r.id, length(phrase.value) DESC
         ),
         ranked_quotes AS (
             SELECT *,
@@ -7140,25 +7314,31 @@ async def _fetch_evidence_vault_review_rows(
 ) -> list[dict[str, Any]]:
     """Fetch review-level evidence rows used for pass-2 vault aggregation."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT id AS review_id,
-            vendor_name,
-            source,
-            reviewed_at,
-            enriched_at,
-            rating,
-            rating_max,
-            reviewer_title,
-            company_size_raw,
-            COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
-            enrichment->'reviewer_context'->>'role_level' AS role_level,
-            enrichment->>'pain_category' AS pain_category,
-            COALESCE(enrichment->'feature_gaps', '[]'::jsonb) AS feature_gaps,
-            COALESCE(enrichment->'positive_aspects', '[]'::jsonb) AS positive_aspects,
-            (enrichment->>'urgency_score')::numeric AS urgency
-        FROM b2b_reviews
+        SELECT r.id AS review_id,
+            vm.vendor_name AS vendor_name,
+            r.source,
+            r.reviewed_at,
+            r.enriched_at,
+            r.rating,
+            r.rating_max,
+            r.reviewer_title,
+            r.company_size_raw,
+            COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
+            r.enrichment->'reviewer_context'->>'role_level' AS role_level,
+            r.enrichment->>'pain_category' AS pain_category,
+            COALESCE(r.enrichment->'feature_gaps', '[]'::jsonb) AS feature_gaps,
+            COALESCE(r.enrichment->'positive_aspects', '[]'::jsonb) AS positive_aspects,
+            (r.enrichment->>'urgency_score')::numeric AS urgency
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
         """,
         window_days,
@@ -7196,16 +7376,16 @@ async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, An
     - top quotable phrases from high-urgency insider posts
     """
     rows = await pool.fetch(
-        """
+        f"""
         SELECT
-            vendor_name,
-            COUNT(DISTINCT id)::int AS signal_count,
+            vm.vendor_name,
+            COUNT(DISTINCT r.id)::int AS signal_count,
             ROUND(
                 COUNT(DISTINCT CASE
                     WHEN (enrichment->'insider_signals'->>'departures_mentioned')::boolean = true
                       OR (enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned')::boolean = true
-                    THEN id END)::numeric
-                / NULLIF(COUNT(DISTINCT id), 0)::numeric,
+                    THEN r.id END)::numeric
+                / NULLIF(COUNT(DISTINCT r.id), 0)::numeric,
                 4
             ) AS talent_drain_rate,
             -- v2 flattened insider fields (with v1 nested fallback)
@@ -7231,19 +7411,20 @@ async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, An
                 jsonb_build_object(
                     'quote', ph.value,
                     'urgency', (enrichment->>'urgency_score')::numeric,
-                    'review_id', id::text
+                    'review_id', r.id::text
                 )
                 ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
             ) FILTER (WHERE ph.value IS NOT NULL) AS quotable_phrases
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         LEFT JOIN LATERAL jsonb_array_elements_text(
-            COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
+            COALESCE(r.enrichment->'quotable_phrases', '[]'::jsonb)
         ) AS ph(value) ON true
-        WHERE content_type = 'insider_account'
-          AND enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND imported_at > NOW() - make_interval(days => $1)
-        GROUP BY vendor_name
+        WHERE r.content_type = 'insider_account'
+          AND r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.imported_at > NOW() - make_interval(days => $1)
+        GROUP BY vm.vendor_name
         """,
         window_days,
     )
@@ -7681,11 +7862,11 @@ async def fetch_all_pool_layers(
 
     # Review candidates for witness-pack building.
     try:
-        review_filter_clause = "AND LOWER(r.vendor_name) = ANY($3::text[])" if requested_vendors else ""
+        review_filter_clause = "AND LOWER(vm.vendor_name) = ANY($3::text[])" if requested_vendors else ""
         review_rows = await pool.fetch(
             """
                 SELECT
-                    r.vendor_name,
+                    vm.vendor_name AS vendor_name,
                     r.id,
                     r.source,
                 rating,
@@ -7710,6 +7891,8 @@ async def fetch_all_pool_layers(
                 r.raw_metadata,
                 r.enrichment
                 FROM b2b_reviews r
+                JOIN b2b_review_vendor_mentions vm
+                  ON vm.review_id = r.id
                 LEFT JOIN b2b_account_resolution ar
                   ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
                 WHERE r.enrichment_status = 'enriched'
@@ -7718,7 +7901,7 @@ async def fetch_all_pool_layers(
                   AND COALESCE(r.reviewed_at, r.imported_at) >= ($1::date - ($2::int * INTERVAL '1 day'))
                   """ + review_filter_clause + """
                 ORDER BY
-                    r.vendor_name,
+                    vm.vendor_name,
                     COALESCE(r.reviewed_at, r.imported_at) DESC,
                 r.imported_at DESC,
                 r.id DESC
@@ -8177,41 +8360,47 @@ def _merge_company_lookup_with_evidence_vault(
 async def _fetch_budget_signals(pool, window_days: int) -> list[dict[str, Any]]:
     """Aggregate budget signals: seat_count stats and price-increase mentions per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             avg(NULLIF(
-                CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
-                     THEN (enrichment->'budget_signals'->>'seat_count')::numeric END,
+                CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                     THEN (r.enrichment->'budget_signals'->>'seat_count')::numeric END,
                 0)) AS avg_seat_count,
             percentile_cont(0.5) WITHIN GROUP (
                 ORDER BY NULLIF(
-                    CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
-                         THEN (enrichment->'budget_signals'->>'seat_count')::numeric END,
+                    CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                         THEN (r.enrichment->'budget_signals'->>'seat_count')::numeric END,
                     0)
             ) AS median_seat_count,
             max(NULLIF(
-                CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
-                     THEN (enrichment->'budget_signals'->>'seat_count')::numeric END,
+                CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                     THEN (r.enrichment->'budget_signals'->>'seat_count')::numeric END,
                 0)) AS max_seat_count,
             count(*) FILTER (
-                WHERE (enrichment->'budget_signals'->>'price_increase_mentioned')::boolean = true
+                WHERE (r.enrichment->'budget_signals'->>'price_increase_mentioned')::boolean = true
             ) AS price_increase_count,
             count(*) AS total,
-            array_agg(DISTINCT enrichment->'budget_signals'->>'annual_spend_estimate')
-                FILTER (WHERE enrichment->'budget_signals'->>'annual_spend_estimate' IS NOT NULL
-                        AND enrichment->'budget_signals'->>'annual_spend_estimate' != '')
+            array_agg(DISTINCT r.enrichment->'budget_signals'->>'annual_spend_estimate')
+                FILTER (WHERE r.enrichment->'budget_signals'->>'annual_spend_estimate' IS NOT NULL
+                        AND r.enrichment->'budget_signals'->>'annual_spend_estimate' != '')
                 AS annual_spend_values,
-            array_agg(DISTINCT enrichment->'budget_signals'->>'price_per_seat')
-                FILTER (WHERE enrichment->'budget_signals'->>'price_per_seat' IS NOT NULL
-                        AND enrichment->'budget_signals'->>'price_per_seat' != '')
+            array_agg(DISTINCT r.enrichment->'budget_signals'->>'price_per_seat')
+                FILTER (WHERE r.enrichment->'budget_signals'->>'price_per_seat' IS NOT NULL
+                        AND r.enrichment->'budget_signals'->>'price_per_seat' != '')
                 AS price_per_seat_values
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND enrichment->'budget_signals' IS NOT NULL
-          AND enrichment->'budget_signals' != 'null'::jsonb
-        GROUP BY vendor_name
+          AND r.enrichment->'budget_signals' IS NOT NULL
+          AND r.enrichment->'budget_signals' != 'null'::jsonb
+        GROUP BY vm.vendor_name
         """,
         window_days,
         sources,
@@ -8234,18 +8423,24 @@ async def _fetch_budget_signals(pool, window_days: int) -> list[dict[str, Any]]:
 async def _fetch_use_case_distribution(pool, window_days: int) -> list[dict[str, Any]]:
     """Explode use_case modules and integration stacks, count per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     module_rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             mod.value #>> '{{}}' AS module_name,
             count(*) AS mentions
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         CROSS JOIN LATERAL jsonb_array_elements(
-            COALESCE(enrichment->'use_case'->'modules_mentioned', '[]'::jsonb)
+            COALESCE(r.enrichment->'use_case'->'modules_mentioned', '[]'::jsonb)
         ) AS mod(value)
         WHERE {filters}
-        GROUP BY vendor_name, mod.value #>> '{{}}'
+        GROUP BY vm.vendor_name, mod.value #>> '{{}}'
         HAVING count(*) >= 2
         ORDER BY mentions DESC
         """,
@@ -8254,15 +8449,16 @@ async def _fetch_use_case_distribution(pool, window_days: int) -> list[dict[str,
     )
     stack_rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             tool.value #>> '{{}}' AS tool_name,
             count(*) AS mentions
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         CROSS JOIN LATERAL jsonb_array_elements(
-            COALESCE(enrichment->'use_case'->'integration_stack', '[]'::jsonb)
+            COALESCE(r.enrichment->'use_case'->'integration_stack', '[]'::jsonb)
         ) AS tool(value)
         WHERE {filters}
-        GROUP BY vendor_name, tool.value #>> '{{}}'
+        GROUP BY vm.vendor_name, tool.value #>> '{{}}'
         HAVING count(*) >= 2
         ORDER BY mentions DESC
         """,
@@ -8271,13 +8467,14 @@ async def _fetch_use_case_distribution(pool, window_days: int) -> list[dict[str,
     )
     lock_rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
+        SELECT vm.vendor_name AS vendor_name,
+            r.enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
             count(*) AS cnt
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND enrichment->'use_case'->>'lock_in_level' IS NOT NULL
-        GROUP BY vendor_name, enrichment->'use_case'->>'lock_in_level'
+          AND r.enrichment->'use_case'->>'lock_in_level' IS NOT NULL
+        GROUP BY vm.vendor_name, r.enrichment->'use_case'->>'lock_in_level'
         ORDER BY cnt DESC
         """,
         window_days,
@@ -8293,17 +8490,23 @@ async def _fetch_use_case_distribution(pool, window_days: int) -> list[dict[str,
 async def _fetch_sentiment_trajectory(pool, window_days: int) -> list[dict[str, Any]]:
     """Count reviews per sentiment direction per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            sentiment_direction AS direction,
+        SELECT vm.vendor_name AS vendor_name,
+            r.sentiment_direction AS direction,
             count(*) AS cnt
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND sentiment_direction IS NOT NULL
-          AND sentiment_direction != 'unknown'
-        GROUP BY vendor_name, sentiment_direction
+          AND r.sentiment_direction IS NOT NULL
+          AND r.sentiment_direction != 'unknown'
+        GROUP BY vm.vendor_name, r.sentiment_direction
         ORDER BY cnt DESC
         """,
         window_days,
@@ -8322,17 +8525,23 @@ async def _fetch_sentiment_trajectory(pool, window_days: int) -> list[dict[str, 
 async def _fetch_sentiment_tenure(pool, window_days: int) -> list[dict[str, Any]]:
     """Aggregate customer tenure from sentiment_trajectory per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            sentiment_tenure AS tenure,
+        SELECT vm.vendor_name AS vendor_name,
+            r.sentiment_tenure AS tenure,
             count(*) AS cnt
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND sentiment_tenure IS NOT NULL
-          AND sentiment_tenure != ''
-        GROUP BY vendor_name, sentiment_tenure
+          AND r.sentiment_tenure IS NOT NULL
+          AND r.sentiment_tenure != ''
+        GROUP BY vm.vendor_name, r.sentiment_tenure
         ORDER BY cnt DESC
         """,
         window_days,
@@ -8347,17 +8556,23 @@ async def _fetch_sentiment_tenure(pool, window_days: int) -> list[dict[str, Any]
 async def _fetch_turning_points(pool, window_days: int) -> list[dict[str, Any]]:
     """Aggregate churn turning points from sentiment_trajectory per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            sentiment_turning_point AS turning_point,
+        SELECT vm.vendor_name AS vendor_name,
+            r.sentiment_turning_point AS turning_point,
             count(*) AS cnt
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND sentiment_turning_point IS NOT NULL
-          AND sentiment_turning_point != ''
-        GROUP BY vendor_name, sentiment_turning_point
+          AND r.sentiment_turning_point IS NOT NULL
+          AND r.sentiment_turning_point != ''
+        GROUP BY vm.vendor_name, r.sentiment_turning_point
         ORDER BY cnt DESC
         """,
         window_days,
@@ -8371,17 +8586,18 @@ async def _fetch_turning_points(pool, window_days: int) -> list[dict[str, Any]]:
     # Supplement with v2 event_mentions for richer temporal data
     event_rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             ev.value->>'event' AS event_text,
             ev.value->>'timeframe' AS timeframe,
             count(*) AS cnt
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         CROSS JOIN LATERAL jsonb_array_elements(
-            COALESCE(enrichment->'event_mentions', '[]'::jsonb)
+            COALESCE(r.enrichment->'event_mentions', '[]'::jsonb)
         ) AS ev(value)
         WHERE {filters}
-          AND jsonb_array_length(COALESCE(enrichment->'event_mentions', '[]'::jsonb)) > 0
-        GROUP BY vendor_name, ev.value->>'event', ev.value->>'timeframe'
+          AND jsonb_array_length(COALESCE(r.enrichment->'event_mentions', '[]'::jsonb)) > 0
+        GROUP BY vm.vendor_name, ev.value->>'event', ev.value->>'timeframe'
         HAVING count(*) >= 2
         ORDER BY cnt DESC
         """,
@@ -8414,18 +8630,24 @@ async def _fetch_review_text_aggregates(pool, window_days: int) -> tuple[list[di
     vendor, text, mentions. Only includes items with 2+ mentions.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
 
     complaint_rows, positive_rows = await asyncio.gather(
         pool.fetch(
             f"""
-            SELECT vendor_name, c.value #>> '{{}}' AS text, count(*) AS mentions
-            FROM b2b_reviews
+            SELECT vm.vendor_name AS vendor_name, c.value #>> '{{}}' AS text, count(*) AS mentions
+            FROM b2b_reviews r
+            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
             CROSS JOIN LATERAL jsonb_array_elements(
-                COALESCE(enrichment->'specific_complaints', '[]'::jsonb)
+                COALESCE(r.enrichment->'specific_complaints', '[]'::jsonb)
             ) AS c(value)
             WHERE {filters}
-            GROUP BY vendor_name, c.value #>> '{{}}'
+            GROUP BY vm.vendor_name, c.value #>> '{{}}'
             HAVING count(*) >= 2
             ORDER BY mentions DESC
             """,
@@ -8434,13 +8656,14 @@ async def _fetch_review_text_aggregates(pool, window_days: int) -> tuple[list[di
         ),
         pool.fetch(
             f"""
-            SELECT vendor_name, a.value #>> '{{}}' AS text, count(*) AS mentions
-            FROM b2b_reviews
+            SELECT vm.vendor_name AS vendor_name, a.value #>> '{{}}' AS text, count(*) AS mentions
+            FROM b2b_reviews r
+            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
             CROSS JOIN LATERAL jsonb_array_elements(
-                COALESCE(enrichment->'positive_aspects', '[]'::jsonb)
+                COALESCE(r.enrichment->'positive_aspects', '[]'::jsonb)
             ) AS a(value)
             WHERE {filters}
-            GROUP BY vendor_name, a.value #>> '{{}}'
+            GROUP BY vm.vendor_name, a.value #>> '{{}}'
             HAVING count(*) >= 2
             ORDER BY mentions DESC
             """,
@@ -8463,22 +8686,28 @@ async def _fetch_review_text_aggregates(pool, window_days: int) -> tuple[list[di
 async def _fetch_department_distribution(pool, window_days: int) -> list[dict[str, Any]]:
     """Count reviews and churn rate per department per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            enrichment->'reviewer_context'->>'department' AS department,
+        SELECT vm.vendor_name AS vendor_name,
+            r.enrichment->'reviewer_context'->>'department' AS department,
             count(*) AS review_count,
             count(*) FILTER (
-                WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                WHERE (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
             ) AS churning_count,
-            round(avg((enrichment->>'urgency_score')::numeric), 1) AS avg_urgency
-        FROM b2b_reviews
+            round(avg((r.enrichment->>'urgency_score')::numeric), 1) AS avg_urgency
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND enrichment->'reviewer_context'->>'department' IS NOT NULL
-          AND enrichment->'reviewer_context'->>'department' != ''
-          AND enrichment->'reviewer_context'->>'department' != 'unknown'
-        GROUP BY vendor_name, enrichment->'reviewer_context'->>'department'
+          AND r.enrichment->'reviewer_context'->>'department' IS NOT NULL
+          AND r.enrichment->'reviewer_context'->>'department' != ''
+          AND r.enrichment->'reviewer_context'->>'department' != 'unknown'
+        GROUP BY vm.vendor_name, r.enrichment->'reviewer_context'->>'department'
         ORDER BY review_count DESC
         """,
         window_days,
@@ -8504,10 +8733,15 @@ async def _fetch_company_size_distribution(pool, window_days: int) -> list[dict[
       2. Apollo-verified employee_count bucket via account resolution
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name,
+        SELECT vm.vendor_name AS vendor_name,
             COALESCE(
                 NULLIF(NULLIF(r.enrichment->'reviewer_context'->>'company_size_segment', 'unknown'), ''),
                 CASE
@@ -8522,12 +8756,13 @@ async def _fetch_company_size_distribution(pool, window_days: int) -> list[dict[
                 WHERE (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
             ) AS churning_count
         FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         LEFT JOIN b2b_account_resolution ar
             ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
         LEFT JOIN prospect_org_cache poc
             ON poc.company_name_norm = ar.normalized_company_name
         WHERE {filters}
-        GROUP BY r.vendor_name,
+        GROUP BY vm.vendor_name,
             COALESCE(
                 NULLIF(NULLIF(r.enrichment->'reviewer_context'->>'company_size_segment', 'unknown'), ''),
                 CASE
@@ -8568,22 +8803,28 @@ async def _fetch_contract_context_distribution(pool, window_days: int) -> tuple[
     Returns (value_signal_rows, duration_rows).
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
 
     value_rows, duration_rows = await asyncio.gather(
         pool.fetch(
             f"""
-            SELECT vendor_name,
-                enrichment->'contract_context'->>'contract_value_signal' AS segment,
+            SELECT vm.vendor_name AS vendor_name,
+                r.enrichment->'contract_context'->>'contract_value_signal' AS segment,
                 count(*) AS cnt,
                 count(*) FILTER (
-                    WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                    WHERE (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
                 ) AS churning
-            FROM b2b_reviews
+            FROM b2b_reviews r
+            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
             WHERE {filters}
-              AND enrichment->'contract_context'->>'contract_value_signal' IS NOT NULL
-              AND enrichment->'contract_context'->>'contract_value_signal' NOT IN ('unknown', '')
-            GROUP BY vendor_name, enrichment->'contract_context'->>'contract_value_signal'
+              AND r.enrichment->'contract_context'->>'contract_value_signal' IS NOT NULL
+              AND r.enrichment->'contract_context'->>'contract_value_signal' NOT IN ('unknown', '')
+            GROUP BY vm.vendor_name, r.enrichment->'contract_context'->>'contract_value_signal'
             ORDER BY cnt DESC
             """,
             window_days,
@@ -8591,17 +8832,18 @@ async def _fetch_contract_context_distribution(pool, window_days: int) -> tuple[
         ),
         pool.fetch(
             f"""
-            SELECT vendor_name,
-                enrichment->'contract_context'->>'usage_duration' AS duration,
+            SELECT vm.vendor_name AS vendor_name,
+                r.enrichment->'contract_context'->>'usage_duration' AS duration,
                 count(*) AS cnt,
                 count(*) FILTER (
-                    WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                    WHERE (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
                 ) AS churning
-            FROM b2b_reviews
+            FROM b2b_reviews r
+            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
             WHERE {filters}
-              AND enrichment->'contract_context'->>'usage_duration' IS NOT NULL
-              AND enrichment->'contract_context'->>'usage_duration' != ''
-            GROUP BY vendor_name, enrichment->'contract_context'->>'usage_duration'
+              AND r.enrichment->'contract_context'->>'usage_duration' IS NOT NULL
+              AND r.enrichment->'contract_context'->>'usage_duration' != ''
+            GROUP BY vm.vendor_name, r.enrichment->'contract_context'->>'usage_duration'
             ORDER BY cnt DESC
             """,
             window_days,
@@ -8633,20 +8875,26 @@ async def _fetch_contract_context_distribution(pool, window_days: int) -> tuple[
 async def _fetch_buyer_authority_summary(pool, window_days: int) -> list[dict[str, Any]]:
     """Count reviews per role_type and buying_stage per vendor."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            enrichment->'buyer_authority'->>'role_type' AS role_type,
-            enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+        SELECT vm.vendor_name AS vendor_name,
+            r.enrichment->'buyer_authority'->>'role_type' AS role_type,
+            r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
             count(*) AS cnt
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND enrichment->'buyer_authority' IS NOT NULL
-          AND enrichment->'buyer_authority' != 'null'::jsonb
-        GROUP BY vendor_name,
-            enrichment->'buyer_authority'->>'role_type',
-            enrichment->'buyer_authority'->>'buying_stage'
+          AND r.enrichment->'buyer_authority' IS NOT NULL
+          AND r.enrichment->'buyer_authority' != 'null'::jsonb
+        GROUP BY vm.vendor_name,
+            r.enrichment->'buyer_authority'->>'role_type',
+            r.enrichment->'buyer_authority'->>'buying_stage'
         ORDER BY cnt DESC
         """,
         window_days,
@@ -8670,26 +8918,32 @@ async def _fetch_role_churn_summary(pool, window_days: int) -> list[dict[str, An
     showing churn intent and the most common pain_category for that role.
     """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            enrichment->'buyer_authority'->>'role_type' AS role_type,
+        SELECT vm.vendor_name AS vendor_name,
+            r.enrichment->'buyer_authority'->>'role_type' AS role_type,
             count(*) AS total,
             count(*) FILTER (
-                WHERE (enrichment->>'churn_intent')::boolean IS TRUE
+                WHERE (r.enrichment->>'churn_intent')::boolean IS TRUE
             ) AS churn_count,
             mode() WITHIN GROUP (
-                ORDER BY enrichment->>'pain_category'
+                ORDER BY r.enrichment->>'pain_category'
             ) FILTER (
-                WHERE enrichment->>'pain_category' IS NOT NULL
+                WHERE r.enrichment->>'pain_category' IS NOT NULL
             ) AS top_pain
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
-          AND enrichment->'buyer_authority' IS NOT NULL
-          AND enrichment->'buyer_authority' != 'null'::jsonb
-        GROUP BY vendor_name,
-            enrichment->'buyer_authority'->>'role_type'
+          AND r.enrichment->'buyer_authority' IS NOT NULL
+          AND r.enrichment->'buyer_authority' != 'null'::jsonb
+        GROUP BY vm.vendor_name,
+            r.enrichment->'buyer_authority'->>'role_type'
         HAVING count(*) >= 3
         """,
         window_days,
@@ -8726,24 +8980,30 @@ def _build_role_churn_lookup(
 async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) -> list[dict[str, Any]]:
     """Extract reviews with non-null contract_end or evaluation_deadline -- hottest leads."""
     sources = _executive_source_list()
-    filters = _eligible_review_filters(window_param=1, source_param=3)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
-        SELECT reviewer_company, vendor_name,
-            enrichment->'timeline'->>'contract_end' AS contract_end,
-            enrichment->'timeline'->>'evaluation_deadline' AS evaluation_deadline,
-            enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
-            (enrichment->>'urgency_score')::numeric AS urgency,
-            reviewer_title, company_size_raw,
-            COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
-        FROM b2b_reviews
+        SELECT r.reviewer_company, vm.vendor_name AS vendor_name,
+            r.enrichment->'timeline'->>'contract_end' AS contract_end,
+            r.enrichment->'timeline'->>'evaluation_deadline' AS evaluation_deadline,
+            r.enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
+            (r.enrichment->>'urgency_score')::numeric AS urgency,
+            r.reviewer_title, r.company_size_raw,
+            COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
           AND (
-              enrichment->'timeline'->>'contract_end' IS NOT NULL
-              OR enrichment->'timeline'->>'evaluation_deadline' IS NOT NULL
-              OR NULLIF(enrichment->'timeline'->>'decision_timeline', '') IS NOT NULL
+              r.enrichment->'timeline'->>'contract_end' IS NOT NULL
+              OR r.enrichment->'timeline'->>'evaluation_deadline' IS NOT NULL
+              OR NULLIF(r.enrichment->'timeline'->>'decision_timeline', '') IS NOT NULL
           )
-        ORDER BY (enrichment->>'urgency_score')::numeric DESC
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
         LIMIT $2
         """,
         window_days,
@@ -8769,11 +9029,16 @@ async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) ->
 async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, Any]]:
     """Top reasons per vendor/competitor pair -- prefers structured reason_category."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(
+        window_param=1,
+        source_param=2,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     rows = await pool.fetch(
         f"""
         WITH ranked_reasons AS (
-            SELECT vendor_name,
+            SELECT vm.vendor_name AS vendor_name,
                 comp.value->>'name' AS competitor,
                 comp.value->>'context' AS direction,
                 COALESCE(comp.value->>'reason_category', comp.value->>'reason') AS reason,
@@ -8781,14 +9046,15 @@ async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, An
                 comp.value->>'reason_detail' AS reason_detail,
                 count(*) AS mention_count,
                 ROW_NUMBER() OVER (
-                    PARTITION BY vendor_name, comp.value->>'name'
+                    PARTITION BY vm.vendor_name, comp.value->>'name'
                     ORDER BY count(*) DESC
                 ) AS rn
-            FROM b2b_reviews
-            CROSS JOIN LATERAL jsonb_array_elements(enrichment->'competitors_mentioned') AS comp(value)
-                        WHERE {filters}
+            FROM b2b_reviews r
+            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
+            CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'competitors_mentioned') AS comp(value)
+            WHERE {filters}
               AND COALESCE(comp.value->>'reason_category', comp.value->>'reason') IS NOT NULL
-            GROUP BY vendor_name, comp.value->>'name', comp.value->>'context',
+            GROUP BY vm.vendor_name, comp.value->>'name', comp.value->>'context',
                      reason, reason_category, reason_detail
         )
         SELECT vendor_name, competitor, direction, reason, reason_category, reason_detail, mention_count
@@ -15294,15 +15560,17 @@ async def read_review_details(
     ]
     params: list = [window_days]
     idx = 2
+    vendor_param = None
+    scoped_param = None
 
     if scoped_vendors is not None:
         if not scoped_vendors:
             return []  # scoped user with no tracked vendors = zero results
-        conditions.append(f"r.vendor_name = ANY(${idx}::text[])")
+        scoped_param = idx
         params.append(scoped_vendors)
         idx += 1
     if vendor_name:
-        conditions.append(f"r.vendor_name ILIKE '%' || ${idx} || '%'")
+        vendor_param = idx
         params.append(vendor_name)
         idx += 1
     if pain_category:
@@ -15338,15 +15606,21 @@ async def read_review_details(
         conditions.append(
             suppress_predicate(
                 "review", id_expr="r.id", source_expr="r.source",
-                vendor_expr="r.vendor_name",
+                vendor_expr="matched_vm.vendor_name",
             )
         )
     params.append(limit)
     where = " AND ".join(conditions)
+    vendor_join = _review_vendor_match_join(
+        review_alias="r",
+        vendor_param=vendor_param,
+        scoped_param=scoped_param,
+        output_alias="matched_vm",
+    )
 
     rows = await pool.fetch(
         f"""
-        SELECT r.id, r.vendor_name, r.product_category, r.reviewer_company,
+        SELECT r.id, matched_vm.vendor_name AS vendor_name, r.product_category, r.reviewer_company,
                r.rating, r.source, r.reviewed_at, r.enriched_at,
                (r.enrichment->>'urgency_score')::numeric AS urgency_score,
                r.enrichment->>'pain_category' AS pain_category,
@@ -15366,6 +15640,7 @@ async def read_review_details(
                r.relevance_score, r.author_churn_score,
                r.low_fidelity, r.low_fidelity_reasons
         FROM b2b_reviews r
+        {vendor_join}
         WHERE {where}
         ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
         LIMIT ${idx}
@@ -15445,9 +15720,10 @@ async def read_campaign_opportunities(
     ]
     params: list = [window_days, min_urgency]
     idx = 3
+    vendor_param = None
 
     if vendor_name:
-        conditions.append(f"r.vendor_name ILIKE '%' || ${idx} || '%'")
+        vendor_param = idx
         params.append(vendor_name)
         idx += 1
     if company:
@@ -15466,16 +15742,21 @@ async def read_campaign_opportunities(
     conditions.append(
         suppress_predicate(
             "review", id_expr="r.id", source_expr="r.source",
-            vendor_expr="r.vendor_name",
+            vendor_expr="matched_vm.vendor_name",
         )
     )
     params.append(limit)
     where = " AND ".join(conditions)
+    vendor_join = _review_vendor_match_join(
+        review_alias="r",
+        vendor_param=vendor_param,
+        output_alias="matched_vm",
+    )
 
     rows = await pool.fetch(
         f"""
         SELECT r.id AS review_id,
-               r.vendor_name,
+               matched_vm.vendor_name AS vendor_name,
                COALESCE(NULLIF(BTRIM(r.reviewer_company), ''),
                         NULLIF(BTRIM(r.reviewer_company_norm), '')) AS reviewer_company,
                r.product_category, r.source, r.reviewed_at,
@@ -15499,6 +15780,7 @@ async def read_campaign_opportunities(
                r.reviewer_title, r.company_size_raw,
                NULLIF(BTRIM(r.reviewer_name), '') AS reviewer_name
         FROM b2b_reviews r
+        {vendor_join}
         WHERE {where}
         ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
         LIMIT ${idx}
@@ -15636,7 +15918,7 @@ async def read_vendor_quote_evidence(
         "r.enrichment_status = 'enriched'",
         "r.duplicate_of_review_id IS NULL",
         f"{recency_expr} > NOW() - make_interval(days => $1)",
-        "LOWER(r.vendor_name) = LOWER($2)",
+        "LOWER(matched_vm.vendor_name) = LOWER($2)",
     ]
     params: list = [window_days, vendor_name]
     idx = 3
@@ -15660,20 +15942,31 @@ async def read_vendor_quote_evidence(
         )
 
     conditions.append(
-        suppress_predicate("review", id_expr="r.id", source_expr="r.source", vendor_expr="r.vendor_name")
+        suppress_predicate(
+            "review",
+            id_expr="r.id",
+            source_expr="r.source",
+            vendor_expr="matched_vm.vendor_name",
+        )
     )
     params.append(limit)
     where = " AND ".join(conditions)
+    vendor_join = _review_vendor_match_join(
+        review_alias="r",
+        vendor_param=2,
+        output_alias="matched_vm",
+    )
 
     rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name, r.source, r.reviewer_company, r.reviewer_title,
+        SELECT matched_vm.vendor_name AS vendor_name, r.source, r.reviewer_company, r.reviewer_title,
                COALESCE(r.reviewer_title, r.enrichment->'reviewer_context'->>'role_level') AS role_level,
                r.enrichment->>'pain_category' AS pain_category,
                (r.enrichment->>'urgency_score')::numeric AS urgency,
                r.review_text, r.rating,
                r.enrichment->'quotable_phrases' AS quotable_raw
         FROM b2b_reviews r
+        {vendor_join}
         WHERE {where}
         ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
         LIMIT ${idx}
@@ -15735,20 +16028,30 @@ async def read_category_quote_evidence(
         idx += 1
 
     conditions.append(
-        suppress_predicate("review", id_expr="r.id", source_expr="r.source", vendor_expr="r.vendor_name")
+        suppress_predicate(
+            "review",
+            id_expr="r.id",
+            source_expr="r.source",
+            vendor_expr="matched_vm.vendor_name",
+        )
     )
     params.append(limit)
     where = " AND ".join(conditions)
+    vendor_join = _review_vendor_match_join(
+        review_alias="r",
+        output_alias="matched_vm",
+    )
 
     rows = await pool.fetch(
         f"""
-        SELECT r.vendor_name, r.source, r.reviewer_company, r.reviewer_title,
+        SELECT matched_vm.vendor_name AS vendor_name, r.source, r.reviewer_company, r.reviewer_title,
                COALESCE(r.reviewer_title, r.enrichment->'reviewer_context'->>'role_level') AS role_level,
                r.enrichment->>'pain_category' AS pain_category,
                (r.enrichment->>'urgency_score')::numeric AS urgency,
                r.review_text, r.rating,
                r.enrichment->'quotable_phrases' AS quotable_raw
         FROM b2b_reviews r
+        {vendor_join}
         WHERE {where}
         ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
         LIMIT ${idx}

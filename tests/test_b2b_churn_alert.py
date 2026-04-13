@@ -101,6 +101,10 @@ class TestB2BChurnAlertTask:
         assert result["baselines_seeded"] == 3
         assert result["alerts_sent"] == 0
         assert pool.execute.await_count == 3
+        metrics_sql = pool.fetchrow.await_args_list[0].args[0]
+        assert "JOIN LATERAL" in metrics_sql
+        assert "FROM b2b_review_vendor_mentions vm" in metrics_sql
+        assert "vm.vendor_name ILIKE '%' || $1 || '%'" in metrics_sql
 
     @pytest.mark.asyncio
     async def test_sends_owner_email_and_updates_baseline(self):

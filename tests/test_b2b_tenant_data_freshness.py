@@ -248,7 +248,7 @@ async def test_tenant_pipeline_excludes_cross_source_duplicates(monkeypatch):
             ]
         ),
     )
-    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="owner", is_admin=False)
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
 

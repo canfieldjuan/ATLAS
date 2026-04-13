@@ -7851,7 +7851,15 @@ async def get_source_correction_impact(
                dc.created_at,
                (SELECT COUNT(*) FROM b2b_reviews r
                 WHERE LOWER(r.source) = LOWER(dc.metadata->>'source_name')
-                  AND (dc.field_name IS NULL OR LOWER(r.vendor_name) = LOWER(dc.field_name))
+                  AND (
+                        dc.field_name IS NULL
+                        OR EXISTS (
+                            SELECT 1
+                            FROM b2b_review_vendor_mentions vm
+                            WHERE vm.review_id = r.id
+                              AND LOWER(vm.vendor_name) = LOWER(dc.field_name)
+                        )
+                      )
                   AND r.enrichment_status = 'enriched'
                ) AS affected_review_count
         FROM data_corrections dc

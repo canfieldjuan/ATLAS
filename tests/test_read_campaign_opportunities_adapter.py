@@ -103,7 +103,9 @@ async def test_vendor_filter_in_sql():
     pool = FakePool([])
     await read_campaign_opportunities(pool, vendor_name="Zendesk")
     sql = pool.fetch.call_args[0][0]
-    assert "ILIKE" in sql
+    assert "JOIN LATERAL" in sql
+    assert "FROM b2b_review_vendor_mentions vm" in sql
+    assert "vm.vendor_name ILIKE '%' || $3 || '%'" in sql
 
 
 @pytest.mark.asyncio
@@ -128,7 +130,7 @@ async def test_dm_only_false_omitted():
     pool = FakePool([])
     await read_campaign_opportunities(pool, dm_only=False)
     sql = pool.fetch.call_args[0][0]
-    where_clause = sql.split("WHERE")[1].split("ORDER")[0]
+    where_clause = sql.rsplit("WHERE", 1)[1].split("ORDER")[0]
     assert "decision_maker" not in where_clause
 
 
@@ -158,6 +160,7 @@ async def test_suppress_predicate_applied():
     ) as mock_sp:
         await read_campaign_opportunities(pool)
     mock_sp.assert_called_once()
+    assert mock_sp.call_args.kwargs["vendor_expr"] == "matched_vm.vendor_name"
     sql = pool.fetch.call_args[0][0]
     assert "r.id != 'blocked'" in sql
 

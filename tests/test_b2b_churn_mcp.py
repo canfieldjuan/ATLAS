@@ -547,6 +547,14 @@ class TestB2BChurnMCPTools:
         assert len(profile["pain_distribution"]) == 1
         counts_sql = pool.fetchrow.call_args_list[1][0][0]
         pain_sql = pool.fetch.call_args_list[0][0][0]
+        assert "JOIN LATERAL" in counts_sql
+        assert "FROM b2b_review_vendor_mentions vm" in counts_sql
+        assert "vm.vendor_name ILIKE '%' || $1 || '%'" in counts_sql
+        assert "matched_vm.vendor_name" in counts_sql
+        assert "JOIN LATERAL" in pain_sql
+        assert "FROM b2b_review_vendor_mentions vm" in pain_sql
+        assert "vm.vendor_name ILIKE '%' || $1 || '%'" in pain_sql
+        assert "matched_vm.vendor_name" in pain_sql
         assert "duplicate_of_review_id IS NULL" in counts_sql
         assert "duplicate_of_review_id IS NULL" in pain_sql
 
@@ -930,6 +938,10 @@ class TestB2BChurnMCPTools:
         assert data["success"] is True
         assert data["basis"] == "raw_source_provenance"
         assert data["total"] == 1
+        sql = pool.fetch.await_args.args[0]
+        assert "b2b_review_vendor_mentions vm" in sql
+        assert "EXISTS (" in sql
+        assert "LOWER(vm.vendor_name) = LOWER(dc.field_name)" in sql
 
     # -- list_scrape_targets -----------------------------------------------
 

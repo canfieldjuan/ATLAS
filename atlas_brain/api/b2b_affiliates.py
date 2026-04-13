@@ -202,7 +202,7 @@ async def list_opportunities(
     idx = 4
 
     if clean_vendor_name:
-        extra_conditions += f" AND r.vendor_name ILIKE '%' || ${idx} || '%'"
+        extra_conditions += f" AND vm.vendor_name ILIKE '%' || ${idx} || '%'"
         params.append(clean_vendor_name)
         idx += 1
 
@@ -214,7 +214,7 @@ async def list_opportunities(
     account_id = getattr(user, "account_id", None)
     if settings.saas_auth.enabled and account_id:
         extra_conditions += (
-            f" AND r.vendor_name IN ("
+            f" AND vm.vendor_name IN ("
             f"SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid"
             f")"
         )
@@ -227,7 +227,7 @@ async def list_opportunities(
         f"""
         WITH review_competitors AS (
             SELECT r.id AS review_id,
-                   r.vendor_name,
+                   vm.vendor_name AS vendor_name,
                    COALESCE(
                        NULLIF(BTRIM(r.reviewer_company_norm), ''),
                        NULLIF(BTRIM(r.reviewer_company), '')
@@ -248,6 +248,8 @@ async def list_opportunities(
                    comp.value->>'context' AS mention_context,
                    comp.value->>'reason' AS mention_reason
             FROM b2b_reviews r
+            JOIN b2b_review_vendor_mentions vm
+              ON vm.review_id = r.id
             CROSS JOIN LATERAL jsonb_array_elements(
                 CASE WHEN jsonb_typeof(r.enrichment->'competitors_mentioned') = 'array'
                      THEN r.enrichment->'competitors_mentioned'

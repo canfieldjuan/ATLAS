@@ -101,7 +101,7 @@ async def test_list_opportunities_normalizes_blank_vendor_filter(monkeypatch):
 
     assert result == {"basis": "canonical_reviews", "opportunities": [], "count": 0}
     sql, *params = pool.fetch.await_args.args
-    assert "AND r.vendor_name ILIKE '%' || $4 || '%'" not in sql
+    assert "AND vm.vendor_name ILIKE '%' || $4 || '%'" not in sql
     assert params == [90, 5, 50]
 
 
@@ -117,8 +117,38 @@ async def test_list_opportunities_normalizes_query_defaults_on_direct_call(monke
     assert result == {"basis": "canonical_reviews", "opportunities": [], "count": 0}
     sql, *params = pool.fetch.await_args.args
     assert "(r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true" not in sql
-    assert "AND r.vendor_name ILIKE '%' || $4 || '%'" not in sql
+    assert "AND vm.vendor_name ILIKE '%' || $4 || '%'" not in sql
     assert params == [90, 5.0, 50]
+
+
+@pytest.mark.asyncio
+async def test_list_opportunities_vendor_filter_reads_vendor_mentions(monkeypatch):
+    from atlas_brain.api import b2b_affiliates as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+
+    await mod.list_opportunities(vendor_name="Zendesk")
+
+    sql = pool.fetch.await_args.args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
+    assert "AND vm.vendor_name ILIKE '%' || $4 || '%'" in sql
+
+
+@pytest.mark.asyncio
+async def test_list_opportunities_account_scope_reads_vendor_mentions(monkeypatch):
+    from atlas_brain.api import b2b_affiliates as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    user = SimpleNamespace(account_id=str(uuid4()))
+
+    await mod.list_opportunities(user=user)
+
+    sql, *params = pool.fetch.await_args.args
+    assert "AND vm.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $4::uuid)" in sql
+    assert str(params[-1]) == user.account_id
 
 
 @pytest.mark.asyncio

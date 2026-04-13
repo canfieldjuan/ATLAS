@@ -140,6 +140,8 @@ async def test_vendor_quote_sources_filter():
     pool = FakePool([])
     await read_vendor_quote_evidence(pool, vendor_name="Zendesk", sources=["g2", "capterra"])
     sql = pool.fetch.call_args[0][0]
+    assert "JOIN LATERAL" in sql
+    assert "FROM b2b_review_vendor_mentions vm" in sql
     assert "ANY(" in sql
 
 
@@ -174,7 +176,7 @@ async def test_vendor_quote_require_quotes_filter():
     pool = FakePool([])
     await read_vendor_quote_evidence(pool, vendor_name="Zendesk", require_quotes=True)
     sql = pool.fetch.call_args[0][0]
-    where = sql.split("WHERE")[1]
+    where = sql.rsplit("WHERE", 1)[1]
     assert "quotable_phrases" in where
     assert "jsonb_array_length" in where
 
@@ -185,7 +187,7 @@ async def test_vendor_quote_require_quotes_default_off():
     pool = FakePool([])
     await read_vendor_quote_evidence(pool, vendor_name="Zendesk")
     sql = pool.fetch.call_args[0][0]
-    where = sql.split("WHERE")[1].split("ORDER")[0]
+    where = sql.rsplit("WHERE", 1)[1].split("ORDER")[0]
     assert "jsonb_array_length" not in where
 
 
@@ -205,7 +207,7 @@ async def test_vendor_quote_recency_default_enriched_at():
     await read_vendor_quote_evidence(pool, vendor_name="Zendesk")
     sql = pool.fetch.call_args[0][0]
     assert "r.enriched_at > NOW()" in sql
-    assert "COALESCE" not in sql.split("WHERE")[1].split("ORDER")[0]
+    assert "COALESCE" not in sql.rsplit("WHERE", 1)[1].split("ORDER")[0]
 
 
 @pytest.mark.asyncio
@@ -217,6 +219,7 @@ async def test_vendor_quote_suppress_applied():
     ) as mock_sp:
         await read_vendor_quote_evidence(pool, vendor_name="Zendesk")
     mock_sp.assert_called_once()
+    assert mock_sp.call_args.kwargs["vendor_expr"] == "matched_vm.vendor_name"
     sql = pool.fetch.call_args[0][0]
     assert "r.id != 'blocked'" in sql
 
@@ -238,6 +241,8 @@ async def test_category_quote_filters_by_category():
     pool = FakePool([])
     await read_category_quote_evidence(pool, product_category="CRM")
     sql = pool.fetch.call_args[0][0]
+    assert "JOIN LATERAL" in sql
+    assert "FROM b2b_review_vendor_mentions vm" in sql
     assert "product_category = $2" in sql
 
 

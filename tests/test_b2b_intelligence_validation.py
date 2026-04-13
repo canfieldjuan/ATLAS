@@ -4341,7 +4341,16 @@ class TestChurnIntelligenceExecutionProgress:
             pass
 
         async def fake_gather(*coros, **kwargs):
-            if len(coros) == 34:
+            coro_names = {
+                getattr(getattr(coro, "cr_code", None), "co_name", "")
+                for coro in coros
+            }
+            if {
+                "_fetch_vendor_churn_scores",
+                "_fetch_high_intent_companies",
+                "_fetch_company_signal_review_candidates",
+                "_fetch_turning_points",
+            } <= coro_names:
                 for coro in coros:
                     close = getattr(coro, "close", None)
                     if close:
@@ -4353,6 +4362,7 @@ class TestChurnIntelligenceExecutionProgress:
                 return (
                     vendor_scores,                    # vendor_scores
                     [{"vendor_name": "Zendesk"}],    # high_intent
+                    [],                               # company_signal_candidates
                     {},                               # existing_company_signals
                     [],                               # competitive_disp
                     [],                               # pain_dist
