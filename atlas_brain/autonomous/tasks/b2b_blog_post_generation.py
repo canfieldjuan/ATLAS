@@ -91,6 +91,32 @@ def _blog_vendor_lookup_key(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _blog_review_vendor_join(
+    review_alias: str = "r",
+    mention_alias: str = "vm",
+) -> str:
+    """Join canonical review-to-vendor mentions for vendor-scoped reads."""
+    return (
+        f"JOIN b2b_review_vendor_mentions {mention_alias} "
+        f"ON {mention_alias}.review_id = {review_alias}.id"
+    )
+
+
+def _blog_primary_vendor_join(
+    review_alias: str = "r",
+    mention_alias: str = "primary_vm",
+) -> str:
+    """Project one canonical vendor label per review for category-scoped reads."""
+    return (
+        "LEFT JOIN LATERAL ("
+        f" SELECT vm.vendor_name"
+        " FROM b2b_review_vendor_mentions vm"
+        f" WHERE vm.review_id = {review_alias}.id"
+        " ORDER BY vm.is_primary DESC, vm.id ASC"
+        f" LIMIT 1) AS {mention_alias} ON TRUE"
+    )
+
+
 async def _fetch_vendor_scorecard_details(
     pool,
     *,
@@ -4379,7 +4405,13 @@ async def _find_migration_guide_candidates(pool) -> list[dict[str, Any]]:
             pp.vendor_name AS vendor,
             pp.product_category AS category,
             COALESCE(jsonb_array_length(pp.commonly_switched_from), 0) AS switch_count,
-            (SELECT COUNT(*) FROM b2b_reviews br WHERE br.vendor_name = pp.vendor_name AND br.duplicate_of_review_id IS NULL) AS review_total
+            (
+                SELECT COUNT(DISTINCT br.id)
+                FROM b2b_reviews br
+                JOIN b2b_review_vendor_mentions vm ON vm.review_id = br.id
+                WHERE vm.vendor_name = pp.vendor_name
+                  AND br.duplicate_of_review_id IS NULL
+            ) AS review_total
         FROM b2b_product_profiles pp
         WHERE jsonb_array_length(COALESCE(pp.commonly_switched_from, '[]'::jsonb)) >= 2
         ORDER BY jsonb_array_length(pp.commonly_switched_from) DESC
@@ -4405,23 +4437,28 @@ async def _find_pricing_reality_check_candidates(pool) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         """
         SELECT
-            vendor_name AS vendor,
-            product_category AS category,
-            COUNT(*) AS total_reviews,
-            COUNT(*) FILTER (
-                WHERE enrichment->>'pain_categories' ILIKE '%pricing%'
+            vm.vendor_name AS vendor,
+            r.product_category AS category,
+            COUNT(DISTINCT r.id) AS total_reviews,
+            COUNT(DISTINCT r.id) FILTER (
+                WHERE r.enrichment->>'pain_categories' ILIKE '%pricing%'
             ) AS pricing_complaints,
             ROUND(AVG(
-                CASE WHEN enrichment->>'urgency_score' ~ '^[0-9]'
-                     THEN (enrichment->>'urgency_score')::numeric ELSE NULL END
+                CASE WHEN r.enrichment->>'urgency_score' ~ '^[0-9]'
+                     THEN (r.enrichment->>'urgency_score')::numeric ELSE NULL END
             )::numeric, 1) AS avg_urgency
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND source = ANY($1)
-        GROUP BY vendor_name, product_category
-        HAVING COUNT(*) FILTER (WHERE enrichment->>'pain_categories' ILIKE '%pricing%') >= 2
-        ORDER BY COUNT(*) FILTER (WHERE enrichment->>'pain_categories' ILIKE '%pricing%') DESC
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.source = ANY($1)
+        GROUP BY vm.vendor_name, r.product_category
+        HAVING COUNT(DISTINCT r.id) FILTER (
+            WHERE r.enrichment->>'pain_categories' ILIKE '%pricing%'
+        ) >= 2
+        ORDER BY COUNT(DISTINCT r.id) FILTER (
+            WHERE r.enrichment->>'pain_categories' ILIKE '%pricing%'
+        ) DESC
         LIMIT 10
         """,
         sources,
@@ -4446,30 +4483,31 @@ async def _find_switching_story_candidates(pool) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         """
         SELECT
-            vendor_name AS from_vendor,
-            product_category AS category,
-            COUNT(*) AS total_reviews,
-            COUNT(*) FILTER (
-                WHERE (enrichment->>'urgency_score')::numeric >= 7
+            vm.vendor_name AS from_vendor,
+            r.product_category AS category,
+            COUNT(DISTINCT r.id) AS total_reviews,
+            COUNT(DISTINCT r.id) FILTER (
+                WHERE (r.enrichment->>'urgency_score')::numeric >= 7
             ) AS high_urgency_count,
-            COUNT(*) FILTER (
-                WHERE review_text ILIKE '%switch%' OR review_text ILIKE '%migrat%'
-                   OR review_text ILIKE '%moved to%' OR review_text ILIKE '%moving to%'
-                   OR review_text ILIKE '%left for%' OR review_text ILIKE '%leaving for%'
+            COUNT(DISTINCT r.id) FILTER (
+                WHERE r.review_text ILIKE '%switch%' OR r.review_text ILIKE '%migrat%'
+                   OR r.review_text ILIKE '%moved to%' OR r.review_text ILIKE '%moving to%'
+                   OR r.review_text ILIKE '%left for%' OR r.review_text ILIKE '%leaving for%'
             ) AS switch_mentions,
             ROUND(AVG(
-                CASE WHEN enrichment->>'urgency_score' ~ '^[0-9]'
-                     THEN (enrichment->>'urgency_score')::numeric ELSE NULL END
+                CASE WHEN r.enrichment->>'urgency_score' ~ '^[0-9]'
+                     THEN (r.enrichment->>'urgency_score')::numeric ELSE NULL END
             )::numeric, 1) AS avg_urgency
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND source = ANY($1)
-        GROUP BY vendor_name, product_category
-        HAVING COUNT(*) FILTER (
-            WHERE review_text ILIKE '%switch%' OR review_text ILIKE '%migrat%'
-               OR review_text ILIKE '%moved to%' OR review_text ILIKE '%moving to%'
-               OR review_text ILIKE '%left for%' OR review_text ILIKE '%leaving for%'
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.source = ANY($1)
+        GROUP BY vm.vendor_name, r.product_category
+        HAVING COUNT(DISTINCT r.id) FILTER (
+            WHERE r.review_text ILIKE '%switch%' OR r.review_text ILIKE '%migrat%'
+               OR r.review_text ILIKE '%moved to%' OR r.review_text ILIKE '%moving to%'
+               OR r.review_text ILIKE '%left for%' OR r.review_text ILIKE '%leaving for%'
         ) >= 2
         ORDER BY switch_mentions DESC
         LIMIT 10
@@ -4497,21 +4535,22 @@ async def _find_pain_point_roundup_candidates(pool) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         """
         SELECT
-            product_category AS category,
-            COUNT(DISTINCT vendor_name) AS vendor_count,
-            COUNT(*) AS total_complaints,
+            r.product_category AS category,
+            COUNT(DISTINCT vm.vendor_name) AS vendor_count,
+            COUNT(DISTINCT r.id) AS total_complaints,
             ROUND(AVG(
-                CASE WHEN enrichment->>'urgency_score' ~ '^[0-9]'
-                     THEN (enrichment->>'urgency_score')::numeric ELSE NULL END
+                CASE WHEN r.enrichment->>'urgency_score' ~ '^[0-9]'
+                     THEN (r.enrichment->>'urgency_score')::numeric ELSE NULL END
             )::numeric, 1) AS avg_urgency
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND product_category IS NOT NULL AND product_category != ''
-          AND source = ANY($1)
-        GROUP BY product_category
-        HAVING COUNT(DISTINCT vendor_name) >= 3
-        ORDER BY COUNT(DISTINCT vendor_name) DESC
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.product_category IS NOT NULL AND r.product_category != ''
+          AND r.source = ANY($1)
+        GROUP BY r.product_category
+        HAVING COUNT(DISTINCT vm.vendor_name) >= 3
+        ORDER BY COUNT(DISTINCT vm.vendor_name) DESC
         LIMIT 10
         """,
         sources,
@@ -4577,7 +4616,13 @@ async def _find_vendor_deep_dive_candidates(pool) -> list[dict[str, Any]]:
         SELECT
             pp.vendor_name AS vendor,
             pp.product_category AS category,
-            (SELECT COUNT(*) FROM b2b_reviews br WHERE br.vendor_name = pp.vendor_name AND br.duplicate_of_review_id IS NULL) AS review_count,
+            (
+                SELECT COUNT(DISTINCT br.id)
+                FROM b2b_reviews br
+                JOIN b2b_review_vendor_mentions vm ON vm.review_id = br.id
+                WHERE vm.vendor_name = pp.vendor_name
+                  AND br.duplicate_of_review_id IS NULL
+            ) AS review_count,
             (CASE
                 WHEN pp.strengths IS NOT NULL AND jsonb_array_length(COALESCE(pp.strengths, '[]'::jsonb)) > 0 THEN 1 ELSE 0
             END +
@@ -4637,10 +4682,13 @@ async def _batch_vendor_review_counts(
         return {}
     rows = await pool.fetch(
         """
-        SELECT LOWER(vendor_name) AS vn, COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE vendor_name = ANY($1) AND duplicate_of_review_id IS NULL AND source = ANY($2)
-        GROUP BY LOWER(vendor_name)
+        SELECT LOWER(vm.vendor_name) AS vn, COUNT(DISTINCT r.id) AS cnt
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name = ANY($1)
+          AND r.duplicate_of_review_id IS NULL
+          AND r.source = ANY($2)
+        GROUP BY LOWER(vm.vendor_name)
         """,
         list(vendor_set), sources,
     )
@@ -5366,12 +5414,17 @@ async def _gather_data(
         # Also pull positive reviews for balance
         positive_reviews = await pool.fetch(
             """
-            SELECT review_text, reviewer_title, rating
-            FROM b2b_reviews
-            WHERE vendor_name = $1 AND enrichment_status = 'enriched'
-              AND duplicate_of_review_id IS NULL
+            SELECT
+                r.review_text,
+                r.reviewer_title,
+                r.rating,
+                vm.vendor_name AS vendor_name
+            FROM b2b_reviews r
+            JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+            WHERE vm.vendor_name = $1 AND r.enrichment_status = 'enriched'
+              AND r.duplicate_of_review_id IS NULL
               AND rating >= 4
-              AND source = ANY($2)
+              AND r.source = ANY($2)
             ORDER BY rating DESC
             LIMIT 5
             """,
@@ -5415,16 +5468,22 @@ async def _gather_data(
         sources = _blog_source_allowlist()
         switch_reviews = await pool.fetch(
             """
-            SELECT review_text, vendor_name, reviewer_title, rating, source,
-                   enrichment->>'urgency_score' AS urgency
-            FROM b2b_reviews
-            WHERE vendor_name = $1 AND enrichment_status = 'enriched'
-              AND duplicate_of_review_id IS NULL
-              AND (review_text ILIKE '%switch%' OR review_text ILIKE '%migrat%'
-                   OR review_text ILIKE '%moved to%' OR review_text ILIKE '%moving to%'
-                   OR review_text ILIKE '%left for%' OR review_text ILIKE '%leaving for%')
-              AND source = ANY($2)
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            SELECT
+                r.review_text,
+                vm.vendor_name AS vendor_name,
+                r.reviewer_title,
+                r.rating,
+                r.source,
+                r.enrichment->>'urgency_score' AS urgency
+            FROM b2b_reviews r
+            JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+            WHERE vm.vendor_name = $1 AND r.enrichment_status = 'enriched'
+              AND r.duplicate_of_review_id IS NULL
+              AND (r.review_text ILIKE '%switch%' OR r.review_text ILIKE '%migrat%'
+                   OR r.review_text ILIKE '%moved to%' OR r.review_text ILIKE '%moving to%'
+                   OR r.review_text ILIKE '%left for%' OR r.review_text ILIKE '%leaving for%')
+              AND r.source = ANY($2)
+            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
             LIMIT 10
             """,
             vendor, sources,
@@ -5462,18 +5521,19 @@ async def _gather_data(
         vendor_pains = await pool.fetch(
             """
             SELECT
-                vendor_name,
-                COUNT(*) AS review_count,
-                enrichment->>'pain_categories' AS pains,
+                vm.vendor_name AS vendor_name,
+                COUNT(DISTINCT r.id) AS review_count,
+                r.enrichment->>'pain_categories' AS pains,
                 ROUND(AVG(
-                    CASE WHEN enrichment->>'urgency_score' ~ '^[0-9]'
-                         THEN (enrichment->>'urgency_score')::numeric ELSE NULL END
+                    CASE WHEN r.enrichment->>'urgency_score' ~ '^[0-9]'
+                         THEN (r.enrichment->>'urgency_score')::numeric ELSE NULL END
                 )::numeric, 1) AS avg_urgency
-            FROM b2b_reviews
-            WHERE product_category = $1 AND enrichment_status = 'enriched'
-              AND duplicate_of_review_id IS NULL
-              AND source = ANY($2)
-            GROUP BY vendor_name, enrichment->>'pain_categories'
+            FROM b2b_reviews r
+            JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+            WHERE r.product_category = $1 AND r.enrichment_status = 'enriched'
+              AND r.duplicate_of_review_id IS NULL
+              AND r.source = ANY($2)
+            GROUP BY vm.vendor_name, r.enrichment->>'pain_categories'
             ORDER BY review_count DESC
             LIMIT 30
             """,
@@ -5528,7 +5588,11 @@ async def _gather_data(
             if p:
                 # Also pull avg rating from raw reviews
                 rating_row = await pool.fetchrow(
-                    "SELECT ROUND(AVG(rating)::numeric, 1) AS avg_rating, COUNT(*) AS cnt FROM b2b_reviews WHERE vendor_name = $1 AND rating IS NOT NULL AND duplicate_of_review_id IS NULL AND source = ANY($2)",
+                    "SELECT ROUND(AVG(r.rating)::numeric, 1) AS avg_rating, COUNT(*) AS cnt "
+                    "FROM b2b_reviews r "
+                    "JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id "
+                    "WHERE vm.vendor_name = $1 AND r.rating IS NOT NULL "
+                    "AND r.duplicate_of_review_id IS NULL AND r.source = ANY($2)",
                     vn, sources,
                 )
                 profiles.append({
@@ -5610,7 +5674,11 @@ async def _gather_data(
                     detail_row=scorecard_detail_lookup.get(vn),
                 )
                 rating_row = await pool.fetchrow(
-                    "SELECT ROUND(AVG(rating)::numeric, 1) AS avg_rating, COUNT(*) AS cnt FROM b2b_reviews WHERE vendor_name = $1 AND rating IS NOT NULL AND duplicate_of_review_id IS NULL AND source = ANY($2)",
+                    "SELECT ROUND(AVG(r.rating)::numeric, 1) AS avg_rating, COUNT(*) AS cnt "
+                    "FROM b2b_reviews r "
+                    "JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id "
+                    "WHERE vm.vendor_name = $1 AND r.rating IS NOT NULL "
+                    "AND r.duplicate_of_review_id IS NULL AND r.source = ANY($2)",
                     vn, sources,
                 )
                 profiles.append({
@@ -5647,7 +5715,10 @@ async def _gather_data(
     # For category-level topics, pull all vendors in the category
     if not vendor_names and topic_ctx.get("category"):
         cat_rows = await pool.fetch(
-            "SELECT DISTINCT vendor_name FROM b2b_reviews WHERE product_category = $1 AND duplicate_of_review_id IS NULL AND source = ANY($2)",
+            "SELECT DISTINCT vm.vendor_name "
+            "FROM b2b_reviews r "
+            "JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id "
+            "WHERE r.product_category = $1 AND r.duplicate_of_review_id IS NULL AND r.source = ANY($2)",
             topic_ctx["category"], ctx_sources,
         )
         vendor_names = [r["vendor_name"] for r in cat_rows]
@@ -5664,7 +5735,14 @@ async def _gather_data(
                 MIN(imported_at)::date AS earliest,
                 MAX(imported_at)::date AS latest
             FROM b2b_reviews
-            WHERE vendor_name = ANY($1) AND duplicate_of_review_id IS NULL AND source = ANY($2)
+            WHERE EXISTS (
+                SELECT 1
+                FROM b2b_review_vendor_mentions vm
+                WHERE vm.review_id = b2b_reviews.id
+                  AND vm.vendor_name = ANY($1)
+            )
+              AND duplicate_of_review_id IS NULL
+              AND source = ANY($2)
             """,
             vendor_names, ctx_sources,
         )
@@ -5835,14 +5913,15 @@ async def _fetch_pain_category_urgency(pool, vendor_name: str) -> dict[str, floa
     # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
-        SELECT enrichment->>'pain_category' AS pain_cat,
-               AVG((enrichment->>'urgency_score')::numeric) AS avg_urg,
+        SELECT r.enrichment->>'pain_category' AS pain_cat,
+               AVG((r.enrichment->>'urgency_score')::numeric) AS avg_urg,
                COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE vendor_name = $1 AND enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enrichment->>'pain_category' IS NOT NULL
-        GROUP BY enrichment->>'pain_category'
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name = $1 AND r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enrichment->>'pain_category' IS NOT NULL
+        GROUP BY r.enrichment->>'pain_category'
         """,
         vendor_name,
     )
@@ -5990,8 +6069,18 @@ async def _fetch_negative_quotes(
     """High-urgency enriched reviews (negative signal)."""
     # APPROVED-ENRICHMENT-READ: urgency_score
     # Reason: urgency used only in ORDER BY; query is structurally tied to account_resolution + prospect_org_cache JOINs
-    _quote_cols = """
-        r.review_text, r.vendor_name, r.reviewer_title, r.rating,
+    vendor_projection = (
+        "matched_vm.vendor_name AS matched_vendor_name"
+        if vendor_name
+        else "COALESCE(primary_vm.vendor_name, r.vendor_name) AS matched_vendor_name"
+    )
+    vendor_join = (
+        _blog_review_vendor_join("r", "matched_vm")
+        if vendor_name
+        else _blog_primary_vendor_join("r", "primary_vm")
+    )
+    _quote_cols = f"""
+        r.review_text, {vendor_projection}, r.reviewer_title, r.rating,
         r.enrichment->>'urgency_score' AS urgency,
         r.source,
         COALESCE(
@@ -6007,7 +6096,8 @@ async def _fetch_negative_quotes(
         poc.employee_count AS verified_employee_count,
         poc.country AS company_country
     """
-    _quote_joins = """
+    _quote_joins = f"""
+        {vendor_join}
         LEFT JOIN b2b_account_resolution ar
             ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
         LEFT JOIN prospect_org_cache poc
@@ -6022,7 +6112,7 @@ async def _fetch_negative_quotes(
             f"""
             SELECT {_quote_cols}
             FROM b2b_reviews r {_quote_joins}
-            WHERE r.vendor_name = $1
+            WHERE matched_vm.vendor_name = $1
               AND r.enrichment_status = 'enriched'
               AND r.duplicate_of_review_id IS NULL
               AND r.source = ANY($2)
@@ -6057,7 +6147,7 @@ async def _fetch_negative_quotes(
             pass
         results.append({
             "phrase": _extract_phrase(r["review_text"] or ""),
-            "vendor": r["vendor_name"],
+            "vendor": r["matched_vendor_name"],
             "urgency": urg,
             "role": r["reviewer_title"],
             "company": r["company"],
@@ -6076,8 +6166,18 @@ async def _fetch_positive_quotes(
     sources: list[str], limit: int = 6,
 ) -> list[dict[str, Any]]:
     """High-rated reviews from raw columns (no enrichment required)."""
-    _pos_cols = """
-        COALESCE(r.pros, r.review_text) AS text, r.vendor_name,
+    vendor_projection = (
+        "matched_vm.vendor_name AS matched_vendor_name"
+        if vendor_name
+        else "COALESCE(primary_vm.vendor_name, r.vendor_name) AS matched_vendor_name"
+    )
+    vendor_join = (
+        _blog_review_vendor_join("r", "matched_vm")
+        if vendor_name
+        else _blog_primary_vendor_join("r", "primary_vm")
+    )
+    _pos_cols = f"""
+        COALESCE(r.pros, r.review_text) AS text, {vendor_projection},
         r.reviewer_title, r.rating, r.source,
         COALESCE(
             CASE
@@ -6092,7 +6192,8 @@ async def _fetch_positive_quotes(
         poc.employee_count AS verified_employee_count,
         poc.country AS company_country
     """
-    _pos_joins = """
+    _pos_joins = f"""
+        {vendor_join}
         LEFT JOIN b2b_account_resolution ar
             ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
         LEFT JOIN prospect_org_cache poc
@@ -6107,7 +6208,7 @@ async def _fetch_positive_quotes(
             f"""
             SELECT {_pos_cols}
             FROM b2b_reviews r {_pos_joins}
-            WHERE r.vendor_name = $1
+            WHERE matched_vm.vendor_name = $1
               AND r.duplicate_of_review_id IS NULL
               AND r.rating >= 4
               AND r.source = ANY($2)
@@ -6141,7 +6242,7 @@ async def _fetch_positive_quotes(
     for r in rows:
         results.append({
             "phrase": _extract_phrase(r["text"] or ""),
-            "vendor": r["vendor_name"],
+            "vendor": r["matched_vendor_name"],
             "urgency": 0.0,
             "role": r["reviewer_title"],
             "company": r["company"],
@@ -6226,12 +6327,13 @@ async def _fetch_source_distribution(pool, vendor_names: list[str]) -> dict[str,
     allowed = _blog_source_allowlist()
     rows = await pool.fetch(
         """
-        SELECT COALESCE(source, 'unknown') AS src, COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE vendor_name = ANY($1) AND enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND source = ANY($2)
-        GROUP BY source
+        SELECT COALESCE(r.source, 'unknown') AS src, COUNT(DISTINCT r.id) AS cnt
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name = ANY($1) AND r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.source = ANY($2)
+        GROUP BY r.source
         ORDER BY cnt DESC
         """,
         vendor_names, allowed,
@@ -9070,16 +9172,17 @@ async def _fetch_vendor_stats(pool, vendor_name: str) -> dict[str, Any]:
         """
         SELECT
             COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched,
-            COUNT(*) FILTER (WHERE rating IS NOT NULL AND rating < 3) AS negative,
+            COUNT(*) FILTER (WHERE r.enrichment_status = 'enriched') AS enriched,
+            COUNT(*) FILTER (WHERE r.rating IS NOT NULL AND r.rating < 3) AS negative,
             ROUND(AVG(
-                CASE WHEN enrichment->>'urgency_score' ~ '^[0-9]'
-                     THEN (enrichment->>'urgency_score')::numeric ELSE NULL END
+                CASE WHEN r.enrichment->>'urgency_score' ~ '^[0-9]'
+                     THEN (r.enrichment->>'urgency_score')::numeric ELSE NULL END
             )::numeric, 1) AS avg_urgency,
-            MODE() WITHIN GROUP (ORDER BY product_category) AS category
-        FROM b2b_reviews
-        WHERE LOWER(vendor_name) = LOWER($1)
-          AND duplicate_of_review_id IS NULL
+            MODE() WITHIN GROUP (ORDER BY r.product_category) AS category
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE LOWER(vm.vendor_name) = LOWER($1)
+          AND r.duplicate_of_review_id IS NULL
         """,
         vendor_name,
     )
@@ -9099,16 +9202,17 @@ async def _fetch_category_topic_stats(pool, category: str) -> dict[str, Any]:
     row = await pool.fetchrow(
         """
         SELECT
-            COUNT(DISTINCT vendor_name) AS vendor_count,
-            COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched_reviews,
+            COUNT(DISTINCT vm.vendor_name) AS vendor_count,
+            COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'enriched') AS enriched_reviews,
             ROUND(AVG(
-                CASE WHEN enrichment->>'urgency_score' ~ '^[0-9]'
-                     THEN (enrichment->>'urgency_score')::numeric ELSE NULL END
+                CASE WHEN r.enrichment->>'urgency_score' ~ '^[0-9]'
+                     THEN (r.enrichment->>'urgency_score')::numeric ELSE NULL END
             )::numeric, 1) AS avg_urgency
-        FROM b2b_reviews
-        WHERE product_category = $1
-          AND duplicate_of_review_id IS NULL
-          AND source = ANY($2)
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.product_category = $1
+          AND r.duplicate_of_review_id IS NULL
+          AND r.source = ANY($2)
         """,
         category,
         sources,
