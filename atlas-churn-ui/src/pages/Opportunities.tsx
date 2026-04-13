@@ -1673,6 +1673,8 @@ function EvidencePanel({
   campaignRefreshKey?: number
   onCampaignAction?: () => void
 }) {
+  const [copiedShortcutLabel, setCopiedShortcutLabel] = useState<string | null>(null)
+  const [shortcutError, setShortcutError] = useState<string | null>(null)
   const signals = row.intent_signals
   const alternatives = Array.isArray(row.alternatives)
     ? row.alternatives.filter((a) => a?.name?.trim())
@@ -1695,6 +1697,37 @@ function EvidencePanel({
     ? directAlertsPath
     : alertsPath(currentPagePath, row.vendor)
   const reviewPath = row.review_id ? reviewDetailPath(row.review_id, currentPagePath) : null
+
+  useEffect(() => {
+    if (!copiedShortcutLabel) return
+    const timeoutId = window.setTimeout(() => setCopiedShortcutLabel(null), 2000)
+    return () => window.clearTimeout(timeoutId)
+  }, [copiedShortcutLabel])
+
+  async function copyShortcutLink(path: string, label: string) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
+      await navigator.clipboard.writeText(`${window.location.origin}${path}`)
+      setShortcutError(null)
+      setCopiedShortcutLabel(label)
+    } catch (err) {
+      setCopiedShortcutLabel(null)
+      setShortcutError(err instanceof Error ? err.message : `Failed to copy ${label}`)
+    }
+  }
+
+  function renderShortcutCopyButton(path: string, label: string) {
+    return (
+      <button
+        type="button"
+        onClick={() => void copyShortcutLink(path, label)}
+        aria-label={copiedShortcutLabel === label ? `Copied ${label}` : `Copy ${label}`}
+        className="text-slate-500 transition-colors hover:text-white"
+      >
+        <Copy className="h-3.5 w-3.5" />
+      </button>
+    )
+  }
 
   return (
     <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 space-y-5">
@@ -1734,44 +1767,65 @@ function EvidencePanel({
               {row.source}
             </span>
           )}
+          {shortcutError && (
+            <p className="text-xs text-rose-300">{shortcutError}</p>
+          )}
           <div className="flex flex-wrap gap-3 pt-1">
-            <Link
-              to={vendorWatchlistsPath}
-              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              View watchlists <ExternalLink className="h-3 w-3" />
-            </Link>
-            <Link
-              to={vendorPath}
-              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              View vendor <ExternalLink className="h-3 w-3" />
-            </Link>
-            <Link
-              to={vendorEvidencePath}
-              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              Validate evidence <ExternalLink className="h-3 w-3" />
-            </Link>
-            <Link
-              to={vendorReportsLibraryPath}
-              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              View reports <ExternalLink className="h-3 w-3" />
-            </Link>
-            <Link
-              to={vendorAlertsPath}
-              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              View alerts <ExternalLink className="h-3 w-3" />
-            </Link>
-            {reviewPath && (
+            <span className="inline-flex items-center gap-1.5">
               <Link
-                to={reviewPath}
+                to={vendorWatchlistsPath}
                 className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
               >
-                View full review <ExternalLink className="h-3 w-3" />
+                View watchlists <ExternalLink className="h-3 w-3" />
               </Link>
+              {renderShortcutCopyButton(vendorWatchlistsPath, 'watchlists')}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Link
+                to={vendorPath}
+                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+              >
+                View vendor <ExternalLink className="h-3 w-3" />
+              </Link>
+              {renderShortcutCopyButton(vendorPath, 'vendor')}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Link
+                to={vendorEvidencePath}
+                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+              >
+                Validate evidence <ExternalLink className="h-3 w-3" />
+              </Link>
+              {renderShortcutCopyButton(vendorEvidencePath, 'evidence')}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Link
+                to={vendorReportsLibraryPath}
+                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+              >
+                View reports <ExternalLink className="h-3 w-3" />
+              </Link>
+              {renderShortcutCopyButton(vendorReportsLibraryPath, 'reports')}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Link
+                to={vendorAlertsPath}
+                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+              >
+                View alerts <ExternalLink className="h-3 w-3" />
+              </Link>
+              {renderShortcutCopyButton(vendorAlertsPath, 'alerts')}
+            </span>
+            {reviewPath && (
+              <span className="inline-flex items-center gap-1.5">
+                <Link
+                  to={reviewPath}
+                  className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                >
+                  View full review <ExternalLink className="h-3 w-3" />
+                </Link>
+                {renderShortcutCopyButton(reviewPath, 'review')}
+              </span>
             )}
           </div>
         </div>

@@ -498,6 +498,47 @@ describe('Opportunities', () => {
     )
   })
 
+  it('copies expanded opportunity links scoped back to the current workbench context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.7,
+          pain: 'support',
+          category: 'helpdesk',
+          review_id: 'review-1',
+          source: 'g2',
+          quotes: ['Support has regressed since renewal.'],
+          intent_signals: { cancel: true, migration: true, evaluation: false, completed_switch: false },
+          alternatives: [{ name: 'Freshdesk' }],
+          company_size: '201-1000',
+          reviewer_title: 'VP Support',
+        },
+      ],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities?vendor=Zendesk&back_to=%2Fvendors%2FZendesk'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText(/Acme Corp/)).toBeInTheDocument()
+    await user.click(screen.getByText(/Acme Corp/))
+    await user.click(screen.getByRole('button', { name: 'Copy alerts' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/alerts?vendor=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk`,
+      )
+    })
+    expect(screen.getByRole('button', { name: 'Copied alerts' })).toBeInTheDocument()
+  })
+
   it.each([
     {
       name: 'reuses the exact upstream evidence shortcut on expanded rows',
