@@ -203,6 +203,22 @@ function upstreamWatchlistsPath(value: string | null): string | null {
   return null
 }
 
+function upstreamAccountReviewCompany(value: string | null, vendorName: string): string | null {
+  const watchlistsPath = upstreamWatchlistsPath(value)
+  if (!watchlistsPath) return null
+
+  try {
+    const url = new URL(watchlistsPath, window.location.origin)
+    const accountCompany = url.searchParams.get('account_company')?.trim()
+    const accountVendor = url.searchParams.get('account_vendor')?.trim()
+    if (!accountCompany) return null
+    if (accountVendor && accountVendor.toLowerCase() !== vendorName.trim().toLowerCase()) return null
+    return accountCompany
+  } catch {
+    return null
+  }
+}
+
 function upstreamVendorPath(value: string | null): string | null {
   let current = parseBackTo(value)
 
@@ -469,6 +485,10 @@ export default function EvidenceExplorer() {
     if (!witnessId) return ''
     return witnesses.find((witness) => witness.witness_id === witnessId)?.reviewer_company?.trim() || ''
   }, [requestedWitnessId, witnesses])
+  const upstreamAccountCompany = useMemo(
+    () => (activeVendor ? upstreamAccountReviewCompany(requestedBackTo, activeVendor) : ''),
+    [activeVendor, requestedBackTo],
+  )
 
   // -- Search handler ---------------------------------------------------------
 
@@ -839,14 +859,14 @@ export default function EvidenceExplorer() {
               ) : null}
               <span className="inline-flex items-center gap-2">
                 <Link
-                  to={directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor, activeWitnessCompany)}
+                  to={directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor, activeWitnessCompany || upstreamAccountCompany)}
                   className="text-rose-300 hover:text-rose-200 transition-colors"
                 >
                   Alerts API
                 </Link>
                 <button
                   type="button"
-                  onClick={() => void handleCopyAlertsLink(directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor, activeWitnessCompany))}
+                  onClick={() => void handleCopyAlertsLink(directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor, activeWitnessCompany || upstreamAccountCompany))}
                   className="text-slate-400 hover:text-white transition-colors"
                   aria-label="Copy alerts link"
                 >
