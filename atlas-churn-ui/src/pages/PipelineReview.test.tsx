@@ -839,8 +839,8 @@ describe('PipelineReview watchlist delivery ops', () => {
 
     await user.click(screen.getByText('Sunny Side Studio'))
     expect(await screen.findByText('Supporting Reviews')).toBeInTheDocument()
-    expect(screen.getByText('All reviews currently backing this candidate group.')).toBeInTheDocument()
-    expect(screen.getAllByRole('link', { name: 'Source' }).length).toBeGreaterThan(0)
+    expect(screen.getByText('Representative reviews supporting this company-signal group.')).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Open source' }).length).toBeGreaterThan(0)
     expect(screen.getByText('Review State')).toBeInTheDocument()
     expect(screen.getByText('Notes: --')).toBeInTheDocument()
 
@@ -855,7 +855,7 @@ describe('PipelineReview watchlist delivery ops', () => {
         notes: 'Promote based on clear decision-maker evidence',
       })
     })
-    expect(await screen.findByText('approved')).toBeInTheDocument()
+    expect((await screen.findAllByText('approved')).length).toBeGreaterThan(0)
 
     await user.selectOptions(screen.getByLabelText('Source'), 'reddit')
     await user.selectOptions(screen.getByLabelText('Gap'), 'low_confidence_low_trust_source')
@@ -913,7 +913,7 @@ describe('PipelineReview watchlist delivery ops', () => {
         notes: 'Promote based on clear decision-maker evidence',
       })
     })
-    expect(await screen.findByText('Approved 1 candidate group')).toBeInTheDocument()
+    expect((await screen.findAllByText('Approved 1 candidate group')).length).toBeGreaterThan(0)
 
     await user.selectOptions(screen.getByLabelText('Review Status'), 'approved')
 
