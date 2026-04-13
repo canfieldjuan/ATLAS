@@ -91,6 +91,53 @@ describe('Opportunities', () => {
     })
   })
 
+  it('hydrates the workbench filters from the URL', async () => {
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.6,
+          buying_stage: 'evaluation',
+          category: 'helpdesk',
+          review_id: 'review-1',
+          source: 'g2',
+          quotes: ['Support has regressed since renewal.'],
+          intent_signals: { cancel: true, migration: true, evaluation: false, completed_switch: false },
+          alternatives: [{ name: 'Freshdesk' }],
+          company_size: '201-1000',
+          reviewer_title: 'VP Support',
+        },
+      ],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&min_urgency=8&window_days=30&stage=evaluation&intent=cancel&intent=migration',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    const selects = screen.getAllByRole('combobox')
+    expect(screen.getByPlaceholderText('Filter vendor...')).toHaveValue('Zendesk')
+    expect(screen.getByRole('slider')).toHaveValue('8')
+    expect(selects[0]).toHaveValue('30')
+    expect(selects[1]).toHaveValue('evaluation')
+    expect(screen.getByLabelText('cancel')).toBeChecked()
+    expect(screen.getByLabelText('migration')).toBeChecked()
+    expect(api.fetchHighIntent).toHaveBeenCalledWith({
+      limit: 100,
+      min_urgency: 8,
+      vendor_name: 'Zendesk',
+      window_days: 30,
+    })
+  })
+
   it('supports vendor workspace back_to navigation', async () => {
     const user = userEvent.setup()
     const router = createMemoryRouter(
@@ -291,33 +338,47 @@ describe('Opportunities', () => {
   it('shows watchlists, vendor workspace, evidence, report, and alerts shortcuts for the active vendor filter', async () => {
     const router = createMemoryRouter(
       [{ path: '/opportunities', element: <Opportunities /> }],
-      { initialEntries: ['/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1'] },
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&min_urgency=8&window_days=30&stage=evaluation&intent=cancel&back_to=%2Fwatchlists%3Fview%3Dview-1',
+        ],
+      },
     )
 
     render(<RouterProvider router={router} />)
 
-    expect(await screen.findByText('Filtered to')).toBeInTheDocument()
+    const vendorInputs = await screen.findAllByPlaceholderText('Filter vendor...')
+    expect(vendorInputs[0]).toHaveValue('Zendesk')
+
     expect(screen.getByText('Zendesk')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?view=view-1',
     )
-    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
-      'href',
-      '/vendors/Zendesk?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
-    )
-    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
-      'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
-    )
-    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
-      'href',
-      '/reports?vendor_filter=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
-    )
-    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
-      'href',
-      '/alerts?vendor=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
-    )
+
+    const vendorLink = new URL(screen.getByRole('link', { name: 'Vendor workspace' }).getAttribute('href') || '', 'https://atlas.test')
+    const evidenceLink = new URL(screen.getByRole('link', { name: 'Evidence' }).getAttribute('href') || '', 'https://atlas.test')
+    const reportsLink = new URL(screen.getByRole('link', { name: 'Reports' }).getAttribute('href') || '', 'https://atlas.test')
+    const alertsLink = new URL(screen.getByRole('link', { name: 'Alerts API' }).getAttribute('href') || '', 'https://atlas.test')
+
+    expect(vendorLink.pathname).toBe('/vendors/Zendesk')
+    expect(evidenceLink.pathname).toBe('/evidence')
+    expect(evidenceLink.searchParams.get('vendor')).toBe('Zendesk')
+    expect(reportsLink.pathname).toBe('/reports')
+    expect(reportsLink.searchParams.get('vendor_filter')).toBe('Zendesk')
+    expect(alertsLink.pathname).toBe('/alerts')
+    expect(alertsLink.searchParams.get('vendor')).toBe('Zendesk')
+
+    for (const link of [vendorLink, evidenceLink, reportsLink, alertsLink]) {
+      const backTo = new URL(link.searchParams.get('back_to') || '', 'https://atlas.test')
+      expect(backTo.pathname).toBe('/opportunities')
+      expect(backTo.searchParams.get('vendor')).toBe('Zendesk')
+      expect(backTo.searchParams.get('min_urgency')).toBe('8')
+      expect(backTo.searchParams.get('window_days')).toBe('30')
+      expect(backTo.searchParams.get('stage')).toBe('evaluation')
+      expect(backTo.searchParams.getAll('intent')).toEqual(['cancel'])
+      expect(backTo.searchParams.get('back_to')).toBe('/watchlists?view=view-1')
+    }
   })
 
   it('keeps expanded opportunity links scoped back to the current workbench context', async () => {
@@ -348,9 +409,9 @@ describe('Opportunities', () => {
 
     render(<RouterProvider router={router} />)
 
-    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(await screen.findByText(/Acme Corp/)).toBeInTheDocument()
 
-    await user.click(screen.getByText('Acme Corp'))
+    await user.click(screen.getByText(/Acme Corp/))
 
     expect(await screen.findByRole('link', { name: 'View watchlists' })).toHaveAttribute(
       'href',
@@ -424,9 +485,9 @@ describe('Opportunities', () => {
 
     render(<RouterProvider router={router} />)
 
-    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(await screen.findByText(/Acme Corp/)).toBeInTheDocument()
 
-    await user.click(screen.getByText('Acme Corp'))
+    await user.click(screen.getByText(/Acme Corp/))
 
     expect(await screen.findByRole('link', { name: linkName })).toHaveAttribute('href', expectedHref)
   })

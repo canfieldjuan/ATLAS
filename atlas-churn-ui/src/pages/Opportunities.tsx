@@ -92,6 +92,11 @@ const WINDOW_OPTIONS = [
   { label: 'All time', value: 3650 },
 ] as const
 
+const DEFAULT_MIN_URGENCY = 5
+const DEFAULT_WINDOW_DAYS = 90
+const DEFAULT_STAGE_FILTER = 'all'
+const DEFAULT_DISPOSITION_TAB = 'active'
+
 const DISPOSITION_TABS = ['active', 'saved', 'snoozed', 'dismissed', 'all'] as const
 type DispositionTab = (typeof DISPOSITION_TABS)[number]
 
@@ -154,12 +159,73 @@ function watchlistsShortcutLabel(target: string | null): string {
   }
 }
 
-function opportunitiesPath(vendorName: string, backTarget: string | null): string {
+function parseUrgencyParam(value: string | null) {
+  if (!value?.trim()) return DEFAULT_MIN_URGENCY
+  const next = Number(value)
+  if (!Number.isFinite(next)) return DEFAULT_MIN_URGENCY
+  return Math.min(10, Math.max(0, Math.round(next)))
+}
+
+function parseWindowDaysParam(value: string | null) {
+  const next = Number(value)
+  return WINDOW_OPTIONS.some((option) => option.value === next) ? next : DEFAULT_WINDOW_DAYS
+}
+
+function parseStageFilter(value: string | null) {
+  return STAGE_OPTIONS.includes((value || '') as (typeof STAGE_OPTIONS)[number]) ? value || DEFAULT_STAGE_FILTER : DEFAULT_STAGE_FILTER
+}
+
+function parseDispositionTab(value: string | null): DispositionTab {
+  return DISPOSITION_TABS.includes((value || '') as DispositionTab) ? (value as DispositionTab) : DEFAULT_DISPOSITION_TAB
+}
+
+function parseIntentFilter(values: string[]) {
+  const next = new Set<string>()
+  for (const value of values) {
+    if (INTENT_KEYS.includes(value as (typeof INTENT_KEYS)[number])) {
+      next.add(value)
+    }
+  }
+  return next
+}
+
+function sameStringSet(left: Set<string>, right: Set<string>) {
+  if (left.size !== right.size) return false
+  for (const value of left) {
+    if (!right.has(value)) return false
+  }
+  return true
+}
+
+function buildOpportunitiesSearchParams({
+  vendorName,
+  backTarget,
+  minUrgency,
+  windowDays,
+  stageFilter,
+  dispositionTab,
+  intentFilter,
+}: {
+  vendorName: string
+  backTarget: string | null
+  minUrgency: number
+  windowDays: number
+  stageFilter: string
+  dispositionTab: DispositionTab
+  intentFilter: Set<string>
+}) {
   const params = new URLSearchParams()
-  if (vendorName) params.set('vendor', vendorName)
+  const normalizedVendor = vendorName.trim()
+  if (normalizedVendor) params.set('vendor', normalizedVendor)
+  if (minUrgency !== DEFAULT_MIN_URGENCY) params.set('min_urgency', String(minUrgency))
+  if (windowDays !== DEFAULT_WINDOW_DAYS) params.set('window_days', String(windowDays))
+  if (stageFilter !== DEFAULT_STAGE_FILTER) params.set('stage', stageFilter)
+  if (dispositionTab !== DEFAULT_DISPOSITION_TAB) params.set('disposition', dispositionTab)
+  for (const intentKey of Array.from(intentFilter).sort()) {
+    params.append('intent', intentKey)
+  }
   if (backTarget) params.set('back_to', backTarget)
-  const query = params.toString()
-  return query ? `/opportunities?${query}` : '/opportunities'
+  return params
 }
 
 function watchlistsPath(vendorName: string, returnPath: string): string {
@@ -236,19 +302,24 @@ function CollapsibleSection({ title, defaultOpen = false, children }: {
 }
 
 export default function Opportunities() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const initialVendor = searchParams.get('vendor') || ''
   const backTarget = resolveBackTarget(searchParams.get('back_to'))
+  const initialMinUrgency = parseUrgencyParam(searchParams.get('min_urgency'))
+  const initialWindowDays = parseWindowDaysParam(searchParams.get('window_days'))
+  const initialStageFilter = parseStageFilter(searchParams.get('stage'))
+  const initialDispositionTab = parseDispositionTab(searchParams.get('disposition'))
+  const initialIntentFilter = parseIntentFilter(searchParams.getAll('intent'))
 
   const { canAccessCampaigns } = usePlanGate()
 
   // -- Filters --
   const [vendorSearch, setVendorSearch] = useState(initialVendor)
   const [debouncedVendor, setDebouncedVendor] = useState(initialVendor)
-  const [minUrgency, setMinUrgency] = useState(5)
-  const [windowDays, setWindowDays] = useState(90)
-  const [stageFilter, setStageFilter] = useState<string>('all')
-  const [intentFilter, setIntentFilter] = useState<Set<string>>(new Set())
+  const [minUrgency, setMinUrgency] = useState(initialMinUrgency)
+  const [windowDays, setWindowDays] = useState(initialWindowDays)
+  const [stageFilter, setStageFilter] = useState<string>(initialStageFilter)
+  const [intentFilter, setIntentFilter] = useState<Set<string>>(initialIntentFilter)
 
   // -- Expansion --
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -257,7 +328,7 @@ export default function Opportunities() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   // -- Disposition (persistent save/snooze/dismiss) --
-  const [dispositionTab, setDispositionTab] = useState<DispositionTab>('active')
+  const [dispositionTab, setDispositionTab] = useState<DispositionTab>(initialDispositionTab)
   const { data: dispData, refresh: refreshDispositions } = useApiData(
     () => fetchDispositions(),
     [],
@@ -290,6 +361,26 @@ export default function Opportunities() {
     setExpandedId(null)
     setSelectedIds(new Set())
   }, [initialVendor])
+
+  useEffect(() => {
+    setMinUrgency((current) => (current === initialMinUrgency ? current : initialMinUrgency))
+  }, [initialMinUrgency])
+
+  useEffect(() => {
+    setWindowDays((current) => (current === initialWindowDays ? current : initialWindowDays))
+  }, [initialWindowDays])
+
+  useEffect(() => {
+    setStageFilter((current) => (current === initialStageFilter ? current : initialStageFilter))
+  }, [initialStageFilter])
+
+  useEffect(() => {
+    setDispositionTab((current) => (current === initialDispositionTab ? current : initialDispositionTab))
+  }, [initialDispositionTab])
+
+  useEffect(() => {
+    setIntentFilter((current) => (sameStringSet(current, initialIntentFilter) ? current : initialIntentFilter))
+  }, [initialIntentFilter])
 
   // Clear selection when server-side filters change (data will change)
   useEffect(() => {
@@ -794,8 +885,20 @@ export default function Opportunities() {
     [filtered, expandedId],
   )
   const currentPagePath = useMemo(
-    () => opportunitiesPath(debouncedVendor, backTarget),
-    [debouncedVendor, backTarget],
+    () => {
+      const next = buildOpportunitiesSearchParams({
+        vendorName: debouncedVendor,
+        backTarget,
+        minUrgency,
+        windowDays,
+        stageFilter,
+        dispositionTab,
+        intentFilter,
+      })
+      const query = next.toString()
+      return query ? `/opportunities?${query}` : '/opportunities'
+    },
+    [backTarget, debouncedVendor, dispositionTab, intentFilter, minUrgency, stageFilter, windowDays],
   )
   const activeVendorFilter = debouncedVendor.trim()
   const directWatchlistsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/watchlists') : null
@@ -804,6 +907,21 @@ export default function Opportunities() {
   const directVendorWorkspacePath = activeVendorFilter ? upstreamNestedPath(backTarget, '/vendors/') : null
   const directEvidencePath = activeVendorFilter ? upstreamNestedPath(backTarget, '/evidence') : null
   const directReportsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/reports') : null
+
+  useEffect(() => {
+    const next = buildOpportunitiesSearchParams({
+      vendorName: debouncedVendor,
+      backTarget,
+      minUrgency,
+      windowDays,
+      stageFilter,
+      dispositionTab,
+      intentFilter,
+    })
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true })
+    }
+  }, [backTarget, debouncedVendor, dispositionTab, intentFilter, minUrgency, searchParams, setSearchParams, stageFilter, windowDays])
 
   if (error) return <PageError error={error} onRetry={refresh} />
 
