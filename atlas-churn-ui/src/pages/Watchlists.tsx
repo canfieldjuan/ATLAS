@@ -3455,8 +3455,11 @@ export default function Watchlists() {
           label="Feed Rows"
           value={filteredFeed.length}
           sub={hasActiveAlertPolicy
-            ? `${vendorAlertHitCount} vendor alert hit${vendorAlertHitCount === 1 ? '' : 's'}`
-            : undefined}
+            ? `${vendorAlertHitCount} alert hit${vendorAlertHitCount === 1 ? '' : 's'}` +
+              (feed.length > filteredFeed.length ? ` (${feed.length - filteredFeed.length} filtered)` : '')
+            : feed.length > filteredFeed.length
+              ? `${feed.length - filteredFeed.length} hidden by filters`
+              : undefined}
           icon={<Activity className="h-5 w-5" />}
           skeleton={loading}
         />
@@ -3465,8 +3468,13 @@ export default function Watchlists() {
           value={accountBuckets.primary.length}
           sub={vendorsWithAccounts > 0
             ? hasActiveAlertPolicy
-              ? `${accountAlertHitCount} account alert hit${accountAlertHitCount === 1 ? '' : 's'} - ${staleThresholdHitCount} stale policy hit${staleThresholdHitCount === 1 ? '' : 's'}`
-              : `${visibleReviewAccounts.length} review-needed cluster${visibleReviewAccounts.length === 1 ? '' : 's'} across ${vendorsWithAccounts} vendors`
+              ? `${accountAlertHitCount} alert hit${accountAlertHitCount === 1 ? '' : 's'}` +
+                (staleThresholdHitCount > 0 ? ` - ${staleThresholdHitCount} stale` : '') +
+                (accountBuckets.review.length > 0 ? ` - ${accountBuckets.review.length} below threshold` : '')
+              : `${visibleReviewAccounts.length} review-needed cluster${visibleReviewAccounts.length === 1 ? '' : 's'}` +
+                (accountBuckets.review.length > visibleReviewAccounts.length
+                  ? ` (${accountBuckets.review.length - visibleReviewAccounts.length} hidden by filter)`
+                  : '')
             : 'No persisted account movement yet'}
           icon={<RefreshCw className="h-5 w-5" />}
           skeleton={loading}
