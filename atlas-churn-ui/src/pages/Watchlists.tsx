@@ -1253,6 +1253,7 @@ export default function Watchlists() {
     () => (changedWedgesOnly ? feed.filter((row) => Boolean(row.reasoning_delta?.wedge_changed)) : feed),
     [changedWedgesOnly, feed],
   )
+  const hiddenFeedCount = Math.max(feed.length - filteredFeed.length, 0)
   const vendorAlertHitCount = useMemo(
     () => filteredFeed.some((row) => row.vendor_alert_hit !== undefined)
       ? filteredFeed.filter((row) => Boolean(row.vendor_alert_hit)).length
@@ -1284,6 +1285,7 @@ export default function Watchlists() {
     () => (namedAccountsOnly ? [] : accountBuckets.review),
     [accountBuckets.review, namedAccountsOnly],
   )
+  const hiddenReviewAccountCount = Math.max(accountBuckets.review.length - visibleReviewAccounts.length, 0)
   const visibleAccounts = useMemo(
     () => [...accountBuckets.primary, ...visibleReviewAccounts],
     [accountBuckets.primary, visibleReviewAccounts],
@@ -3456,9 +3458,9 @@ export default function Watchlists() {
           value={filteredFeed.length}
           sub={hasActiveAlertPolicy
             ? `${vendorAlertHitCount} alert hit${vendorAlertHitCount === 1 ? '' : 's'}` +
-              (feed.length > filteredFeed.length ? ` (${feed.length - filteredFeed.length} filtered)` : '')
-            : feed.length > filteredFeed.length
-              ? `${feed.length - filteredFeed.length} hidden by filters`
+              (hiddenFeedCount > 0 ? ` (${hiddenFeedCount} hidden by changed wedges only)` : '')
+            : hiddenFeedCount > 0
+              ? `${hiddenFeedCount} hidden by changed wedges only`
               : undefined}
           icon={<Activity className="h-5 w-5" />}
           skeleton={loading}
@@ -3471,12 +3473,12 @@ export default function Watchlists() {
               ? `${accountAlertHitCount} alert hit${accountAlertHitCount === 1 ? '' : 's'}` +
                 (staleThresholdHitCount > 0 ? ` - ${staleThresholdHitCount} stale` : '') +
                 (accountBuckets.review.length > 0 ? ` - ${accountBuckets.review.length} below threshold` : '') +
-                (accountBuckets.review.length > visibleReviewAccounts.length
-                  ? ` (${accountBuckets.review.length - visibleReviewAccounts.length} hidden by filter)`
+                (hiddenReviewAccountCount > 0
+                  ? ` (${hiddenReviewAccountCount} hidden by named accounts only)`
                   : '')
               : `${visibleReviewAccounts.length} review-needed cluster${visibleReviewAccounts.length === 1 ? '' : 's'}` +
-                (accountBuckets.review.length > visibleReviewAccounts.length
-                  ? ` (${accountBuckets.review.length - visibleReviewAccounts.length} hidden by filter)`
+                (hiddenReviewAccountCount > 0
+                  ? ` (${hiddenReviewAccountCount} hidden by named accounts only)`
                   : '')
             : 'No persisted account movement yet'}
           icon={<RefreshCw className="h-5 w-5" />}

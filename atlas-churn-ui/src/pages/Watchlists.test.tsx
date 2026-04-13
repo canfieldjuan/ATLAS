@@ -683,6 +683,90 @@ describe('Watchlists', () => {
     })
   })
 
+  it('shows changed-wedge suppression pressure in the feed stat card', async () => {
+    const user = userEvent.setup()
+    api.fetchSlowBurnWatchlist.mockResolvedValue({
+      signals: [
+        {
+          vendor_name: 'Zendesk',
+          product_category: 'Helpdesk',
+          total_reviews: 300,
+          churn_intent_count: 22,
+          avg_urgency_score: 8.2,
+          avg_rating_normalized: 4.1,
+          nps_proxy: 18.2,
+          price_complaint_rate: 0.3,
+          decision_maker_churn_rate: 0.2,
+          support_sentiment: 2.4,
+          legacy_support_score: 1.8,
+          new_feature_velocity: 0.4,
+          employee_growth_rate: 3.2,
+          archetype: 'reliability',
+          archetype_confidence: 0.81,
+          reasoning_mode: 'persisted',
+          last_computed_at: '2026-04-07T16:00:00Z',
+          freshness_status: 'fresh',
+          freshness_reason: null,
+          freshness_timestamp: '2026-04-07T16:00:00Z',
+          synthesis_wedge_label: 'Reliability pressure',
+          reasoning_reference_ids: { witness_ids: ['witness:vendor:zendesk:1'] },
+          reasoning_delta: {
+            wedge_changed: true,
+            confidence_changed: false,
+            top_destination_changed: false,
+            new_timing_windows: [],
+            new_account_signals: ['Acme Corp'],
+          },
+        },
+        {
+          vendor_name: 'Intercom',
+          product_category: 'Helpdesk',
+          total_reviews: 120,
+          churn_intent_count: 7,
+          avg_urgency_score: 6.4,
+          avg_rating_normalized: 4.3,
+          nps_proxy: 25.1,
+          price_complaint_rate: 0.1,
+          decision_maker_churn_rate: 0.05,
+          support_sentiment: 3.8,
+          legacy_support_score: 3.4,
+          new_feature_velocity: 0.7,
+          employee_growth_rate: 5.1,
+          archetype: 'workflow',
+          archetype_confidence: 0.72,
+          reasoning_mode: 'persisted',
+          last_computed_at: '2026-04-07T16:00:00Z',
+          freshness_status: 'fresh',
+          freshness_reason: null,
+          freshness_timestamp: '2026-04-07T16:00:00Z',
+          synthesis_wedge_label: 'Workflow pressure',
+          reasoning_reference_ids: { witness_ids: ['witness:vendor:intercom:1'] },
+          reasoning_delta: {
+            wedge_changed: false,
+            confidence_changed: false,
+            top_destination_changed: false,
+            new_timing_windows: [],
+            new_account_signals: [],
+          },
+        },
+      ],
+      count: 2,
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Vendor Movement Feed' })
+
+    const feedControls = screen.getByRole('group', { name: 'Feed controls' })
+    await user.click(within(feedControls).getByLabelText('Changed wedges only'))
+
+    expect(screen.getByText('1 hidden by changed wedges only')).toBeInTheDocument()
+  })
+
   it('saves the current filtered view with persisted thresholds', async () => {
     const user = userEvent.setup()
 
@@ -856,7 +940,7 @@ describe('Watchlists', () => {
     expect(screen.getByText('Vendor alerts at 7.5+ urgency: 1 hit')).toBeInTheDocument()
     expect(screen.getByText('Account alerts at 8.5+ urgency: 1 hit')).toBeInTheDocument()
     expect(screen.getByText('Stale policy after 1 day: 2 hits')).toBeInTheDocument()
-    expect(screen.getByText('1 alert hit - 2 stale - 1 below threshold (1 hidden by filter)')).toBeInTheDocument()
+    expect(screen.getByText('1 alert hit - 2 stale - 1 below threshold (1 hidden by named accounts only)')).toBeInTheDocument()
     expect(screen.getByText('Saved View Alert Events')).toBeInTheDocument()
     expect(screen.getByText('Zendesk crossed the vendor alert threshold at 8.2')).toBeInTheDocument()
     expect(screen.getByText('Email delivery log')).toBeInTheDocument()
