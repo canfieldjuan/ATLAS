@@ -78,6 +78,26 @@ export const skillTiers: SkillTier[] = [
     ],
     keySkill: "Making non-deterministic AI outputs deterministic and production-ready",
   },
+  {
+    level: 5,
+    title: "AI Platform Operator",
+    subtitle: "Keeping autonomous AI systems alive in production",
+    traditional: [
+      "Runs infrastructure at scale — uptime, cost, capacity",
+      "Debugs failures across distributed systems at 3AM",
+      "Manages vendor relationships and SLAs",
+      "Owns budget, headcount, and operational efficiency",
+    ],
+    aiAugmented: [
+      "Manages cost across multiple LLM providers — routes workloads to the cheapest model that meets quality requirements",
+      "Debugs silent failures in autonomous pipelines: GPU disconnects, cache poisoning, runaway cron schedules, fallback paths that quietly drain API budgets",
+      "Designs circuit breakers, orphan recovery, and graceful degradation so the system self-heals before anyone notices",
+      "Operates multi-node distributed inference: edge NPU, local vLLM, cloud batch API, each with different cost and latency profiles",
+      "Monitors prompt contract drift — when the LLM starts returning 'medium' confidence for every vendor, that's an operational signal, not a code bug",
+      "Makes the build-vs-buy decision on model hosting daily: local GPU saves money until the PCIe clip breaks, then cloud fallback saves the product",
+    ],
+    keySkill: "Keeping autonomous AI systems running reliably when nobody is watching",
+  },
 ];
 
 export const gapTable = [
@@ -108,5 +128,13 @@ export const gapTable = [
   {
     traditional: "CI/CD",
     aiEquivalent: "Evaluation pipelines, regression detection, model version management",
+  },
+  {
+    traditional: "On-call / incident response",
+    aiEquivalent: "Diagnosing whether the failure is the model, the prompt, the cache, the provider, the hardware, or the data — usually it's the one you didn't instrument",
+  },
+  {
+    traditional: "Cost management",
+    aiEquivalent: "Token economics across providers, batch API discounts, caching hit rates, and the fallback path that silently costs 10x when local inference goes down",
   },
 ];
