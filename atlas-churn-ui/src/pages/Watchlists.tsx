@@ -1335,6 +1335,13 @@ export default function Watchlists() {
   const staleThresholdHitCount = vendorStaleThresholdHitCount + accountStaleThresholdHitCount
   const activeAlertEvents = activeAlertEventsData?.events ?? []
   const activeAlertEmailDeliveries = activeAlertEmailLogData?.deliveries ?? []
+  const activeAlertEventsEmptyState = useMemo(() => {
+    if (!activeWatchlistView) return 'No open persisted alert events for this saved view yet.'
+    const localSuppression = summarizeLocalWatchlistSuppression(activeWatchlistView)
+    return localSuppression
+      ? `No open persisted alert events for this saved view yet. Local filters: ${localSuppression}.`
+      : 'No open persisted alert events for this saved view yet.'
+  }, [activeWatchlistView])
   const requestedAccountFocus = useMemo(
     () => ({
       vendor: searchParams.get('account_vendor')?.trim() || '',
@@ -3742,7 +3749,7 @@ export default function Watchlists() {
             </div>
             {activeAlertEvents.length === 0 ? (
               <div className="rounded-lg border border-dashed border-slate-700/50 px-3 py-4 text-sm text-slate-500">
-                No open persisted alert events for this saved view yet.
+                {activeAlertEventsEmptyState}
               </div>
             ) : (
               <div className="space-y-2">

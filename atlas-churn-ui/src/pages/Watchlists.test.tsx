@@ -768,10 +768,11 @@ describe('Watchlists', () => {
   })
 
   it('uses explicit local suppression language in saved view summaries and no-events delivery lines', async () => {
+    const user = userEvent.setup()
     api.listWatchlistViews.mockResolvedValue({
       views: [
         {
-          id: 'view-1',
+          id: 'view-empty-1',
           name: 'Suppressed Intercom',
           vendor_names: ['Intercom'],
           vendor_name: 'Intercom',
@@ -796,19 +797,32 @@ describe('Watchlists', () => {
       ],
       count: 1,
     })
+    api.listWatchlistAlertEvents.mockResolvedValue({
+      watchlist_view_id: 'view-empty-1',
+      watchlist_view_name: 'Suppressed Intercom',
+      status: 'open',
+      events: [],
+      count: 0,
+    })
 
     render(
-      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+      <MemoryRouter>
         <Watchlists />
       </MemoryRouter>,
     )
 
     await screen.findByRole('heading', { name: 'Watchlists' })
+    await user.click(screen.getAllByRole('button', { name: /Suppressed Intercom/i })[0])
     expect(screen.getByText('Intercom - Helpdesk - reddit - urgency 8+ - fresh only - named accounts only - changed wedges only - vendor alert 7.5+ - account alert 8.5+ - stale after 3d - email daily')).toBeInTheDocument()
     expect(screen.getByText((text) =>
       text.includes('Next email')
       && text.includes('No alert email sent because local filters suppressed all candidates')
       && text.includes('local filters: named accounts only + changed wedges only'),
+    )).toBeInTheDocument()
+    expect(await screen.findByText('Saved View Alert Events')).toBeInTheDocument()
+    expect(screen.getByText((text) =>
+      text.includes('No open persisted alert events for this saved view yet.')
+      && text.includes('Local filters: named accounts only + changed wedges only.'),
     )).toBeInTheDocument()
   })
 
