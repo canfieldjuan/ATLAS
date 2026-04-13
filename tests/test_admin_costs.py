@@ -1088,6 +1088,57 @@ def test_reddit_overview_is_labeled_raw_source_provenance(monkeypatch):
     assert "duplicate_of_review_id IS NULL" not in pool.last_fetch_query
 
 
+def test_reddit_per_vendor_reads_vendor_mentions(monkeypatch):
+    client, pool = _client(monkeypatch)
+    queries: list[str] = []
+
+    async def _fetch(query, *args):
+        queries.append(query)
+        pool.last_fetch_query = query
+        pool.last_fetch_args = args
+        if "high_urgency_count" in query:
+            return [
+                {
+                    "vendor_name": "Zendesk",
+                    "inserted": 6,
+                    "enriched": 4,
+                    "no_signal": 1,
+                    "failed": 1,
+                    "avg_source_weight": Decimal("0.810"),
+                    "avg_urgency_score": Decimal("7.25"),
+                    "intent_to_leave_count": 2,
+                    "high_urgency_count": 3,
+                    "trending_high_count": 1,
+                }
+            ]
+        if "reddit_subreddit AS subreddit" in query:
+            return [
+                {"vendor_name": "Zendesk", "subreddit": "zendesk", "cnt": 4},
+            ]
+        if "pain_category" in query:
+            return [
+                {"vendor_name": "Zendesk", "pain_category": "pricing", "cnt": 3},
+            ]
+        return []
+
+    pool.fetch = _fetch
+
+    with client:
+        res = client.get("/admin/costs/scraping/reddit/per-vendor?days=30&limit=5")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["period_days"] == 30
+    assert body["vendors"][0]["vendor_name"] == "Zendesk"
+    assert body["vendors"][0]["top_subreddits"] == ["zendesk"]
+    assert body["vendors"][0]["top_pain_categories"] == ["pricing"]
+    assert len(queries) == 3
+    assert all("JOIN b2b_review_vendor_mentions vm" in query for query in queries)
+    assert "COUNT(DISTINCT r.id)" in queries[0]
+    assert "vm.vendor_name = ANY($2)" in queries[1]
+    assert "vm.vendor_name = ANY($2)" in queries[2]
+
+
 def test_recent_calls_filters_and_surfaces_battle_card_context(monkeypatch):
     client, pool = _client(monkeypatch)
     with client:

@@ -4430,30 +4430,31 @@ async def reddit_per_vendor(
     rows = await pool.fetch(
         """
         SELECT
-            vendor_name,
-            COUNT(*)                                                                     AS inserted,
-            COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                      AS enriched,
-            COUNT(*) FILTER (WHERE enrichment_status = 'no_signal')                     AS no_signal,
-            COUNT(*) FILTER (WHERE enrichment_status = 'failed')                        AS failed,
-            ROUND(AVG(COALESCE(source_weight, 0.7))::numeric, 3)           AS avg_source_weight,
+            vm.vendor_name,
+            COUNT(DISTINCT r.id)                                                        AS inserted,
+            COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'enriched')        AS enriched,
+            COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'no_signal')       AS no_signal,
+            COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'failed')          AS failed,
+            ROUND(AVG(COALESCE(r.source_weight, 0.7))::numeric, 3)                      AS avg_source_weight,
             ROUND(AVG(
-                CASE WHEN enrichment_status = 'enriched'
-                     THEN (enrichment->>'urgency_score')::numeric END
+                CASE WHEN r.enrichment_status = 'enriched'
+                     THEN (r.enrichment->>'urgency_score')::numeric END
             )::numeric, 2)                                                               AS avg_urgency_score,
-            COUNT(*) FILTER (
-                WHERE COALESCE(enrichment->'churn_signals'->>'intent_to_leave', 'false')::boolean
+            COUNT(DISTINCT r.id) FILTER (
+                WHERE COALESCE(r.enrichment->'churn_signals'->>'intent_to_leave', 'false')::boolean
             )                                                                            AS intent_to_leave_count,
-            COUNT(*) FILTER (
-                WHERE (enrichment->>'urgency_score')::numeric >= 7
+            COUNT(DISTINCT r.id) FILTER (
+                WHERE (r.enrichment->>'urgency_score')::numeric >= 7
             )                                                                            AS high_urgency_count,
-            COUNT(*) FILTER (
-                WHERE reddit_trending = 'high'
+            COUNT(DISTINCT r.id) FILTER (
+                WHERE r.reddit_trending = 'high'
             )                                                                            AS trending_high_count
-        FROM b2b_reviews
-        WHERE source = 'reddit'
-          AND COALESCE(enrichment_status, '') != 'filtered'
-          AND imported_at >= $1
-        GROUP BY vendor_name
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.source = 'reddit'
+          AND COALESCE(r.enrichment_status, '') != 'filtered'
+          AND r.imported_at >= $1
+        GROUP BY vm.vendor_name
         ORDER BY enriched DESC, inserted DESC
         LIMIT $2
         """,
@@ -4470,18 +4471,19 @@ async def reddit_per_vendor(
     sub_rows = await pool.fetch(
         """
         SELECT
-            vendor_name,
-            reddit_subreddit   AS subreddit,
-            COUNT(*)                      AS cnt
-        FROM b2b_reviews
-        WHERE source = 'reddit'
-          AND COALESCE(enrichment_status, '') != 'filtered'
-          AND imported_at >= $1
-          AND vendor_name = ANY($2)
-          AND reddit_subreddit IS NOT NULL
-          AND reddit_subreddit != ''
-        GROUP BY vendor_name, reddit_subreddit
-        ORDER BY vendor_name, cnt DESC
+            vm.vendor_name,
+            r.reddit_subreddit AS subreddit,
+            COUNT(DISTINCT r.id) AS cnt
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.source = 'reddit'
+          AND COALESCE(r.enrichment_status, '') != 'filtered'
+          AND r.imported_at >= $1
+          AND vm.vendor_name = ANY($2)
+          AND r.reddit_subreddit IS NOT NULL
+          AND r.reddit_subreddit != ''
+        GROUP BY vm.vendor_name, r.reddit_subreddit
+        ORDER BY vm.vendor_name, cnt DESC
         """,
         since,
         vendor_names,
@@ -4502,18 +4504,19 @@ async def reddit_per_vendor(
     pain_rows = await pool.fetch(
         """
         SELECT
-            vendor_name,
-            enrichment->>'pain_category'  AS pain_category,
-            COUNT(*)                       AS cnt
-        FROM b2b_reviews
-        WHERE source = 'reddit'
-          AND COALESCE(enrichment_status, '') != 'filtered'
-          AND imported_at >= $1
-          AND vendor_name = ANY($2)
-          AND enrichment_status = 'enriched'
-          AND enrichment->>'pain_category' IS NOT NULL
-        GROUP BY vendor_name, enrichment->>'pain_category'
-        ORDER BY vendor_name, cnt DESC
+            vm.vendor_name,
+            r.enrichment->>'pain_category' AS pain_category,
+            COUNT(DISTINCT r.id) AS cnt
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.source = 'reddit'
+          AND COALESCE(r.enrichment_status, '') != 'filtered'
+          AND r.imported_at >= $1
+          AND vm.vendor_name = ANY($2)
+          AND r.enrichment_status = 'enriched'
+          AND r.enrichment->>'pain_category' IS NOT NULL
+        GROUP BY vm.vendor_name, r.enrichment->>'pain_category'
+        ORDER BY vm.vendor_name, cnt DESC
         """,
         since,
         vendor_names,
