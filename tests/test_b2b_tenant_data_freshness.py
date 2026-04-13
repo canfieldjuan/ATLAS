@@ -180,6 +180,22 @@ def test_owner_role_gets_admin_scope_even_without_is_admin_flag(monkeypatch):
     assert mod._tenant_params(user) == []
 
 
+def test_vendor_scope_sql_qualifies_vendor_expr_for_members(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(
+        account_id=str(uuid4()),
+        product="b2b_retention",
+        role="member",
+        is_admin=False,
+    )
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    assert mod._vendor_scope_sql(2, user, "vm.vendor_name") == (
+        "vm.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $2)"
+    )
+
+
 @pytest.mark.asyncio
 async def test_dashboard_overview_owner_role_reads_global_vendor_count(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
@@ -300,6 +316,28 @@ async def test_tenant_competitor_displacement_excludes_cross_source_duplicates(m
     sql = pool.fetch.await_args.args[0]
     assert "duplicate_of_review_id IS NULL" in sql
     assert "JOIN b2b_review_vendor_mentions vm" in sql
+
+
+
+@pytest.mark.asyncio
+async def test_tenant_review_aggregates_scope_tracked_vendors_through_vendor_mentions(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    await mod.pain_trends(window_days=90, user=user)
+    pain_sql = pool.fetch.await_args.args[0]
+    assert "vm.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)" in pain_sql
+
+    await mod.competitor_displacement(limit=20, user=user)
+    displacement_sql = pool.fetch.await_args.args[0]
+    assert "vm.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)" in displacement_sql
 
 
 @pytest.mark.asyncio

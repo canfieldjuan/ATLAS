@@ -1732,11 +1732,11 @@ async def run_competitive_set_now(
 # Tenant scope helper
 # ---------------------------------------------------------------------------
 
-def _vendor_scope_sql(param_idx: int, user: AuthUser | None = None) -> str:
+def _vendor_scope_sql(param_idx: int, user: AuthUser | None = None, vendor_expr: str = "vendor_name") -> str:
     """SQL clause restricting to tracked vendors for the account."""
     if not settings.saas_auth.enabled or _is_admin_user(user):
         return "TRUE"
-    return f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${param_idx})"
+    return f"{vendor_expr} IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${param_idx})"
 
 
 def _tenant_params(user: AuthUser) -> list:
@@ -3171,7 +3171,7 @@ async def pain_trends(
     conditions = []
     params: list = []
 
-    scope = _vendor_scope_sql(idx, user)
+    scope = _vendor_scope_sql(idx, user, "vm.vendor_name")
     if scope != "TRUE":
         conditions.append(scope)
         params.extend(t_params)
@@ -3228,7 +3228,7 @@ async def competitor_displacement(
     conditions = ["enrichment_status = 'enriched'", _canonical_review_predicate()]
     params: list = []
 
-    scope = _vendor_scope_sql(idx, user)
+    scope = _vendor_scope_sql(idx, user, "vm.vendor_name")
     if scope != "TRUE":
         conditions.append(scope)
         params.extend(t_params)
