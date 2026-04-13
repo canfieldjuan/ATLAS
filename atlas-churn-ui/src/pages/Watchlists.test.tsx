@@ -2354,6 +2354,76 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Copied Alerts API link')).toBeInTheDocument()
   })
 
+  it('scopes the saved alert events alerts shortcut to a single vendor view', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Zendesk only',
+          vendor_names: ['Zendesk'],
+          vendor_name: 'Zendesk',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: false,
+          vendor_alert_threshold: 8,
+          account_alert_threshold: 9,
+          stale_days_threshold: 7,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: '2026-04-08T09:00:00Z',
+          last_alert_delivery_status: 'sent',
+          last_alert_delivery_at: '2026-04-07T09:00:00Z',
+          created_at: '2026-04-07T08:00:00Z',
+          updated_at: '2026-04-07T08:30:00Z',
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      const alertsUrl = new URL(screen.getByRole('link', { name: 'Alerts API' }).getAttribute('href') || '', 'https://atlas.test')
+      expect(alertsUrl.pathname).toBe('/alerts')
+      expect(alertsUrl.searchParams.get('vendor')).toBe('Zendesk')
+      const backToUrl = new URL(alertsUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+      expect(backToUrl.pathname).toBe('/watchlists')
+      expect(backToUrl.searchParams.get('view')).toBe('view-1')
+      expect(backToUrl.searchParams.get('vendor_name')).toBe('Zendesk')
+      expect(backToUrl.searchParams.get('source')).toBe('reddit')
+      expect(backToUrl.searchParams.get('category')).toBe('Helpdesk')
+      expect(backToUrl.searchParams.get('min_urgency')).toBe('8')
+      expect(backToUrl.searchParams.get('fresh_only')).toBe('true')
+      expect(backToUrl.searchParams.get('named_accounts_only')).toBe('true')
+      expect(backToUrl.searchParams.get('vendor_alert_threshold')).toBe('8')
+      expect(backToUrl.searchParams.get('account_alert_threshold')).toBe('9')
+      expect(backToUrl.searchParams.get('stale_days_threshold')).toBe('7')
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Copy Alerts Link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedUrl = new URL(clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string)
+    expect(copiedUrl.pathname).toBe('/alerts')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Zendesk')
+    const copiedBackToUrl = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+    expect(copiedBackToUrl.pathname).toBe('/watchlists')
+    expect(copiedBackToUrl.searchParams.get('view')).toBe('view-1')
+    expect(copiedBackToUrl.searchParams.get('vendor_name')).toBe('Zendesk')
+  })
+
   it('uses an in-app confirmation modal before deleting a saved view', async () => {
     const user = userEvent.setup()
     const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)

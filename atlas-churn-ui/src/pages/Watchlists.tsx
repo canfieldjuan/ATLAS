@@ -374,10 +374,6 @@ function watchlistAlertsPath(searchParams: URLSearchParams) {
   return `/alerts?${params.toString()}`
 }
 
-function watchlistAlertsUrl(searchParams: URLSearchParams) {
-  return `${window.location.origin}${watchlistAlertsPath(searchParams)}`
-}
-
 function watchlistVendorAlertsPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -1192,6 +1188,9 @@ export default function Watchlists() {
     staleDaysThreshold,
     vendorAlertThreshold,
   ])
+  const currentAlertsPath = currentEvidenceVendor
+    ? watchlistVendorAlertsPath(outboundWatchlistSearchParams, currentEvidenceVendor)
+    : watchlistAlertsPath(outboundWatchlistSearchParams)
   const selectedAccountSearchParams = useMemo(
     () => (selectedAccount
       ? accountFocusParams(outboundWatchlistSearchParams, selectedAccount)
@@ -1803,7 +1802,7 @@ export default function Watchlists() {
 
   async function handleCopyAlertsLink() {
     try {
-      await navigator.clipboard.writeText(watchlistAlertsUrl(outboundWatchlistSearchParams))
+      await navigator.clipboard.writeText(`${window.location.origin}${currentAlertsPath}`)
       setActionError(null)
       setActionMessage('Copied Alerts API link')
     } catch (err) {
@@ -3645,7 +3644,7 @@ export default function Watchlists() {
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <Link
-              to={watchlistAlertsPath(outboundWatchlistSearchParams)}
+              to={currentAlertsPath}
               className="rounded-md bg-violet-500/10 px-3 py-2 text-center text-sm font-medium text-violet-300 hover:bg-violet-500/20"
             >
               Alerts API
