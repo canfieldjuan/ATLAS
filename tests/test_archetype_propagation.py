@@ -622,6 +622,62 @@ class TestVendorBriefingReasoningAnchorsRender:
         assert "Proof Anchors" in html
         assert "Hack Club" in html
 
+    def test_full_briefing_html_includes_preview_account_pressure_without_named_accounts(self):
+        from atlas_brain.templates.email.vendor_briefing import (
+            render_vendor_briefing_html,
+        )
+
+        html = render_vendor_briefing_html(
+            {
+                "vendor_name": "Salesforce",
+                "category": "CRM",
+                "churn_pressure_score": 61,
+                "trend": "rising",
+                "churn_signal_density": 12.0,
+                "avg_urgency": 7.3,
+                "review_count": 48,
+                "dm_churn_rate": 22.0,
+                "account_pressure_summary": "Sparse but real account pressure is visible.",
+                "priority_account_names": ["Concentrix"],
+                "account_reasoning_preview": {
+                    "disclaimer": "Preview only until canonical account reasoning expands.",
+                },
+            }
+        )
+
+        assert "Account Pressure" in html
+        assert "Sparse but real account pressure is visible." in html
+        assert "Priority accounts: Concentrix" in html
+        assert "Preview only until canonical account reasoning expands." in html
+
+    def test_prospect_briefing_html_redacts_preview_account_names(self):
+        from atlas_brain.templates.email.vendor_briefing import (
+            render_vendor_briefing_html,
+        )
+
+        html = render_vendor_briefing_html(
+            {
+                "vendor_name": "Salesforce",
+                "category": "CRM",
+                "churn_pressure_score": 61,
+                "trend": "rising",
+                "churn_signal_density": 12.0,
+                "avg_urgency": 7.3,
+                "review_count": 48,
+                "dm_churn_rate": 22.0,
+                "prospect_mode": True,
+                "account_pressure_summary": "Sparse but real account pressure is visible.",
+                "priority_account_names": ["Concentrix", "Slack"],
+                "account_pressure_disclaimer": "Preview only until canonical account reasoning expands.",
+            }
+        )
+
+        assert "Account Pressure" in html
+        assert "Sparse but real account pressure is visible." in html
+        assert "2 priority accounts identified" in html
+        assert "Concentrix" not in html
+        assert "Slack" not in html
+
 
 # ---------------------------------------------------------------------------
 # Article-archetype correlation

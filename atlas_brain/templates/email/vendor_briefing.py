@@ -456,6 +456,23 @@ def render_vendor_briefing_html(briefing: dict) -> str:
 
     # Section 7: named accounts (conditional)
     named_accounts = briefing.get("named_accounts") or []
+    account_preview = briefing.get("account_reasoning_preview") or {}
+    account_pressure_summary = _safe(
+        briefing.get("account_pressure_summary")
+        or account_preview.get("account_pressure_summary"),
+    )
+    account_pressure_disclaimer = _safe(
+        briefing.get("account_pressure_disclaimer")
+        or account_preview.get("disclaimer"),
+    )
+    raw_priority_names = briefing.get("priority_account_names")
+    if not raw_priority_names:
+        raw_priority_names = account_preview.get("priority_account_names")
+    priority_account_names = [
+        _safe(item)
+        for item in (raw_priority_names or [])
+        if _safe(item)
+    ][:5]
     named_accounts_html = ""
     if named_accounts:
         if prospect_mode:
@@ -533,6 +550,59 @@ def render_vendor_briefing_html(briefing: dict) -> str:
               </tr>
               {account_rows}
             </table>
+          </td></tr>
+        </table>"""
+    elif account_pressure_summary or priority_account_names or account_pressure_disclaimer:
+        preview_heading = "Accounts In Motion" if challenger_mode else "Account Pressure"
+        if prospect_mode:
+            priority_summary_html = ""
+            if priority_account_names:
+                label = "priority account" if len(priority_account_names) == 1 else "priority accounts"
+                priority_summary_html = (
+                    f'<div style="font-size:13px;color:#555;margin-top:8px;">'
+                    f'{len(priority_account_names)} {label} identified</div>'
+                )
+            disclaimer_html = ""
+            if account_pressure_disclaimer:
+                disclaimer_html = (
+                    f'<div style="font-size:12px;color:#999;margin-top:10px;font-style:italic;">'
+                    f'{account_pressure_disclaimer}</div>'
+                )
+            named_accounts_html = f"""
+        <!-- Account Pressure Preview (redacted) -->
+        <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+          <tr><td style="padding:0 24px;">
+            <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">{preview_heading}</h3>
+            <div style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:16px 20px;">
+              <div style="font-size:14px;line-height:1.6;color:#444;">{account_pressure_summary}</div>
+              {priority_summary_html}
+              {disclaimer_html}
+            </div>
+          </td></tr>
+        </table>"""
+        else:
+            priority_html = ""
+            if priority_account_names:
+                priority_html = (
+                    f'<div style="font-size:13px;color:#555;margin-top:10px;">'
+                    f'Priority accounts: {", ".join(priority_account_names)}</div>'
+                )
+            disclaimer_html = ""
+            if account_pressure_disclaimer:
+                disclaimer_html = (
+                    f'<div style="font-size:12px;color:#888;margin-top:10px;font-style:italic;">'
+                    f'{account_pressure_disclaimer}</div>'
+                )
+            named_accounts_html = f"""
+        <!-- Account Pressure Preview -->
+        <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+          <tr><td style="padding:0 24px;">
+            <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">{preview_heading}</h3>
+            <div style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:16px 20px;">
+              <div style="font-size:14px;line-height:1.6;color:#444;">{account_pressure_summary}</div>
+              {priority_html}
+              {disclaimer_html}
+            </div>
           </td></tr>
         </table>"""
 
