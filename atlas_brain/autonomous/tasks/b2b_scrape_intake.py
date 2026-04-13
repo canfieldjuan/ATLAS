@@ -69,7 +69,46 @@ _TWITTER_MARKETING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:now\s+available|product\s+update|release\s+notes|hiring)\b", re.I),
 )
 _CAPTERRA_AGGREGATE_METHOD = "jsonld_aggregate"
-_DEFAULT_SOURCE_QUALITY_GATE_SOURCES = frozenset({"quora", "twitter", "capterra"})
+_DEFAULT_SOURCE_QUALITY_GATE_SOURCES = frozenset(
+    {"quora", "twitter", "capterra", "reddit", "hackernews", "software_advice", "trustpilot"}
+)
+_DISCUSSION_SOURCE_QUALITY_MIN_TEXT_LEN = 160
+_REVIEW_PLATFORM_QUALITY_MIN_TEXT_LEN = 140
+_DISCUSSION_SOURCE_QUALITY_MARKERS = {
+    "alternative", "alternatives", "budget", "contract", "cost", "expensive",
+    "migrate", "migration", "pricing", "renewal", "replace", "replaced",
+    "seat", "seats", "support", "switch", "switching",
+}
+_DISCUSSION_SOURCE_QUALITY_STRONG_MARKERS = {
+    "alternative", "alternatives", "budget", "contract", "cost", "expensive",
+    "migrate", "migration", "pricing", "renewal", "replace", "replaced",
+    "seat", "seats", "switch", "switching",
+}
+_DISCUSSION_SOURCE_CONSUMER_PATTERNS = (
+    r"\b2fa\b",
+    r"\bapp support\b",
+    r"\bdownloaded\b",
+    r"\bghosting email\b",
+    r"\bgoogle play\b",
+    r"\bhacked\b",
+    r"\bminecraft\b",
+    r"\bmy son\b",
+    r"\boutlook app\b",
+    r"\btaskbar\b",
+    r"\bwindows 11\b",
+    r"\bworkspace account\b",
+)
+_DISCUSSION_SOURCE_TECHNICAL_PATTERNS = (
+    r"\bhow (?:can|do|to)\b",
+    r"\bbest practice\b",
+    r"\bsetting up\b",
+    r"\bapi token\b",
+    r"\berror\b",
+    r"\bfailed\b",
+    r"\bintegrat(?:e|ion)\b",
+    r"\blogin\b",
+    r"\bplugin\b",
+)
 
 
 def _coerce_config_bool(value: Any, default: bool) -> bool:
@@ -149,9 +188,9 @@ def _make_dedup_key(
     Identical logic to api/b2b_reviews.py and scripts/import_b2b_reviews.py.
     """
     if source_review_id:
-        raw = f"{source}:{vendor_name}:{source_review_id}"
+        raw = f"{source}:{source_review_id}"
     else:
-        raw = f"{source}:{vendor_name}:{reviewer_name or ''}:{reviewed_at or ''}"
+        raw = f"{source}:{reviewer_name or ''}:{reviewed_at or ''}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -177,13 +216,12 @@ def _make_review_identity_key(
     - historical rows saved under an older/incorrect dedup_key formula
     """
     source_norm = str(source or "").strip().lower()
-    vendor_norm = str(vendor_name or "").strip()
     review_id = str(source_review_id or "").strip()
     if review_id:
-        return f"id:{source_norm}:{vendor_norm}:{review_id}"
+        return f"id:{source_norm}:{review_id}"
     reviewer_norm = str(reviewer_name or "").strip()
     reviewed_norm = _normalize_review_identity_timestamp(reviewed_at)
-    return f"fallback:{source_norm}:{vendor_norm}:{reviewer_norm}:{reviewed_norm}"
+    return f"fallback:{source_norm}:{reviewer_norm}:{reviewed_norm}"
 
 
 def _normalize_review_text_for_hash(value: Any) -> str:
@@ -257,6 +295,52 @@ def _review_looks_like_twitter_marketing(text: str) -> bool:
     return any(pattern.search(text) for pattern in _TWITTER_MARKETING_PATTERNS)
 
 
+def _quality_normalize_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _quality_name_tokens(value: Any) -> list[str]:
+    normalized = _quality_normalize_text(value)
+    if not normalized:
+        return []
+    return [token for token in normalized.split() if len(token) >= 3]
+
+
+def _quality_text_mentions_name(haystack: str, needle: Any) -> bool:
+    normalized = _quality_normalize_text(needle)
+    if not normalized:
+        return False
+    wrapped = f" {haystack} "
+    if f" {normalized} " in wrapped:
+        return True
+    compact_haystack = haystack.replace(" ", "")
+    compact_needle = normalized.replace(" ", "")
+    if compact_needle and compact_needle in compact_haystack:
+        return True
+    return any(
+        re.search(rf"\b{re.escape(token)}\b", haystack)
+        for token in _quality_name_tokens(needle)
+    )
+
+
+def _has_discussion_commercial_context(text: str) -> bool:
+    return any(marker in text for marker in _DISCUSSION_SOURCE_QUALITY_MARKERS)
+
+
+def _has_strong_discussion_commercial_context(text: str) -> bool:
+    return any(marker in text for marker in _DISCUSSION_SOURCE_QUALITY_STRONG_MARKERS)
+
+
+def _has_discussion_consumer_context(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in _DISCUSSION_SOURCE_CONSUMER_PATTERNS)
+
+
+def _has_discussion_technical_context(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in _DISCUSSION_SOURCE_TECHNICAL_PATTERNS)
+
+
 def _is_vendor_self_tweet(review: dict[str, Any], vendor_name: str) -> bool:
     """Detect likely vendor self-posts on Twitter/X."""
     tokens = _tokenize_vendor_name(vendor_name)
@@ -278,6 +362,48 @@ def _is_vendor_self_tweet(review: dict[str, Any], vendor_name: str) -> bool:
 def _quality_gate_skip_reason(review: dict[str, Any], cfg) -> str | None:
     """Return a skip reason when a review fails source-specific quality gates."""
     source = str(review.get("source") or "").strip().lower()
+    combined_text = " ".join(
+        str(value or "").strip()
+        for value in (
+            review.get("summary"),
+            review.get("review_text"),
+            review.get("pros"),
+            review.get("cons"),
+        )
+        if str(value or "").strip()
+    )
+    combined_norm = _quality_normalize_text(combined_text)
+    vendor_hit = any(
+        _quality_text_mentions_name(combined_norm, review.get(field))
+        for field in ("vendor_name", "product_name")
+        if review.get(field)
+    )
+    try:
+        discussion_min_len = max(
+            80,
+            int(
+                getattr(
+                    cfg,
+                    "source_quality_discussion_min_text_len",
+                    _DISCUSSION_SOURCE_QUALITY_MIN_TEXT_LEN,
+                ) or _DISCUSSION_SOURCE_QUALITY_MIN_TEXT_LEN
+            ),
+        )
+    except (TypeError, ValueError):
+        discussion_min_len = _DISCUSSION_SOURCE_QUALITY_MIN_TEXT_LEN
+    try:
+        review_platform_min_len = max(
+            80,
+            int(
+                getattr(
+                    cfg,
+                    "source_quality_review_platform_min_text_len",
+                    _REVIEW_PLATFORM_QUALITY_MIN_TEXT_LEN,
+                ) or _REVIEW_PLATFORM_QUALITY_MIN_TEXT_LEN
+            ),
+        )
+    except (TypeError, ValueError):
+        review_platform_min_len = _REVIEW_PLATFORM_QUALITY_MIN_TEXT_LEN
     if source == "quora":
         if not _is_scrapable_quora_url(review.get("source_url")):
             return "quora_non_question_url"
@@ -312,6 +438,31 @@ def _quality_gate_skip_reason(review: dict[str, Any], cfg) -> str | None:
             return "twitter_vendor_self_post"
         return None
 
+    if source in {"reddit", "hackernews"}:
+        if not combined_norm:
+            return "discussion_empty_context"
+        if _has_discussion_technical_context(combined_norm) and not _has_discussion_commercial_context(combined_norm):
+            return "discussion_technical_context"
+        if len(combined_norm) < discussion_min_len and not _has_strong_discussion_commercial_context(combined_norm):
+            return "discussion_thin_context"
+        if not vendor_hit and not _has_discussion_commercial_context(combined_norm):
+            return "discussion_vendor_absent"
+        return None
+
+    if source == "software_advice":
+        body_len = len(str(review.get("review_text") or "").strip())
+        pros_cons_len = len(str(review.get("pros") or "").strip()) + len(str(review.get("cons") or "").strip())
+        if body_len < review_platform_min_len and pros_cons_len < review_platform_min_len:
+            return "software_advice_thin_review"
+        return None
+
+    if source == "trustpilot":
+        if _has_discussion_consumer_context(combined_norm) and not _has_strong_discussion_commercial_context(combined_norm):
+            return "trustpilot_consumer_context"
+        if len(combined_norm) < review_platform_min_len and not _has_strong_discussion_commercial_context(combined_norm):
+            return "trustpilot_thin_context"
+        return None
+
     return None
 
 
@@ -330,16 +481,17 @@ async def _load_existing_review_fingerprints(
     vendor_name: str,
     source: str,
 ) -> tuple[set[str], set[str], set[str]]:
-    """Load existing dedup hashes, semantic identities, and content hashes."""
-    canonical_vendor = await resolve_vendor_name(vendor_name)
+    """Load existing same-source dedup hashes, semantic identities, and content hashes."""
     rows = await pool.fetch(
         """
-        SELECT dedup_key, source_review_id, reviewer_name, reviewed_at,
-               raw_metadata->>'review_content_hash' AS review_content_hash
+        SELECT dedup_key,
+               source_review_id,
+               reviewer_name,
+               reviewed_at,
+               COALESCE(cross_source_content_hash, raw_metadata->>'review_content_hash') AS review_content_hash
         FROM b2b_reviews
-        WHERE vendor_name = $1 AND source = $2
+        WHERE source = $1
         """,
-        canonical_vendor,
         source,
     )
     known_keys: set[str] = set()
@@ -352,7 +504,7 @@ async def _load_existing_review_fingerprints(
         known_identities.add(
             _make_review_identity_key(
                 source,
-                canonical_vendor,
+                vendor_name,
                 row.get("source_review_id"),
                 row.get("reviewer_name"),
                 row.get("reviewed_at"),
@@ -369,13 +521,79 @@ async def _load_existing_review_identity_sets(
     vendor_name: str,
     source: str,
 ) -> tuple[set[str], set[str]]:
-    """Load existing dedup hashes and semantic identities for one source/vendor."""
+    """Load existing same-source dedup hashes and semantic identities."""
     known_keys, known_identities, _ = await _load_existing_review_fingerprints(
         pool,
         vendor_name,
         source,
     )
     return known_keys, known_identities
+
+
+async def _load_existing_source_review_lookup(
+    pool,
+    source: str,
+) -> dict[str, dict[str, _uuid.UUID]]:
+    rows = await pool.fetch(
+        """
+        SELECT id,
+               dedup_key,
+               source_review_id,
+               reviewer_name,
+               reviewed_at,
+               COALESCE(cross_source_content_hash, raw_metadata->>'review_content_hash') AS review_content_hash
+        FROM b2b_reviews
+        WHERE source = $1
+          AND duplicate_of_review_id IS NULL
+        ORDER BY imported_at DESC NULLS LAST, id DESC
+        """,
+        source,
+    )
+    by_dedup_key: dict[str, _uuid.UUID] = {}
+    by_identity_key: dict[str, _uuid.UUID] = {}
+    by_content_hash: dict[str, _uuid.UUID] = {}
+    for row in rows:
+        row_id = row.get("id")
+        if row_id is None:
+            continue
+        review_id = row_id if isinstance(row_id, _uuid.UUID) else _uuid.UUID(str(row_id))
+        dedup_key = str(row.get("dedup_key") or "").strip()
+        if dedup_key and dedup_key not in by_dedup_key:
+            by_dedup_key[dedup_key] = review_id
+        identity_key = _make_review_identity_key(
+            source,
+            "",
+            row.get("source_review_id"),
+            row.get("reviewer_name"),
+            row.get("reviewed_at"),
+        )
+        if identity_key and identity_key not in by_identity_key:
+            by_identity_key[identity_key] = review_id
+        content_hash = str(row.get("review_content_hash") or "").strip()
+        if content_hash and content_hash not in by_content_hash:
+            by_content_hash[content_hash] = review_id
+    return {
+        "by_dedup_key": by_dedup_key,
+        "by_identity_key": by_identity_key,
+        "by_content_hash": by_content_hash,
+    }
+
+
+def _lookup_existing_review_id(
+    lookup: dict[str, dict[str, _uuid.UUID]],
+    *,
+    dedup_key: str,
+    identity_key: str,
+    content_hash: str | None,
+) -> _uuid.UUID | None:
+    by_dedup_key = lookup.get("by_dedup_key", {})
+    by_identity_key = lookup.get("by_identity_key", {})
+    by_content_hash = lookup.get("by_content_hash", {})
+    return (
+        by_dedup_key.get(dedup_key)
+        or by_identity_key.get(identity_key)
+        or (by_content_hash.get(content_hash) if content_hash else None)
+    )
 
 
 async def _load_vendor_cross_source_reviews(
@@ -391,7 +609,15 @@ async def _load_vendor_cross_source_reviews(
                cross_source_identity_key,
                summary, review_text, pros, cons
         FROM b2b_reviews
-        WHERE vendor_name = $1
+        WHERE (
+                vendor_name = $1
+             OR EXISTS (
+                    SELECT 1
+                    FROM b2b_review_vendor_mentions vm
+                    WHERE vm.review_id = b2b_reviews.id
+                      AND vm.vendor_name = $1
+                )
+              )
           AND duplicate_of_review_id IS NULL
         ORDER BY imported_at ASC, id ASC
         """,
@@ -735,6 +961,18 @@ INSERT INTO b2b_reviews (
 ON CONFLICT (dedup_key) DO NOTHING
 """
 
+_UPSERT_REVIEW_VENDOR_MENTION_SQL = """
+INSERT INTO b2b_review_vendor_mentions (
+    review_id, vendor_name, is_primary, match_metadata
+) VALUES (
+    $1::uuid, $2, $3, $4::jsonb
+)
+ON CONFLICT (review_id, vendor_name) DO UPDATE
+SET is_primary = b2b_review_vendor_mentions.is_primary OR EXCLUDED.is_primary,
+    match_metadata = COALESCE(b2b_review_vendor_mentions.match_metadata, '{}'::jsonb) || EXCLUDED.match_metadata,
+    updated_at = NOW()
+"""
+
 _REPAIR_PARSER_FIELDS_SQL = """
 UPDATE b2b_reviews
 SET reviewer_title = COALESCE(reviewer_title, $2::text),
@@ -757,8 +995,7 @@ _PROMOTE_RAW_ONLY_DUPLICATE_SQL = """
 WITH candidate AS (
     SELECT id
     FROM b2b_reviews
-    WHERE vendor_name = $1
-      AND source = $2
+    WHERE source = $2
       AND duplicate_of_review_id IS NULL
       AND enrichment_status = 'raw_only'
       AND (
@@ -807,6 +1044,38 @@ FROM candidate
 WHERE r.id = candidate.id
 """
 
+_PROMOTE_RAW_ONLY_BY_ID_SQL = """
+UPDATE b2b_reviews
+SET summary = CASE
+        WHEN length(COALESCE($2::text, '')) > length(COALESCE(summary, ''))
+        THEN $2::text
+        ELSE summary
+    END,
+    review_text = CASE
+        WHEN length(COALESCE($3::text, '')) > length(COALESCE(review_text, ''))
+        THEN $3::text
+        ELSE review_text
+    END,
+    pros = CASE
+        WHEN length(COALESCE($4::text, '')) > length(COALESCE(pros, ''))
+        THEN $4::text
+        ELSE pros
+    END,
+    cons = CASE
+        WHEN length(COALESCE($5::text, '')) > length(COALESCE(cons, ''))
+        THEN $5::text
+        ELSE cons
+    END,
+    raw_metadata = (COALESCE(raw_metadata, '{}'::jsonb) || $6::jsonb) - 'retention_lane' - 'retention_reasons',
+    parser_version = COALESCE($7::text, parser_version),
+    cross_source_content_hash = COALESCE($8::text, cross_source_content_hash),
+    cross_source_identity_key = COALESCE($9::text, cross_source_identity_key),
+    enrichment_status = 'pending'
+WHERE id = $1::uuid
+  AND duplicate_of_review_id IS NULL
+  AND enrichment_status = 'raw_only'
+"""
+
 # Resolve parent_review_id for comments after all posts in the batch are inserted
 _RESOLVE_PARENT_SQL = """
 UPDATE b2b_reviews AS c
@@ -842,6 +1111,31 @@ ORDER BY CASE WHEN last_scraped_at IS NULL THEN 0 ELSE 1 END,
          last_scraped_at ASC NULLS FIRST
 LIMIT $2
 """
+
+
+def _build_review_vendor_mention_metadata(
+    *,
+    source: str,
+    source_review_id: str | None,
+    batch_id: str,
+    is_primary: bool,
+    match_reason: str,
+    target_context: dict[str, Any] | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "association_source": "b2b_scrape_intake",
+        "review_source": source,
+        "source_review_id": str(source_review_id or "").strip() or None,
+        "batch_id": batch_id,
+        "match_reason": match_reason,
+        "is_primary": is_primary,
+    }
+    if target_context:
+        if target_context.get("scrape_target_id"):
+            payload["scrape_target_id"] = str(target_context.get("scrape_target_id"))
+        if target_context.get("scrape_target_source_fit"):
+            payload["scrape_target_source_fit"] = target_context.get("scrape_target_source_fit")
+    return json.dumps(payload)
 
 
 def _filter_targets_by_source_fit(rows: list[dict[str, Any]], cfg) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1650,10 +1944,12 @@ async def _insert_reviews(
     _existing_keys = set(_known)
     _existing_identities = set(_known_identities)
     _existing_content_hashes = set(_known_content_hashes)
+    _batch_canonical_by_dedup_key: dict[str, _uuid.UUID] = {}
     _batch_canonical_by_content_hash: dict[str, dict[str, Any]] = {}
     _batch_canonical_by_identity_key: dict[str, dict[str, Any]] = {}
     _vendor_name_cache: dict[str, str] = {}
     _vendor_candidate_indexes: dict[str, VendorDedupIndex] = {}
+    _existing_source_lookups: dict[str, dict[str, dict[str, _uuid.UUID]]] = {}
     skipped_short = 0
     skipped_quality_gate = 0
     short_flagged = 0
@@ -1666,8 +1962,11 @@ async def _insert_reviews(
     cross_source_duplicates = 0
     repaired_existing = 0
     promoted_existing = 0
+    vendor_mentions_upserted = 0
     repair_candidates: list[tuple[str, str | None, str | None, str | None, str | None, str | None, str | None]] = []
     promotion_candidates: list[tuple[str, str, str, str | None, str | None, str | None, str | None, str | None, str | None, str, str | None]] = []
+    promotion_by_id_candidates: list[tuple[str, str | None, str | None, str | None, str | None, str, str | None, str | None, str | None]] = []
+    vendor_mention_rows: list[tuple[str, str, bool, str]] = []
     for r in reviews:
         source = str(r.get("source") or "").strip().lower()
         raw_vendor_name = str(r.get("vendor_name") or "").strip()
@@ -1735,6 +2034,22 @@ async def _insert_reviews(
             or (content_hash is not None and content_hash in _known_content_hashes)
         ):
             duplicate_or_existing += 1
+            existing_review_id: _uuid.UUID | None = (
+                _batch_canonical_by_dedup_key.get(dedup_key)
+                or (_batch_canonical_by_identity_key.get(identity_key) or {}).get("id")
+                or ((_batch_canonical_by_content_hash.get(content_hash) if content_hash is not None else None) or {}).get("id")
+            )
+            if existing_review_id is None:
+                source_lookup = _existing_source_lookups.get(source)
+                if source_lookup is None:
+                    source_lookup = await _load_existing_source_review_lookup(pool, source)
+                    _existing_source_lookups[source] = source_lookup
+                existing_review_id = _lookup_existing_review_id(
+                    source_lookup,
+                    dedup_key=dedup_key,
+                    identity_key=identity_key,
+                    content_hash=content_hash,
+                )
             if (
                 dedup_key in _existing_keys
                 or identity_key in _existing_identities
@@ -1759,22 +2074,63 @@ async def _insert_reviews(
                         r.get("reviewer_industry"),
                         parser_version,
                     ))
-                if not retention_reasons:
-                    promotion_candidates.append((
+                if existing_review_id is not None:
+                    vendor_mention_rows.append((
+                        str(existing_review_id),
                         canonical_vendor,
-                        source,
-                        dedup_key,
-                        cross_source_identity_key,
-                        content_hash,
-                        r.get("summary"),
-                        review_text,
-                        pros,
-                        cons,
-                        json.dumps(raw_metadata),
-                        parser_version,
+                        False,
+                        _build_review_vendor_mention_metadata(
+                            source=source,
+                            source_review_id=r.get("source_review_id"),
+                            batch_id=batch_id,
+                            is_primary=False,
+                            match_reason="existing_same_source_duplicate",
+                            target_context=target_context,
+                        ),
                     ))
+                if not retention_reasons:
+                    if existing_review_id is not None:
+                        promotion_by_id_candidates.append((
+                            str(existing_review_id),
+                            r.get("summary"),
+                            review_text,
+                            pros,
+                            cons,
+                            json.dumps(raw_metadata),
+                            parser_version,
+                            content_hash,
+                            cross_source_identity_key,
+                        ))
+                    else:
+                        promotion_candidates.append((
+                            canonical_vendor,
+                            source,
+                            dedup_key,
+                            cross_source_identity_key,
+                            content_hash,
+                            r.get("summary"),
+                            review_text,
+                            pros,
+                            cons,
+                            json.dumps(raw_metadata),
+                            parser_version,
+                        ))
             else:
                 duplicate_same_batch += 1
+                if existing_review_id is not None:
+                    vendor_mention_rows.append((
+                        str(existing_review_id),
+                        canonical_vendor,
+                        False,
+                        _build_review_vendor_mention_metadata(
+                            source=source,
+                            source_review_id=r.get("source_review_id"),
+                            batch_id=batch_id,
+                            is_primary=False,
+                            match_reason="same_batch_same_source_duplicate",
+                            target_context=target_context,
+                        ),
+                    ))
             continue
         _known.add(dedup_key)
         _known_identities.add(identity_key)
@@ -1912,6 +2268,20 @@ async def _insert_reviews(
             review_uuid,
         ))
         if duplicate_of_review_id is None:
+            vendor_mention_rows.append((
+                str(review_uuid),
+                canonical_vendor,
+                True,
+                _build_review_vendor_mention_metadata(
+                    source=source,
+                    source_review_id=r.get("source_review_id"),
+                    batch_id=batch_id,
+                    is_primary=True,
+                    match_reason="canonical_source_item",
+                    target_context=target_context,
+                ),
+            ))
+            _batch_canonical_by_dedup_key[dedup_key] = review_uuid
             canonical_row = {
                 "id": review_uuid,
                 "source": r["source"],
@@ -1948,6 +2318,19 @@ async def _insert_reviews(
                 if reviewer_stem:
                     by_reviewer_stem.setdefault(reviewer_stem, []).append(canonical_row)
         else:
+            vendor_mention_rows.append((
+                str(duplicate_of_review_id),
+                canonical_vendor,
+                False,
+                _build_review_vendor_mention_metadata(
+                    source=source,
+                    source_review_id=r.get("source_review_id"),
+                    batch_id=batch_id,
+                    is_primary=False,
+                    match_reason="cross_source_duplicate_survivor",
+                    target_context=target_context,
+                ),
+            ))
             dedup_audit_events.append((
                 str(review_uuid),
                 str(duplicate_of_review_id),
@@ -1977,8 +2360,20 @@ async def _insert_reviews(
             result = await pool.execute(_PROMOTE_RAW_ONLY_DUPLICATE_SQL, *candidate)
             if str(result).split()[-1:] == ["1"]:
                 promoted_existing += 1
+    if promotion_by_id_candidates:
+        for candidate in promotion_by_id_candidates:
+            result = await pool.execute(_PROMOTE_RAW_ONLY_BY_ID_SQL, *candidate)
+            if str(result).split()[-1:] == ["1"]:
+                promoted_existing += 1
 
     if not rows:
+        if vendor_mention_rows:
+            try:
+                async with pool.transaction() as conn:
+                    await conn.executemany(_UPSERT_REVIEW_VENDOR_MENTION_SQL, vendor_mention_rows)
+                vendor_mentions_upserted = len(vendor_mention_rows)
+            except Exception:
+                logger.exception("Failed to upsert review vendor mentions (batch %s)", batch_id)
         return {
             "inserted": 0,
             "skipped_short": skipped_short,
@@ -1992,6 +2387,7 @@ async def _insert_reviews(
             "cross_source_duplicates": cross_source_duplicates,
             "repaired_existing": repaired_existing,
             "promoted_existing": promoted_existing,
+            "vendor_mentions_upserted": vendor_mentions_upserted,
             "retained_raw_only": retained_raw_only,
             "retained_pending": retained_pending,
             "named_company_reviews": 0,
@@ -2002,6 +2398,8 @@ async def _insert_reviews(
     try:
         async with pool.transaction() as conn:
             await conn.executemany(_INSERT_SQL, rows)
+            if vendor_mention_rows:
+                await conn.executemany(_UPSERT_REVIEW_VENDOR_MENTION_SQL, vendor_mention_rows)
     except Exception:
         logger.exception("Failed to insert scraped reviews (batch %s)", batch_id)
         return {
@@ -2017,12 +2415,14 @@ async def _insert_reviews(
             "cross_source_duplicates": cross_source_duplicates,
             "repaired_existing": repaired_existing,
             "promoted_existing": promoted_existing,
+            "vendor_mentions_upserted": 0,
             "retained_raw_only": retained_raw_only,
             "retained_pending": retained_pending,
             "named_company_reviews": 0,
             "company_signal_eligible_reviews": 0,
             "eligible_rows": len(rows),
         }
+    vendor_mentions_upserted = len(vendor_mention_rows)
 
     # Resolve parent_review_id for Reddit comments (looks up parent post by
     # source_review_id stored in raw_metadata.parent_source_review_id)
@@ -2088,6 +2488,7 @@ async def _insert_reviews(
         "cross_source_duplicates": cross_source_duplicates,
         "repaired_existing": repaired_existing,
         "promoted_existing": promoted_existing,
+        "vendor_mentions_upserted": vendor_mentions_upserted,
         "retained_raw_only": retained_raw_only,
         "retained_pending": retained_pending,
         "named_company_reviews": named_company_reviews,

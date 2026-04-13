@@ -4008,8 +4008,14 @@ def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) ->
             reasons.append("vendor_absent_noisy_source")
         if not vendor_hit and competitor_hit:
             reasons.append("competitor_only_context")
-        if source in {"twitter", "quora"} and len(combined_norm) < 120:
+        if (
+            source in {"twitter", "quora", "reddit", "hackernews"}
+            and len(combined_norm) < 160
+            and not (vendor_hit and _has_commercial_context(combined_norm))
+        ):
             reasons.append("thin_social_context")
+        if source == "software_advice" and len(combined_norm) < 140 and not _has_strong_commercial_context(combined_norm):
+            reasons.append("thin_review_platform_context")
         if source == "quora" and summary_tokens and len(summary_tokens) <= 3 and not vendor_hit:
             reasons.append("author_style_summary")
     if source in {"stackoverflow", "github"}:

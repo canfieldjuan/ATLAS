@@ -5,7 +5,6 @@ Accepts JSON array of reviews from any source and inserts into b2b_reviews
 table with dedup via SHA-256 keys.
 """
 
-import hashlib
 import json
 import logging
 import time
@@ -32,8 +31,13 @@ from ..services.scraping.sources import ReviewSource
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 from ..autonomous.tasks.b2b_scrape_intake import (
-    _load_existing_review_identity_sets,
+    _UPSERT_REVIEW_VENDOR_MENTION_SQL,
+    _build_review_vendor_mention_metadata,
+    _load_existing_review_fingerprints,
+    _load_existing_source_review_lookup,
+    _lookup_existing_review_id,
     _make_review_content_hash,
+    _make_dedup_key,
     _make_review_identity_key,
 )
 
@@ -87,15 +91,6 @@ ON CONFLICT (dedup_key) DO NOTHING
 """
 
 
-def _make_dedup_key(source: str, vendor_name: str, source_review_id: str | None,
-                    reviewer_name: str | None, reviewed_at: str | None) -> str:
-    if source_review_id:
-        raw = f"{source}:{vendor_name}:{source_review_id}"
-    else:
-        raw = f"{source}:{vendor_name}:{reviewer_name or ''}:{reviewed_at or ''}"
-    return hashlib.sha256(raw.encode()).hexdigest()
-
-
 @router.post("/import")
 async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
     """Import B2B reviews from any source. Accepts JSON array."""
@@ -124,9 +119,12 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
     seen_hashes: set[str] = set()
     seen_identities: set[str] = set()
     seen_content_hashes_by_source: dict[str, set[str]] = {}
-    existing_cache: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
+    existing_cache: dict[str, tuple[set[str], set[str], set[str]]] = {}
+    existing_lookup_cache: dict[str, dict[str, dict[str, _uuid.UUID]]] = {}
+    batch_canonical_by_dedup_key: dict[str, _uuid.UUID] = {}
     batch_canonical_by_content_hash: dict[str, dict] = {}
     batch_canonical_by_identity_key: dict[str, dict] = {}
+    vendor_mention_rows: list[tuple[str, str, bool, str]] = []
     for r in reviews:
         reviewed_at_ts = None
         if r.reviewed_at:
@@ -157,17 +155,17 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             reviewed_at_ts or r.reviewed_at,
             r.rating,
         )
-        cache_key = (canonical_vendor, r.source)
+        cache_key = r.source
         if cache_key not in existing_cache:
             try:
-                existing_cache[cache_key] = await _load_existing_review_identity_sets(
+                existing_cache[cache_key] = await _load_existing_review_fingerprints(
                     pool,
                     canonical_vendor,
                     r.source,
                 )
             except Exception:
-                existing_cache[cache_key] = (set(), set())
-        known_hashes, known_identities = existing_cache[cache_key]
+                existing_cache[cache_key] = (set(), set(), set())
+        known_hashes, known_identities, known_content_hashes = existing_cache[cache_key]
         seen_content_hashes = seen_content_hashes_by_source.setdefault(r.source, set())
         if (
             dedup_key in seen_hashes
@@ -175,7 +173,37 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             or (content_hash is not None and content_hash in seen_content_hashes)
             or dedup_key in known_hashes
             or identity_key in known_identities
+            or (content_hash is not None and content_hash in known_content_hashes)
         ):
+            existing_review_id: _uuid.UUID | None = (
+                batch_canonical_by_dedup_key.get(dedup_key)
+                or (batch_canonical_by_identity_key.get(identity_key) or {}).get("id")
+                or ((batch_canonical_by_content_hash.get(content_hash) if content_hash is not None else None) or {}).get("id")
+            )
+            if existing_review_id is None:
+                source_lookup = existing_lookup_cache.get(r.source)
+                if source_lookup is None:
+                    source_lookup = await _load_existing_source_review_lookup(pool, r.source)
+                    existing_lookup_cache[r.source] = source_lookup
+                existing_review_id = _lookup_existing_review_id(
+                    source_lookup,
+                    dedup_key=dedup_key,
+                    identity_key=identity_key,
+                    content_hash=content_hash,
+                )
+            if existing_review_id is not None:
+                vendor_mention_rows.append((
+                    str(existing_review_id),
+                    canonical_vendor,
+                    False,
+                    _build_review_vendor_mention_metadata(
+                        source=r.source,
+                        source_review_id=r.source_review_id,
+                        batch_id=batch_id,
+                        is_primary=False,
+                        match_reason="api_import_same_source_duplicate",
+                    ),
+                ))
             continue
         seen_hashes.add(dedup_key)
         seen_identities.add(identity_key)
@@ -286,6 +314,19 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             review_uuid,
         ))
         if duplicate_of_review_id is None:
+            vendor_mention_rows.append((
+                str(review_uuid),
+                canonical_vendor,
+                True,
+                _build_review_vendor_mention_metadata(
+                    source=r.source,
+                    source_review_id=r.source_review_id,
+                    batch_id=batch_id,
+                    is_primary=True,
+                    match_reason="api_import_canonical_source_item",
+                ),
+            ))
+            batch_canonical_by_dedup_key[dedup_key] = review_uuid
             canonical_row = {
                 "id": review_uuid,
                 "source": r.source,
@@ -304,6 +345,18 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             if cross_source_identity_key is not None:
                 batch_canonical_by_identity_key[cross_source_identity_key] = canonical_row
         else:
+            vendor_mention_rows.append((
+                str(duplicate_of_review_id),
+                canonical_vendor,
+                False,
+                _build_review_vendor_mention_metadata(
+                    source=r.source,
+                    source_review_id=r.source_review_id,
+                    batch_id=batch_id,
+                    is_primary=False,
+                    match_reason="api_import_cross_source_duplicate_survivor",
+                ),
+            ))
             dedup_audit_events.append((
                 str(review_uuid),
                 str(duplicate_of_review_id),
@@ -314,6 +367,8 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
     try:
         async with pool.transaction() as conn:
             await conn.executemany(_INSERT_SQL, rows)
+            if vendor_mention_rows:
+                await conn.executemany(_UPSERT_REVIEW_VENDOR_MENTION_SQL, vendor_mention_rows)
     except Exception:
         logger.exception("Failed to import B2B reviews")
         raise HTTPException(status_code=500, detail="Database insert failed")

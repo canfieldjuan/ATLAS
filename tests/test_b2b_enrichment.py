@@ -356,6 +356,11 @@ async def test_run_limits_rounds_and_reports_orphan_recovery(monkeypatch):
         "_enrich_rows",
         AsyncMock(return_value={"enriched": 3, "failed": 1, "no_signal": 2}),
     )
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_fetch_review_funnel_audit",
+        AsyncMock(return_value={"found": 0, "enriched": 0}),
+    )
 
     cfg = b2b_enrichment.settings.b2b_churn
     monkeypatch.setattr(cfg, "enabled", True)
@@ -404,6 +409,11 @@ async def test_run_applies_manual_metadata_overrides(monkeypatch):
     )
     enrich_rows = AsyncMock(return_value={"enriched": 1, "failed": 0, "no_signal": 0})
     monkeypatch.setattr(b2b_enrichment, "_enrich_rows", enrich_rows)
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_fetch_review_funnel_audit",
+        AsyncMock(return_value={"found": 0, "enriched": 0}),
+    )
 
     cfg = b2b_enrichment.settings.b2b_churn
     monkeypatch.setattr(cfg, "enabled", True)
@@ -1066,6 +1076,50 @@ def test_detect_low_fidelity_reasons_keeps_vendor_present_context(monkeypatch):
     reasons = b2b_enrichment._detect_low_fidelity_reasons(row, {"competitors_mentioned": []})
 
     assert reasons == []
+
+
+def test_detect_low_fidelity_reasons_flags_thin_reddit_context(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "reddit,hackernews,quora,twitter",
+        raising=False,
+    )
+    row = {
+        "source": "reddit",
+        "vendor_name": "HubSpot",
+        "product_name": "HubSpot",
+        "summary": "Anyone switch?",
+        "review_text": "Thinking about options.",
+        "pros": "",
+        "cons": "",
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, {"urgency_score": 2, "competitors_mentioned": []})
+
+    assert "thin_social_context" in reasons
+
+
+def test_detect_low_fidelity_reasons_flags_thin_software_advice_context(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "software_advice",
+        raising=False,
+    )
+    row = {
+        "source": "software_advice",
+        "vendor_name": "HubSpot",
+        "product_name": "HubSpot",
+        "summary": "Bad",
+        "review_text": "Too pricey.",
+        "pros": "",
+        "cons": "",
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, {"urgency_score": 3, "competitors_mentioned": []})
+
+    assert "thin_review_platform_context" in reasons
 
 
 def test_detect_low_fidelity_reasons_flags_technical_stackoverflow_context(monkeypatch):

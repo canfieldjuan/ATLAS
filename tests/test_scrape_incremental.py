@@ -273,7 +273,11 @@ class _FakeInsertConn:
     def __init__(self, pool):
         self.pool = pool
 
-    async def executemany(self, _sql, rows):
+    async def executemany(self, sql, rows):
+        sql_text = str(sql)
+        if "INSERT INTO b2b_review_vendor_mentions" in sql_text:
+            self.pool.inserted_vendor_mentions = list(rows)
+            return
         self.pool.inserted_rows = list(rows)
 
 
@@ -291,6 +295,7 @@ class _FakeTransaction:
 class _FakeInsertPool:
     def __init__(self, fetch_rows=None):
         self.inserted_rows = []
+        self.inserted_vendor_mentions = []
         self.fetch_rows = list(fetch_rows or [])
 
     def transaction(self):
@@ -387,6 +392,48 @@ async def test_insert_reviews_dedupes_by_text_hash_when_ids_differ(monkeypatch):
     assert stats["duplicate_or_existing"] == 1
     assert stats["duplicate_same_batch"] == 1
     assert stats["skipped_quality_gate"] == 0
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_canonicalizes_same_source_item_across_vendors(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "reddit",
+            "vendor_name": "HubSpot",
+            "source_review_id": "post-1",
+            "review_text": "migration pricing complaint " * 12,
+            "reviewed_at": "2026-03-20",
+        },
+        {
+            "source": "reddit",
+            "vendor_name": "Salesforce",
+            "source_review_id": "post-1",
+            "review_text": "migration pricing complaint " * 12,
+            "reviewed_at": "2026-03-20",
+        },
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-multi-vendor", parser_version="reddit:1")
+
+    assert len(pool.inserted_rows) == 1
+    assert stats["inserted"] == 1
+    assert stats["duplicate_or_existing"] == 1
+    assert stats["duplicate_same_batch"] == 1
+    assert stats["vendor_mentions_upserted"] == 2
+    assert [row[1] for row in pool.inserted_vendor_mentions] == ["HubSpot", "Salesforce"]
+    assert pool.inserted_vendor_mentions[0][2] is True
+    assert pool.inserted_vendor_mentions[1][2] is False
 
 
 @pytest.mark.asyncio
@@ -507,6 +554,38 @@ async def test_insert_reviews_retains_short_reviews_in_raw_only_lane(monkeypatch
     assert len(pool.inserted_rows) == 1
     assert stats["inserted"] == 1
     assert stats["short_flagged"] == 1
+    assert stats["retained_raw_only"] == 1
+    assert pool.inserted_rows[0][43] == "raw_only"
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_retains_thin_reddit_without_commercial_context_in_raw_only_lane(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "reddit",
+            "vendor_name": "HubSpot",
+            "source_review_id": "post-thin",
+            "summary": "Anyone use this?",
+            "review_text": "Trying to decide what to do here.",
+            "reviewed_at": "2026-03-20",
+        }
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-thin-reddit", parser_version="reddit:1")
+
+    assert stats["inserted"] == 1
+    assert stats["quality_gate_flagged"] == 1
     assert stats["retained_raw_only"] == 1
     assert pool.inserted_rows[0][43] == "raw_only"
 
@@ -652,9 +731,9 @@ async def test_insert_reviews_promotes_existing_raw_only_duplicate_with_fuller_p
             "vendor_name": "HubSpot",
             "source_review_id": "post-1",
             "reviewer_name": "Alex",
-            "review_text": "A" * 160,
-            "pros": "B" * 40,
-            "cons": "C" * 30,
+            "review_text": "HubSpot renewal pricing complaint and migration risk " * 4,
+            "pros": "Strong automation",
+            "cons": "Renewal pricing is too high for our team",
             "reviewed_at": "2026-03-20",
             "raw_metadata": {"source_weight": 0.4},
         },

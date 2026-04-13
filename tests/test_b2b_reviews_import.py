@@ -9,7 +9,11 @@ class _FakeInsertConn:
     def __init__(self, pool):
         self.pool = pool
 
-    async def executemany(self, _sql, rows):
+    async def executemany(self, sql, rows):
+        sql_text = str(sql)
+        if "INSERT INTO b2b_review_vendor_mentions" in sql_text:
+            self.pool.inserted_vendor_mentions = list(rows)
+            return
         self.pool.inserted_rows = list(rows)
 
 
@@ -28,6 +32,7 @@ class _FakePool:
     def __init__(self, fetch_rows=None):
         self.is_initialized = True
         self.inserted_rows = []
+        self.inserted_vendor_mentions = []
         self.fetch_rows = list(fetch_rows or [])
 
     def transaction(self):
@@ -51,8 +56,8 @@ async def test_import_b2b_reviews_dedupes_same_request_semantic_duplicates(monke
         AsyncMock(side_effect=lambda vendor: vendor),
     )
     monkeypatch.setattr(
-        "atlas_brain.api.b2b_reviews._load_existing_review_identity_sets",
-        AsyncMock(return_value=(set(), set())),
+        "atlas_brain.api.b2b_reviews._load_existing_review_fingerprints",
+        AsyncMock(return_value=(set(), set(), set())),
     )
 
     reviews = [
@@ -79,10 +84,11 @@ async def test_import_b2b_reviews_skips_existing_semantic_identity(monkeypatch):
         AsyncMock(side_effect=lambda vendor: vendor),
     )
     monkeypatch.setattr(
-        "atlas_brain.api.b2b_reviews._load_existing_review_identity_sets",
+        "atlas_brain.api.b2b_reviews._load_existing_review_fingerprints",
         AsyncMock(return_value=(
             set(),
             {_make_review_identity_key("g2", "HubSpot", "rev-legacy", "Alice", "2026-03-21T00:00:00+00:00")},
+            set(),
         )),
     )
 
@@ -115,8 +121,8 @@ async def test_import_b2b_reviews_dedupes_same_text_with_different_ids(monkeypat
         AsyncMock(side_effect=lambda vendor: vendor),
     )
     monkeypatch.setattr(
-        "atlas_brain.api.b2b_reviews._load_existing_review_identity_sets",
-        AsyncMock(return_value=(set(), set())),
+        "atlas_brain.api.b2b_reviews._load_existing_review_fingerprints",
+        AsyncMock(return_value=(set(), set(), set())),
     )
 
     reviews = [
@@ -142,6 +148,44 @@ async def test_import_b2b_reviews_dedupes_same_text_with_different_ids(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_import_b2b_reviews_canonicalizes_same_source_item_across_vendors(monkeypatch):
+    from atlas_brain.api.b2b_reviews import B2BReviewInput, import_b2b_reviews
+
+    pool = _FakePool()
+    monkeypatch.setattr("atlas_brain.api.b2b_reviews.get_db_pool", lambda: pool)
+    monkeypatch.setattr(
+        "atlas_brain.api.b2b_reviews.resolve_vendor_name",
+        AsyncMock(side_effect=lambda vendor: vendor),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.api.b2b_reviews._load_existing_review_fingerprints",
+        AsyncMock(return_value=(set(), set(), set())),
+    )
+
+    reviews = [
+        B2BReviewInput(
+            source="reddit",
+            vendor_name="HubSpot",
+            review_text="same review body " * 10,
+            source_review_id="post-1",
+        ),
+        B2BReviewInput(
+            source="reddit",
+            vendor_name="Salesforce",
+            review_text="same review body " * 10,
+            source_review_id="post-1",
+        ),
+    ]
+
+    result = await import_b2b_reviews(reviews)
+
+    assert len(pool.inserted_rows) == 1
+    assert len(pool.inserted_vendor_mentions) == 2
+    assert result["imported"] == 1
+    assert result["duplicates"] == 1
+
+
+@pytest.mark.asyncio
 async def test_import_b2b_reviews_marks_cross_source_duplicates(monkeypatch):
     from atlas_brain.api.b2b_reviews import B2BReviewInput, import_b2b_reviews
 
@@ -152,8 +196,8 @@ async def test_import_b2b_reviews_marks_cross_source_duplicates(monkeypatch):
         AsyncMock(side_effect=lambda vendor: vendor),
     )
     monkeypatch.setattr(
-        "atlas_brain.api.b2b_reviews._load_existing_review_identity_sets",
-        AsyncMock(return_value=(set(), set())),
+        "atlas_brain.api.b2b_reviews._load_existing_review_fingerprints",
+        AsyncMock(return_value=(set(), set(), set())),
     )
 
     reviews = [
@@ -199,8 +243,8 @@ async def test_import_b2b_reviews_sanitizes_synthetic_reviewer_title(monkeypatch
         AsyncMock(side_effect=lambda vendor: vendor),
     )
     monkeypatch.setattr(
-        "atlas_brain.api.b2b_reviews._load_existing_review_identity_sets",
-        AsyncMock(return_value=(set(), set())),
+        "atlas_brain.api.b2b_reviews._load_existing_review_fingerprints",
+        AsyncMock(return_value=(set(), set(), set())),
     )
 
     reviews = [

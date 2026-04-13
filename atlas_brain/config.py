@@ -3931,8 +3931,20 @@ class B2BScrapeConfig(BaseSettings):
         description="Enable source-specific pre-insert quality gates for noisy sources",
     )
     source_quality_gate_sources: str = Field(
-        default="quora,twitter,capterra",
+        default="quora,twitter,capterra,reddit,hackernews,software_advice,trustpilot",
         description="Comma-separated sources with pre-insert quality gating",
+    )
+    source_quality_discussion_min_text_len: int = Field(
+        default=160,
+        ge=80,
+        le=2000,
+        description="Minimum normalized text length for discussion-style sources before raw-only retention kicks in",
+    )
+    source_quality_review_platform_min_text_len: int = Field(
+        default=140,
+        ge=80,
+        le=2000,
+        description="Minimum normalized text length for review-platform sources before raw-only retention kicks in",
     )
     source_quality_twitter_require_intent: bool = Field(
         default=True,

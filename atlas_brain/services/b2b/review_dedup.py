@@ -196,7 +196,15 @@ async def load_cross_source_review_candidates(
                cross_source_identity_key,
                summary, review_text, pros, cons
         FROM b2b_reviews
-        WHERE vendor_name = $1
+        WHERE (
+                vendor_name = $1
+             OR EXISTS (
+                    SELECT 1
+                    FROM b2b_review_vendor_mentions vm
+                    WHERE vm.review_id = b2b_reviews.id
+                      AND vm.vendor_name = $1
+                )
+              )
           AND duplicate_of_review_id IS NULL
           AND (
                 ($2::text IS NOT NULL AND cross_source_content_hash = $2)
