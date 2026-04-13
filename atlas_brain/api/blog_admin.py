@@ -63,6 +63,13 @@ def _canonical_review_predicate(alias: str = "") -> str:
     return f"{prefix}duplicate_of_review_id IS NULL"
 
 
+def _review_vendor_join(review_alias: str = "r", mention_alias: str = "vm") -> str:
+    return (
+        f"JOIN b2b_review_vendor_mentions {mention_alias} "
+        f"ON {mention_alias}.review_id = {review_alias}.id"
+    )
+
+
 # -- schemas ------------------------------------------------------
 
 class BlogDraftSummary(BaseModel):
@@ -771,17 +778,26 @@ async def get_draft_evidence(
     if report_date:
         reviews = await pool.fetch(
             f"""
-            SELECT id, vendor_name, reviewer_company, summary, review_text,
-                   enrichment->>'pain_category' AS pain_category,
-                   (enrichment->>'urgency_score')::numeric AS urgency_score,
-                   source, reviewed_at, reviewer_title, company_size_raw,
-                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
-            FROM b2b_reviews
-            WHERE LOWER(vendor_name) = LOWER($1)
-              AND {_canonical_review_predicate()}
-              AND enrichment_status = 'enriched'
-              AND reviewed_at >= ($2::date - INTERVAL '90 days')
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            SELECT
+                   r.id,
+                   vm.vendor_name,
+                   r.reviewer_company,
+                   r.summary,
+                   r.review_text,
+                   r.enrichment->>'pain_category' AS pain_category,
+                   (r.enrichment->>'urgency_score')::numeric AS urgency_score,
+                   r.source,
+                   r.reviewed_at,
+                   r.reviewer_title,
+                   r.company_size_raw,
+                   COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
+            FROM b2b_reviews r
+            {_review_vendor_join("r", "vm")}
+            WHERE LOWER(vm.vendor_name) = LOWER($1)
+              AND {_canonical_review_predicate("r")}
+              AND r.enrichment_status = 'enriched'
+              AND r.reviewed_at >= ($2::date - INTERVAL '90 days')
+            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
             LIMIT $3
             """,
             vendor_name, report_date, limit,
@@ -791,16 +807,25 @@ async def get_draft_evidence(
         # Reason: blog review quality aggregation
         reviews = await pool.fetch(
             f"""
-            SELECT id, vendor_name, reviewer_company, summary, review_text,
-                   enrichment->>'pain_category' AS pain_category,
-                   (enrichment->>'urgency_score')::numeric AS urgency_score,
-                   source, reviewed_at, reviewer_title, company_size_raw,
-                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
-            FROM b2b_reviews
-            WHERE LOWER(vendor_name) = LOWER($1)
-              AND {_canonical_review_predicate()}
-              AND enrichment_status = 'enriched'
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            SELECT
+                   r.id,
+                   vm.vendor_name,
+                   r.reviewer_company,
+                   r.summary,
+                   r.review_text,
+                   r.enrichment->>'pain_category' AS pain_category,
+                   (r.enrichment->>'urgency_score')::numeric AS urgency_score,
+                   r.source,
+                   r.reviewed_at,
+                   r.reviewer_title,
+                   r.company_size_raw,
+                   COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
+            FROM b2b_reviews r
+            {_review_vendor_join("r", "vm")}
+            WHERE LOWER(vm.vendor_name) = LOWER($1)
+              AND {_canonical_review_predicate("r")}
+              AND r.enrichment_status = 'enriched'
+            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
             LIMIT $2
             """,
             vendor_name, limit,

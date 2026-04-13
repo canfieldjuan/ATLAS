@@ -1724,6 +1724,7 @@ def test_blog_draft_evidence_uses_canonical_review_basis(monkeypatch):
     body = response.json()
     assert body["basis"] == "canonical_reviews"
     assert body["count"] == 1
+    assert "JOIN b2b_review_vendor_mentions vm" in captured["query"]
     assert "duplicate_of_review_id IS NULL" in captured["query"]
 
 

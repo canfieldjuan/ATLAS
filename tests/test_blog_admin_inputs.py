@@ -56,5 +56,6 @@ async def test_get_draft_evidence_normalizes_query_default_limit(monkeypatch):
 
     result = await mod.get_draft_evidence(uuid4())
 
+    assert "JOIN b2b_review_vendor_mentions vm" in pool.fetch.await_args.args[0]
     assert pool.fetch.await_args.args[1:] == ("Salesforce", 20)
     assert result == {"basis": mod._REVIEW_BASIS_CANONICAL, "reviews": [], "count": 0}
