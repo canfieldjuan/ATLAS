@@ -1082,6 +1082,9 @@ describe('Watchlists', () => {
           payload: {
             urgency: 8.9,
           },
+          account_alert_score: 8.9,
+          account_alert_score_source: 'preview_signal_score',
+          account_reasoning_preview_only: true,
           reasoning_reference_ids: { witness_ids: ['witness:zendesk:1'] },
           source_review_ids: ['review-1'],
           account_review_focus: {
@@ -1110,6 +1113,8 @@ describe('Watchlists', () => {
     )
 
     const accountReviewLink = await screen.findByLabelText('Open alert account review for Acme Corp')
+    expect(screen.getByText('Early account signal')).toBeInTheDocument()
+    expect(screen.getByText('Alert score: 8.9 via preview signal')).toBeInTheDocument()
     const reviewLink = screen.getByLabelText('Open alert review detail for Acme Corp')
     const witnessLink = screen.getByLabelText('Open alert witness for Acme Corp')
     const alertsLink = screen.getByLabelText('Open alert delivery activity for Zendesk')

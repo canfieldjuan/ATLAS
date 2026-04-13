@@ -703,6 +703,12 @@ function alertEventLabel(event: WatchlistAlertEvent) {
   return 'vendor alert'
 }
 
+function watchlistAlertScoreSourceLabel(source: string | null | undefined) {
+  if (source === 'preview_signal_score') return 'preview signal'
+  if (source === 'urgency') return 'urgency'
+  return source || null
+}
+
 type PendingWatchlistDestructiveAction =
   | { kind: 'delete_watchlist_view'; view: WatchlistView }
   | { kind: 'remove_vendor'; vendorName: string }
@@ -3779,6 +3785,7 @@ export default function Watchlists() {
                   const reportsPath = watchlistAlertEventReportsPath(outboundWatchlistSearchParams, event)
                   const opportunitiesPath = watchlistAlertEventOpportunitiesPath(outboundWatchlistSearchParams, event)
                   const eventLabel = event.company_name || vendorName
+                  const alertScoreSourceLabel = watchlistAlertScoreSourceLabel(event.account_alert_score_source)
                   return (
                     <div
                       key={event.id}
@@ -3798,6 +3805,21 @@ export default function Watchlists() {
                             ) : null}
                           </div>
                           <div className="mt-1 text-sm font-medium text-white">{event.summary}</div>
+                          {event.event_type === 'account_alert' && (
+                            <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-300">
+                              {event.account_reasoning_preview_only ? (
+                                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-200">
+                                  Early account signal
+                                </span>
+                              ) : null}
+                              {typeof event.account_alert_score === 'number' ? (
+                                <span>
+                                  Alert score: {event.account_alert_score.toFixed(1)}
+                                  {alertScoreSourceLabel ? ` via ${alertScoreSourceLabel}` : ''}
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
                           <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-400">
                             {event.category ? <span>Category: {event.category}</span> : null}
                             {event.source ? <span>Source: {event.source}</span> : null}

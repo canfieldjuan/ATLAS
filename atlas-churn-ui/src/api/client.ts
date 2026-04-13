@@ -1394,6 +1394,10 @@ export interface WatchlistAlertEvent {
   threshold_value: number | null
   summary: string
   payload: Record<string, unknown>
+  account_alert_score?: number | null
+  account_alert_score_source?: string | null
+  account_alert_policy_reason?: string | null
+  account_reasoning_preview_only?: boolean | null
   reasoning_reference_ids?: ReasoningReferenceIds | null
   source_review_ids?: string[] | null
   account_review_focus?: AlertAccountReviewFocus | null
