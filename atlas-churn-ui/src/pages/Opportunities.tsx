@@ -351,6 +351,7 @@ export default function Opportunities() {
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null)
   const [genResult, setGenResult] = useState<string | null>(null)
   const [copiedViewLink, setCopiedViewLink] = useState(false)
+  const [copiedShortcutLabel, setCopiedShortcutLabel] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -910,12 +911,18 @@ export default function Opportunities() {
   const directVendorWorkspacePath = activeVendorFilter ? upstreamNestedPath(backTarget, '/vendors/') : null
   const directEvidencePath = activeVendorFilter ? upstreamNestedPath(backTarget, '/evidence') : null
   const directReportsPath = activeVendorFilter ? upstreamNestedPath(backTarget, '/reports') : null
+  const watchlistsShortcutPath = activeVendorFilter ? (directWatchlistsPath ?? watchlistsPath(activeVendorFilter, currentPagePath)) : null
+  const vendorWorkspaceShortcutPath = activeVendorFilter ? (directVendorWorkspacePath ?? vendorDetailPath(activeVendorFilter, currentPagePath)) : null
+  const evidenceShortcutPath = activeVendorFilter ? (directEvidencePath ?? evidencePath(activeVendorFilter, currentPagePath)) : null
+  const reportsShortcutPath = activeVendorFilter ? (directReportsPath ?? reportsPath(activeVendorFilter, currentPagePath)) : null
+  const alertsShortcutPath = activeVendorFilter ? (directAlertsPath ?? alertsPath(currentPagePath, activeVendorFilter)) : null
 
   const copyCurrentViewLink = useCallback(async () => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
       await navigator.clipboard.writeText(`${window.location.origin}${currentPagePath}`)
       setActionError(null)
+      setCopiedShortcutLabel(null)
       setCopiedViewLink(true)
     } catch (err) {
       setCopiedViewLink(false)
@@ -923,8 +930,22 @@ export default function Opportunities() {
     }
   }, [currentPagePath])
 
+  const copyShortcutLink = useCallback(async (path: string, label: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
+      await navigator.clipboard.writeText(`${window.location.origin}${path}`)
+      setActionError(null)
+      setCopiedViewLink(false)
+      setCopiedShortcutLabel(label)
+    } catch (err) {
+      setCopiedShortcutLabel(null)
+      setActionError(err instanceof Error ? err.message : `Failed to copy ${label}`)
+    }
+  }, [])
+
   useEffect(() => {
     setCopiedViewLink(false)
+    setCopiedShortcutLabel(null)
     setActionError(null)
   }, [currentPagePath])
 
@@ -933,6 +954,12 @@ export default function Opportunities() {
     const timeoutId = window.setTimeout(() => setCopiedViewLink(false), 2000)
     return () => window.clearTimeout(timeoutId)
   }, [copiedViewLink])
+
+  useEffect(() => {
+    if (!copiedShortcutLabel) return
+    const timeoutId = window.setTimeout(() => setCopiedShortcutLabel(null), 2000)
+    return () => window.clearTimeout(timeoutId)
+  }, [copiedShortcutLabel])
 
   useEffect(() => {
     const next = buildOpportunitiesSearchParams({
@@ -973,38 +1000,98 @@ export default function Opportunities() {
                 <span className="text-slate-500">
                   Filtered to <span className="text-slate-300">{activeVendorFilter}</span>
                 </span>
-                <Link
-                  to={directWatchlistsPath ?? watchlistsPath(activeVendorFilter, currentPagePath)}
-                  className={directWatchlistsLabel === 'Account Review'
-                    ? 'text-amber-300 hover:text-amber-200 transition-colors'
-                    : 'text-violet-300 hover:text-violet-200 transition-colors'}
-                >
-                  {directWatchlistsLabel}
-                </Link>
-                <Link
-                  to={directVendorWorkspacePath ?? vendorDetailPath(activeVendorFilter, currentPagePath)}
-                  className="text-cyan-400 hover:text-cyan-300 transition-colors"
-                >
-                  Vendor workspace
-                </Link>
-                <Link
-                  to={directEvidencePath ?? evidencePath(activeVendorFilter, currentPagePath)}
-                  className="text-violet-300 hover:text-violet-200 transition-colors"
-                >
-                  Evidence
-                </Link>
-                <Link
-                  to={directReportsPath ?? reportsPath(activeVendorFilter, currentPagePath)}
-                  className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
-                >
-                  Reports
-                </Link>
-                <Link
-                  to={directAlertsPath ?? alertsPath(currentPagePath, activeVendorFilter)}
-                  className="text-rose-300 hover:text-rose-200 transition-colors"
-                >
-                  Alerts API
-                </Link>
+                {watchlistsShortcutPath ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Link
+                      to={watchlistsShortcutPath}
+                      className={directWatchlistsLabel === 'Account Review'
+                        ? 'text-amber-300 hover:text-amber-200 transition-colors'
+                        : 'text-violet-300 hover:text-violet-200 transition-colors'}
+                    >
+                      {directWatchlistsLabel}
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void copyShortcutLink(watchlistsShortcutPath, directWatchlistsLabel)}
+                      aria-label={copiedShortcutLabel === directWatchlistsLabel ? `Copied ${directWatchlistsLabel}` : `Copy ${directWatchlistsLabel}`}
+                      className="text-slate-500 transition-colors hover:text-white"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                ) : null}
+                {vendorWorkspaceShortcutPath ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Link
+                      to={vendorWorkspaceShortcutPath}
+                      className="text-cyan-400 hover:text-cyan-300 transition-colors"
+                    >
+                      Vendor workspace
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void copyShortcutLink(vendorWorkspaceShortcutPath, 'Vendor workspace')}
+                      aria-label={copiedShortcutLabel === 'Vendor workspace' ? 'Copied Vendor workspace' : 'Copy Vendor workspace'}
+                      className="text-slate-500 transition-colors hover:text-white"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                ) : null}
+                {evidenceShortcutPath ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Link
+                      to={evidenceShortcutPath}
+                      className="text-violet-300 hover:text-violet-200 transition-colors"
+                    >
+                      Evidence
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void copyShortcutLink(evidenceShortcutPath, 'Evidence')}
+                      aria-label={copiedShortcutLabel === 'Evidence' ? 'Copied Evidence' : 'Copy Evidence'}
+                      className="text-slate-500 transition-colors hover:text-white"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                ) : null}
+                {reportsShortcutPath ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Link
+                      to={reportsShortcutPath}
+                      className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+                    >
+                      Reports
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void copyShortcutLink(reportsShortcutPath, 'Reports')}
+                      aria-label={copiedShortcutLabel === 'Reports' ? 'Copied Reports' : 'Copy Reports'}
+                      className="text-slate-500 transition-colors hover:text-white"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                ) : null}
+                {alertsShortcutPath ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Link
+                      to={alertsShortcutPath}
+                      className="text-rose-300 hover:text-rose-200 transition-colors"
+                    >
+                      Alerts API
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void copyShortcutLink(alertsShortcutPath, 'Alerts API')}
+                      aria-label={copiedShortcutLabel === 'Alerts API' ? 'Copied Alerts API' : 'Copy Alerts API'}
+                      className="text-slate-500 transition-colors hover:text-white"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>

@@ -415,6 +415,31 @@ describe('Opportunities', () => {
     }
   })
 
+  it('copies the resolved header workflow shortcuts for the active vendor filter', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&min_urgency=8&window_days=30&stage=evaluation&intent=cancel&back_to=%2Fwatchlists%3Fview%3Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findAllByPlaceholderText('Filter vendor...')
+    await user.click(screen.getByRole('button', { name: 'Copy Alerts API' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/alerts?vendor=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26min_urgency%3D8%26window_days%3D30%26stage%3Devaluation%26intent%3Dcancel%26back_to%3D%252Fwatchlists%253Fview%253Dview-1`,
+      )
+    })
+    expect(screen.getByRole('button', { name: 'Copied Alerts API' })).toBeInTheDocument()
+  })
+
   it('keeps expanded opportunity links scoped back to the current workbench context', async () => {
     const user = userEvent.setup()
     api.fetchHighIntent.mockResolvedValue({
