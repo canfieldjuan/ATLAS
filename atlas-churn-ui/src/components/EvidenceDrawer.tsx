@@ -159,6 +159,46 @@ function upstreamNestedPath(value: string | null | undefined, prefix: '/alerts' 
   return null
 }
 
+function upstreamReviewPath(value: string | null | undefined, reviewId: string) {
+  let current = parseBackTarget(value)
+  while (current) {
+    try {
+      const url = new URL(current, window.location.origin)
+      if (url.pathname === `/reviews/${encodeURIComponent(reviewId)}`) return current
+      current = parseBackTarget(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function upstreamAccountReviewPath(
+  value: string | null | undefined,
+  vendorName: string,
+  reviewerCompany: string,
+) {
+  const normalizedVendor = vendorName.trim().toLowerCase()
+  const normalizedCompany = reviewerCompany.trim().toLowerCase()
+  let current = parseBackTarget(value)
+  while (current) {
+    try {
+      const url = new URL(current, window.location.origin)
+      if (url.pathname === '/watchlists') {
+        const accountCompany = url.searchParams.get('account_company')?.trim().toLowerCase() || ''
+        const accountVendor = url.searchParams.get('account_vendor')?.trim().toLowerCase() || ''
+        if (accountCompany === normalizedCompany && (!accountVendor || accountVendor === normalizedVendor)) {
+          return current
+        }
+      }
+      current = parseBackTarget(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 function toAbsoluteUrl(pathOrUrl: string) {
   if (typeof window === 'undefined') return pathOrUrl
   return new URL(pathOrUrl, window.location.origin).toString()
@@ -300,6 +340,11 @@ export default function EvidenceDrawer({
       setMatchedAccountReviewPath(null)
       return
     }
+    const exactAccountReviewPath = upstreamAccountReviewPath(backToPath, vendorName, witness.reviewer_company)
+    if (exactAccountReviewPath) {
+      setMatchedAccountReviewPath(exactAccountReviewPath)
+      return
+    }
     if (backToPath?.startsWith('/watchlists')) {
       setMatchedAccountReviewPath(null)
       return
@@ -415,7 +460,9 @@ export default function EvidenceDrawer({
   const vendorPath = vendorName
     ? upstreamNestedPath(backToPath, '/vendors/') ?? vendorWorkspacePath(vendorName, backToPath)
     : null
-  const reviewPath = witness?.review_id ? reviewDetailPath(witness.review_id, backToPath) : null
+  const reviewPath = witness?.review_id
+    ? upstreamReviewPath(backToPath, witness.review_id) ?? reviewDetailPath(witness.review_id, backToPath)
+    : null
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">

@@ -288,6 +288,71 @@ describe('EvidenceDrawer', () => {
     }
   })
 
+  it('prefers exact upstream review and account review paths when present', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.fetchWitness.mockResolvedValueOnce({
+      witness: {
+        witness_id: 'w1',
+        excerpt_text: 'Pricing spiked after renewal.',
+        source: 'g2',
+        reviewed_at: '2026-04-07T18:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP IT',
+        pain_category: 'pricing',
+        competitor: 'Zendesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        review_id: 'review-1',
+        review_text: 'Pricing spiked after renewal and support dropped.',
+        evidence_spans: [],
+        all_evidence_span_count: 0,
+      },
+    })
+
+    try {
+      render(
+        <MemoryRouter>
+          <EvidenceDrawer
+            vendorName="Salesforce"
+            witnessId="w1"
+            open
+            backToPath="/vendors/Salesforce?back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DSalesforce%2526account_company%253DAcme%252BCorp"
+            onClose={() => {}}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(await screen.findByRole('link', { name: 'Open account review' })).toHaveAttribute(
+        'href',
+        '/watchlists?view=view-1&account_vendor=Salesforce&account_company=Acme+Corp',
+      )
+      expect(screen.getByRole('link', { name: 'Open review detail' })).toHaveAttribute(
+        'href',
+        '/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DSalesforce%26account_company%3DAcme%2BCorp',
+      )
+      expect(api.fetchAccountsInMotionFeed).not.toHaveBeenCalled()
+
+      await user.click(screen.getByRole('button', { name: 'Copy account review link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledWith(
+          `${window.location.origin}/watchlists?view=view-1&account_vendor=Salesforce&account_company=Acme+Corp`,
+        )
+      })
+
+      await user.click(screen.getByRole('button', { name: 'Copy review detail link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledWith(
+          `${window.location.origin}/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DSalesforce%26account_company%3DAcme%2BCorp`,
+        )
+      })
+    } finally {
+      clipboardSpy.mockRestore()
+    }
+  })
+
   it('surfaces annotation mutation failures inline', async () => {
     const user = userEvent.setup()
     api.setAnnotation.mockRejectedValueOnce(new Error('annotation service unavailable'))
