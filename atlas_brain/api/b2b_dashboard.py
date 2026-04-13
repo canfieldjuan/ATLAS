@@ -45,6 +45,7 @@ from ..autonomous.tasks._b2b_shared import (
     read_company_signal_review_impact_summary,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
+    read_vendor_company_signal_review_queue,
     read_vendor_signal_detail,
     read_vendor_signal_rows,
     read_vendor_signal_summary,
@@ -646,6 +647,20 @@ def _overlay_reasoning_detail_from_view(
     section_disclaimers = context.get("reasoning_section_disclaimers")
     if isinstance(section_disclaimers, dict) and section_disclaimers:
         target["reasoning_section_disclaimers"] = section_disclaimers
+    account_preview = context.get("account_reasoning_preview")
+    if isinstance(account_preview, dict) and account_preview:
+        preview_reasoning = account_preview.get("account_reasoning")
+        if isinstance(preview_reasoning, dict) and preview_reasoning:
+            target["account_reasoning_preview"] = preview_reasoning
+            target["account_reasoning_preview_only"] = True
+            for key in (
+                "account_pressure_summary",
+                "account_pressure_metrics",
+                "priority_account_names",
+            ):
+                value = account_preview.get(key)
+                if value not in ("", [], {}, None):
+                    target[key] = value
     if getattr(view, "meta", None):
         target["evidence_window"] = view.meta
     primary_wedge = getattr(view, "primary_wedge", None)
@@ -1541,6 +1556,20 @@ async def get_signal(
             view,
             requested_as_of=date.today(),
         )
+    try:
+        company_signal_review_queue = await read_vendor_company_signal_review_queue(
+            pool,
+            vendor_name=row["vendor_name"],
+        )
+    except Exception:
+        logger.debug(
+            "Company signal review queue load failed for %s",
+            row["vendor_name"],
+            exc_info=True,
+        )
+    else:
+        if company_signal_review_queue:
+            result["company_signal_review_queue"] = company_signal_review_queue
     result = await _apply_field_overrides(pool, "churn_signal", str(row["id"]), result)
     return result
 
