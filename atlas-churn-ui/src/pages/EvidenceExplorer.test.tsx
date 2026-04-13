@@ -629,7 +629,7 @@ describe('EvidenceExplorer', () => {
     )
     expect(headerShortcuts.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
-      '/alerts?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+      '/alerts?vendor=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
     expect(headerShortcuts.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',

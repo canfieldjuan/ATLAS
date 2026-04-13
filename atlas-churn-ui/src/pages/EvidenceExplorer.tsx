@@ -78,8 +78,9 @@ function evidenceOpportunitiesPath(searchParams: URLSearchParams, vendorName: st
   return `/opportunities?${params.toString()}`
 }
 
-function evidenceAlertsPath(searchParams: URLSearchParams) {
+function evidenceAlertsPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
+  params.set('vendor', vendorName)
   params.set('back_to', evidenceExplorerPath(searchParams))
   return `/alerts?${params.toString()}`
 }
@@ -829,14 +830,14 @@ export default function EvidenceExplorer() {
               ) : null}
               <span className="inline-flex items-center gap-2">
                 <Link
-                  to={directAlertsShortcutPath ?? evidenceAlertsPath(searchParams)}
+                  to={directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor)}
                   className="text-rose-300 hover:text-rose-200 transition-colors"
                 >
                   Alerts API
                 </Link>
                 <button
                   type="button"
-                  onClick={() => void handleCopyAlertsLink(directAlertsShortcutPath ?? evidenceAlertsPath(searchParams))}
+                  onClick={() => void handleCopyAlertsLink(directAlertsShortcutPath ?? evidenceAlertsPath(searchParams, activeVendor))}
                   className="text-slate-400 hover:text-white transition-colors"
                   aria-label="Copy alerts link"
                 >
