@@ -112,6 +112,46 @@ function accountReviewPath(row: AccountsInMotionFeedItem, backToPath?: string | 
   return `/watchlists?${params.toString()}`
 }
 
+function alertsPath(vendorName: string, backToPath?: string | null) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  if (backToPath) params.set('back_to', backToPath)
+  return `/alerts?${params.toString()}`
+}
+
+function vendorWorkspacePath(vendorName: string, backToPath?: string | null) {
+  const params = new URLSearchParams()
+  if (backToPath) params.set('back_to', backToPath)
+  const query = params.toString()
+  return query ? `/vendors/${encodeURIComponent(vendorName)}?${query}` : `/vendors/${encodeURIComponent(vendorName)}`
+}
+
+function parseBackTarget(value: string | null | undefined) {
+  if (!value) return null
+  if (value.startsWith('/')) return value
+  try {
+    const url = new URL(value, window.location.origin)
+    if (url.origin !== window.location.origin) return null
+    return `${url.pathname}${url.search}`
+  } catch {
+    return null
+  }
+}
+
+function upstreamNestedPath(value: string | null | undefined, prefix: '/alerts' | '/vendors/') {
+  let current = parseBackTarget(value)
+  while (current) {
+    if (current.startsWith(prefix)) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = parseBackTarget(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 function toAbsoluteUrl(pathOrUrl: string) {
   if (typeof window === 'undefined') return pathOrUrl
   return new URL(pathOrUrl, window.location.origin).toString()
@@ -352,6 +392,12 @@ export default function EvidenceDrawer({
         return `/reports?${params.toString()}`
       })()
     : null
+  const alertsWorkspacePath = vendorName
+    ? upstreamNestedPath(backToPath, '/alerts') ?? alertsPath(vendorName, backToPath)
+    : null
+  const vendorPath = vendorName
+    ? upstreamNestedPath(backToPath, '/vendors/') ?? vendorWorkspacePath(vendorName, backToPath)
+    : null
   const reviewPath = witness?.review_id ? reviewDetailPath(witness.review_id, backToPath) : null
 
   return (
@@ -428,6 +474,46 @@ export default function EvidenceDrawer({
                   >
                     <Copy className="h-3 w-3" />
                     {copiedLinkKey === 'account-review' ? 'Copied' : 'Copy account review'}
+                  </button>
+                </>
+              ) : null}
+              {alertsWorkspacePath ? (
+                <>
+                  <Link
+                    to={alertsWorkspacePath}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 transition-colors"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Alerts API
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyLink('alerts', alertsWorkspacePath)}
+                    aria-label="Copy alerts link"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 transition-colors"
+                  >
+                    <Copy className="h-3 w-3" />
+                    {copiedLinkKey === 'alerts' ? 'Copied' : 'Copy alerts'}
+                  </button>
+                </>
+              ) : null}
+              {vendorPath ? (
+                <>
+                  <Link
+                    to={vendorPath}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 transition-colors"
+                  >
+                    <Building2 className="h-3 w-3" />
+                    Vendor workspace
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyLink('vendor', vendorPath)}
+                    aria-label="Copy vendor workspace link"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 transition-colors"
+                  >
+                    <Copy className="h-3 w-3" />
+                    {copiedLinkKey === 'vendor' ? 'Copied' : 'Copy vendor'}
                   </button>
                 </>
               ) : null}

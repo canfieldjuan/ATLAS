@@ -68,6 +68,14 @@ describe('EvidenceDrawer', () => {
 
     expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: 'Pin' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Salesforce&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
+    )
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Salesforce?back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
+    )
     expect(screen.getByRole('link', { name: /View library/i })).toHaveAttribute(
       'href',
       '/reports?vendor_filter=Salesforce&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
@@ -166,9 +174,32 @@ describe('EvidenceDrawer', () => {
       expect(copiedUrl.pathname).toBe('/reports')
       expect(copiedUrl.searchParams.get('vendor_filter')).toBe('Salesforce')
 
-      await user.click(screen.getByRole('button', { name: 'Copy review detail link' }))
+      await user.click(screen.getByRole('button', { name: 'Copy alerts link' }))
       await waitFor(() => {
         expect(clipboardSpy).toHaveBeenCalledTimes(4)
+      })
+      copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+      copiedUrl = new URL(copiedText)
+      expect(copiedUrl.pathname).toBe('/alerts')
+      expect(copiedUrl.searchParams.get('vendor')).toBe('Salesforce')
+      const alertsBackTo = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+      expect(alertsBackTo.pathname).toBe('/reports')
+      expect(alertsBackTo.searchParams.get('vendor_filter')).toBe('Salesforce')
+
+      await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledTimes(5)
+      })
+      copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+      copiedUrl = new URL(copiedText)
+      expect(copiedUrl.pathname).toBe('/vendors/Salesforce')
+      const vendorBackTo = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+      expect(vendorBackTo.pathname).toBe('/reports')
+      expect(vendorBackTo.searchParams.get('vendor_filter')).toBe('Salesforce')
+
+      await user.click(screen.getByRole('button', { name: 'Copy review detail link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledTimes(6)
       })
       copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
       copiedUrl = new URL(copiedText)
@@ -179,6 +210,29 @@ describe('EvidenceDrawer', () => {
     } finally {
       clipboardSpy.mockRestore()
     }
+  })
+
+  it('prefers exact upstream alerts and vendor workspace paths when present', async () => {
+    render(
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          backToPath="/reports?vendor_filter=Salesforce&back_to=%2Falerts%3Fvendor%3DSalesforce%26back_to%3D%252Fvendors%252FSalesforce%253Fback_to%253D%25252Fwatchlists%25253Fview%25253Dview-1"
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Salesforce&back_to=%2Fvendors%2FSalesforce%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Salesforce?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
   })
 
   it('surfaces annotation mutation failures inline', async () => {
