@@ -112,6 +112,52 @@ def _redact_quotes(evidence: list) -> list:
     return cleaned
 
 
+def _redact_public_account_identity(briefing_data: dict) -> dict:
+    named = briefing_data.pop("named_accounts", []) or []
+
+    preview = briefing_data.get("account_reasoning_preview")
+    preview_dict = dict(preview) if isinstance(preview, dict) else {}
+
+    raw_priority_names = briefing_data.pop("priority_account_names", None)
+    if not raw_priority_names:
+        raw_priority_names = preview_dict.get("priority_account_names")
+    priority_names = [
+        str(item or "").strip()
+        for item in (raw_priority_names or [])
+        if str(item or "").strip()
+    ]
+
+    preview_count = 0
+    metrics = preview_dict.get("account_pressure_metrics")
+    if isinstance(metrics, dict):
+        try:
+            preview_count = int(metrics.get("total_accounts") or 0)
+        except (TypeError, ValueError):
+            preview_count = 0
+    if preview_count <= 0:
+        reasoning = preview_dict.get("account_reasoning")
+        if isinstance(reasoning, dict):
+            try:
+                preview_count = int(reasoning.get("total_accounts") or 0)
+            except (TypeError, ValueError):
+                preview_count = 0
+    if preview_count <= 0:
+        preview_count = len(priority_names)
+
+    briefing_data["named_account_count"] = max(len(named), preview_count)
+
+    if preview_dict:
+        preview_dict.pop("priority_account_names", None)
+        preview_dict.pop("account_reasoning", None)
+        preview_dict.pop("top_accounts", None)
+        if preview_dict:
+            briefing_data["account_reasoning_preview"] = preview_dict
+        else:
+            briefing_data.pop("account_reasoning_preview", None)
+
+    return briefing_data
+
+
 # ---------------------------------------------------------------------------
 # Gate token helpers
 # ---------------------------------------------------------------------------
@@ -574,10 +620,9 @@ async def report_data(token: str = Query(..., min_length=10)):
     if not briefing_data:
         raise HTTPException(status_code=404, detail=f"No data found for vendor: {vendor_name}")
 
-    # Redact named accounts from public report (premium-only data).
-    # Replace with count so UI can show "X accounts showing friction signals".
-    named = briefing_data.pop("named_accounts", []) or []
-    briefing_data["named_account_count"] = len(named)
+    # Redact account-identifying fields from the public report while preserving
+    # the preview summary/count needed for the public UI.
+    briefing_data = _redact_public_account_identity(dict(briefing_data))
 
     # Strip company-identifying details from quotes
     evidence = briefing_data.get("evidence") or []

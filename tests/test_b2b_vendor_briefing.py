@@ -140,6 +140,61 @@ def test_report_data_rejects_blank_token_before_db_touch(monkeypatch):
     assert response.json()["detail"] == "token is required"
 
 
+def test_report_data_redacts_preview_account_identity(monkeypatch):
+    monkeypatch.setattr(
+        briefing_api,
+        "decode_gate_token",
+        lambda _token: {"vendor_name": "Salesforce"},
+    )
+
+    class Pool:
+        async def fetchrow(self, query, *args):
+            if "FROM b2b_vendor_briefings" in query:
+                return {
+                    "briefing_data": {
+                        "vendor_name": "Salesforce",
+                        "named_accounts": [],
+                        "account_pressure_summary": "Sparse but real account pressure is visible.",
+                        "priority_account_names": ["Concentrix"],
+                        "account_reasoning_preview": {
+                            "preview_mode": "early_account_signal",
+                            "disclaimer": "Preview only until canonical account reasoning expands.",
+                            "account_pressure_summary": "Sparse but real account pressure is visible.",
+                            "account_pressure_metrics": {"total_accounts": 4},
+                            "priority_account_names": ["Concentrix"],
+                            "account_reasoning": {
+                                "total_accounts": 4,
+                                "top_accounts": [{"name": "Concentrix"}],
+                            },
+                        },
+                        "evidence": [],
+                    }
+                }
+            if "FROM b2b_product_profiles" in query:
+                return None
+            return None
+
+        async def fetch(self, query, *args):
+            return []
+
+    monkeypatch.setattr(briefing_api, "_pool_or_503", lambda: Pool())
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/briefings/report-data?token=abcdefghij")
+
+    assert response.status_code == 200
+    briefing = response.json()["briefing"]
+    assert briefing["named_account_count"] == 4
+    assert "named_accounts" not in briefing
+    assert "priority_account_names" not in briefing
+    preview = briefing["account_reasoning_preview"]
+    assert preview["account_pressure_summary"] == "Sparse but real account pressure is visible."
+    assert preview["account_pressure_metrics"]["total_accounts"] == 4
+    assert "priority_account_names" not in preview
+    assert "account_reasoning" not in preview
+
+
 def test_default_pain_label_maps_generic_buckets_to_overall_dissatisfaction():
     assert briefing_mod._default_pain_label("other") == "Overall Dissatisfaction"
     assert briefing_mod._default_pain_label("general_dissatisfaction") == "Overall Dissatisfaction"
