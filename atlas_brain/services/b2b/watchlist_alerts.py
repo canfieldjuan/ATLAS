@@ -209,6 +209,12 @@ def serialize_watchlist_alert_event(row: Any) -> dict[str, Any]:
     payload = _row_value(row, "payload")
     payload_json = _safe_json(payload) if payload is not None else {}
     payload_dict = payload_json if isinstance(payload_json, dict) else {}
+    account_alert_score = _safe_float(payload_dict.get("account_alert_score"))
+    account_alert_score_source = _clean_optional_text(payload_dict.get("account_alert_score_source"))
+    if account_alert_score is None:
+        account_alert_score = _safe_float(payload_dict.get("urgency"))
+        if account_alert_score is not None and not account_alert_score_source:
+            account_alert_score_source = "urgency"
     return {
         "id": str(_row_value(row, "id")),
         "watchlist_view_id": str(_row_value(row, "watchlist_view_id")),
@@ -226,6 +232,11 @@ def serialize_watchlist_alert_event(row: Any) -> dict[str, Any]:
         "reasoning_reference_ids": payload_dict.get("reasoning_reference_ids") if isinstance(payload_dict.get("reasoning_reference_ids"), dict) else None,
         "source_review_ids": _clean_text_list(payload_dict.get("source_review_ids")),
         "account_review_focus": _normalize_watchlist_alert_account_focus(payload_dict.get("account_review_focus")),
+        "account_alert_score": account_alert_score,
+        "account_alert_score_source": account_alert_score_source,
+        "preview_signal_score": _safe_float(payload_dict.get("preview_signal_score")),
+        "account_reasoning_preview_only": bool(payload_dict.get("account_reasoning_preview_only")),
+        "account_pressure_disclaimer": _clean_optional_text(payload_dict.get("account_pressure_disclaimer")),
         "status": _row_value(row, "status"),
         "first_seen_at": str(_row_value(row, "first_seen_at")) if _row_value(row, "first_seen_at") else None,
         "last_seen_at": str(_row_value(row, "last_seen_at")) if _row_value(row, "last_seen_at") else None,

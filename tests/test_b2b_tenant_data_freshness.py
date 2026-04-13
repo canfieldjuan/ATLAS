@@ -2860,6 +2860,8 @@ async def test_list_watchlist_alert_events_returns_view_scoped_rows(monkeypatch)
     assert result["events"][0]["event_type"] == "account_alert"
     assert result["events"][0]["source_review_ids"] == ["r1", "r2"]
     assert result["events"][0]["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
+    assert result["events"][0]["account_alert_score"] == pytest.approx(8.2)
+    assert result["events"][0]["account_alert_score_source"] == "urgency"
     assert result["events"][0]["account_review_focus"] == {
         "vendor": "Salesforce",
         "company": "Acme Corp",
@@ -3115,6 +3117,8 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
     assert mod.list_tenant_accounts_in_motion_feed.await_args.kwargs["named_accounts_only"] is True
     assert result["events"][0]["reasoning_reference_ids"] == {"witness_ids": ["vw1"]}
     assert result["events"][1]["source_review_ids"] == ["r1"]
+    assert result["events"][1]["account_alert_score"] == pytest.approx(9.0)
+    assert result["events"][1]["account_alert_score_source"] == "urgency"
     assert result["events"][1]["account_review_focus"] == {
         "vendor": "Salesforce",
         "company": "Acme Corp",

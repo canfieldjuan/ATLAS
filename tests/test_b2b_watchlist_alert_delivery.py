@@ -163,3 +163,50 @@ def test_build_watchlist_alert_candidates_uses_preview_signal_score_for_preview_
     assert candidate["payload"]["account_alert_score_source"] == "preview_signal_score"
     assert candidate["payload"]["account_reasoning_preview_only"] is True
     assert candidate["payload"]["account_pressure_disclaimer"] == "Early account signal only."
+
+
+def test_serialize_watchlist_alert_event_surfaces_preview_account_fields():
+    event_id = uuid4()
+    view_id = uuid4()
+
+    result = watchlist_alert_service.serialize_watchlist_alert_event(
+        {
+            "id": event_id,
+            "watchlist_view_id": view_id,
+            "event_type": "account_alert",
+            "threshold_field": "account_alert_threshold",
+            "entity_type": "account",
+            "entity_key": "account_alert:account:salesforce:concentrix:crm:reddit:2026-04-05",
+            "vendor_name": "Salesforce",
+            "company_name": "Concentrix",
+            "category": "CRM",
+            "source": "reddit",
+            "threshold_value": 6.0,
+            "summary": "Early account signal for Concentrix crossed the account alert threshold at 6.2",
+            "payload": {
+                "urgency": None,
+                "preview_signal_score": 6.2,
+                "account_alert_score": 6.2,
+                "account_alert_score_source": "preview_signal_score",
+                "account_reasoning_preview_only": True,
+                "account_pressure_disclaimer": "Early account signal only.",
+                "reasoning_reference_ids": {"witness_ids": ["w1"]},
+                "source_review_ids": ["r1"],
+                "account_review_focus": {
+                    "vendor": "Salesforce",
+                    "company": "Concentrix",
+                    "report_date": "2026-04-05",
+                    "watch_vendor": "Salesforce",
+                    "category": "CRM",
+                    "track_mode": "competitor",
+                },
+            },
+            "status": "open",
+        }
+    )
+
+    assert result["account_alert_score"] == pytest.approx(6.2)
+    assert result["account_alert_score_source"] == "preview_signal_score"
+    assert result["preview_signal_score"] == pytest.approx(6.2)
+    assert result["account_reasoning_preview_only"] is True
+    assert result["account_pressure_disclaimer"] == "Early account signal only."
