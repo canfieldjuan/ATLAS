@@ -286,6 +286,7 @@ def _build_accounts_in_motion_preview_rows(
     rows: list[dict[str, Any]] = []
     for company_name in priority_names:
         metadata = dict((preview_account_lookup or {}).get(_company_lookup_key(company_name)) or {})
+        preview_signal_score = _safe_float(metadata.get("urgency_score"))
         company_source_distribution = metadata.get("source_distribution")
         if not isinstance(company_source_distribution, dict) or not company_source_distribution:
             company_source_distribution = dict(source_distribution)
@@ -308,6 +309,7 @@ def _build_accounts_in_motion_preview_rows(
                     or category
                 ),
                 "urgency": None,
+                "preview_signal_score": preview_signal_score,
                 "role_type": metadata.get("buyer_role"),
                 "buying_stage": metadata.get("buying_stage"),
                 "budget_authority": bool(metadata.get("decision_maker")),
@@ -334,6 +336,19 @@ def _build_accounts_in_motion_preview_rows(
             }
         )
     return rows
+
+
+def _accounts_in_motion_alert_basis(account: Mapping[str, Any] | None) -> tuple[float | None, str | None]:
+    if not isinstance(account, Mapping):
+        return None, None
+    urgency_value = _safe_float(account.get("urgency"))
+    if urgency_value is not None:
+        return urgency_value, "urgency"
+    if bool(account.get("account_reasoning_preview_only")):
+        preview_signal_score = _safe_float(account.get("preview_signal_score"))
+        if preview_signal_score is not None:
+            return preview_signal_score, "preview_signal_score"
+    return None, None
 
 
 async def _fetch_accounts_in_motion_preview_account_lookup(
@@ -383,6 +398,7 @@ async def _fetch_accounts_in_motion_preview_account_lookup(
                 "buying_stage": item.get("buying_stage"),
                 "contract_end": item.get("contract_end"),
                 "pain_category": item.get("pain_category"),
+                "urgency_score": _safe_float(item.get("urgency_score")),
                 "confidence_score": item.get("confidence_score"),
                 "last_seen_at": item.get("last_seen_at"),
                 "source_distribution": source_distribution,
@@ -393,7 +409,7 @@ async def _fetch_accounts_in_motion_preview_account_lookup(
         """
         SELECT company_name, source, review_id, pain_category,
                buyer_role, decision_maker, seat_count, contract_end,
-               buying_stage, confidence_score, last_seen_at
+               buying_stage, urgency_score, confidence_score, last_seen_at
         FROM b2b_company_signals
         WHERE LOWER(vendor_name) = LOWER($1)
           AND LOWER(company_name) = ANY($2::text[])
@@ -437,6 +453,11 @@ async def _fetch_accounts_in_motion_preview_account_lookup(
             entry["contract_end"] = row.get("contract_end")
         if row.get("buying_stage") and not entry.get("buying_stage"):
             entry["buying_stage"] = row.get("buying_stage")
+        urgency_value = _safe_float(row.get("urgency_score"))
+        if urgency_value is not None:
+            current_urgency = _safe_float(entry.get("urgency_score"))
+            if current_urgency is None or urgency_value > current_urgency:
+                entry["urgency_score"] = urgency_value
         confidence_value = _safe_float(row.get("confidence_score"))
         if confidence_value is not None:
             current_confidence = _safe_float(entry.get("confidence_score"))
@@ -7899,7 +7920,7 @@ async def _list_accounts_in_motion_from_report(
     shaped.sort(
         key=lambda account: (
             -(account.get("opportunity_score") or 0),
-            -(account.get("urgency") or 0),
+            -(_accounts_in_motion_alert_basis(account)[0] or 0),
         )
     )
     accounts = await _enrich_accounts_in_motion_accounts(pool, shaped[:limit])

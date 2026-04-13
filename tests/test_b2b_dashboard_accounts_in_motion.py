@@ -3475,6 +3475,7 @@ async def test_list_accounts_in_motion_from_report_named_accounts_only_backfills
                             "company_name": "Concentrix",
                             "source": "reddit",
                             "review_id": review_id,
+                            "urgency_score": 5.8,
                             "buyer_role": "economic_buyer",
                             "buying_stage": "post_purchase",
                             "pain_category": "support",
@@ -3503,6 +3504,7 @@ async def test_list_accounts_in_motion_from_report_named_accounts_only_backfills
                     "seat_count": None,
                     "contract_end": None,
                     "buying_stage": "post_purchase",
+                    "urgency_score": 6.0,
                     "confidence_score": 0.41,
                     "last_seen_at": "2026-04-11T10:00:00Z",
                 }
@@ -3549,6 +3551,7 @@ async def test_list_accounts_in_motion_from_report_named_accounts_only_backfills
     assert account["role_type"] == "economic_buyer"
     assert account["buying_stage"] == "post_purchase"
     assert account["budget_authority"] is True
+    assert account["preview_signal_score"] == pytest.approx(6.0)
     assert account["pain_categories"] == [{"category": "support", "severity": ""}]
     assert account["confidence"] == pytest.approx(0.41)
     assert account["account_pressure_summary"] == (

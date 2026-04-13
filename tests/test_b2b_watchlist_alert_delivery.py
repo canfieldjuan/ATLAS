@@ -122,3 +122,44 @@ async def test_claim_delivery_attempt_matches_partial_unique_index(monkeypatch):
     sql = pool.fetchrow.await_args.args[0]
     assert "ON CONFLICT (watchlist_view_id, scheduled_for, delivery_mode)" in sql
     assert "WHERE scheduled_for IS NOT NULL" in sql
+
+
+def test_build_watchlist_alert_candidates_uses_preview_signal_score_for_preview_accounts():
+    candidates = watchlist_alert_service.build_watchlist_alert_candidates(
+        watchlist_view={
+            "account_alert_threshold": 6.0,
+        },
+        feed={"signals": []},
+        accounts_feed={
+            "accounts": [
+                {
+                    "company": "Concentrix",
+                    "vendor": "Salesforce",
+                    "category": "CRM",
+                    "urgency": None,
+                    "preview_signal_score": 6.2,
+                    "account_reasoning_preview_only": True,
+                    "account_pressure_disclaimer": "Early account signal only.",
+                    "account_alert_hit": True,
+                    "report_date": "2026-04-05",
+                    "watch_vendor": "Salesforce",
+                    "track_mode": "competitor",
+                    "source_distribution": {"reddit": 1},
+                    "reasoning_reference_ids": {"witness_ids": ["w1"]},
+                    "source_review_ids": ["r1"],
+                }
+            ]
+        },
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["summary"] == (
+        "Early account signal for Concentrix crossed the account alert threshold at 6.2"
+    )
+    assert candidate["payload"]["urgency"] is None
+    assert candidate["payload"]["preview_signal_score"] == pytest.approx(6.2)
+    assert candidate["payload"]["account_alert_score"] == pytest.approx(6.2)
+    assert candidate["payload"]["account_alert_score_source"] == "preview_signal_score"
+    assert candidate["payload"]["account_reasoning_preview_only"] is True
+    assert candidate["payload"]["account_pressure_disclaimer"] == "Early account signal only."

@@ -7,7 +7,10 @@ import uuid as _uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
-from ...api.b2b_dashboard import _normalize_vendor_name
+from ...api.b2b_dashboard import (
+    _accounts_in_motion_alert_basis,
+    _normalize_vendor_name,
+)
 from ...autonomous.tasks.campaign_send import _unsub_headers, _wrap_with_footer
 from ...autonomous.tasks.campaign_suppression import is_suppressed
 from ...config import settings
@@ -347,9 +350,11 @@ def build_watchlist_alert_candidates(
         company_name = _clean_optional_text(account.get("company"))
         category = _clean_optional_text(account.get("category"))
         source_name = _watchlist_alert_source_name(account)
+        account_alert_score, account_alert_score_source = _accounts_in_motion_alert_basis(account)
         reasoning_reference_ids = account.get("reasoning_reference_ids")
         source_review_ids = account.get("source_review_ids")
         account_review_focus = _watchlist_alert_account_focus_payload(account)
+        preview_only = bool(account.get("account_reasoning_preview_only"))
         entity_type = "account" if company_name else "signal_cluster"
         entity_key = _watchlist_alert_entity_key(
             event_type="account_alert",
@@ -362,6 +367,16 @@ def build_watchlist_alert_candidates(
         )
         subject = company_name or f"{vendor_name} signal cluster"
         if account.get("account_alert_hit") and account_threshold is not None:
+            if preview_only:
+                summary = (
+                    f"Early account signal for {subject} crossed the account alert threshold at "
+                    f"{_safe_float(account_alert_score, 0.0):.1f}"
+                )
+            else:
+                summary = (
+                    f"{subject} crossed the account alert threshold at "
+                    f"{_safe_float(account_alert_score, 0.0):.1f}"
+                )
             candidates.append({
                 "event_type": "account_alert",
                 "threshold_field": "account_alert_threshold",
@@ -372,18 +387,20 @@ def build_watchlist_alert_candidates(
                 "category": category,
                 "source": source_name,
                 "threshold_value": account_threshold,
-                "summary": (
-                    f"{subject} crossed the account alert threshold at "
-                    f"{_safe_float(account.get('urgency'), 0.0):.1f}"
-                ),
+                "summary": summary,
                 "payload": {
                     "urgency": account.get("urgency"),
+                    "account_alert_score": account_alert_score,
+                    "account_alert_score_source": account_alert_score_source,
+                    "preview_signal_score": account.get("preview_signal_score"),
                     "confidence": account.get("confidence"),
                     "report_date": account.get("report_date"),
                     "freshness_status": account.get("freshness_status"),
                     "reasoning_reference_ids": reasoning_reference_ids,
                     "source_review_ids": source_review_ids,
                     "account_review_focus": account_review_focus,
+                    "account_reasoning_preview_only": preview_only,
+                    "account_pressure_disclaimer": account.get("account_pressure_disclaimer"),
                 },
             })
         if account.get("stale_threshold_hit") and stale_threshold is not None:

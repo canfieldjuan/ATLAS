@@ -2006,6 +2006,58 @@ async def test_accounts_in_motion_feed_handles_empty_watchlist(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_accounts_in_motion_feed_uses_preview_signal_score_for_account_alerts(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {"vendor_name": "Salesforce", "track_mode": "competitor", "label": "CRM", "added_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    helper = AsyncMock(
+        return_value={
+            "accounts": [
+                {
+                    "company": "Concentrix",
+                    "vendor": "Salesforce",
+                    "category": "CRM",
+                    "urgency": None,
+                    "preview_signal_score": 6.2,
+                    "account_reasoning_preview_only": True,
+                    "account_pressure_disclaimer": "Early account signal only.",
+                    "opportunity_score": None,
+                    "source_distribution": {"reddit": 1},
+                    "source_reviews": [{"id": "review-1", "source": "reddit"}],
+                }
+            ],
+            "report_date": "2026-04-04",
+            "stale_days": 0,
+            "is_stale": False,
+            "data_source": "persisted_report",
+        }
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_list_accounts_in_motion_from_report", helper)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        account_alert_threshold=6,
+        user=user,
+    )
+
+    assert result["count"] == 1
+    assert result["account_alert_hit_count"] == 1
+    assert result["accounts"][0]["account_alert_hit"] is True
+    assert result["accounts"][0]["account_alert_score"] == pytest.approx(6.2)
+    assert result["accounts"][0]["account_alert_score_source"] == "preview_signal_score"
+    assert result["accounts"][0]["account_reasoning_preview_only"] is True
+
+
+@pytest.mark.asyncio
 async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
