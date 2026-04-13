@@ -97,8 +97,9 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   return `/opportunities?${next.toString()}`
 }
 
-function alertsPath(backTo: string) {
+function alertsPath(vendorName: string, backTo: string) {
   const next = new URLSearchParams()
+  next.set('vendor', vendorName)
   next.set('back_to', backTo)
   return `/alerts?${next.toString()}`
 }
@@ -352,14 +353,14 @@ export default function ReviewDetail() {
             ) : null}
             <span className="inline-flex items-center gap-1.5">
               <Link
-                to={directAlertsPath ?? alertsPath(reviewDetailBackPath)}
+                to={directAlertsPath ?? alertsPath(review.vendor_name, reviewDetailBackPath)}
                 className="text-rose-300 hover:text-rose-200 transition-colors"
               >
                 Alerts API
               </Link>
               <button
                 type="button"
-                onClick={() => handleCopyShortcutLink('alerts', directAlertsPath ?? alertsPath(reviewDetailBackPath))}
+                onClick={() => handleCopyShortcutLink('alerts', directAlertsPath ?? alertsPath(review.vendor_name, reviewDetailBackPath))}
                 className="text-slate-400 hover:text-white transition-colors"
                 aria-label="Copy alerts link"
                 title="Copy alerts link"

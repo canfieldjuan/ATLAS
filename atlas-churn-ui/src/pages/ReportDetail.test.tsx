@@ -603,7 +603,7 @@ describe('ReportDetail', () => {
     )
     expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
-      '/alerts?back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      '/alerts?vendor=Zendesk&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
   })
 

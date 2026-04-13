@@ -87,8 +87,9 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   return `/opportunities?${next.toString()}`
 }
 
-function alertsPath(backTo: string) {
+function alertsPath(vendorName: string, backTo: string) {
   const next = new URLSearchParams()
+  next.set('vendor', vendorName)
   next.set('back_to', backTo)
   return `/alerts?${next.toString()}`
 }
@@ -420,7 +421,7 @@ export default function ReportDetail() {
               Opportunities
             </Link>
             <Link
-              to={directAlertsPath ?? alertsPath(detailBackPath)}
+              to={directAlertsPath ?? alertsPath(report.vendor_filter, detailBackPath)}
               className="text-rose-300 hover:text-rose-200 transition-colors"
             >
               Alerts API
