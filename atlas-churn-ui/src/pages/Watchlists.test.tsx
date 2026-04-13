@@ -767,6 +767,51 @@ describe('Watchlists', () => {
     expect(screen.getByText('1 hidden by changed wedges only')).toBeInTheDocument()
   })
 
+  it('uses explicit local suppression language in saved view summaries and no-events delivery lines', async () => {
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Suppressed Intercom',
+          vendor_names: ['Intercom'],
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 3,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: '2026-04-08T18:00:00Z',
+          last_alert_delivery_at: '2026-04-07T18:30:00Z',
+          last_alert_delivery_status: 'no_events',
+          last_alert_delivery_summary: 'No alert email sent because local filters suppressed all candidates',
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Watchlists' })
+    expect(screen.getByText('Intercom - Helpdesk - reddit - urgency 8+ - fresh only - named accounts only - changed wedges only - vendor alert 7.5+ - account alert 8.5+ - stale after 3d - email daily')).toBeInTheDocument()
+    expect(screen.getByText((text) =>
+      text.includes('Next email')
+      && text.includes('No alert email sent because local filters suppressed all candidates')
+      && text.includes('local filters: named accounts only + changed wedges only'),
+    )).toBeInTheDocument()
+  })
+
   it('saves the current filtered view with persisted thresholds', async () => {
     const user = userEvent.setup()
 

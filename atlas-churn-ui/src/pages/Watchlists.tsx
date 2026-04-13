@@ -309,13 +309,30 @@ function summarizeWatchlistView(view: WatchlistView) {
   if (view.source) parts.push(view.source)
   if (view.min_urgency != null) parts.push(`urgency ${view.min_urgency}+`)
   if (!view.include_stale) parts.push('fresh only')
-  if (view.named_accounts_only) parts.push('named only')
-  if (view.changed_wedges_only) parts.push('changed wedges')
+  if (view.named_accounts_only) parts.push('named accounts only')
+  if (view.changed_wedges_only) parts.push('changed wedges only')
   if (view.vendor_alert_threshold != null) parts.push(`vendor alert ${view.vendor_alert_threshold}+`)
   if (view.account_alert_threshold != null) parts.push(`account alert ${view.account_alert_threshold}+`)
   if (view.stale_days_threshold != null) parts.push(`stale after ${view.stale_days_threshold}d`)
   if (view.alert_email_enabled) parts.push(`email ${view.alert_delivery_frequency}`)
   return parts.length > 0 ? parts.join(' - ') : 'All signals'
+}
+
+function summarizeLocalWatchlistSuppression(view: WatchlistView) {
+  const parts: string[] = []
+  if (view.named_accounts_only) parts.push('named accounts only')
+  if (view.changed_wedges_only) parts.push('changed wedges only')
+  return parts.join(' + ')
+}
+
+function summarizeSavedViewDelivery(view: WatchlistView) {
+  if (!view.last_alert_delivery_status) return 'Last --'
+  const base = view.last_alert_delivery_summary || `Last ${view.last_alert_delivery_status.replace(/_/g, ' ')}`
+  if (view.last_alert_delivery_status === 'no_events') {
+    const localSuppression = summarizeLocalWatchlistSuppression(view)
+    if (localSuppression) return `${base} · local filters: ${localSuppression}`
+  }
+  return base
 }
 
 function watchlistViewUrl(viewId: string) {
@@ -3632,7 +3649,7 @@ export default function Watchlists() {
                   </div>
                   {view.alert_email_enabled ? (
                     <div className="mt-1 text-[11px] text-slate-500">
-                      Next email {formatTs(view.next_alert_delivery_at)} · Last {view.last_alert_delivery_status || '--'}
+                      Next email {formatTs(view.next_alert_delivery_at)} · {summarizeSavedViewDelivery(view)}
                     </div>
                   ) : null}
                 </button>
