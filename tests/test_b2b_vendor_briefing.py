@@ -175,7 +175,29 @@ def test_report_data_redacts_preview_account_identity(monkeypatch):
             return None
 
         async def fetch(self, query, *args):
-            return []
+            return [
+                {
+                    "report_type": "vendor_scorecard",
+                    "executive_summary": "Summary",
+                    "intelligence_data": {
+                        "account_pressure_summary": "Sparse but real account pressure is visible.",
+                        "priority_account_names": ["Concentrix"],
+                        "account_reasoning_preview": {
+                            "preview_mode": "early_account_signal",
+                            "disclaimer": "Preview only until canonical account reasoning expands.",
+                            "account_pressure_summary": "Sparse but real account pressure is visible.",
+                            "account_pressure_metrics": {"total_accounts": 4},
+                            "priority_account_names": ["Concentrix"],
+                            "account_reasoning": {
+                                "total_accounts": 4,
+                                "top_accounts": [{"name": "Concentrix"}],
+                            },
+                        },
+                    },
+                    "report_date": None,
+                    "created_at": None,
+                }
+            ]
 
     monkeypatch.setattr(briefing_api, "_pool_or_503", lambda: Pool())
     app = _make_app()
@@ -193,6 +215,13 @@ def test_report_data_redacts_preview_account_identity(monkeypatch):
     assert preview["account_pressure_metrics"]["total_accounts"] == 4
     assert "priority_account_names" not in preview
     assert "account_reasoning" not in preview
+    report_data = response.json()["intelligence_reports"][0]["data"]
+    assert report_data["named_account_count"] == 4
+    assert "priority_account_names" not in report_data
+    report_preview = report_data["account_reasoning_preview"]
+    assert report_preview["account_pressure_metrics"]["total_accounts"] == 4
+    assert "priority_account_names" not in report_preview
+    assert "account_reasoning" not in report_preview
 
 
 def test_default_pain_label_maps_generic_buckets_to_overall_dissatisfaction():

@@ -657,6 +657,8 @@ async def report_data(token: str = Query(..., min_length=10)):
         redacted_data = {
             k: v for k, v in intel_data.items() if k not in _REDACT_INTEL_KEYS
         }
+        if isinstance(redacted_data, dict):
+            redacted_data = _redact_public_account_identity(redacted_data)
         intelligence_reports.append({
             "report_type": row["report_type"],
             "executive_summary": row["executive_summary"],
