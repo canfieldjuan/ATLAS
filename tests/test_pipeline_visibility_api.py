@@ -148,6 +148,26 @@ def test_synthesis_validation_retry_only_joins_attempts(monkeypatch):
     assert "a_succeeded.status = 'succeeded'" in query
 
 
+def test_synthesis_validation_normalizes_blank_and_trimmed_filters(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/pipeline/visibility/synthesis-validation?vendor_name=%20Shopify%20&run_id=%20%20"
+        )
+
+    assert response.status_code == 200
+    query = pool.fetch.await_args.args[0]
+    assert "vendor_name = $1" in query
+    assert "run_id =" not in query
+    assert pool.fetch.await_args.args[1:] == ("Shopify", 100, 0)
+
+
 def test_extraction_health_endpoint_returns_audit_payload(monkeypatch):
     app = _make_app()
     app.dependency_overrides[require_auth] = _auth_user
@@ -212,6 +232,28 @@ def test_visibility_queue_runs_detached_batch_health_sync(monkeypatch):
 
     assert response.status_code == 200
     assert sync.await_count == 1
+
+
+def test_visibility_queue_normalizes_blank_filters(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    pool.fetchrow = AsyncMock(return_value=None)
+    pool.execute = AsyncMock(return_value="UPDATE 0")
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+    sync = AsyncMock(return_value=None)
+    monkeypatch.setattr(visibility_api, "_sync_detached_batch_health", sync)
+
+    with TestClient(app) as client:
+        response = client.get("/pipeline/visibility/queue?stage=%20%20&severity=%20")
+
+    assert response.status_code == 200
+    query = pool.fetch.await_args.args[0]
+    assert "e.stage =" not in query
+    assert "e.severity =" not in query
+    assert pool.fetch.await_args.args[1:] == (50, 0)
 
 
 def test_watchlist_delivery_ops_returns_summary_views_and_logs(monkeypatch):
@@ -443,6 +485,170 @@ def test_watchlist_delivery_view_detail_proxies_tenant_routes(monkeypatch):
     assert body["delivery_count"] == 1
 
 
+def test_watchlist_delivery_view_detail_rejects_invalid_event_status_before_db_touch(monkeypatch):
+    app = _make_app()
+    user = _auth_user()
+    app.dependency_overrides[require_auth] = lambda: user
+    view_id = uuid4()
+
+    import atlas_brain.api.b2b_tenant_dashboard as tenant_api
+
+    monkeypatch.setattr(tenant_api, "_require_b2b_product", lambda _user: None)
+
+    def _fail_get_db_pool():
+        raise AssertionError("get_db_pool should not be called")
+
+    monkeypatch.setattr(visibility_api, "get_db_pool", _fail_get_db_pool)
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/pipeline/visibility/watchlist-delivery/views/{view_id}?event_status=invalid"
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "status must be one of: open, resolved, all"
+
+
+def test_watchlist_delivery_view_detail_normalizes_blank_event_status_before_proxy(monkeypatch):
+    app = _make_app()
+    user = _auth_user()
+    app.dependency_overrides[require_auth] = lambda: user
+    view_id = uuid4()
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value="Effingham Office Maids")
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    import atlas_brain.api.b2b_tenant_dashboard as tenant_api
+
+    list_events = AsyncMock(return_value={
+        "watchlist_view_id": str(view_id),
+        "watchlist_view_name": "Daily CRM Watch",
+        "status": "open",
+        "events": [],
+        "count": 0,
+    })
+    monkeypatch.setattr(tenant_api, "_require_b2b_product", lambda _user: None)
+    monkeypatch.setattr(
+        tenant_api,
+        "_fetch_watchlist_view_row",
+        AsyncMock(return_value={
+            "id": view_id,
+            "name": "Daily CRM Watch",
+            "vendor_names": ["Salesforce"],
+            "vendor_name": "Salesforce",
+            "category": "CRM",
+            "source": "g2",
+            "min_urgency": 7.2,
+            "include_stale": False,
+            "named_accounts_only": True,
+            "changed_wedges_only": False,
+            "vendor_alert_threshold": 6.8,
+            "account_alert_threshold": 7.2,
+            "preview_alerts_enabled": True,
+            "preview_alert_min_confidence": 0.65,
+            "preview_alert_require_budget_authority": False,
+            "stale_days_threshold": 5,
+            "alert_email_enabled": True,
+            "alert_delivery_frequency": "daily",
+            "next_alert_delivery_at": datetime(2026, 4, 7, 19, 0, tzinfo=timezone.utc),
+            "last_alert_delivery_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+            "last_alert_delivery_status": "sent",
+            "last_alert_delivery_summary": "Delivered watchlist alert email to 1 of 1 recipient",
+            "created_at": datetime(2026, 4, 6, 18, 0, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+        }),
+    )
+    monkeypatch.setattr(tenant_api, "list_watchlist_alert_events", list_events)
+    monkeypatch.setattr(
+        tenant_api,
+        "list_watchlist_alert_email_log",
+        AsyncMock(return_value={
+            "watchlist_view_id": str(view_id),
+            "watchlist_view_name": "Daily CRM Watch",
+            "deliveries": [],
+            "count": 0,
+        }),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/pipeline/visibility/watchlist-delivery/views/{view_id}?event_status=%20%20%20"
+        )
+
+    assert response.status_code == 200
+    assert list_events.await_args.kwargs["status"] == "open"
+
+
+def test_watchlist_delivery_view_detail_trims_active_event_status_before_proxy(monkeypatch):
+    app = _make_app()
+    user = _auth_user()
+    app.dependency_overrides[require_auth] = lambda: user
+    view_id = uuid4()
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value="Effingham Office Maids")
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    import atlas_brain.api.b2b_tenant_dashboard as tenant_api
+
+    list_events = AsyncMock(return_value={
+        "watchlist_view_id": str(view_id),
+        "watchlist_view_name": "Daily CRM Watch",
+        "status": "resolved",
+        "events": [],
+        "count": 0,
+    })
+    monkeypatch.setattr(tenant_api, "_require_b2b_product", lambda _user: None)
+    monkeypatch.setattr(
+        tenant_api,
+        "_fetch_watchlist_view_row",
+        AsyncMock(return_value={
+            "id": view_id,
+            "name": "Daily CRM Watch",
+            "vendor_names": ["Salesforce"],
+            "vendor_name": "Salesforce",
+            "category": "CRM",
+            "source": "g2",
+            "min_urgency": 7.2,
+            "include_stale": False,
+            "named_accounts_only": True,
+            "changed_wedges_only": False,
+            "vendor_alert_threshold": 6.8,
+            "account_alert_threshold": 7.2,
+            "preview_alerts_enabled": True,
+            "preview_alert_min_confidence": 0.65,
+            "preview_alert_require_budget_authority": False,
+            "stale_days_threshold": 5,
+            "alert_email_enabled": True,
+            "alert_delivery_frequency": "daily",
+            "next_alert_delivery_at": datetime(2026, 4, 7, 19, 0, tzinfo=timezone.utc),
+            "last_alert_delivery_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+            "last_alert_delivery_status": "sent",
+            "last_alert_delivery_summary": "Delivered watchlist alert email to 1 of 1 recipient",
+            "created_at": datetime(2026, 4, 6, 18, 0, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+        }),
+    )
+    monkeypatch.setattr(tenant_api, "list_watchlist_alert_events", list_events)
+    monkeypatch.setattr(
+        tenant_api,
+        "list_watchlist_alert_email_log",
+        AsyncMock(return_value={
+            "watchlist_view_id": str(view_id),
+            "watchlist_view_name": "Daily CRM Watch",
+            "deliveries": [],
+            "count": 0,
+        }),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/pipeline/visibility/watchlist-delivery/views/{view_id}?event_status=%20resolved%20"
+        )
+
+    assert response.status_code == 200
+    assert list_events.await_args.kwargs["status"] == "resolved"
+
+
 def test_watchlist_delivery_view_actions_proxy_tenant_or_disable(monkeypatch):
     app = _make_app()
     user = _auth_user()
@@ -669,3 +875,19 @@ def test_dedup_decisions_endpoint_returns_rows(monkeypatch):
     body = response.json()
     assert body["decisions"][0]["reason_code"] == "dedup_discard"
     assert body["decisions"][0]["discarded_entity_id"] == "switch-to-shopify-2026-03"
+
+
+def test_review_actions_rejects_invalid_uuid_before_db_touch(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    def _fail_get_db_pool():
+        raise AssertionError("get_db_pool should not be called")
+
+    monkeypatch.setattr(visibility_api, "get_db_pool", _fail_get_db_pool)
+
+    with TestClient(app) as client:
+        response = client.get("/pipeline/visibility/review-actions?review_id=not-a-uuid")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "review_id must be a valid UUID"
