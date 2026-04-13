@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Check, Copy, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -416,6 +416,15 @@ export default function VendorDetail() {
   >('support_sentiment')
   const [copied, setCopied] = useState(false)
   const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'alerts' | 'evidence' | 'watchlists' | 'reports' | 'opportunities'; status: 'copied' | 'error' } | null>(null)
+  const copiedTimeoutRef = useRef<number | null>(null)
+  const copiedShortcutTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimeoutRef.current) window.clearTimeout(copiedTimeoutRef.current)
+      if (copiedShortcutTimeoutRef.current) window.clearTimeout(copiedShortcutTimeoutRef.current)
+    }
+  }, [])
 
   const { data, loading, error, refresh, refreshing } = useApiData<VendorData>(
     async () => {
@@ -473,16 +482,19 @@ export default function VendorDetail() {
   const evidenceExplorerPath = upstreamEvidencePath(backTo, profile.vendor_name) ?? vendorEvidenceExplorerPath(profile.vendor_name, backTo)
   const reportsPath = upstreamNestedPath(backTo, '/reports') ?? vendorReportsPath(profile.vendor_name, backTo)
   const opportunitiesPath = upstreamNestedPath(backTo, '/opportunities') ?? vendorOpportunitiesPath(profile.vendor_name, backTo)
+
   const handleCopyLink = () => {
     navigator.clipboard.writeText(`${window.location.origin}${vendorSharePath}`).then(() => {
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      if (copiedTimeoutRef.current) window.clearTimeout(copiedTimeoutRef.current)
+      copiedTimeoutRef.current = window.setTimeout(() => setCopied(false), 2000)
     })
   }
   const handleCopyShortcutLink = (key: 'alerts' | 'evidence' | 'watchlists' | 'reports' | 'opportunities', path: string) => {
     navigator.clipboard.writeText(`${window.location.origin}${path}`).then(() => {
       setCopiedShortcutState({ key, status: 'copied' })
-      setTimeout(() => setCopiedShortcutState((current) => (
+      if (copiedShortcutTimeoutRef.current) window.clearTimeout(copiedShortcutTimeoutRef.current)
+      copiedShortcutTimeoutRef.current = window.setTimeout(() => setCopiedShortcutState((current) => (
         current?.key === key ? null : current
       )), 2000)
     }).catch(() => {
