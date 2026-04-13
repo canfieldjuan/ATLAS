@@ -330,6 +330,14 @@ function vendorAlertsPath(vendorName: string, backTo: string | null): string {
   return `/alerts?${params.toString()}`
 }
 
+function vendorCompanyAlertsPath(vendorName: string, companyName: string, backTo: string | null): string {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('company', companyName)
+  params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
+  return `/alerts?${params.toString()}`
+}
+
 function normalizeFocusValue(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? ''
 }
@@ -831,6 +839,13 @@ export default function VendorDetail() {
               className="text-violet-300 hover:text-violet-200 transition-colors"
             >
               {r.account_review_focus ? 'Account Review' : 'Watchlists'}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(vendorCompanyAlertsPath(profile.vendor_name, r.company, backTo))}
+              className="text-rose-300 hover:text-rose-200 transition-colors"
+            >
+              Alerts
             </button>
             {reviewId ? (
               <button

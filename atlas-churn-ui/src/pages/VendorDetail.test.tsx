@@ -360,6 +360,26 @@ describe('VendorDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith(exactAccountReviewPath)
   })
 
+  it('opens company-scoped alerts from vendor high-intent companies with preserved vendor context', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'companies' }))
+    await user.click(screen.getByRole('button', { name: 'Alerts' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Fvendors%2FZendesk',
+    )
+  })
+
   it('falls back to vendor-scoped watchlists from vendor high-intent companies without exact focus', async () => {
     const user = userEvent.setup()
 
