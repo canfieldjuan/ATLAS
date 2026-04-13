@@ -138,8 +138,12 @@ def test_build_watchlist_alert_candidates_uses_preview_signal_score_for_preview_
                     "category": "CRM",
                     "urgency": None,
                     "preview_signal_score": 6.2,
+                    "confidence": 0.41,
+                    "budget_authority": True,
                     "account_reasoning_preview_only": True,
                     "account_pressure_disclaimer": "Early account signal only.",
+                    "account_alert_eligible": True,
+                    "account_alert_policy_reason": None,
                     "account_alert_hit": True,
                     "report_date": "2026-04-05",
                     "watch_vendor": "Salesforce",
@@ -161,6 +165,8 @@ def test_build_watchlist_alert_candidates_uses_preview_signal_score_for_preview_
     assert candidate["payload"]["preview_signal_score"] == pytest.approx(6.2)
     assert candidate["payload"]["account_alert_score"] == pytest.approx(6.2)
     assert candidate["payload"]["account_alert_score_source"] == "preview_signal_score"
+    assert candidate["payload"]["account_alert_eligible"] is True
+    assert candidate["payload"]["account_alert_policy_reason"] is None
     assert candidate["payload"]["account_reasoning_preview_only"] is True
     assert candidate["payload"]["account_pressure_disclaimer"] == "Early account signal only."
 
@@ -188,6 +194,8 @@ def test_serialize_watchlist_alert_event_surfaces_preview_account_fields():
                 "preview_signal_score": 6.2,
                 "account_alert_score": 6.2,
                 "account_alert_score_source": "preview_signal_score",
+                "account_alert_eligible": True,
+                "account_alert_policy_reason": None,
                 "account_reasoning_preview_only": True,
                 "account_pressure_disclaimer": "Early account signal only.",
                 "reasoning_reference_ids": {"witness_ids": ["w1"]},
@@ -207,6 +215,8 @@ def test_serialize_watchlist_alert_event_surfaces_preview_account_fields():
 
     assert result["account_alert_score"] == pytest.approx(6.2)
     assert result["account_alert_score_source"] == "preview_signal_score"
+    assert result["account_alert_eligible"] is True
+    assert result["account_alert_policy_reason"] is None
     assert result["preview_signal_score"] == pytest.approx(6.2)
     assert result["account_reasoning_preview_only"] is True
     assert result["account_pressure_disclaimer"] == "Early account signal only."

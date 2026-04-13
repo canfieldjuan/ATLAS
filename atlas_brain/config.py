@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILES = (".env", ".env.local")
-DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
 
 
 class SaaSAuthConfig(BaseSettings):
@@ -196,7 +195,7 @@ class LLMConfig(BaseSettings):
 
     # OpenRouter reasoning model (synthesis/reasoning workloads)
     openrouter_reasoning_model: str = Field(
-        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
+        default="openai/gpt-oss-120b",
         description=(
             "OpenRouter model for synthesis/reasoning workloads. "
             "Set via ATLAS_LLM__OPENROUTER_REASONING_MODEL "
@@ -2204,7 +2203,7 @@ class ExternalDataConfig(BaseSettings):
     blog_base_url: str = Field(default="https://atlas-intel-ui-two.vercel.app", description="Base URL for consumer blog (full URLs in campaign emails)")
     amazon_associate_tag: str = Field(default="", description="Amazon Associates tag for consumer affiliate links")
     blog_post_openrouter_model: str = Field(
-        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
+        default="openai/gpt-oss-120b",
         description="OpenRouter model for blog post generation",
     )
     # Blog auto-deploy (git push + Vercel deploy hook)
@@ -2695,7 +2694,7 @@ class B2BChurnConfig(BaseSettings):
         description="LLM backend for product profiles: 'vllm' (local) or 'openrouter'",
     )
     product_profile_openrouter_model: str = Field(
-        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
+        default="openai/gpt-oss-120b",
         description="OpenRouter model for product profile synthesis",
     )
     product_profile_anthropic_batch_enabled: bool = Field(
@@ -2721,7 +2720,7 @@ class B2BChurnConfig(BaseSettings):
     blog_post_timeout_seconds: int = Field(default=1800, description="Task timeout for blog post generation")
     blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
     blog_base_url: str = Field(default="https://churnsignals.co", description="Base URL for B2B blog (full URLs in campaign emails)")
-    blog_post_openrouter_model: str = Field(default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL, description="OpenRouter model for blog generation")
+    blog_post_openrouter_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for blog generation")
     blog_post_temperature: float = Field(
         default=0.7,
         ge=0.0,
@@ -2912,7 +2911,7 @@ class B2BChurnConfig(BaseSettings):
 
     # Analyst enrichment (OpenRouter)
     openrouter_api_key: str = Field(default="", description="OpenRouter API key for analyst enrichment")
-    briefing_analyst_model: str = Field(default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL, description="OpenRouter model for briefing analyst summary")
+    briefing_analyst_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for briefing analyst summary")
     scorecard_narrative_max_tokens: int = Field(
         default=300,
         ge=128,
@@ -2923,7 +2922,7 @@ class B2BChurnConfig(BaseSettings):
         default=1600,
         ge=256,
         le=8192,
-        description="Deprecated legacy GPT OSS token budget retained for backward-compatible env parsing",
+        description="Max output tokens for vendor scorecard narratives when the synthesis model is gpt-oss",
     )
     scorecard_narrative_deepseek_max_tokens: int = Field(
         default=1200,
@@ -3033,17 +3032,17 @@ class B2BChurnConfig(BaseSettings):
         description="Max scored items per pool in the default vendor reasoning payload",
     )
     reasoning_synthesis_max_tokens: int = Field(
-        default=12288,
+        default=4096,
         ge=256,
         le=16384,
         description="Max completion tokens for vendor or cross-vendor reasoning synthesis calls",
     )
     reasoning_synthesis_model: str = Field(
-        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
+        default="",
         description=(
-            "OpenRouter model for vendor reasoning synthesis. "
-            "Defaults to Claude Sonnet 4.5; empty inherits the global "
-            "OpenRouter reasoning model."
+            "OpenRouter model override for vendor reasoning synthesis. "
+            "Empty = prefer settings.llm.openrouter_reasoning_model before "
+            "falling back to the legacy reasoning-model defaults."
         ),
     )
     reasoning_synthesis_temperature: float = Field(
@@ -3337,11 +3336,10 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     battle_card_openrouter_model: str = Field(
-        default=DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL,
+        default="",
         description=(
-            "OpenRouter model for battle-card sales copy. "
-            "Defaults to Claude Sonnet 4.5; empty inherits the global "
-            "OpenRouter reasoning model."
+            "OpenRouter model override for battle-card sales copy. "
+            "Empty = inherit ATLAS_LLM__OPENROUTER_REASONING_MODEL."
         ),
     )
     battle_card_llm_max_tokens: int = Field(default=16384, ge=256, le=32768, description="Max output tokens for battle card sales copy (reasoning models need extra budget)")
@@ -3566,6 +3564,8 @@ class B2BChurnConfig(BaseSettings):
     accounts_in_motion_max_per_vendor: int = Field(default=25, ge=1, le=100, description="Max accounts per vendor in accounts_in_motion report")
     accounts_in_motion_feed_max_total: int = Field(default=100, ge=1, le=200, description="Max total tenant feed rows returned by the aggregated accounts_in_motion endpoint")
     accounts_in_motion_min_urgency: float = Field(default=5.0, ge=0, le=10, description="Min urgency to include an account in motion")
+    accounts_in_motion_preview_alert_min_confidence: float = Field(default=0.4, ge=0.0, le=1.0, description="Minimum preview-only account confidence required before a preview-backed row may trigger a watchlist account alert")
+    accounts_in_motion_preview_alert_require_budget_authority: bool = Field(default=True, description="Require preview-only account rows to carry budget-authority evidence before they may trigger a watchlist account alert")
     accounts_in_motion_signal_metadata_min_confidence: float = Field(default=6.0, ge=0, le=10, description="Minimum normalized confidence required for company-signal metadata fallback rows to seed accounts_in_motion")
     accounts_in_motion_reddit_insider_min_confidence: float = Field(default=6.0, ge=0, le=10, description="Minimum normalized confidence required for reddit insider_account company signals to seed accounts_in_motion")
     accounts_in_motion_repeat_evidence_bonus: int = Field(default=3, ge=0, le=20, description="Bonus points added per extra supporting review for an account in motion")
@@ -3699,10 +3699,6 @@ class B2BWebhookConfig(BaseSettings):
     max_retries: int = Field(default=3, ge=0, le=5, description="Max retry attempts on failure")
     retry_delay_seconds: int = Field(default=5, ge=1, le=600, description="Delay between retries")
     max_payload_bytes: int = Field(default=65536, description="Max payload size in bytes")
-    allow_non_global_destinations: bool = Field(
-        default=False,
-        description="Allow webhook deliveries to localhost, private, or otherwise non-global network destinations",
-    )
     delivery_log_retention_days: int = Field(default=30, ge=1, le=365, description="Days to keep delivery logs")
     min_change_event_severity: str = Field(
         default="moderate",

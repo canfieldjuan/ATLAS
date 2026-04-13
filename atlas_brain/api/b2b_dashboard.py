@@ -351,6 +351,27 @@ def _accounts_in_motion_alert_basis(account: Mapping[str, Any] | None) -> tuple[
     return None, None
 
 
+def _accounts_in_motion_preview_alert_policy(
+    account: Mapping[str, Any] | None,
+) -> tuple[bool, str | None]:
+    if not isinstance(account, Mapping):
+        return False, "missing_account"
+    if not bool(account.get("account_reasoning_preview_only")):
+        return True, None
+    confidence_value = _safe_float(account.get("confidence"))
+    if (
+        confidence_value is None
+        or confidence_value < settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
+    ):
+        return False, "preview_low_confidence"
+    if (
+        settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
+        and not bool(account.get("budget_authority"))
+    ):
+        return False, "preview_missing_budget_authority"
+    return True, None
+
+
 async def _fetch_accounts_in_motion_preview_account_lookup(
     pool,
     *,

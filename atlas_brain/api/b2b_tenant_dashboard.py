@@ -62,6 +62,7 @@ from ..templates.email.watchlist_alert_delivery import (
 )
 from .b2b_dashboard import (
     _accounts_in_motion_alert_basis,
+    _accounts_in_motion_preview_alert_policy,
     _extract_report_account_preview_fields,
     _list_accounts_in_motion_from_report,
     _load_reasoning_views_for_vendors,
@@ -2157,6 +2158,9 @@ async def list_tenant_accounts_in_motion_feed(
             if source and not _matches_source_filter(account, source):
                 continue
             account_alert_score, account_alert_score_source = _accounts_in_motion_alert_basis(account)
+            account_alert_eligible, account_alert_policy_reason = _accounts_in_motion_preview_alert_policy(
+                account
+            )
             filtered_accounts.append(
                 {
                     **account,
@@ -2172,7 +2176,9 @@ async def list_tenant_accounts_in_motion_feed(
                     "freshness_timestamp": report.get("freshness_timestamp"),
                     "account_alert_score": account_alert_score,
                     "account_alert_score_source": account_alert_score_source,
-                    "account_alert_hit": _threshold_hit_numeric(
+                    "account_alert_eligible": account_alert_eligible,
+                    "account_alert_policy_reason": account_alert_policy_reason,
+                    "account_alert_hit": account_alert_eligible and _threshold_hit_numeric(
                         account_alert_score,
                         account_alert_threshold,
                     ),
