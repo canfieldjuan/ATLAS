@@ -80,6 +80,14 @@ describe('Dashboard', () => {
           buying_stage: 'evaluation',
           contract_end: '2026-09-01',
           decision_maker: true,
+          account_review_focus: {
+            vendor: 'Zendesk',
+            company: 'Acme Corp',
+            report_date: '2026-04-10',
+            watch_vendor: 'Zendesk',
+            category: 'Helpdesk',
+            track_mode: 'competitor',
+          },
         },
       ],
     })
@@ -90,7 +98,7 @@ describe('Dashboard', () => {
     })
   })
 
-  it('surfaces vendor, evidence, report, and opportunity handoffs from the high-intent table', async () => {
+  it('surfaces account review, vendor, evidence, report, and opportunity handoffs from the high-intent table', async () => {
     render(
       <MemoryRouter initialEntries={['/dashboard']}>
         <Routes>
@@ -103,6 +111,10 @@ describe('Dashboard', () => {
     const companyRow = screen.getByText('Acme Corp').closest('tr')
     expect(companyRow).not.toBeNull()
     const row = within(companyRow as HTMLTableRowElement)
+    expect(row.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-10&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fdashboard',
+    )
     expect(row.getByRole('link', { name: 'Vendor' })).toHaveAttribute(
       'href',
       '/vendors/Zendesk?back_to=%2Fdashboard',
@@ -118,6 +130,40 @@ describe('Dashboard', () => {
     expect(row.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',
       '/opportunities?vendor=Zendesk&back_to=%2Fdashboard',
+    )
+  })
+
+  it('falls back to vendor-scoped watchlists when exact account review focus is absent', async () => {
+    api.fetchHighIntent.mockResolvedValueOnce({
+      companies: [
+        {
+          company: 'Beta Corp',
+          vendor: 'HubSpot',
+          urgency: 7.1,
+          pain: 'pricing',
+          seat_count: 42,
+          buying_stage: 'evaluation',
+          contract_end: '2026-10-01',
+          decision_maker: false,
+        },
+      ],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <Routes>
+          <Route path="/dashboard" element={<Dashboard />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Churn Signals Overview' })).toBeInTheDocument()
+    const companyRow = screen.getByText('Beta Corp').closest('tr')
+    expect(companyRow).not.toBeNull()
+    const row = within(companyRow as HTMLTableRowElement)
+    expect(row.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?vendor_name=HubSpot&back_to=%2Fdashboard',
     )
   })
 

@@ -58,6 +58,26 @@ function vendorDetailPath(vendorName: string, backTo: string) {
   return qs ? `${base}?${qs}` : base
 }
 
+function watchlistsPath(
+  vendorName: string,
+  backTo: string,
+  accountReviewFocus?: NonNullable<HighIntentCompany['account_review_focus']> | null,
+) {
+  const next = new URLSearchParams()
+  if (accountReviewFocus) {
+    next.set('account_vendor', accountReviewFocus.vendor)
+    next.set('account_company', accountReviewFocus.company)
+    next.set('account_report_date', accountReviewFocus.report_date)
+    next.set('account_watch_vendor', accountReviewFocus.watch_vendor)
+    next.set('account_category', accountReviewFocus.category)
+    next.set('account_track_mode', accountReviewFocus.track_mode)
+  } else {
+    next.set('vendor_name', vendorName)
+  }
+  next.set('back_to', backTo)
+  return `/watchlists?${next.toString()}`
+}
+
 function evidencePath(vendorName: string, backTo: string) {
   const next = new URLSearchParams()
   next.set('vendor', vendorName)
@@ -203,6 +223,13 @@ export default function Dashboard() {
       header: 'Actions',
       render: (r) => (
         <div className="flex items-center gap-3 text-xs">
+          <Link
+            to={watchlistsPath(r.vendor, dashboardPath, r.account_review_focus ?? null)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-violet-300 hover:text-violet-200 transition-colors"
+          >
+            {r.account_review_focus ? 'Account Review' : 'Watchlists'}
+          </Link>
           <Link
             to={vendorDetailPath(r.vendor, dashboardPath)}
             onClick={(event) => event.stopPropagation()}
