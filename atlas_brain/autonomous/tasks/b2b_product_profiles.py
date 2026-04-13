@@ -112,6 +112,17 @@ def _safe_float(val, default: float = 0.0) -> float:
         return default
 
 
+def _profile_review_vendor_join(
+    review_alias: str = "r",
+    mention_alias: str = "vm",
+) -> str:
+    """Join canonical review-to-vendor mentions for profile aggregates."""
+    return (
+        f"JOIN b2b_review_vendor_mentions {mention_alias} "
+        f"ON {mention_alias}.review_id = {review_alias}.id"
+    )
+
+
 # ------------------------------------------------------------------
 # SQL fetchers -- one per data dimension, all run in parallel
 # ------------------------------------------------------------------
@@ -127,18 +138,19 @@ async def _fetch_satisfaction_by_area(pool, window_days: int) -> dict[str, list[
     # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
-        SELECT vendor_name,
-               enrichment->>'pain_category' AS pain_cat,
-               AVG(rating) AS avg_rating,
+        SELECT vm.vendor_name,
+               r.enrichment->>'pain_category' AS pain_cat,
+               AVG(r.rating) AS avg_rating,
                COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enriched_at > NOW() - make_interval(days => $1)
-          AND enrichment->>'pain_category' IS NOT NULL
-        GROUP BY vendor_name, enrichment->>'pain_category'
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND r.enrichment->>'pain_category' IS NOT NULL
+        GROUP BY vm.vendor_name, r.enrichment->>'pain_category'
         HAVING COUNT(*) >= 2
-        ORDER BY vendor_name, avg_rating DESC
+        ORDER BY vm.vendor_name, avg_rating DESC
         """,
         window_days,
     )
@@ -160,16 +172,17 @@ async def _fetch_pain_distribution(pool, window_days: int) -> dict[str, dict[str
     # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
-        SELECT vendor_name,
-               enrichment->>'pain_category' AS pain_cat,
+        SELECT vm.vendor_name,
+               r.enrichment->>'pain_category' AS pain_cat,
                COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enriched_at > NOW() - make_interval(days => $1)
-          AND enrichment->>'pain_category' IS NOT NULL
-        GROUP BY vendor_name, enrichment->>'pain_category'
-        ORDER BY vendor_name, cnt DESC
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND r.enrichment->>'pain_category' IS NOT NULL
+        GROUP BY vm.vendor_name, r.enrichment->>'pain_category'
+        ORDER BY vm.vendor_name, cnt DESC
         """,
         window_days,
     )
@@ -185,16 +198,17 @@ async def _fetch_use_case_distribution(pool, window_days: int) -> dict[str, list
     # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
-        SELECT vendor_name,
-               enrichment->'use_case'->>'primary_workflow' AS workflow,
+        SELECT vm.vendor_name,
+               r.enrichment->'use_case'->>'primary_workflow' AS workflow,
                COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enriched_at > NOW() - make_interval(days => $1)
-          AND enrichment->'use_case'->>'primary_workflow' IS NOT NULL
-        GROUP BY vendor_name, enrichment->'use_case'->>'primary_workflow'
-        ORDER BY vendor_name, cnt DESC
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND r.enrichment->'use_case'->>'primary_workflow' IS NOT NULL
+        GROUP BY vm.vendor_name, r.enrichment->'use_case'->>'primary_workflow'
+        ORDER BY vm.vendor_name, cnt DESC
         """,
         window_days,
     )
@@ -213,17 +227,18 @@ async def _fetch_company_size_distribution(pool, window_days: int) -> dict[str, 
     # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
-        SELECT vendor_name,
-               enrichment->'reviewer_context'->>'company_size_segment' AS seg,
+        SELECT vm.vendor_name,
+               r.enrichment->'reviewer_context'->>'company_size_segment' AS seg,
                COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enriched_at > NOW() - make_interval(days => $1)
-          AND enrichment->'reviewer_context'->>'company_size_segment' IS NOT NULL
-          AND enrichment->'reviewer_context'->>'company_size_segment' != 'unknown'
-        GROUP BY vendor_name, enrichment->'reviewer_context'->>'company_size_segment'
-        ORDER BY vendor_name, cnt DESC
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND r.enrichment->'reviewer_context'->>'company_size_segment' IS NOT NULL
+          AND r.enrichment->'reviewer_context'->>'company_size_segment' != 'unknown'
+        GROUP BY vm.vendor_name, r.enrichment->'reviewer_context'->>'company_size_segment'
+        ORDER BY vm.vendor_name, cnt DESC
         """,
         window_days,
     )
@@ -242,16 +257,17 @@ async def _fetch_competitive_flows(pool, window_days: int) -> dict[str, dict]:
     # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
-        SELECT vendor_name,
+        SELECT vm.vendor_name,
                comp->>'name' AS comp_name,
                comp->>'context' AS comp_context,
                comp->>'reason' AS comp_reason
-        FROM b2b_reviews,
-             jsonb_array_elements(enrichment->'competitors_mentioned') AS comp
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enriched_at > NOW() - make_interval(days => $1)
-          AND jsonb_typeof(enrichment->'competitors_mentioned') = 'array'
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id,
+             jsonb_array_elements(r.enrichment->'competitors_mentioned') AS comp
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND jsonb_typeof(r.enrichment->'competitors_mentioned') = 'array'
         """,
         window_days,
     )
@@ -286,14 +302,15 @@ async def _fetch_integration_stacks(pool, window_days: int) -> dict[str, dict[st
     # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
-        SELECT vendor_name,
+        SELECT vm.vendor_name,
                integ::text AS integration
-        FROM b2b_reviews,
-             jsonb_array_elements_text(enrichment->'use_case'->'integration_stack') AS integ
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enriched_at > NOW() - make_interval(days => $1)
-          AND jsonb_typeof(enrichment->'use_case'->'integration_stack') = 'array'
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id,
+             jsonb_array_elements_text(r.enrichment->'use_case'->'integration_stack') AS integ
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND jsonb_typeof(r.enrichment->'use_case'->'integration_stack') = 'array'
         """,
         window_days,
     )
@@ -316,23 +333,24 @@ async def _fetch_aggregate_metrics(pool, window_days: int, min_reviews: int) -> 
     # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
-        SELECT vendor_name,
-               MODE() WITHIN GROUP (ORDER BY product_category) AS product_category,
+        SELECT vm.vendor_name,
+               MODE() WITHIN GROUP (ORDER BY r.product_category) AS product_category,
                COUNT(*) AS total_reviews,
-               AVG(rating) AS avg_rating,
-               AVG(CASE WHEN (enrichment->>'would_recommend')::boolean THEN 1.0 ELSE 0.0 END)
-                   FILTER (WHERE enrichment->>'would_recommend' IS NOT NULL) AS recommend_rate,
-               AVG((enrichment->>'urgency_score')::numeric)
-                   FILTER (WHERE enrichment->>'urgency_score' IS NOT NULL) AS avg_urgency,
-               (ARRAY_AGG(id ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST))[1:50]
+               AVG(r.rating) AS avg_rating,
+               AVG(CASE WHEN (r.enrichment->>'would_recommend')::boolean THEN 1.0 ELSE 0.0 END)
+                   FILTER (WHERE r.enrichment->>'would_recommend' IS NOT NULL) AS recommend_rate,
+               AVG((r.enrichment->>'urgency_score')::numeric)
+                   FILTER (WHERE r.enrichment->>'urgency_score' IS NOT NULL) AS avg_urgency,
+               (ARRAY_AGG(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST))[1:50]
                    AS sample_review_ids,
-               MIN(enriched_at) AS review_window_start,
-               MAX(enriched_at) AS review_window_end
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enriched_at > NOW() - make_interval(days => $1)
-        GROUP BY vendor_name
+               MIN(r.enriched_at) AS review_window_start,
+               MAX(r.enriched_at) AS review_window_end
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+        GROUP BY vm.vendor_name
         HAVING COUNT(*) >= $2
         ORDER BY total_reviews DESC
         """,
@@ -357,12 +375,13 @@ async def _fetch_source_distribution(pool, window_days: int) -> dict[str, dict[s
     """Per-vendor review source distribution: {vendor: {source: count}}."""
     rows = await pool.fetch(
         """
-        SELECT vendor_name, source, count(*) AS cnt
-        FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND duplicate_of_review_id IS NULL
-          AND enriched_at > NOW() - make_interval(days => $1)
-        GROUP BY vendor_name, source
+        SELECT vm.vendor_name, r.source, count(*) AS cnt
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE r.enrichment_status = 'enriched'
+          AND r.duplicate_of_review_id IS NULL
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+        GROUP BY vm.vendor_name, r.source
         """,
         window_days,
     )

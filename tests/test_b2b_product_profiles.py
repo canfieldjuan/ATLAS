@@ -121,6 +121,44 @@ def test_profile_batch_custom_id_is_anthropic_safe():
 
 
 @pytest.mark.asyncio
+async def test_profile_fetchers_read_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]), fetchrow=AsyncMock(return_value=None))
+
+    await profiles._fetch_satisfaction_by_area(pool, 30)
+    assert "JOIN b2b_review_vendor_mentions vm" in pool.fetch.await_args_list[0].args[0]
+
+    await profiles._fetch_pain_distribution(pool, 30)
+    assert "JOIN b2b_review_vendor_mentions vm" in pool.fetch.await_args_list[1].args[0]
+
+    await profiles._fetch_use_case_distribution(pool, 30)
+    assert "JOIN b2b_review_vendor_mentions vm" in pool.fetch.await_args_list[2].args[0]
+
+    await profiles._fetch_company_size_distribution(pool, 30)
+    assert "JOIN b2b_review_vendor_mentions vm" in pool.fetch.await_args_list[3].args[0]
+
+    await profiles._fetch_competitive_flows(pool, 30)
+    assert "JOIN b2b_review_vendor_mentions vm" in pool.fetch.await_args_list[4].args[0]
+
+    await profiles._fetch_integration_stacks(pool, 30)
+    assert "JOIN b2b_review_vendor_mentions vm" in pool.fetch.await_args_list[5].args[0]
+
+
+@pytest.mark.asyncio
+async def test_profile_aggregate_and_source_fetchers_read_vendor_mentions():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]), fetchrow=AsyncMock(return_value=None))
+
+    await profiles._fetch_aggregate_metrics(pool, 30, 3)
+    aggregate_sql = pool.fetch.await_args_list[0].args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in aggregate_sql
+    assert "GROUP BY vm.vendor_name" in aggregate_sql
+
+    await profiles._fetch_source_distribution(pool, 30)
+    source_sql = pool.fetch.await_args_list[1].args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in source_sql
+    assert "GROUP BY vm.vendor_name, r.source" in source_sql
+
+
+@pytest.mark.asyncio
 async def test_run_uses_anthropic_batch_for_product_profiles(monkeypatch):
     class DummyPool:
         is_initialized = True
