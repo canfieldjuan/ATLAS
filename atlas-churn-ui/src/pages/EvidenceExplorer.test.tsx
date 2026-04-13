@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -23,6 +23,18 @@ vi.mock('../api/client', () => api)
 function LocationSearchProbe() {
   const location = useLocation()
   return <div data-testid="location-search">{location.search}</div>
+}
+
+function activeVendorShortcuts(vendorName = 'Zendesk') {
+  const headerScope = screen
+    .getByText((_, node) => node?.textContent?.trim() === `Focused on ${vendorName}`)
+    .closest('div')
+
+  if (!(headerScope instanceof HTMLElement)) {
+    throw new Error(`Expected active vendor shortcuts for ${vendorName}`)
+  }
+
+  return within(headerScope)
 }
 
 describe('EvidenceExplorer', () => {
@@ -215,9 +227,20 @@ describe('EvidenceExplorer', () => {
       )
 
       const explorerLink = await screen.findByRole('link', { name: 'Open in Evidence Explorer' })
+      const drawerShortcutsRow = explorerLink.closest('div')
+      expect(drawerShortcutsRow).not.toBeNull()
+      const drawerShortcuts = within(drawerShortcutsRow as HTMLElement)
       expect(explorerLink).toHaveAttribute(
         'href',
         '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk',
+      )
+      expect(drawerShortcuts.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+        'href',
+        '/alerts?vendor=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26as_of_date%3D2026-04-08%26window_days%3D45%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
+      )
+      expect(drawerShortcuts.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+        'href',
+        '/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26as_of_date%3D2026-04-08%26window_days%3D45%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
       )
 
       await user.click(screen.getByRole('button', { name: 'Copy evidence explorer link' }))
@@ -595,15 +618,16 @@ describe('EvidenceExplorer', () => {
     )
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    const headerShortcuts = activeVendorShortcuts()
     expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?view=view-zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
-    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+    expect(headerShortcuts.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
       '/alerts?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
-    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+    expect(headerShortcuts.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
       '/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
@@ -624,7 +648,7 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const alertsLink = await screen.findByRole('link', { name: 'Alerts API' })
+    const alertsLink = activeVendorShortcuts().getByRole('link', { name: 'Alerts API' })
     expect(alertsLink).toHaveAttribute(
       'href',
       '/alerts?webhook=wh-crm&window=30d',
@@ -641,8 +665,9 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const alertsLink = await screen.findByRole('link', { name: 'Alerts API' })
-    await user.click(screen.getByRole('button', { name: 'Copy alerts link' }))
+    const headerShortcuts = activeVendorShortcuts()
+    const alertsLink = headerShortcuts.getByRole('link', { name: 'Alerts API' })
+    await user.click(headerShortcuts.getByRole('button', { name: 'Copy alerts link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${alertsLink.getAttribute('href')}`)
@@ -659,8 +684,9 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const alertsLink = await screen.findByRole('link', { name: 'Alerts API' })
-    await user.click(screen.getByRole('button', { name: 'Copy alerts link' }))
+    const headerShortcuts = activeVendorShortcuts()
+    const alertsLink = headerShortcuts.getByRole('link', { name: 'Alerts API' })
+    await user.click(headerShortcuts.getByRole('button', { name: 'Copy alerts link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${alertsLink.getAttribute('href')}`)
@@ -674,7 +700,7 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const vendorLink = await screen.findByRole('link', { name: 'Vendor workspace' })
+    const vendorLink = activeVendorShortcuts().getByRole('link', { name: 'Vendor workspace' })
     expect(vendorLink).toHaveAttribute(
       'href',
       '/vendors/Zendesk?tab=reviews&back_to=%2Fwatchlists%3Fview%3Dview-1',
@@ -691,8 +717,9 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const vendorLink = await screen.findByRole('link', { name: 'Vendor workspace' })
-    await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+    const headerShortcuts = activeVendorShortcuts()
+    const vendorLink = headerShortcuts.getByRole('link', { name: 'Vendor workspace' })
+    await user.click(headerShortcuts.getByRole('button', { name: 'Copy vendor workspace link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${vendorLink.getAttribute('href')}`)
@@ -709,8 +736,9 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const vendorLink = await screen.findByRole('link', { name: 'Vendor workspace' })
-    await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+    const headerShortcuts = activeVendorShortcuts()
+    const vendorLink = headerShortcuts.getByRole('link', { name: 'Vendor workspace' })
+    await user.click(headerShortcuts.getByRole('button', { name: 'Copy vendor workspace link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${vendorLink.getAttribute('href')}`)
