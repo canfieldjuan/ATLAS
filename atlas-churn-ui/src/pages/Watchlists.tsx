@@ -3470,7 +3470,10 @@ export default function Watchlists() {
             ? hasActiveAlertPolicy
               ? `${accountAlertHitCount} alert hit${accountAlertHitCount === 1 ? '' : 's'}` +
                 (staleThresholdHitCount > 0 ? ` - ${staleThresholdHitCount} stale` : '') +
-                (accountBuckets.review.length > 0 ? ` - ${accountBuckets.review.length} below threshold` : '')
+                (accountBuckets.review.length > 0 ? ` - ${accountBuckets.review.length} below threshold` : '') +
+                (accountBuckets.review.length > visibleReviewAccounts.length
+                  ? ` (${accountBuckets.review.length - visibleReviewAccounts.length} hidden by filter)`
+                  : '')
               : `${visibleReviewAccounts.length} review-needed cluster${visibleReviewAccounts.length === 1 ? '' : 's'}` +
                 (accountBuckets.review.length > visibleReviewAccounts.length
                   ? ` (${accountBuckets.review.length - visibleReviewAccounts.length} hidden by filter)`
