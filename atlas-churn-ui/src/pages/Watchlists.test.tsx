@@ -1374,7 +1374,7 @@ describe('Watchlists', () => {
     )
     expect(screen.getByRole('link', { name: 'Open primary witness for Zendesk' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fvendor_name%3DZendesk%26named_accounts_only%3Dtrue%26changed_wedges_only%3Dtrue%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-05&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fvendor_name%3DZendesk%26named_accounts_only%3Dtrue%26changed_wedges_only%3Dtrue%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
     )
   })
 
@@ -1528,7 +1528,7 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open primary witness for Zendesk' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-05&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
     )
   })
 
@@ -1554,6 +1554,7 @@ describe('Watchlists', () => {
     expect(copiedUrl.pathname).toBe('/evidence')
     expect(copiedUrl.searchParams.get('vendor')).toBe('Zendesk')
     expect(copiedUrl.searchParams.get('tab')).toBe('witnesses')
+    expect(copiedUrl.searchParams.get('as_of_date')).toBe('2026-04-05')
     expect(copiedUrl.searchParams.get('witness_id')).toBe('witness:zendesk:1')
     expect(copiedUrl.searchParams.get('source')).toBe('reddit')
     const backTo = copiedUrl.searchParams.get('back_to')
@@ -1814,7 +1815,7 @@ describe('Watchlists', () => {
     )
     expect(screen.getByRole('link', { name: 'Open account evidence for Zendesk' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-05&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
     )
   })
 

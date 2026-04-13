@@ -479,6 +479,11 @@ function watchlistReportsUrl(searchParams: URLSearchParams, vendorName: string) 
   return `${window.location.origin}${watchlistReportsPath(searchParams, vendorName)}`
 }
 
+function watchlistSnapshotDate(searchParams: URLSearchParams) {
+  const text = searchParams.get('account_report_date')?.trim() || ''
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : ''
+}
+
 function watchlistEvidenceExplorerPath(
   searchParams: URLSearchParams,
   vendorName: string,
@@ -488,6 +493,8 @@ function watchlistEvidenceExplorerPath(
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
   params.set('tab', 'witnesses')
+  const snapshotDate = watchlistSnapshotDate(searchParams)
+  if (snapshotDate) params.set('as_of_date', snapshotDate)
   if (witnessId) params.set('witness_id', witnessId)
   if (source) params.set('source', source)
   params.set('back_to', watchlistPath(searchParams))

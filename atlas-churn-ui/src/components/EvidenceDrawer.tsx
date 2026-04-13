@@ -152,6 +152,28 @@ function parseBackTarget(value: string | null | undefined) {
   }
 }
 
+function parseSnapshotDate(value: string | null | undefined) {
+  const text = value?.trim() || ''
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null
+}
+
+function upstreamSnapshotDate(value: string | null | undefined) {
+  let current = parseBackTarget(value)
+  while (current) {
+    try {
+      const url = new URL(current, window.location.origin)
+      const accountReportDate = parseSnapshotDate(url.searchParams.get('account_report_date'))
+      if (accountReportDate) return accountReportDate
+      const asOfDate = parseSnapshotDate(url.searchParams.get('as_of_date'))
+      if (asOfDate) return asOfDate
+      current = parseBackTarget(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 function upstreamNestedPath(
   value: string | null | undefined,
   prefix: '/alerts' | '/vendors/' | '/watchlists' | '/reports' | '/opportunities',
@@ -317,6 +339,7 @@ export default function EvidenceDrawer({
   const [pendingRemoveAnnotation, setPendingRemoveAnnotation] = useState(false)
   const [removeAnnotationError, setRemoveAnnotationError] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const effectiveAsOfDate = parseSnapshotDate(asOfDate) ?? upstreamSnapshotDate(backToPath)
 
   useEffect(() => {
     if (!open || !witnessId || !vendorName) return
@@ -331,7 +354,7 @@ export default function EvidenceDrawer({
     setRemoveAnnotationError(null)
     Promise.all([
       fetchWitness(witnessId, vendorName, {
-        as_of_date: asOfDate || undefined,
+        as_of_date: effectiveAsOfDate || undefined,
         window_days: windowDays,
       }),
       fetchAnnotations({ vendor_name: vendorName }).catch(() => ({ annotations: [] })),
@@ -343,7 +366,7 @@ export default function EvidenceDrawer({
       })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load witness'))
       .finally(() => setLoading(false))
-  }, [open, witnessId, vendorName, asOfDate, windowDays])
+  }, [open, witnessId, vendorName, effectiveAsOfDate, windowDays])
 
   useEffect(() => {
     if (!open || !witness?.reviewer_company || !vendorName) {

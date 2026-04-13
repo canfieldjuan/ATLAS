@@ -429,7 +429,7 @@ describe('Watchlists account drawer', () => {
     expect(within(drawer).getByText('Renewal warning from URL hydration.')).toBeInTheDocument()
     expect(within(drawer).getByRole('link', { name: 'Evidence Explorer' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-05&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
     )
   })
 
@@ -511,7 +511,8 @@ describe('Watchlists account drawer', () => {
     expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
     await waitFor(() => {
       expect(api.fetchWitness).toHaveBeenCalledWith('witness:zendesk:1', 'Zendesk', {
-        source: undefined,
+        as_of_date: '2026-04-05',
+        window_days: undefined,
       })
     })
   })
@@ -1037,6 +1038,7 @@ describe('Watchlists account drawer', () => {
     expect(copiedEvidenceUrl.pathname).toBe('/evidence')
     expect(copiedEvidenceUrl.searchParams.get('vendor')).toBe('Zendesk')
     expect(copiedEvidenceUrl.searchParams.get('tab')).toBe('witnesses')
+    expect(copiedEvidenceUrl.searchParams.get('as_of_date')).toBe('2026-04-05')
     const copiedEvidenceBackTo = new URL(copiedEvidenceUrl.searchParams.get('back_to')!, window.location.origin)
     expect(copiedEvidenceBackTo.pathname).toBe('/watchlists')
     expect(copiedEvidenceBackTo.searchParams.get('view')).toBe('view-1')
@@ -1492,13 +1494,13 @@ describe('Watchlists account drawer', () => {
     expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
     await waitFor(() => {
       expect(api.fetchWitness).toHaveBeenCalledWith('witness:zendesk:1', 'Zendesk', {
-        as_of_date: undefined,
+        as_of_date: '2026-04-05',
         window_days: undefined,
       })
     })
     expect(screen.getByRole('link', { name: 'Open in Evidence Explorer' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor%26witness_id%3Dwitness%253Azendesk%253A1%26witness_vendor%3DZendesk',
+      '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-05&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor%26witness_id%3Dwitness%253Azendesk%253A1%26witness_vendor%3DZendesk',
     )
   })
 
