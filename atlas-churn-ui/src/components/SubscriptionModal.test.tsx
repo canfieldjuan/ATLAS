@@ -408,6 +408,122 @@ describe('SubscriptionModal', () => {
     vi.useRealTimers()
   }, 10000)
 
+  it('ignores stale save completions after switching scopes', async () => {
+    vi.useFakeTimers()
+    const onClose = vi.fn()
+    const onSaved = vi.fn()
+    let resolveSave: ((value: {
+      subscription: {
+        id: string
+        scope_type: 'report'
+        scope_key: string
+        scope_label: string
+        filter_payload: Record<string, never>
+        report_id: string
+        delivery_frequency: 'weekly'
+        deliverable_focus: 'all'
+        freshness_policy: 'fresh_or_monitor'
+        recipient_emails: string[]
+        delivery_note: string
+        enabled: true
+        next_delivery_at: null
+        last_delivery_at: null
+        last_delivery_status: null
+        last_delivery_report_count: null
+        last_delivery_summary: null
+        created_at: null
+        updated_at: null
+      }
+    }) => void) | undefined
+
+    api.fetchReportSubscription.mockResolvedValue({ subscription: null })
+    api.upsertReportSubscription.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSave = resolve
+    }))
+
+    const { rerender } = render(
+      <SubscriptionModal
+        open
+        onClose={onClose}
+        onSaved={onSaved}
+        scopeType="report"
+        scopeKey="report-1"
+        scopeLabel="Report One"
+      />,
+    )
+
+    await flushMicrotasks()
+    fireEvent.change(screen.getByLabelText('Recipient Emails'), {
+      target: { value: 'team@example.com' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Subscribe' }))
+
+    expect(api.upsertReportSubscription).toHaveBeenCalledWith(
+      'report',
+      'report-1',
+      expect.objectContaining({
+        scope_label: 'Report One',
+        recipients: ['team@example.com'],
+      }),
+    )
+
+    rerender(
+      <SubscriptionModal
+        open
+        onClose={onClose}
+        onSaved={onSaved}
+        scopeType="library"
+        scopeKey="library"
+        scopeLabel="Full Intelligence Library"
+      />,
+    )
+
+    await flushMicrotasks()
+    expect(screen.getByLabelText('Subscription Label')).toHaveValue('Full Intelligence Library')
+
+    const resolvePendingSave = resolveSave
+    if (!resolvePendingSave) {
+      throw new Error('Expected save promise resolver')
+    }
+
+    await act(async () => {
+      resolvePendingSave({
+        subscription: {
+          id: 'sub-stale',
+          scope_type: 'report',
+          scope_key: 'report-1',
+          scope_label: 'Report One',
+          filter_payload: {},
+          report_id: 'report-1',
+          delivery_frequency: 'weekly',
+          deliverable_focus: 'all',
+          freshness_policy: 'fresh_or_monitor',
+          recipient_emails: ['team@example.com'],
+          delivery_note: '',
+          enabled: true,
+          next_delivery_at: null,
+          last_delivery_at: null,
+          last_delivery_status: null,
+          last_delivery_report_count: null,
+          last_delivery_summary: null,
+          created_at: null,
+          updated_at: null,
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(1300)
+    })
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Subscription Label')).toHaveValue('Full Intelligence Library')
+    vi.useRealTimers()
+  })
+
   it('persists filter-backed library view subscriptions', async () => {
     api.fetchReportSubscription.mockResolvedValue({ subscription: null })
     api.upsertReportSubscription.mockResolvedValue({

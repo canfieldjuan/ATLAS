@@ -1,6 +1,6 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, RouterProvider, createMemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Report from './Report'
 
@@ -141,6 +141,74 @@ describe('Report', () => {
       expect(structuredRenderer.lastProps?.asOfDate).toBe('2026-04-08')
       expect(structuredRenderer.lastProps?.windowDays).toBe(45)
     })
+  })
+
+  it('rehydrates the direct report view on same-route vendor changes and ignores stale loads', async () => {
+    let resolveFirst: ((value: Response) => void) | undefined
+    let resolveSecond: ((value: Response) => void) | undefined
+
+    global.fetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirst = resolve as (value: Response) => void
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecond = resolve as (value: Response) => void
+      }))
+
+    const appRouter = createMemoryRouter(
+      [{ path: '/report', element: <Report /> }],
+      { initialEntries: ['/report?vendor=Zendesk&ref=token-1&mode=view'] },
+    )
+
+    render(<RouterProvider router={appRouter} />)
+
+    expect(screen.getByText('Loading Zendesk intelligence report...')).toBeInTheDocument()
+
+    await act(async () => {
+      await appRouter.navigate('/report?vendor=Intercom&ref=token-2&mode=view')
+    })
+
+    expect(screen.getByText('Loading Intercom intelligence report...')).toBeInTheDocument()
+
+    const resolveLatestReport = resolveSecond
+    if (!resolveLatestReport) {
+      throw new Error('Expected latest report fetch resolver')
+    }
+
+    await act(async () => {
+      resolveLatestReport({
+        ok: true,
+        json: async () => ({
+          ...buildStructuredPublicReport(),
+          vendor_name: 'Intercom',
+        }),
+      } as Response)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(structuredRenderer.lastProps?.vendorName).toBe('Intercom')
+    })
+    expect(structuredRenderer.lastProps?.backTo).toBe('/report?vendor=Intercom&ref=token-2&mode=view')
+    expect(screen.getByRole('heading', { name: 'Intercom' })).toBeInTheDocument()
+
+    const resolveStaleReport = resolveFirst
+    if (!resolveStaleReport) {
+      throw new Error('Expected stale report fetch resolver')
+    }
+
+    await act(async () => {
+      resolveStaleReport({
+        ok: true,
+        json: async () => buildStructuredPublicReport(),
+      } as Response)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(structuredRenderer.lastProps?.vendorName).toBe('Intercom')
+    expect(screen.getByRole('heading', { name: 'Intercom' })).toBeInTheDocument()
   })
 
   it('passes the vendor context into specialized report renderers on direct report load', async () => {
@@ -296,5 +364,126 @@ describe('Report', () => {
     }
     expect(router.navigate).toHaveBeenCalledWith('/watchlists')
     timeoutSpy.mockRestore()
+  })
+
+  it('ignores stale checkout session fetches after the session route changes', async () => {
+    let resolveFirst: ((value: Response) => void) | undefined
+    let resolveSecond: ((value: Response) => void) | undefined
+
+    global.fetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirst = resolve as (value: Response) => void
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecond = resolve as (value: Response) => void
+      }))
+
+    const appRouter = createMemoryRouter(
+      [{ path: '/report', element: <Report /> }],
+      { initialEntries: ['/report?vendor=Zendesk&checkout=success&session_id=session-1'] },
+    )
+
+    render(<RouterProvider router={appRouter} />)
+
+    await act(async () => {
+      await appRouter.navigate('/report?vendor=Zendesk&checkout=success&session_id=session-2')
+    })
+
+    const resolveCurrentSession = resolveSecond
+    if (!resolveCurrentSession) {
+      throw new Error('Expected current checkout session resolver')
+    }
+
+    await act(async () => {
+      resolveCurrentSession({
+        ok: true,
+        json: async () => ({ email: 'current@example.com', tier: 'standard' }),
+      } as Response)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('current@example.com')).toBeInTheDocument()
+    })
+    expect(screen.getByText("Your Zendesk Standard subscription is confirmed.")).toBeInTheDocument()
+
+    const resolveStaleSession = resolveFirst
+    if (!resolveStaleSession) {
+      throw new Error('Expected stale checkout session resolver')
+    }
+
+    await act(async () => {
+      resolveStaleSession({
+        ok: true,
+        json: async () => ({ email: 'stale@example.com', tier: 'pro' }),
+      } as Response)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByDisplayValue('current@example.com')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue('stale@example.com')).not.toBeInTheDocument()
+    expect(screen.getByText("Your Zendesk Standard subscription is confirmed.")).toBeInTheDocument()
+  })
+
+  it('clears checkout redirect timers when the session route changes', async () => {
+    vi.useFakeTimers()
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ email: 'first@example.com', tier: 'pro' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ email: 'second@example.com', tier: 'standard' }),
+      } as Response)
+
+    const appRouter = createMemoryRouter(
+      [{ path: '/report', element: <Report /> }],
+      { initialEntries: ['/report?vendor=Zendesk&checkout=success&session_id=session-1'] },
+    )
+
+    render(<RouterProvider router={appRouter} />)
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByDisplayValue('first@example.com')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Jane Smith'), {
+      target: { value: 'Juan Canfield' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('Acme Inc.'), {
+      target: { value: 'Atlas Labs' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('Min. 8 characters'), {
+      target: { value: 'password123' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Account' }))
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByText('Account ready. Redirecting to Watchlists...')).toBeInTheDocument()
+
+    await act(async () => {
+      await appRouter.navigate('/report?vendor=Zendesk&checkout=success&session_id=session-2')
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByDisplayValue('second@example.com')).toBeInTheDocument()
+    expect(screen.queryByText('Account ready. Redirecting to Watchlists...')).not.toBeInTheDocument()
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
+    })
+
+    expect(router.navigate).not.toHaveBeenCalled()
+    vi.useRealTimers()
   })
 })

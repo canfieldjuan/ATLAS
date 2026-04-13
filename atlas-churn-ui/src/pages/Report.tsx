@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from 'react'
+import { useState, useEffect, useRef, type FormEvent } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   FileText, Mail, AlertCircle, Loader2, ShieldCheck,
@@ -761,6 +761,8 @@ const CHECKOUT_SESSION_URL = `${API_BASE}/api/v1/b2b/briefings/checkout-session`
 function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: string }) {
   const { signup, login } = useAuth()
   const navigate = useNavigate()
+  const sessionRequestIdRef = useRef(0)
+  const redirectTimerRef = useRef<number | null>(null)
   const [sessionEmail, setSessionEmail] = useState('')
   const [tier, setTier] = useState('')
   const [fullName, setFullName] = useState('')
@@ -772,18 +774,43 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
   const [mode, setMode] = useState<'signup' | 'login'>('signup')
 
   useEffect(() => {
+    sessionRequestIdRef.current += 1
+    if (redirectTimerRef.current != null) {
+      window.clearTimeout(redirectTimerRef.current)
+      redirectTimerRef.current = null
+    }
+    setSessionEmail('')
+    setTier('')
+    setFullName('')
+    setCompanyName('')
+    setPassword('')
+    setSignupError('')
+    setSignupLoading(false)
+    setAccountCreated(false)
+    setMode('signup')
     if (!sessionId) return
+    const requestId = sessionRequestIdRef.current
     fetch(addFreshParam(CHECKOUT_SESSION_URL, { session_id: sessionId }), noStoreInit())
       .then(r => r.ok ? r.json() : null)
       .then(data => {
+        if (sessionRequestIdRef.current !== requestId) return
         if (data?.email) setSessionEmail(data.email)
         if (data?.tier) setTier(data.tier)
       })
       .catch(() => {})
-  }, [sessionId])
+  }, [sessionId, vendor])
+
+  useEffect(() => () => {
+    sessionRequestIdRef.current += 1
+    if (redirectTimerRef.current != null) {
+      window.clearTimeout(redirectTimerRef.current)
+      redirectTimerRef.current = null
+    }
+  }, [])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
+    const requestId = sessionRequestIdRef.current
     setSignupError('')
     if (password.length < 8) {
       setSignupError('Password must be at least 8 characters')
@@ -796,9 +823,17 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
       } else {
         await login(sessionEmail, password)
       }
+      if (sessionRequestIdRef.current !== requestId) return
       setAccountCreated(true)
-      setTimeout(() => navigate('/watchlists'), 2000)
+      if (redirectTimerRef.current != null) {
+        window.clearTimeout(redirectTimerRef.current)
+      }
+      redirectTimerRef.current = window.setTimeout(() => {
+        if (sessionRequestIdRef.current !== requestId) return
+        navigate('/watchlists')
+      }, 2000)
     } catch (err) {
+      if (sessionRequestIdRef.current !== requestId) return
       const msg = err instanceof Error ? err.message : 'Something went wrong'
       if (msg.toLowerCase().includes('already registered')) {
         setMode('login')
@@ -807,6 +842,7 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
         setSignupError(msg)
       }
     } finally {
+      if (sessionRequestIdRef.current !== requestId) return
       setSignupLoading(false)
     }
   }
@@ -992,6 +1028,8 @@ export default function Report() {
   const [status, setStatus] = useState<Status>(mode === 'view' ? 'loading_report' : 'idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [reportData, setReportData] = useState<ReportData | null>(null)
+  const routeVersionRef = useRef(0)
+  const loadRequestIdRef = useRef(0)
 
   useEffect(() => {
     document.title = vendor
@@ -999,21 +1037,30 @@ export default function Report() {
       : 'Churn Intelligence Report -- Churn Signals'
   }, [vendor])
 
-  // Auto-load report if mode=view (post-gate redirect)
   useEffect(() => {
-    if (mode === 'view' && token && !reportData) {
-      loadReport(token)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, token])
+    routeVersionRef.current += 1
+    loadRequestIdRef.current += 1
+    setEmail('')
+    setErrorMsg('')
+    setReportData(null)
+    setStatus(mode === 'view' && token ? 'loading_report' : 'idle')
+  }, [vendor, token, mode, checkoutStatus])
 
-  async function loadReport(reportToken: string) {
+  useEffect(() => {
+    if (checkoutStatus === 'success' || mode !== 'view' || !token) return
+    void loadReport(token, routeVersionRef.current)
+  }, [checkoutStatus, mode, token, vendor])
+
+  async function loadReport(reportToken: string, routeVersion = routeVersionRef.current) {
+    const requestId = loadRequestIdRef.current + 1
+    loadRequestIdRef.current = requestId
     setStatus('loading_report')
     try {
       const res = await fetch(
         addFreshParam(REPORT_DATA_URL, { token: reportToken }),
         noStoreInit(),
       )
+      if (routeVersionRef.current !== routeVersion || loadRequestIdRef.current !== requestId) return
       if (res.ok) {
         const data = normalizePublicReportData(await res.json() as ReportData)
         setReportData(data)
@@ -1024,6 +1071,7 @@ export default function Report() {
         setStatus('error')
       }
     } catch {
+      if (routeVersionRef.current !== routeVersion || loadRequestIdRef.current !== requestId) return
       setErrorMsg('Network error loading report')
       setStatus('error')
     }
@@ -1033,6 +1081,9 @@ export default function Report() {
     e.preventDefault()
     if (!email.trim()) return
 
+    const routeVersion = routeVersionRef.current
+    const requestId = loadRequestIdRef.current + 1
+    loadRequestIdRef.current = requestId
     setStatus('submitting')
     setErrorMsg('')
 
@@ -1042,18 +1093,20 @@ export default function Report() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), token }),
       }))
+      if (routeVersionRef.current !== routeVersion || loadRequestIdRef.current !== requestId) return
 
       if (res.ok) {
         const body = await res.json()
         // Gate passed -- load the full report inline
         const reportToken = body.report_token || token
-        await loadReport(reportToken)
+        await loadReport(reportToken, routeVersion)
       } else {
         const body = await res.json().catch(() => ({ detail: 'Something went wrong' }))
         setErrorMsg(formatApiDetail(body.detail, res.status))
         setStatus('error')
       }
     } catch {
+      if (routeVersionRef.current !== routeVersion || loadRequestIdRef.current !== requestId) return
       setErrorMsg('Network error -- please try again')
       setStatus('error')
     }

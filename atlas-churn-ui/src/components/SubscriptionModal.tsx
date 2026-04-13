@@ -126,6 +126,7 @@ export default function SubscriptionModal({
 }: SubscriptionModalProps) {
   const idPrefix = `subscription-${scopeType}-${scopeKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
   const loadRequestIdRef = useRef(0)
+  const saveRequestIdRef = useRef(0)
   const saveCloseTimerRef = useRef<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -148,13 +149,17 @@ export default function SubscriptionModal({
   // Load existing subscription
   useEffect(() => {
     loadRequestIdRef.current += 1
+    saveRequestIdRef.current += 1
     if (saveCloseTimerRef.current != null) {
       window.clearTimeout(saveCloseTimerRef.current)
       saveCloseTimerRef.current = null
     }
-    if (!open) return
-    const requestId = loadRequestIdRef.current + 1
-    loadRequestIdRef.current = requestId
+    setSaving(false)
+    if (!open) {
+      setLoading(false)
+      return
+    }
+    const requestId = loadRequestIdRef.current
     setLoading(true)
     setError('')
     setSuccess(false)
@@ -203,6 +208,12 @@ export default function SubscriptionModal({
       return
     }
 
+    const requestId = saveRequestIdRef.current + 1
+    saveRequestIdRef.current = requestId
+    if (saveCloseTimerRef.current != null) {
+      window.clearTimeout(saveCloseTimerRef.current)
+      saveCloseTimerRef.current = null
+    }
     setSaving(true)
     setError('')
     setSuccess(false)
@@ -219,18 +230,19 @@ export default function SubscriptionModal({
         enabled,
       }
       const res = await upsertReportSubscription(scopeType, scopeKey, body)
+      if (saveRequestIdRef.current !== requestId) return
       setExisting(res.subscription)
       setSuccess(true)
-      if (saveCloseTimerRef.current != null) {
-        window.clearTimeout(saveCloseTimerRef.current)
-      }
       saveCloseTimerRef.current = window.setTimeout(() => {
+        if (saveRequestIdRef.current !== requestId) return
         onSaved?.(res.subscription)
         onClose()
       }, 1200)
     } catch (err) {
+      if (saveRequestIdRef.current !== requestId) return
       setError(err instanceof Error ? err.message : 'Failed to save subscription')
     } finally {
+      if (saveRequestIdRef.current !== requestId) return
       setSaving(false)
     }
   }
@@ -246,6 +258,7 @@ export default function SubscriptionModal({
 
   useEffect(() => () => {
     loadRequestIdRef.current += 1
+    saveRequestIdRef.current += 1
     if (saveCloseTimerRef.current != null) {
       window.clearTimeout(saveCloseTimerRef.current)
       saveCloseTimerRef.current = null

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { RouterProvider, createMemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ReportDetail from './ReportDetail'
@@ -765,6 +765,86 @@ describe('ReportDetail', () => {
       '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&witness_id=w1&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
     expect(screen.getByTestId('evidence-drawer')).toHaveTextContent('Zendesk:w1')
+  })
+
+  it('closes stale evidence drawer state when the report route changes', async () => {
+    api.fetchReport
+      .mockResolvedValueOnce({
+        id: 'report-1',
+        report_type: 'vendor_scorecard',
+        vendor_filter: 'Zendesk',
+        category_filter: null,
+        executive_summary: 'Executive summary',
+        created_at: '2026-04-10T00:00:00Z',
+        report_date: '2026-04-10',
+        as_of_date: '2026-04-08',
+        analysis_window_days: 45,
+        llm_model: 'gpt-test',
+        status: 'completed',
+        blocker_count: 0,
+        warning_count: 0,
+        unresolved_issue_count: 0,
+        quality_status: 'needs_review',
+        latest_failure_step: null,
+        latest_error_summary: null,
+        data_density: {},
+        report_subscription: null,
+        intelligence_data: {
+          reasoning_reference_ids: { witness_ids: ['w1'] },
+          reasoning_witness_highlights: [
+            {
+              witness_id: 'w1',
+              reviewer_company: 'Acme',
+              excerpt_text: 'Pricing changed overnight',
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        id: 'report-2',
+        report_type: 'vendor_scorecard',
+        vendor_filter: 'Intercom',
+        category_filter: null,
+        executive_summary: 'Second report',
+        created_at: '2026-04-11T00:00:00Z',
+        report_date: '2026-04-11',
+        as_of_date: '2026-04-09',
+        analysis_window_days: 30,
+        llm_model: 'gpt-test',
+        status: 'completed',
+        blocker_count: 0,
+        warning_count: 0,
+        unresolved_issue_count: 0,
+        quality_status: 'needs_review',
+        latest_failure_step: null,
+        latest_error_summary: null,
+        data_density: {},
+        report_subscription: null,
+        intelligence_data: {},
+      })
+
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      { initialEntries: ['/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    fireEvent.click(screen.getAllByRole('button', { name: '[1]' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByTestId('evidence-drawer')).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      await router.navigate('/reports/report-2?back_to=%2Fwatchlists%3Fview%3Dview-1')
+    })
+
+    await screen.findByRole('heading', { name: 'Intercom' })
+    expect(screen.queryByTestId('evidence-drawer')).not.toBeInTheDocument()
+    expect(drawerState.lastProps?.open).toBe(false)
+    expect(drawerState.lastProps?.witnessId).toBe(null)
   })
 
   it('renders partial and thin evidence states for generic report sections', async () => {

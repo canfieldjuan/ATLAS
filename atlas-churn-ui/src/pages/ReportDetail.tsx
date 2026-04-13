@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Link, useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { ArrowLeft, RefreshCw, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -227,6 +227,7 @@ export default function ReportDetail() {
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(null)
   const [drawerVendor, setDrawerVendor] = useState('')
   const [copiedDirectWatchlistsLink, setCopiedDirectWatchlistsLink] = useState(false)
+  const copyResetTimerRef = useRef<number | null>(null)
 
   const handleOpenWitness = useCallback((witnessId: string, vendorName: string) => {
     setDrawerWitnessId(witnessId)
@@ -244,7 +245,22 @@ export default function ReportDetail() {
 
   useEffect(() => {
     setSubscriptionStateOverride(null)
+    setDrawerOpen(false)
+    setDrawerWitnessId(null)
+    setDrawerVendor('')
+    setCopiedDirectWatchlistsLink(false)
+    if (copyResetTimerRef.current != null) {
+      window.clearTimeout(copyResetTimerRef.current)
+      copyResetTimerRef.current = null
+    }
   }, [id])
+
+  useEffect(() => () => {
+    if (copyResetTimerRef.current != null) {
+      window.clearTimeout(copyResetTimerRef.current)
+      copyResetTimerRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     setSubModalOpen(searchParams.get('subscription') === 'report')
@@ -313,8 +329,12 @@ export default function ReportDetail() {
     if (!directWatchlistsPath) return
     void navigator.clipboard.writeText(`${window.location.origin}${directWatchlistsPath}`).then(() => {
       setCopiedDirectWatchlistsLink(true)
-      window.setTimeout(() => {
+      if (copyResetTimerRef.current != null) {
+        window.clearTimeout(copyResetTimerRef.current)
+      }
+      copyResetTimerRef.current = window.setTimeout(() => {
         setCopiedDirectWatchlistsLink(false)
+        copyResetTimerRef.current = null
       }, 2000)
     })
   }
