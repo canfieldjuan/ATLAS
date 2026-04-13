@@ -3606,11 +3606,13 @@ export default function Watchlists() {
             {activeVendorAlertThreshold != null ? (
               <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-300">
                 Vendor alerts at {activeVendorAlertThreshold}+ urgency: {vendorAlertHitCount} hit{vendorAlertHitCount === 1 ? '' : 's'}
+                {hiddenFeedCount > 0 ? ` (${hiddenFeedCount} hidden by changed wedges only)` : ''}
               </span>
             ) : null}
             {activeAccountAlertThreshold != null ? (
               <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-300">
                 Account alerts at {activeAccountAlertThreshold}+ urgency: {accountAlertHitCount} hit{accountAlertHitCount === 1 ? '' : 's'}
+                {hiddenReviewAccountCount > 0 ? ` (${hiddenReviewAccountCount} hidden by named accounts only)` : ''}
               </span>
             ) : null}
             {activeStaleDaysThreshold != null ? (

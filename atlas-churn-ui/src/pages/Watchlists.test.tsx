@@ -983,7 +983,7 @@ describe('Watchlists', () => {
     expect(screen.getByDisplayValue('8.5')).toBeInTheDocument()
     expect(screen.getByDisplayValue('1')).toBeInTheDocument()
     expect(screen.getByText('Vendor alerts at 7.5+ urgency: 1 hit')).toBeInTheDocument()
-    expect(screen.getByText('Account alerts at 8.5+ urgency: 1 hit')).toBeInTheDocument()
+    expect(screen.getByText('Account alerts at 8.5+ urgency: 1 hit (1 hidden by named accounts only)')).toBeInTheDocument()
     expect(screen.getByText('Stale policy after 1 day: 2 hits')).toBeInTheDocument()
     expect(screen.getByText('1 alert hit - 2 stale - 1 below threshold (1 hidden by named accounts only)')).toBeInTheDocument()
     expect(screen.getByText('Saved View Alert Events')).toBeInTheDocument()
