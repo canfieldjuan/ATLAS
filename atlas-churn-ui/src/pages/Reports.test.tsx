@@ -1506,6 +1506,27 @@ describe('Reports', () => {
     })
   })
 
+  it('rehydrates the active tab from same-route URL changes', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      { initialEntries: ['/reports'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('button', { name: 'Subscribe to Library' })).toBeInTheDocument()
+
+    await router.navigate('/reports?tab=subscriptions')
+
+    expect(await screen.findByText('No subscriptions yet. Subscribe from a report or the library view.')).toBeInTheDocument()
+
+    await router.navigate('/reports')
+
+    expect(await screen.findByRole('button', { name: 'Subscribe to Library' })).toBeInTheDocument()
+
+    router.dispose()
+  })
+
   it('hydrates the subscriptions tab and opens the requested subscription editor from the URL', async () => {
     api.listReportSubscriptions.mockResolvedValueOnce({
       subscriptions: [

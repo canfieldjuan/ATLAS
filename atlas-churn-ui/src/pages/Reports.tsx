@@ -422,15 +422,15 @@ export default function Reports() {
   const [composerNotice, setComposerNotice] = useState<{ tone: 'error' | 'info'; text: string } | null>(null)
   const suppressRouteSyncRef = useRef(false)
   const [libSubOpen, setLibSubOpen] = useState(false)
-  const [activeComposer, setActiveComposer] = useState<ReportComposer | null>(() => {
+  const requestedActiveComposer = (() => {
     const composer = searchParams.get('composer')
     return composer && REPORT_COMPOSERS.has(composer as ReportComposer)
       ? composer as ReportComposer
       : null
-  })
-  const [activeTab, setActiveTab] = useState<'library' | 'subscriptions'>(
-    () => searchParams.get('tab') === 'subscriptions' ? 'subscriptions' : 'library',
-  )
+  })()
+  const requestedActiveTab = searchParams.get('tab') === 'subscriptions' ? 'subscriptions' : 'library'
+  const [activeComposer, setActiveComposer] = useState<ReportComposer | null>(requestedActiveComposer)
+  const [activeTab, setActiveTab] = useState<'library' | 'subscriptions'>(requestedActiveTab)
   const [subscriptions, setSubscriptions] = useState<ReportSubscription[]>([])
   const [subLoading, setSubLoading] = useState(false)
   const [editingSub, setEditingSub] = useState<ReportSubscription | null>(null)
@@ -468,10 +468,14 @@ export default function Reports() {
     : REPORT_EXTERNAL_BACK_TARGET_RULES.find((rule) => reportsBackTarget.startsWith(rule.prefix))?.label ?? 'Back to Library'
 
   useEffect(() => {
-    const composer = searchParams.get('composer')
-    if (composer && REPORT_COMPOSERS.has(composer as ReportComposer)) {
-      setActiveComposer(composer as ReportComposer)
-    }
+    setActiveComposer((current) => (current === requestedActiveComposer ? current : requestedActiveComposer))
+  }, [requestedActiveComposer])
+
+  useEffect(() => {
+    setActiveTab((current) => (current === requestedActiveTab ? current : requestedActiveTab))
+  }, [requestedActiveTab])
+
+  useEffect(() => {
     setPrimaryVendor(searchParams.get('primary_vendor') ?? '')
     setComparisonVendor(searchParams.get('comparison_vendor') ?? '')
     setPrimaryCompany(searchParams.get('primary_company') ?? '')
