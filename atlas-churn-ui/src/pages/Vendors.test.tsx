@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Vendors from './Vendors'
 
@@ -20,6 +20,11 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useNavigate: () => mockNavigate,
   }
 })
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
+}
 
 describe('Vendors', () => {
   beforeEach(() => {
@@ -121,6 +126,61 @@ describe('Vendors', () => {
         'href',
         '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fvendors%3Fsearch%3DZendesk',
       )
+    })
+  })
+
+  it('clears same-route list filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/vendors', element: <><Vendors /><LocationProbe /></> }],
+      {
+        initialEntries: ['/vendors?search=Zendesk&min_urgency=6&category=Helpdesk'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await router.navigate('/vendors')
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search vendors...')).toHaveValue('')
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/vendors')
+    })
+
+    await waitFor(() => {
+      expect(api.fetchSignals).toHaveBeenLastCalledWith({
+        vendor_name: undefined,
+        min_urgency: undefined,
+        category: undefined,
+        limit: 100,
+      })
+    })
+  })
+
+  it('canonicalizes invalid route filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/vendors', element: <><Vendors /><LocationProbe /></> }],
+      {
+        initialEntries: ['/vendors?search=%20Zendesk%20&min_urgency=99&category=%20Helpdesk%20'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchSignals).toHaveBeenLastCalledWith({
+        vendor_name: 'Zendesk',
+        min_urgency: 10,
+        category: 'Helpdesk',
+        limit: 100,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/vendors?search=Zendesk&min_urgency=10&category=Helpdesk')
     })
   })
 })

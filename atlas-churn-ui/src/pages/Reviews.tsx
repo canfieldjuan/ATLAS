@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Search, RefreshCw, X, Loader2, Download } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -10,6 +10,13 @@ import { fetchReviews, downloadCsv } from '../api/client'
 import type { ReviewSummary } from '../types'
 
 const REVIEW_WINDOW_DAYS = 365
+
+function parseMinUrgency(value: string | null) {
+  if (!value?.trim()) return 0
+  const next = Number(value)
+  if (!Number.isFinite(next)) return 0
+  return Math.min(10, Math.max(0, Math.round(next)))
+}
 
 function reviewsPath(vendor: string, company: string, minUrgency: number, churnOnly: boolean) {
   const next = new URLSearchParams()
@@ -62,12 +69,18 @@ function opportunitiesPath(vendorName: string, backTo: string) {
 export default function Reviews() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [vendor, setVendor] = useState(() => searchParams.get('vendor') ?? '')
-  const [debouncedVendor, setDebouncedVendor] = useState(() => searchParams.get('vendor') ?? '')
-  const [company, setCompany] = useState(() => searchParams.get('company') ?? '')
-  const [debouncedCompany, setDebouncedCompany] = useState(() => searchParams.get('company') ?? '')
-  const [minUrgency, setMinUrgency] = useState(() => Number(searchParams.get('min_urgency') ?? '0') || 0)
-  const [churnOnly, setChurnOnly] = useState(() => searchParams.get('churn_only') === 'true')
+  const searchParamsSignature = searchParams.toString()
+  const requestedVendor = searchParams.get('vendor')?.trim() ?? ''
+  const requestedCompany = searchParams.get('company')?.trim() ?? ''
+  const requestedMinUrgency = parseMinUrgency(searchParams.get('min_urgency'))
+  const requestedChurnOnly = searchParams.get('churn_only') === 'true'
+  const [vendor, setVendor] = useState(requestedVendor)
+  const [debouncedVendor, setDebouncedVendor] = useState(requestedVendor)
+  const [company, setCompany] = useState(requestedCompany)
+  const [debouncedCompany, setDebouncedCompany] = useState(requestedCompany)
+  const [minUrgency, setMinUrgency] = useState(requestedMinUrgency)
+  const [churnOnly, setChurnOnly] = useState(requestedChurnOnly)
+  const suppressRouteSyncRef = useRef(false)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -78,6 +91,37 @@ export default function Reviews() {
   }, [vendor, company])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setVendor(requestedVendor)
+    setDebouncedVendor(requestedVendor)
+  }, [requestedVendor])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setCompany(requestedCompany)
+    setDebouncedCompany(requestedCompany)
+  }, [requestedCompany])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setMinUrgency((current) => (current === requestedMinUrgency ? current : requestedMinUrgency))
+  }, [requestedMinUrgency])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setChurnOnly((current) => (current === requestedChurnOnly ? current : requestedChurnOnly))
+  }, [requestedChurnOnly])
+
+  const routeStateSettled =
+    vendor === requestedVendor &&
+    debouncedVendor === requestedVendor &&
+    company === requestedCompany &&
+    debouncedCompany === requestedCompany &&
+    minUrgency === requestedMinUrgency &&
+    churnOnly === requestedChurnOnly
+
+  useEffect(() => {
+    if (!routeStateSettled) return
     const next = new URLSearchParams(searchParams)
     if (debouncedVendor.trim()) next.set('vendor', debouncedVendor.trim())
     else next.delete('vendor')
@@ -87,9 +131,29 @@ export default function Reviews() {
     else next.delete('min_urgency')
     if (churnOnly) next.set('churn_only', 'true')
     else next.delete('churn_only')
-    if (next.toString() === searchParams.toString()) return
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
     setSearchParams(next, { replace: true })
-  }, [churnOnly, debouncedCompany, debouncedVendor, minUrgency, searchParams, setSearchParams])
+  }, [churnOnly, debouncedCompany, debouncedVendor, minUrgency, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
+
+  useEffect(() => {
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    if (debouncedVendor.trim()) next.set('vendor', debouncedVendor.trim())
+    else next.delete('vendor')
+    if (debouncedCompany.trim()) next.set('company', debouncedCompany.trim())
+    else next.delete('company')
+    if (minUrgency > 0) next.set('min_urgency', String(minUrgency))
+    else next.delete('min_urgency')
+    if (churnOnly) next.set('churn_only', 'true')
+    else next.delete('churn_only')
+    if (next.toString() === searchParamsSignature) return
+    setSearchParams(next, { replace: true })
+  }, [churnOnly, debouncedCompany, debouncedVendor, minUrgency, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>

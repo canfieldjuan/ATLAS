@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Challengers from './Challengers'
 
@@ -22,6 +22,11 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useNavigate: () => mockNavigate,
   }
 })
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
+}
 
 describe('Challengers', () => {
   beforeEach(() => {
@@ -117,6 +122,43 @@ describe('Challengers', () => {
         'href',
         '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fchallengers%3Fsearch%3DZendesk',
       )
+    })
+  })
+
+  it('clears same-route list filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/challengers', element: <><Challengers /><LocationProbe /></> }],
+      {
+        initialEntries: ['/challengers?search=Zendesk'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await router.navigate('/challengers')
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search challenger...')).toHaveValue('')
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/challengers')
+    })
+  })
+
+  it('canonicalizes invalid route filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/challengers', element: <><Challengers /><LocationProbe /></> }],
+      {
+        initialEntries: ['/challengers?search=%20Zendesk%20'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/challengers?search=Zendesk')
     })
   })
 })

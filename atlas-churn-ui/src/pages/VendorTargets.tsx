@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Shield,
@@ -34,6 +34,11 @@ const TARGET_MODES = [
 ]
 
 const TIERS = ['report', 'dashboard', 'api']
+
+function parseModeFilter(value: string | null) {
+  const next = value?.trim() ?? ''
+  return TARGET_MODES.some((mode) => mode.value === next) ? next : ''
+}
 
 function ModeBadge({ mode }: { mode: string }) {
   const colors: Record<string, string> = {
@@ -142,9 +147,13 @@ function opportunitiesPath(vendorName: string, backTo: string) {
 export default function VendorTargets() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [modeFilter, setModeFilter] = useState<string>(() => searchParams.get('mode') ?? '')
-  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '')
-  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('search') ?? '')
+  const searchParamsSignature = searchParams.toString()
+  const requestedModeFilter = parseModeFilter(searchParams.get('mode'))
+  const requestedSearch = searchParams.get('search')?.trim() ?? ''
+  const [modeFilter, setModeFilter] = useState<string>(requestedModeFilter)
+  const [searchInput, setSearchInput] = useState(requestedSearch)
+  const [debouncedSearch, setDebouncedSearch] = useState(requestedSearch)
+  const suppressRouteSyncRef = useRef(false)
 
   // Form state
   const [showForm, setShowForm] = useState(false)
@@ -166,14 +175,47 @@ export default function VendorTargets() {
   }, [searchInput])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setModeFilter((current) => (current === requestedModeFilter ? current : requestedModeFilter))
+  }, [requestedModeFilter])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setSearchInput(requestedSearch)
+    setDebouncedSearch(requestedSearch)
+  }, [requestedSearch])
+
+  const routeStateSettled =
+    modeFilter === requestedModeFilter &&
+    searchInput === requestedSearch &&
+    debouncedSearch === requestedSearch
+
+  useEffect(() => {
+    if (!routeStateSettled) return
     const next = new URLSearchParams(searchParams)
     if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
     else next.delete('search')
     if (modeFilter.trim()) next.set('mode', modeFilter.trim())
     else next.delete('mode')
-    if (next.toString() === searchParams.toString()) return
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
     setSearchParams(next, { replace: true })
-  }, [debouncedSearch, modeFilter, searchParams, setSearchParams])
+  }, [debouncedSearch, modeFilter, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
+
+  useEffect(() => {
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
+    else next.delete('search')
+    if (modeFilter.trim()) next.set('mode', modeFilter.trim())
+    else next.delete('mode')
+    if (next.toString() === searchParamsSignature) return
+    setSearchParams(next, { replace: true })
+  }, [debouncedSearch, modeFilter, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     async () => {

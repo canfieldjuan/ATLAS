@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Swords,
@@ -73,11 +73,14 @@ function opportunitiesPath(vendorName: string, backTo: string) {
 export default function Challengers() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '')
-  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('search') ?? '')
+  const searchParamsSignature = searchParams.toString()
+  const requestedSearch = searchParams.get('search')?.trim() ?? ''
+  const [searchInput, setSearchInput] = useState(requestedSearch)
+  const [debouncedSearch, setDebouncedSearch] = useState(requestedSearch)
   const [generatingFor, setGeneratingFor] = useState<string | null>(null)
   const [actionResult, setActionResult] = useState<string | null>(null)
   const [lastGenVendor, setLastGenVendor] = useState<string | null>(null)
+  const suppressRouteSyncRef = useRef(false)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchInput), 300)
@@ -85,12 +88,37 @@ export default function Challengers() {
   }, [searchInput])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setSearchInput(requestedSearch)
+    setDebouncedSearch(requestedSearch)
+  }, [requestedSearch])
+
+  const routeStateSettled =
+    searchInput === requestedSearch &&
+    debouncedSearch === requestedSearch
+
+  useEffect(() => {
+    if (!routeStateSettled) return
     const next = new URLSearchParams(searchParams)
     if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
     else next.delete('search')
-    if (next.toString() === searchParams.toString()) return
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
     setSearchParams(next, { replace: true })
-  }, [debouncedSearch, searchParams, setSearchParams])
+  }, [debouncedSearch, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
+
+  useEffect(() => {
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
+    else next.delete('search')
+    if (next.toString() === searchParamsSignature) return
+    setSearchParams(next, { replace: true })
+  }, [debouncedSearch, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     async () => {

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import VendorTargets from './VendorTargets'
 
@@ -25,6 +25,11 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useNavigate: () => mockNavigate,
   }
 })
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
+}
 
 describe('VendorTargets', () => {
   beforeEach(() => {
@@ -126,6 +131,59 @@ describe('VendorTargets', () => {
         'href',
         '/vendors/Zendesk?back_to=%2Fvendor-targets%3Fsearch%3DZendesk',
       )
+    })
+  })
+
+  it('clears same-route list filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/vendor-targets', element: <><VendorTargets /><LocationProbe /></> }],
+      {
+        initialEntries: ['/vendor-targets?search=Zendesk&mode=challenger_intel'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await router.navigate('/vendor-targets')
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search company...')).toHaveValue('')
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/vendor-targets')
+    })
+
+    await waitFor(() => {
+      expect(api.fetchVendorTargets).toHaveBeenLastCalledWith({
+        target_mode: undefined,
+        search: undefined,
+        limit: 100,
+      })
+    })
+  })
+
+  it('canonicalizes invalid route filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/vendor-targets', element: <><VendorTargets /><LocationProbe /></> }],
+      {
+        initialEntries: ['/vendor-targets?search=%20Zendesk%20&mode=bogus'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchVendorTargets).toHaveBeenLastCalledWith({
+        target_mode: undefined,
+        search: 'Zendesk',
+        limit: 100,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/vendor-targets?search=Zendesk')
     })
   })
 })

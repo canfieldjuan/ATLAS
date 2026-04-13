@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Handshake,
@@ -80,6 +80,20 @@ const EMPTY_PARTNER = {
 
 const COMMISSION_TYPES = ['cpa', 'recurring', 'rev_share', 'flat', 'unknown']
 
+function parseMinUrgency(value: string | null) {
+  if (!value?.trim()) return 5
+  const next = Number(value)
+  if (!Number.isFinite(next)) return 5
+  return Math.min(10, Math.max(0, Math.round(next)))
+}
+
+function parseMinScore(value: string | null) {
+  if (!value?.trim()) return 0
+  const next = Number(value)
+  if (!Number.isFinite(next)) return 0
+  return Math.min(100, Math.max(0, Math.round(next)))
+}
+
 function affiliatesPath(
   vendor: string,
   minUrgency: number,
@@ -126,12 +140,18 @@ function opportunitiesPath(vendorName: string, backTo: string) {
 export default function Affiliates() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const searchParamsSignature = searchParams.toString()
   // Filters
-  const [vendorSearch, setVendorSearch] = useState(() => searchParams.get('vendor') ?? '')
-  const [debouncedVendor, setDebouncedVendor] = useState(() => searchParams.get('vendor') ?? '')
-  const [minUrgency, setMinUrgency] = useState(() => Number(searchParams.get('min_urgency') ?? '5') || 5)
-  const [minScore, setMinScore] = useState(() => Number(searchParams.get('min_score') ?? '0') || 0)
-  const [dmOnly, setDmOnly] = useState(() => searchParams.get('dm_only') === 'true')
+  const requestedVendor = searchParams.get('vendor')?.trim() ?? ''
+  const requestedMinUrgency = parseMinUrgency(searchParams.get('min_urgency'))
+  const requestedMinScore = parseMinScore(searchParams.get('min_score'))
+  const requestedDmOnly = searchParams.get('dm_only') === 'true'
+  const [vendorSearch, setVendorSearch] = useState(requestedVendor)
+  const [debouncedVendor, setDebouncedVendor] = useState(requestedVendor)
+  const [minUrgency, setMinUrgency] = useState(requestedMinUrgency)
+  const [minScore, setMinScore] = useState(requestedMinScore)
+  const [dmOnly, setDmOnly] = useState(requestedDmOnly)
+  const suppressRouteSyncRef = useRef(false)
 
   // Partner management
   const [showPartners, setShowPartners] = useState(false)
@@ -147,6 +167,35 @@ export default function Affiliates() {
   }, [vendorSearch])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setVendorSearch(requestedVendor)
+    setDebouncedVendor(requestedVendor)
+  }, [requestedVendor])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setMinUrgency((current) => (current === requestedMinUrgency ? current : requestedMinUrgency))
+  }, [requestedMinUrgency])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setMinScore((current) => (current === requestedMinScore ? current : requestedMinScore))
+  }, [requestedMinScore])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setDmOnly((current) => (current === requestedDmOnly ? current : requestedDmOnly))
+  }, [requestedDmOnly])
+
+  const routeStateSettled =
+    vendorSearch === requestedVendor &&
+    debouncedVendor === requestedVendor &&
+    minUrgency === requestedMinUrgency &&
+    minScore === requestedMinScore &&
+    dmOnly === requestedDmOnly
+
+  useEffect(() => {
+    if (!routeStateSettled) return
     const next = new URLSearchParams(searchParams)
     if (debouncedVendor.trim()) next.set('vendor', debouncedVendor.trim())
     else next.delete('vendor')
@@ -156,9 +205,29 @@ export default function Affiliates() {
     else next.delete('min_score')
     if (dmOnly) next.set('dm_only', 'true')
     else next.delete('dm_only')
-    if (next.toString() === searchParams.toString()) return
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
     setSearchParams(next, { replace: true })
-  }, [debouncedVendor, dmOnly, minScore, minUrgency, searchParams, setSearchParams])
+  }, [debouncedVendor, dmOnly, minScore, minUrgency, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
+
+  useEffect(() => {
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    if (debouncedVendor.trim()) next.set('vendor', debouncedVendor.trim())
+    else next.delete('vendor')
+    if (minUrgency !== 5) next.set('min_urgency', String(minUrgency))
+    else next.delete('min_urgency')
+    if (minScore !== 0) next.set('min_score', String(minScore))
+    else next.delete('min_score')
+    if (dmOnly) next.set('dm_only', 'true')
+    else next.delete('dm_only')
+    if (next.toString() === searchParamsSignature) return
+    setSearchParams(next, { replace: true })
+  }, [debouncedVendor, dmOnly, minScore, minUrgency, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData<AffiliatesData>(
     async () => {

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Affiliates from './Affiliates'
 
@@ -25,6 +25,11 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useNavigate: () => mockNavigate,
   }
 })
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
+}
 
 describe('Affiliates', () => {
   beforeEach(() => {
@@ -135,6 +140,63 @@ describe('Affiliates', () => {
         'href',
         '/vendors/Zendesk?back_to=%2Faffiliates%3Fvendor%3DZendesk',
       )
+    })
+  })
+
+  it('clears same-route list filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/affiliates', element: <><Affiliates /><LocationProbe /></> }],
+      {
+        initialEntries: ['/affiliates?vendor=Zendesk&min_urgency=7&min_score=80&dm_only=true'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await router.navigate('/affiliates')
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Filter vendor...')).toHaveValue('')
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/affiliates')
+    })
+
+    await waitFor(() => {
+      expect(api.fetchAffiliateOpportunities).toHaveBeenLastCalledWith({
+        min_urgency: 5,
+        min_score: 0,
+        vendor_name: undefined,
+        dm_only: undefined,
+        limit: 100,
+      })
+    })
+  })
+
+  it('canonicalizes invalid route filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/affiliates', element: <><Affiliates /><LocationProbe /></> }],
+      {
+        initialEntries: ['/affiliates?vendor=%20Zendesk%20&min_urgency=99&min_score=999&dm_only=wat'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchAffiliateOpportunities).toHaveBeenLastCalledWith({
+        min_urgency: 10,
+        min_score: 100,
+        vendor_name: 'Zendesk',
+        dm_only: undefined,
+        limit: 100,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/affiliates?vendor=Zendesk&min_urgency=10&min_score=100')
     })
   })
 })

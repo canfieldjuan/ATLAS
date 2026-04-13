@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Reviews from './Reviews'
 
@@ -20,6 +20,11 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useNavigate: () => mockNavigate,
   }
 })
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
+}
 
 describe('Reviews', () => {
   beforeEach(() => {
@@ -133,6 +138,68 @@ describe('Reviews', () => {
         'href',
         '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%3Fvendor%3DZendesk',
       )
+    })
+  })
+
+  it('clears same-route list filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reviews', element: <><Reviews /><LocationProbe /></> }],
+      {
+        initialEntries: ['/reviews?vendor=Zendesk&company=Acme&min_urgency=6&churn_only=true'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Acme')).toBeInTheDocument()
+
+    await router.navigate('/reviews')
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Filter by vendor...')).toHaveValue('')
+      expect(screen.getByPlaceholderText('Filter by company...')).toHaveValue('')
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/reviews')
+    })
+
+    await waitFor(() => {
+      expect(api.fetchReviews).toHaveBeenLastCalledWith({
+        vendor_name: undefined,
+        company: undefined,
+        min_urgency: undefined,
+        has_churn_intent: undefined,
+        window_days: 365,
+        limit: 100,
+      })
+    })
+  })
+
+  it('canonicalizes invalid route filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reviews', element: <><Reviews /><LocationProbe /></> }],
+      {
+        initialEntries: ['/reviews?vendor=%20Zendesk%20&company=%20Acme%20&min_urgency=99&churn_only=wat'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Acme')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchReviews).toHaveBeenLastCalledWith({
+        vendor_name: 'Zendesk',
+        company: 'Acme',
+        min_urgency: 10,
+        has_churn_intent: undefined,
+        window_days: 365,
+        limit: 100,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/reviews?vendor=Zendesk&company=Acme&min_urgency=10')
     })
   })
 })

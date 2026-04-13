@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Search, RefreshCw, X, Loader2, Download } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -18,6 +18,13 @@ function formatSignalValue(value: number | null, suffix = '') {
 function formatGrowthRate(value: number | null) {
   if (value === null || Number.isNaN(value)) return '--'
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
+function parseMinUrgency(value: string | null) {
+  if (!value?.trim()) return 0
+  const next = Number(value)
+  if (!Number.isFinite(next)) return 0
+  return Math.min(10, Math.max(0, Math.round(next)))
 }
 
 function vendorsPath(search: string, minUrgency: number, category: string) {
@@ -62,10 +69,15 @@ function opportunitiesPath(vendorName: string, backTo: string) {
 export default function Vendors() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [search, setSearch] = useState(() => searchParams.get('search') ?? '')
-  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('search') ?? '')
-  const [minUrgency, setMinUrgency] = useState(() => Number(searchParams.get('min_urgency') ?? '0') || 0)
-  const [category, setCategory] = useState(() => searchParams.get('category') ?? '')
+  const searchParamsSignature = searchParams.toString()
+  const requestedSearch = searchParams.get('search')?.trim() ?? ''
+  const requestedMinUrgency = parseMinUrgency(searchParams.get('min_urgency'))
+  const requestedCategory = searchParams.get('category')?.trim() ?? ''
+  const [search, setSearch] = useState(requestedSearch)
+  const [debouncedSearch, setDebouncedSearch] = useState(requestedSearch)
+  const [minUrgency, setMinUrgency] = useState(requestedMinUrgency)
+  const [category, setCategory] = useState(requestedCategory)
+  const suppressRouteSyncRef = useRef(false)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -75,6 +87,29 @@ export default function Vendors() {
   }, [search])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setSearch(requestedSearch)
+    setDebouncedSearch(requestedSearch)
+  }, [requestedSearch])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setMinUrgency((current) => (current === requestedMinUrgency ? current : requestedMinUrgency))
+  }, [requestedMinUrgency])
+
+  useEffect(() => {
+    suppressRouteSyncRef.current = true
+    setCategory((current) => (current === requestedCategory ? current : requestedCategory))
+  }, [requestedCategory])
+
+  const routeStateSettled =
+    search === requestedSearch &&
+    debouncedSearch === requestedSearch &&
+    minUrgency === requestedMinUrgency &&
+    category === requestedCategory
+
+  useEffect(() => {
+    if (!routeStateSettled) return
     const next = new URLSearchParams(searchParams)
     if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
     else next.delete('search')
@@ -82,9 +117,27 @@ export default function Vendors() {
     else next.delete('min_urgency')
     if (category.trim()) next.set('category', category.trim())
     else next.delete('category')
-    if (next.toString() === searchParams.toString()) return
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
     setSearchParams(next, { replace: true })
-  }, [category, debouncedSearch, minUrgency, searchParams, setSearchParams])
+  }, [category, debouncedSearch, minUrgency, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
+
+  useEffect(() => {
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
+    else next.delete('search')
+    if (minUrgency > 0) next.set('min_urgency', String(minUrgency))
+    else next.delete('min_urgency')
+    if (category.trim()) next.set('category', category.trim())
+    else next.delete('category')
+    if (next.toString() === searchParamsSignature) return
+    setSearchParams(next, { replace: true })
+  }, [category, debouncedSearch, minUrgency, routeStateSettled, searchParams, searchParamsSignature, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
