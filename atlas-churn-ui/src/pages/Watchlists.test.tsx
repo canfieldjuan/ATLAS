@@ -493,7 +493,7 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'View alerts for Zendesk' })).toHaveAttribute(
       'href',
-      '/alerts?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+      '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
     )
   })
 
@@ -512,7 +512,7 @@ describe('Watchlists', () => {
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/alerts?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor`,
+        `${window.location.origin}/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor`,
       )
     })
     expect(await screen.findByText('Copied Alerts API link for Acme Corp')).toBeInTheDocument()
@@ -980,6 +980,7 @@ describe('Watchlists', () => {
     const alertsUrl = new URL(alertsLink.getAttribute('href') || '', 'https://atlas.test')
     expect(alertsUrl.pathname).toBe('/alerts')
     expect(alertsUrl.searchParams.get('vendor')).toBe('Zendesk')
+    expect(alertsUrl.searchParams.get('company')).toBe('Acme Corp')
     const alertsBackTo = new URL(alertsUrl.searchParams.get('back_to') || '', 'https://atlas.test')
     expect(alertsBackTo.pathname).toBe('/watchlists')
     expect(alertsBackTo.searchParams.get('view')).toBe('view-1')
@@ -1147,6 +1148,7 @@ describe('Watchlists', () => {
     copiedUrl = new URL(copiedText)
     expect(copiedUrl.pathname).toBe('/alerts')
     expect(copiedUrl.searchParams.get('vendor')).toBe('Zendesk')
+    expect(copiedUrl.searchParams.get('company')).toBe('Acme Corp')
     let alertsBackTo = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
     expect(alertsBackTo.pathname).toBe('/watchlists')
     expect(alertsBackTo.searchParams.get('view')).toBe('view-1')

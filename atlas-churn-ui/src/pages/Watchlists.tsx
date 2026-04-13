@@ -374,15 +374,18 @@ function watchlistAlertsPath(searchParams: URLSearchParams) {
   return `/alerts?${params.toString()}`
 }
 
-function watchlistVendorAlertsPath(searchParams: URLSearchParams, vendorName: string) {
+function watchlistVendorAlertsPath(searchParams: URLSearchParams, vendorName: string, companyName?: string | null) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
+  if (companyName?.trim()) {
+    params.set('company', companyName.trim())
+  }
   params.set('back_to', watchlistPath(searchParams))
   return `/alerts?${params.toString()}`
 }
 
-function watchlistVendorAlertsUrl(searchParams: URLSearchParams, vendorName: string) {
-  return `${window.location.origin}${watchlistVendorAlertsPath(searchParams, vendorName)}`
+function watchlistVendorAlertsUrl(searchParams: URLSearchParams, vendorName: string, companyName?: string | null) {
+  return `${window.location.origin}${watchlistVendorAlertsPath(searchParams, vendorName, companyName)}`
 }
 
 function watchlistVendorPath(searchParams: URLSearchParams, vendorName: string) {
@@ -566,7 +569,11 @@ function watchlistAlertEventVendorPath(searchParams: URLSearchParams, event: Wat
 function watchlistAlertEventAlertsPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
   const vendorName = watchlistAlertEventVendorName(event)
   if (!vendorName) return null
-  return watchlistVendorAlertsPath(watchlistAlertEventContextParams(searchParams, event), vendorName)
+  return watchlistVendorAlertsPath(
+    watchlistAlertEventContextParams(searchParams, event),
+    vendorName,
+    event.account_review_focus?.company || event.company_name,
+  )
 }
 
 function watchlistAlertEventReportsPath(searchParams: URLSearchParams, event: WatchlistAlertEvent) {
@@ -1956,7 +1963,9 @@ export default function Watchlists() {
   async function handleCopySelectedAlertsLink() {
     if (!selectedAccount) return
     try {
-      await navigator.clipboard.writeText(watchlistVendorAlertsUrl(selectedAccountSearchParams, selectedAccount.vendor))
+      await navigator.clipboard.writeText(
+        watchlistVendorAlertsUrl(selectedAccountSearchParams, selectedAccount.vendor, selectedAccount.company),
+      )
       setActionError(null)
       setActionMessage(`Copied Alerts API link for ${selectedAccount.company || selectedAccount.vendor}`)
     } catch (err) {
@@ -1990,7 +1999,7 @@ export default function Watchlists() {
   async function handleCopyAccountRowAlertsLink(row: AccountsInMotionFeedItem) {
     try {
       await navigator.clipboard.writeText(
-        watchlistVendorAlertsUrl(accountFocusParams(outboundWatchlistSearchParams, row), row.vendor),
+        watchlistVendorAlertsUrl(accountFocusParams(outboundWatchlistSearchParams, row), row.vendor, row.company),
       )
       setActionError(null)
       setActionMessage(`Copied Alerts API link for ${row.company || row.vendor}`)
@@ -3228,7 +3237,7 @@ export default function Watchlists() {
             )}
             {row.company && (
               <Link
-                to={watchlistVendorAlertsPath(accountFocusParams(outboundWatchlistSearchParams, row), row.vendor)}
+                to={watchlistVendorAlertsPath(accountFocusParams(outboundWatchlistSearchParams, row), row.vendor, row.company)}
                 onClick={(e) => e.stopPropagation()}
                 aria-label={`View alerts for ${row.vendor}`}
                 className="rounded-md bg-violet-500/10 px-2 py-1 text-xs font-medium text-violet-200 hover:bg-violet-500/20"
@@ -4805,7 +4814,7 @@ export default function Watchlists() {
         open={selectedAccount != null}
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(watchlistVendorPath(selectedAccountSearchParams, vendorName))}
-        alertsApiUrl={selectedAccount ? watchlistVendorAlertsPath(selectedAccountSearchParams, selectedAccount.vendor) : null}
+        alertsApiUrl={selectedAccount ? watchlistVendorAlertsPath(selectedAccountSearchParams, selectedAccount.vendor, selectedAccount.company) : null}
         onCopyAlertsLink={() => void handleCopySelectedAlertsLink()}
         onCopyVendorLink={() => void handleCopySelectedVendorLink()}
         onCopyWitnessLink={(witnessId) => void handleCopySelectedWitnessLink(witnessId)}

@@ -119,9 +119,12 @@ function watchlistsPath(vendorName: string, backToPath?: string | null) {
   return `/watchlists?${params.toString()}`
 }
 
-function alertsPath(vendorName: string, backToPath?: string | null) {
+function alertsPath(vendorName: string, backToPath?: string | null, companyName?: string | null) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
+  if (companyName?.trim()) {
+    params.set('company', companyName.trim())
+  }
   if (backToPath) params.set('back_to', backToPath)
   return `/alerts?${params.toString()}`
 }
@@ -488,7 +491,7 @@ export default function EvidenceDrawer({
     ? watchlistsWorkspacePath
     : null
   const alertsWorkspacePath = vendorName
-    ? upstreamNestedPath(backToPath, '/alerts') ?? alertsPath(vendorName, backToPath)
+    ? upstreamNestedPath(backToPath, '/alerts') ?? alertsPath(vendorName, backToPath, witness?.reviewer_company)
     : null
   const opportunitiesWorkspacePath = vendorName
     ? upstreamNestedPath(backToPath, '/opportunities') ?? opportunitiesPath(vendorName, backToPath)

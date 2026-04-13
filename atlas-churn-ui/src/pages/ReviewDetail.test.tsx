@@ -585,7 +585,7 @@ describe('ReviewDetail', () => {
     expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
-      '/alerts?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
     expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
@@ -622,7 +622,7 @@ describe('ReviewDetail', () => {
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/alerts?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1`,
+        `${window.location.origin}/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1`,
       )
     })
   })

@@ -74,7 +74,7 @@ describe('EvidenceDrawer', () => {
     )
     expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
-      '/alerts?vendor=Salesforce&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
+      '/alerts?vendor=Salesforce&company=Acme+Corp&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
     )
     expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',
@@ -202,6 +202,7 @@ describe('EvidenceDrawer', () => {
       copiedUrl = new URL(copiedText)
       expect(copiedUrl.pathname).toBe('/alerts')
       expect(copiedUrl.searchParams.get('vendor')).toBe('Salesforce')
+      expect(copiedUrl.searchParams.get('company')).toBe('Acme Corp')
       const alertsBackTo = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
       expect(alertsBackTo.pathname).toBe('/reports')
       expect(alertsBackTo.searchParams.get('vendor_filter')).toBe('Salesforce')
