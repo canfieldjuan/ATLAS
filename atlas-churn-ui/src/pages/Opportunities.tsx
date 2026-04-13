@@ -275,6 +275,24 @@ function matchesAccountReviewPath(
   }
 }
 
+function matchesAlertsPath(
+  path: string | null,
+  vendorName?: string | null,
+  companyName?: string | null,
+): boolean {
+  if (!path) return false
+  try {
+    const url = new URL(path, window.location.origin)
+    return (
+      url.pathname === '/alerts'
+      && normalizeFocusValue(url.searchParams.get('vendor')) === normalizeFocusValue(vendorName)
+      && normalizeFocusValue(url.searchParams.get('company')) === normalizeFocusValue(companyName)
+    )
+  } catch {
+    return false
+  }
+}
+
 function evidencePath(vendorName: string, returnPath: string): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -302,9 +320,10 @@ function reportsPath(vendorName: string, returnPath: string): string {
   return `/reports?${params.toString()}`
 }
 
-function alertsPath(returnPath: string, vendorName?: string | null): string {
+function alertsPath(returnPath: string, vendorName?: string | null, companyName?: string | null): string {
   const params = new URLSearchParams()
   if (vendorName?.trim()) params.set('vendor', vendorName.trim())
+  if (companyName?.trim()) params.set('company', companyName.trim())
   params.set('back_to', returnPath)
   return `/alerts?${params.toString()}`
 }
@@ -1742,9 +1761,10 @@ function EvidencePanel({
   const vendorReportsLibraryPath = reusesActiveVendorContext && directReportsPath
     ? directReportsPath
     : reportsPath(row.vendor, currentPagePath)
-  const vendorAlertsPath = reusesActiveVendorContext && directAlertsPath
+  const exactAlertsPath = reusesActiveVendorContext && matchesAlertsPath(directAlertsPath, row.vendor, row.company)
     ? directAlertsPath
-    : alertsPath(currentPagePath, row.vendor)
+    : null
+  const vendorAlertsPath = exactAlertsPath ?? alertsPath(currentPagePath, row.vendor, row.company)
   const reviewPath = row.review_id ? reviewDetailPath(row.review_id, currentPagePath) : null
 
   useEffect(() => {

@@ -518,7 +518,10 @@ function watchlistAlertEventPrimaryWitnessId(event: WatchlistAlertEvent) {
 }
 
 function watchlistAlertEventPrimaryReviewId(event: WatchlistAlertEvent) {
-  return event.source_review_ids[0] || ''
+  const reviewIds = event.source_review_ids
+  if (!Array.isArray(reviewIds) || reviewIds.length === 0) return ''
+  const firstReviewId = reviewIds[0]
+  return typeof firstReviewId === 'string' ? firstReviewId : String(firstReviewId || '')
 }
 
 function watchlistAlertEventContextParams(searchParams: URLSearchParams, event: WatchlistAlertEvent) {

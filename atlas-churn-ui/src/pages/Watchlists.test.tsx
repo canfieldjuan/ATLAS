@@ -681,9 +681,20 @@ describe('Watchlists', () => {
         stale_days_threshold: 3,
       })
     })
+  })
+
+  it('saves the current filtered view with persisted thresholds', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?vendor_name=Intercom&category=Helpdesk&source=reddit&min_urgency=8&fresh_only=true&named_accounts_only=true&changed_wedges_only=true&vendor_alert_threshold=7.5&account_alert_threshold=8.5&stale_days_threshold=3']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
 
     await user.type(screen.getByLabelText('Saved view name'), 'Intercom high urgency')
-    await user.type(screen.getByLabelText('Account alert threshold'), '8.5')
     api.createWatchlistView.mockResolvedValue({
       id: 'view-1',
       name: 'Intercom high urgency',

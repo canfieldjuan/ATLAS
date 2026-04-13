@@ -478,8 +478,35 @@ export async function pushToCrm(
   )
 }
 
-export type WebhookEventType = 'change_event' | 'churn_alert' | 'report_generated' | 'signal_update'
+export type WebhookEventType = 'change_event' | 'churn_alert' | 'report_generated' | 'signal_update' | 'high_intent_push'
 export type WebhookChannel = 'generic' | 'slack' | 'teams' | 'crm_hubspot' | 'crm_salesforce' | 'crm_pipedrive'
+
+export interface AlertAccountReviewFocus {
+  vendor: string
+  company: string
+  report_date: string
+  watch_vendor: string
+  category: string
+  track_mode: string
+}
+
+export interface WebhookLatestCrmPushSummary {
+  id: string
+  signal_type: string
+  signal_id: string | null
+  review_id: string | null
+  report_id: string | null
+  report_type: string | null
+  report_title: string | null
+  vendor_name: string | null
+  company_name: string | null
+  crm_record_id: string | null
+  crm_record_type: string | null
+  status: string
+  error: string | null
+  pushed_at: string | null
+  account_review_focus?: AlertAccountReviewFocus | null
+}
 
 export interface WebhookSubscription {
   id: string
@@ -496,10 +523,27 @@ export interface WebhookSubscription {
   latest_failure_status_code?: number | null
   latest_failure_error?: string | null
   latest_failure_at?: string | null
+  latest_failure_signal_id?: string | null
+  latest_failure_review_id?: string | null
+  latest_failure_report_id?: string | null
+  latest_failure_report_type?: string | null
+  latest_failure_report_title?: string | null
+  latest_failure_vendor_name?: string | null
+  latest_failure_company_name?: string | null
+  latest_failure_account_review_focus?: AlertAccountReviewFocus | null
   latest_test_success?: boolean | null
   latest_test_status_code?: number | null
   latest_test_error?: string | null
   latest_test_at?: string | null
+  latest_test_signal_id?: string | null
+  latest_test_review_id?: string | null
+  latest_test_report_id?: string | null
+  latest_test_report_type?: string | null
+  latest_test_report_title?: string | null
+  latest_test_vendor_name?: string | null
+  latest_test_company_name?: string | null
+  latest_test_account_review_focus?: AlertAccountReviewFocus | null
+  latest_crm_push?: WebhookLatestCrmPushSummary | null
 }
 
 export interface WebhookDeliverySummary {
@@ -523,12 +567,25 @@ export interface WebhookDelivery {
   success: boolean
   error: string | null
   delivered_at: string
+  vendor_name?: string | null
+  company_name?: string | null
+  signal_id?: string | null
+  signal_type?: string | null
+  review_id?: string | null
+  report_id?: string | null
+  report_type?: string | null
+  report_title?: string | null
+  account_review_focus?: AlertAccountReviewFocus | null
 }
 
 export interface WebhookCrmPushLogEntry {
   id: string
   signal_type: string
   signal_id: string | null
+  review_id?: string | null
+  report_id?: string | null
+  report_type?: string | null
+  report_title?: string | null
   vendor_name: string | null
   company_name: string | null
   crm_record_id: string | null
@@ -536,6 +593,7 @@ export interface WebhookCrmPushLogEntry {
   status: string
   error: string | null
   pushed_at: string
+  account_review_focus?: AlertAccountReviewFocus | null
 }
 
 export interface WebhookCreateBody {
@@ -561,12 +619,18 @@ export interface WebhookTestResult {
   error?: string
 }
 
-export async function listWebhooks() {
-  return get<{ webhooks: WebhookSubscription[]; count: number }>(WEBHOOKS_BASE, '/webhooks')
+export async function listWebhooks(params?: {
+  vendor_name?: string
+  company_name?: string
+}) {
+  return get<{ webhooks: WebhookSubscription[]; count: number }>(WEBHOOKS_BASE, '/webhooks', params)
 }
 
-export async function fetchWebhookDeliverySummary(days = 7) {
-  return get<WebhookDeliverySummary>(WEBHOOKS_BASE, '/webhooks/delivery-summary', { days })
+export async function fetchWebhookDeliverySummary(days = 7, params?: {
+  vendor_name?: string
+  company_name?: string
+}) {
+  return get<WebhookDeliverySummary>(WEBHOOKS_BASE, '/webhooks/delivery-summary', { days, ...params })
 }
 
 export async function createWebhook(body: WebhookCreateBody) {
@@ -589,6 +653,8 @@ export async function listWebhookDeliveries(webhookId: string, params?: {
   success?: boolean
   event_type?: string
   limit?: number
+  vendor_name?: string
+  company_name?: string
 }) {
   return get<{ deliveries: WebhookDelivery[]; count: number }>(
     WEBHOOKS_BASE,
@@ -597,11 +663,152 @@ export async function listWebhookDeliveries(webhookId: string, params?: {
   )
 }
 
-export async function listWebhookCrmPushLog(webhookId: string, limit = 20) {
+export async function listWebhookCrmPushLog(webhookId: string, params: number | {
+  limit?: number
+  status?: 'success' | 'failed'
+  vendor_name?: string
+  company_name?: string
+} = 20) {
+  const normalizedParams = typeof params === 'number' ? { limit: params } : params
   return get<{ pushes: WebhookCrmPushLogEntry[]; count: number }>(
     WEBHOOKS_BASE,
     `/webhooks/${encodeURIComponent(webhookId)}/crm-push-log`,
-    { limit },
+    normalizedParams,
+  )
+}
+
+export async function fetchCompanySignalReviewImpactSummary(params?: {
+  vendor_name?: string
+  review_scope?: string
+  review_action?: string
+  company_signal_action?: string
+  canonical_gap_reason?: string
+  review_priority_band?: string
+  review_priority_reason?: string
+  review_unlock_path?: string
+  review_unlock_reason?: string
+  candidate_source?: string
+  rebuild_outcome?: string
+  rebuild_reason?: string
+  window_days?: number
+  top_n?: number
+}) {
+  return get<Record<string, unknown>>(
+    WEBHOOKS_BASE,
+    '/company-signal-review-impact-summary',
+    params,
+  )
+}
+
+export async function fetchCompanySignalCandidateGroupSummary(params?: {
+  vendor_name?: string
+  company_name?: string
+  source_name?: string
+  candidate_bucket?: string
+  review_status?: string
+  canonical_gap_reason?: string
+  review_priority_band?: string
+  review_priority_reason?: string
+  min_urgency?: number
+  min_confidence?: number
+  min_reviews?: number
+  decision_makers_only?: boolean
+  signal_evidence_present?: boolean
+  window_days?: number
+  top_n?: number
+}) {
+  return get<Record<string, unknown>>(
+    WEBHOOKS_BASE,
+    '/company-signal-candidate-group-summary',
+    params,
+  )
+}
+
+export async function fetchCompanySignalCandidateGroups(params?: {
+  vendor_name?: string
+  company_name?: string
+  source_name?: string
+  candidate_bucket?: string
+  review_status?: string
+  canonical_gap_reason?: string
+  review_priority_band?: string
+  review_priority_reason?: string
+  min_urgency?: number
+  min_confidence?: number
+  min_reviews?: number
+  decision_makers_only?: boolean
+  signal_evidence_present?: boolean
+  window_days?: number
+  limit?: number
+}) {
+  return get<Record<string, unknown>>(
+    WEBHOOKS_BASE,
+    '/company-signal-candidate-groups',
+    params,
+  )
+}
+
+export async function approveCompanySignalCandidateGroup(groupId: string, body?: {
+  notes?: string
+  trigger_rebuild?: boolean
+}) {
+  const payload = {
+    trigger_rebuild: body?.trigger_rebuild ?? true,
+    ...(body?.notes !== undefined ? { notes: body.notes } : {}),
+  }
+  return post<Record<string, unknown>>(
+    WEBHOOKS_BASE,
+    `/company-signal-candidate-groups/${encodeURIComponent(groupId)}/approve`,
+    payload,
+  )
+}
+
+export async function suppressCompanySignalCandidateGroup(groupId: string, body?: {
+  notes?: string
+  trigger_rebuild?: boolean
+}) {
+  const payload = {
+    trigger_rebuild: body?.trigger_rebuild ?? true,
+    ...(body?.notes !== undefined ? { notes: body.notes } : {}),
+  }
+  return post<Record<string, unknown>>(
+    WEBHOOKS_BASE,
+    `/company-signal-candidate-groups/${encodeURIComponent(groupId)}/suppress`,
+    payload,
+  )
+}
+
+export async function approveCompanySignalCandidateGroups(body: {
+  group_ids: string[]
+  notes?: string
+  trigger_rebuild?: boolean
+}) {
+  const payload = {
+    group_ids: body.group_ids,
+    trigger_rebuild: body.trigger_rebuild ?? true,
+    ...(body.notes !== undefined ? { notes: body.notes } : {}),
+  }
+  return post<Record<string, unknown>>(
+    WEBHOOKS_BASE,
+    '/company-signal-candidate-groups/approve',
+    payload,
+  )
+}
+
+export async function suppressCompanySignalCandidateGroups(body: {
+  group_ids: string[]
+  notes?: string
+  trigger_rebuild?: boolean
+}) {
+  const payload = {
+    group_ids: body.group_ids,
+    trigger_rebuild: body.trigger_rebuild ?? true,
+    ...(body.notes !== undefined ? { notes: body.notes } : {}),
+  }
+  return post<Record<string, unknown>>(
+    WEBHOOKS_BASE,
+    '/company-signal-candidate-groups/suppress',
+    payload,
   )
 }
 
@@ -1184,6 +1391,9 @@ export interface WatchlistAlertEvent {
   threshold_value: number | null
   summary: string
   payload: Record<string, unknown>
+  reasoning_reference_ids?: ReasoningReferenceIds | null
+  source_review_ids?: string[] | null
+  account_review_focus?: AlertAccountReviewFocus | null
   status: 'open' | 'resolved'
   first_seen_at: string | null
   last_seen_at: string | null

@@ -44,6 +44,15 @@ export interface ReasoningOverlayFields {
   synthesis_wedge_label?: string | null
 }
 
+export interface AccountReviewFocus {
+  vendor: string
+  company: string
+  report_date: string
+  watch_vendor: string
+  category: string
+  track_mode: string
+}
+
 export interface ChurnSignalDetail extends ChurnSignal, ReasoningOverlayFields {
   negative_reviews: number
   top_pain_categories: string[] | null
@@ -120,6 +129,7 @@ export interface HighIntentCompany {
   revenue_range?: string | null
   founded_year?: number | null
   company_description?: string | null
+  account_review_focus?: AccountReviewFocus | null
 }
 
 export interface VendorProfile {
@@ -130,11 +140,7 @@ export interface VendorProfile {
     pending_enrichment: number
     enriched: number
   }
-  high_intent_companies: {
-    company: string
-    urgency: number
-    pain: string | null
-  }[]
+  high_intent_companies: HighIntentCompany[]
   pain_distribution: {
     pain_category: string
     count: number
@@ -178,6 +184,8 @@ export interface Report {
   id: string
   report_date: string | null
   report_type: string
+  as_of_date?: string | null
+  analysis_window_days?: number | null
   executive_summary: string | null
   vendor_filter: string | null
   category_filter?: string | null

@@ -439,12 +439,13 @@ async def test_list_webhooks_tolerates_missing_latest_test_summary_fields():
         result = await b2b_dashboard.list_webhooks(user=user)
 
     assert result['count'] == 1
-    query, account_id, vendor_name = pool.fetch.await_args.args
+    query, account_id, vendor_name, company_name = pool.fetch.await_args.args
     assert "AND dl.event_type <> 'test'" in query
     assert "ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC" in query
     assert "ORDER BY cp.pushed_at DESC, cp.id DESC" in query
     assert account_id == 'account-1'
     assert vendor_name is None
+    assert company_name is None
     webhook = result['webhooks'][0]
     assert webhook['recent_success_rate_7d'] == 0.667
     assert webhook['latest_failure_at'] == failed_at.isoformat()
@@ -655,11 +656,67 @@ async def test_list_webhooks_applies_vendor_scope_to_summary_rows():
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         result = await b2b_dashboard.list_webhooks(vendor_name='Acme Rival', user=user)
 
-    query, account_id, vendor_name = pool.fetch.await_args.args
+    query, account_id, vendor_name, company_name = pool.fetch.await_args.args
     assert 'LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = LOWER($2)' in query
     assert 'LOWER(COALESCE(cp.vendor_name, cp_signal.vendor_name, cp_report.vendor_filter)) = LOWER($2)' in query
     assert account_id == 'account-1'
     assert vendor_name == 'Acme Rival'
+    assert company_name is None
+    assert result['count'] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_webhooks_applies_company_scope_to_summary_rows():
+    created_at = datetime.now(timezone.utc) - timedelta(days=1)
+    pool = MagicMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': '62885ce9-70de-4a5b-a724-a8c74ae1f4d5',
+                'url': 'https://hooks.example.com/churn',
+                'event_types': ['churn_alert'],
+                'channel': 'generic',
+                'enabled': True,
+                'description': 'Generic webhook',
+                'created_at': created_at,
+                'updated_at': created_at,
+                'recent_deliveries': 1,
+                'recent_successes': 1,
+                'latest_failure_event_type': None,
+                'latest_failure_status_code': None,
+                'latest_failure_response_body': None,
+                'latest_failure_error': None,
+                'latest_failure_at': None,
+                'latest_failure_signal_id': None,
+                'latest_failure_review_id': None,
+                'latest_failure_report_id': None,
+                'latest_failure_vendor_name': None,
+                'latest_failure_company_name': None,
+                'latest_test_success': None,
+                'latest_test_status_code': None,
+                'latest_test_response_body': None,
+                'latest_test_error': None,
+                'latest_test_at': None,
+                'latest_test_signal_id': None,
+                'latest_test_review_id': None,
+                'latest_test_report_id': None,
+                'latest_test_vendor_name': None,
+                'latest_test_company_name': None,
+                'latest_crm_id': None,
+            }
+        ]
+    )
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.list_webhooks(company_name='Acme Bank', user=user)
+
+    query, account_id, vendor_name, company_name = pool.fetch.await_args.args
+    assert 'LOWER(COALESCE(dl.company_name, dl_signal.company_name)) = LOWER($3)' in query
+    assert 'LOWER(COALESCE(cp.company_name, cp_signal.company_name)) = LOWER($3)' in query
+    assert account_id == 'account-1'
+    assert vendor_name is None
+    assert company_name == 'Acme Bank'
     assert result['count'] == 1
 
 
@@ -744,11 +801,12 @@ async def test_webhook_delivery_summary_excludes_manual_tests_from_aggregate_que
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         result = await b2b_dashboard.webhook_delivery_summary(days=30, user=user)
 
-    query, account_id, days, vendor_name = pool.fetchrow.await_args.args
+    query, account_id, days, vendor_name, company_name = pool.fetchrow.await_args.args
     assert "AND dl.event_type <> 'test'" in query
     assert account_id == 'account-1'
     assert days == '30'
     assert vendor_name is None
+    assert company_name is None
     assert result == {
         'window_days': 30,
         'active_subscriptions': 2,
@@ -781,11 +839,40 @@ async def test_webhook_delivery_summary_applies_vendor_scope():
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         result = await b2b_dashboard.webhook_delivery_summary(days=30, vendor_name='Acme Rival', user=user)
 
-    query, account_id, days, vendor_name = pool.fetchrow.await_args.args
+    query, account_id, days, vendor_name, company_name = pool.fetchrow.await_args.args
     assert 'LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = LOWER($3)' in query
     assert account_id == 'account-1'
     assert days == '30'
     assert vendor_name == 'Acme Rival'
+    assert company_name is None
+    assert result['active_subscriptions'] == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_summary_applies_company_scope():
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        return_value={
+            'active_subscriptions': 1,
+            'total_deliveries': 2,
+            'successful': 2,
+            'failed': 0,
+            'avg_success_duration_ms': 95.0,
+            'p95_success_duration_ms': 120.0,
+            'last_delivery_at': datetime(2026, 4, 10, 3, 0, tzinfo=timezone.utc),
+        }
+    )
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.webhook_delivery_summary(days=30, company_name='Acme Bank', user=user)
+
+    query, account_id, days, vendor_name, company_name = pool.fetchrow.await_args.args
+    assert 'LOWER(COALESCE(dl.company_name, dl_signal.company_name)) = LOWER($4)' in query
+    assert account_id == 'account-1'
+    assert days == '30'
+    assert vendor_name is None
+    assert company_name == 'Acme Bank'
     assert result['active_subscriptions'] == 1
 
 
@@ -1158,6 +1245,34 @@ async def test_list_webhook_deliveries_applies_vendor_scope():
 
 
 @pytest.mark.asyncio
+async def test_list_webhook_deliveries_applies_company_scope():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(return_value=[])
+    user = MagicMock(account_id='account-1')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.list_webhook_deliveries(
+            '3df7f790-6afc-4e0f-b40e-a78f77e60dd2',
+            success=None,
+            event_type=None,
+            vendor_name=None,
+            company_name='Acme Bank',
+            start_date=None,
+            end_date=None,
+            limit=50,
+            user=user,
+        )
+
+    assert result == {'deliveries': [], 'count': 0}
+    query, wid, company_name, limit = pool.fetch.await_args.args
+    assert 'LOWER(COALESCE(dl.company_name, dl_signal.company_name)) = LOWER($2)' in query
+    assert str(wid) == '3df7f790-6afc-4e0f-b40e-a78f77e60dd2'
+    assert company_name == 'Acme Bank'
+    assert limit == 50
+
+
+@pytest.mark.asyncio
 async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus():
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=1)
@@ -1451,6 +1566,31 @@ async def test_list_crm_push_log_applies_vendor_scope():
     assert 'LOWER(COALESCE(cp.vendor_name, cp_signal.vendor_name, cp_report.vendor_filter)) = LOWER($3)' in query
     assert normalized_status == 'success'
     assert vendor_name == 'Acme Rival'
+    assert limit == 25
+    assert str(wid) == 'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44'
+
+
+@pytest.mark.asyncio
+async def test_list_crm_push_log_applies_company_scope():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(return_value=[])
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        result = await b2b_dashboard.list_crm_push_log(
+            'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44',
+            limit=25,
+            status='success',
+            company_name='Acme Bank',
+            user=user,
+        )
+
+    assert result == {'pushes': [], 'count': 0}
+    query, wid, normalized_status, company_name, limit = pool.fetch.await_args.args
+    assert 'LOWER(COALESCE(cp.company_name, cp_signal.company_name)) = LOWER($3)' in query
+    assert normalized_status == 'success'
+    assert company_name == 'Acme Bank'
     assert limit == 25
     assert str(wid) == 'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44'
 

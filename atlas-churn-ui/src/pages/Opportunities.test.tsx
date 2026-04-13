@@ -490,7 +490,7 @@ describe('Opportunities', () => {
     )
     expect(screen.getByRole('link', { name: 'View alerts' })).toHaveAttribute(
       'href',
-      '/alerts?vendor=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
+      '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk',
     )
     expect(screen.getByRole('link', { name: 'View full review' })).toHaveAttribute(
       'href',
@@ -582,7 +582,7 @@ describe('Opportunities', () => {
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/alerts?vendor=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk`,
+        `${window.location.origin}/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fvendors%252FZendesk`,
       )
     })
     expect(screen.getByRole('button', { name: 'Copied alerts' })).toBeInTheDocument()
@@ -647,9 +647,9 @@ describe('Opportunities', () => {
     },
     {
       name: 'reuses the exact upstream alerts shortcut on expanded rows',
-      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fwebhook%253Dwh-1%2526days%253D30',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fvendor%253DZendesk%2526company%253DAcme%252BCorp%2526days%253D30',
       linkName: 'View alerts',
-      expectedHref: '/alerts?webhook=wh-1&days=30',
+      expectedHref: '/alerts?vendor=Zendesk&company=Acme+Corp&days=30',
     },
   ])('$name', async ({ initialEntry, linkName, expectedHref }) => {
     const user = userEvent.setup()
@@ -683,6 +683,46 @@ describe('Opportunities', () => {
     await user.click(screen.getByText(/Acme Corp/))
 
     expect(await screen.findByRole('link', { name: linkName })).toHaveAttribute('href', expectedHref)
+  })
+
+  it('does not reuse broad upstream alerts shortcuts for company rows', async () => {
+    const user = userEvent.setup()
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.6,
+          category: 'helpdesk',
+          review_id: 'review-1',
+          source: 'g2',
+          quotes: ['Support has regressed since renewal.'],
+          intent_signals: { cancel: true, migration: true, evaluation: false, completed_switch: false },
+          alternatives: [{ name: 'Freshdesk' }],
+          company_size: '201-1000',
+          reviewer_title: 'VP Support',
+        },
+      ],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fwebhook%253Dwh-1%2526days%253D30',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText(/Acme Corp/)).toBeInTheDocument()
+    await user.click(screen.getByText(/Acme Corp/))
+
+    expect(await screen.findByRole('link', { name: 'View alerts' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Zendesk&company=Acme+Corp&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Freviews%252Freview-1%253Fback_to%253D%25252Falerts%25253Fwebhook%25253Dwh-1%252526days%25253D30',
+    )
   })
 
   it('hides campaign-only analytics when the plan gate is off', async () => {

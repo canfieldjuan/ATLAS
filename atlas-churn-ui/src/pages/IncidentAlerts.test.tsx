@@ -57,7 +57,13 @@ const DEFAULT_DELIVERIES = [
   },
 ]
 
-function filterDeliveries(params?: { success?: boolean; event_type?: string; limit?: number; vendor_name?: string }) {
+function filterDeliveries(params?: {
+  success?: boolean
+  event_type?: string
+  limit?: number
+  vendor_name?: string
+  company_name?: string
+}) {
   let deliveries = [...DEFAULT_DELIVERIES]
   if (typeof params?.success === 'boolean') {
     deliveries = deliveries.filter((delivery) => delivery.success === params.success)
@@ -68,6 +74,9 @@ function filterDeliveries(params?: { success?: boolean; event_type?: string; lim
   if (params?.vendor_name) {
     deliveries = deliveries.filter((delivery) => delivery.vendor_name === params.vendor_name)
   }
+  if (params?.company_name) {
+    deliveries = deliveries.filter((delivery) => delivery.company_name === params.company_name)
+  }
   const limit = params?.limit ?? deliveries.length
   return { deliveries: deliveries.slice(0, limit), count: deliveries.length }
 }
@@ -75,7 +84,7 @@ function filterDeliveries(params?: { success?: boolean; event_type?: string; lim
 describe('IncidentAlerts', () => {
   beforeEach(() => {
     cleanup()
-    vi.clearAllMocks()
+    vi.resetAllMocks()
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
       value: clipboard,
@@ -122,6 +131,7 @@ describe('IncidentAlerts', () => {
       event_type?: string
       limit?: number
       vendor_name?: string
+      company_name?: string
     }) => filterDeliveries(params))
     api.listWebhookCrmPushLog.mockResolvedValue({
       pushes: [],
@@ -180,6 +190,35 @@ describe('IncidentAlerts', () => {
       limit: 10,
       vendor_name: 'Acme Rival',
     }))
+  })
+
+  it('hydrates company-scoped alert views through the API and URL state', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts?vendor=Acme%20Rival&company=Acme%20Bank&webhook=wh-1']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Scoped to vendor: Acme Rival')).toBeInTheDocument()
+    expect(screen.getByText('Scoped to account: Acme Bank at Acme Rival')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Clear account scope' })).toHaveAttribute(
+      'href',
+      '/alerts?vendor=Acme+Rival&webhook=wh-1',
+    )
+    expect(api.fetchWebhookDeliverySummary).toHaveBeenCalledWith(7, {
+      vendor_name: 'Acme Rival',
+      company_name: 'Acme Bank',
+    })
+    expect(api.listWebhooks).toHaveBeenCalledWith({
+      vendor_name: 'Acme Rival',
+      company_name: 'Acme Bank',
+    })
+    expect(api.listWebhookDeliveries).toHaveBeenCalledWith('wh-1', expect.objectContaining({
+      limit: 10,
+      vendor_name: 'Acme Rival',
+      company_name: 'Acme Bank',
+    }))
+    expect(screen.getByText('Acme Bank at Acme Rival')).toBeInTheDocument()
   })
 
   it('shows vendor-scope workflow shortcuts in the header when a vendor filter is active', async () => {

@@ -6335,6 +6335,17 @@ def _webhook_delivery_vendor_scope_condition(
     )
 
 
+def _webhook_delivery_company_scope_condition(
+    company_param_ref: str,
+    delivery_alias: str,
+    signal_alias: str,
+) -> str:
+    return (
+        f"AND ({company_param_ref} IS NULL OR "
+        f"LOWER(COALESCE({delivery_alias}.company_name, {signal_alias}.company_name)) = LOWER({company_param_ref}))"
+    )
+
+
 def _webhook_crm_vendor_scope_joins(
     crm_alias: str,
     signal_alias: str,
@@ -6363,15 +6374,28 @@ def _webhook_crm_vendor_scope_condition(
     )
 
 
+def _webhook_crm_company_scope_condition(
+    company_param_ref: str,
+    crm_alias: str,
+    signal_alias: str,
+) -> str:
+    return (
+        f"AND ({company_param_ref} IS NULL OR "
+        f"LOWER(COALESCE({crm_alias}.company_name, {signal_alias}.company_name)) = LOWER({company_param_ref}))"
+    )
+
+
 @router.get("/webhooks")
 async def list_webhooks(
     vendor_name: Optional[str] = Query(None, description="Scope webhook summary activity to a vendor"),
+    company_name: Optional[str] = Query(None, description="Scope webhook summary activity to a company"),
     user: AuthUser | None = Depends(optional_auth),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
+    company_name = _optional_query_text(company_name)
     delivery_vendor_joins = _webhook_delivery_vendor_scope_joins(
         "dl",
         "dl_signal",
@@ -6385,6 +6409,11 @@ async def list_webhooks(
         "dl_report",
         "dl_signal_report",
     )
+    delivery_company_condition = _webhook_delivery_company_scope_condition(
+        "$3",
+        "dl",
+        "dl_signal",
+    )
     crm_vendor_joins = _webhook_crm_vendor_scope_joins(
         "cp",
         "cp_signal",
@@ -6395,6 +6424,11 @@ async def list_webhooks(
         "cp",
         "cp_signal",
         "cp_report",
+    )
+    crm_company_condition = _webhook_crm_company_scope_condition(
+        "$3",
+        "cp",
+        "cp_signal",
     )
 
     rows = await pool.fetch(
@@ -6445,6 +6479,7 @@ async def list_webhooks(
               AND dl.delivered_at > NOW() - INTERVAL '7 days'
               AND dl.event_type <> 'test'
               {delivery_vendor_condition}
+              {delivery_company_condition}
         ) AS recent_activity ON TRUE
         LEFT JOIN LATERAL (
             SELECT dl.event_type, dl.status_code, dl.response_body, dl.error, dl.delivered_at,
@@ -6454,6 +6489,7 @@ async def list_webhooks(
             WHERE dl.subscription_id = ws.id
               AND NOT dl.success
               {delivery_vendor_condition}
+              {delivery_company_condition}
             ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC
             LIMIT 1
         ) AS latest_failure ON TRUE
@@ -6465,6 +6501,7 @@ async def list_webhooks(
             WHERE dl.subscription_id = ws.id
               AND dl.event_type = 'test'
               {delivery_vendor_condition}
+              {delivery_company_condition}
             ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC
             LIMIT 1
         ) AS latest_test ON TRUE
@@ -6475,6 +6512,7 @@ async def list_webhooks(
             {crm_vendor_joins}
             WHERE cp.subscription_id = ws.id
               {crm_vendor_condition}
+              {crm_company_condition}
             ORDER BY cp.pushed_at DESC, cp.id DESC
             LIMIT 1
         ) AS latest_crm ON TRUE
@@ -6483,6 +6521,7 @@ async def list_webhooks(
         """,
         user.account_id,
         vendor_name,
+        company_name,
     )
 
     report_cache: dict[str, Any] = {}
@@ -6511,11 +6550,14 @@ async def list_webhooks(
         latest_failure_signal_id = _normalize_webhook_activity_uuid_text(r["latest_failure_signal_id"]) if "latest_failure_signal_id" in r and r["latest_failure_signal_id"] else None
         latest_failure_review_id = _normalize_webhook_activity_uuid_text(r["latest_failure_review_id"]) if "latest_failure_review_id" in r and r["latest_failure_review_id"] else None
         latest_failure_report_id = _normalize_webhook_activity_uuid_text(r["latest_failure_report_id"]) if "latest_failure_report_id" in r and r["latest_failure_report_id"] else None
+        latest_failure_signal_context = signal_cache.get(latest_failure_signal_id) if latest_failure_signal_id else None
         latest_failure_report_context = report_activity_cache.get(latest_failure_report_id) if latest_failure_report_id else None
         latest_failure_vendor_name = (
             _optional_query_text(r["latest_failure_vendor_name"]) if "latest_failure_vendor_name" in r and r["latest_failure_vendor_name"] else None
-        ) or (latest_failure_report_context or {}).get("vendor_name")
-        latest_failure_company_name = _optional_query_text(r["latest_failure_company_name"]) if "latest_failure_company_name" in r and r["latest_failure_company_name"] else None
+        ) or (latest_failure_signal_context or {}).get("vendor_name") or (latest_failure_report_context or {}).get("vendor_name")
+        latest_failure_company_name = (
+            _optional_query_text(r["latest_failure_company_name"]) if "latest_failure_company_name" in r and r["latest_failure_company_name"] else None
+        ) or (latest_failure_signal_context or {}).get("company_name")
         latest_failure_account_review_focus = (
             await _resolve_webhook_activity_account_focus(
                 pool,
@@ -6543,11 +6585,14 @@ async def list_webhooks(
         latest_test_signal_id = _normalize_webhook_activity_uuid_text(r["latest_test_signal_id"]) if "latest_test_signal_id" in r and r["latest_test_signal_id"] else None
         latest_test_review_id = _normalize_webhook_activity_uuid_text(r["latest_test_review_id"]) if "latest_test_review_id" in r and r["latest_test_review_id"] else None
         latest_test_report_id = _normalize_webhook_activity_uuid_text(r["latest_test_report_id"]) if "latest_test_report_id" in r and r["latest_test_report_id"] else None
+        latest_test_signal_context = signal_cache.get(latest_test_signal_id) if latest_test_signal_id else None
         latest_test_report_context = report_activity_cache.get(latest_test_report_id) if latest_test_report_id else None
         latest_test_vendor_name = (
             _optional_query_text(r["latest_test_vendor_name"]) if "latest_test_vendor_name" in r and r["latest_test_vendor_name"] else None
-        ) or (latest_test_report_context or {}).get("vendor_name")
-        latest_test_company_name = _optional_query_text(r["latest_test_company_name"]) if "latest_test_company_name" in r and r["latest_test_company_name"] else None
+        ) or (latest_test_signal_context or {}).get("vendor_name") or (latest_test_report_context or {}).get("vendor_name")
+        latest_test_company_name = (
+            _optional_query_text(r["latest_test_company_name"]) if "latest_test_company_name" in r and r["latest_test_company_name"] else None
+        ) or (latest_test_signal_context or {}).get("company_name")
         if latest_test_vendor_name == "test_vendor" and not any(
             (latest_test_signal_id, latest_test_review_id, latest_test_report_id)
         ):
@@ -6683,6 +6728,7 @@ async def list_webhooks(
 async def webhook_delivery_summary(
     days: int = Query(7, ge=1, le=90),
     vendor_name: Optional[str] = Query(None, description="Scope aggregate delivery health to a vendor"),
+    company_name: Optional[str] = Query(None, description="Scope aggregate delivery health to a company"),
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Aggregate delivery health across all webhooks for the authenticated account."""
@@ -6690,6 +6736,7 @@ async def webhook_delivery_summary(
         raise HTTPException(status_code=401, detail="Authentication required")
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
+    company_name = _optional_query_text(company_name)
     delivery_vendor_joins = _webhook_delivery_vendor_scope_joins(
         "dl",
         "dl_signal",
@@ -6702,6 +6749,11 @@ async def webhook_delivery_summary(
         "dl_signal",
         "dl_report",
         "dl_signal_report",
+    )
+    delivery_company_condition = _webhook_delivery_company_scope_condition(
+        "$4",
+        "dl",
+        "dl_signal",
     )
 
     row = await pool.fetchrow(
@@ -6724,11 +6776,12 @@ async def webhook_delivery_summary(
               AND dl.delivered_at > NOW() - ($2 || ' days')::interval
               AND dl.event_type <> 'test'
               {delivery_vendor_condition}
+              {delivery_company_condition}
         ) AS dl ON TRUE
         WHERE ws.account_id = $1::uuid
           AND ws.enabled = true
         """,
-        user.account_id, str(days), vendor_name,
+        user.account_id, str(days), vendor_name, company_name,
     )
 
     total = row["total_deliveries"] or 0
@@ -6911,6 +6964,7 @@ async def list_webhook_deliveries(
     start_date: Optional[str] = Query(None, description="Deliveries on or after (ISO 8601)"),
     end_date: Optional[str] = Query(None, description="Deliveries before (ISO 8601)"),
     vendor_name: Optional[str] = Query(None, description="Filter by vendor context"),
+    company_name: Optional[str] = Query(None, description="Filter by company context"),
     limit: int = Query(50, ge=1, le=200),
     user: AuthUser | None = Depends(optional_auth),
 ):
@@ -6926,6 +6980,7 @@ async def list_webhook_deliveries(
     start_date = _optional_query_text(start_date)
     end_date = _optional_query_text(end_date)
     vendor_name = _optional_query_text(vendor_name)
+    company_name = _optional_query_text(company_name)
 
     parsed_start_date = None
     parsed_end_date = None
@@ -6971,18 +7026,26 @@ async def list_webhook_deliveries(
         conditions.append(f"delivered_at < ${idx}")
         params.append(parsed_end_date)
         idx += 1
-    if vendor_name:
+    if vendor_name or company_name:
         joins = _webhook_delivery_vendor_scope_joins(
             "dl",
             "dl_signal",
             "dl_report",
             "dl_signal_report",
         )
+    if vendor_name:
         conditions.append(
             "LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = "
             f"LOWER(${idx})"
         )
         params.append(vendor_name)
+        idx += 1
+    if company_name:
+        conditions.append(
+            "LOWER(COALESCE(dl.company_name, dl_signal.company_name)) = "
+            f"LOWER(${idx})"
+        )
+        params.append(company_name)
         idx += 1
 
     where = " AND ".join(conditions)
@@ -7116,6 +7179,7 @@ async def list_crm_push_log(
     limit: int = 50,
     status: Optional[str] = Query(None, description="Filter by normalized CRM push status"),
     vendor_name: Optional[str] = Query(None, description="Filter by vendor context"),
+    company_name: Optional[str] = Query(None, description="Filter by company context"),
     user: AuthUser | None = Depends(optional_auth),
 ):
     if not user:
@@ -7130,6 +7194,7 @@ async def list_crm_push_log(
     raw_status = status if isinstance(status, str) or status is None else None
     normalized_status = _normalize_crm_push_status(raw_status)
     vendor_name = _optional_query_text(vendor_name)
+    company_name = _optional_query_text(company_name)
     if raw_status is not None and normalized_status not in {"success", "failed"}:
         raise HTTPException(status_code=400, detail="status must be one of: success, failed")
     pool = _pool_or_503()
@@ -7156,17 +7221,25 @@ async def list_crm_push_log(
         idx += 1
     elif normalized_status == "failed":
         conditions.append(f"coalesce({normalized_status_sql}, '') <> 'success'")
-    if vendor_name:
+    if vendor_name or company_name:
         joins = _webhook_crm_vendor_scope_joins(
             "cp",
             "cp_signal",
             "cp_report",
         )
+    if vendor_name:
         conditions.append(
             "LOWER(COALESCE(cp.vendor_name, cp_signal.vendor_name, cp_report.vendor_filter)) = "
             f"LOWER(${idx})"
         )
         params.append(vendor_name)
+        idx += 1
+    if company_name:
+        conditions.append(
+            "LOWER(COALESCE(cp.company_name, cp_signal.company_name)) = "
+            f"LOWER(${idx})"
+        )
+        params.append(company_name)
         idx += 1
     params.append(limit)
     rows = await pool.fetch(

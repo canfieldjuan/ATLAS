@@ -68,7 +68,7 @@ describe('api client helpers', () => {
     )
   })
 
-  it('uses the tenant webhook routes instead of the legacy dashboard prefix', async () => {
+  it('uses the dashboard webhook routes with explicit summary scope filters', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -76,15 +76,15 @@ describe('api client helpers', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await listWebhooks()
+    await listWebhooks({ vendor_name: 'Acme Rival', company_name: 'Acme Bank' })
 
     const requestedUrl = String(fetchMock.mock.calls[0]?.[0] ?? '')
-    const legacyDashboardPrefix = ['/api/v1', '/b2b', '/dashboard'].join('')
-    expect(requestedUrl).toContain('/api/v1/b2b/tenant/webhooks')
-    expect(requestedUrl).not.toContain(legacyDashboardPrefix)
+    expect(requestedUrl).toContain('/api/v1/b2b/dashboard/webhooks')
+    expect(requestedUrl).toContain('vendor_name=Acme+Rival')
+    expect(requestedUrl).toContain('company_name=Acme+Bank')
   })
 
-  it('uses tenant webhook activity routes with explicit filters', async () => {
+  it('uses dashboard webhook activity routes with explicit vendor and company filters', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -101,26 +101,32 @@ describe('api client helpers', () => {
         ok: true,
         status: 200,
         json: async () => ({ pushes: [], count: 0 }),
-      })
+    })
     vi.stubGlobal('fetch', fetchMock)
 
-    await fetchWebhookDeliverySummary(30, { vendor_name: 'Acme Rival' })
+    await fetchWebhookDeliverySummary(30, { vendor_name: 'Acme Rival', company_name: 'Acme Bank' })
     await listWebhookDeliveries('wh-1', {
       success: false,
       event_type: 'signal_update',
       limit: 10,
       vendor_name: 'Acme Rival',
+      company_name: 'Acme Bank',
     })
-    await listWebhookCrmPushLog('wh-1', { limit: 5, status: 'success', vendor_name: 'Acme Rival' })
+    await listWebhookCrmPushLog('wh-1', {
+      limit: 5,
+      status: 'success',
+      vendor_name: 'Acme Rival',
+      company_name: 'Acme Bank',
+    })
 
     expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/delivery-summary?days=30&vendor_name=Acme+Rival',
+      '/api/v1/b2b/dashboard/webhooks/delivery-summary?days=30&vendor_name=Acme+Rival&company_name=Acme+Bank',
     )
     expect(String(fetchMock.mock.calls[1]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/wh-1/deliveries?success=false&event_type=signal_update&limit=10&vendor_name=Acme+Rival',
+      '/api/v1/b2b/dashboard/webhooks/wh-1/deliveries?success=false&event_type=signal_update&limit=10&vendor_name=Acme+Rival&company_name=Acme+Bank',
     )
     expect(String(fetchMock.mock.calls[2]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/wh-1/crm-push-log?limit=5&status=success&vendor_name=Acme+Rival',
+      '/api/v1/b2b/dashboard/webhooks/wh-1/crm-push-log?limit=5&status=success&vendor_name=Acme+Rival&company_name=Acme+Bank',
     )
   })
 
