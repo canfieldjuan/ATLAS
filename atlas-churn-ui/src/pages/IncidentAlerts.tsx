@@ -811,7 +811,7 @@ function latestActivityTimestamp(value: string | null | undefined) {
   return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY
 }
 
-function collectVendorScopedExactTargets(
+function collectScopedExactTargets(
   webhooks: WebhookSubscription[],
   manualTestResults: Record<string, ManualTestResult>,
 ) {
@@ -1132,19 +1132,19 @@ export default function IncidentAlerts() {
     requestedVendorName,
   ])
 
-  const vendorScopedExactTargets = useMemo(() => {
-    if (!requestedVendorName.trim()) return []
-    return collectVendorScopedExactTargets(webhooks, manualTestResults)
-  }, [manualTestResults, requestedVendorName, webhooks])
+  const scopedExactTargets = useMemo(() => {
+    if (!requestedVendorName.trim() && !requestedCompanyName.trim()) return []
+    return collectScopedExactTargets(webhooks, manualTestResults)
+  }, [manualTestResults, requestedCompanyName, requestedVendorName, webhooks])
 
-  const vendorScopedLatestExactTarget = vendorScopedExactTargets[0] ?? null
+  const scopedLatestExactTarget = scopedExactTargets[0] ?? null
 
-  const vendorScopedRecentExactTargets = vendorScopedExactTargets.slice(1, 4)
+  const scopedRecentExactTargets = scopedExactTargets.slice(1, 4)
 
-  const vendorScopedExactTargetSummary = vendorScopedLatestExactTarget
+  const scopedExactTargetSummary = scopedLatestExactTarget
     ? {
-        count: vendorScopedExactTargets.length,
-        latest: vendorScopedLatestExactTarget,
+        count: scopedExactTargets.length,
+        latest: scopedLatestExactTarget,
       }
     : null
 
@@ -1744,7 +1744,7 @@ export default function IncidentAlerts() {
               {renderShortcutCopyButton(vendorScopedHeaderShortcuts.opportunitiesPath, 'opportunities')}
             </div>
           ) : null}
-          {vendorScopedLatestExactTarget ? (
+          {scopedLatestExactTarget ? (
             <div
               role="region"
               aria-label="Latest exact target"
@@ -1754,15 +1754,15 @@ export default function IncidentAlerts() {
                 Latest exact target
               </div>
               <div className="mt-1 text-sm font-medium text-white">
-                {formatExactTargetLabel(vendorScopedLatestExactTarget)}
+                {formatExactTargetLabel(scopedLatestExactTarget)}
               </div>
               <div className="mt-1 text-xs text-slate-400">
-                {vendorScopedLatestExactTarget.summary_label} · {formatTs(vendorScopedLatestExactTarget.occurred_at)} · {vendorScopedLatestExactTarget.webhook_label}
+                {scopedLatestExactTarget.summary_label} · {formatTs(scopedLatestExactTarget.occurred_at)} · {scopedLatestExactTarget.webhook_label}
               </div>
-              {renderActivityDetailShortcuts(vendorScopedLatestExactTarget, currentAlertsUrl, { includeCopy: true })}
+              {renderActivityDetailShortcuts(scopedLatestExactTarget, currentAlertsUrl, { includeCopy: true })}
             </div>
           ) : null}
-          {vendorScopedRecentExactTargets.length ? (
+          {scopedRecentExactTargets.length ? (
             <div
               role="region"
               aria-label="Other recent exact targets"
@@ -1772,7 +1772,7 @@ export default function IncidentAlerts() {
                 Other recent exact targets
               </div>
               <div className="mt-3 space-y-3">
-                {vendorScopedRecentExactTargets.map((activity) => (
+                {scopedRecentExactTargets.map((activity) => (
                   <div
                     key={`${activity.webhook_label}-${activity.summary_label}-${activity.occurred_at}`}
                     className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3"
@@ -1833,7 +1833,7 @@ export default function IncidentAlerts() {
         </div>
       ) : null}
 
-      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${vendorScopedExactTargetSummary ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`}>
+      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${scopedExactTargetSummary ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`}>
         <StatCard
           label={activeScopeLabel ? 'Webhooks with Activity' : 'Active Webhooks'}
           value={summary?.active_subscriptions ?? 0}
@@ -1862,12 +1862,12 @@ export default function IncidentAlerts() {
           sub={`P95 ${formatDurationMs(summary?.p95_success_duration_ms)}`}
           skeleton={loading}
         />
-        {vendorScopedExactTargetSummary ? (
+        {scopedExactTargetSummary ? (
           <StatCard
             label="Exact Targets"
-            value={vendorScopedExactTargetSummary.count}
+            value={scopedExactTargetSummary.count}
             icon={<ArrowRight className="h-4 w-4 text-cyan-400" />}
-            sub={`${vendorScopedExactTargetSummary.latest.summary_label} · ${vendorScopedExactTargetSummary.latest.webhook_label}`}
+            sub={`${scopedExactTargetSummary.latest.summary_label} · ${scopedExactTargetSummary.latest.webhook_label}`}
             skeleton={loading}
           />
         ) : null}

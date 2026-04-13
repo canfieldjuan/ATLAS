@@ -598,6 +598,67 @@ describe('IncidentAlerts', () => {
     expect(exactTargetsRegion.getByText(/CRM escalation/)).toBeInTheDocument()
   })
 
+  it('shows exact target summaries for company-scoped views without requiring a vendor scope', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-company-crm',
+          url: 'https://hooks.example.com/crm',
+          event_types: ['high_intent_push'],
+          channel: 'crm_hubspot',
+          enabled: true,
+          description: 'CRM escalation',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 4,
+          recent_success_rate_7d: 1,
+          latest_crm_push: {
+            id: 'push-1',
+            signal_type: 'competitive_displacement',
+            signal_id: 'sig-1',
+            vendor_name: 'Acme Rival',
+            company_name: 'Acme Bank',
+            review_id: '33333333-3333-4333-8333-333333333334',
+            crm_record_id: 'deal-1',
+            crm_record_type: 'deal',
+            status: 'success',
+            error: null,
+            pushed_at: '2026-04-10T03:05:00Z',
+            account_review_focus: {
+              vendor: 'Acme Rival',
+              company: 'Acme Bank',
+              report_date: '2026-04-10',
+              watch_vendor: 'Acme Rival',
+              category: 'Switch Risk',
+              track_mode: 'competitor',
+            },
+          },
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?company=Acme%20Bank']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    const region = await screen.findByRole('region', { name: 'Latest exact target' })
+    expect(within(region).getByText('Account review target: Acme Bank (Switch Risk)')).toBeInTheDocument()
+    expect(within(region).getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor&back_to=%2Falerts%3Fcompany%3DAcme%2520Bank',
+    )
+
+    const exactTargetsLabel = screen.getByText('Exact Targets')
+    const exactTargetsCard = exactTargetsLabel.closest('div')?.parentElement
+    expect(exactTargetsCard).not.toBeNull()
+    const exactTargetsRegion = within(exactTargetsCard as HTMLElement)
+    expect(exactTargetsRegion.getByText('1')).toBeInTheDocument()
+    expect(exactTargetsRegion.getByText(/Latest CRM push succeeded/)).toBeInTheDocument()
+  })
+
   it('does not show a latest exact target header region for vendor-only activity', async () => {
     api.listWebhooks.mockResolvedValueOnce({
       webhooks: [
