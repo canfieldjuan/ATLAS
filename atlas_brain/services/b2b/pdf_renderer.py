@@ -94,6 +94,42 @@ def _copy_dict(val: Any) -> dict[str, Any]:
     return dict(val) if isinstance(val, dict) else {}
 
 
+def _account_pressure_payload(data: dict[str, Any]) -> tuple[str, list[str], str]:
+    summary = _safe_str(data.get("account_pressure_summary")).strip()
+    priority_names = [
+        _safe_str(name).strip()
+        for name in _safe_list(data.get("priority_account_names"))
+        if _safe_str(name).strip()
+    ]
+    preview = _copy_dict(data.get("account_reasoning_preview"))
+    disclaimer = _safe_str(
+        data.get("account_pressure_disclaimer") or preview.get("disclaimer"),
+    ).strip()
+    return summary, priority_names[:5], disclaimer
+
+
+def _render_account_pressure_block(
+    pdf: IntelligenceReportPDF,
+    data: dict[str, Any],
+    *,
+    section_title: str | None = "Account Pressure",
+    summary_prefix: str = "",
+) -> bool:
+    summary, priority_names, disclaimer = _account_pressure_payload(data)
+    if not summary and not priority_names and not disclaimer:
+        return False
+    if section_title:
+        pdf.section_title(section_title)
+    if summary:
+        body = f"{summary_prefix}{summary}" if summary_prefix else summary
+        pdf.body_text(body[:300])
+    if priority_names:
+        pdf.body_text(f"Priority accounts: {', '.join(priority_names)}")
+    if disclaimer:
+        pdf.body_text(f"Note: {disclaimer[:220]}")
+    return True
+
+
 def _battle_card_contract(card: dict[str, Any], name: str) -> dict[str, Any]:
     contracts = card.get("reasoning_contracts")
     if isinstance(contracts, dict):
@@ -367,6 +403,12 @@ def _render_churn_feed(pdf: IntelligenceReportPDF, data: Any) -> None:
         risk = _safe_str(entry.get("risk_level", ""))
         risk_label = f" | Risk: {risk.upper()}" if risk else ""
         pdf.cell(0, 6, f"{vendor} (Score: {score:.0f}{risk_label})", new_x="LMARGIN", new_y="NEXT")
+        _render_account_pressure_block(
+            pdf,
+            entry,
+            section_title=None,
+            summary_prefix="Account pressure: ",
+        )
 
         # Affected segments
         segments = entry.get("affected_segments") or {}
@@ -461,6 +503,8 @@ def _render_vendor_scorecard(pdf: IntelligenceReportPDF, data: dict, exec_summar
                     str(t.get("count") or t.get("mentions", 0)),
                 ])
         pdf.simple_table(["Competitor", "Mentions"], rows, [90, 30])
+
+    _render_account_pressure_block(pdf, data)
 
     # Named accounts
     accounts = _safe_list(data.get("named_accounts"))
@@ -1090,28 +1134,7 @@ def _render_battle_card(
             pdf.section_title("Evidence Conclusions")
             pdf.simple_table(["Conclusion", "Status", "Confidence", "Fallback"], rows, [52, 24, 28, 76])
 
-    account_pressure_summary = _safe_str(card.get("account_pressure_summary")).strip()
-    priority_account_names = [
-        _safe_str(item).strip()
-        for item in _safe_list(card.get("priority_account_names"))
-        if _safe_str(item).strip()
-    ]
-    account_preview = _copy_dict(card.get("account_reasoning_preview"))
-    account_pressure_disclaimer = _safe_str(
-        card.get("account_pressure_disclaimer")
-        or account_preview.get("disclaimer")
-        or "",
-    ).strip()
-    if account_pressure_summary or priority_account_names or account_pressure_disclaimer:
-        pdf.section_title("Account Pressure")
-        if account_pressure_summary:
-            pdf.body_text(account_pressure_summary[:300])
-        if priority_account_names:
-            pdf.body_text(
-                "Priority accounts: %s" % ", ".join(priority_account_names[:5])
-            )
-        if account_pressure_disclaimer:
-            pdf.body_text(f"Note: {account_pressure_disclaimer[:220]}")
+    _render_account_pressure_block(pdf, card)
 
     # Section 1: Causal Narrative
     causal = _copy_dict(card.get("causal_narrative"))
@@ -2059,6 +2082,8 @@ def render_vendor_full_report_pdf(
                         str(t.get("count") or t.get("mentions", 0)),
                     ])
             pdf.simple_table(["Competitor", "Mentions"], rows, [90, 30])
+
+    _render_account_pressure_block(pdf, merged)
 
     # Named accounts at risk
     accounts = _safe_list(merged.get("named_accounts"))
