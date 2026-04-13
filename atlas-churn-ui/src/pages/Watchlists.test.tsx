@@ -1084,6 +1084,7 @@ describe('Watchlists', () => {
           },
           account_alert_score: 8.9,
           account_alert_score_source: 'preview_signal_score',
+          account_alert_policy_reason: 'preview_low_confidence',
           account_reasoning_preview_only: true,
           reasoning_reference_ids: { witness_ids: ['witness:zendesk:1'] },
           source_review_ids: ['review-1'],
@@ -1115,6 +1116,7 @@ describe('Watchlists', () => {
     const accountReviewLink = await screen.findByLabelText('Open alert account review for Acme Corp')
     expect(screen.getByText('Early account signal')).toBeInTheDocument()
     expect(screen.getByText('Alert score: 8.9 via preview signal')).toBeInTheDocument()
+    expect(screen.getByText('Policy: confidence gate')).toBeInTheDocument()
     const reviewLink = screen.getByLabelText('Open alert review detail for Acme Corp')
     const witnessLink = screen.getByLabelText('Open alert witness for Acme Corp')
     const alertsLink = screen.getByLabelText('Open alert delivery activity for Zendesk')

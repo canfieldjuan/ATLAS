@@ -709,6 +709,13 @@ function watchlistAlertScoreSourceLabel(source: string | null | undefined) {
   return source || null
 }
 
+function watchlistAlertPolicyReasonLabel(reason: string | null | undefined) {
+  if (reason === 'preview_low_confidence') return 'Policy: confidence gate'
+  if (reason === 'preview_policy_disabled') return 'Policy: preview alerts disabled'
+  if (reason === 'preview_missing_budget_authority') return 'Policy: budget authority required'
+  return reason || null
+}
+
 type PendingWatchlistDestructiveAction =
   | { kind: 'delete_watchlist_view'; view: WatchlistView }
   | { kind: 'remove_vendor'; vendorName: string }
@@ -3786,6 +3793,7 @@ export default function Watchlists() {
                   const opportunitiesPath = watchlistAlertEventOpportunitiesPath(outboundWatchlistSearchParams, event)
                   const eventLabel = event.company_name || vendorName
                   const alertScoreSourceLabel = watchlistAlertScoreSourceLabel(event.account_alert_score_source)
+                  const alertPolicyReasonLabel = watchlistAlertPolicyReasonLabel(event.account_alert_policy_reason)
                   return (
                     <div
                       key={event.id}
@@ -3818,6 +3826,7 @@ export default function Watchlists() {
                                   {alertScoreSourceLabel ? ` via ${alertScoreSourceLabel}` : ''}
                                 </span>
                               ) : null}
+                              {alertPolicyReasonLabel ? <span>{alertPolicyReasonLabel}</span> : null}
                             </div>
                           )}
                           <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-400">
