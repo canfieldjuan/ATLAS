@@ -375,6 +375,13 @@ def _merge_vendor_names_from_request(req) -> list[str] | None:
 
 
 def _watchlist_view_payload(row: Any) -> dict[str, Any]:
+    preview_account_alert_policy = {
+        "applies_to_preview_only": True,
+        "min_confidence": float(settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence),
+        "require_budget_authority": bool(
+            settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
+        ),
+    }
     return {
         "id": str(row["id"]),
         "name": row["name"],
@@ -395,6 +402,7 @@ def _watchlist_view_payload(row: Any) -> dict[str, Any]:
         "last_alert_delivery_at": str(row["last_alert_delivery_at"]) if row.get("last_alert_delivery_at") else None,
         "last_alert_delivery_status": row.get("last_alert_delivery_status"),
         "last_alert_delivery_summary": row.get("last_alert_delivery_summary"),
+        "preview_account_alert_policy": preview_account_alert_policy,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
         "updated_at": str(row["updated_at"]) if row["updated_at"] else None,
     }

@@ -2167,6 +2167,15 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
     assert result["views"][0]["alert_delivery_frequency"] == "weekly"
     assert result["views"][0]["next_alert_delivery_at"] == "2026-04-10 12:00:00+00:00"
     assert result["views"][0]["last_alert_delivery_status"] == "sent"
+    assert result["views"][0]["preview_account_alert_policy"] == {
+        "applies_to_preview_only": True,
+        "min_confidence": pytest.approx(
+            mod.settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
+        ),
+        "require_budget_authority": bool(
+            mod.settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
+        ),
+    }
     assert "is_default" not in result["views"][0]
     assert "FROM b2b_watchlist_views" in pool.fetch.await_args.args[0]
 
@@ -2405,6 +2414,15 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
     assert result["alert_email_enabled"] is True
     assert result["alert_delivery_frequency"] == "weekly"
     assert result["next_alert_delivery_at"] == "2026-04-14 12:00:00+00:00"
+    assert result["preview_account_alert_policy"] == {
+        "applies_to_preview_only": True,
+        "min_confidence": pytest.approx(
+            mod.settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
+        ),
+        "require_budget_authority": bool(
+            mod.settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
+        ),
+    }
     vendor_lookup_sql = pool.fetchval.await_args_list[1].args[0]
     assert "FROM tracked_vendors" in vendor_lookup_sql
     insert_sql = pool.fetchrow.await_args.args[0]
@@ -2588,6 +2606,15 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
     assert updated["alert_email_enabled"] is True
     assert updated["alert_delivery_frequency"] == "weekly"
     assert updated["next_alert_delivery_at"] == "2026-04-12 09:00:00+00:00"
+    assert updated["preview_account_alert_policy"] == {
+        "applies_to_preview_only": True,
+        "min_confidence": pytest.approx(
+            mod.settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
+        ),
+        "require_budget_authority": bool(
+            mod.settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
+        ),
+    }
     assert "UPDATE b2b_watchlist_views" in pool.fetchrow.await_args_list[1].args[0]
     assert pool.fetchrow.await_args_list[1].args[3] == "Changed wedges only"
     assert pool.fetchrow.await_args_list[1].args[15] == "weekly"
