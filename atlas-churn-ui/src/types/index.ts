@@ -138,11 +138,7 @@ export interface VendorProfile {
     pending_enrichment: number
     enriched: number
   }
-  high_intent_companies: {
-    company: string
-    urgency: number
-    pain: string | null
-  }[]
+  high_intent_companies: HighIntentCompany[]
   pain_distribution: {
     pain_category: string
     count: number

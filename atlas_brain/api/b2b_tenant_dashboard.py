@@ -2042,6 +2042,7 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
         vendor_name=vname,
         limit=10,
     )
+    hi_account_review_focuses = await _resolve_high_intent_account_review_focuses(pool, user, hi_items)
 
     profile: dict = {"vendor_name": vname}
 
@@ -2089,15 +2090,8 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
     }
 
     profile["high_intent_companies"] = [
-        {
-            "company": item["company"],
-            "urgency": _safe_float(item.get("urgency"), 0),
-            "pain": item.get("pain"),
-            "title": item.get("title"),
-            "company_size": item.get("company_size"),
-            "industry": item.get("industry"),
-        }
-        for item in hi_items
+        _shape_high_intent_company_payload(item, account_review_focus=focus)
+        for item, focus in zip(hi_items, hi_account_review_focuses)
     ]
 
     profile["pain_distribution"] = [

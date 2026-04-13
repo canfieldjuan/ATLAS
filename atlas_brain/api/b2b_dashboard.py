@@ -1714,6 +1714,7 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
         vendor_name=vname,
         limit=5,
     )
+    hi_account_review_focuses = await _resolve_high_intent_account_review_focuses(pool, user, hi_rows)
 
     # APPROVED-ENRICHMENT-READ: pain_category
     # Reason: inline aggregate, GROUP BY pain_category
@@ -1793,24 +1794,8 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
     }
 
     profile["high_intent_companies"] = [
-        {
-            "company": r.get("company"),
-            "urgency": _safe_float(r.get("urgency"), 0),
-            "pain": r.get("pain"),
-            "title": r.get("title"),
-            "company_size": r.get("company_size"),
-            "industry": r.get("industry"),
-            "founded_year": r.get("founded_year"),
-            "total_funding": r.get("total_funding"),
-            "funding_stage": r.get("funding_stage"),
-            "headcount_growth_6m": _safe_float(r.get("headcount_growth_6m")),
-            "headcount_growth_12m": _safe_float(r.get("headcount_growth_12m")),
-            "headcount_growth_24m": _safe_float(r.get("headcount_growth_24m")),
-            "publicly_traded": r.get("publicly_traded"),
-            "ticker": r.get("ticker"),
-            "company_description": r.get("company_description"),
-        }
-        for r in hi_rows
+        _shape_high_intent_company_payload(row, account_review_focus=focus)
+        for row, focus in zip(hi_rows, hi_account_review_focuses)
     ]
 
     profile["pain_distribution"] = [

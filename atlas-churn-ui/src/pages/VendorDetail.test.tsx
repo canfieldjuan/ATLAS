@@ -42,6 +42,7 @@ describe('VendorDetail', () => {
       high_intent_companies: [
         {
           company: 'Acme Corp',
+          vendor: 'Zendesk',
           urgency: 8.4,
           pain: 'pricing',
         },
@@ -158,6 +159,115 @@ describe('VendorDetail', () => {
     await user.click(screen.getByRole('button', { name: 'reviews' }))
     await user.click(screen.getByText('Acme Corp'))
     expect(mockNavigate).toHaveBeenCalledWith('/reviews/review-1?back_to=%2Fvendors%2FZendesk')
+  })
+
+  it('opens an exact account review from vendor high-intent companies when focus is available', async () => {
+    const user = userEvent.setup()
+    api.fetchVendorProfile.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      churn_signal: null,
+      review_counts: {
+        total: 12,
+        pending_enrichment: 1,
+        enriched: 11,
+      },
+      high_intent_companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.4,
+          pain: 'pricing',
+          account_review_focus: {
+            vendor: 'Zendesk',
+            company: 'Acme Corp',
+            report_date: '2026-04-10',
+            watch_vendor: 'Zendesk',
+            category: 'Helpdesk',
+            track_mode: 'competitor',
+          },
+        },
+      ],
+      pain_distribution: [],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'companies' }))
+    await user.click(screen.getByRole('button', { name: 'Account Review' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-10&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fvendors%2FZendesk',
+    )
+  })
+
+  it('reuses the exact upstream account review path from vendor high-intent companies', async () => {
+    const user = userEvent.setup()
+    const exactAccountReviewPath = '/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-10&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor'
+    api.fetchVendorProfile.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      churn_signal: null,
+      review_counts: {
+        total: 12,
+        pending_enrichment: 1,
+        enriched: 11,
+      },
+      high_intent_companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.4,
+          pain: 'pricing',
+          account_review_focus: {
+            vendor: 'Zendesk',
+            company: 'Acme Corp',
+            report_date: '2026-04-10',
+            watch_vendor: 'Zendesk',
+            category: 'Helpdesk',
+            track_mode: 'competitor',
+          },
+        },
+      ],
+      pain_distribution: [],
+    })
+
+    render(
+      <MemoryRouter initialEntries={[`/vendors/Zendesk?back_to=${encodeURIComponent(exactAccountReviewPath)}`]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'companies' }))
+    await user.click(screen.getByRole('button', { name: 'Account Review' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith(exactAccountReviewPath)
+  })
+
+  it('falls back to vendor-scoped watchlists from vendor high-intent companies without exact focus', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'companies' }))
+    await user.click(screen.getByRole('button', { name: 'Watchlists' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/watchlists?vendor_name=Zendesk&back_to=%2Fvendors%2FZendesk')
   })
 
   it('returns to alerts when back_to points at an alerts page', async () => {

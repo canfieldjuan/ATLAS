@@ -26,6 +26,7 @@ import {
   fetchReviews,
 } from '../api/client'
 import type {
+  HighIntentCompany,
   Report,
   VendorHistoryResponse,
   VendorPeriodComparisonResponse,
@@ -304,6 +305,66 @@ function vendorAlertsPath(vendorName: string): string {
   const params = new URLSearchParams()
   params.set('back_to', vendorDetailPath(vendorName))
   return `/alerts?${params.toString()}`
+}
+
+function normalizeFocusValue(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function matchesAccountReviewPath(
+  path: string | null,
+  focus: NonNullable<HighIntentCompany['account_review_focus']>,
+): string | null {
+  if (!path?.startsWith('/watchlists')) return null
+  try {
+    const url = new URL(path, window.location.origin)
+    return normalizeFocusValue(url.searchParams.get('account_vendor')) === normalizeFocusValue(focus.vendor)
+      && normalizeFocusValue(url.searchParams.get('account_company')) === normalizeFocusValue(focus.company)
+      && normalizeFocusValue(url.searchParams.get('account_report_date')) === normalizeFocusValue(focus.report_date)
+      && normalizeFocusValue(url.searchParams.get('account_watch_vendor')) === normalizeFocusValue(focus.watch_vendor)
+      && normalizeFocusValue(url.searchParams.get('account_category')) === normalizeFocusValue(focus.category)
+      && normalizeFocusValue(url.searchParams.get('account_track_mode')) === normalizeFocusValue(focus.track_mode)
+      ? path
+      : null
+  } catch {
+    return null
+  }
+}
+
+function vendorCompanyWatchlistsPath(
+  vendorName: string,
+  backTo: string | null,
+  focus: NonNullable<HighIntentCompany['account_review_focus']> | null,
+): string {
+  const upstreamPath = upstreamWatchlistsPath(backTo)
+  if (focus) {
+    const reusedPath = matchesAccountReviewPath(upstreamPath, focus)
+    if (reusedPath) return reusedPath
+
+    const params = new URLSearchParams()
+    params.set('account_vendor', focus.vendor)
+    params.set('account_company', focus.company)
+    params.set('account_report_date', focus.report_date)
+    params.set('account_watch_vendor', focus.watch_vendor)
+    params.set('account_category', focus.category)
+    params.set('account_track_mode', focus.track_mode)
+    params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
+    return `/watchlists?${params.toString()}`
+  }
+
+  if (upstreamPath?.startsWith('/watchlists')) {
+    try {
+      const url = new URL(upstreamPath, window.location.origin)
+      if (!url.searchParams.get('account_company')?.trim()) return upstreamPath
+    } catch {
+      // Fall through to the vendor-scoped view.
+    }
+  }
+
+  const params = new URLSearchParams()
+  params.set('vendor_name', vendorName)
+  params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
+  return `/watchlists?${params.toString()}`
 }
 
 function vendorReviewDetailPath(reviewId: string, vendorName: string): string {
@@ -704,7 +765,7 @@ export default function VendorDetail() {
     },
   ]
 
-  const companyColumns: Column<{ company: string; urgency: number; pain: string | null }>[] = [
+  const companyColumns: Column<HighIntentCompany>[] = [
     {
       key: 'company',
       header: 'Company',
@@ -721,6 +782,19 @@ export default function VendorDetail() {
       key: 'pain',
       header: 'Pain Category',
       render: (r) => <span className="text-slate-400">{r.pain ?? '--'}</span>,
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (r) => (
+        <button
+          type="button"
+          onClick={() => navigate(vendorCompanyWatchlistsPath(profile.vendor_name, backTo, r.account_review_focus ?? null))}
+          className="text-violet-300 hover:text-violet-200 transition-colors"
+        >
+          {r.account_review_focus ? 'Account Review' : 'Watchlists'}
+        </button>
+      ),
     },
   ]
 

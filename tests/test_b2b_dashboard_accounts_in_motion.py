@@ -2546,6 +2546,52 @@ async def test_list_high_intent_includes_account_review_focus():
 
 
 @pytest.mark.asyncio
+async def test_get_vendor_profile_includes_account_review_focus():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetchrow = AsyncMock(return_value={
+        "total_reviews": 12,
+        "pending_enrichment": 1,
+        "enriched": 9,
+    })
+    pool.fetch = AsyncMock(return_value=[{"pain": "support", "cnt": 4}])
+    user = SimpleNamespace(
+        account_id=str(uuid4()),
+        product="b2b_retention",
+        role="member",
+        is_admin=False,
+    )
+    rows = [{
+        "company": "Acme Corp",
+        "vendor": "Zendesk",
+        "urgency": 8.4,
+        "pain": "support",
+        "review_id": str(uuid4()),
+    }]
+    focus = {
+        "vendor": "Zendesk",
+        "company": "Acme Corp",
+        "report_date": "2026-04-10",
+        "watch_vendor": "Zendesk",
+        "category": "Helpdesk",
+        "track_mode": "competitor",
+    }
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(b2b_dashboard, "read_vendor_signal_detail", new=AsyncMock(return_value=None)):
+            with patch.object(b2b_dashboard, "read_high_intent_companies", new=AsyncMock(return_value=rows)):
+                with patch.object(
+                    b2b_dashboard,
+                    "_resolve_high_intent_account_review_focuses",
+                    new=AsyncMock(return_value=[focus]),
+                ) as focus_mock:
+                    result = await b2b_dashboard.get_vendor_profile("Zendesk", user=user)
+
+    focus_mock.assert_awaited_once_with(pool, user, rows)
+    assert result["high_intent_companies"][0]["account_review_focus"] == focus
+
+
+@pytest.mark.asyncio
 async def test_export_high_intent_normalizes_blank_vendor_filter():
     pool = MagicMock()
     read_mock = AsyncMock(return_value=[])
