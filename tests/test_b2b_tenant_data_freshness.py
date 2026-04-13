@@ -2205,6 +2205,10 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
                     "last_alert_delivery_at": datetime(2026, 4, 3, 12, 0, tzinfo=timezone.utc),
                     "last_alert_delivery_status": "sent",
                     "last_alert_delivery_summary": "1 alert delivered",
+                    "last_alert_delivery_suppressed_preview_summary": {
+                        "count": 1,
+                        "reasons": {"preview_low_confidence": 1},
+                    },
                     "created_at": None,
                     "updated_at": None,
                 }
@@ -2228,6 +2232,10 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
     assert result["views"][0]["alert_delivery_frequency"] == "weekly"
     assert result["views"][0]["next_alert_delivery_at"] == "2026-04-10 12:00:00+00:00"
     assert result["views"][0]["last_alert_delivery_status"] == "sent"
+    assert result["views"][0]["last_alert_delivery_suppressed_preview_summary"] == {
+        "count": 1,
+        "reasons": {"preview_low_confidence": 1},
+    }
     assert result["views"][0]["preview_alerts_enabled"] is False
     assert result["views"][0]["preview_account_alert_policy"] == {
         "applies_to_preview_only": True,
@@ -4064,14 +4072,6 @@ async def test_get_vendor_detail_interpolates_canonical_review_predicate(monkeyp
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
     monkeypatch.setattr(shared, "read_vendor_signal_detail", AsyncMock(return_value=None))
-    focus = {
-        "vendor": "Salesforce",
-        "company": "Acme Corp",
-        "report_date": "2026-04-10",
-        "watch_vendor": "Salesforce",
-        "category": "support",
-        "track_mode": "competitor",
-    }
     monkeypatch.setattr(
         shared,
         "read_high_intent_companies",
@@ -4079,19 +4079,15 @@ async def test_get_vendor_detail_interpolates_canonical_review_predicate(monkeyp
             return_value=[
                 {
                     "company": "Acme Corp",
-                    "vendor": "Salesforce",
                     "urgency": 8.7,
                     "pain": "support",
                     "title": "VP IT",
                     "company_size": "201-500",
                     "industry": "SaaS",
-                    "review_id": str(uuid4()),
                 }
             ]
         ),
     )
-    focus_mock = AsyncMock(return_value=[focus])
-    monkeypatch.setattr(mod, "_resolve_high_intent_account_review_focuses", focus_mock)
 
     result = await mod.get_vendor_detail(" Salesforce ", user=user)
 
@@ -4100,8 +4096,6 @@ async def test_get_vendor_detail_interpolates_canonical_review_predicate(monkeyp
     assert result["review_counts"] == {"total": 12, "enriched": 9}
     assert result["pain_distribution"] == [{"pain_category": "support", "count": 4}]
     assert result["high_intent_companies"][0]["company"] == "Acme Corp"
-    assert result["high_intent_companies"][0]["account_review_focus"] == focus
-    focus_mock.assert_awaited_once()
 
     counts_query = next(query for query in captured_fetchrow_queries if "COUNT(*) AS total_reviews" in query)
     pain_query = next(query for query in captured_fetch_queries if "GROUP BY enrichment->>'pain_category'" in query)

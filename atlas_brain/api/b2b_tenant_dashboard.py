@@ -430,6 +430,9 @@ def _watchlist_view_payload(row: Any) -> dict[str, Any]:
         "last_alert_delivery_at": str(row["last_alert_delivery_at"]) if row.get("last_alert_delivery_at") else None,
         "last_alert_delivery_status": row.get("last_alert_delivery_status"),
         "last_alert_delivery_summary": row.get("last_alert_delivery_summary"),
+        "last_alert_delivery_suppressed_preview_summary": _safe_json(
+            row.get("last_alert_delivery_suppressed_preview_summary")
+        ),
         "preview_account_alert_policy": preview_account_alert_policy,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
         "updated_at": str(row["updated_at"]) if row["updated_at"] else None,
@@ -492,6 +495,13 @@ async def _fetch_watchlist_view_row(
                preview_alert_require_budget_authority, stale_days_threshold,
                alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
                last_alert_delivery_at, last_alert_delivery_status, last_alert_delivery_summary,
+               (
+                   SELECT log.suppressed_preview_summary
+                   FROM b2b_watchlist_alert_email_log AS log
+                   WHERE log.watchlist_view_id = b2b_watchlist_views.id
+                   ORDER BY log.created_at DESC
+                   LIMIT 1
+               ) AS last_alert_delivery_suppressed_preview_summary,
                created_at, updated_at
         FROM b2b_watchlist_views
         WHERE id = $1
@@ -2040,7 +2050,6 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
         vendor_name=vname,
         limit=10,
     )
-    hi_account_review_focuses = await _resolve_high_intent_account_review_focuses(pool, user, hi_items)
 
     profile: dict = {"vendor_name": vname}
 
@@ -2088,8 +2097,15 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
     }
 
     profile["high_intent_companies"] = [
-        _shape_high_intent_company_payload(item, account_review_focus=focus)
-        for item, focus in zip(hi_items, hi_account_review_focuses)
+        {
+            "company": item["company"],
+            "urgency": _safe_float(item.get("urgency"), 0),
+            "pain": item.get("pain"),
+            "title": item.get("title"),
+            "company_size": item.get("company_size"),
+            "industry": item.get("industry"),
+        }
+        for item in hi_items
     ]
 
     profile["pain_distribution"] = [
@@ -2285,6 +2301,13 @@ async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
                preview_alert_require_budget_authority, stale_days_threshold,
                alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
                last_alert_delivery_at, last_alert_delivery_status, last_alert_delivery_summary,
+               (
+                   SELECT log.suppressed_preview_summary
+                   FROM b2b_watchlist_alert_email_log AS log
+                   WHERE log.watchlist_view_id = b2b_watchlist_views.id
+                   ORDER BY log.created_at DESC
+                   LIMIT 1
+               ) AS last_alert_delivery_suppressed_preview_summary,
                created_at, updated_at
         FROM b2b_watchlist_views
         WHERE account_id = $1
