@@ -748,9 +748,26 @@ describe('VendorDetail', () => {
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/alerts?back_to=%2Fvendors%2FZendesk`,
+        `${window.location.origin}/alerts?vendor=Zendesk&back_to=%2Fvendors%2FZendesk`,
       )
     })
+  })
+
+  it('navigates to the vendor-scoped alerts shortcut when no exact upstream alerts path exists', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Alerts API' })[0])
+
+    expect(mockNavigate).toHaveBeenCalledWith('/alerts?vendor=Zendesk&back_to=%2Fvendors%2FZendesk')
   })
 
   it('preserves the exact upstream alerts path through nested evidence context', async () => {

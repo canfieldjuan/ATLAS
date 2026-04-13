@@ -303,6 +303,7 @@ function vendorOpportunitiesPath(vendorName: string, backTo: string | null): str
 
 function vendorAlertsPath(vendorName: string, backTo: string | null): string {
   const params = new URLSearchParams()
+  params.set('vendor', vendorName)
   params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
   return `/alerts?${params.toString()}`
 }
