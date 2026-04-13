@@ -49,12 +49,31 @@ function evidencePath(vendorName: string, backTo: string, upstreamEvidencePath?:
       const painCategory = url.searchParams.get('pain_category')?.trim()
       const witnessType = url.searchParams.get('witness_type')?.trim()
       const offset = url.searchParams.get('offset')?.trim()
+      const asOfDate = url.searchParams.get('as_of_date')?.trim()
+      const windowDays = url.searchParams.get('window_days')?.trim()
       if (upstreamTab) next.set('tab', upstreamTab)
       if (witnessId) next.set('witness_id', witnessId)
       if (source) next.set('source', source)
       if (painCategory) next.set('pain_category', painCategory)
       if (witnessType) next.set('witness_type', witnessType)
       if (offset) next.set('offset', offset)
+      if (asOfDate && /^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) next.set('as_of_date', asOfDate)
+      if (windowDays && /^\d+$/.test(windowDays) && Number(windowDays) > 0) next.set('window_days', windowDays)
+    } catch {
+      // Fall through to the generic evidence path.
+    }
+  } else {
+    try {
+      const watchlistsTarget = watchlistsPath(backTo) ?? (backTo.startsWith('/watchlists') ? backTo : null)
+      if (!watchlistsTarget) {
+        next.set('back_to', backTo)
+        return `/evidence?${next.toString()}`
+      }
+      const url = new URL(watchlistsTarget, window.location.origin)
+      const accountReportDate = url.searchParams.get('account_report_date')?.trim()
+      if (accountReportDate && /^\d{4}-\d{2}-\d{2}$/.test(accountReportDate)) {
+        next.set('as_of_date', accountReportDate)
+      }
     } catch {
       // Fall through to the generic evidence path.
     }

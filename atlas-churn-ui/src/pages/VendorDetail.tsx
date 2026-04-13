@@ -264,8 +264,12 @@ function upstreamEvidencePath(backTo: string | null, vendorName: string): string
     const url = new URL(backTo, window.location.origin)
     const witnessId = url.searchParams.get('witness_id')?.trim()
     const source = url.searchParams.get('source')?.trim()
+    const accountReportDate = url.searchParams.get('account_report_date')?.trim()
     if (witnessId) params.set('witness_id', witnessId)
     if (source) params.set('source', source)
+    if (accountReportDate && /^\d{4}-\d{2}-\d{2}$/.test(accountReportDate)) {
+      params.set('as_of_date', accountReportDate)
+    }
   } catch {
     return null
   }
