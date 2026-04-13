@@ -804,6 +804,25 @@ describe('Watchlists', () => {
       events: [],
       count: 0,
     })
+    api.listWatchlistAlertEmailLog.mockResolvedValue({
+      watchlist_view_id: 'view-empty-1',
+      watchlist_view_name: 'Suppressed Intercom',
+      deliveries: [
+        {
+          id: 'delivery-no-events-1',
+          recipient_emails: ['owner@example.com'],
+          message_ids: [],
+          event_count: 0,
+          status: 'no_events',
+          summary: 'No alert email sent because local filters suppressed all candidates',
+          error: null,
+          delivered_at: '2026-04-07T18:30:00Z',
+          created_at: '2026-04-07T18:30:00Z',
+          updated_at: '2026-04-07T18:30:00Z',
+        },
+      ],
+      count: 1,
+    })
 
     render(
       <MemoryRouter>
@@ -824,6 +843,10 @@ describe('Watchlists', () => {
       text.includes('No open persisted alert events for this saved view yet.')
       && text.includes('Local filters: named accounts only + changed wedges only.'),
     )).toBeInTheDocument()
+    expect(screen.getAllByText((text) =>
+      text.includes('No alert email sent because local filters suppressed all candidates')
+      && text.includes('local filters: named accounts only + changed wedges only'),
+    ).length).toBeGreaterThanOrEqual(2)
   })
 
   it('saves the current filtered view with persisted thresholds', async () => {

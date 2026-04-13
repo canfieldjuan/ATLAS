@@ -325,14 +325,22 @@ function summarizeLocalWatchlistSuppression(view: WatchlistView) {
   return parts.join(' + ')
 }
 
-function summarizeSavedViewDelivery(view: WatchlistView) {
-  if (!view.last_alert_delivery_status) return 'Last --'
-  const base = view.last_alert_delivery_summary || `Last ${view.last_alert_delivery_status.replace(/_/g, ' ')}`
-  if (view.last_alert_delivery_status === 'no_events') {
+function summarizeWatchlistDeliverySummary(
+  base: string,
+  status: string | null | undefined,
+  view: WatchlistView,
+) {
+  if (status === 'no_events') {
     const localSuppression = summarizeLocalWatchlistSuppression(view)
     if (localSuppression) return `${base} · local filters: ${localSuppression}`
   }
   return base
+}
+
+function summarizeSavedViewDelivery(view: WatchlistView) {
+  if (!view.last_alert_delivery_status) return 'Last --'
+  const base = view.last_alert_delivery_summary || `Last ${view.last_alert_delivery_status.replace(/_/g, ' ')}`
+  return summarizeWatchlistDeliverySummary(base, view.last_alert_delivery_status, view)
 }
 
 function watchlistViewUrl(viewId: string) {
@@ -3981,7 +3989,9 @@ export default function Watchlists() {
                         <span className="text-slate-400">{delivery.event_count} event{delivery.event_count === 1 ? '' : 's'}</span>
                         <span className="text-slate-500">{formatTs(delivery.delivered_at || delivery.created_at)}</span>
                       </div>
-                      <div className="mt-1 text-sm text-slate-200">{delivery.summary}</div>
+                      <div className="mt-1 text-sm text-slate-200">
+                        {summarizeWatchlistDeliverySummary(delivery.summary, delivery.status, activeWatchlistView)}
+                      </div>
                       <div className="mt-1 text-xs text-slate-500">
                         {delivery.recipient_emails.join(', ') || '--'}
                       </div>
