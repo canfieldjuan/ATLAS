@@ -100,6 +100,12 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   return `/opportunities?${next.toString()}`
 }
 
+function reviewDetailPath(reviewId: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/reviews/${encodeURIComponent(reviewId)}?${next.toString()}`
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const dashboardPath = '/dashboard'
@@ -237,6 +243,15 @@ export default function Dashboard() {
           >
             Vendor
           </Link>
+          {r.review_id ? (
+            <Link
+              to={reviewDetailPath(r.review_id, dashboardPath)}
+              onClick={(event) => event.stopPropagation()}
+              className="text-cyan-300 hover:text-cyan-200 transition-colors"
+            >
+              Review
+            </Link>
+          ) : null}
           <Link
             to={evidencePath(r.vendor, dashboardPath)}
             onClick={(event) => event.stopPropagation()}

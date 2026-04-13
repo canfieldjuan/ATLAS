@@ -76,6 +76,7 @@ describe('Dashboard', () => {
           vendor: 'Zendesk',
           urgency: 8.2,
           pain: 'support',
+          review_id: 'review-1',
           seat_count: 120,
           buying_stage: 'evaluation',
           contract_end: '2026-09-01',
@@ -98,7 +99,7 @@ describe('Dashboard', () => {
     })
   })
 
-  it('surfaces account review, vendor, evidence, report, and opportunity handoffs from the high-intent table', async () => {
+  it('surfaces account review, review, vendor, evidence, report, and opportunity handoffs from the high-intent table', async () => {
     render(
       <MemoryRouter initialEntries={['/dashboard']}>
         <Routes>
@@ -118,6 +119,10 @@ describe('Dashboard', () => {
     expect(row.getByRole('link', { name: 'Vendor' })).toHaveAttribute(
       'href',
       '/vendors/Zendesk?back_to=%2Fdashboard',
+    )
+    expect(row.getByRole('link', { name: 'Review' })).toHaveAttribute(
+      'href',
+      '/reviews/review-1?back_to=%2Fdashboard',
     )
     expect(row.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
       'href',
