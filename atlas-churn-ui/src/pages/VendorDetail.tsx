@@ -279,31 +279,31 @@ function upstreamEvidencePath(backTo: string | null, vendorName: string): string
   return `/evidence?${params.toString()}`
 }
 
-function vendorEvidenceExplorerPath(vendorName: string): string {
+function vendorEvidenceExplorerPath(vendorName: string, backTo: string | null): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
   params.set('tab', 'witnesses')
-  params.set('back_to', vendorDetailPath(vendorName))
+  params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
   return `/evidence?${params.toString()}`
 }
 
-function vendorReportsPath(vendorName: string): string {
+function vendorReportsPath(vendorName: string, backTo: string | null): string {
   const params = new URLSearchParams()
   params.set('vendor_filter', vendorName)
-  params.set('back_to', vendorDetailPath(vendorName))
+  params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
   return `/reports?${params.toString()}`
 }
 
-function vendorOpportunitiesPath(vendorName: string): string {
+function vendorOpportunitiesPath(vendorName: string, backTo: string | null): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
-  params.set('back_to', vendorDetailPath(vendorName))
+  params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
   return `/opportunities?${params.toString()}`
 }
 
-function vendorAlertsPath(vendorName: string): string {
+function vendorAlertsPath(vendorName: string, backTo: string | null): string {
   const params = new URLSearchParams()
-  params.set('back_to', vendorDetailPath(vendorName))
+  params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
   return `/alerts?${params.toString()}`
 }
 
@@ -367,15 +367,15 @@ function vendorCompanyWatchlistsPath(
   return `/watchlists?${params.toString()}`
 }
 
-function vendorReviewDetailPath(reviewId: string, vendorName: string): string {
+function vendorReviewDetailPath(reviewId: string, vendorName: string, backTo: string | null): string {
   const params = new URLSearchParams()
-  params.set('back_to', vendorDetailPath(vendorName))
+  params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
   return `/reviews/${reviewId}?${params.toString()}`
 }
 
-function vendorReportDetailPath(reportId: string, vendorName: string): string {
+function vendorReportDetailPath(reportId: string, vendorName: string, backTo: string | null): string {
   const params = new URLSearchParams()
-  params.set('back_to', vendorDetailPath(vendorName))
+  params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
   return `/reports/${encodeURIComponent(reportId)}?${params.toString()}`
 }
 
@@ -469,10 +469,10 @@ export default function VendorDetail() {
   const backLabel = backToLabel(backTo)
   const watchlistsReturnPath = upstreamWatchlistsPath(backTo)
   const watchlistsReturnLabel = upstreamWatchlistsLabel(watchlistsReturnPath)
-  const alertsPath = upstreamNestedPath(backTo, '/alerts') ?? vendorAlertsPath(profile.vendor_name)
-  const evidenceExplorerPath = upstreamEvidencePath(backTo, profile.vendor_name) ?? vendorEvidenceExplorerPath(profile.vendor_name)
-  const reportsPath = upstreamNestedPath(backTo, '/reports') ?? vendorReportsPath(profile.vendor_name)
-  const opportunitiesPath = upstreamNestedPath(backTo, '/opportunities') ?? vendorOpportunitiesPath(profile.vendor_name)
+  const alertsPath = upstreamNestedPath(backTo, '/alerts') ?? vendorAlertsPath(profile.vendor_name, backTo)
+  const evidenceExplorerPath = upstreamEvidencePath(backTo, profile.vendor_name) ?? vendorEvidenceExplorerPath(profile.vendor_name, backTo)
+  const reportsPath = upstreamNestedPath(backTo, '/reports') ?? vendorReportsPath(profile.vendor_name, backTo)
+  const opportunitiesPath = upstreamNestedPath(backTo, '/opportunities') ?? vendorOpportunitiesPath(profile.vendor_name, backTo)
   const handleCopyLink = () => {
     navigator.clipboard.writeText(`${window.location.origin}${vendorSharePath}`).then(() => {
       setCopied(true)
@@ -511,7 +511,7 @@ export default function VendorDetail() {
           {recentReports.map((report) => (
             <button
               key={report.id}
-              onClick={() => navigate(vendorReportDetailPath(report.id, profile.vendor_name))}
+              onClick={() => navigate(vendorReportDetailPath(report.id, profile.vendor_name, backTo))}
               className="w-full rounded-lg border border-slate-700/50 bg-slate-800/40 px-3 py-3 text-left hover:border-cyan-500/30 hover:bg-slate-800/70 transition-colors"
             >
               <div className="flex items-start justify-between gap-3">
@@ -1684,7 +1684,7 @@ export default function VendorDetail() {
           <DataTable
             columns={reviewColumns}
             data={data?.reviews ?? []}
-            onRowClick={(r) => navigate(vendorReviewDetailPath(r.id, profile.vendor_name))}
+            onRowClick={(r) => navigate(vendorReviewDetailPath(r.id, profile.vendor_name, backTo))}
             emptyMessage="No enriched reviews for this vendor"
           />
         </div>

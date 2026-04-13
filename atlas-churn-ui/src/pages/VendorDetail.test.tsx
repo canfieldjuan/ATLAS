@@ -161,6 +161,75 @@ describe('VendorDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/reviews/review-1?back_to=%2Fvendors%2FZendesk')
   })
 
+  it('preserves nested watchlist context in vendor shortcut fallbacks and drilldowns', async () => {
+    const user = userEvent.setup()
+    api.fetchReviews.mockResolvedValue({
+      reviews: [
+        {
+          id: 'review-1',
+          reviewer_company: 'Acme Corp',
+          reviewer_title: 'VP Support',
+          source: 'g2',
+          urgency_score: 8.6,
+          pain_category: 'support',
+          sentiment_direction: 'declining',
+          rating: 2.5,
+          intent_to_leave: true,
+          decision_maker: true,
+          role_level: 'vp',
+          buying_stage: 'evaluation',
+          competitors_mentioned: [{ name: 'Freshdesk' }],
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    api.fetchReports.mockResolvedValue({
+      reports: [
+        {
+          id: 'report-1',
+          report_type: 'battle_card',
+          executive_summary: 'Zendesk churn is concentrated in enterprise support teams.',
+          vendor_filter: 'Zendesk',
+          quality_status: 'sales_ready',
+          report_date: '2026-04-10T12:00:00Z',
+          created_at: '2026-04-10T12:00:00Z',
+          status: 'ready',
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: 'View Reports' })[0])
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/reports?vendor_filter=Zendesk&back_to=%2Fvendors%2FZendesk%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+
+    mockNavigate.mockClear()
+    await user.click(screen.getByRole('button', { name: /battle card/i }))
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/reports/report-1?back_to=%2Fvendors%2FZendesk%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+
+    mockNavigate.mockClear()
+    await user.click(screen.getByRole('button', { name: 'reviews' }))
+    await user.click(screen.getByText('Acme Corp'))
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/reviews/review-1?back_to=%2Fvendors%2FZendesk%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+  })
+
   it('opens an exact account review from vendor high-intent companies when focus is available', async () => {
     const user = userEvent.setup()
     api.fetchVendorProfile.mockResolvedValue({
