@@ -377,12 +377,39 @@ def _merge_vendor_names_from_request(req) -> list[str] | None:
 
 
 def _watchlist_view_payload(row: Any) -> dict[str, Any]:
+    preview_alerts_enabled = bool(_row_value(row, "preview_alerts_enabled", True))
+    preview_alert_min_confidence_override = _safe_float(
+        _row_value(row, "preview_alert_min_confidence")
+    )
+    raw_preview_alert_require_budget_authority = _row_value(
+        row, "preview_alert_require_budget_authority"
+    )
+    preview_alert_require_budget_authority_override = (
+        raw_preview_alert_require_budget_authority
+        if isinstance(raw_preview_alert_require_budget_authority, bool)
+        else None
+    )
     preview_account_alert_policy = {
         "applies_to_preview_only": True,
-        "min_confidence": float(settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence),
-        "require_budget_authority": bool(
-            settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
+        "enabled": preview_alerts_enabled,
+        "min_confidence": (
+            preview_alert_min_confidence_override
+            if preview_alert_min_confidence_override is not None
+            else float(settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence)
         ),
+        "min_confidence_source": (
+            "view" if preview_alert_min_confidence_override is not None else "global"
+        ),
+        "require_budget_authority": (
+            preview_alert_require_budget_authority_override
+            if preview_alert_require_budget_authority_override is not None
+            else bool(settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority)
+        ),
+        "require_budget_authority_source": (
+            "view" if preview_alert_require_budget_authority_override is not None else "global"
+        ),
+        "override_min_confidence": preview_alert_min_confidence_override,
+        "override_require_budget_authority": preview_alert_require_budget_authority_override,
     }
     return {
         "id": str(row["id"]),
@@ -397,6 +424,7 @@ def _watchlist_view_payload(row: Any) -> dict[str, Any]:
         "changed_wedges_only": bool(row["changed_wedges_only"]),
         "vendor_alert_threshold": _safe_float(row.get("vendor_alert_threshold")),
         "account_alert_threshold": _safe_float(row.get("account_alert_threshold")),
+        "preview_alerts_enabled": preview_alerts_enabled,
         "stale_days_threshold": int(row["stale_days_threshold"]) if row.get("stale_days_threshold") is not None else None,
         "alert_email_enabled": bool(row.get("alert_email_enabled")),
         "alert_delivery_frequency": str(row.get("alert_delivery_frequency") or "daily"),
@@ -461,7 +489,9 @@ async def _fetch_watchlist_view_row(
         """
         SELECT id, account_id, name, vendor_names, category, source, min_urgency,
                include_stale, named_accounts_only, changed_wedges_only,
-               vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
+               vendor_alert_threshold, account_alert_threshold,
+               preview_alerts_enabled, preview_alert_min_confidence,
+               preview_alert_require_budget_authority, stale_days_threshold,
                alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
                last_alert_delivery_at, last_alert_delivery_status, last_alert_delivery_summary,
                created_at, updated_at
@@ -1079,6 +1109,9 @@ class WatchlistViewRequest(BaseModel):
     changed_wedges_only: bool = False
     vendor_alert_threshold: float | None = Field(default=None, ge=0, le=10)
     account_alert_threshold: float | None = Field(default=None, ge=0, le=10)
+    preview_alerts_enabled: bool = True
+    preview_alert_min_confidence: float | None = Field(default=None, ge=0, le=1)
+    preview_alert_require_budget_authority: bool | None = None
     stale_days_threshold: int | None = Field(default=None, ge=0, le=365)
     alert_email_enabled: bool = False
     alert_delivery_frequency: str = Field(default="daily", min_length=1, max_length=20)
@@ -2085,6 +2118,9 @@ async def list_tenant_accounts_in_motion_feed(
     include_stale: bool = Query(True),
     named_accounts_only: bool = Query(False),
     account_alert_threshold: float | None = Query(None, ge=0, le=10),
+    preview_alerts_enabled: bool = Query(True),
+    preview_alert_min_confidence: float | None = Query(None, ge=0, le=1),
+    preview_alert_require_budget_authority: bool | None = Query(None),
     stale_days_threshold: int | None = Query(None, ge=0, le=365),
     per_vendor_limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_feed_max_total, ge=1, le=200),
@@ -2102,6 +2138,13 @@ async def list_tenant_accounts_in_motion_feed(
     named_accounts_only = bool(named_accounts_only)
     min_urgency = _safe_float(min_urgency, settings.b2b_churn.accounts_in_motion_min_urgency)
     account_alert_threshold = _safe_float(account_alert_threshold)
+    preview_alerts_enabled = preview_alerts_enabled if isinstance(preview_alerts_enabled, bool) else True
+    preview_alert_min_confidence = _safe_float(preview_alert_min_confidence)
+    preview_alert_require_budget_authority = (
+        preview_alert_require_budget_authority
+        if isinstance(preview_alert_require_budget_authority, bool)
+        else None
+    )
     stale_days_threshold = _coerce_optional_int(stale_days_threshold)
     per_vendor_limit = _coerce_optional_int(per_vendor_limit) or settings.b2b_churn.accounts_in_motion_max_per_vendor
     limit = _coerce_optional_int(limit) or settings.b2b_churn.accounts_in_motion_feed_max_total
@@ -2169,7 +2212,10 @@ async def list_tenant_accounts_in_motion_feed(
                 continue
             account_alert_score, account_alert_score_source = _accounts_in_motion_alert_basis(account)
             account_alert_eligible, account_alert_policy_reason = _accounts_in_motion_preview_alert_policy(
-                account
+                account,
+                enabled=preview_alerts_enabled,
+                min_confidence=preview_alert_min_confidence,
+                require_budget_authority=preview_alert_require_budget_authority,
             )
             filtered_accounts.append(
                 {
@@ -2242,7 +2288,9 @@ async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
         """
         SELECT id, name, vendor_names, category, source, min_urgency,
                include_stale, named_accounts_only, changed_wedges_only,
-               vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
+               vendor_alert_threshold, account_alert_threshold,
+               preview_alerts_enabled, preview_alert_min_confidence,
+               preview_alert_require_budget_authority, stale_days_threshold,
                alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
                last_alert_delivery_at, last_alert_delivery_status, last_alert_delivery_summary,
                created_at, updated_at
@@ -2292,17 +2340,21 @@ async def create_watchlist_view(
         INSERT INTO b2b_watchlist_views (
             id, account_id, name, vendor_names, category, source, min_urgency,
             include_stale, named_accounts_only, changed_wedges_only,
-            vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
+            vendor_alert_threshold, account_alert_threshold,
+            preview_alerts_enabled, preview_alert_min_confidence,
+            preview_alert_require_budget_authority, stale_days_threshold,
             alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
             created_at, updated_at
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-            $14, $15, $16, $17, $17
+            $14, $15, $16, $17, $18, $19, $20, $20
         )
         RETURNING id, name, vendor_names, category, source, min_urgency,
                   include_stale, named_accounts_only, changed_wedges_only,
-                  vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
+                  vendor_alert_threshold, account_alert_threshold,
+                  preview_alerts_enabled, preview_alert_min_confidence,
+                  preview_alert_require_budget_authority, stale_days_threshold,
                   alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
                   last_alert_delivery_at, last_alert_delivery_status, last_alert_delivery_summary,
                   created_at, updated_at
@@ -2319,6 +2371,9 @@ async def create_watchlist_view(
         req.changed_wedges_only,
         req.vendor_alert_threshold,
         req.account_alert_threshold,
+        req.preview_alerts_enabled,
+        req.preview_alert_min_confidence,
+        req.preview_alert_require_budget_authority,
         req.stale_days_threshold,
         req.alert_email_enabled,
         alert_delivery_frequency,
@@ -2344,7 +2399,9 @@ async def update_watchlist_view(
         """
         SELECT id, name, vendor_names, category, source, min_urgency,
                include_stale, named_accounts_only, changed_wedges_only,
-               vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
+               vendor_alert_threshold, account_alert_threshold,
+               preview_alerts_enabled, preview_alert_min_confidence,
+               preview_alert_require_budget_authority, stale_days_threshold,
                alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at
         FROM b2b_watchlist_views
         WHERE id = $1
@@ -2410,6 +2467,25 @@ async def update_watchlist_view(
         if "account_alert_threshold" in request_fields
         else existing["account_alert_threshold"]
     )
+    preview_alerts_enabled = (
+        bool(req.preview_alerts_enabled)
+        if "preview_alerts_enabled" in request_fields
+        else bool(_row_value(existing, "preview_alerts_enabled", True))
+    )
+    preview_alert_min_confidence = (
+        req.preview_alert_min_confidence
+        if "preview_alert_min_confidence" in request_fields
+        else _safe_float(_row_value(existing, "preview_alert_min_confidence"))
+    )
+    preview_alert_require_budget_authority = (
+        req.preview_alert_require_budget_authority
+        if "preview_alert_require_budget_authority" in request_fields
+        else (
+            _row_value(existing, "preview_alert_require_budget_authority")
+            if isinstance(_row_value(existing, "preview_alert_require_budget_authority"), bool)
+            else None
+        )
+    )
     stale_days_threshold = (
         req.stale_days_threshold
         if "stale_days_threshold" in request_fields
@@ -2444,16 +2520,21 @@ async def update_watchlist_view(
             changed_wedges_only = $10,
             vendor_alert_threshold = $11,
             account_alert_threshold = $12,
-            stale_days_threshold = $13,
-            alert_email_enabled = $14,
-            alert_delivery_frequency = $15,
-            next_alert_delivery_at = $16,
-            updated_at = $17
+            preview_alerts_enabled = $13,
+            preview_alert_min_confidence = $14,
+            preview_alert_require_budget_authority = $15,
+            stale_days_threshold = $16,
+            alert_email_enabled = $17,
+            alert_delivery_frequency = $18,
+            next_alert_delivery_at = $19,
+            updated_at = $20
         WHERE id = $1
           AND account_id = $2
         RETURNING id, name, vendor_names, category, source, min_urgency,
                   include_stale, named_accounts_only, changed_wedges_only,
-                  vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
+                  vendor_alert_threshold, account_alert_threshold,
+                  preview_alerts_enabled, preview_alert_min_confidence,
+                  preview_alert_require_budget_authority, stale_days_threshold,
                   alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
                   last_alert_delivery_at, last_alert_delivery_status, last_alert_delivery_summary,
                   created_at, updated_at
@@ -2470,6 +2551,9 @@ async def update_watchlist_view(
         changed_wedges_only,
         vendor_alert_threshold,
         account_alert_threshold,
+        preview_alerts_enabled,
+        preview_alert_min_confidence,
+        preview_alert_require_budget_authority,
         stale_days_threshold,
         alert_delivery_enabled,
         alert_delivery_frequency,

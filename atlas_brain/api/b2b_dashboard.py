@@ -353,19 +353,35 @@ def _accounts_in_motion_alert_basis(account: Mapping[str, Any] | None) -> tuple[
 
 def _accounts_in_motion_preview_alert_policy(
     account: Mapping[str, Any] | None,
+    *,
+    enabled: bool = True,
+    min_confidence: float | None = None,
+    require_budget_authority: bool | None = None,
 ) -> tuple[bool, str | None]:
     if not isinstance(account, Mapping):
         return False, "missing_account"
     if not bool(account.get("account_reasoning_preview_only")):
         return True, None
+    if not enabled:
+        return False, "preview_policy_disabled"
+    effective_min_confidence = (
+        settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
+        if min_confidence is None
+        else min_confidence
+    )
     confidence_value = _safe_float(account.get("confidence"))
     if (
         confidence_value is None
-        or confidence_value < settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
+        or confidence_value < effective_min_confidence
     ):
         return False, "preview_low_confidence"
-    if (
+    effective_require_budget_authority = (
         settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
+        if require_budget_authority is None
+        else require_budget_authority
+    )
+    if (
+        effective_require_budget_authority
         and not bool(account.get("budget_authority"))
     ):
         return False, "preview_missing_budget_authority"

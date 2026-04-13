@@ -570,6 +570,13 @@ async def evaluate_watchlist_alert_events_for_view(
         include_stale=bool(_row_value(view_row, "include_stale")),
         named_accounts_only=bool(_row_value(view_row, "named_accounts_only")),
         account_alert_threshold=_safe_float(_row_value(view_row, "account_alert_threshold")),
+        preview_alerts_enabled=bool(_row_value(view_row, "preview_alerts_enabled", True)),
+        preview_alert_min_confidence=_safe_float(_row_value(view_row, "preview_alert_min_confidence")),
+        preview_alert_require_budget_authority=(
+            _row_value(view_row, "preview_alert_require_budget_authority")
+            if isinstance(_row_value(view_row, "preview_alert_require_budget_authority"), bool)
+            else None
+        ),
         stale_days_threshold=_coerce_optional_int(_row_value(view_row, "stale_days_threshold")),
         per_vendor_limit=settings.b2b_churn.accounts_in_motion_max_per_vendor,
         limit=settings.b2b_churn.accounts_in_motion_feed_max_total,

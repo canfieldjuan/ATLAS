@@ -2158,6 +2158,64 @@ async def test_accounts_in_motion_feed_blocks_preview_alert_without_policy_suppo
 
 
 @pytest.mark.asyncio
+async def test_accounts_in_motion_feed_honors_preview_alert_policy_overrides(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {"vendor_name": "Salesforce", "track_mode": "competitor", "label": "CRM", "added_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    helper = AsyncMock(
+        return_value={
+            "accounts": [
+                {
+                    "company": "Concentrix",
+                    "vendor": "Salesforce",
+                    "category": "CRM",
+                    "urgency": None,
+                    "preview_signal_score": 6.2,
+                    "confidence": 0.41,
+                    "budget_authority": False,
+                    "account_reasoning_preview_only": True,
+                    "account_pressure_disclaimer": "Early account signal only.",
+                    "opportunity_score": None,
+                    "source_distribution": {"reddit": 1},
+                    "source_reviews": [{"id": "review-1", "source": "reddit"}],
+                }
+            ],
+            "report_date": "2026-04-04",
+            "stale_days": 0,
+            "is_stale": False,
+            "data_source": "persisted_report",
+        }
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_list_accounts_in_motion_from_report", helper)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        account_alert_threshold=6,
+        preview_alerts_enabled=False,
+        preview_alert_min_confidence=0.5,
+        preview_alert_require_budget_authority=False,
+        user=user,
+    )
+
+    assert result["count"] == 1
+    assert result["account_alert_hit_count"] == 0
+    assert result["accounts"][0]["account_alert_hit"] is False
+    assert result["accounts"][0]["account_alert_score"] == pytest.approx(6.2)
+    assert result["accounts"][0]["account_alert_score_source"] == "preview_signal_score"
+    assert result["accounts"][0]["account_alert_eligible"] is False
+    assert result["accounts"][0]["account_alert_policy_reason"] == "preview_policy_disabled"
+
+
+@pytest.mark.asyncio
 async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -2178,6 +2236,9 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
                     "changed_wedges_only": True,
                     "vendor_alert_threshold": 7.5,
                     "account_alert_threshold": 8.5,
+                    "preview_alerts_enabled": False,
+                    "preview_alert_min_confidence": 0.55,
+                    "preview_alert_require_budget_authority": False,
                     "stale_days_threshold": 3,
                     "alert_email_enabled": True,
                     "alert_delivery_frequency": "weekly",
@@ -2208,14 +2269,16 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
     assert result["views"][0]["alert_delivery_frequency"] == "weekly"
     assert result["views"][0]["next_alert_delivery_at"] == "2026-04-10 12:00:00+00:00"
     assert result["views"][0]["last_alert_delivery_status"] == "sent"
+    assert result["views"][0]["preview_alerts_enabled"] is False
     assert result["views"][0]["preview_account_alert_policy"] == {
         "applies_to_preview_only": True,
-        "min_confidence": pytest.approx(
-            mod.settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
-        ),
-        "require_budget_authority": bool(
-            mod.settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
-        ),
+        "enabled": False,
+        "min_confidence": pytest.approx(0.55),
+        "min_confidence_source": "view",
+        "require_budget_authority": False,
+        "require_budget_authority_source": "view",
+        "override_min_confidence": pytest.approx(0.55),
+        "override_require_budget_authority": False,
     }
     assert "is_default" not in result["views"][0]
     assert "FROM b2b_watchlist_views" in pool.fetch.await_args.args[0]
@@ -2409,6 +2472,9 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
                 "changed_wedges_only": True,
                 "vendor_alert_threshold": 7.0,
                 "account_alert_threshold": 8.0,
+                "preview_alerts_enabled": False,
+                "preview_alert_min_confidence": 0.45,
+                "preview_alert_require_budget_authority": False,
                 "stale_days_threshold": 2,
                 "alert_email_enabled": True,
                 "alert_delivery_frequency": "weekly",
@@ -2437,6 +2503,9 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
             changed_wedges_only=True,
             vendor_alert_threshold=7,
             account_alert_threshold=8,
+            preview_alerts_enabled=False,
+            preview_alert_min_confidence=0.45,
+            preview_alert_require_budget_authority=False,
             stale_days_threshold=2,
             alert_email_enabled=True,
             alert_delivery_frequency="weekly",
@@ -2451,18 +2520,20 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
     assert result["changed_wedges_only"] is True
     assert result["vendor_alert_threshold"] == 7.0
     assert result["account_alert_threshold"] == 8.0
+    assert result["preview_alerts_enabled"] is False
     assert result["stale_days_threshold"] == 2
     assert result["alert_email_enabled"] is True
     assert result["alert_delivery_frequency"] == "weekly"
     assert result["next_alert_delivery_at"] == "2026-04-14 12:00:00+00:00"
     assert result["preview_account_alert_policy"] == {
         "applies_to_preview_only": True,
-        "min_confidence": pytest.approx(
-            mod.settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
-        ),
-        "require_budget_authority": bool(
-            mod.settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
-        ),
+        "enabled": False,
+        "min_confidence": pytest.approx(0.45),
+        "min_confidence_source": "view",
+        "require_budget_authority": False,
+        "require_budget_authority_source": "view",
+        "override_min_confidence": pytest.approx(0.45),
+        "override_require_budget_authority": False,
     }
     vendor_lookup_sql = pool.fetchval.await_args_list[1].args[0]
     assert "FROM tracked_vendors" in vendor_lookup_sql
@@ -2470,9 +2541,12 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
     assert "INSERT INTO b2b_watchlist_views" in insert_sql
     assert "alert_email_enabled" in insert_sql
     assert pool.fetchrow.await_args.args[3] == "Intercom named only"
-    assert pool.fetchrow.await_args.args[14] is True
-    assert pool.fetchrow.await_args.args[15] == "weekly"
-    assert pool.fetchrow.await_args.args[16] is not None
+    assert pool.fetchrow.await_args.args[13] is False
+    assert pool.fetchrow.await_args.args[14] == pytest.approx(0.45)
+    assert pool.fetchrow.await_args.args[15] is False
+    assert pool.fetchrow.await_args.args[17] is True
+    assert pool.fetchrow.await_args.args[18] == "weekly"
+    assert pool.fetchrow.await_args.args[19] is not None
 
 
 @pytest.mark.asyncio
@@ -2596,6 +2670,9 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
                         "changed_wedges_only": True,
                         "vendor_alert_threshold": 6.5,
                         "account_alert_threshold": 7.5,
+                        "preview_alerts_enabled": True,
+                        "preview_alert_min_confidence": None,
+                        "preview_alert_require_budget_authority": None,
                         "stale_days_threshold": 5,
                         "alert_email_enabled": True,
                         "alert_delivery_frequency": "weekly",
@@ -2613,6 +2690,9 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
                     "changed_wedges_only": True,
                     "vendor_alert_threshold": 6.5,
                     "account_alert_threshold": 7.5,
+                    "preview_alerts_enabled": False,
+                    "preview_alert_min_confidence": 0.35,
+                    "preview_alert_require_budget_authority": False,
                     "stale_days_threshold": 5,
                     "alert_email_enabled": True,
                     "alert_delivery_frequency": "weekly",
@@ -2634,7 +2714,13 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
 
     updated = await mod.update_watchlist_view(
         view_id=view_id,
-        req=mod.WatchlistViewRequest(name="  Changed wedges only  ", changed_wedges_only=True),
+        req=mod.WatchlistViewRequest(
+            name="  Changed wedges only  ",
+            changed_wedges_only=True,
+            preview_alerts_enabled=False,
+            preview_alert_min_confidence=0.35,
+            preview_alert_require_budget_authority=False,
+        ),
         user=user,
     )
     deleted = await mod.delete_watchlist_view(view_id=view_id, user=user)
@@ -2643,23 +2729,28 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
     assert updated["changed_wedges_only"] is True
     assert updated["vendor_alert_threshold"] == 6.5
     assert updated["account_alert_threshold"] == 7.5
+    assert updated["preview_alerts_enabled"] is False
     assert updated["stale_days_threshold"] == 5
     assert updated["alert_email_enabled"] is True
     assert updated["alert_delivery_frequency"] == "weekly"
     assert updated["next_alert_delivery_at"] == "2026-04-12 09:00:00+00:00"
     assert updated["preview_account_alert_policy"] == {
         "applies_to_preview_only": True,
-        "min_confidence": pytest.approx(
-            mod.settings.b2b_churn.accounts_in_motion_preview_alert_min_confidence
-        ),
-        "require_budget_authority": bool(
-            mod.settings.b2b_churn.accounts_in_motion_preview_alert_require_budget_authority
-        ),
+        "enabled": False,
+        "min_confidence": pytest.approx(0.35),
+        "min_confidence_source": "view",
+        "require_budget_authority": False,
+        "require_budget_authority_source": "view",
+        "override_min_confidence": pytest.approx(0.35),
+        "override_require_budget_authority": False,
     }
     assert "UPDATE b2b_watchlist_views" in pool.fetchrow.await_args_list[1].args[0]
     assert pool.fetchrow.await_args_list[1].args[3] == "Changed wedges only"
-    assert pool.fetchrow.await_args_list[1].args[15] == "weekly"
-    assert pool.fetchrow.await_args_list[1].args[16] == existing_next_delivery_at
+    assert pool.fetchrow.await_args_list[1].args[13] is False
+    assert pool.fetchrow.await_args_list[1].args[14] == pytest.approx(0.35)
+    assert pool.fetchrow.await_args_list[1].args[15] is False
+    assert pool.fetchrow.await_args_list[1].args[18] == "weekly"
+    assert pool.fetchrow.await_args_list[1].args[19] == existing_next_delivery_at
     assert deleted == {"deleted": True, "watchlist_view_id": str(view_id)}
     assert "DELETE FROM b2b_watchlist_views" in pool.fetchrow.await_args_list[-1].args[0]
 
@@ -3107,6 +3198,9 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
         "changed_wedges_only": False,
         "vendor_alert_threshold": 7.5,
         "account_alert_threshold": 8.5,
+        "preview_alerts_enabled": False,
+        "preview_alert_min_confidence": 0.65,
+        "preview_alert_require_budget_authority": False,
         "stale_days_threshold": 2,
         "created_at": None,
         "updated_at": None,
@@ -3242,6 +3336,9 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
     assert result["new_open_event_count"] == 1
     assert result["resolved_event_count"] == 1
     assert mod.list_tenant_accounts_in_motion_feed.await_args.kwargs["named_accounts_only"] is True
+    assert mod.list_tenant_accounts_in_motion_feed.await_args.kwargs["preview_alerts_enabled"] is False
+    assert mod.list_tenant_accounts_in_motion_feed.await_args.kwargs["preview_alert_min_confidence"] == pytest.approx(0.65)
+    assert mod.list_tenant_accounts_in_motion_feed.await_args.kwargs["preview_alert_require_budget_authority"] is False
     assert result["events"][0]["reasoning_reference_ids"] == {"witness_ids": ["vw1"]}
     assert result["events"][1]["source_review_ids"] == ["r1"]
     assert result["events"][1]["account_alert_score"] == pytest.approx(9.0)

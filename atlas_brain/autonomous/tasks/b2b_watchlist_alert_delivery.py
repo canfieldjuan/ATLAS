@@ -38,7 +38,9 @@ async def _fetch_due_views(pool, limit: int) -> list[Any]:
         """
         SELECT v.id, v.account_id, v.name, v.vendor_names, v.category, v.source, v.min_urgency,
                v.include_stale, v.named_accounts_only, v.changed_wedges_only,
-               v.vendor_alert_threshold, v.account_alert_threshold, v.stale_days_threshold,
+               v.vendor_alert_threshold, v.account_alert_threshold,
+               v.preview_alerts_enabled, v.preview_alert_min_confidence,
+               v.preview_alert_require_budget_authority, v.stale_days_threshold,
                v.alert_email_enabled, v.alert_delivery_frequency, v.next_alert_delivery_at,
                v.last_alert_delivery_at, v.last_alert_delivery_status, v.last_alert_delivery_summary,
                v.created_at, v.updated_at,
