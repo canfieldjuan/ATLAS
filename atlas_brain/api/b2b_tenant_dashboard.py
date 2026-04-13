@@ -2017,11 +2017,12 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
 
     counts = await pool.fetchrow(
         f"""
-        SELECT COUNT(*) AS total_reviews,
-               COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched
-        FROM b2b_reviews
-        WHERE vendor_name ILIKE '%' || $1 || '%'
-          AND {_canonical_review_predicate()}
+        SELECT COUNT(DISTINCT r.id) AS total_reviews,
+               COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'enriched') AS enriched
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name ILIKE '%' || $1 || '%'
+          AND {_canonical_review_predicate('r')}
         """,
         vname,
     )
@@ -2030,13 +2031,14 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
     # Reason: aggregation, GROUP BY + COUNT
     pain_rows = await pool.fetch(
         f"""
-        SELECT enrichment->>'pain_category' AS pain, COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE vendor_name ILIKE '%' || $1 || '%'
-          AND enrichment_status = 'enriched'
-          AND {_canonical_review_predicate()}
-          AND enrichment->>'pain_category' IS NOT NULL
-        GROUP BY enrichment->>'pain_category'
+        SELECT r.enrichment->>'pain_category' AS pain, COUNT(DISTINCT r.id) AS cnt
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name ILIKE '%' || $1 || '%'
+          AND r.enrichment_status = 'enriched'
+          AND {_canonical_review_predicate('r')}
+          AND r.enrichment->>'pain_category' IS NOT NULL
+        GROUP BY r.enrichment->>'pain_category'
         ORDER BY cnt DESC LIMIT 50
         """,
         vname,
@@ -3188,10 +3190,11 @@ async def pain_trends(
 
     rows = await pool.fetch(
         f"""
-        SELECT DATE_TRUNC('week', enriched_at) AS week,
-               enrichment->>'pain_category' AS pain,
-               COUNT(*) AS cnt
-        FROM b2b_reviews
+        SELECT DATE_TRUNC('week', r.enriched_at) AS week,
+               r.enrichment->>'pain_category' AS pain,
+               COUNT(DISTINCT r.id) AS cnt
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
         WHERE {where}
         GROUP BY week, pain
         ORDER BY week, cnt DESC
@@ -3242,13 +3245,14 @@ async def competitor_displacement(
 
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-               enrichment->'competitors_mentioned' AS competitors,
-               (enrichment->'churn_signals'->>'intent_to_leave')::boolean AS leaving,
-               COUNT(*) AS mention_count
-        FROM b2b_reviews
+        SELECT vm.vendor_name,
+               r.enrichment->'competitors_mentioned' AS competitors,
+               (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean AS leaving,
+               COUNT(DISTINCT r.id) AS mention_count
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
         WHERE {where}
-        GROUP BY vendor_name, competitors, leaving
+        GROUP BY vm.vendor_name, competitors, leaving
         ORDER BY mention_count DESC
         LIMIT ${idx}
         """,
@@ -3281,7 +3285,12 @@ async def get_tenant_pipeline_status(user: AuthUser = Depends(require_auth)):
     scope_params: list = []
     if t_params:
         review_scope = (
-            "WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)"
+            "WHERE EXISTS ("
+            " SELECT 1"
+            " FROM b2b_review_vendor_mentions vm"
+            " WHERE vm.review_id = b2b_reviews.id"
+            "   AND vm.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)"
+            ")"
             f" AND {_canonical_review_predicate()}"
         )
         scrape_scope = "WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)"
@@ -4180,7 +4189,23 @@ async def get_tenant_review(review_id: str, user: AuthUser = Depends(require_aut
         raise HTTPException(status_code=400, detail="Invalid review_id (must be UUID)")
 
     pool = _pool_or_503()
-    row = await pool.fetchrow("SELECT * FROM b2b_reviews WHERE id = $1", rid)
+    row = await pool.fetchrow(
+        """
+        SELECT
+            r.*,
+            COALESCE(primary_vm.vendor_name, r.vendor_name) AS matched_vendor_name
+        FROM b2b_reviews r
+        LEFT JOIN LATERAL (
+            SELECT vm.vendor_name
+            FROM b2b_review_vendor_mentions vm
+            WHERE vm.review_id = r.id
+            ORDER BY vm.is_primary DESC, vm.id ASC
+            LIMIT 1
+        ) AS primary_vm ON TRUE
+        WHERE r.id = $1
+        """,
+        rid,
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Review not found")
 
@@ -4188,9 +4213,19 @@ async def get_tenant_review(review_id: str, user: AuthUser = Depends(require_aut
     if settings.saas_auth.enabled and not _is_admin_user(user):
         acct = _uuid.UUID(user.account_id)
         tracked = await pool.fetchval(
-            "SELECT 1 FROM tracked_vendors WHERE account_id = $1 AND vendor_name = $2",
+            """
+            SELECT 1
+            FROM tracked_vendors tv
+            WHERE tv.account_id = $1
+              AND EXISTS (
+                  SELECT 1
+                  FROM b2b_review_vendor_mentions vm
+                  WHERE vm.review_id = $2::uuid
+                    AND tv.vendor_name = vm.vendor_name
+              )
+            """,
             acct,
-            row["vendor_name"],
+            row["id"],
         )
         if not tracked:
             raise HTTPException(status_code=403, detail="Review vendor not in your tracked list")
@@ -4199,7 +4234,7 @@ async def get_tenant_review(review_id: str, user: AuthUser = Depends(require_aut
         "id": str(row["id"]),
         "source": row["source"],
         "source_url": row["source_url"],
-        "vendor_name": row["vendor_name"],
+        "vendor_name": row.get("matched_vendor_name") or row.get("vendor_name"),
         "product_name": row["product_name"],
         "product_category": row["product_category"],
         "rating": _safe_float(row["rating"]),

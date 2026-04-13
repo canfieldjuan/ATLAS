@@ -259,6 +259,7 @@ async def test_tenant_pipeline_excludes_cross_source_duplicates(monkeypatch):
     stats_sql = pool.fetchrow.await_args_list[0].args[0]
     assert "duplicate_of_review_id IS NULL" in status_sql
     assert "duplicate_of_review_id IS NULL" in stats_sql
+    assert "b2b_review_vendor_mentions vm" in status_sql
 
 
 @pytest.mark.asyncio
@@ -278,6 +279,7 @@ async def test_tenant_pain_trends_excludes_cross_source_duplicates(monkeypatch):
     assert result == {"trends": [], "count": 0}
     sql = pool.fetch.await_args.args[0]
     assert "duplicate_of_review_id IS NULL" in sql
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
 
 
 @pytest.mark.asyncio
@@ -297,6 +299,7 @@ async def test_tenant_competitor_displacement_excludes_cross_source_duplicates(m
     assert result == {"displacement": [], "count": 0}
     sql = pool.fetch.await_args.args[0]
     assert "duplicate_of_review_id IS NULL" in sql
+    assert "JOIN b2b_review_vendor_mentions vm" in sql
 
 
 @pytest.mark.asyncio
@@ -2965,6 +2968,8 @@ async def test_get_tenant_review_trims_uuid_path_before_lookup(monkeypatch):
     await mod.get_tenant_review(f"  {review_id}  ", user=user)
 
     assert pool.fetchrow.await_args.args[1] == review_id
+    assert "b2b_review_vendor_mentions vm" in pool.fetchrow.await_args.args[0]
+    assert "FROM b2b_review_vendor_mentions vm" in pool.fetchval.await_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -4051,13 +4056,13 @@ async def test_get_vendor_detail_interpolates_canonical_review_predicate(monkeyp
 
     async def fetchrow(query, *args):
         captured_fetchrow_queries.append(query)
-        if "COUNT(*) AS total_reviews" in query:
+        if "COUNT(DISTINCT r.id) AS total_reviews" in query:
             return {"total_reviews": 12, "enriched": 9}
         return None
 
     async def fetch(query, *args):
         captured_fetch_queries.append(query)
-        if "GROUP BY enrichment->>'pain_category'" in query:
+        if "GROUP BY r.enrichment->>'pain_category'" in query:
             return [{"pain": "support", "cnt": 4}]
         return []
 
@@ -4097,7 +4102,7 @@ async def test_get_vendor_detail_interpolates_canonical_review_predicate(monkeyp
     assert result["pain_distribution"] == [{"pain_category": "support", "count": 4}]
     assert result["high_intent_companies"][0]["company"] == "Acme Corp"
 
-    counts_query = next(query for query in captured_fetchrow_queries if "COUNT(*) AS total_reviews" in query)
-    pain_query = next(query for query in captured_fetch_queries if "GROUP BY enrichment->>'pain_category'" in query)
+    counts_query = next(query for query in captured_fetchrow_queries if "COUNT(DISTINCT r.id) AS total_reviews" in query)
+    pain_query = next(query for query in captured_fetch_queries if "GROUP BY r.enrichment->>'pain_category'" in query)
     assert "{" not in counts_query and "}" not in counts_query
     assert "{" not in pain_query and "}" not in pain_query
