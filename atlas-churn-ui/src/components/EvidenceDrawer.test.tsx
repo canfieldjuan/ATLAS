@@ -255,6 +255,39 @@ describe('EvidenceDrawer', () => {
     )
   })
 
+  it('prefers the exact upstream report detail path when present', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    try {
+      render(
+        <MemoryRouter>
+          <EvidenceDrawer
+            vendorName="Salesforce"
+            witnessId="w1"
+            open
+            backToPath="/vendors/Salesforce?back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1"
+            onClose={() => {}}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(await screen.findByRole('link', { name: 'Open report detail' })).toHaveAttribute(
+        'href',
+        '/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1',
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Copy report detail link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledWith(
+          `${window.location.origin}/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1`,
+        )
+      })
+    } finally {
+      clipboardSpy.mockRestore()
+    }
+  })
+
   it('surfaces annotation mutation failures inline', async () => {
     const user = userEvent.setup()
     api.setAnnotation.mockRejectedValueOnce(new Error('annotation service unavailable'))

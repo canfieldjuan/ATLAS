@@ -145,7 +145,7 @@ function parseBackTarget(value: string | null | undefined) {
   }
 }
 
-function upstreamNestedPath(value: string | null | undefined, prefix: '/alerts' | '/vendors/' | '/watchlists') {
+function upstreamNestedPath(value: string | null | undefined, prefix: '/alerts' | '/vendors/' | '/watchlists' | '/reports') {
   let current = parseBackTarget(value)
   while (current) {
     if (current.startsWith(prefix)) return current
@@ -392,13 +392,17 @@ export default function EvidenceDrawer({
   if (!open) return null
 
   const libraryPath = vendorName
-    ? (() => {
+    ? upstreamNestedPath(backToPath, '/reports') ?? (() => {
         const params = new URLSearchParams()
         params.set('vendor_filter', vendorName)
         if (backToPath) params.set('back_to', backToPath)
         return `/reports?${params.toString()}`
       })()
     : null
+  const libraryTargetsReportDetail = Boolean(libraryPath?.startsWith('/reports/'))
+  const libraryLinkText = libraryTargetsReportDetail ? 'Open report detail' : 'View library'
+  const libraryCopyLabel = libraryTargetsReportDetail ? 'Copy report' : 'Copy library'
+  const libraryCopyAriaLabel = libraryTargetsReportDetail ? 'Copy report detail link' : 'Copy report library link'
   const watchlistsWorkspacePath = vendorName
     ? upstreamNestedPath(backToPath, '/watchlists') ?? watchlistsPath(vendorName, backToPath)
     : null
@@ -737,16 +741,16 @@ export default function EvidenceDrawer({
                         href={libraryPath}
                         className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
                       >
-                        View library <ExternalLink className="h-3 w-3" />
+                        {libraryLinkText} <ExternalLink className="h-3 w-3" />
                       </a>
                       <button
                         type="button"
                         onClick={() => void handleCopyLink('library', libraryPath)}
-                        aria-label="Copy report library link"
+                        aria-label={libraryCopyAriaLabel}
                         className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-slate-200 mt-1"
                       >
                         <Copy className="h-3 w-3" />
-                        {copiedLinkKey === 'library' ? 'Copied' : 'Copy library'}
+                        {copiedLinkKey === 'library' ? 'Copied' : libraryCopyLabel}
                       </button>
                     </>
                   ) : null}
