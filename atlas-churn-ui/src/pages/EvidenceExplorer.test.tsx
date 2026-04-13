@@ -234,6 +234,10 @@ describe('EvidenceExplorer', () => {
         'href',
         '/evidence?vendor=Zendesk&tab=witnesses&as_of_date=2026-04-08&window_days=45&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk',
       )
+      expect(drawerShortcuts.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+        'href',
+        '/watchlists?view=view-1&account_vendor=Zendesk',
+      )
       expect(drawerShortcuts.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
         'href',
         '/alerts?vendor=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26as_of_date%3D2026-04-08%26window_days%3D45%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
@@ -619,7 +623,7 @@ describe('EvidenceExplorer', () => {
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
     const headerShortcuts = activeVendorShortcuts()
-    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+    expect(headerShortcuts.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?view=view-zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
@@ -855,8 +859,9 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const watchlistsLink = await screen.findByRole('link', { name: 'Watchlists' })
-    await user.click(screen.getByRole('button', { name: 'Copy watchlists link' }))
+    const headerShortcuts = activeVendorShortcuts()
+    const watchlistsLink = await headerShortcuts.findByRole('link', { name: 'Watchlists' })
+    await user.click(headerShortcuts.getByRole('button', { name: 'Copy watchlists link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${watchlistsLink.getAttribute('href')}`)
@@ -910,7 +915,7 @@ describe('EvidenceExplorer', () => {
     )
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+    expect(activeVendorShortcuts().getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?view=view-zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses',
     )

@@ -112,6 +112,13 @@ function accountReviewPath(row: AccountsInMotionFeedItem, backToPath?: string | 
   return `/watchlists?${params.toString()}`
 }
 
+function watchlistsPath(vendorName: string, backToPath?: string | null) {
+  const params = new URLSearchParams()
+  params.set('vendor_name', vendorName)
+  if (backToPath) params.set('back_to', backToPath)
+  return `/watchlists?${params.toString()}`
+}
+
 function alertsPath(vendorName: string, backToPath?: string | null) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -138,7 +145,7 @@ function parseBackTarget(value: string | null | undefined) {
   }
 }
 
-function upstreamNestedPath(value: string | null | undefined, prefix: '/alerts' | '/vendors/') {
+function upstreamNestedPath(value: string | null | undefined, prefix: '/alerts' | '/vendors/' | '/watchlists') {
   let current = parseBackTarget(value)
   while (current) {
     if (current.startsWith(prefix)) return current
@@ -392,6 +399,12 @@ export default function EvidenceDrawer({
         return `/reports?${params.toString()}`
       })()
     : null
+  const watchlistsWorkspacePath = vendorName
+    ? upstreamNestedPath(backToPath, '/watchlists') ?? watchlistsPath(vendorName, backToPath)
+    : null
+  const visibleWatchlistsPath = watchlistsWorkspacePath && watchlistsWorkspacePath !== matchedAccountReviewPath
+    ? watchlistsWorkspacePath
+    : null
   const alertsWorkspacePath = vendorName
     ? upstreamNestedPath(backToPath, '/alerts') ?? alertsPath(vendorName, backToPath)
     : null
@@ -474,6 +487,26 @@ export default function EvidenceDrawer({
                   >
                     <Copy className="h-3 w-3" />
                     {copiedLinkKey === 'account-review' ? 'Copied' : 'Copy account review'}
+                  </button>
+                </>
+              ) : null}
+              {visibleWatchlistsPath ? (
+                <>
+                  <Link
+                    to={visibleWatchlistsPath}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 transition-colors"
+                  >
+                    <Building2 className="h-3 w-3" />
+                    Watchlists
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyLink('watchlists', visibleWatchlistsPath)}
+                    aria-label="Copy watchlists link"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 transition-colors"
+                  >
+                    <Copy className="h-3 w-3" />
+                    {copiedLinkKey === 'watchlists' ? 'Copied' : 'Copy watchlists'}
                   </button>
                 </>
               ) : null}

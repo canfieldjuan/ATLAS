@@ -68,6 +68,10 @@ describe('EvidenceDrawer', () => {
 
     expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: 'Pin' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?vendor_name=Salesforce&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
+    )
     expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
       '/alerts?vendor=Salesforce&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
@@ -165,9 +169,21 @@ describe('EvidenceDrawer', () => {
       expect(copiedUrl.searchParams.get('account_vendor')).toBe('Salesforce')
       expect(copiedUrl.searchParams.get('account_watch_vendor')).toBe('HubSpot')
 
-      await user.click(screen.getByRole('button', { name: 'Copy report library link' }))
+      await user.click(screen.getByRole('button', { name: 'Copy watchlists link' }))
       await waitFor(() => {
         expect(clipboardSpy).toHaveBeenCalledTimes(3)
+      })
+      copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+      copiedUrl = new URL(copiedText)
+      expect(copiedUrl.pathname).toBe('/watchlists')
+      expect(copiedUrl.searchParams.get('vendor_name')).toBe('Salesforce')
+      const watchlistsBackTo = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+      expect(watchlistsBackTo.pathname).toBe('/reports')
+      expect(watchlistsBackTo.searchParams.get('vendor_filter')).toBe('Salesforce')
+
+      await user.click(screen.getByRole('button', { name: 'Copy report library link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledTimes(4)
       })
       copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
       copiedUrl = new URL(copiedText)
@@ -176,7 +192,7 @@ describe('EvidenceDrawer', () => {
 
       await user.click(screen.getByRole('button', { name: 'Copy alerts link' }))
       await waitFor(() => {
-        expect(clipboardSpy).toHaveBeenCalledTimes(4)
+        expect(clipboardSpy).toHaveBeenCalledTimes(5)
       })
       copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
       copiedUrl = new URL(copiedText)
@@ -188,7 +204,7 @@ describe('EvidenceDrawer', () => {
 
       await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
       await waitFor(() => {
-        expect(clipboardSpy).toHaveBeenCalledTimes(5)
+        expect(clipboardSpy).toHaveBeenCalledTimes(6)
       })
       copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
       copiedUrl = new URL(copiedText)
@@ -199,7 +215,7 @@ describe('EvidenceDrawer', () => {
 
       await user.click(screen.getByRole('button', { name: 'Copy review detail link' }))
       await waitFor(() => {
-        expect(clipboardSpy).toHaveBeenCalledTimes(6)
+        expect(clipboardSpy).toHaveBeenCalledTimes(7)
       })
       copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
       copiedUrl = new URL(copiedText)
@@ -225,6 +241,10 @@ describe('EvidenceDrawer', () => {
       </MemoryRouter>,
     )
 
+    expect(await screen.findByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-1',
+    )
     expect(await screen.findByRole('link', { name: 'Alerts API' })).toHaveAttribute(
       'href',
       '/alerts?vendor=Salesforce&back_to=%2Fvendors%2FSalesforce%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
