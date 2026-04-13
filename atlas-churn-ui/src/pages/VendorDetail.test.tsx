@@ -770,6 +770,83 @@ describe('VendorDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/alerts?vendor=Zendesk&back_to=%2Fvendors%2FZendesk')
   })
 
+  it('navigates to a company-scoped alerts shortcut when entered from an exact account review path', async () => {
+    const user = userEvent.setup()
+    const upstreamAccountReviewPath = '/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-10&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor'
+    const expectedPath = (() => {
+      const params = new URLSearchParams()
+      params.set('vendor', 'Zendesk')
+      params.set('company', 'Acme Corp')
+      params.set('back_to', `/vendors/Zendesk?back_to=${encodeURIComponent(upstreamAccountReviewPath)}`)
+      return `/alerts?${params.toString()}`
+    })()
+
+    render(
+      <MemoryRouter initialEntries={[`/vendors/Zendesk?back_to=${encodeURIComponent(upstreamAccountReviewPath)}`]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Alerts API' })[0])
+
+    expect(mockNavigate).toHaveBeenCalledWith(expectedPath)
+  })
+
+  it('copies a company-scoped alerts shortcut when entered from an exact account review path', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const upstreamAccountReviewPath = '/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-10&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor'
+    const expectedPath = (() => {
+      const params = new URLSearchParams()
+      params.set('vendor', 'Zendesk')
+      params.set('company', 'Acme Corp')
+      params.set('back_to', `/vendors/Zendesk?back_to=${encodeURIComponent(upstreamAccountReviewPath)}`)
+      return `/alerts?${params.toString()}`
+    })()
+
+    render(
+      <MemoryRouter initialEntries={[`/vendors/Zendesk?back_to=${encodeURIComponent(upstreamAccountReviewPath)}`]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy alerts link' })[0])
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${expectedPath}`)
+    })
+  })
+
+  it('keeps alerts vendor-scoped when the upstream account review targets a different vendor', async () => {
+    const user = userEvent.setup()
+    const upstreamAccountReviewPath = '/watchlists?view=view-1&account_vendor=Freshdesk&account_company=Acme+Corp&account_report_date=2026-04-10&account_watch_vendor=Freshdesk&account_category=Helpdesk&account_track_mode=competitor'
+    const expectedPath = (() => {
+      const params = new URLSearchParams()
+      params.set('vendor', 'Zendesk')
+      params.set('back_to', `/vendors/Zendesk?back_to=${encodeURIComponent(upstreamAccountReviewPath)}`)
+      return `/alerts?${params.toString()}`
+    })()
+
+    render(
+      <MemoryRouter initialEntries={[`/vendors/Zendesk?back_to=${encodeURIComponent(upstreamAccountReviewPath)}`]}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Alerts API' })[0])
+
+    expect(mockNavigate).toHaveBeenCalledWith(expectedPath)
+  })
+
   it('preserves the exact upstream alerts path through nested evidence context', async () => {
     const user = userEvent.setup()
     const directAlertsPath = '/alerts?webhook=wh-crm&window=30d'

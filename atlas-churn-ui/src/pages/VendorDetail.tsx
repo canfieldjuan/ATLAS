@@ -301,9 +301,31 @@ function vendorOpportunitiesPath(vendorName: string, backTo: string | null): str
   return `/opportunities?${params.toString()}`
 }
 
+function upstreamAccountReviewCompany(backTo: string | null, vendorName: string): string | null {
+  const watchlistsPath = upstreamWatchlistsPath(backTo)
+  if (!watchlistsPath) return null
+
+  try {
+    const url = new URL(watchlistsPath, window.location.origin)
+    const accountCompany = url.searchParams.get('account_company')?.trim()
+    const accountVendor = url.searchParams.get('account_vendor')?.trim()
+    if (!accountCompany) return null
+    if (accountVendor && normalizeFocusValue(accountVendor) !== normalizeFocusValue(vendorName)) {
+      return null
+    }
+    return accountCompany
+  } catch {
+    return null
+  }
+}
+
 function vendorAlertsPath(vendorName: string, backTo: string | null): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
+  const accountCompany = upstreamAccountReviewCompany(backTo, vendorName)
+  if (accountCompany) {
+    params.set('company', accountCompany)
+  }
   params.set('back_to', vendorDetailSharePath(vendorName, normalizeBackTo(backTo)))
   return `/alerts?${params.toString()}`
 }
