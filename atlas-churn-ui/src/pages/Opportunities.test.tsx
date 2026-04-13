@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { RouterProvider, createMemoryRouter } from 'react-router-dom'
+import { RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Opportunities from './Opportunities'
 
@@ -38,6 +38,11 @@ vi.mock('../components/CompanyTimeline', () => ({
 vi.mock('../components/SignalEffectivenessPanel', () => ({
   default: () => <div>Signal Effectiveness Mock</div>,
 }))
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
+}
 
 describe('Opportunities', () => {
   beforeEach(() => {
@@ -84,7 +89,7 @@ describe('Opportunities', () => {
 
   it('syncs the vendor filter when the query string changes', async () => {
     const router = createMemoryRouter(
-      [{ path: '/opportunities', element: <Opportunities /> }],
+      [{ path: '/opportunities', element: <><Opportunities /><LocationProbe /></> }],
       { initialEntries: ['/opportunities?vendor=Zendesk'] },
     )
 
@@ -98,6 +103,68 @@ describe('Opportunities', () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Filter vendor...')).toHaveValue('HubSpot')
     })
+  })
+
+  it('clears same-route workbench filters without restoring stale query params', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <><Opportunities /><LocationProbe /></> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=Zendesk&min_urgency=7&window_days=30&stage=evaluation&intent=cancel&disposition=saved',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByPlaceholderText('Filter vendor...')).toHaveValue('Zendesk')
+
+    await router.navigate('/opportunities')
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Filter vendor...')).toHaveValue('')
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/opportunities')
+    })
+
+    await waitFor(() => {
+      expect(api.fetchHighIntent).toHaveBeenLastCalledWith({
+        min_urgency: 5,
+        vendor_name: undefined,
+        window_days: 90,
+        limit: 100,
+      })
+    })
+  })
+
+  it('canonicalizes invalid route filters on load', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <><Opportunities /><LocationProbe /></> }],
+      {
+        initialEntries: [
+          '/opportunities?vendor=%20Zendesk%20&min_urgency=99&window_days=999&stage=bogus&intent=cancel&intent=bogus&disposition=wat',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByPlaceholderText('Filter vendor...')).toHaveValue('Zendesk')
+
+    await waitFor(() => {
+      expect(api.fetchHighIntent).toHaveBeenLastCalledWith({
+        min_urgency: 10,
+        vendor_name: 'Zendesk',
+        window_days: 90,
+        limit: 100,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toHaveTextContent('/opportunities?vendor=Zendesk&min_urgency=10&intent=cancel')
+    })
+    expect(screen.getByTestId('location-probe')).not.toHaveTextContent('window_days=999')
+    expect(screen.getByTestId('location-probe')).not.toHaveTextContent('stage=bogus')
+    expect(screen.getByTestId('location-probe')).not.toHaveTextContent('disposition=wat')
   })
 
   it('hydrates the workbench filters from the URL', async () => {

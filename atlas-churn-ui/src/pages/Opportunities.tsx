@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Activity,
@@ -362,7 +362,8 @@ function CollapsibleSection({ title, defaultOpen = false, children }: {
 
 export default function Opportunities() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const initialVendor = searchParams.get('vendor') || ''
+  const searchParamsSignature = searchParams.toString()
+  const initialVendor = searchParams.get('vendor')?.trim() || ''
   const backTarget = resolveBackTarget(searchParams.get('back_to'))
   const initialMinUrgency = parseUrgencyParam(searchParams.get('min_urgency'))
   const initialWindowDays = parseWindowDaysParam(searchParams.get('window_days'))
@@ -402,6 +403,7 @@ export default function Opportunities() {
 
   // -- Campaign refresh signal: increment to trigger CampaignQueue refetch --
   const [campaignRefreshKey, setCampaignRefreshKey] = useState(0)
+  const suppressRouteSyncRef = useRef(false)
 
   // -- Generate --
   const [generating, setGenerating] = useState<string | null>(null)
@@ -418,6 +420,7 @@ export default function Opportunities() {
   }, [vendorSearch])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
     setVendorSearch(initialVendor)
     setDebouncedVendor(initialVendor)
     setExpandedId(null)
@@ -425,24 +428,38 @@ export default function Opportunities() {
   }, [initialVendor])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
     setMinUrgency((current) => (current === initialMinUrgency ? current : initialMinUrgency))
   }, [initialMinUrgency])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
     setWindowDays((current) => (current === initialWindowDays ? current : initialWindowDays))
   }, [initialWindowDays])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
     setStageFilter((current) => (current === initialStageFilter ? current : initialStageFilter))
   }, [initialStageFilter])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
     setDispositionTab((current) => (current === initialDispositionTab ? current : initialDispositionTab))
   }, [initialDispositionTab])
 
   useEffect(() => {
+    suppressRouteSyncRef.current = true
     setIntentFilter((current) => (sameStringSet(current, initialIntentFilter) ? current : initialIntentFilter))
   }, [initialIntentFilter])
+
+  const routeStateSettled =
+    vendorSearch === initialVendor &&
+    debouncedVendor === initialVendor &&
+    minUrgency === initialMinUrgency &&
+    windowDays === initialWindowDays &&
+    stageFilter === initialStageFilter &&
+    dispositionTab === initialDispositionTab &&
+    sameStringSet(intentFilter, initialIntentFilter)
 
   // Clear selection when server-side filters change (data will change)
   useEffect(() => {
@@ -1020,6 +1037,7 @@ export default function Opportunities() {
   }, [copiedShortcutLabel])
 
   useEffect(() => {
+    if (!routeStateSettled) return
     const next = buildOpportunitiesSearchParams({
       vendorName: debouncedVendor,
       backTarget,
@@ -1029,10 +1047,52 @@ export default function Opportunities() {
       dispositionTab,
       intentFilter,
     })
-    if (next.toString() !== searchParams.toString()) {
+    if (next.toString() === searchParamsSignature) return
+    suppressRouteSyncRef.current = true
+    setSearchParams(next, { replace: true })
+  }, [
+    backTarget,
+    debouncedVendor,
+    dispositionTab,
+    intentFilter,
+    minUrgency,
+    routeStateSettled,
+    searchParamsSignature,
+    setSearchParams,
+    stageFilter,
+    windowDays,
+  ])
+
+  useEffect(() => {
+    if (suppressRouteSyncRef.current) {
+      if (!routeStateSettled) return
+      suppressRouteSyncRef.current = false
+      return
+    }
+    const next = buildOpportunitiesSearchParams({
+      vendorName: debouncedVendor,
+      backTarget,
+      minUrgency,
+      windowDays,
+      stageFilter,
+      dispositionTab,
+      intentFilter,
+    })
+    if (next.toString() !== searchParamsSignature) {
       setSearchParams(next, { replace: true })
     }
-  }, [backTarget, debouncedVendor, dispositionTab, intentFilter, minUrgency, searchParams, setSearchParams, stageFilter, windowDays])
+  }, [
+    backTarget,
+    debouncedVendor,
+    dispositionTab,
+    intentFilter,
+    minUrgency,
+    routeStateSettled,
+    searchParamsSignature,
+    setSearchParams,
+    stageFilter,
+    windowDays,
+  ])
 
   if (error) return <PageError error={error} onRetry={refresh} />
 
