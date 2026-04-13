@@ -337,6 +337,14 @@ function summarizeWatchlistDeliverySummary(
   return base
 }
 
+function summarizeSuppressedPreviewReason(reason: string, shortSummary?: string | null) {
+  if (shortSummary) return shortSummary
+  if (reason === 'preview_low_confidence') return 'confidence gate'
+  if (reason === 'preview_policy_disabled') return 'preview alerts disabled'
+  if (reason === 'preview_missing_budget_authority') return 'budget authority required'
+  return reason.replace(/_/g, ' ')
+}
+
 function summarizeSavedViewDelivery(view: WatchlistView) {
   if (!view.last_alert_delivery_status) return 'Last --'
   const base = view.last_alert_delivery_summary || `Last ${view.last_alert_delivery_status.replace(/_/g, ' ')}`
@@ -3949,26 +3957,50 @@ export default function Watchlists() {
                 <div className="mt-2 text-sm text-slate-500">No watchlist alert emails have been sent for this saved view yet.</div>
               ) : (
                 <div className="mt-3 space-y-2">
-                  {activeAlertEmailDeliveries.map((delivery) => (
-                    <div key={delivery.id} className="rounded-md border border-slate-800/60 bg-slate-900/50 px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-200">
-                          {delivery.status}
-                        </span>
-                        <span className="text-slate-400">{delivery.event_count} event{delivery.event_count === 1 ? '' : 's'}</span>
-                        <span className="text-slate-500">{formatTs(delivery.delivered_at || delivery.created_at)}</span>
+                  {activeAlertEmailDeliveries.map((delivery) => {
+                    const suppressedPreviewSummary = delivery.suppressed_preview_summary
+                    const suppressedPreviewCount = suppressedPreviewSummary?.count || 0
+                    const suppressedPreviewReasons = Object.entries(suppressedPreviewSummary?.reasons || {})
+                      .filter(([, count]) => Number(count) > 0)
+                    return (
+                      <div key={delivery.id} className="rounded-md border border-slate-800/60 bg-slate-900/50 px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-200">
+                            {delivery.status}
+                          </span>
+                          <span className="text-slate-400">{delivery.event_count} event{delivery.event_count === 1 ? '' : 's'}</span>
+                          <span className="text-slate-500">{formatTs(delivery.delivered_at || delivery.created_at)}</span>
+                        </div>
+                        <div className="mt-1 text-sm text-slate-200">
+                          {summarizeWatchlistDeliverySummary(delivery.summary, delivery.status, activeWatchlistView)}
+                        </div>
+                        {suppressedPreviewCount > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-200">
+                              {suppressedPreviewCount} preview alert{suppressedPreviewCount === 1 ? '' : 's'} blocked
+                            </span>
+                            {suppressedPreviewReasons.map(([reason]) => (
+                              <span
+                                key={`${delivery.id}-${reason}`}
+                                className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-violet-200"
+                              >
+                                {summarizeSuppressedPreviewReason(
+                                  reason,
+                                  suppressedPreviewSummary?.reason_details?.[reason]?.short_summary || null,
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        <div className="mt-1 text-xs text-slate-500">
+                          {delivery.recipient_emails.join(', ') || '--'}
+                        </div>
+                        {delivery.error ? (
+                          <div className="mt-1 text-xs text-rose-300">{delivery.error}</div>
+                        ) : null}
                       </div>
-                      <div className="mt-1 text-sm text-slate-200">
-                        {summarizeWatchlistDeliverySummary(delivery.summary, delivery.status, activeWatchlistView)}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {delivery.recipient_emails.join(', ') || '--'}
-                      </div>
-                      {delivery.error ? (
-                        <div className="mt-1 text-xs text-rose-300">{delivery.error}</div>
-                      ) : null}
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>

@@ -819,6 +819,15 @@ describe('Watchlists', () => {
           delivered_at: '2026-04-07T18:30:00Z',
           created_at: '2026-04-07T18:30:00Z',
           updated_at: '2026-04-07T18:30:00Z',
+          suppressed_preview_summary: {
+            count: 1,
+            reasons: { preview_low_confidence: 1 },
+            reason_details: {
+              preview_low_confidence: {
+                short_summary: 'confidence >= 0.65 required',
+              },
+            },
+          },
         },
       ],
       count: 1,
@@ -847,6 +856,8 @@ describe('Watchlists', () => {
       text.includes('No alert email sent because local filters suppressed all candidates')
       && text.includes('local filters: named accounts only + changed wedges only'),
     ).length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('1 preview alert blocked')).toBeInTheDocument()
+    expect(screen.getByText('confidence >= 0.65 required')).toBeInTheDocument()
   })
 
   it('clears same-route feed filters without restoring stale query params', async () => {
