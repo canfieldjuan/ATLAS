@@ -3755,12 +3755,16 @@ export default function Watchlists() {
                                 </span>
                               ) : null}
                               {typeof event.account_alert_score === 'number' ? (
-                                <span>
+                                <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-sky-200">
                                   Alert score: {event.account_alert_score.toFixed(1)}
                                   {alertScoreSourceLabel ? ` via ${alertScoreSourceLabel}` : ''}
                                 </span>
                               ) : null}
-                              {alertPolicyReasonLabel ? <span>{alertPolicyReasonLabel}</span> : null}
+                              {alertPolicyReasonLabel ? (
+                                <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-violet-200">
+                                  {alertPolicyReasonLabel}
+                                </span>
+                              ) : null}
                             </div>
                           )}
                           <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-400">
