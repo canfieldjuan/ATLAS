@@ -236,6 +236,9 @@ def watchlist_view_payload(row: Any) -> dict[str, Any]:
         "last_alert_delivery_at": str(_row_value(row, "last_alert_delivery_at")) if _row_value(row, "last_alert_delivery_at") else None,
         "last_alert_delivery_status": _row_value(row, "last_alert_delivery_status"),
         "last_alert_delivery_summary": _row_value(row, "last_alert_delivery_summary"),
+        "last_alert_delivery_suppressed_preview_summary": _safe_json(
+            _row_value(row, "last_alert_delivery_suppressed_preview_summary")
+        ),
         "preview_account_alert_policy": preview_account_alert_policy,
         "created_at": str(_row_value(row, "created_at")) if _row_value(row, "created_at") else None,
         "updated_at": str(_row_value(row, "updated_at")) if _row_value(row, "updated_at") else None,

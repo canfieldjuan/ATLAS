@@ -120,14 +120,6 @@ export interface HighIntentCompany {
   revenue_range?: string | null
   founded_year?: number | null
   company_description?: string | null
-  account_review_focus?: {
-    vendor: string
-    company: string
-    report_date: string
-    watch_vendor: string
-    category: string
-    track_mode: string
-  } | null
 }
 
 export interface VendorProfile {
@@ -138,7 +130,11 @@ export interface VendorProfile {
     pending_enrichment: number
     enriched: number
   }
-  high_intent_companies: HighIntentCompany[]
+  high_intent_companies: {
+    company: string
+    urgency: number
+    pain: string | null
+  }[]
   pain_distribution: {
     pain_category: string
     count: number
@@ -216,8 +212,6 @@ export interface Report {
     review_state?: 'clean' | 'warnings' | 'open_review' | 'blocked' | null
     review_label?: string | null
   } | null
-  as_of_date?: string | null
-  analysis_window_days?: number | null
   created_at: string | null
 }
 
@@ -947,182 +941,6 @@ export interface ExtractionHealthRunRow {
   generated: number
 }
 
-export interface CompanySignalReviewImpactTrendComparison {
-  anchor_day?: string | null
-  recent_days?: number
-  prior_days?: number
-  recent_review_actions?: number
-  prior_review_actions?: number
-  recent_approvals?: number
-  prior_approvals?: number
-  recent_effect_count?: number
-  prior_effect_count?: number
-  recent_effect_rate?: number
-  prior_effect_rate?: number
-  recent_rebuild_requested?: number
-  prior_rebuild_requested?: number
-  recent_rebuild_triggered?: number
-  prior_rebuild_triggered?: number
-  recent_rebuild_blocked?: number
-  prior_rebuild_blocked?: number
-  deltas?: Record<string, number>
-  [key: string]: unknown
-}
-
-export interface CompanySignalReviewImpactTrendFocus {
-  status: string
-  focus?: string | null
-  metric?: string | null
-  direction?: string | null
-  delta?: number
-  recent_value?: number
-  prior_value?: number
-  rationale?: string | null
-  [key: string]: unknown
-}
-
-export interface CompanySignalReviewImpactRecommendation {
-  status: string
-  action?: string | null
-  priority?: string | null
-  owner?: string | null
-  rationale?: string | null
-  supporting_focuses: string[]
-  [key: string]: unknown
-}
-
-export interface CompanySignalReviewImpactSummary {
-  totals: Record<string, unknown>
-  review_scope?: string | null
-  canonical_gap_reason?: string | null
-  rebuild_outcome?: string | null
-  rebuild_reason?: string | null
-  scopes: Record<string, unknown>[]
-  unlock_paths: Record<string, unknown>[]
-  priority_bands: Record<string, unknown>[]
-  priority_reasons: Record<string, unknown>[]
-  top_vendors: Record<string, unknown>[]
-  top_vendor_reasons: Record<string, unknown>[]
-  rebuild_reasons: Record<string, unknown>[]
-  daily_trends: Record<string, unknown>[]
-  trend_comparison: CompanySignalReviewImpactTrendComparison
-  trend_focus: CompanySignalReviewImpactTrendFocus
-  trend_alerts: CompanySignalReviewImpactTrendFocus[]
-  trend_recommendation: CompanySignalReviewImpactRecommendation
-  trend_recommendation_filters: Record<string, string>
-}
-
-export interface CompanySignalCandidateGroupSummaryVendorRow {
-  vendor_name: string
-  group_count: number
-  review_count: number
-  pending_groups: number
-  canonical_ready_groups: number
-}
-
-export interface CompanySignalCandidateGroupSummaryPriorityReasonRow {
-  review_priority_band: string
-  review_priority_reason: string
-  group_count: number
-  review_count: number
-}
-
-export interface CompanySignalCandidateGroupSummary {
-  totals: {
-    pending_groups: number
-    actionable_pending_groups: number
-    blocked_pending_groups: number
-    overdue_pending_groups: number
-    canonical_ready_groups: number
-    analyst_review_groups: number
-    [key: string]: number
-  }
-  top_vendors: CompanySignalCandidateGroupSummaryVendorRow[]
-  pending_priority_reasons: CompanySignalCandidateGroupSummaryPriorityReasonRow[]
-  candidate_bucket?: string | null
-  review_status?: string | null
-  review_priority_band?: string | null
-  review_priority_reason?: string | null
-  source_name?: string | null
-  [key: string]: unknown
-}
-
-export interface CompanySignalCandidateSupportReview {
-  review_id: string
-  source?: string | null
-  summary?: string | null
-  review_excerpt?: string | null
-  source_url?: string | null
-  reviewed_at?: string | null
-  quote_excerpt?: string | null
-}
-
-export interface CompanySignalCandidateGroup {
-  group_id: string | null
-  company?: string | null
-  display_company?: string | null
-  vendor?: string | null
-  category?: string | null
-  review_count: number
-  distinct_source_count: number
-  decision_maker_count: number
-  signal_evidence_count: number
-  canonical_ready_review_count: number
-  avg_urgency?: number | null
-  max_urgency?: number | null
-  corroborated_confidence_score?: number | null
-  confidence_tier?: string | null
-  representative_review_id?: string | null
-  representative_source?: string | null
-  canonical_gap_reason?: string | null
-  candidate_bucket?: string | null
-  review_priority_band?: string | null
-  review_priority_reason?: string | null
-  review_status?: string | null
-  review_status_updated_at?: string | null
-  first_seen_at?: string | null
-  last_seen_at?: string | null
-  supporting_reviews?: CompanySignalCandidateSupportReview[]
-}
-
-export interface CompanySignalCandidateGroupListResponse {
-  groups: CompanySignalCandidateGroup[]
-  count: number
-  candidate_bucket: string
-  review_status: string
-  review_priority_band?: string | null
-  review_priority_reason?: string | null
-  source_name?: string | null
-}
-
-export interface CompanySignalCandidateGroupReviewResult {
-  review_batch_id: string
-  group_id: string
-  review_status: string
-  review_status_updated_at?: string | null
-  reviewed_by?: string | null
-  review_notes?: string | null
-  company_signal_id?: string | null
-  company_signal_action?: string | null
-  company_name: string
-  vendor_name: string
-  review_count: number
-  review_priority_band?: string | null
-  review_priority_reason?: string | null
-  candidate_source?: string | null
-  canonical_gap_reason?: string | null
-  review_unlock_path?: string | null
-  review_unlock_reason?: string | null
-  rebuild?: Record<string, unknown>
-}
-
-export interface BulkCompanySignalCandidateGroupReviewResult {
-  review_batch_id: string
-  groups: CompanySignalCandidateGroupReviewResult[]
-  count: number
-  rebuilds?: Record<string, unknown>[]
-}
-
 export interface ExtractionHealthAudit {
   days: number
   top_n: number
@@ -1600,8 +1418,54 @@ export interface WatchlistDeliveryOpsView {
   last_alert_delivery_at: string | null
   last_alert_delivery_status: string | null
   last_alert_delivery_summary: string | null
+  last_alert_delivery_suppressed_preview_summary: WatchlistSuppressedPreviewSummary | null
+  preview_account_alert_policy: WatchlistPreviewAccountAlertPolicy | null
   open_event_count: number
   due_now: boolean
+}
+
+export interface WatchlistPreviewAccountAlertPolicy {
+  applies_to_preview_only: boolean
+  enabled: boolean
+  enabled_source?: string | null
+  min_confidence: number | null
+  min_confidence_source?: string | null
+  require_budget_authority: boolean
+  require_budget_authority_source?: string | null
+  override_min_confidence: number | null
+  override_require_budget_authority: boolean | null
+}
+
+export interface WatchlistSuppressedPreviewReasonDetail {
+  summary?: string | null
+  short_summary?: string | null
+  enabled?: boolean | null
+  enabled_source?: string | null
+  min_confidence?: number | null
+  min_confidence_source?: string | null
+  require_budget_authority?: boolean | null
+  require_budget_authority_source?: string | null
+}
+
+export interface WatchlistSuppressedPreviewSummary {
+  count: number
+  threshold_value?: number | null
+  preview_account_alert_policy?: WatchlistPreviewAccountAlertPolicy | null
+  reason_details?: Record<string, WatchlistSuppressedPreviewReasonDetail> | null
+  reasons: Record<string, number>
+  vendors?: Array<{ vendor_name: string | null; count: number }>
+  accounts?: Array<{
+    vendor_name: string | null
+    company_name: string | null
+    category: string | null
+    source: string | null
+    account_alert_score: number | null
+    account_alert_score_source: string | null
+    account_alert_policy_reason: string | null
+    confidence: number | null
+    budget_authority: boolean
+    account_pressure_disclaimer: string | null
+  }>
 }
 
 export interface WatchlistDeliveryOpsLog {
@@ -1619,6 +1483,7 @@ export interface WatchlistDeliveryOpsLog {
   created_at: string | null
   scheduled_for: string | null
   delivery_mode: string | null
+  suppressed_preview_summary: WatchlistSuppressedPreviewSummary | null
 }
 
 export interface WatchlistDeliveryOpsSummary {

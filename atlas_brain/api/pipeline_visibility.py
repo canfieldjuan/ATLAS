@@ -58,32 +58,19 @@ def _serialize_row(row) -> dict[str, Any]:
     return out
 
 
+def _safe_json_value(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+    return value
+
+
 def _campaign_batch_stale_minutes() -> int:
     return int(getattr(settings.b2b_campaign, "anthropic_batch_stale_minutes", 30) or 30)
-
-
-def _clean_optional_text(value: str | None) -> str | None:
-    text = (value or "").strip()
-    return text or None
-
-
-def _parse_optional_uuid_text(value: str | None, *, field_name: str) -> str | None:
-    text = _clean_optional_text(value)
-    if text is None:
-        return None
-    try:
-        return str(UUID(text))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"{field_name} must be a valid UUID") from exc
-
-
-def _clean_watchlist_event_status(value: str | None) -> str:
-    status_value = (value or "").strip().lower()
-    if not status_value:
-        return "open"
-    if status_value not in {"open", "resolved", "all"}:
-        raise HTTPException(status_code=422, detail="status must be one of: open, resolved, all")
-    return status_value
 
 
 def _managed_health_key(
@@ -634,12 +621,33 @@ async def get_watchlist_delivery_ops(
             v.id,
             v.account_id,
             a.name AS account_name,
+            v.vendor_names,
+            v.category,
+            v.source,
+            v.min_urgency,
+            v.include_stale,
+            v.named_accounts_only,
+            v.changed_wedges_only,
+            v.vendor_alert_threshold,
+            v.account_alert_threshold,
+            v.preview_alerts_enabled,
+            v.preview_alert_min_confidence,
+            v.preview_alert_require_budget_authority,
+            v.stale_days_threshold,
+            v.alert_email_enabled,
             v.name AS view_name,
             v.alert_delivery_frequency,
             v.next_alert_delivery_at,
             v.last_alert_delivery_at,
             v.last_alert_delivery_status,
             v.last_alert_delivery_summary,
+            (
+                SELECT log.suppressed_preview_summary
+                FROM b2b_watchlist_alert_email_log AS log
+                WHERE log.watchlist_view_id = v.id
+                ORDER BY log.created_at DESC
+                LIMIT 1
+            ) AS last_alert_delivery_suppressed_preview_summary,
             COALESCE(open_events.open_event_count, 0) AS open_event_count,
             (
                 v.alert_email_enabled = TRUE
@@ -682,7 +690,8 @@ async def get_watchlist_delivery_ops(
             l.delivered_at,
             l.created_at,
             l.scheduled_for,
-            l.delivery_mode
+            l.delivery_mode,
+            l.suppressed_preview_summary
         FROM b2b_watchlist_alert_email_log l
         JOIN b2b_watchlist_views v ON v.id = l.watchlist_view_id
         JOIN saas_accounts a ON a.id = l.account_id
@@ -730,19 +739,22 @@ async def get_watchlist_delivery_ops(
         "task": task,
         "views": [
             {
-                "view_id": str(row["id"]),
+                "view_id": payload["id"],
                 "view_name": row["view_name"],
                 "account_id": str(row["account_id"]),
                 "account_name": row["account_name"],
-                "alert_delivery_frequency": row["alert_delivery_frequency"],
-                "next_alert_delivery_at": row["next_alert_delivery_at"].isoformat() if row["next_alert_delivery_at"] else None,
-                "last_alert_delivery_at": row["last_alert_delivery_at"].isoformat() if row["last_alert_delivery_at"] else None,
-                "last_alert_delivery_status": row["last_alert_delivery_status"],
-                "last_alert_delivery_summary": row["last_alert_delivery_summary"],
+                "alert_delivery_frequency": payload["alert_delivery_frequency"],
+                "next_alert_delivery_at": payload["next_alert_delivery_at"],
+                "last_alert_delivery_at": payload["last_alert_delivery_at"],
+                "last_alert_delivery_status": payload["last_alert_delivery_status"],
+                "last_alert_delivery_summary": payload["last_alert_delivery_summary"],
+                "last_alert_delivery_suppressed_preview_summary": payload["last_alert_delivery_suppressed_preview_summary"],
+                "preview_account_alert_policy": payload["preview_account_alert_policy"],
                 "open_event_count": int(row["open_event_count"] or 0),
                 "due_now": bool(row["due_now"]),
             }
             for row in view_rows
+            for payload in [watchlist_alert_service.watchlist_view_payload(row)]
         ],
         "deliveries": [
             {
@@ -760,6 +772,7 @@ async def get_watchlist_delivery_ops(
                 "created_at": row["created_at"].isoformat() if row["created_at"] else None,
                 "scheduled_for": row["scheduled_for"].isoformat() if row["scheduled_for"] else None,
                 "delivery_mode": row["delivery_mode"],
+                "suppressed_preview_summary": _safe_json_value(row["suppressed_preview_summary"]),
             }
             for row in delivery_rows
         ],
@@ -778,7 +791,6 @@ async def get_watchlist_delivery_view_detail(
     from . import b2b_tenant_dashboard as tenant_dashboard_api
 
     tenant_dashboard_api._require_b2b_product(user)
-    status_value = _clean_watchlist_event_status(event_status)
     pool = get_db_pool()
     account_id = UUID(user.account_id)
     view_row = await tenant_dashboard_api._fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
@@ -791,7 +803,7 @@ async def get_watchlist_delivery_view_detail(
     )
     events = await tenant_dashboard_api.list_watchlist_alert_events(
         view_id=view_id,
-        status=status_value,
+        status=event_status,
         limit=event_limit,
         user=user,
     )
@@ -884,8 +896,6 @@ async def get_visibility_queue(
     _user: AuthUser = Depends(require_auth),
 ):
     """Unresolved actionable items for operator triage."""
-    stage = _clean_optional_text(stage)
-    severity = _clean_optional_text(severity)
     pool = get_db_pool()
     await _sync_detached_batch_health(pool)
     conditions = ["r.status = 'open'", "e.actionable = TRUE"]
@@ -950,13 +960,6 @@ async def get_visibility_events(
     _user: AuthUser = Depends(require_auth),
 ):
     """Filterable event history."""
-    stage = _clean_optional_text(stage)
-    event_type = _clean_optional_text(event_type)
-    severity = _clean_optional_text(severity)
-    entity_type = _clean_optional_text(entity_type)
-    entity_id = _clean_optional_text(entity_id)
-    reason_code = _clean_optional_text(reason_code)
-    rule_code = _clean_optional_text(rule_code)
     pool = get_db_pool()
     await _sync_detached_batch_health(pool)
     conditions: list[str] = []
@@ -1016,8 +1019,6 @@ async def get_artifact_attempts(
     _user: AuthUser = Depends(require_auth),
 ):
     """Artifact generation attempt history."""
-    artifact_type = _clean_optional_text(artifact_type)
-    status = _clean_optional_text(status)
     pool = get_db_pool()
     conditions: list[str] = []
     params: list[Any] = []
@@ -1069,8 +1070,6 @@ async def get_enrichment_quarantines(
     _user: AuthUser = Depends(require_auth),
 ):
     """Enrichment quarantine decisions."""
-    reason_code = _clean_optional_text(reason_code)
-    vendor_name = _clean_optional_text(vendor_name)
     pool = get_db_pool()
     conditions: list[str] = []
     params: list[Any] = []
@@ -1120,10 +1119,6 @@ async def get_synthesis_validation_results(
     _user: AuthUser = Depends(require_auth),
 ):
     """Normalized per-rule synthesis validation history."""
-    vendor_name = _clean_optional_text(vendor_name)
-    rule_code = _clean_optional_text(rule_code)
-    severity = _clean_optional_text(severity)
-    run_id = _clean_optional_text(run_id)
     pool = get_db_pool()
     conditions: list[str] = []
     params: list[Any] = []
@@ -1220,10 +1215,6 @@ async def get_dedup_decisions(
     _user: AuthUser = Depends(require_auth),
 ):
     """First-class dedup/discard decisions."""
-    stage = _clean_optional_text(stage)
-    entity_type = _clean_optional_text(entity_type)
-    reason_code = _clean_optional_text(reason_code)
-    run_id = _clean_optional_text(run_id)
     pool = get_db_pool()
     conditions: list[str] = []
     params: list[Any] = []
@@ -1272,9 +1263,6 @@ async def get_review_actions(
     _user: AuthUser = Depends(require_auth),
 ):
     """Immutable operator action history for visibility reviews."""
-    review_id = _parse_optional_uuid_text(review_id, field_name="review_id")
-    target_entity_type = _clean_optional_text(target_entity_type)
-    target_entity_id = _clean_optional_text(target_entity_id)
     pool = get_db_pool()
     conditions: list[str] = []
     params: list[Any] = []
