@@ -280,6 +280,47 @@ describe('IncidentAlerts', () => {
     expect(await screen.findByText('Copied account review link')).toBeInTheDocument()
   })
 
+  it('reuses exact upstream workflow paths on vendor-scoped webhook cards', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-upstream-card',
+          url: 'https://hooks.example.com/vendor',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Vendor scoped endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 3,
+          recent_success_rate_7d: 1,
+          latest_failure_event_type: 'churn_alert',
+          latest_failure_status_code: 500,
+          latest_failure_error: 'downstream timeout',
+          latest_failure_at: '2026-04-10T02:55:00Z',
+          latest_failure_vendor_name: 'Acme Rival',
+        },
+      ],
+      count: 1,
+    })
+    const upstreamAccountReviewPath = '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor'
+    const upstreamEvidencePath = `/evidence?vendor=Acme+Rival&tab=witnesses&witness_id=witness%3Aacme%3A1&back_to=${encodeURIComponent(upstreamAccountReviewPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/alerts?vendor=Acme%20Rival&back_to=${encodeURIComponent(upstreamEvidencePath)}`]}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Account Review' })).toSatisfy((links) => (
+      links.every((link: HTMLAnchorElement) => link.getAttribute('href') === upstreamAccountReviewPath)
+    ))
+    expect(screen.getAllByRole('link', { name: 'Evidence' })).toSatisfy((links) => (
+      links.every((link: HTMLAnchorElement) => link.getAttribute('href') === upstreamEvidencePath)
+    ))
+  })
+
   it('surfaces the newest exact target in the vendor-scoped header', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
@@ -1390,6 +1431,58 @@ describe('IncidentAlerts', () => {
       )
     })
     expect(await screen.findByText('Copied evidence link')).toBeInTheDocument()
+  })
+
+  it('reuses exact upstream workflow paths on vendor-scoped activity rows', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-upstream-activity',
+          url: 'https://hooks.example.com/vendor',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Vendor scoped endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 3,
+          recent_success_rate_7d: 1,
+        },
+      ],
+      count: 1,
+    })
+    api.listWebhookDeliveries.mockResolvedValueOnce({
+      deliveries: [
+        {
+          id: 'delivery-upstream',
+          event_type: 'churn_alert',
+          status_code: 202,
+          duration_ms: 180,
+          attempt: 1,
+          success: true,
+          error: null,
+          delivered_at: '2026-04-10T03:05:00Z',
+          vendor_name: 'Acme Rival',
+        },
+      ],
+      count: 1,
+    })
+    const upstreamAccountReviewPath = '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor'
+    const upstreamEvidencePath = `/evidence?vendor=Acme+Rival&tab=witnesses&witness_id=witness%3Aacme%3A1&back_to=${encodeURIComponent(upstreamAccountReviewPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/alerts?vendor=Acme%20Rival&webhook=wh-upstream-activity&back_to=${encodeURIComponent(upstreamEvidencePath)}`]}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Account Review' })).toSatisfy((links) => (
+      links.every((link: HTMLAnchorElement) => link.getAttribute('href') === upstreamAccountReviewPath)
+    ))
+    expect(screen.getAllByRole('link', { name: 'Evidence' })).toSatisfy((links) => (
+      links.every((link: HTMLAnchorElement) => link.getAttribute('href') === upstreamEvidencePath)
+    ))
   })
 
   it('copies canonical signal ids from delivery activity rows', async () => {

@@ -470,7 +470,8 @@ function deliveryTone(success: boolean) {
 function parseBackTo(value: string | null) {
   if (!value) return null
   if (
-    value.startsWith('/watchlists')
+    value.startsWith('/alerts')
+    || value.startsWith('/watchlists')
     || value.startsWith('/evidence')
     || value.startsWith('/vendors/')
     || value.startsWith('/reports')
@@ -482,7 +483,8 @@ function parseBackTo(value: string | null) {
     if (
       url.origin === window.location.origin
       && (
-        url.pathname === '/watchlists'
+        url.pathname === '/alerts'
+        || url.pathname === '/watchlists'
         || url.pathname === '/evidence'
         || url.pathname.startsWith('/vendors/')
         || url.pathname === '/reports'
@@ -500,6 +502,7 @@ function parseBackTo(value: string | null) {
 
 function backToLabel(value: string | null) {
   if (!value) return 'Back'
+  if (value.startsWith('/alerts')) return 'Back to Alerts'
   if (value.startsWith('/watchlists')) {
     try {
       const url = new URL(value, window.location.origin)
@@ -608,6 +611,23 @@ function buildVendorScopedPath(pathname: string, vendorName: string, backTo: str
   next.set(pathname === '/reports' ? 'vendor_filter' : 'vendor', vendorName)
   next.set('back_to', backTo)
   return `${pathname}?${next.toString()}`
+}
+
+function resolveVendorWorkflowShortcutPaths(vendorName: string, backTo: string) {
+  const directWatchlistsPath = upstreamWatchlistsPath(backTo)
+  const directVendorWorkspacePath = upstreamNestedPath(backTo, '/vendors/')
+  const directEvidencePath = upstreamNestedPath(backTo, '/evidence')
+  const directReportsPath = upstreamNestedPath(backTo, '/reports')
+  const directOpportunitiesPath = upstreamNestedPath(backTo, '/opportunities')
+
+  return {
+    watchlistsLabel: watchlistsShortcutLabel(directWatchlistsPath),
+    watchlistsPath: directWatchlistsPath ?? buildWatchlistsPath(vendorName, backTo),
+    vendorWorkspacePath: directVendorWorkspacePath ?? buildVendorWorkspacePath(vendorName, backTo),
+    evidencePath: directEvidencePath ?? buildVendorScopedPath('/evidence', vendorName, backTo),
+    reportsPath: directReportsPath ?? buildVendorScopedPath('/reports', vendorName, backTo),
+    opportunitiesPath: directOpportunitiesPath ?? buildVendorScopedPath('/opportunities', vendorName, backTo),
+  }
 }
 
 function buildReportDetailPath(reportId: string, backTo: string) {
@@ -1066,30 +1086,20 @@ export default function IncidentAlerts() {
     location.search ? `${location.pathname}${location.search}` : location.pathname
   ), [location.pathname, location.search])
 
-  const directWatchlistsShortcutPath = useMemo(() => upstreamWatchlistsPath(requestedBackTo), [requestedBackTo])
-  const directVendorShortcutPath = useMemo(() => upstreamNestedPath(requestedBackTo, '/vendors/'), [requestedBackTo])
-  const directEvidenceShortcutPath = useMemo(() => upstreamNestedPath(requestedBackTo, '/evidence'), [requestedBackTo])
-  const directReportsShortcutPath = useMemo(() => upstreamNestedPath(requestedBackTo, '/reports'), [requestedBackTo])
-  const directOpportunitiesShortcutPath = useMemo(() => upstreamNestedPath(requestedBackTo, '/opportunities'), [requestedBackTo])
-
   const vendorScopedHeaderShortcuts = useMemo(() => {
     const vendorName = requestedVendorName.trim()
     if (!vendorName) return null
+    const shortcutPaths = resolveVendorWorkflowShortcutPaths(vendorName, currentAlertsUrl)
     return {
-      watchlistsLabel: watchlistsShortcutLabel(directWatchlistsShortcutPath),
-      watchlistsPath: directWatchlistsShortcutPath ?? buildWatchlistsPath(vendorName, currentAlertsUrl),
-      vendorWorkspacePath: directVendorShortcutPath ?? buildVendorWorkspacePath(vendorName, currentAlertsUrl),
-      evidencePath: directEvidenceShortcutPath ?? buildVendorScopedPath('/evidence', vendorName, currentAlertsUrl),
-      reportsPath: directReportsShortcutPath ?? buildVendorScopedPath('/reports', vendorName, currentAlertsUrl),
-      opportunitiesPath: directOpportunitiesShortcutPath ?? buildVendorScopedPath('/opportunities', vendorName, currentAlertsUrl),
+      watchlistsLabel: shortcutPaths.watchlistsLabel,
+      watchlistsPath: shortcutPaths.watchlistsPath,
+      vendorWorkspacePath: shortcutPaths.vendorWorkspacePath,
+      evidencePath: shortcutPaths.evidencePath,
+      reportsPath: shortcutPaths.reportsPath,
+      opportunitiesPath: shortcutPaths.opportunitiesPath,
     }
   }, [
     currentAlertsUrl,
-    directEvidenceShortcutPath,
-    directOpportunitiesShortcutPath,
-    directReportsShortcutPath,
-    directVendorShortcutPath,
-    directWatchlistsShortcutPath,
     requestedVendorName,
   ])
 
@@ -1370,41 +1380,45 @@ export default function IncidentAlerts() {
     const hideWhenExactTarget = options?.hideWhenExactTarget ?? true
     const compact = options?.compact ?? false
     if (hideWhenExactTarget && (reviewId || reportId)) return null
-    const watchlistsPath = buildWatchlistsPath(vendorName, backTo)
-    const vendorWorkspacePath = buildVendorWorkspacePath(vendorName, backTo)
-    const evidencePath = buildVendorScopedPath('/evidence', vendorName, backTo)
-    const reportsPath = buildVendorScopedPath('/reports', vendorName, backTo)
-    const opportunitiesPath = buildVendorScopedPath('/opportunities', vendorName, backTo)
+    const shortcutPaths = resolveVendorWorkflowShortcutPaths(vendorName, backTo)
+    const suppressWatchlistsShortcut = Boolean(activity.account_review_focus) && shortcutPaths.watchlistsLabel === 'Account Review'
     const className = compact
       ? 'rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800'
       : 'inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800'
     return (
       <div className={`mt-2 flex flex-wrap gap-2${compact ? ' text-xs' : ''}`}>
-        <Link to={watchlistsPath} className={className}>
-          {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
-          Watchlists
-        </Link>
-        {includeCopy ? renderShortcutCopyButton(watchlistsPath, 'watchlists') : null}
-        <Link to={vendorWorkspacePath} className={className}>
+        {!suppressWatchlistsShortcut ? (
+          <Link to={shortcutPaths.watchlistsPath} className={className}>
+            {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
+            {shortcutPaths.watchlistsLabel}
+          </Link>
+        ) : null}
+        {!suppressWatchlistsShortcut && includeCopy
+          ? renderShortcutCopyButton(
+              shortcutPaths.watchlistsPath,
+              shortcutPaths.watchlistsLabel === 'Account Review' ? 'account review' : 'watchlists',
+            )
+          : null}
+        <Link to={shortcutPaths.vendorWorkspacePath} className={className}>
           {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Vendor workspace
         </Link>
-        {includeCopy ? renderShortcutCopyButton(vendorWorkspacePath, 'vendor workspace') : null}
-        <Link to={evidencePath} className={className}>
+        {includeCopy ? renderShortcutCopyButton(shortcutPaths.vendorWorkspacePath, 'vendor workspace') : null}
+        <Link to={shortcutPaths.evidencePath} className={className}>
           {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Evidence
         </Link>
-        {includeCopy ? renderShortcutCopyButton(evidencePath, 'evidence') : null}
-        <Link to={reportsPath} className={className}>
+        {includeCopy ? renderShortcutCopyButton(shortcutPaths.evidencePath, 'evidence') : null}
+        <Link to={shortcutPaths.reportsPath} className={className}>
           {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Reports
         </Link>
-        {includeCopy ? renderShortcutCopyButton(reportsPath, 'reports') : null}
-        <Link to={opportunitiesPath} className={className}>
+        {includeCopy ? renderShortcutCopyButton(shortcutPaths.reportsPath, 'reports') : null}
+        <Link to={shortcutPaths.opportunitiesPath} className={className}>
           {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Opportunities
         </Link>
-        {includeCopy ? renderShortcutCopyButton(opportunitiesPath, 'opportunities') : null}
+        {includeCopy ? renderShortcutCopyButton(shortcutPaths.opportunitiesPath, 'opportunities') : null}
       </div>
     )
   }
