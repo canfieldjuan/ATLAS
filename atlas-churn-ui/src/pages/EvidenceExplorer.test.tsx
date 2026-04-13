@@ -635,7 +635,7 @@ describe('EvidenceExplorer', () => {
       'href',
       '/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
-    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+    expect(headerShortcuts.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',
       '/opportunities?vendor=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
@@ -773,8 +773,9 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const opportunitiesLink = await screen.findByRole('link', { name: 'Opportunities' })
-    await user.click(screen.getByRole('button', { name: 'Copy opportunities link' }))
+    const headerShortcuts = activeVendorShortcuts()
+    const opportunitiesLink = headerShortcuts.getByRole('link', { name: 'Opportunities' })
+    await user.click(headerShortcuts.getByRole('button', { name: 'Copy opportunities link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${opportunitiesLink.getAttribute('href')}`)
@@ -791,8 +792,9 @@ describe('EvidenceExplorer', () => {
       </MemoryRouter>,
     )
 
-    const opportunitiesLink = await screen.findByRole('link', { name: 'Opportunities' })
-    await user.click(screen.getByRole('button', { name: 'Copy opportunities link' }))
+    const headerShortcuts = activeVendorShortcuts()
+    const opportunitiesLink = headerShortcuts.getByRole('link', { name: 'Opportunities' })
+    await user.click(headerShortcuts.getByRole('button', { name: 'Copy opportunities link' }))
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${opportunitiesLink.getAttribute('href')}`)

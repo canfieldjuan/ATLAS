@@ -126,6 +126,13 @@ function alertsPath(vendorName: string, backToPath?: string | null) {
   return `/alerts?${params.toString()}`
 }
 
+function opportunitiesPath(vendorName: string, backToPath?: string | null) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  if (backToPath) params.set('back_to', backToPath)
+  return `/opportunities?${params.toString()}`
+}
+
 function vendorWorkspacePath(vendorName: string, backToPath?: string | null) {
   const params = new URLSearchParams()
   if (backToPath) params.set('back_to', backToPath)
@@ -145,7 +152,10 @@ function parseBackTarget(value: string | null | undefined) {
   }
 }
 
-function upstreamNestedPath(value: string | null | undefined, prefix: '/alerts' | '/vendors/' | '/watchlists' | '/reports') {
+function upstreamNestedPath(
+  value: string | null | undefined,
+  prefix: '/alerts' | '/vendors/' | '/watchlists' | '/reports' | '/opportunities',
+) {
   let current = parseBackTarget(value)
   while (current) {
     if (current.startsWith(prefix)) return current
@@ -457,6 +467,9 @@ export default function EvidenceDrawer({
   const alertsWorkspacePath = vendorName
     ? upstreamNestedPath(backToPath, '/alerts') ?? alertsPath(vendorName, backToPath)
     : null
+  const opportunitiesWorkspacePath = vendorName
+    ? upstreamNestedPath(backToPath, '/opportunities') ?? opportunitiesPath(vendorName, backToPath)
+    : null
   const vendorPath = vendorName
     ? upstreamNestedPath(backToPath, '/vendors/') ?? vendorWorkspacePath(vendorName, backToPath)
     : null
@@ -578,6 +591,26 @@ export default function EvidenceDrawer({
                   >
                     <Copy className="h-3 w-3" />
                     {copiedLinkKey === 'alerts' ? 'Copied' : 'Copy alerts'}
+                  </button>
+                </>
+              ) : null}
+              {opportunitiesWorkspacePath ? (
+                <>
+                  <Link
+                    to={opportunitiesWorkspacePath}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-colors"
+                  >
+                    <ChevronRight className="h-3 w-3" />
+                    Opportunities
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyLink('opportunities', opportunitiesWorkspacePath)}
+                    aria-label="Copy opportunities link"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 transition-colors"
+                  >
+                    <Copy className="h-3 w-3" />
+                    {copiedLinkKey === 'opportunities' ? 'Copied' : 'Copy opportunities'}
                   </button>
                 </>
               ) : null}

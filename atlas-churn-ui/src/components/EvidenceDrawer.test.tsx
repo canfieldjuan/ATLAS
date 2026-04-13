@@ -76,6 +76,10 @@ describe('EvidenceDrawer', () => {
       'href',
       '/alerts?vendor=Salesforce&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
     )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Salesforce&back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
+    )
     expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
       '/vendors/Salesforce?back_to=%2Freport%3Fvendor%3DSalesforce%26ref%3Dtest-token%26mode%3Dview',
@@ -202,9 +206,21 @@ describe('EvidenceDrawer', () => {
       expect(alertsBackTo.pathname).toBe('/reports')
       expect(alertsBackTo.searchParams.get('vendor_filter')).toBe('Salesforce')
 
-      await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+      await user.click(screen.getByRole('button', { name: 'Copy opportunities link' }))
       await waitFor(() => {
         expect(clipboardSpy).toHaveBeenCalledTimes(6)
+      })
+      copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+      copiedUrl = new URL(copiedText)
+      expect(copiedUrl.pathname).toBe('/opportunities')
+      expect(copiedUrl.searchParams.get('vendor')).toBe('Salesforce')
+      const opportunitiesBackTo = new URL(copiedUrl.searchParams.get('back_to') || '', 'https://atlas.test')
+      expect(opportunitiesBackTo.pathname).toBe('/reports')
+      expect(opportunitiesBackTo.searchParams.get('vendor_filter')).toBe('Salesforce')
+
+      await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledTimes(7)
       })
       copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
       copiedUrl = new URL(copiedText)
@@ -215,7 +231,7 @@ describe('EvidenceDrawer', () => {
 
       await user.click(screen.getByRole('button', { name: 'Copy review detail link' }))
       await waitFor(() => {
-        expect(clipboardSpy).toHaveBeenCalledTimes(7)
+        expect(clipboardSpy).toHaveBeenCalledTimes(8)
       })
       copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
       copiedUrl = new URL(copiedText)
@@ -249,10 +265,47 @@ describe('EvidenceDrawer', () => {
       'href',
       '/alerts?vendor=Salesforce&back_to=%2Fvendors%2FSalesforce%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Salesforce&back_to=%2Freports%3Fvendor_filter%3DSalesforce%26back_to%3D%252Falerts%253Fvendor%253DSalesforce%2526back_to%253D%25252Fvendors%25252FSalesforce%25253Fback_to%25253D%2525252Fwatchlists%2525253Fview%2525253Dview-1',
+    )
     expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
       '/vendors/Salesforce?back_to=%2Fwatchlists%3Fview%3Dview-1',
     )
+  })
+
+  it('prefers the exact upstream opportunities path when present', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    try {
+      render(
+        <MemoryRouter>
+          <EvidenceDrawer
+            vendorName="Salesforce"
+            witnessId="w1"
+            open
+            backToPath="/vendors/Salesforce?back_to=%2Fopportunities%3Fvendor%3DSalesforce%26back_to%3D%252Fwatchlists%253Fview%253Dview-1"
+            onClose={() => {}}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(await screen.findByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+        'href',
+        '/opportunities?vendor=Salesforce&back_to=%2Fwatchlists%3Fview%3Dview-1',
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Copy opportunities link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledWith(
+          `${window.location.origin}/opportunities?vendor=Salesforce&back_to=%2Fwatchlists%3Fview%3Dview-1`,
+        )
+      })
+    } finally {
+      clipboardSpy.mockRestore()
+    }
   })
 
   it('prefers the exact upstream report detail path when present', async () => {
