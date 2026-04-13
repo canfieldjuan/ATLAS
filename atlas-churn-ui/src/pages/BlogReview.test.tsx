@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter, RouterProvider, createMemoryRouter } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import BlogReview from './BlogReview'
+import type { BlogDraft, BlogEvidence } from '../types'
 
 const api = vi.hoisted(() => ({
   fetchBlogDrafts: vi.fn(),
@@ -63,6 +64,30 @@ const draftDetail = {
   },
 }
 
+const secondDraftSummary = {
+  ...draftSummary,
+  id: 'draft-2',
+  slug: 'switch-to-hubspot-2026-03',
+  title: 'Migration Guide: Why Teams Are Switching to HubSpot',
+}
+
+const secondDraftDetail = {
+  ...draftDetail,
+  ...secondDraftSummary,
+  content: '<p><a href="https://example.com/hubspot">HubSpot trial</a></p>',
+  data_context: {
+    affiliate_url: 'https://example.com/hubspot',
+    affiliate_partner: { name: 'HubSpot' },
+  },
+  cta: {
+    headline: 'See the full HubSpot brief',
+    body: 'Get the full HubSpot report before renewal.',
+    button_text: 'Open briefing',
+    report_type: 'migration_guide',
+    vendor_filter: 'HubSpot',
+  },
+}
+
 const draftRollup = {
   by_status: { draft: 1 },
   quality: {
@@ -78,6 +103,10 @@ const draftRollup = {
 }
 
 describe('BlogReview preview mode', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     api.fetchBlogDrafts.mockResolvedValue([draftSummary])
@@ -155,5 +184,97 @@ describe('BlogReview preview mode', () => {
         .getAllByRole('link', { name: 'Opportunities' })
         .some((link) => link.getAttribute('href') === '/opportunities?vendor=Shopify&back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1'),
     ).toBe(true)
+  })
+
+  it('clears the selected draft panel when the same route drops the draft query', async () => {
+    api.fetchBlogDrafts.mockResolvedValue([{ ...draftSummary, status: 'published' }])
+    api.fetchBlogDraft.mockResolvedValue({ ...draftDetail, status: 'published' })
+
+    const appRouter = createMemoryRouter(
+      [{ path: '/blog-review', element: <BlogReview /> }],
+      { initialEntries: ['/blog-review?status=published&draft=draft-1'] },
+    )
+
+    render(<RouterProvider router={appRouter} />)
+
+    expect((await screen.findAllByText('Reviewer Notes')).length).toBeGreaterThan(0)
+
+    await act(async () => {
+      await appRouter.navigate('/blog-review?status=published')
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('Reviewer Notes')).not.toBeInTheDocument()
+    })
+  })
+
+  it('ignores stale draft detail loads after the route switches drafts', async () => {
+    let resolveFirstDetail: ((value: BlogDraft) => void) | undefined
+    let resolveFirstEvidence: ((value: { reviews: BlogEvidence[]; count: number }) => void) | undefined
+
+    api.fetchBlogDrafts.mockResolvedValue([
+      { ...draftSummary, status: 'published' },
+      { ...secondDraftSummary, status: 'published' },
+    ])
+    api.fetchBlogDraft
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstDetail = resolve as (value: BlogDraft) => void
+      }))
+      .mockResolvedValueOnce({ ...secondDraftDetail, status: 'published' })
+    api.fetchBlogEvidence
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstEvidence = resolve as (value: { reviews: BlogEvidence[]; count: number }) => void
+      }))
+      .mockResolvedValueOnce({ reviews: [], count: 0 })
+
+    const appRouter = createMemoryRouter(
+      [{ path: '/blog-review', element: <BlogReview /> }],
+      { initialEntries: ['/blog-review?status=published&draft=draft-1'] },
+    )
+
+    render(<RouterProvider router={appRouter} />)
+
+    await waitFor(() => {
+      expect(api.fetchBlogDraft).toHaveBeenCalledWith('draft-1')
+    })
+
+    await act(async () => {
+      await appRouter.navigate('/blog-review?status=published&draft=draft-2')
+    })
+
+    await waitFor(() => {
+      expect(api.fetchBlogDraft).toHaveBeenCalledWith('draft-2')
+    })
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByRole('link', { name: 'Vendor workspace' })
+          .some((link) => link.getAttribute('href') === '/vendors/HubSpot?back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-2'),
+      ).toBe(true)
+    })
+
+    const staleDetail = resolveFirstDetail
+    const staleEvidence = resolveFirstEvidence
+    if (!staleDetail || !staleEvidence) {
+      throw new Error('Expected stale draft resolvers')
+    }
+
+    await act(async () => {
+      staleDetail({ ...draftDetail, status: 'published' } as BlogDraft)
+      staleEvidence({ reviews: [], count: 0 })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Vendor workspace' })
+        .some((link) => link.getAttribute('href') === '/vendors/HubSpot?back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-2'),
+    ).toBe(true)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Vendor workspace' })
+        .some((link) => link.getAttribute('href') === '/vendors/Shopify?back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1'),
+    ).toBe(false)
   })
 })

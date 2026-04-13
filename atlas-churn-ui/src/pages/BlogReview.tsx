@@ -176,6 +176,7 @@ export default function BlogReview() {
   const [highlightCtas, setHighlightCtas] = useState(true)
   const [relatedPreviewPosts, setRelatedPreviewPosts] = useState<BlogPostType[]>([])
   const openingDraftIdRef = useRef<string | null>(null)
+  const detailRequestIdRef = useRef(0)
 
   const { data: drafts, loading, error, refresh, refreshing } = useApiData(
     () => fetchBlogDrafts(statusFilter || undefined),
@@ -187,6 +188,8 @@ export default function BlogReview() {
   )
 
   const openDraft = useCallback(async (row: BlogDraftSummary, options?: { syncSearch?: boolean }) => {
+    const requestId = detailRequestIdRef.current + 1
+    detailRequestIdRef.current = requestId
     if (options?.syncSearch !== false) {
       setSearchParams(buildBlogReviewSearchParams(statusFilter, row.id))
     }
@@ -199,10 +202,12 @@ export default function BlogReview() {
         fetchBlogDraft(row.id),
         fetchBlogEvidence(row.id),
       ])
+      if (detailRequestIdRef.current !== requestId) return
       setSelectedDraft(detail)
       setEvidence(ev.reviews)
       setNotes(detail.reviewer_notes || '')
     } catch {
+      if (detailRequestIdRef.current !== requestId) return
       // Fallback: show summary info in the detail panel
       setSelectedDraft({
         ...row,
@@ -214,12 +219,15 @@ export default function BlogReview() {
         source_report_date: null,
       })
     } finally {
+      if (detailRequestIdRef.current !== requestId) return
       setLoadingDetail(false)
     }
   }, [setSearchParams, statusFilter])
 
   const closeDraft = useCallback(() => {
+    detailRequestIdRef.current += 1
     setSearchParams(buildBlogReviewSearchParams(statusFilter, null))
+    setLoadingDetail(false)
     setSelectedDraft(null)
     setEvidence([])
     setNotes('')
@@ -274,9 +282,14 @@ export default function BlogReview() {
   useEffect(() => {
     if (!selectedDraftId) {
       openingDraftIdRef.current = null
+      detailRequestIdRef.current += 1
+      setLoadingDetail(false)
+      setSelectedDraft(null)
+      setEvidence([])
+      setNotes('')
       return
     }
-    if (openingDraftIdRef.current === selectedDraftId || loading || loadingDetail) return
+    if (openingDraftIdRef.current === selectedDraftId || loading) return
     if (selectedDraft?.id === selectedDraftId) return
     const requestedDraft = drafts?.find((draft) => draft.id === selectedDraftId)
     if (!requestedDraft) return
@@ -286,7 +299,10 @@ export default function BlogReview() {
         openingDraftIdRef.current = null
       }
     })
-  }, [drafts, loading, loadingDetail, openDraft, selectedDraft?.id, selectedDraftId])
+  }, [drafts, loading, openDraft, selectedDraft?.id, selectedDraftId])
+  useEffect(() => () => {
+    detailRequestIdRef.current += 1
+  }, [])
   useEffect(() => {
     let cancelled = false
     const relatedSlugs = previewPost?.related_slugs || []
