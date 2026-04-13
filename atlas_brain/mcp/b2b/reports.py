@@ -115,6 +115,7 @@ async def get_report(report_id: str) -> str:
             "status": row["status"],
             "llm_model": row["llm_model"],
             "created_at": row["created_at"],
+            **_extract_report_account_preview_fields(row["intelligence_data"]),
         }
 
         return json.dumps({"success": True, "report": report}, default=str)

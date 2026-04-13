@@ -630,6 +630,14 @@ class TestB2BChurnMCPTools:
         from atlas_brain.mcp.b2b.reports import get_report
 
         report = _make_report_row()
+        report["intelligence_data"] = {
+            "account_reasoning_preview_only": True,
+            "account_reasoning_preview": {
+                "disclaimer": "Early account signal only.",
+                "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                "priority_account_names": ["Concentrix", "Concentrix"],
+            },
+        }
         pool = _mock_pool(fetchrow_return=report)
 
         with _patch_pool(pool):
@@ -639,6 +647,12 @@ class TestB2BChurnMCPTools:
         assert data["success"] is True
         assert data["report"]["report_type"] == "weekly_churn_feed"
         assert isinstance(data["report"]["intelligence_data"], dict)
+        assert data["report"]["account_reasoning_preview_only"] is True
+        assert data["report"]["account_pressure_summary"] == (
+            "A single named account is showing early evaluation pressure."
+        )
+        assert data["report"]["priority_account_names"] == ["Concentrix"]
+        assert data["report"]["account_pressure_disclaimer"] == "Early account signal only."
 
     async def test_get_report_not_found(self):
         from atlas_brain.mcp.b2b.reports import get_report
