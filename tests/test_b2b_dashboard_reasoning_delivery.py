@@ -1189,4 +1189,5 @@ async def test_dashboard_operational_overview_counts_vendor_mentions(monkeypatch
 
     assert result["data_summary"]["vendors_tracked"] == 4
     review_sql = pool.fetchrow.await_args_list[2].args[0]
+    assert "COUNT(DISTINCT r.id) AS total_reviews" in review_sql
     assert "JOIN b2b_review_vendor_mentions vm" in review_sql

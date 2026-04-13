@@ -905,6 +905,7 @@ class TestB2BChurnMCPTools:
         review_sql = pool.fetchrow.call_args_list[2][0][0]
         assert "duplicate_of_review_id IS NULL" in pipeline_sql
         assert "duplicate_of_review_id IS NULL" in review_sql
+        assert "COUNT(DISTINCT r.id) AS total_reviews" in review_sql
         assert "JOIN b2b_review_vendor_mentions vm" in review_sql
 
     async def test_get_pipeline_status_error(self):

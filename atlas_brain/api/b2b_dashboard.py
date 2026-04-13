@@ -2959,7 +2959,7 @@ async def get_operational_overview(
         """),
         pool.fetchrow("""
             SELECT
-                COUNT(*) AS total_reviews,
+                COUNT(DISTINCT r.id) AS total_reviews,
                 COUNT(DISTINCT vm.vendor_name) AS vendors_tracked,
                 MAX(imported_at) AS last_review_at
             FROM b2b_reviews r

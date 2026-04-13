@@ -537,7 +537,7 @@ async def get_operational_overview() -> str:
                 LIMIT 10
             """),
             pool.fetchrow("""
-                SELECT COUNT(*) AS total_reviews,
+                SELECT COUNT(DISTINCT r.id) AS total_reviews,
                        COUNT(DISTINCT vm.vendor_name) AS vendors_tracked
                 FROM b2b_reviews r
                 JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
