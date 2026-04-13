@@ -25,6 +25,13 @@ const api = vi.hoisted(() => ({
   fetchAdminCostReasoningActivity: vi.fn(),
   fetchAdminCostRun: vi.fn(),
   fetchAdminTaskHealth: vi.fn(),
+  fetchCompanySignalReviewImpactSummary: vi.fn(),
+  fetchCompanySignalCandidateGroupSummary: vi.fn(),
+  fetchCompanySignalCandidateGroups: vi.fn(),
+  approveCompanySignalCandidateGroup: vi.fn(),
+  suppressCompanySignalCandidateGroup: vi.fn(),
+  approveCompanySignalCandidateGroups: vi.fn(),
+  suppressCompanySignalCandidateGroups: vi.fn(),
   fetchWatchlistDeliveryOps: vi.fn(),
   fetchWatchlistDeliveryViewDetail: vi.fn(),
   runWatchlistDeliveryForView: vi.fn(),
@@ -81,6 +88,179 @@ describe('PipelineReview watchlist delivery ops', () => {
     })
     api.fetchAdminCostByOperation.mockResolvedValue({ period_days: 30, operations: [] })
     api.fetchAdminCostByVendor.mockResolvedValue({ period_days: 30, vendors: [] })
+    api.fetchCompanySignalReviewImpactSummary.mockResolvedValue({
+      totals: {
+        total_actions: 0,
+        total_batches: 0,
+        distinct_vendors: 0,
+        approvals: 0,
+        suppressions: 0,
+        company_signal_creations: 0,
+        company_signal_updates: 0,
+        company_signal_deletions: 0,
+        company_signal_noops: 0,
+        rebuild_requests: 0,
+        rebuild_triggered: 0,
+        rebuild_blocked: 0,
+        rebuild_persisted_runs: 0,
+        rebuild_persisted_reports: 0,
+        rebuild_total_accounts: 0,
+        company_signal_effect_rate: 0,
+        company_signal_creation_rate: 0,
+        rebuild_trigger_rate: 0,
+        avg_rebuild_reports_per_triggered: 0,
+        avg_rebuild_accounts_per_triggered: 0,
+      },
+      scopes: [],
+      unlock_paths: [],
+      priority_bands: [],
+      priority_reasons: [],
+      top_vendors: [],
+      top_vendor_reasons: [],
+      rebuild_reasons: [],
+      daily_trends: [],
+      trend_comparison: {
+        comparison_window_days: 7,
+        anchor_day: null,
+        recent_start_day: null,
+        recent_end_day: null,
+        recent_days_present: 0,
+        prior_start_day: null,
+        prior_end_day: null,
+        prior_days_present: 0,
+        recent: {
+          action_count: 0,
+          approvals: 0,
+          suppressions: 0,
+          company_signal_creations: 0,
+          company_signal_updates: 0,
+          company_signal_deletions: 0,
+          company_signal_noops: 0,
+          rebuild_requests: 0,
+          rebuild_triggered: 0,
+          rebuild_blocked: 0,
+          rebuild_persisted_runs: 0,
+          rebuild_persisted_reports: 0,
+          rebuild_total_accounts: 0,
+          company_signal_effect_rate: 0,
+          company_signal_creation_rate: 0,
+          rebuild_trigger_rate: 0,
+          rebuild_block_rate: 0,
+          avg_rebuild_reports_per_triggered: 0,
+          avg_rebuild_accounts_per_triggered: 0,
+        },
+        prior: {
+          action_count: 0,
+          approvals: 0,
+          suppressions: 0,
+          company_signal_creations: 0,
+          company_signal_updates: 0,
+          company_signal_deletions: 0,
+          company_signal_noops: 0,
+          rebuild_requests: 0,
+          rebuild_triggered: 0,
+          rebuild_blocked: 0,
+          rebuild_persisted_runs: 0,
+          rebuild_persisted_reports: 0,
+          rebuild_total_accounts: 0,
+          company_signal_effect_rate: 0,
+          company_signal_creation_rate: 0,
+          rebuild_trigger_rate: 0,
+          rebuild_block_rate: 0,
+          avg_rebuild_reports_per_triggered: 0,
+          avg_rebuild_accounts_per_triggered: 0,
+        },
+        deltas: {
+          action_count: 0,
+          approvals: 0,
+          suppressions: 0,
+          company_signal_creations: 0,
+          company_signal_updates: 0,
+          company_signal_deletions: 0,
+          company_signal_noops: 0,
+          rebuild_requests: 0,
+          rebuild_triggered: 0,
+          rebuild_blocked: 0,
+          rebuild_persisted_runs: 0,
+          rebuild_persisted_reports: 0,
+          rebuild_total_accounts: 0,
+          company_signal_effect_rate: 0,
+          company_signal_creation_rate: 0,
+          rebuild_trigger_rate: 0,
+          rebuild_block_rate: 0,
+          avg_rebuild_reports_per_triggered: 0,
+          avg_rebuild_accounts_per_triggered: 0,
+        },
+      },
+      trend_focus: {},
+      trend_alerts: [
+        {
+          status: 'watch',
+          focus: 'rebuild_blocks_up',
+          metric: 'rebuild_blocked',
+          direction: 'up',
+          delta: 1,
+          rationale: 'More requested rebuilds are blocking in the recent window than in the prior window.',
+          queue_filters: {
+            candidate_bucket: 'analyst_review',
+            review_status: 'pending',
+          },
+          queue_snapshot: {
+            pending_groups: 7,
+            actionable_pending_groups: 3,
+            blocked_pending_groups: 4,
+            overdue_pending_groups: 2,
+            oldest_pending_age_days: 6,
+          },
+        },
+      ],
+      trend_recommendation: { status: 'no_data' },
+      trend_recommendation_filters: {},
+      trend_recommendation_queue_filters: {},
+      trend_recommendation_queue_snapshot: null,
+      trend_queue_rankings: [
+        {
+          primary_driver: {
+            label: 'rebuild_blocks_up',
+            rationale: 'Blocked rebuilds are the top queue driver right now.',
+          },
+          queue_filters: {
+            candidate_bucket: 'analyst_review',
+            review_status: 'pending',
+          },
+          queue_snapshot: {
+            pending_groups: 7,
+            actionable_pending_groups: 3,
+            blocked_pending_groups: 4,
+            overdue_pending_groups: 2,
+            oldest_pending_age_days: 6,
+          },
+          actionable_pending_groups: 3,
+          blocked_pending_groups: 4,
+          overdue_pending_groups: 2,
+          pending_groups: 7,
+          oldest_pending_age_days: 6,
+        },
+      ],
+      trend_queue_focus: {
+        primary_driver: {
+          label: 'rebuild_blocks_up',
+        },
+      },
+      trend_queue_recommendation: { status: 'no_data' },
+      operator_focus: { status: 'no_data' },
+      review_scope: null,
+      canonical_gap_reason: null,
+      rebuild_outcome: null,
+      rebuild_reason: null,
+      review_action: null,
+      company_signal_action: null,
+      review_priority_band: null,
+      review_priority_reason: null,
+      review_unlock_path: null,
+      review_unlock_reason: null,
+      candidate_source: null,
+    })
     api.fetchAdminCostB2bEfficiency.mockResolvedValue({
       period_days: 30,
       top_n: 5,
@@ -274,6 +454,123 @@ describe('PipelineReview watchlist delivery ops', () => {
     })
     api.fetchAdminCostRun.mockResolvedValue(null)
     api.fetchAdminTaskHealth.mockResolvedValue({ tasks: [] })
+    api.fetchCompanySignalCandidateGroupSummary.mockResolvedValue({
+      totals: {
+        total_groups: 12,
+        total_reviews: 18,
+        canonical_ready_reviews: 1,
+        pending_groups: 12,
+        actionable_pending_groups: 5,
+        actionable_pending_reviews: 8,
+        blocked_pending_groups: 7,
+        blocked_pending_reviews: 10,
+        near_threshold_blocked_groups: 1,
+        near_threshold_blocked_reviews: 2,
+        approved_groups: 0,
+        suppressed_groups: 0,
+        canonical_ready_groups: 1,
+        analyst_review_groups: 11,
+        pending_canonical_ready_groups: 1,
+        pending_analyst_review_groups: 11,
+        decision_maker_groups: 3,
+        signal_evidence_groups: 4,
+        avg_pending_age_days: 2.4,
+        oldest_pending_age_days: 4.1,
+        overdue_pending_groups: 1,
+        overdue_pending_reviews: 2,
+      },
+      gap_reasons: [
+        { gap_reason: 'low_confidence_low_trust_source', group_count: 7, review_count: 10 },
+        { gap_reason: 'below_high_intent_threshold', group_count: 4, review_count: 6 },
+      ],
+      top_vendors: [
+        { vendor_name: 'Shopify', group_count: 3, review_count: 6, pending_groups: 3, canonical_ready_groups: 0 },
+      ],
+      actionable_top_vendors: [
+        {
+          vendor_name: 'Shopify',
+          actionable_group_count: 2,
+          actionable_review_count: 4,
+          promote_now_group_count: 0,
+          high_group_count: 1,
+          medium_group_count: 1,
+          actionable_signal_evidence_groups: 1,
+          actionable_decision_maker_groups: 1,
+        },
+      ],
+      candidate_bucket: 'analyst_review',
+      review_status: 'pending',
+      review_priority_band: null,
+      review_priority_reason: null,
+      source_name: null,
+    })
+    api.fetchCompanySignalCandidateGroups.mockResolvedValue({
+      groups: [
+        {
+          group_id: 'group-1',
+          company: 'sunny side studio',
+          display_company: 'Sunny Side Studio',
+          vendor: 'Shopify',
+          category: 'E-commerce',
+          review_count: 1,
+          distinct_source_count: 1,
+          decision_maker_count: 1,
+          signal_evidence_count: 1,
+          canonical_ready_review_count: 0,
+          avg_urgency: 8.5,
+          max_urgency: 8.5,
+          avg_confidence_score: 0.21,
+          max_confidence_score: 0.21,
+          corroborated_confidence_score: 0.31,
+          confidence_tier: 'medium',
+          source_distribution: { reddit: 1 },
+          gap_reason_distribution: { low_confidence_low_trust_source: 1 },
+          sample_review_ids: ['review-1'],
+          representative_review_id: 'review-1',
+          representative_source: 'reddit',
+          representative_pain_category: 'pricing',
+          representative_buyer_role: 'unknown',
+          representative_decision_maker: true,
+          representative_seat_count: null,
+          representative_contract_end: null,
+          representative_buying_stage: 'evaluation',
+          representative_confidence_score: 0.21,
+          representative_urgency_score: 8.5,
+          canonical_gap_reason: 'low_confidence_low_trust_source',
+          candidate_bucket: 'analyst_review',
+          review_priority_band: 'high',
+          review_priority_reason: 'has_signal_evidence_and_decision_maker',
+          review_status: 'pending',
+          review_status_updated_at: null,
+          reviewed_by: null,
+          review_notes: null,
+          materialization_run_id: 'run-1',
+          first_seen_at: '2026-04-11T06:51:24Z',
+          last_seen_at: '2026-04-13T16:56:10Z',
+          supporting_reviews: [
+            {
+              review_id: 'review-1',
+              source: 'reddit',
+              summary: 'Shopify or Squarespace for a surf art project?',
+              review_excerpt: 'A surf art project deciding between Shopify and Squarespace.',
+              source_url: 'https://example.com/review-1',
+              reviewed_at: '2026-04-08T06:51:12Z',
+              quote_excerpt: 'I know Shopify is better for selling and Squarespace for portfolios',
+            },
+          ],
+        },
+      ],
+      count: 1,
+      candidate_bucket: 'analyst_review',
+      review_status: 'pending',
+      review_priority_band: null,
+      review_priority_reason: null,
+      source_name: null,
+    })
+    api.approveCompanySignalCandidateGroup.mockResolvedValue({ review_status: 'approved' })
+    api.suppressCompanySignalCandidateGroup.mockResolvedValue({ review_status: 'suppressed' })
+    api.approveCompanySignalCandidateGroups.mockResolvedValue({ count: 1, groups: [] })
+    api.suppressCompanySignalCandidateGroups.mockResolvedValue({ count: 1, groups: [] })
     api.fetchWatchlistDeliveryOps.mockResolvedValue({
       period_days: 30,
       summary: {
@@ -504,6 +801,502 @@ describe('PipelineReview watchlist delivery ops', () => {
     expect(await screen.findByText('Triggered delivery run')).toBeInTheDocument()
   })
 
+  it('renders the company signal queue and approves a candidate group', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Company Signal Queue')).toBeInTheDocument()
+    expect(screen.getByText('Operator Focus')).toBeInTheDocument()
+    expect(screen.getByText('No review-action history yet. Once analysts approve or suppress groups, impact and rebuild outcomes will show here.')).toBeInTheDocument()
+    expect(screen.getByText('Pending Candidate Groups')).toBeInTheDocument()
+    expect(api.fetchCompanySignalReviewImpactSummary).toHaveBeenCalledWith({ window_days: 30, top_n: 8 })
+    expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenCalledWith({
+      candidate_bucket: 'analyst_review',
+      review_status: 'pending',
+      source_name: undefined,
+      canonical_gap_reason: undefined,
+      review_priority_band: undefined,
+      decision_makers_only: undefined,
+      top_n: 8,
+    })
+    expect(api.fetchCompanySignalCandidateGroups).toHaveBeenCalledWith({
+      candidate_bucket: 'analyst_review',
+      review_status: 'pending',
+      source_name: undefined,
+      canonical_gap_reason: undefined,
+      review_priority_band: undefined,
+      decision_makers_only: undefined,
+      limit: 25,
+    })
+    expect(screen.getByText('Sunny Side Studio')).toBeInTheDocument()
+    expect(screen.getAllByText('low confidence low trust source').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Shopify').length).toBeGreaterThan(0)
+
+    await user.click(screen.getByText('Sunny Side Studio'))
+    expect(await screen.findByText('Supporting Reviews')).toBeInTheDocument()
+    expect(screen.getByText('All reviews currently backing this candidate group.')).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Source' }).length).toBeGreaterThan(0)
+    expect(screen.getByText('Review State')).toBeInTheDocument()
+    expect(screen.getByText('Notes: --')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Company signal review notes'), 'Promote based on clear decision-maker evidence')
+    await user.click(screen.getByLabelText('Trigger rebuild after review'))
+
+    await user.click(screen.getByRole('button', { name: 'Approve' }))
+
+    await waitFor(() => {
+      expect(api.approveCompanySignalCandidateGroup).toHaveBeenCalledWith('group-1', {
+        trigger_rebuild: false,
+        notes: 'Promote based on clear decision-maker evidence',
+      })
+    })
+    expect(await screen.findByText('approved')).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Source'), 'reddit')
+    await user.selectOptions(screen.getByLabelText('Gap'), 'low_confidence_low_trust_source')
+    await user.click(screen.getByLabelText('Decision makers only'))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalReviewImpactSummary).toHaveBeenLastCalledWith({
+        review_action: undefined,
+        canonical_gap_reason: 'low_confidence_low_trust_source',
+        review_priority_band: undefined,
+        candidate_source: 'reddit',
+        window_days: 30,
+        top_n: 8,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        source_name: 'reddit',
+        canonical_gap_reason: 'low_confidence_low_trust_source',
+        review_priority_band: undefined,
+        decision_makers_only: true,
+        top_n: 8,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        source_name: 'reddit',
+        canonical_gap_reason: 'low_confidence_low_trust_source',
+        review_priority_band: undefined,
+        decision_makers_only: true,
+        limit: 25,
+      })
+    })
+    expect(screen.getByText('reddit source')).toBeInTheDocument()
+    expect(screen.getAllByText('Decision makers only').length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select candidate group group-1' }))
+    expect(screen.getByText('1 candidate group selected')).toBeInTheDocument()
+    expect(
+      screen.getAllByRole('link', { name: 'Evidence' }).some((node) =>
+        node.getAttribute('href') === '/evidence?vendor=Shopify&tab=witnesses&back_to=%2Fpipeline-review',
+      ),
+    ).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Approve Selected' }))
+
+    await waitFor(() => {
+      expect(api.approveCompanySignalCandidateGroups).toHaveBeenCalledWith({
+        group_ids: ['group-1'],
+        trigger_rebuild: false,
+        notes: 'Promote based on clear decision-maker evidence',
+      })
+    })
+    expect(await screen.findByText('Approved 1 candidate group')).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Review Status'), 'approved')
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalReviewImpactSummary).toHaveBeenLastCalledWith({
+        review_action: 'approved',
+        canonical_gap_reason: 'low_confidence_low_trust_source',
+        review_priority_band: undefined,
+        candidate_source: 'reddit',
+        window_days: 30,
+        top_n: 8,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'approved',
+        source_name: 'reddit',
+        canonical_gap_reason: 'low_confidence_low_trust_source',
+        review_priority_band: undefined,
+        decision_makers_only: true,
+        top_n: 8,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'approved',
+        source_name: 'reddit',
+        canonical_gap_reason: 'low_confidence_low_trust_source',
+        review_priority_band: undefined,
+        decision_makers_only: true,
+        limit: 25,
+      })
+    })
+    expect(screen.getByText('approved groups')).toBeInTheDocument()
+    expect(screen.getByText('Review actions are disabled in audit mode.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve Selected' })).not.toBeInTheDocument()
+  })
+
+  it('renders company signal review activity in audit mode when impact history exists', async () => {
+    const user = userEvent.setup()
+
+    api.fetchCompanySignalReviewImpactSummary.mockResolvedValue({
+      totals: {
+        total_actions: 6,
+        total_batches: 2,
+        distinct_vendors: 2,
+        approvals: 4,
+        suppressions: 2,
+        company_signal_creations: 3,
+        company_signal_updates: 1,
+        company_signal_deletions: 1,
+        company_signal_noops: 1,
+        rebuild_requests: 5,
+        rebuild_triggered: 4,
+        rebuild_blocked: 1,
+        rebuild_persisted_runs: 3,
+        rebuild_persisted_reports: 7,
+        rebuild_total_accounts: 18,
+        company_signal_effect_rate: 0.67,
+        company_signal_creation_rate: 0.5,
+        rebuild_trigger_rate: 0.8,
+        avg_rebuild_reports_per_triggered: 1.75,
+        avg_rebuild_accounts_per_triggered: 4.5,
+      },
+      scopes: [],
+      unlock_paths: [],
+      priority_bands: [],
+      priority_reasons: [],
+      top_vendors: [
+        { vendor_name: 'Shopify', action_count: 4 },
+        { vendor_name: 'Salesforce', action_count: 2 },
+      ],
+      top_vendor_reasons: [],
+      rebuild_reasons: [
+        { rebuild_reason: 'accounts_in_motion_refresh', count: 4 },
+        { rebuild_reason: 'rebuild_disabled', count: 1 },
+      ],
+      daily_trends: [],
+      trend_comparison: {
+        comparison_window_days: 7,
+        anchor_day: '2026-04-13',
+        recent_start_day: '2026-04-07',
+        recent_end_day: '2026-04-13',
+        recent_days_present: 7,
+        prior_start_day: '2026-03-31',
+        prior_end_day: '2026-04-06',
+        prior_days_present: 7,
+        recent: {
+          action_count: 6,
+          approvals: 4,
+          suppressions: 2,
+          company_signal_creations: 3,
+          company_signal_updates: 1,
+          company_signal_deletions: 1,
+          company_signal_noops: 1,
+          rebuild_requests: 5,
+          rebuild_triggered: 4,
+          rebuild_blocked: 1,
+          rebuild_persisted_runs: 3,
+          rebuild_persisted_reports: 7,
+          rebuild_total_accounts: 18,
+          company_signal_effect_rate: 0.67,
+          company_signal_creation_rate: 0.5,
+          rebuild_trigger_rate: 0.8,
+          rebuild_block_rate: 0.2,
+          avg_rebuild_reports_per_triggered: 1.75,
+          avg_rebuild_accounts_per_triggered: 4.5,
+        },
+        prior: {
+          action_count: 3,
+          approvals: 2,
+          suppressions: 1,
+          company_signal_creations: 1,
+          company_signal_updates: 1,
+          company_signal_deletions: 0,
+          company_signal_noops: 1,
+          rebuild_requests: 2,
+          rebuild_triggered: 1,
+          rebuild_blocked: 1,
+          rebuild_persisted_runs: 1,
+          rebuild_persisted_reports: 2,
+          rebuild_total_accounts: 6,
+          company_signal_effect_rate: 0.33,
+          company_signal_creation_rate: 0.33,
+          rebuild_trigger_rate: 0.5,
+          rebuild_block_rate: 0.5,
+          avg_rebuild_reports_per_triggered: 2,
+          avg_rebuild_accounts_per_triggered: 6,
+        },
+        deltas: {
+          action_count: 3,
+          approvals: 2,
+          suppressions: 1,
+          company_signal_creations: 2,
+          company_signal_updates: 0,
+          company_signal_deletions: 1,
+          company_signal_noops: 0,
+          rebuild_requests: 3,
+          rebuild_triggered: 3,
+          rebuild_blocked: 0,
+          rebuild_persisted_runs: 2,
+          rebuild_persisted_reports: 5,
+          rebuild_total_accounts: 12,
+          company_signal_effect_rate: 0.34,
+          company_signal_creation_rate: 0.17,
+          rebuild_trigger_rate: 0.3,
+          rebuild_block_rate: -0.3,
+          avg_rebuild_reports_per_triggered: -0.25,
+          avg_rebuild_accounts_per_triggered: -1.5,
+        },
+      },
+      trend_focus: {},
+      trend_alerts: [
+        {
+          status: 'watch',
+          focus: 'pending_backlog',
+          metric: 'pending_groups',
+          direction: 'up',
+          delta: 2,
+          rationale: 'Pending analyst-review work is building in the live queue.',
+          queue_filters: {
+            candidate_bucket: 'analyst_review',
+            review_status: 'pending',
+          },
+          queue_snapshot: {
+            pending_groups: 9,
+            actionable_pending_groups: 4,
+            blocked_pending_groups: 5,
+            overdue_pending_groups: 2,
+            oldest_pending_age_days: 5,
+          },
+        },
+      ],
+      trend_recommendation: { status: 'ok' },
+      trend_recommendation_filters: {},
+      trend_recommendation_queue_filters: {
+        candidate_bucket: 'canonical_ready',
+        review_status: 'pending',
+        source_name: 'reddit',
+        review_priority_band: 'medium',
+      },
+      trend_recommendation_queue_snapshot: null,
+      trend_queue_rankings: [
+        {
+          primary_driver: {
+            label: 'pending_backlog',
+            rationale: 'Pending analyst-review work is the highest-leverage slice right now.',
+          },
+          queue_filters: {
+            candidate_bucket: 'analyst_review',
+            review_status: 'pending',
+          },
+          queue_snapshot: {
+            pending_groups: 9,
+            actionable_pending_groups: 4,
+            blocked_pending_groups: 5,
+            overdue_pending_groups: 2,
+            oldest_pending_age_days: 5,
+          },
+        },
+      ],
+      trend_queue_focus: null,
+      trend_queue_recommendation: {
+        status: 'focus',
+        action: 'Work the actionable pending slice first',
+        queue_filters: {
+          candidate_bucket: 'canonical_ready',
+          review_status: 'pending',
+          source_name: 'reddit',
+          review_priority_band: 'medium',
+        },
+      },
+      operator_focus: {
+        status: 'focus',
+        action: 'Audit recently approved groups with rebuild activity',
+        rationale: 'Recent approvals are creating signals and triggering rebuilds.',
+        queue_filters: {
+          candidate_bucket: 'analyst_review',
+          review_status: 'pending',
+          source_name: 'reddit',
+          canonical_gap_reason: 'low_confidence_low_trust_source',
+          review_priority_band: 'high',
+          decision_makers_only: true,
+        },
+      },
+      review_scope: null,
+      canonical_gap_reason: null,
+      rebuild_outcome: null,
+      rebuild_reason: null,
+      review_action: null,
+      company_signal_action: null,
+      review_priority_band: null,
+      review_priority_reason: null,
+      review_unlock_path: null,
+      review_unlock_reason: null,
+      candidate_source: null,
+    })
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Company Signal Queue')).toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('Review Status'), 'approved')
+
+    expect(await screen.findByText('Review Activity')).toBeInTheDocument()
+    expect(screen.getByText('Trend Alerts')).toBeInTheDocument()
+    expect(screen.getByText('Ranked Queue Slices')).toBeInTheDocument()
+    expect(screen.getByText('Recent 7d')).toBeInTheDocument()
+    expect(screen.getByText('Vs Prior 7d')).toBeInTheDocument()
+    expect(screen.getByText('Top Vendors')).toBeInTheDocument()
+    expect(screen.getByText('Rebuild Reasons')).toBeInTheDocument()
+    expect(screen.getAllByText('Shopify').length).toBeGreaterThan(0)
+    expect(screen.getByText('accounts in motion refresh')).toBeInTheDocument()
+    expect(screen.getByText('Audit recently approved groups with rebuild activity')).toBeInTheDocument()
+    expect(screen.getAllByText('Changes current queue: sets review status pending').length).toBeGreaterThan(0)
+    expect(screen.getAllByText((content) => content.includes('Queue impact:')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText((content) => content.includes('3 fewer pending')).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: 'Preview Slice' }).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: 'Apply Operator Focus' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Apply Queue Recommendation' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reset Queue' })).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: 'Preview Slice' })[0])
+
+    expect(await screen.findByText('Preview Queue Slice')).toBeInTheDocument()
+    expect(screen.getByText('Trend alert: pending backlog')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Apply Preview' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Clear Preview' })).toBeInTheDocument()
+    expect(screen.getByText('1 of 1 visible groups match preview')).toBeInTheDocument()
+    expect(screen.getByText('Preview match')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Apply Preview' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        source_name: undefined,
+        canonical_gap_reason: undefined,
+        review_priority_band: undefined,
+        decision_makers_only: undefined,
+        top_n: 8,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        source_name: undefined,
+        canonical_gap_reason: undefined,
+        review_priority_band: undefined,
+        decision_makers_only: undefined,
+        limit: 25,
+      })
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('Preview Queue Slice')).not.toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Apply Operator Focus' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        source_name: 'reddit',
+        canonical_gap_reason: 'low_confidence_low_trust_source',
+        review_priority_band: 'high',
+        decision_makers_only: true,
+        top_n: 8,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        source_name: 'reddit',
+        canonical_gap_reason: 'low_confidence_low_trust_source',
+        review_priority_band: 'high',
+        decision_makers_only: true,
+        limit: 25,
+      })
+    })
+    expect(screen.getByText('pending groups')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText(/Active preset: Apply Operator Focus/)).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Apply Queue Recommendation' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'canonical_ready',
+        review_status: 'pending',
+        source_name: 'reddit',
+        canonical_gap_reason: undefined,
+        review_priority_band: 'medium',
+        decision_makers_only: undefined,
+        top_n: 8,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'canonical_ready',
+        review_status: 'pending',
+        source_name: 'reddit',
+        canonical_gap_reason: undefined,
+        review_priority_band: 'medium',
+        decision_makers_only: undefined,
+        limit: 25,
+      })
+    })
+    await user.click(screen.getByRole('button', { name: 'Reset Queue' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroupSummary).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        source_name: undefined,
+        canonical_gap_reason: undefined,
+        review_priority_band: undefined,
+        decision_makers_only: undefined,
+        top_n: 8,
+      })
+    })
+    await waitFor(() => {
+      expect(api.fetchCompanySignalCandidateGroups).toHaveBeenLastCalledWith({
+        candidate_bucket: 'analyst_review',
+        review_status: 'pending',
+        source_name: undefined,
+        canonical_gap_reason: undefined,
+        review_priority_band: undefined,
+        decision_makers_only: undefined,
+        limit: 25,
+      })
+    })
+  })
+
   it('renders B2B token cards and run-level tier splits', async () => {
     const user = userEvent.setup()
 
@@ -579,18 +1372,21 @@ describe('PipelineReview watchlist delivery ops', () => {
       'href',
       '/vendors/Salesforce?back_to=%2Fpipeline-review',
     )
-    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
-      'href',
-      '/evidence?vendor=Salesforce&tab=witnesses&back_to=%2Fpipeline-review',
-    )
-    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
-      'href',
-      '/reports?vendor_filter=Salesforce&back_to=%2Fpipeline-review',
-    )
-    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
-      'href',
-      '/opportunities?vendor=Salesforce&back_to=%2Fpipeline-review',
-    )
+    expect(
+      screen.getAllByRole('link', { name: 'Evidence' }).some((node) =>
+        node.getAttribute('href') === '/evidence?vendor=Salesforce&tab=witnesses&back_to=%2Fpipeline-review',
+      ),
+    ).toBe(true)
+    expect(
+      screen.getAllByRole('link', { name: 'Reports' }).some((node) =>
+        node.getAttribute('href') === '/reports?vendor_filter=Salesforce&back_to=%2Fpipeline-review',
+      ),
+    ).toBe(true)
+    expect(
+      screen.getAllByRole('link', { name: 'Opportunities' }).some((node) =>
+        node.getAttribute('href') === '/opportunities?vendor=Salesforce&back_to=%2Fpipeline-review',
+      ),
+    ).toBe(true)
 
     await user.click(screen.getByRole('button', { name: 'Deliver Now' }))
     await waitFor(() => {

@@ -779,6 +779,235 @@ export interface VisibilityEvent {
   fingerprint?: string
 }
 
+export interface CompanySignalCandidateGroupSummaryTotals {
+  total_groups: number
+  total_reviews: number
+  canonical_ready_reviews: number
+  pending_groups: number
+  actionable_pending_groups: number
+  actionable_pending_reviews: number
+  blocked_pending_groups: number
+  blocked_pending_reviews: number
+  near_threshold_blocked_groups: number
+  near_threshold_blocked_reviews: number
+  approved_groups: number
+  suppressed_groups: number
+  canonical_ready_groups: number
+  analyst_review_groups: number
+  pending_canonical_ready_groups: number
+  pending_analyst_review_groups: number
+  decision_maker_groups: number
+  signal_evidence_groups: number
+  avg_pending_age_days: number | null
+  oldest_pending_age_days: number | null
+  overdue_pending_groups: number
+  overdue_pending_reviews: number
+}
+
+export interface CompanySignalCandidateGroupGapReasonRow {
+  gap_reason: string
+  group_count: number
+  review_count: number
+}
+
+export interface CompanySignalCandidateGroupVendorRow {
+  vendor_name: string
+  group_count?: number
+  review_count?: number
+  pending_groups?: number
+  canonical_ready_groups?: number
+  actionable_group_count?: number
+  actionable_review_count?: number
+  promote_now_group_count?: number
+  high_group_count?: number
+  medium_group_count?: number
+  actionable_signal_evidence_groups?: number
+  actionable_decision_maker_groups?: number
+}
+
+export interface CompanySignalCandidateGroupSummary {
+  totals: CompanySignalCandidateGroupSummaryTotals
+  gap_reasons: CompanySignalCandidateGroupGapReasonRow[]
+  top_vendors: CompanySignalCandidateGroupVendorRow[]
+  actionable_top_vendors: CompanySignalCandidateGroupVendorRow[]
+  candidate_bucket?: string | null
+  review_status?: string | null
+  review_priority_band?: string | null
+  review_priority_reason?: string | null
+  source_name?: string | null
+}
+
+export interface CompanySignalSupportingReview {
+  review_id: string
+  source: string | null
+  summary: string | null
+  review_excerpt: string | null
+  source_url: string | null
+  reviewed_at: string | null
+  quote_excerpt: string | null
+}
+
+export interface CompanySignalCandidateGroup {
+  group_id: string
+  company: string
+  display_company: string
+  vendor: string
+  category: string | null
+  review_count: number
+  distinct_source_count: number
+  decision_maker_count: number
+  signal_evidence_count: number
+  canonical_ready_review_count: number
+  avg_urgency: number | null
+  max_urgency: number | null
+  avg_confidence_score: number | null
+  max_confidence_score: number | null
+  corroborated_confidence_score: number | null
+  confidence_tier: string | null
+  source_distribution: Record<string, number> | null
+  gap_reason_distribution: Record<string, number> | null
+  sample_review_ids: string[] | null
+  representative_review_id: string | null
+  representative_source: string | null
+  representative_pain_category: string | null
+  representative_buyer_role: string | null
+  representative_decision_maker: boolean | null
+  representative_seat_count: number | null
+  representative_contract_end: string | null
+  representative_buying_stage: string | null
+  representative_confidence_score: number | null
+  representative_urgency_score: number | null
+  canonical_gap_reason: string | null
+  candidate_bucket: string
+  review_priority_band: string | null
+  review_priority_reason: string | null
+  review_status: string
+  review_status_updated_at: string | null
+  reviewed_by: string | null
+  review_notes: string | null
+  materialization_run_id: string | null
+  first_seen_at: string | null
+  last_seen_at: string | null
+  supporting_reviews: CompanySignalSupportingReview[]
+}
+
+export interface CompanySignalCandidateGroupListResponse {
+  groups: CompanySignalCandidateGroup[]
+  count: number
+  candidate_bucket?: string | null
+  review_status?: string | null
+  review_priority_band?: string | null
+  review_priority_reason?: string | null
+  source_name?: string | null
+}
+
+export interface CompanySignalReviewImpactTotals {
+  total_actions: number
+  total_batches: number
+  distinct_vendors: number
+  approvals: number
+  suppressions: number
+  company_signal_creations: number
+  company_signal_updates: number
+  company_signal_deletions: number
+  company_signal_noops: number
+  rebuild_requests: number
+  rebuild_triggered: number
+  rebuild_blocked: number
+  rebuild_persisted_runs: number
+  rebuild_persisted_reports: number
+  rebuild_total_accounts: number
+  company_signal_effect_rate: number
+  company_signal_creation_rate: number
+  rebuild_trigger_rate: number
+  avg_rebuild_reports_per_triggered: number
+  avg_rebuild_accounts_per_triggered: number
+}
+
+export interface CompanySignalReviewImpactTrendBucket {
+  action_count: number
+  approvals: number
+  suppressions: number
+  company_signal_creations: number
+  company_signal_updates: number
+  company_signal_deletions: number
+  company_signal_noops: number
+  rebuild_requests: number
+  rebuild_triggered: number
+  rebuild_blocked: number
+  rebuild_persisted_runs: number
+  rebuild_persisted_reports: number
+  rebuild_total_accounts: number
+  company_signal_effect_rate: number
+  company_signal_creation_rate: number
+  rebuild_trigger_rate: number
+  rebuild_block_rate: number
+  avg_rebuild_reports_per_triggered: number
+  avg_rebuild_accounts_per_triggered: number
+}
+
+export interface CompanySignalReviewImpactTrendComparison {
+  comparison_window_days: number
+  anchor_day: string | null
+  recent_start_day: string | null
+  recent_end_day: string | null
+  recent_days_present: number
+  prior_start_day: string | null
+  prior_end_day: string | null
+  prior_days_present: number
+  recent: CompanySignalReviewImpactTrendBucket
+  prior: CompanySignalReviewImpactTrendBucket
+  deltas: CompanySignalReviewImpactTrendBucket
+}
+
+export interface CompanySignalReviewImpactRecommendation {
+  status: string
+  action?: string | null
+  action_type?: string | null
+  priority?: string | null
+  owner?: string | null
+  reason?: string | null
+  rationale?: string | null
+  queue_filters?: Record<string, unknown>
+  queue_snapshot?: Record<string, unknown> | null
+  primary_driver?: string | null
+  supporting_focuses?: string[] | null
+}
+
+export interface CompanySignalReviewImpactSummary {
+  totals: CompanySignalReviewImpactTotals
+  scopes: Record<string, unknown>[]
+  unlock_paths: Record<string, unknown>[]
+  priority_bands: Record<string, unknown>[]
+  priority_reasons: Record<string, unknown>[]
+  top_vendors: Record<string, unknown>[]
+  top_vendor_reasons: Record<string, unknown>[]
+  rebuild_reasons: Record<string, unknown>[]
+  daily_trends: Record<string, unknown>[]
+  trend_comparison: CompanySignalReviewImpactTrendComparison
+  trend_focus: Record<string, unknown>
+  trend_alerts: Record<string, unknown>[]
+  trend_recommendation: CompanySignalReviewImpactRecommendation
+  trend_recommendation_filters: Record<string, unknown>
+  trend_recommendation_queue_filters: Record<string, unknown>
+  trend_recommendation_queue_snapshot: Record<string, unknown> | null
+  trend_queue_rankings: Record<string, unknown>[]
+  trend_queue_focus: Record<string, unknown> | null
+  trend_queue_recommendation: CompanySignalReviewImpactRecommendation
+  operator_focus: CompanySignalReviewImpactRecommendation
+  review_scope?: string | null
+  canonical_gap_reason?: string | null
+  rebuild_outcome?: string | null
+  rebuild_reason?: string | null
+  review_action?: string | null
+  company_signal_action?: string | null
+  review_priority_band?: string | null
+  review_priority_reason?: string | null
+  review_unlock_path?: string | null
+  review_unlock_reason?: string | null
+  candidate_source?: string | null
+}
+
 export interface SynthesisValidationResult {
   id: string
   vendor_name: string

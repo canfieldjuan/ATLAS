@@ -54,6 +54,9 @@ import type {
   DedupDecision,
   PipelineReviewAction,
   ReasoningReferenceIds,
+  CompanySignalCandidateGroupSummary,
+  CompanySignalCandidateGroupListResponse,
+  CompanySignalReviewImpactSummary,
   WatchlistDeliveryOpsSummary,
   WatchlistDeliveryOpsDetail,
 } from '../types'
@@ -693,8 +696,8 @@ export async function fetchCompanySignalReviewImpactSummary(params?: {
   window_days?: number
   top_n?: number
 }) {
-  return get<Record<string, unknown>>(
-    WEBHOOKS_BASE,
+  return get<CompanySignalReviewImpactSummary>(
+    TENANT_BASE,
     '/company-signal-review-impact-summary',
     params,
   )
@@ -717,8 +720,8 @@ export async function fetchCompanySignalCandidateGroupSummary(params?: {
   window_days?: number
   top_n?: number
 }) {
-  return get<Record<string, unknown>>(
-    WEBHOOKS_BASE,
+  return get<CompanySignalCandidateGroupSummary>(
+    TENANT_BASE,
     '/company-signal-candidate-group-summary',
     params,
   )
@@ -741,8 +744,8 @@ export async function fetchCompanySignalCandidateGroups(params?: {
   window_days?: number
   limit?: number
 }) {
-  return get<Record<string, unknown>>(
-    WEBHOOKS_BASE,
+  return get<CompanySignalCandidateGroupListResponse>(
+    TENANT_BASE,
     '/company-signal-candidate-groups',
     params,
   )
@@ -757,7 +760,7 @@ export async function approveCompanySignalCandidateGroup(groupId: string, body?:
     ...(body?.notes !== undefined ? { notes: body.notes } : {}),
   }
   return post<Record<string, unknown>>(
-    WEBHOOKS_BASE,
+    TENANT_BASE,
     `/company-signal-candidate-groups/${encodeURIComponent(groupId)}/approve`,
     payload,
   )
@@ -772,7 +775,7 @@ export async function suppressCompanySignalCandidateGroup(groupId: string, body?
     ...(body?.notes !== undefined ? { notes: body.notes } : {}),
   }
   return post<Record<string, unknown>>(
-    WEBHOOKS_BASE,
+    TENANT_BASE,
     `/company-signal-candidate-groups/${encodeURIComponent(groupId)}/suppress`,
     payload,
   )
@@ -789,7 +792,7 @@ export async function approveCompanySignalCandidateGroups(body: {
     ...(body.notes !== undefined ? { notes: body.notes } : {}),
   }
   return post<Record<string, unknown>>(
-    WEBHOOKS_BASE,
+    TENANT_BASE,
     '/company-signal-candidate-groups/approve',
     payload,
   )
@@ -806,7 +809,7 @@ export async function suppressCompanySignalCandidateGroups(body: {
     ...(body.notes !== undefined ? { notes: body.notes } : {}),
   }
   return post<Record<string, unknown>>(
-    WEBHOOKS_BASE,
+    TENANT_BASE,
     '/company-signal-candidate-groups/suppress',
     payload,
   )

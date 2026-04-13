@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Shield,
@@ -67,6 +67,10 @@ import type {
   AdminCostRunBatchJob,
   AdminCostRunBatchItem,
   AdminTaskHealthRow,
+  CompanySignalCandidateGroupSummary,
+  CompanySignalCandidateGroup,
+  CompanySignalCandidateGroupListResponse,
+  CompanySignalReviewImpactSummary,
   WatchlistDeliveryOpsSummary,
   WatchlistDeliveryOpsDetail,
   WatchlistPreviewAccountAlertPolicy,
@@ -93,6 +97,13 @@ import {
   fetchAdminCostReasoningActivity,
   fetchAdminCostRun,
   fetchAdminTaskHealth,
+  fetchCompanySignalReviewImpactSummary,
+  fetchCompanySignalCandidateGroupSummary,
+  fetchCompanySignalCandidateGroups,
+  approveCompanySignalCandidateGroup,
+  suppressCompanySignalCandidateGroup,
+  approveCompanySignalCandidateGroups,
+  suppressCompanySignalCandidateGroups,
   fetchWatchlistDeliveryOps,
   fetchWatchlistDeliveryViewDetail,
   runWatchlistDeliveryForView,
@@ -157,6 +168,11 @@ const BURN_DASHBOARD_TOP_N = 25
 const GENERIC_REASONING_TOP_N = 8
 const RECON_TASK_NAME = 'b2b_campaign_batch_reconciliation'
 const WATCHLIST_DELIVERY_TASK_NAME = 'b2b_watchlist_alert_delivery'
+const EMPTY_COMPANY_SIGNAL_GROUPS: CompanySignalCandidateGroup[] = []
+const DEFAULT_COMPANY_SIGNAL_QUEUE_FILTERS: Record<string, unknown> = {
+  candidate_bucket: 'analyst_review',
+  review_status: 'pending',
+}
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -327,6 +343,62 @@ function formatVisibilityCode(code: string | null | undefined): string {
   return visibilityCodeLabels[key] || key.replace(/_/g, ' ')
 }
 
+function formatCompanySignalCode(code: string | null | undefined): string {
+  const key = String(code || '').trim()
+  if (!key) return '--'
+  if (key === 'canonical_ready') return 'Canonical ready'
+  return key.replace(/_/g, ' ')
+}
+
+function formatCompanySignalCode(code: string | null | undefined): string {
+  const key = String(code || '').trim()
+  if (!key) return '--'
+  return key.replace(/_/g, ' ')
+}
+
+function formatPriorityBandLabel(value: string | null | undefined): string {
+  const text = String(value || '').trim()
+  if (!text) return '--'
+  if (text === 'promote_now') return 'promote now'
+  return text.replace(/_/g, ' ')
+}
+
+function formatSourceDistributionSummary(distribution: Record<string, number> | null | undefined): string {
+  if (!distribution) return '--'
+  const entries = Object.entries(distribution).filter(([, count]) => Number(count || 0) > 0)
+  if (entries.length === 0) return '--'
+  return entries
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+    .slice(0, 2)
+    .map(([source, count]) => `${source} ${formatNumber(count)}`)
+    .join(' | ')
+}
+
+function companySignalReviewActionForStatus(status: string): string | undefined {
+  if (status === 'approved' || status === 'suppressed') return status
+  return undefined
+}
+
+function buildFilterSelectOptions(
+  values: Array<string | null | undefined>,
+  emptyLabel: string,
+  currentValue: string,
+  formatter: (value: string) => string = (value) => value,
+) {
+  const uniqueValues = Array.from(
+    new Set(
+      values
+        .map((value) => String(value || '').trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b))
+  if (currentValue && !uniqueValues.includes(currentValue)) uniqueValues.push(currentValue)
+  return [
+    { value: '', label: emptyLabel },
+    ...uniqueValues.map((value) => ({ value, label: formatter(value) })),
+  ]
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -339,6 +411,200 @@ function asString(value: unknown): string {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null
+}
+
+function queueFilterSignature(filters: Record<string, unknown>): string {
+  return JSON.stringify(
+    Object.keys(filters)
+      .sort()
+      .map((key) => [key, filters[key]]),
+  )
+}
+
+function hasQueueFilters(filters: Record<string, unknown>): boolean {
+  return Object.keys(filters).length > 0
+}
+
+function normalizeCompanySignalQueueFilters(filters: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(filters)) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (trimmed) normalized[key] = trimmed
+      continue
+    }
+    if (typeof value === 'boolean') {
+      if (value) normalized[key] = true
+      continue
+    }
+    if (value != null) normalized[key] = value
+  }
+  return normalized
+}
+
+function resolveCompanySignalQueueFilters(
+  currentFilters: Record<string, unknown>,
+  patchFilters: Record<string, unknown>,
+): Record<string, unknown> {
+  const current = normalizeCompanySignalQueueFilters(currentFilters)
+  const patch = normalizeCompanySignalQueueFilters(patchFilters)
+
+  const candidateBucket = asString(patch.candidate_bucket)
+  const reviewStatus = asString(patch.review_status)
+  const reviewAction = asString(patch.review_action)
+  const priorityBand = asString(patch.review_priority_band)
+
+  return normalizeCompanySignalQueueFilters({
+    candidate_bucket:
+      candidateBucket === 'analyst_review' || candidateBucket === 'canonical_ready'
+        ? candidateBucket
+        : current.candidate_bucket,
+    review_status:
+      reviewStatus === 'pending' || reviewStatus === 'approved' || reviewStatus === 'suppressed'
+        ? reviewStatus
+        : reviewAction === 'approved' || reviewAction === 'suppressed'
+          ? reviewAction
+          : current.review_status,
+    review_priority_band:
+      priorityBand === 'promote_now' || priorityBand === 'high' || priorityBand === 'medium' || priorityBand === 'low'
+        ? priorityBand
+        : undefined,
+    canonical_gap_reason: asString(patch.canonical_gap_reason) || undefined,
+    source_name: asString(patch.source_name) || asString(patch.candidate_source) || undefined,
+    decision_makers_only: asBoolean(patch.decision_makers_only) === true || undefined,
+  })
+}
+
+function companySignalQueueFilterLabel(key: string, value: unknown): string {
+  if (key === 'decision_makers_only') return 'decision makers only'
+  if (typeof value === 'string' && value.trim()) {
+    return `${key.replace(/_/g, ' ')} ${formatCompanySignalCode(value)}`
+  }
+  return key.replace(/_/g, ' ')
+}
+
+function summarizeCompanySignalQueueDelta(
+  currentFilters: Record<string, unknown>,
+  targetFilters: Record<string, unknown>,
+): string {
+  const current = normalizeCompanySignalQueueFilters(currentFilters)
+  const target = resolveCompanySignalQueueFilters(current, targetFilters)
+  if (!hasQueueFilters(target)) return ''
+  if (queueFilterSignature(current) === queueFilterSignature(target)) return 'Matches the current queue filters.'
+
+  const added = Object.keys(target).filter((key) => current[key] == null)
+  const removed = Object.keys(current).filter((key) => target[key] == null)
+  const changed = Object.keys(target).filter((key) => current[key] != null && current[key] !== target[key])
+
+  const details = [
+    ...added.slice(0, 2).map((key) => `adds ${companySignalQueueFilterLabel(key, target[key])}`),
+    ...removed.slice(0, 2).map((key) => `clears ${companySignalQueueFilterLabel(key, current[key])}`),
+    ...changed.slice(0, 2).map((key) => `sets ${companySignalQueueFilterLabel(key, target[key])}`),
+  ]
+
+  if (added.length > 0 && removed.length === 0 && changed.length === 0) return `Narrows current queue: ${details.join(' | ')}`
+  if (removed.length > 0 && added.length === 0 && changed.length === 0) return `Broadens current queue: ${details.join(' | ')}`
+  return `Changes current queue: ${details.join(' | ')}`
+}
+
+function summarizeCompanySignalQueueSnapshotDelta(
+  currentSnapshot: {
+    pending: number
+    actionable: number
+    blocked: number
+    overdue: number
+    oldestPendingAgeDays: number | null
+  },
+  targetSnapshot: {
+    pending: number
+    actionable: number
+    blocked: number
+    overdue: number
+    oldestPendingAgeDays: number | null
+  },
+): string {
+  const parts: string[] = []
+
+  const pendingDelta = targetSnapshot.pending - currentSnapshot.pending
+  if (pendingDelta !== 0) parts.push(`${Math.abs(pendingDelta)} ${pendingDelta > 0 ? 'more' : 'fewer'} pending`)
+
+  const actionableDelta = targetSnapshot.actionable - currentSnapshot.actionable
+  if (actionableDelta !== 0) parts.push(`${Math.abs(actionableDelta)} ${actionableDelta > 0 ? 'more' : 'fewer'} actionable`)
+
+  const blockedDelta = targetSnapshot.blocked - currentSnapshot.blocked
+  if (blockedDelta !== 0) parts.push(`${Math.abs(blockedDelta)} ${blockedDelta > 0 ? 'more' : 'fewer'} blocked`)
+
+  const overdueDelta = targetSnapshot.overdue - currentSnapshot.overdue
+  if (overdueDelta !== 0) parts.push(`${Math.abs(overdueDelta)} ${overdueDelta > 0 ? 'more' : 'fewer'} overdue`)
+
+  if (
+    currentSnapshot.oldestPendingAgeDays != null
+    && targetSnapshot.oldestPendingAgeDays != null
+    && currentSnapshot.oldestPendingAgeDays !== targetSnapshot.oldestPendingAgeDays
+  ) {
+    const ageDelta = targetSnapshot.oldestPendingAgeDays - currentSnapshot.oldestPendingAgeDays
+    parts.push(`${formatMaybeNumber(Math.abs(ageDelta))} ${ageDelta > 0 ? 'older' : 'newer'} oldest age`)
+  }
+
+  return parts.length > 0 ? `Queue impact: ${parts.join(' | ')}` : 'Queue impact: same size and age as the current queue.'
+}
+
+function rowMatchesCompanySignalQueueFilters(
+  row: CompanySignalCandidateGroup,
+  filters: Record<string, unknown>,
+): boolean {
+  const normalized = normalizeCompanySignalQueueFilters(filters)
+
+  const candidateBucket = asString(normalized.candidate_bucket)
+  if (candidateBucket && row.candidate_bucket !== candidateBucket) return false
+
+  const reviewStatus = asString(normalized.review_status)
+  if (reviewStatus && row.review_status !== reviewStatus) return false
+
+  const priorityBand = asString(normalized.review_priority_band)
+  if (priorityBand && (row.review_priority_band || '') !== priorityBand) return false
+
+  const gapReason = asString(normalized.canonical_gap_reason)
+  if (gapReason && (row.canonical_gap_reason || '') !== gapReason) return false
+
+  const sourceName = asString(normalized.source_name)
+  if (sourceName) {
+    const supportedSources = new Set<string>([
+      asString(row.representative_source),
+      ...Object.keys(row.source_distribution || {}),
+      ...row.supporting_reviews.map((review) => asString(review.source)),
+    ].filter(Boolean))
+    if (!supportedSources.has(sourceName)) return false
+  }
+
+  if (asBoolean(normalized.decision_makers_only) === true) {
+    const hasDecisionMaker = row.representative_decision_maker === true || row.decision_maker_count > 0
+    if (!hasDecisionMaker) return false
+  }
+
+  return true
+}
+
+function impactRowLabel(row: unknown, keys: string[]): string {
+  const record = asRecord(row)
+  for (const key of keys) {
+    const value = asString(record[key])
+    if (value) return value
+  }
+  return '--'
+}
+
+function impactRowCount(row: unknown, keys: string[]): number | null {
+  const record = asRecord(row)
+  for (const key of keys) {
+    const value = asNumber(record[key])
+    if (value != null) return value
+  }
+  return null
 }
 
 function toStringArray(value: unknown): string[] {
@@ -442,6 +708,7 @@ function FilterSelect({
     <div className="flex items-center gap-1.5">
       <label className="text-xs text-slate-500">{label}</label>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="bg-slate-800/50 border border-slate-700/50 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
@@ -689,6 +956,385 @@ function WatchlistDeliveryDetailDrawer({
   )
 }
 
+function CompanySignalGroupDetailDrawer({
+  group,
+  loading,
+  actionLoading,
+  actionMessage,
+  actionError,
+  backToTab,
+  onClose,
+  onApprove,
+  onSuppress,
+}: {
+  group: CompanySignalCandidateGroup | null
+  loading: boolean
+  actionLoading: boolean
+  actionMessage: string | null
+  actionError: string | null
+  backToTab: TabKey
+  onClose: () => void
+  onApprove: () => void
+  onSuppress: () => void
+}) {
+  const sourceDistribution = Object.entries(group?.source_distribution || {})
+  const gapDistribution = Object.entries(group?.gap_reason_distribution || {})
+  const primaryLabel = group?.display_company || group?.company || 'Company signal detail'
+
+  return (
+    <div className="rounded-xl border border-cyan-500/20 bg-slate-950/40">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+        <div>
+          <h3 className="text-sm font-medium text-white">{primaryLabel}</h3>
+          <p className="text-xs text-slate-500">
+            {group ? `${group.vendor_name} | ${group.product_category || 'Uncategorized'}` : 'Loading candidate-group detail'}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-400 transition hover:border-slate-500 hover:text-white"
+        >
+          Close
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="px-4 py-6 text-sm text-slate-400">Loading company-signal detail...</div>
+      ) : !group ? (
+        <div className="px-4 py-6 text-sm text-slate-400">Company-signal detail unavailable.</div>
+      ) : (
+        <div className="space-y-4 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={group.review_status} />
+            <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">
+              {formatCompanySignalCode(group.candidate_bucket)}
+            </span>
+            {group.review_priority_band ? (
+              <span className="rounded bg-cyan-500/10 px-2 py-1 text-xs text-cyan-300">
+                {formatCompanySignalCode(group.review_priority_band)}
+              </span>
+            ) : null}
+            {group.representative_source ? (
+              <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">
+                {group.representative_source}
+              </span>
+            ) : null}
+            {group.representative_decision_maker ? (
+              <span className="rounded bg-emerald-500/10 px-2 py-1 text-xs text-emerald-300">
+                Decision maker signal
+              </span>
+            ) : null}
+            {group.canonical_gap_reason ? (
+              <span className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
+                {formatCompanySignalCode(group.canonical_gap_reason)}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Link
+              to={pipelineVendorWorkspacePath(backToTab, group.vendor_name)}
+              className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+            >
+              Vendor workspace
+            </Link>
+            <Link
+              to={pipelineEvidencePath(backToTab, group.vendor_name)}
+              className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+            >
+              Evidence
+            </Link>
+            <Link
+              to={pipelineReportsPath(backToTab, group.vendor_name)}
+              className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+            >
+              Reports
+            </Link>
+            <Link
+              to={pipelineOpportunitiesPath(backToTab, group.vendor_name)}
+              className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+            >
+              Opportunities
+            </Link>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Coverage</p>
+              <div className="mt-2 space-y-1 text-xs text-slate-300">
+                <p>{formatNumber(group.review_count)} reviews</p>
+                <p>{formatNumber(group.distinct_source_count)} sources</p>
+                <p>{formatNumber(group.canonical_ready_review_count)} canonical-ready reviews</p>
+              </div>
+            </div>
+            <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Priority</p>
+              <div className="mt-2 space-y-1 text-xs text-slate-300">
+                <p>Urgency: {group.max_urgency_score?.toFixed(1) ?? '--'}</p>
+                <p>Confidence: {group.corroborated_confidence_score?.toFixed(2) ?? '--'}</p>
+                <p>{group.review_priority_reason ? formatCompanySignalCode(group.review_priority_reason) : 'No priority reason'}</p>
+              </div>
+            </div>
+            <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Buying Context</p>
+              <div className="mt-2 space-y-1 text-xs text-slate-300">
+                <p>Stage: {group.representative_buying_stage || '--'}</p>
+                <p>Role: {group.representative_buyer_role || '--'}</p>
+                <p>Seats: {formatMaybeNumber(group.representative_seat_count)}</p>
+              </div>
+            </div>
+            <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Review State</p>
+              <div className="mt-2 space-y-1 text-xs text-slate-300">
+                <p>Updated: {formatTs(group.review_status_updated_at)}</p>
+                <p>By: {group.reviewed_by || '--'}</p>
+                <p>Notes: {group.review_notes || '--'}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-[0.9fr,1.1fr]">
+            <div className="rounded border border-slate-700/50 bg-slate-900/40 p-4">
+              <h4 className="text-sm font-medium text-white">Source Coverage</h4>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {sourceDistribution.length === 0 ? (
+                  <span className="text-xs text-slate-500">No source coverage captured.</span>
+                ) : (
+                  sourceDistribution.map(([source, count]) => (
+                    <span key={source} className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">
+                      {source}: {formatNumber(count)}
+                    </span>
+                  ))
+                )}
+              </div>
+              <h4 className="mt-4 text-sm font-medium text-white">Gap Reasons</h4>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {gapDistribution.length === 0 ? (
+                  <span className="text-xs text-slate-500">No blocked-gap reasons on this group.</span>
+                ) : (
+                  gapDistribution.map(([reason, count]) => (
+                    <span key={reason} className="rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
+                      {formatCompanySignalCode(reason)}: {formatNumber(count)}
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded border border-slate-700/50 bg-slate-900/40">
+              <div className="border-b border-slate-700/50 px-4 py-3">
+                <h4 className="text-sm font-medium text-white">Supporting Reviews</h4>
+                <p className="text-xs text-slate-500">Representative reviews supporting this company-signal group.</p>
+              </div>
+              <div className="divide-y divide-slate-800/80">
+                {group.supporting_reviews.length === 0 ? (
+                  <div className="px-4 py-4 text-xs text-slate-500">No supporting reviews on this group.</div>
+                ) : (
+                  group.supporting_reviews.map((review) => (
+                    <div key={review.review_id} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded bg-slate-800 px-2 py-1 text-[11px] text-slate-300">
+                          {review.source || '--'}
+                        </span>
+                        <span className="text-[11px] text-slate-500">{formatTs(review.reviewed_at)}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-white">
+                        {review.quote_excerpt || review.summary || review.review_excerpt || '--'}
+                      </p>
+                      {review.review_excerpt && review.review_excerpt !== review.quote_excerpt ? (
+                        <p className="mt-1 text-xs text-slate-400">{review.review_excerpt}</p>
+                      ) : null}
+                      {review.source_url ? (
+                        <a
+                          href={review.source_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-flex text-xs text-cyan-300 transition hover:text-cyan-200"
+                        >
+                          Open source
+                        </a>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={onApprove}
+              disabled={actionLoading || group.review_status !== 'pending'}
+              className="inline-flex items-center gap-1.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <CheckCircle2 className="h-3 w-3" />
+              {actionLoading ? 'Working...' : 'Approve Group'}
+            </button>
+            <button
+              onClick={onSuppress}
+              disabled={actionLoading || group.review_status !== 'pending'}
+              className="inline-flex items-center gap-1.5 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Ban className="h-3 w-3" />
+              {actionLoading ? 'Working...' : 'Suppress Group'}
+            </button>
+            {actionMessage ? <span className="text-xs text-cyan-300">{actionMessage}</span> : null}
+            {actionError ? <span className="text-xs text-rose-300">{actionError}</span> : null}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CompanySignalGroupDetailDrawer({
+  group,
+  backToTab,
+  onClose,
+}: {
+  group: CompanySignalCandidateGroup | null
+  backToTab: TabKey
+  onClose: () => void
+}) {
+  if (!group) return null
+
+  return (
+    <div className="rounded-xl border border-cyan-500/20 bg-slate-950/40">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+        <div>
+          <h3 className="text-sm font-medium text-white">{group.vendor} | {group.display_company}</h3>
+          <p className="text-xs text-slate-500">
+            {group.category || 'Unknown category'} | {formatPriorityBandLabel(group.review_priority_band)} priority
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-400 transition hover:border-slate-500 hover:text-white"
+        >
+          Close
+        </button>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge status={group.review_status} />
+          {group.representative_source ? <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{group.representative_source}</span> : null}
+          {group.confidence_tier ? <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{group.confidence_tier}</span> : null}
+          {group.representative_decision_maker ? <span className="rounded bg-cyan-500/10 px-2 py-1 text-xs text-cyan-300">Decision maker</span> : null}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <Link
+            to={pipelineVendorWorkspacePath(backToTab, group.vendor)}
+            className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+          >
+            Vendor workspace
+          </Link>
+          <Link
+            to={pipelineEvidencePath(backToTab, group.vendor)}
+            className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+          >
+            Evidence
+          </Link>
+          <Link
+            to={pipelineReportsPath(backToTab, group.vendor)}
+            className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+          >
+            Reports
+          </Link>
+          <Link
+            to={pipelineOpportunitiesPath(backToTab, group.vendor)}
+            className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+          >
+            Opportunities
+          </Link>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-4">
+          <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Coverage</p>
+            <div className="mt-2 space-y-1 text-xs text-slate-300">
+              <p>{formatNumber(group.review_count)} reviews</p>
+              <p>{formatNumber(group.distinct_source_count)} sources</p>
+              <p>{formatSourceDistributionSummary(group.source_distribution)}</p>
+            </div>
+          </div>
+          <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Signals</p>
+            <div className="mt-2 space-y-1 text-xs text-slate-300">
+              <p>Urgency: {group.max_urgency == null ? '--' : group.max_urgency.toFixed(1)}</p>
+              <p>Confidence: {group.corroborated_confidence_score == null ? '--' : group.corroborated_confidence_score.toFixed(2)}</p>
+              <p>Signal evidence: {formatNumber(group.signal_evidence_count)}</p>
+            </div>
+          </div>
+          <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Unlock</p>
+            <div className="mt-2 space-y-1 text-xs text-slate-300">
+              <p>{formatCompanySignalCode(group.review_priority_reason)}</p>
+              <p>{formatCompanySignalCode(group.canonical_gap_reason)}</p>
+            </div>
+          </div>
+          <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Timing</p>
+            <div className="mt-2 space-y-1 text-xs text-slate-300">
+              <p>First seen: {formatTs(group.first_seen_at)}</p>
+              <p>Last seen: {formatTs(group.last_seen_at)}</p>
+              <p>Buying stage: {group.representative_buying_stage || '--'}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+          <p className="text-[11px] uppercase tracking-wide text-slate-500">Review State</p>
+          <div className="mt-2 space-y-1 text-xs text-slate-300">
+            <p>Status updated: {formatTs(group.review_status_updated_at)}</p>
+            <p>Reviewed by: {group.reviewed_by || '--'}</p>
+            <p>Notes: {group.review_notes || '--'}</p>
+          </div>
+        </div>
+
+        <div className="rounded border border-slate-700/50 bg-slate-900/40">
+          <div className="border-b border-slate-700/50 px-4 py-3">
+            <h4 className="text-sm font-medium text-white">Supporting Reviews</h4>
+            <p className="text-xs text-slate-500">All reviews currently backing this candidate group.</p>
+          </div>
+          <div className="divide-y divide-slate-800/80">
+            {group.supporting_reviews.length === 0 ? (
+              <div className="px-4 py-4 text-xs text-slate-500">No supporting reviews available.</div>
+            ) : (
+              group.supporting_reviews.map((review) => (
+                <div key={review.review_id} className="px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {review.source ? <span className="text-xs text-slate-400">{review.source}</span> : null}
+                    <span className="text-xs text-slate-500">{formatTs(review.reviewed_at)}</span>
+                    {review.source_url ? (
+                      <a
+                        href={review.source_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-cyan-300 hover:text-cyan-200"
+                      >
+                        Source
+                      </a>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 text-sm text-white">{review.summary || '--'}</p>
+                  {review.quote_excerpt ? (
+                    <p className="mt-1 text-xs text-cyan-200">"{review.quote_excerpt}"</p>
+                  ) : null}
+                  {review.review_excerpt ? (
+                    <p className="mt-2 whitespace-normal text-xs text-slate-400">{review.review_excerpt}</p>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Tab: Queue
 // ---------------------------------------------------------------------------
@@ -696,11 +1342,34 @@ function WatchlistDeliveryDetailDrawer({
 function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: TabKey }) {
   const [stageFilter, setStageFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
+  const [candidateBucketFilter, setCandidateBucketFilter] = useState('analyst_review')
+  const [companySignalReviewStatusFilter, setCompanySignalReviewStatusFilter] = useState('pending')
+  const [priorityBandFilter, setPriorityBandFilter] = useState('')
+  const [companySignalSourceFilter, setCompanySignalSourceFilter] = useState('')
+  const [companySignalGapReasonFilter, setCompanySignalGapReasonFilter] = useState('')
+  const [companySignalDecisionMakersOnly, setCompanySignalDecisionMakersOnly] = useState(false)
+  const [selectedCompanySignalGroupIds, setSelectedCompanySignalGroupIds] = useState<string[]>([])
+  const [selectedCompanySignalGroup, setSelectedCompanySignalGroup] = useState<CompanySignalCandidateGroup | null>(null)
   const [viewStatusFilter, setViewStatusFilter] = useState('')
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState('')
   const [deliveryMessage, setDeliveryMessage] = useState<string | null>(null)
   const [deliveryError, setDeliveryError] = useState<string | null>(null)
   const [deliveryTriggering, setDeliveryTriggering] = useState(false)
+  const [companySignalActionMessage, setCompanySignalActionMessage] = useState<string | null>(null)
+  const [companySignalActionError, setCompanySignalActionError] = useState<string | null>(null)
+  const [companySignalActionLoadingId, setCompanySignalActionLoadingId] = useState<string | null>(null)
+  const [companySignalBulkActionLoading, setCompanySignalBulkActionLoading] = useState(false)
+  const [companySignalActionNotes, setCompanySignalActionNotes] = useState('')
+  const [companySignalTriggerRebuild, setCompanySignalTriggerRebuild] = useState(true)
+  const [companySignalPreviewLabel, setCompanySignalPreviewLabel] = useState<string | null>(null)
+  const [companySignalPreviewFilters, setCompanySignalPreviewFilters] = useState<Record<string, unknown> | null>(null)
+  const [companySignalPreviewSnapshot, setCompanySignalPreviewSnapshot] = useState<{
+    pending: number
+    actionable: number
+    blocked: number
+    overdue: number
+    oldestPendingAgeDays: number | null
+  } | null>(null)
   const [selectedWatchlistViewId, setSelectedWatchlistViewId] = useState<string | null>(null)
   const [viewActionLoading, setViewActionLoading] = useState(false)
   const [viewActionMessage, setViewActionMessage] = useState<string | null>(null)
@@ -714,6 +1383,62 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
         severity: severityFilter || undefined,
       }),
     [stageFilter, severityFilter],
+  )
+  const {
+    data: companySignalImpactSummary,
+    loading: companySignalImpactSummaryLoading,
+    error: companySignalImpactSummaryError,
+    refresh: refreshCompanySignalImpactSummary,
+    refreshing: companySignalImpactSummaryRefreshing,
+  } = useApiData<CompanySignalReviewImpactSummary>(
+    () =>
+      fetchCompanySignalReviewImpactSummary({
+        review_action: companySignalReviewActionForStatus(companySignalReviewStatusFilter),
+        canonical_gap_reason: companySignalGapReasonFilter || undefined,
+        review_priority_band: priorityBandFilter || undefined,
+        candidate_source: companySignalSourceFilter || undefined,
+        window_days: 30,
+        top_n: 8,
+      }),
+    [companySignalReviewStatusFilter, companySignalGapReasonFilter, priorityBandFilter, companySignalSourceFilter],
+  )
+  const {
+    data: companySignalSummary,
+    loading: companySignalSummaryLoading,
+    error: companySignalSummaryError,
+    refresh: refreshCompanySignalSummary,
+    refreshing: companySignalSummaryRefreshing,
+  } = useApiData<CompanySignalCandidateGroupSummary>(
+    () =>
+      fetchCompanySignalCandidateGroupSummary({
+        candidate_bucket: candidateBucketFilter || undefined,
+        review_status: companySignalReviewStatusFilter,
+        source_name: companySignalSourceFilter || undefined,
+        canonical_gap_reason: companySignalGapReasonFilter || undefined,
+        review_priority_band: priorityBandFilter || undefined,
+        decision_makers_only: companySignalDecisionMakersOnly || undefined,
+        top_n: 8,
+      }),
+    [candidateBucketFilter, companySignalReviewStatusFilter, companySignalSourceFilter, companySignalGapReasonFilter, priorityBandFilter, companySignalDecisionMakersOnly],
+  )
+  const {
+    data: companySignalGroupsData,
+    loading: companySignalGroupsLoading,
+    error: companySignalGroupsError,
+    refresh: refreshCompanySignalGroups,
+    refreshing: companySignalGroupsRefreshing,
+  } = useApiData<CompanySignalCandidateGroupListResponse>(
+    () =>
+      fetchCompanySignalCandidateGroups({
+        candidate_bucket: candidateBucketFilter || undefined,
+        review_status: companySignalReviewStatusFilter,
+        source_name: companySignalSourceFilter || undefined,
+        canonical_gap_reason: companySignalGapReasonFilter || undefined,
+        review_priority_band: priorityBandFilter || undefined,
+        decision_makers_only: companySignalDecisionMakersOnly || undefined,
+        limit: 25,
+      }),
+    [candidateBucketFilter, companySignalReviewStatusFilter, companySignalSourceFilter, companySignalGapReasonFilter, priorityBandFilter, companySignalDecisionMakersOnly],
   )
   const {
     data: watchlistDelivery,
@@ -744,6 +1469,81 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
   const handleResolved = () => {
     refresh()
     onRefresh()
+  }
+
+  async function handleQueueRefresh() {
+    await Promise.all([
+      refresh(),
+      refreshCompanySignalImpactSummary(),
+      refreshCompanySignalSummary(),
+      refreshCompanySignalGroups(),
+      refreshWatchlistDelivery(),
+    ])
+  }
+
+  async function handleCompanySignalGroupAction(groupId: string, action: 'approve' | 'suppress') {
+    const trimmedNotes = companySignalActionNotes.trim()
+    setCompanySignalActionMessage(null)
+    setCompanySignalActionError(null)
+    setCompanySignalActionLoadingId(groupId)
+    try {
+      const result = action === 'approve'
+        ? await approveCompanySignalCandidateGroup(groupId, {
+            trigger_rebuild: companySignalTriggerRebuild,
+            notes: trimmedNotes || undefined,
+          })
+        : await suppressCompanySignalCandidateGroup(groupId, {
+            trigger_rebuild: companySignalTriggerRebuild,
+            notes: trimmedNotes || undefined,
+          })
+      const resultRecord = asRecord(result)
+      setCompanySignalActionMessage(
+        String(
+          resultRecord.review_status
+          || resultRecord.status
+          || (action === 'approve' ? 'Approved candidate group' : 'Suppressed candidate group'),
+        ),
+      )
+      await Promise.all([refreshCompanySignalImpactSummary(), refreshCompanySignalSummary(), refreshCompanySignalGroups()])
+      onRefresh()
+    } catch (err) {
+      setCompanySignalActionError(err instanceof Error ? err.message : `Failed to ${action} candidate group`)
+    } finally {
+      setCompanySignalActionLoadingId(null)
+    }
+  }
+
+  async function handleCompanySignalBulkAction(action: 'approve' | 'suppress') {
+    if (selectedCompanySignalGroupIds.length === 0) return
+    const trimmedNotes = companySignalActionNotes.trim()
+    setCompanySignalActionMessage(null)
+    setCompanySignalActionError(null)
+    setCompanySignalBulkActionLoading(true)
+    try {
+      const result = action === 'approve'
+        ? await approveCompanySignalCandidateGroups({
+            group_ids: selectedCompanySignalGroupIds,
+            trigger_rebuild: companySignalTriggerRebuild,
+            notes: trimmedNotes || undefined,
+          })
+        : await suppressCompanySignalCandidateGroups({
+            group_ids: selectedCompanySignalGroupIds,
+            trigger_rebuild: companySignalTriggerRebuild,
+            notes: trimmedNotes || undefined,
+          })
+      const resultRecord = asRecord(result)
+      const count = asNumber(resultRecord.count) ?? selectedCompanySignalGroupIds.length
+      setCompanySignalActionMessage(
+        `${action === 'approve' ? 'Approved' : 'Suppressed'} ${formatNumber(count)} candidate ${count === 1 ? 'group' : 'groups'}`,
+      )
+      setSelectedCompanySignalGroupIds([])
+      await Promise.all([refreshCompanySignalImpactSummary(), refreshCompanySignalSummary(), refreshCompanySignalGroups()])
+      onRefresh()
+    } catch (err) {
+      setCompanySignalActionError(err instanceof Error ? err.message : `Failed to ${action} candidate groups`)
+    } finally {
+      setCompanySignalBulkActionLoading(false)
+    }
   }
 
   async function handleRunWatchlistDelivery() {
@@ -791,6 +1591,45 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
     } finally {
       setViewActionLoading(false)
     }
+  }
+
+  function clearCompanySignalQueuePreview() {
+    setCompanySignalPreviewLabel(null)
+    setCompanySignalPreviewFilters(null)
+    setCompanySignalPreviewSnapshot(null)
+  }
+
+  function previewCompanySignalQueueSlice(
+    label: string,
+    filters: Record<string, unknown>,
+    snapshot: {
+      pending: number
+      actionable: number
+      blocked: number
+      overdue: number
+      oldestPendingAgeDays: number | null
+    },
+  ) {
+    setCompanySignalPreviewLabel(label)
+    setCompanySignalPreviewFilters(filters)
+    setCompanySignalPreviewSnapshot(snapshot)
+  }
+
+  function applyCompanySignalQueueFilters(filters: Record<string, unknown>) {
+    const resolvedFilters = resolveCompanySignalQueueFilters(companySignalCurrentFilters, filters)
+    setCandidateBucketFilter(asString(resolvedFilters.candidate_bucket) || 'analyst_review')
+    setCompanySignalReviewStatusFilter(asString(resolvedFilters.review_status) || 'pending')
+    setPriorityBandFilter(asString(resolvedFilters.review_priority_band))
+    setCompanySignalGapReasonFilter(asString(resolvedFilters.canonical_gap_reason))
+    setCompanySignalSourceFilter(asString(resolvedFilters.source_name))
+    setCompanySignalDecisionMakersOnly(asBoolean(resolvedFilters.decision_makers_only) === true)
+    clearCompanySignalQueuePreview()
+    setCompanySignalActionMessage(null)
+    setCompanySignalActionError(null)
+  }
+
+  function resetCompanySignalQueueFilters() {
+    applyCompanySignalQueueFilters(DEFAULT_COMPANY_SIGNAL_QUEUE_FILTERS)
   }
 
   const columns: Column<VisibilityQueueItem>[] = [
@@ -876,6 +1715,340 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
     return row.status === deliveryStatusFilter
   })
   const watchlistSummary = watchlistDelivery?.summary
+  const companySignalTotals = companySignalSummary?.totals
+  const companySignalGapReasons = companySignalSummary?.gap_reasons ?? []
+  const companySignalTopVendors = companySignalSummary?.top_vendors ?? []
+  const companySignalActionableTopVendors = companySignalSummary?.actionable_top_vendors ?? []
+  const companySignalGroups = companySignalGroupsData?.groups ?? EMPTY_COMPANY_SIGNAL_GROUPS
+  const companySignalIsPendingView = companySignalReviewStatusFilter === 'pending'
+  const companySignalCurrentQueueSnapshot = {
+    pending: companySignalTotals?.pending_groups ?? 0,
+    actionable: companySignalTotals?.actionable_pending_groups ?? 0,
+    blocked: companySignalTotals?.blocked_pending_groups ?? 0,
+    overdue: companySignalTotals?.overdue_pending_groups ?? 0,
+    oldestPendingAgeDays: companySignalTotals?.oldest_pending_age_days ?? null,
+  }
+  const companySignalImpactTopVendors = (companySignalImpactSummary?.top_vendors ?? [])
+    .map((row) => ({
+      label: impactRowLabel(row, ['vendor_name', 'vendor', 'label']),
+      count: impactRowCount(row, ['action_count', 'count', 'approvals', 'suppressions']),
+    }))
+    .filter((row) => row.label !== '--' || row.count != null)
+  const companySignalImpactRebuildReasons = (companySignalImpactSummary?.rebuild_reasons ?? [])
+    .map((row) => ({
+      label: impactRowLabel(row, ['rebuild_reason', 'reason', 'label']),
+      count: impactRowCount(row, ['count', 'rebuild_count', 'action_count']),
+    }))
+    .filter((row) => row.label !== '--' || row.count != null)
+  const companySignalTrendAlerts = (companySignalImpactSummary?.trend_alerts ?? [])
+    .map((row) => {
+      const record = asRecord(row)
+      const queueSnapshot = asRecord(record.queue_snapshot)
+      return {
+        label: impactRowLabel(record, ['focus', 'metric', 'label']),
+        status: asString(record.status),
+        rationale: asString(record.rationale),
+        direction: asString(record.direction),
+        delta: asNumber(record.delta),
+        queueFilters: asRecord(record.queue_filters),
+        queueSnapshot,
+        actionable: asNumber(queueSnapshot.actionable_pending_groups) ?? 0,
+        blocked: asNumber(queueSnapshot.blocked_pending_groups) ?? 0,
+        overdue: asNumber(queueSnapshot.overdue_pending_groups) ?? 0,
+        pending: asNumber(queueSnapshot.pending_groups) ?? 0,
+        oldestPendingAgeDays: asNumber(queueSnapshot.oldest_pending_age_days),
+      }
+    })
+    .filter((row) => row.label !== '--' || row.rationale)
+  const companySignalTrendQueueRankings = (companySignalImpactSummary?.trend_queue_rankings ?? [])
+    .map((row) => {
+      const record = asRecord(row)
+      const primaryDriver = asRecord(record.primary_driver)
+      const queueSnapshot = asRecord(record.queue_snapshot)
+      return {
+        label: impactRowLabel(primaryDriver, ['label', 'focus', 'action']),
+        rationale: impactRowLabel(primaryDriver, ['rationale']),
+        queueFilters: asRecord(record.queue_filters),
+        actionable: asNumber(record.actionable_pending_groups) ?? asNumber(queueSnapshot.actionable_pending_groups) ?? 0,
+        blocked: asNumber(record.blocked_pending_groups) ?? asNumber(queueSnapshot.blocked_pending_groups) ?? 0,
+        overdue: asNumber(record.overdue_pending_groups) ?? asNumber(queueSnapshot.overdue_pending_groups) ?? 0,
+        pending: asNumber(record.pending_groups) ?? asNumber(queueSnapshot.pending_groups) ?? 0,
+        oldestPendingAgeDays: asNumber(record.oldest_pending_age_days) ?? asNumber(queueSnapshot.oldest_pending_age_days),
+      }
+    })
+    .filter((row) => row.label !== '--' || Object.keys(row.queueFilters).length > 0)
+  const companySignalCurrentFilters = {
+    candidate_bucket: candidateBucketFilter,
+    review_status: companySignalReviewStatusFilter,
+    review_priority_band: priorityBandFilter || undefined,
+    source_name: companySignalSourceFilter || undefined,
+    canonical_gap_reason: companySignalGapReasonFilter || undefined,
+    decision_makers_only: companySignalDecisionMakersOnly || undefined,
+  }
+  const companySignalCurrentFilterSignature = queueFilterSignature(companySignalCurrentFilters)
+  const defaultCompanySignalQueueFilterSignature = queueFilterSignature(DEFAULT_COMPANY_SIGNAL_QUEUE_FILTERS)
+  const companySignalQueuePresetFilters = [
+    {
+      label: 'Apply Operator Focus',
+      helpText: 'Applies the current operator-focus recommendation to the visible queue controls.',
+      filters: asRecord(companySignalImpactSummary?.operator_focus?.queue_filters),
+    },
+    {
+      label: 'Apply Queue Recommendation',
+      helpText: 'Applies the top pending-queue recommendation from recent trend analysis.',
+      filters: asRecord(companySignalImpactSummary?.trend_queue_recommendation?.queue_filters),
+    },
+    {
+      label: 'Apply Trend Recommendation',
+      helpText: 'Applies the trend recommendation queue slice to the visible queue controls.',
+      filters: asRecord(companySignalImpactSummary?.trend_recommendation_queue_filters),
+    },
+  ]
+    .filter((preset) => Object.keys(preset.filters).length > 0)
+    .filter((preset, index, all) => (
+      all.findIndex((candidate) => (
+        queueFilterSignature(resolveCompanySignalQueueFilters(companySignalCurrentFilters, candidate.filters))
+        === queueFilterSignature(resolveCompanySignalQueueFilters(companySignalCurrentFilters, preset.filters))
+      )) === index
+    ))
+  const activeCompanySignalQueuePreset = companySignalQueuePresetFilters.find(
+    (preset) => (
+      queueFilterSignature(resolveCompanySignalQueueFilters(companySignalCurrentFilters, preset.filters))
+      === companySignalCurrentFilterSignature
+    ),
+  )
+  const isActiveCompanySignalQueueSlice = (filters: Record<string, unknown>) => (
+    hasQueueFilters(filters)
+      && queueFilterSignature(resolveCompanySignalQueueFilters(companySignalCurrentFilters, filters)) === companySignalCurrentFilterSignature
+  )
+  const describeCompanySignalQueueSlice = (filters: Record<string, unknown>) => (
+    summarizeCompanySignalQueueDelta(companySignalCurrentFilters, filters)
+  )
+  const describeCompanySignalQueueSnapshotImpact = (snapshot: {
+    pending: number
+    actionable: number
+    blocked: number
+    overdue: number
+    oldestPendingAgeDays: number | null
+  }) => summarizeCompanySignalQueueSnapshotDelta(companySignalCurrentQueueSnapshot, snapshot)
+  const companySignalResolvedPreviewFilters = companySignalPreviewFilters
+    ? resolveCompanySignalQueueFilters(companySignalCurrentFilters, companySignalPreviewFilters)
+    : null
+  const companySignalPreviewIsCurrentSlice = companySignalResolvedPreviewFilters != null
+    && queueFilterSignature(companySignalResolvedPreviewFilters) === companySignalCurrentFilterSignature
+  const companySignalPreviewMatchedGroupIds = new Set(
+    companySignalResolvedPreviewFilters
+      ? companySignalGroups
+        .filter((row) => rowMatchesCompanySignalQueueFilters(row, companySignalResolvedPreviewFilters))
+        .map((row) => row.group_id)
+      : [],
+  )
+  const allCompanySignalGroupsSelected = companySignalGroups.length > 0 && selectedCompanySignalGroupIds.length === companySignalGroups.length
+  const companySignalSourceOptions = buildFilterSelectOptions(
+    companySignalGroups.flatMap((row) => [
+      row.representative_source,
+      ...Object.keys(row.source_distribution || {}),
+      ...row.supporting_reviews.map((review) => review.source),
+    ]),
+    'All sources',
+    companySignalSourceFilter,
+    formatCompanySignalCode,
+  )
+  const companySignalGapReasonOptions = buildFilterSelectOptions(
+    [
+      ...companySignalGapReasons.map((row) => row.gap_reason),
+      ...companySignalGroups.map((row) => row.canonical_gap_reason),
+    ],
+    'All gap reasons',
+    companySignalGapReasonFilter,
+    formatCompanySignalCode,
+  )
+
+  useEffect(() => {
+    const visibleGroupIds = new Set(companySignalGroups.map((row) => row.group_id))
+    setSelectedCompanySignalGroupIds((current) => current.filter((id) => visibleGroupIds.has(id)))
+    setSelectedCompanySignalGroup((current) => (
+      current && visibleGroupIds.has(current.group_id) ? current : null
+    ))
+  }, [companySignalGroups])
+
+  const companySignalGroupColumns: Column<CompanySignalCandidateGroup>[] = [
+    {
+      key: 'select',
+      header: '',
+      render: (row) => (
+        companySignalIsPendingView ? (
+          <input
+            aria-label={`Select candidate group ${row.group_id}`}
+            type="checkbox"
+            checked={selectedCompanySignalGroupIds.includes(row.group_id)}
+            onChange={(event) => {
+              event.stopPropagation()
+              setSelectedCompanySignalGroupIds((current) => (
+                event.target.checked
+                  ? [...current, row.group_id]
+                  : current.filter((id) => id !== row.group_id)
+              ))
+            }}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500 focus:ring-cyan-500"
+          />
+        ) : (
+          <span className="text-xs text-slate-600">--</span>
+        )
+      ),
+      sortable: false,
+    },
+    {
+      key: 'vendor_company',
+      header: 'Vendor / Company',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <Link className="truncate text-sm text-cyan-300 hover:text-cyan-200" to={pipelineVendorWorkspacePath(backToTab, row.vendor)}>
+            {row.vendor}
+          </Link>
+          <p className="truncate text-xs text-slate-500">{row.display_company}</p>
+          {companySignalResolvedPreviewFilters ? (
+            <p className="mt-1 text-[11px]">
+              {companySignalPreviewMatchedGroupIds.has(row.group_id) ? (
+                <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-300">
+                  Preview match
+                </span>
+              ) : (
+                <span className="rounded border border-slate-700/60 px-1.5 py-0.5 text-slate-500">
+                  Excluded by preview
+                </span>
+              )}
+            </p>
+          ) : null}
+          <div className="mt-1 flex items-center gap-2 text-[11px]">
+            <Link className="text-slate-400 hover:text-white" to={pipelineEvidencePath(backToTab, row.vendor)}>Evidence</Link>
+            <Link className="text-slate-400 hover:text-white" to={pipelineReportsPath(backToTab, row.vendor)}>Reports</Link>
+            <Link className="text-slate-400 hover:text-white" to={pipelineOpportunitiesPath(backToTab, row.vendor)}>Opps</Link>
+          </div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.vendor}:${row.display_company}`,
+    },
+    {
+      key: 'priority',
+      header: 'Priority',
+      render: (row) => (
+        <div className="space-y-1">
+          <StatusBadge status={row.review_priority_band || 'pending'} />
+          <p className="max-w-[220px] truncate text-[11px] text-slate-500">
+            {formatCompanySignalCode(row.review_priority_reason)}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.review_priority_band || ''}:${row.review_priority_reason || ''}`,
+    },
+    {
+      key: 'coverage',
+      header: 'Coverage',
+      render: (row) => (
+        <div className="space-y-1">
+          <p className="text-xs text-slate-300">
+            {formatNumber(row.review_count)} reviews | {formatNumber(row.distinct_source_count)} sources
+          </p>
+          <p className="text-[11px] text-slate-500">{formatSourceDistributionSummary(row.source_distribution)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.review_count,
+    },
+    {
+      key: 'signals',
+      header: 'Signals',
+      render: (row) => (
+        <div className="space-y-1">
+          <p className="text-xs text-slate-300">
+            urgency {row.max_urgency == null ? '--' : row.max_urgency.toFixed(1)} | conf {row.corroborated_confidence_score == null ? '--' : row.corroborated_confidence_score.toFixed(2)}
+          </p>
+          <p className="max-w-[220px] truncate text-[11px] text-slate-500">
+            {formatCompanySignalCode(row.canonical_gap_reason)}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.max_urgency ?? -1,
+    },
+    {
+      key: 'evidence',
+      header: 'Evidence',
+      render: (row) => (
+        <div className="max-w-[320px]">
+          <p className="truncate text-xs text-slate-300">
+            {row.supporting_reviews[0]?.quote_excerpt || row.supporting_reviews[0]?.summary || '--'}
+          </p>
+          <p className="text-[11px] text-slate-500">
+            DM {formatNumber(row.decision_maker_count)} | signal {formatNumber(row.signal_evidence_count)}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.signal_evidence_count + row.decision_maker_count,
+    },
+    {
+      key: 'last_seen',
+      header: 'Last Seen',
+      render: (row) => (
+        <span className="text-xs text-slate-400">{formatTs(row.last_seen_at)}</span>
+      ),
+      sortable: true,
+      sortValue: (row) => row.last_seen_at || '',
+    },
+    {
+      key: 'review_state',
+      header: 'Review',
+      render: (row) => (
+        <div className="max-w-[220px] space-y-1">
+          <p className="text-xs text-slate-300">
+            {row.reviewed_by || '--'} | {formatTs(row.review_status_updated_at)}
+          </p>
+          <p className="truncate text-[11px] text-slate-500">
+            {row.review_notes || '--'}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.review_status_updated_at || ''}:${row.reviewed_by || ''}:${row.review_notes || ''}`,
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (row) => (
+        companySignalIsPendingView ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCompanySignalGroupAction(row.group_id, 'approve')
+              }}
+              disabled={companySignalActionLoadingId === row.group_id}
+              className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Approve
+            </button>
+            <button
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCompanySignalGroupAction(row.group_id, 'suppress')
+              }}
+              disabled={companySignalActionLoadingId === row.group_id}
+              className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Suppress
+            </button>
+          </div>
+        ) : (
+          <span className="text-xs text-slate-500">Read only</span>
+        )
+      ),
+      sortable: false,
+    },
+  ]
 
   const watchlistViewColumns: Column<WatchlistDeliveryOpsSummary['views'][number]>[] = [
     {
@@ -1073,12 +2246,74 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
             { value: 'info', label: 'Info' },
           ]}
         />
+        <FilterSelect
+          label="Candidate Bucket"
+          value={candidateBucketFilter}
+          onChange={setCandidateBucketFilter}
+          options={[
+            { value: 'analyst_review', label: 'Analyst review' },
+            { value: 'canonical_ready', label: 'Canonical ready' },
+          ]}
+        />
+        <FilterSelect
+          label="Review Status"
+          value={companySignalReviewStatusFilter}
+          onChange={setCompanySignalReviewStatusFilter}
+          options={[
+            { value: 'pending', label: 'Pending' },
+            { value: 'approved', label: 'Approved' },
+            { value: 'suppressed', label: 'Suppressed' },
+          ]}
+        />
+        <FilterSelect
+          label="Priority"
+          value={priorityBandFilter}
+          onChange={setPriorityBandFilter}
+          options={[
+            { value: '', label: 'All priorities' },
+            { value: 'promote_now', label: 'Promote now' },
+            { value: 'high', label: 'High' },
+            { value: 'medium', label: 'Medium' },
+            { value: 'low', label: 'Low' },
+          ]}
+        />
+        <FilterSelect
+          label="Source"
+          value={companySignalSourceFilter}
+          onChange={setCompanySignalSourceFilter}
+          options={companySignalSourceOptions}
+        />
+        <FilterSelect
+          label="Gap"
+          value={companySignalGapReasonFilter}
+          onChange={setCompanySignalGapReasonFilter}
+          options={companySignalGapReasonOptions}
+        />
+        <label className="flex items-center gap-2 text-xs text-slate-400">
+          <input
+            aria-label="Decision makers only"
+            type="checkbox"
+            checked={companySignalDecisionMakersOnly}
+            onChange={(event) => setCompanySignalDecisionMakersOnly(event.target.checked)}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500 focus:ring-cyan-500"
+          />
+          Decision makers only
+        </label>
         <button
-          onClick={refresh}
-          disabled={refreshing || watchlistDeliveryRefreshing}
+          onClick={resetCompanySignalQueueFilters}
+          disabled={companySignalCurrentFilterSignature === defaultCompanySignalQueueFilterSignature}
+          className="px-2.5 py-1 text-xs text-slate-400 transition-colors hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+        >
+          Reset Queue
+        </button>
+        <button
+          onClick={() => {
+            void handleQueueRefresh()
+          }}
+          disabled={refreshing || watchlistDeliveryRefreshing || companySignalImpactSummaryRefreshing || companySignalSummaryRefreshing || companySignalGroupsRefreshing}
           className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
         >
-          <RefreshCw className={clsx('h-3 w-3', (refreshing || watchlistDeliveryRefreshing) && 'animate-spin')} />
+          <RefreshCw className={clsx('h-3 w-3', (refreshing || watchlistDeliveryRefreshing || companySignalImpactSummaryRefreshing || companySignalSummaryRefreshing || companySignalGroupsRefreshing) && 'animate-spin')} />
           Refresh
         </button>
         <FilterSelect
@@ -1118,6 +2353,653 @@ function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: 
           {watchlistDeliveryError.message}
         </div>
       )}
+      {companySignalImpactSummaryError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {companySignalImpactSummaryError.message}
+        </div>
+      )}
+      {companySignalSummaryError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {companySignalSummaryError.message}
+        </div>
+      )}
+      {companySignalGroupsError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {companySignalGroupsError.message}
+        </div>
+      )}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+          <div>
+            <h2 className="text-sm font-medium text-white">Company Signal Queue</h2>
+            <p className="text-xs text-slate-500">
+              {companySignalIsPendingView
+                ? 'Analyst-review candidate groups waiting on approve or suppress decisions.'
+                : 'Reviewed company-signal groups for operator audit and follow-up.'}
+            </p>
+          </div>
+          <div className="text-right text-xs text-slate-500">
+            <p>{formatCompanySignalCode(companySignalReviewStatusFilter)} groups</p>
+            <p>{formatPriorityBandLabel(priorityBandFilter)} priority</p>
+            <p>{formatCompanySignalCode(candidateBucketFilter)}</p>
+            {companySignalSourceFilter ? <p>{formatCompanySignalCode(companySignalSourceFilter)} source</p> : null}
+            {companySignalGapReasonFilter ? <p>{formatCompanySignalCode(companySignalGapReasonFilter)}</p> : null}
+            {companySignalDecisionMakersOnly ? <p>Decision makers only</p> : null}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-3 xl:grid-cols-6">
+          <StatCard
+            label="Review Actions 30d"
+            value={formatNumber(companySignalImpactSummary?.totals.total_actions)}
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            skeleton={companySignalImpactSummaryLoading}
+          />
+          <StatCard
+            label="Approvals 30d"
+            value={formatNumber(companySignalImpactSummary?.totals.approvals)}
+            icon={<Bell className="h-4 w-4" />}
+            skeleton={companySignalImpactSummaryLoading}
+          />
+          <StatCard
+            label="Suppressions 30d"
+            value={formatNumber(companySignalImpactSummary?.totals.suppressions)}
+            icon={<Ban className="h-4 w-4" />}
+            skeleton={companySignalImpactSummaryLoading}
+          />
+          <StatCard
+            label="Signal Creates"
+            value={formatNumber(companySignalImpactSummary?.totals.company_signal_creations)}
+            icon={<Shield className="h-4 w-4" />}
+            skeleton={companySignalImpactSummaryLoading}
+          />
+          <StatCard
+            label="Rebuild Triggered"
+            value={formatNumber(companySignalImpactSummary?.totals.rebuild_triggered)}
+            icon={<RefreshCw className="h-4 w-4" />}
+            skeleton={companySignalImpactSummaryLoading}
+          />
+          <StatCard
+            label="Effect Rate"
+            value={formatMaybePercent(companySignalImpactSummary?.totals.company_signal_effect_rate)}
+            icon={<GitCompareArrows className="h-4 w-4" />}
+            skeleton={companySignalImpactSummaryLoading}
+          />
+        </div>
+
+        <div className="border-b border-slate-700/50 px-4 py-3">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="text-sm font-medium text-white">Operator Focus</h3>
+              {companySignalQueuePresetFilters.length > 0 ? (
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {companySignalQueuePresetFilters.map((preset) => (
+                    <button
+                      key={preset.label}
+                      onClick={() => applyCompanySignalQueueFilters(preset.filters)}
+                      className={clsx(
+                        'rounded border px-2.5 py-1 text-xs transition',
+                        activeCompanySignalQueuePreset?.label === preset.label
+                          ? 'border-cyan-300 bg-cyan-400/20 text-cyan-100'
+                          : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20',
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {companySignalImpactSummaryLoading ? (
+              <p className="mt-2 text-xs text-slate-500">Loading recent review impact...</p>
+            ) : companySignalImpactSummary?.operator_focus?.status && companySignalImpactSummary.operator_focus.status !== 'no_data' ? (
+              <>
+                <p className="mt-2 text-sm text-slate-200">
+                  {companySignalImpactSummary.operator_focus.action || companySignalImpactSummary.operator_focus.reason || '--'}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {companySignalImpactSummary.operator_focus.rationale || '--'}
+                </p>
+                <p className="mt-2 text-[11px] text-slate-400">
+                  {activeCompanySignalQueuePreset
+                    ? `Active preset: ${activeCompanySignalQueuePreset.label}`
+                    : companySignalCurrentFilterSignature === defaultCompanySignalQueueFilterSignature
+                      ? 'Active preset: Default pending queue'
+                      : 'Active preset: Manual queue filters'}
+                </p>
+                {companySignalQueuePresetFilters.length > 0 ? (
+                  <div className="mt-2 space-y-1">
+                    {companySignalQueuePresetFilters.map((preset) => (
+                      <p key={`${preset.label}-help`} className="text-[11px] text-slate-500">
+                        {preset.helpText}
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">
+                No review-action history yet. Once analysts approve or suppress groups, impact and rebuild outcomes will show here.
+              </p>
+            )}
+          </div>
+        </div>
+
+        {companySignalPreviewFilters ? (
+          <div className="border-b border-slate-700/50 px-4 py-3">
+            <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium text-white">Preview Queue Slice</h3>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {companySignalPreviewLabel || 'Queued slice preview'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => companySignalPreviewFilters && applyCompanySignalQueueFilters(companySignalPreviewFilters)}
+                    disabled={companySignalPreviewIsCurrentSlice}
+                    className={clsx(
+                      'rounded border px-2.5 py-1 text-xs transition',
+                      companySignalPreviewIsCurrentSlice
+                        ? 'cursor-not-allowed border-cyan-300/40 bg-cyan-400/15 text-cyan-100'
+                        : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20',
+                    )}
+                  >
+                    {companySignalPreviewIsCurrentSlice ? 'Already Applied' : 'Apply Preview'}
+                  </button>
+                  <button
+                    onClick={clearCompanySignalQueuePreview}
+                    className="rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-300 transition hover:border-slate-500 hover:text-white"
+                  >
+                    Clear Preview
+                  </button>
+                </div>
+              </div>
+              <div className="mt-3 space-y-1 text-xs">
+                {companySignalResolvedPreviewFilters ? (
+                  <p className="text-slate-300">
+                    {summarizeCompanySignalQueueDelta(companySignalCurrentFilters, companySignalResolvedPreviewFilters)}
+                  </p>
+                ) : null}
+                {companySignalPreviewSnapshot ? (
+                  <p className="text-slate-400">
+                    {describeCompanySignalQueueSnapshotImpact(companySignalPreviewSnapshot)}
+                  </p>
+                ) : null}
+                <p className="text-slate-500">
+                  {formatNumber(companySignalPreviewMatchedGroupIds.size)} of {formatNumber(companySignalGroups.length)} visible groups match preview
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.9fr,1.1fr]">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+            <h3 className="text-sm font-medium text-white">Review Activity</h3>
+            {companySignalImpactSummaryLoading ? (
+              <p className="mt-2 text-xs text-slate-500">Loading activity trends...</p>
+            ) : (companySignalImpactSummary?.totals.total_actions || 0) > 0 ? (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Recent 7d</p>
+                  <div className="mt-2 space-y-1 text-xs text-slate-300">
+                    <p>{formatNumber(companySignalImpactSummary?.trend_comparison.recent.action_count)} actions</p>
+                    <p>{formatNumber(companySignalImpactSummary?.trend_comparison.recent.approvals)} approvals</p>
+                    <p>{formatNumber(companySignalImpactSummary?.trend_comparison.recent.suppressions)} suppressions</p>
+                    <p>{formatNumber(companySignalImpactSummary?.trend_comparison.recent.rebuild_triggered)} rebuilds</p>
+                  </div>
+                </div>
+                <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Vs Prior 7d</p>
+                  <div className="mt-2 space-y-1 text-xs text-slate-300">
+                    <p>{formatMaybeNumber(companySignalImpactSummary?.trend_comparison.deltas.action_count)} action delta</p>
+                    <p>{formatMaybeNumber(companySignalImpactSummary?.trend_comparison.deltas.approvals)} approval delta</p>
+                    <p>{formatMaybeNumber(companySignalImpactSummary?.trend_comparison.deltas.suppressions)} suppression delta</p>
+                    <p>{formatMaybePercent(companySignalImpactSummary?.trend_comparison.recent.rebuild_trigger_rate)} rebuild trigger rate</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">
+                No company-signal review actions have been recorded in this window.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+            <h3 className="text-sm font-medium text-white">Recent Impact Drivers</h3>
+            {companySignalImpactSummaryLoading ? (
+              <p className="mt-2 text-xs text-slate-500">Loading vendor and rebuild drivers...</p>
+            ) : companySignalImpactTopVendors.length > 0 || companySignalImpactRebuildReasons.length > 0 ? (
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="space-y-3">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Top Vendors</p>
+                  {companySignalImpactTopVendors.slice(0, 4).map((row) => (
+                    <div key={`impact-vendor-${row.label}`} className="rounded border border-slate-700/50 p-3">
+                      <p className="text-sm text-white">{row.label}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {formatNumber(row.count)} actions
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-3">
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Rebuild Reasons</p>
+                  {companySignalImpactRebuildReasons.slice(0, 4).map((row) => (
+                    <div key={`impact-rebuild-${row.label}`} className="rounded border border-slate-700/50 p-3">
+                      <p className="text-sm text-white">{formatCompanySignalCode(row.label)}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {formatNumber(row.count)} events
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">
+                No vendor or rebuild drivers recorded in the current review window.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-2">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+            <h3 className="text-sm font-medium text-white">Trend Alerts</h3>
+            {companySignalImpactSummaryLoading ? (
+              <p className="mt-2 text-xs text-slate-500">Loading alert recommendations...</p>
+            ) : companySignalTrendAlerts.length > 0 ? (
+              <div className="mt-3 space-y-3">
+                {companySignalTrendAlerts.slice(0, 3).map((row) => (
+                  <div key={`trend-alert-${row.label}`} className="rounded border border-slate-700/50 p-3">
+                    {isActiveCompanySignalQueueSlice(row.queueFilters) ? (
+                      <p className="mb-2 text-[11px] uppercase tracking-wide text-cyan-300">Current queue slice</p>
+                    ) : null}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-white">{formatCompanySignalCode(row.label)}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {row.rationale || '--'}
+                        </p>
+                        {describeCompanySignalQueueSlice(row.queueFilters) ? (
+                          <p className="mt-2 text-[11px] text-slate-400">
+                            {describeCompanySignalQueueSlice(row.queueFilters)}
+                          </p>
+                        ) : null}
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {describeCompanySignalQueueSnapshotImpact({
+                            pending: row.pending,
+                            actionable: row.actionable,
+                            blocked: row.blocked,
+                            overdue: row.overdue,
+                            oldestPendingAgeDays: row.oldestPendingAgeDays,
+                          })}
+                        </p>
+                      </div>
+                      <span className="rounded border border-slate-700/50 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-400">
+                        {row.status || 'watch'}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-slate-400">
+                      <div className="flex flex-wrap gap-3">
+                        <span>
+                          {row.direction ? `${row.direction} ${formatMaybeNumber(row.delta)}` : formatMaybeNumber(row.delta)}
+                        </span>
+                        {row.pending > 0 ? <span>{formatNumber(row.pending)} pending</span> : null}
+                        {row.oldestPendingAgeDays != null ? (
+                          <span>{formatMaybeNumber(row.oldestPendingAgeDays)} oldest days</span>
+                        ) : null}
+                      </div>
+                      {hasQueueFilters(row.queueFilters) ? (
+                        <div className="flex flex-wrap gap-2">
+                          {!isActiveCompanySignalQueueSlice(row.queueFilters) ? (
+                            <button
+                              onClick={() => previewCompanySignalQueueSlice(
+                                `Trend alert: ${formatCompanySignalCode(row.label)}`,
+                                row.queueFilters,
+                                {
+                                  pending: row.pending,
+                                  actionable: row.actionable,
+                                  blocked: row.blocked,
+                                  overdue: row.overdue,
+                                  oldestPendingAgeDays: row.oldestPendingAgeDays,
+                                },
+                              )}
+                              className="rounded border border-slate-600/60 px-2 py-1 text-[11px] text-slate-300 transition hover:border-slate-500 hover:text-white"
+                            >
+                              Preview Slice
+                            </button>
+                          ) : null}
+                          <button
+                            onClick={() => applyCompanySignalQueueFilters(row.queueFilters)}
+                            disabled={isActiveCompanySignalQueueSlice(row.queueFilters)}
+                            className={clsx(
+                              'rounded border px-2 py-1 text-[11px] transition',
+                              isActiveCompanySignalQueueSlice(row.queueFilters)
+                                ? 'cursor-not-allowed border-cyan-300/40 bg-cyan-400/15 text-cyan-100'
+                                : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20',
+                            )}
+                          >
+                            {isActiveCompanySignalQueueSlice(row.queueFilters) ? 'Current Slice' : 'Apply Alert Slice'}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">
+                No trend alerts are active for the current review-impact window.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+            <h3 className="text-sm font-medium text-white">Ranked Queue Slices</h3>
+            {companySignalImpactSummaryLoading ? (
+              <p className="mt-2 text-xs text-slate-500">Loading ranked queue recommendations...</p>
+            ) : companySignalTrendQueueRankings.length > 0 ? (
+              <div className="mt-3 space-y-3">
+                {companySignalTrendQueueRankings.slice(0, 3).map((row) => (
+                  <div key={`trend-queue-${row.label}`} className="rounded border border-slate-700/50 p-3">
+                    {isActiveCompanySignalQueueSlice(row.queueFilters) ? (
+                      <p className="mb-2 text-[11px] uppercase tracking-wide text-cyan-300">Current queue slice</p>
+                    ) : null}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-white">{formatCompanySignalCode(row.label)}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {row.rationale !== '--' ? row.rationale : 'Backend-ranked queue slice for operator focus.'}
+                        </p>
+                        {describeCompanySignalQueueSlice(row.queueFilters) ? (
+                          <p className="mt-2 text-[11px] text-slate-400">
+                            {describeCompanySignalQueueSlice(row.queueFilters)}
+                          </p>
+                        ) : null}
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {describeCompanySignalQueueSnapshotImpact({
+                            pending: row.pending,
+                            actionable: row.actionable,
+                            blocked: row.blocked,
+                            overdue: row.overdue,
+                            oldestPendingAgeDays: row.oldestPendingAgeDays,
+                          })}
+                        </p>
+                      </div>
+                      {hasQueueFilters(row.queueFilters) ? (
+                        <div className="flex flex-wrap gap-2">
+                          {!isActiveCompanySignalQueueSlice(row.queueFilters) ? (
+                            <button
+                              onClick={() => previewCompanySignalQueueSlice(
+                                `Ranked slice: ${formatCompanySignalCode(row.label)}`,
+                                row.queueFilters,
+                                {
+                                  pending: row.pending,
+                                  actionable: row.actionable,
+                                  blocked: row.blocked,
+                                  overdue: row.overdue,
+                                  oldestPendingAgeDays: row.oldestPendingAgeDays,
+                                },
+                              )}
+                              className="rounded border border-slate-600/60 px-2 py-1 text-[11px] text-slate-300 transition hover:border-slate-500 hover:text-white"
+                            >
+                              Preview Slice
+                            </button>
+                          ) : null}
+                          <button
+                            onClick={() => applyCompanySignalQueueFilters(row.queueFilters)}
+                            disabled={isActiveCompanySignalQueueSlice(row.queueFilters)}
+                            className={clsx(
+                              'rounded border px-2 py-1 text-[11px] transition',
+                              isActiveCompanySignalQueueSlice(row.queueFilters)
+                                ? 'cursor-not-allowed border-cyan-300/40 bg-cyan-400/15 text-cyan-100'
+                                : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20',
+                            )}
+                          >
+                            {isActiveCompanySignalQueueSlice(row.queueFilters) ? 'Current Slice' : 'Apply Queue Slice'}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-400">
+                      <span>{formatNumber(row.pending)} pending</span>
+                      <span>{formatNumber(row.actionable)} actionable</span>
+                      <span>{formatNumber(row.blocked)} blocked</span>
+                      <span>{formatNumber(row.overdue)} overdue</span>
+                      {row.oldestPendingAgeDays != null ? (
+                        <span>{formatMaybeNumber(row.oldestPendingAgeDays)} oldest days</span>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">
+                No ranked queue slices are available for this review-impact window.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-3 xl:grid-cols-6">
+          <StatCard
+            label="Pending Groups"
+            value={formatNumber(companySignalTotals?.pending_groups)}
+            icon={<Workflow className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Actionable"
+            value={formatNumber(companySignalTotals?.actionable_pending_groups)}
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Blocked"
+            value={formatNumber(companySignalTotals?.blocked_pending_groups)}
+            icon={<Ban className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Canonical Ready"
+            value={formatNumber(companySignalTotals?.canonical_ready_groups)}
+            icon={<Shield className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Decision Maker"
+            value={formatNumber(companySignalTotals?.decision_maker_groups)}
+            icon={<Building2 className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+          <StatCard
+            label="Overdue"
+            value={formatNumber(companySignalTotals?.overdue_pending_groups)}
+            icon={<Clock className="h-4 w-4" />}
+            skeleton={companySignalSummaryLoading}
+          />
+        </div>
+
+        <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.95fr,1.05fr]">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+            <h3 className="text-sm font-medium text-white">Blocking Reasons</h3>
+            <p className="mt-1 text-xs text-slate-500">Why groups are still held in analyst review.</p>
+            <div className="mt-3 space-y-3">
+              {companySignalSummaryLoading ? (
+                Array.from({ length: 3 }, (_, index) => (
+                  <div key={index} className="animate-pulse rounded-lg border border-slate-700/50 p-3">
+                    <div className="h-4 w-1/2 rounded bg-slate-700/50" />
+                    <div className="mt-2 h-3 w-1/3 rounded bg-slate-800/50" />
+                  </div>
+                ))
+              ) : companySignalGapReasons.length > 0 ? (
+                companySignalGapReasons.slice(0, 4).map((row) => (
+                  <div key={row.gap_reason} className="rounded-lg border border-slate-700/50 p-3">
+                    <p className="text-sm text-white">{formatCompanySignalCode(row.gap_reason)}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {formatNumber(row.group_count)} groups | {formatNumber(row.review_count)} reviews
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-500">No blocking reasons in the selected scope.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+            <h3 className="text-sm font-medium text-white">Actionable Vendors</h3>
+            <p className="mt-1 text-xs text-slate-500">Vendors with the highest current operator load.</p>
+            <div className="mt-3 space-y-3">
+              {companySignalSummaryLoading ? (
+                Array.from({ length: 3 }, (_, index) => (
+                  <div key={index} className="animate-pulse rounded-lg border border-slate-700/50 p-3">
+                    <div className="h-4 w-1/3 rounded bg-slate-700/50" />
+                    <div className="mt-2 h-3 w-2/3 rounded bg-slate-800/50" />
+                  </div>
+                ))
+              ) : companySignalActionableTopVendors.length > 0 ? (
+                companySignalActionableTopVendors.slice(0, 5).map((row) => (
+                  <div key={row.vendor_name} className="rounded-lg border border-slate-700/50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm text-white">{row.vendor_name}</p>
+                      <p className="text-xs text-slate-400">
+                        {formatNumber(row.actionable_group_count)} groups
+                      </p>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {formatNumber(row.high_group_count)} high | {formatNumber(row.medium_group_count)} medium | {formatNumber(row.actionable_decision_maker_groups)} DM
+                    </p>
+                  </div>
+                ))
+              ) : companySignalTopVendors.length > 0 ? (
+                companySignalTopVendors.slice(0, 5).map((row) => (
+                  <div key={row.vendor_name} className="rounded-lg border border-slate-700/50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm text-white">{row.vendor_name}</p>
+                      <p className="text-xs text-slate-400">
+                        {formatNumber(row.group_count)} groups
+                      </p>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {formatNumber(row.review_count)} reviews | {formatNumber(row.pending_groups)} pending
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-500">No vendor pressure in the selected scope.</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-b-xl border-t border-slate-700/50 bg-slate-950/20">
+          <div className="border-b border-slate-700/50 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium text-white">
+                  {companySignalIsPendingView ? 'Pending Candidate Groups' : 'Reviewed Candidate Groups'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {companySignalIsPendingView
+                    ? 'Approve groups that are good enough to materialize, suppress the rest.'
+                    : 'Audit reviewed groups, operator notes, and rebuild decisions.'}
+                </p>
+              </div>
+              {companySignalIsPendingView ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setSelectedCompanySignalGroupIds(
+                        allCompanySignalGroupsSelected ? [] : companySignalGroups.map((row) => row.group_id),
+                      )
+                    }}
+                    className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
+                  >
+                    {allCompanySignalGroupsSelected ? 'Clear All' : 'Select All'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      void handleCompanySignalBulkAction('approve')
+                    }}
+                    disabled={selectedCompanySignalGroupIds.length === 0 || companySignalBulkActionLoading}
+                    className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Approve Selected
+                  </button>
+                  <button
+                    onClick={() => {
+                      void handleCompanySignalBulkAction('suppress')
+                    }}
+                    disabled={selectedCompanySignalGroupIds.length === 0 || companySignalBulkActionLoading}
+                    className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Suppress Selected
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">Review actions are disabled in audit mode.</p>
+              )}
+            </div>
+            {companySignalIsPendingView && selectedCompanySignalGroupIds.length > 0 ? (
+              <p className="mt-2 text-xs text-slate-400">
+                {formatNumber(selectedCompanySignalGroupIds.length)} candidate {selectedCompanySignalGroupIds.length === 1 ? 'group' : 'groups'} selected
+              </p>
+            ) : null}
+            {companySignalIsPendingView ? (
+              <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr),auto]">
+                <label className="block">
+                  <span className="mb-1 block text-[11px] uppercase tracking-wide text-slate-500">Review notes</span>
+                  <textarea
+                    aria-label="Company signal review notes"
+                    value={companySignalActionNotes}
+                    onChange={(event) => setCompanySignalActionNotes(event.target.value)}
+                    rows={2}
+                    placeholder="Capture why this group should be promoted or suppressed."
+                    className="w-full rounded border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-cyan-500/60 focus:outline-none"
+                  />
+                </label>
+                <label className="flex items-center gap-2 self-start rounded border border-slate-700/60 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">
+                  <input
+                    aria-label="Trigger rebuild after review"
+                    type="checkbox"
+                    checked={companySignalTriggerRebuild}
+                    onChange={(event) => setCompanySignalTriggerRebuild(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500 focus:ring-cyan-500"
+                  />
+                  Trigger rebuild after review
+                </label>
+              </div>
+            ) : null}
+            {companySignalActionMessage ? <p className="mt-2 text-xs text-cyan-300">{companySignalActionMessage}</p> : null}
+            {companySignalActionError ? <p className="mt-2 text-xs text-rose-300">{companySignalActionError}</p> : null}
+          </div>
+          {companySignalGroupsLoading ? (
+            <DataTable columns={companySignalGroupColumns} data={[]} skeletonRows={5} />
+          ) : (
+            <DataTable
+              columns={companySignalGroupColumns}
+              data={companySignalGroups}
+              onRowClick={(row) => setSelectedCompanySignalGroup(row)}
+              emptyMessage="No company-signal candidate groups in the selected scope"
+            />
+          )}
+        </div>
+
+        {selectedCompanySignalGroup ? (
+          <div className="border-t border-slate-700/50 p-4">
+            <CompanySignalGroupDetailDrawer
+              group={selectedCompanySignalGroup}
+              backToTab={backToTab}
+              onClose={() => setSelectedCompanySignalGroup(null)}
+            />
+          </div>
+        ) : null}
+      </div>
 
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">

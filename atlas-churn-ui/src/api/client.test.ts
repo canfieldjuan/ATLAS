@@ -130,7 +130,7 @@ describe('api client helpers', () => {
     )
   })
 
-  it('uses the grouped review dashboard routes for queue summaries and actions', async () => {
+  it('uses the grouped review tenant routes for queue summaries and actions', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -203,37 +203,37 @@ describe('api client helpers', () => {
     })
 
     expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/dashboard/company-signal-review-impact-summary',
+      '/api/v1/b2b/tenant/company-signal-review-impact-summary',
     )
     expect(String(fetchMock.mock.calls[1]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/dashboard/company-signal-candidate-group-summary',
+      '/api/v1/b2b/tenant/company-signal-candidate-group-summary',
     )
     expect(String(fetchMock.mock.calls[2]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/dashboard/company-signal-candidate-groups',
+      '/api/v1/b2b/tenant/company-signal-candidate-groups',
     )
     expect(fetchMock.mock.calls[2]?.[0]).toContain('vendor_name=Salesforce')
     expect(fetchMock.mock.calls[2]?.[0]).toContain('review_priority_band=high')
     expect(fetchMock.mock.calls[2]?.[0]).toContain('review_priority_reason=cross_source_corroboration')
     expect(String(fetchMock.mock.calls[3]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/dashboard/company-signal-candidate-groups/group-1/approve',
+      '/api/v1/b2b/tenant/company-signal-candidate-groups/group-1/approve',
     )
     expect(fetchMock.mock.calls[3]?.[1]?.body).toBe(
       JSON.stringify({ trigger_rebuild: false, notes: 'Promote this group' }),
     )
     expect(String(fetchMock.mock.calls[4]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/dashboard/company-signal-candidate-groups/group-2/suppress',
+      '/api/v1/b2b/tenant/company-signal-candidate-groups/group-2/suppress',
     )
     expect(fetchMock.mock.calls[4]?.[1]?.body).toBe(
       JSON.stringify({ trigger_rebuild: true }),
     )
     expect(String(fetchMock.mock.calls[5]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/dashboard/company-signal-candidate-groups/approve',
+      '/api/v1/b2b/tenant/company-signal-candidate-groups/approve',
     )
     expect(fetchMock.mock.calls[5]?.[1]?.body).toBe(
       JSON.stringify({ group_ids: ['group-1', 'group-2'], trigger_rebuild: true, notes: 'Bulk approve' }),
     )
     expect(String(fetchMock.mock.calls[6]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/dashboard/company-signal-candidate-groups/suppress',
+      '/api/v1/b2b/tenant/company-signal-candidate-groups/suppress',
     )
     expect(fetchMock.mock.calls[6]?.[1]?.body).toBe(
       JSON.stringify({ group_ids: ['group-3', 'group-4'], trigger_rebuild: false }),
