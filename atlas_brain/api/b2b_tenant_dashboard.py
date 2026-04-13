@@ -2648,7 +2648,10 @@ async def deliver_watchlist_alert_email(
     ) or "your account"
 
     if not events:
-        summary = "No open alert events to deliver"
+        summary = (
+            "No open alert events to deliver"
+            f"{watchlist_alert_service.suppressed_preview_summary_suffix(suppressed_preview_summary)}"
+        )
         log_id = _uuid.uuid4()
         await watchlist_alert_service.record_watchlist_alert_email_log(
             pool,
@@ -2681,6 +2684,7 @@ async def deliver_watchlist_alert_email(
             "recipient_emails": recipient_emails,
             "event_count": 0,
             "message_ids": [],
+            "summary": summary,
             "suppressed_preview_summary": suppressed_preview_summary,
         }
 

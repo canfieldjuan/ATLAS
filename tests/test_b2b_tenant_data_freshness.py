@@ -3530,6 +3530,7 @@ async def test_deliver_watchlist_alert_email_records_no_events(monkeypatch):
 
     assert result["status"] == "no_events"
     assert result["event_count"] == 0
+    assert result["summary"] == "No open alert events to deliver"
     statements = [call.args[0] for call in pool.execute.await_args_list]
     assert any("INSERT INTO b2b_watchlist_alert_email_log" in sql for sql in statements)
     assert any("UPDATE b2b_watchlist_views" in sql for sql in statements)
@@ -3612,6 +3613,9 @@ async def test_deliver_watchlist_alert_email_returns_suppressed_preview_summary(
 
     assert result["status"] == "no_events"
     assert result["event_count"] == 0
+    assert result["summary"] == (
+        "No open alert events to deliver (1 preview-backed account alert blocked by policy)"
+    )
     assert result["suppressed_preview_summary"] == suppressed_preview_summary
 
 

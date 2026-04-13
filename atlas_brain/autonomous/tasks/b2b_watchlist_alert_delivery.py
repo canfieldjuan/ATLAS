@@ -155,13 +155,17 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
         accounts_loader=list_tenant_accounts_in_motion_feed,
     )
     events = evaluation["events"]
+    suppressed_preview_summary = evaluation.get("suppressed_preview_summary")
     event_ids = [_uuid.UUID(str(event["id"])) for event in events]
     recipients = await watchlist_alert_service.resolve_watchlist_alert_recipients(pool, account_id=account_id)
     recipient_emails = [item["email"] for item in recipients]
     now = datetime.now(timezone.utc)
 
     if not events:
-        summary = "No open alert events to deliver"
+        summary = (
+            "No open alert events to deliver"
+            f"{watchlist_alert_service.suppressed_preview_summary_suffix(suppressed_preview_summary)}"
+        )
         await watchlist_alert_service.update_watchlist_alert_email_log(
             pool,
             log_id=delivery_log_id,

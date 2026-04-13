@@ -354,6 +354,16 @@ def summarize_suppressed_preview_accounts(
     }
 
 
+def suppressed_preview_summary_suffix(summary: Any) -> str:
+    if not isinstance(summary, dict):
+        return ""
+    count = _coerce_optional_int(summary.get("count")) or 0
+    if count <= 0:
+        return ""
+    label = "preview-backed account alert" if count == 1 else "preview-backed account alerts"
+    return f" ({count} {label} blocked by policy)"
+
+
 def _watchlist_alert_entity_key(
     *,
     event_type: str,

@@ -107,6 +107,65 @@ async def test_run_processes_due_view_and_advances_schedule(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scheduled_delivery_reports_blocked_preview_summary_on_no_events(monkeypatch):
+    now = datetime.now(timezone.utc)
+    account_id = uuid4()
+    view_id = uuid4()
+    delivery_log_id = uuid4()
+    row = {
+        "id": view_id,
+        "account_id": account_id,
+        "name": "Quiet CRM watch",
+        "vendor_name": "Salesforce",
+        "category": "CRM",
+        "source": "reddit",
+        "min_urgency": 8.0,
+        "include_stale": False,
+        "named_accounts_only": True,
+        "changed_wedges_only": False,
+        "vendor_alert_threshold": 7.5,
+        "account_alert_threshold": 6.0,
+        "stale_days_threshold": 2,
+        "alert_email_enabled": True,
+        "alert_delivery_frequency": "daily",
+        "next_alert_delivery_at": now,
+        "account_name": "Acme",
+        "product": "b2b_retention",
+    }
+    pool = SimpleNamespace()
+
+    monkeypatch.setattr(
+        watchlist_alert_service,
+        "evaluate_watchlist_alert_events_for_view",
+        AsyncMock(
+            return_value={
+                "watchlist_view_id": str(view_id),
+                "watchlist_view_name": "Quiet CRM watch",
+                "events": [],
+                "suppressed_preview_summary": {"count": 1},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        watchlist_alert_service,
+        "resolve_watchlist_alert_recipients",
+        AsyncMock(return_value=[{"email": "owner@example.com", "full_name": "Owner"}]),
+    )
+    monkeypatch.setattr(watchlist_alert_service, "update_watchlist_alert_email_log", AsyncMock())
+    monkeypatch.setattr(mod, "_advance_view_schedule", AsyncMock())
+
+    status = await mod._send_scheduled_watchlist_email(pool, object(), row, delivery_log_id)
+
+    assert status == "no_events"
+    assert watchlist_alert_service.update_watchlist_alert_email_log.await_args.kwargs["summary"] == (
+        "No open alert events to deliver (1 preview-backed account alert blocked by policy)"
+    )
+    assert mod._advance_view_schedule.await_args.kwargs["summary"] == (
+        "No open alert events to deliver (1 preview-backed account alert blocked by policy)"
+    )
+
+
+@pytest.mark.asyncio
 async def test_claim_delivery_attempt_matches_partial_unique_index(monkeypatch):
     now = datetime.now(timezone.utc)
     row = {
