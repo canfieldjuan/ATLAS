@@ -798,15 +798,29 @@ export default function VendorDetail() {
     {
       key: 'actions',
       header: 'Actions',
-      render: (r) => (
-        <button
-          type="button"
-          onClick={() => navigate(vendorCompanyWatchlistsPath(profile.vendor_name, backTo, r.account_review_focus ?? null))}
-          className="text-violet-300 hover:text-violet-200 transition-colors"
-        >
-          {r.account_review_focus ? 'Account Review' : 'Watchlists'}
-        </button>
-      ),
+      render: (r) => {
+        const reviewId = r.review_id
+        return (
+          <div className="flex items-center gap-3 text-xs">
+            <button
+              type="button"
+              onClick={() => navigate(vendorCompanyWatchlistsPath(profile.vendor_name, backTo, r.account_review_focus ?? null))}
+              className="text-violet-300 hover:text-violet-200 transition-colors"
+            >
+              {r.account_review_focus ? 'Account Review' : 'Watchlists'}
+            </button>
+            {reviewId ? (
+              <button
+                type="button"
+                onClick={() => navigate(vendorReviewDetailPath(reviewId, profile.vendor_name, backTo))}
+                className="text-cyan-300 hover:text-cyan-200 transition-colors"
+              >
+                Review
+              </button>
+            ) : null}
+          </div>
+        )
+      },
     },
   ]
 

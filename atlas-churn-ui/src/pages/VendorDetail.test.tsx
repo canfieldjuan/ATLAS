@@ -230,6 +230,45 @@ describe('VendorDetail', () => {
     )
   })
 
+  it('opens exact review drilldown from vendor high-intent companies with preserved nested context', async () => {
+    const user = userEvent.setup()
+    api.fetchVendorProfile.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      churn_signal: null,
+      review_counts: {
+        total: 12,
+        pending_enrichment: 1,
+        enriched: 11,
+      },
+      high_intent_companies: [
+        {
+          company: 'Acme Corp',
+          vendor: 'Zendesk',
+          urgency: 8.4,
+          pain: 'pricing',
+          review_id: 'review-hi-1',
+        },
+      ],
+      pain_distribution: [],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'companies' }))
+    await user.click(screen.getByRole('button', { name: 'Review' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/reviews/review-hi-1?back_to=%2Fvendors%2FZendesk%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+  })
+
   it('opens an exact account review from vendor high-intent companies when focus is available', async () => {
     const user = userEvent.setup()
     api.fetchVendorProfile.mockResolvedValue({
