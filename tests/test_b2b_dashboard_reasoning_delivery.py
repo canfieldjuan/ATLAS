@@ -1,6 +1,7 @@
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -986,6 +987,7 @@ async def test_dashboard_vendor_profile_only_uses_trusted_account_resolution(mon
     counts_sql = pool.fetchrow.await_args_list[1].args[0]
     assert "WHEN ar.confidence_label IN ('high', 'medium')" in hi_sql
     assert "duplicate_of_review_id IS NULL" in counts_sql
+    assert "JOIN b2b_review_vendor_mentions vm" in counts_sql
 
 
 @pytest.mark.asyncio
@@ -1123,3 +1125,68 @@ async def test_dashboard_pipeline_excludes_cross_source_duplicates(monkeypatch):
     stats_sql = pool.fetchrow.await_args_list[0].args[0]
     assert "duplicate_of_review_id IS NULL" in status_sql
     assert "duplicate_of_review_id IS NULL" in stats_sql
+
+
+@pytest.mark.asyncio
+async def test_dashboard_get_review_uses_primary_vendor_mentions(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    row = {
+        "id": uuid4(),
+        "source": "g2",
+        "source_url": "https://example.com/review",
+        "vendor_name": "Legacy Vendor",
+        "matched_vendor_name": "Zendesk",
+        "product_name": "Zendesk Suite",
+        "product_category": "Helpdesk",
+        "rating": 4.0,
+        "summary": "Summary",
+        "review_text": "Body",
+        "pros": "Pros",
+        "cons": "Cons",
+        "reviewer_name": "Alex",
+        "reviewer_title": "VP Support",
+        "reviewer_company": "Acme",
+        "company_size_raw": "201-500",
+        "reviewer_industry": "SaaS",
+        "reviewed_at": None,
+        "imported_at": None,
+        "enrichment": {},
+        "enrichment_status": "enriched",
+        "enriched_at": None,
+    }
+    pool = SimpleNamespace(
+        fetchrow=AsyncMock(return_value=row),
+        fetchval=AsyncMock(side_effect=[None]),
+    )
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "_apply_field_overrides", AsyncMock(side_effect=lambda _p, _t, _id, payload: payload))
+
+    result = await mod.get_review(str(row["id"]), user=None)
+
+    sql = pool.fetchrow.await_args.args[0]
+    assert "b2b_review_vendor_mentions vm" in sql
+    assert result["vendor_name"] == "Zendesk"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_operational_overview_counts_vendor_mentions(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace(
+        fetch=AsyncMock(side_effect=[[], []]),
+        fetchrow=AsyncMock(
+            side_effect=[
+                {"pending": 1, "enriched": 2, "failed": 0, "no_signal": 0, "total": 3},
+                {"captcha_total": 0, "blocks_total": 0, "blocks_captcha": 0, "blocks_ip_ban": 0, "blocks_waf": 0},
+                {"total_reviews": 9, "vendors_tracked": 4, "last_review_at": None},
+            ]
+        ),
+    )
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.get_operational_overview()
+
+    assert result["data_summary"]["vendors_tracked"] == 4
+    review_sql = pool.fetchrow.await_args_list[2].args[0]
+    assert "JOIN b2b_review_vendor_mentions vm" in review_sql

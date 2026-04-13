@@ -1726,13 +1726,14 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
     counts = await pool.fetchrow(
         f"""
         SELECT
-            COUNT(*) AS total_reviews,
-            COUNT(*) FILTER (WHERE enrichment_status = 'pending') AS pending_enrichment,
-            COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched
-        FROM b2b_reviews
-        WHERE vendor_name ILIKE '%' || $1 || '%'
-          AND {_canonical_review_predicate()}
-          AND {_suppress_predicate('review')}
+            COUNT(DISTINCT r.id) AS total_reviews,
+            COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'pending') AS pending_enrichment,
+            COUNT(DISTINCT r.id) FILTER (WHERE r.enrichment_status = 'enriched') AS enriched
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name ILIKE '%' || $1 || '%'
+          AND {_canonical_review_predicate('r')}
+          AND {_suppress_predicate('review', id_expr='r.id', source_expr='r.source', vendor_expr='vm.vendor_name')}
         """,
         vname,
     )
@@ -1749,14 +1750,15 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
     # Reason: inline aggregate, GROUP BY pain_category
     pain_rows = await pool.fetch(
         f"""
-        SELECT enrichment->>'pain_category' AS pain, COUNT(*) AS cnt
-        FROM b2b_reviews
-        WHERE vendor_name ILIKE '%' || $1 || '%'
-          AND enrichment_status = 'enriched'
-          AND {_canonical_review_predicate()}
-          AND enrichment->>'pain_category' IS NOT NULL
-          AND {_suppress_predicate('review')}
-        GROUP BY enrichment->>'pain_category'
+        SELECT r.enrichment->>'pain_category' AS pain, COUNT(DISTINCT r.id) AS cnt
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name ILIKE '%' || $1 || '%'
+          AND r.enrichment_status = 'enriched'
+          AND {_canonical_review_predicate('r')}
+          AND r.enrichment->>'pain_category' IS NOT NULL
+          AND {_suppress_predicate('review', id_expr='r.id', source_expr='r.source', vendor_expr='vm.vendor_name')}
+        GROUP BY r.enrichment->>'pain_category'
         ORDER BY cnt DESC
         LIMIT 50
         """,
@@ -2421,7 +2423,23 @@ async def get_review(review_id: str, user: AuthUser | None = Depends(optional_au
         raise HTTPException(status_code=400, detail="Invalid review_id (must be UUID)")
 
     pool = _pool_or_503()
-    row = await pool.fetchrow("SELECT * FROM b2b_reviews WHERE id = $1", rid)
+    row = await pool.fetchrow(
+        """
+        SELECT
+            r.*,
+            COALESCE(primary_vm.vendor_name, r.vendor_name) AS matched_vendor_name
+        FROM b2b_reviews r
+        LEFT JOIN LATERAL (
+            SELECT vm.vendor_name
+            FROM b2b_review_vendor_mentions vm
+            WHERE vm.review_id = r.id
+            ORDER BY vm.is_primary DESC, vm.id ASC
+            LIMIT 1
+        ) AS primary_vm ON TRUE
+        WHERE r.id = $1
+        """,
+        rid,
+    )
 
     if not row:
         raise HTTPException(status_code=404, detail="Review not found")
@@ -2437,8 +2455,18 @@ async def get_review(review_id: str, user: AuthUser | None = Depends(optional_au
 
     if _should_scope(user):
         is_tracked = await pool.fetchval(
-            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
-            user.account_id, row["vendor_name"],
+            """
+            SELECT 1
+            FROM tracked_vendors tv
+            WHERE tv.account_id = $1::uuid
+              AND EXISTS (
+                  SELECT 1
+                  FROM b2b_review_vendor_mentions vm
+                  WHERE vm.review_id = $2::uuid
+                    AND tv.vendor_name ILIKE vm.vendor_name
+              )
+            """,
+            user.account_id, row["id"],
         )
         if not is_tracked:
             raise HTTPException(status_code=403, detail="Vendor not in your tracked list")
@@ -2447,7 +2475,7 @@ async def get_review(review_id: str, user: AuthUser | None = Depends(optional_au
         "id": str(row["id"]),
         "source": row["source"],
         "source_url": row["source_url"],
-        "vendor_name": row["vendor_name"],
+        "vendor_name": row["matched_vendor_name"],
         "product_name": row["product_name"],
         "product_category": row["product_category"],
         "rating": _safe_float(row["rating"]),
@@ -2486,7 +2514,12 @@ async def get_pipeline_status(user: AuthUser | None = Depends(optional_auth)):
     scope_params: list = []
     if _should_scope(user):
         vendor_scope = (
-            f" WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
+            " WHERE EXISTS ("
+            " SELECT 1"
+            " FROM b2b_review_vendor_mentions vm"
+            " WHERE vm.review_id = b2b_reviews.id"
+            "   AND vm.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
+            " )"
             f" AND {_canonical_review_predicate()}"
             f" AND {_rev_sup}"
         )
@@ -2927,10 +2960,11 @@ async def get_operational_overview(
         pool.fetchrow("""
             SELECT
                 COUNT(*) AS total_reviews,
-                COUNT(DISTINCT vendor_name) AS vendors_tracked,
+                COUNT(DISTINCT vm.vendor_name) AS vendors_tracked,
                 MAX(imported_at) AS last_review_at
-            FROM b2b_reviews
-            WHERE duplicate_of_review_id IS NULL
+            FROM b2b_reviews r
+            JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+            WHERE r.duplicate_of_review_id IS NULL
         """),
     )
 
@@ -7969,11 +8003,27 @@ async def _fetch_accounts_in_motion_review_lookup(
         return {}
     rows = await pool.fetch(
         """
-        SELECT id, source, source_url, vendor_name, rating, summary,
-               LEFT(review_text, 500) AS review_excerpt,
-               reviewer_name, reviewer_title, reviewer_company, reviewed_at
-        FROM b2b_reviews
-        WHERE id = ANY($1::uuid[])
+        SELECT
+            r.id,
+            r.source,
+            r.source_url,
+            COALESCE(primary_vm.vendor_name, r.vendor_name) AS vendor_name,
+            r.rating,
+            r.summary,
+            LEFT(r.review_text, 500) AS review_excerpt,
+            r.reviewer_name,
+            r.reviewer_title,
+            r.reviewer_company,
+            r.reviewed_at
+        FROM b2b_reviews r
+        LEFT JOIN LATERAL (
+            SELECT vm.vendor_name
+            FROM b2b_review_vendor_mentions vm
+            WHERE vm.review_id = r.id
+            ORDER BY vm.is_primary DESC, vm.id ASC
+            LIMIT 1
+        ) AS primary_vm ON TRUE
+        WHERE r.id = ANY($1::uuid[])
         ORDER BY reviewed_at DESC NULLS LAST
         """,
         parsed_ids,
@@ -8980,20 +9030,20 @@ async def _list_accounts_in_motion_from_reviews(
         "LENGTH(TRIM(r.reviewer_company)) > 3",
         "(r.enrichment->>'urgency_score')::numeric >= $1",
         "r.enriched_at > NOW() - make_interval(days => $2)",
-        "r.vendor_name ILIKE '%' || $3 || '%'",
+        "matched_vm.vendor_name ILIKE '%' || $3 || '%'",
     ]
     params: list[Any] = [min_urgency, window_days, vendor_name.strip()]
     idx = 4
     if _should_scope(user):
         conditions.append(
-            f"r.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+            f"matched_vm.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
         )
         params.append(user.account_id)
         idx += 1
     rows = await pool.fetch(
         f"""
         SELECT DISTINCT ON (LOWER(r.reviewer_company))
-            r.reviewer_company, r.vendor_name, r.product_category,
+            r.reviewer_company, matched_vm.vendor_name, r.product_category,
             (r.enrichment->>'urgency_score')::numeric AS urgency,
             r.enrichment->'buyer_authority'->>'role_type' AS role_type,
             r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
@@ -9006,6 +9056,7 @@ async def _list_accounts_in_motion_from_reviews(
             COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
             r.enriched_at
         FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions matched_vm ON matched_vm.review_id = r.id
         WHERE {" AND ".join(conditions)}
         ORDER BY LOWER(r.reviewer_company), (r.enrichment->>'urgency_score')::numeric DESC
         """,

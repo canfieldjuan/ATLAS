@@ -3723,6 +3723,22 @@ async def test_list_accounts_in_motion_from_reviews_enriches_in_bulk():
     assert result["data_source"] == "live_reviews"
     assert result["count"] == 1
     account = result["accounts"][0]
+    reviews_sql = pool.fetch.await_args_list[0].args[0]
+    assert "JOIN b2b_review_vendor_mentions matched_vm" in reviews_sql
     assert account["contacts"][0]["email"] == "taylor@acme.com"
     assert account["domain"] == "acme.com"
     assert account["alternatives_considering"] == [{"name": "Freshdesk", "reason": "pricing"}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_accounts_in_motion_review_lookup_uses_primary_vendor_mentions():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    await b2b_dashboard._fetch_accounts_in_motion_review_lookup(
+        pool,
+        review_ids=[str(uuid4())],
+    )
+
+    sql = pool.fetch.await_args.args[0]
+    assert "b2b_review_vendor_mentions vm" in sql
