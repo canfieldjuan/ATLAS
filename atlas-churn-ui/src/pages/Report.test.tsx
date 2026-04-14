@@ -259,6 +259,37 @@ describe('Report', () => {
     expect(specializedRenderer.lastProps?.reportType).toBe('accounts_in_motion')
   })
 
+  it('shows account-pressure disclaimer and confidence tier on the public report page', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        vendor_name: 'Zendesk',
+        briefing: {
+          churn_pressure_score: 72,
+          category: 'Helpdesk',
+          named_account_count: 3,
+          account_pressure_disclaimer: 'Early account signal only.',
+          account_actionability_tier: 'low',
+        },
+        intelligence_reports: [],
+        product_profile: null,
+      }),
+    } as Response)
+
+    render(
+      <MemoryRouter initialEntries={['/report?vendor=Zendesk&ref=test-token&mode=view']}>
+        <Routes>
+          <Route path="/report" element={<Report />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    expect(screen.getByText('Accounts Showing Friction')).toBeInTheDocument()
+    expect(screen.getByText('Early account signal only.')).toBeInTheDocument()
+    expect(screen.getByText('Confidence tier: low')).toBeInTheDocument()
+  })
+
   it('shows checkout API errors inline in the pricing modal', async () => {
     const user = userEvent.setup()
     const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})

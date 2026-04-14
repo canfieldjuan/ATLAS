@@ -343,6 +343,8 @@ function ReportView({ data }: { data: ReportData }) {
   const painLabels = asRecord(b.pain_labels) as Record<string, string>
   const timingSummary = firstStringValue(b.timing_summary) || ''
   const priorityTriggers = asArray(b.priority_timing_triggers)
+  const accountPressureDisclaimer = firstStringValue(b.account_pressure_disclaimer) || ''
+  const accountActionabilityTier = firstStringValue(b.account_actionability_tier) || ''
   const buyerProfiles = asArray(b.buyer_profiles).filter(isRecord)
   const crossVendorConclusions = asArray(b.cross_vendor_conclusions).filter(isRecord)
   const segIntel = asRecord(b.segment_intelligence)
@@ -459,6 +461,14 @@ function ReportView({ data }: { data: ReportData }) {
                 <p className="text-sm text-slate-400 mb-4">
                   accounts with active churn signals detected in the last 30 days
                 </p>
+                {accountPressureDisclaimer && (
+                  <p className="text-xs text-amber-300 mb-3">{accountPressureDisclaimer}</p>
+                )}
+                {accountActionabilityTier && (
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500 mb-4">
+                    Confidence tier: {accountActionabilityTier.replace(/_/g, ' ')}
+                  </p>
+                )}
                 <button
                   onClick={() => setShowPricing(true)}
                   className="inline-block px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 rounded-lg text-sm text-cyan-400 font-medium transition-colors cursor-pointer"

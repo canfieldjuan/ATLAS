@@ -17,6 +17,9 @@ describe('SpecializedReportData', () => {
           onOpenWitness={onOpenWitness}
           data={{
             total_accounts_in_motion: 3,
+            account_pressure_summary: 'A single named account is showing early evaluation pressure.',
+            account_pressure_disclaimer: 'Early account signal only.',
+            account_actionability_tier: 'low',
             pricing_pressure: {
               price_complaint_rate: 0.25,
             },
@@ -41,6 +44,8 @@ describe('SpecializedReportData', () => {
     expect(screen.getByText('Total Accounts')).toBeInTheDocument()
     expect(screen.getByText('3')).toBeInTheDocument()
     expect(screen.getAllByText('Freshdesk')).toHaveLength(2)
+    expect(screen.getByText('Early account signal only.')).toBeInTheDocument()
+    expect(screen.getByText('Confidence tier: low')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '1 witnesses' }))
     await user.click(screen.getAllByRole('button', { name: '[1]' })[0])

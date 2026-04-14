@@ -775,6 +775,14 @@ function AccountsInMotionDetail({ data, vendorName, onOpenWitness, backTo, asOfD
       {data.account_pressure_summary && (
         <SectionCard title="Account Pressure" icon={<Zap className="h-4 w-4 text-orange-400" />}>
           <p className="text-sm text-slate-300">{data.account_pressure_summary}</p>
+          {data.account_pressure_disclaimer && (
+            <p className="text-xs text-amber-300 mt-2">{data.account_pressure_disclaimer}</p>
+          )}
+          {data.account_actionability_tier && (
+            <p className="text-[11px] uppercase tracking-wide text-slate-500 mt-1">
+              Confidence tier: {data.account_actionability_tier.replace(/_/g, ' ')}
+            </p>
+          )}
           {data.account_pressure_metrics && (
             <div className="grid grid-cols-3 gap-2 mt-2">
               <MetricRow label="Total Accounts" value={data.account_pressure_metrics.total_accounts} color="text-orange-400" />
@@ -1298,6 +1306,14 @@ function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }:
           {data.account_pressure_summary && (
             <p className="text-sm text-slate-400 mb-3">{data.account_pressure_summary}</p>
           )}
+          {data.account_pressure_disclaimer && (
+            <p className="text-xs text-amber-300 mb-3">{data.account_pressure_disclaimer}</p>
+          )}
+          {data.account_actionability_tier && (
+            <p className="text-[11px] uppercase tracking-wide text-slate-500 mb-3">
+              Confidence tier: {data.account_actionability_tier.replace(/_/g, ' ')}
+            </p>
+          )}
           {data.account_market_summary && (
             <p className="text-sm text-slate-400 mb-3">{data.account_market_summary}</p>
           )}
@@ -1816,6 +1832,14 @@ function WeeklyChurnFeedDetail({ items, onOpenWitness, backTo, asOfDate, windowD
                   </div>
                 )}
                 {item.account_pressure_summary && <p>{item.account_pressure_summary}</p>}
+                {item.account_pressure_disclaimer && (
+                  <p className="text-amber-300">{item.account_pressure_disclaimer}</p>
+                )}
+                {item.account_actionability_tier && (
+                  <p className="uppercase tracking-wide text-slate-500">
+                    Confidence tier: {item.account_actionability_tier.replace(/_/g, ' ')}
+                  </p>
+                )}
               </div>
             )}
 

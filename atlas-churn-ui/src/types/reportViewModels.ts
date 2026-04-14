@@ -279,6 +279,8 @@ export interface BattleCardViewModel {
   executive_summary?: string
   timing_summary?: string
   account_pressure_summary?: string
+  account_pressure_disclaimer?: string
+  account_actionability_tier?: string
   vendor_weaknesses: WeaknessAnalysisItemViewModel[]
   weakness_analysis: WeaknessAnalysisItemViewModel[]
   customer_pain_quotes: PainQuoteViewModel[]
@@ -417,6 +419,8 @@ export interface WeeklyChurnFeedItemViewModel {
   category_council?: CategoryCouncilViewModel | null
   retention_strengths: FeedRetentionStrengthViewModel[]
   account_pressure_summary?: string
+  account_pressure_disclaimer?: string
+  account_actionability_tier?: string
   timing_summary?: string
   priority_timing_triggers: string[]
   reasoning_source?: string
@@ -531,6 +535,8 @@ export interface AccountsInMotionViewModel {
   cross_vendor_context: CrossVendorContextViewModel
   accounts: AccountsInMotionAccountViewModel[]
   account_pressure_summary?: string
+  account_pressure_disclaimer?: string
+  account_actionability_tier?: string
   account_pressure_metrics?: AccountPressureMetricsViewModel
   priority_account_names?: string[]
   timing_summary?: string
