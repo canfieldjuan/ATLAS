@@ -84,8 +84,18 @@ export interface PageMeta {
   title: string;
   description: string;
   ogImage?: string;
+  ogType?: string;
+  /** ISO date string for Open Graph article metadata */
+  publishedTime?: string;
+  /** ISO date string for Open Graph article metadata */
+  modifiedTime?: string;
+  /** Optional content section for article schema and OG */
+  section?: string;
+  twitterImage?: string;
+  noindex?: boolean;
   canonicalPath?: string;
-  jsonLd?: Record<string, unknown>;
+  keywords?: string[];
+  jsonLd?: Record<string, unknown> | Array<Record<string, unknown>>;
 }
 
 /** Navigation link */

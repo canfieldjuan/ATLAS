@@ -15,12 +15,30 @@ export default function Home() {
           canonicalPath: "/",
           jsonLd: {
             "@context": "https://schema.org",
-            "@type": "Person",
-            name: "Juan Canfield",
-            jobTitle: "AI Systems Architect",
-            description:
-              "Building production AI systems with MCP servers, autonomous task orchestration, and edge compute architecture.",
-            url: window.location.origin,
+            "@graph": [
+              {
+                "@type": "Person",
+                name: "Juan Canfield",
+                jobTitle: "AI Systems Architect",
+                description:
+                  "Building production AI systems with MCP servers, autonomous task orchestration, and edge compute architecture.",
+              },
+              {
+                "@type": "WebSite",
+                name: "Juan Canfield",
+                url: window.location.origin,
+                inLanguage: "en-US",
+              },
+              {
+                "@type": "Organization",
+                name: "Juan Canfield",
+                url: window.location.origin,
+                sameAs: [
+                  "https://github.com/canfieldjuan/atlas-portfolio",
+                  "https://www.linkedin.com/in/juan-canfield-9b2a733b5/",
+                ],
+              },
+            ],
           },
         }}
       />
@@ -57,6 +75,10 @@ export default function Home() {
           <p className="text-surface-200/60 text-center mb-12 max-w-2xl mx-auto">
             Not proof-of-concepts. Production systems handling real data,
             real users, and real failure modes.
+          </p>
+          <p className="text-sm text-surface-200/60 text-center mb-8 max-w-2xl mx-auto">
+            I don't build chat demos. I build reliable AI systems — with
+            quality gates, fallback paths, and measurable business outcomes.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {allProjects.map((project) => (

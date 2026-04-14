@@ -39,6 +39,10 @@ export function HeroSection() {
           where non-deterministic LLM outputs become deterministic, repeatable
           pipelines.
         </p>
+        <p className="mt-4 text-sm sm:text-base text-surface-200/70 max-w-2xl mx-auto">
+          From prompt-first experiments to dependable AI systems: classify, gate,
+          validate, and reproduce.
+        </p>
 
         <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
           <Link

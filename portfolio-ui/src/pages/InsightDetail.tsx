@@ -15,38 +15,102 @@ export default function InsightDetail() {
   const { slug } = useParams<{ slug: string }>();
   const post = slug ? getInsight(slug) : undefined;
 
-  if (!post) return <Navigate to="/insights" replace />;
+  if (!post) return <Navigate to="/404" replace />;
+
+  const siteOrigin = window.location.origin;
+  const pageUrl = `${siteOrigin}/insights/${post.slug}`;
 
   const typeMeta = TYPE_META[post.type];
   const TypeIcon = typeMeta.icon;
 
   const jsonLd: Record<string, unknown> = {
     "@context": "https://schema.org",
-    "@type": "Article",
+    "@type": "BlogPosting",
     headline: post.title,
     description: post.seoDescription ?? post.description,
     datePublished: post.date,
+    dateModified: post.date,
+    inLanguage: "en-US",
+    keywords: [post.targetKeyword, ...(post.secondaryKeywords ?? [])].filter(
+      Boolean,
+    ),
+    url: pageUrl,
+    mainEntityOfPage: {
+      "@type": "WebPage",
+      "@id": pageUrl,
+    },
     author: { "@type": "Person", name: "Juan Canfield" },
+    publisher: {
+      "@type": "Person",
+      name: "Juan Canfield",
+    },
+    image: {
+      "@type": "ImageObject",
+      url: new URL("/og/default.svg", siteOrigin).toString(),
+    },
   };
 
-  if (post.faq && post.faq.length > 0) {
-    jsonLd.mainEntity = post.faq.map((f) => ({
-      "@type": "Question",
-      name: f.question,
-      acceptedAnswer: { "@type": "Answer", text: f.answer },
-    }));
-  }
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      {
+        "@type": "ListItem",
+        position: 1,
+        name: "Home",
+        item: new URL("/", siteOrigin).toString(),
+      },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: "Insights",
+        item: new URL("/insights", siteOrigin).toString(),
+      },
+      {
+        "@type": "ListItem",
+        position: 3,
+        name: post.title,
+        item: pageUrl,
+      },
+    ],
+  };
+
+  const faqSchema = post.faq?.length
+    ? {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        mainEntity: post.faq.map((f) => ({
+          "@type": "Question",
+          name: f.question,
+          acceptedAnswer: { "@type": "Answer", text: f.answer },
+        })),
+      }
+    : undefined;
+
+  const seoKeywords = [post.targetKeyword, ...(post.secondaryKeywords ?? [])]
+    .filter((keyword): keyword is string => Boolean(keyword));
+
+  const seoMetaTitle = post.seoTitle ?? post.title;
+  const seoMetaDescription = post.seoDescription ?? post.description;
+  const detailJsonLd = faqSchema
+    ? [jsonLd, breadcrumbJsonLd, faqSchema]
+    : [jsonLd, breadcrumbJsonLd];
+
+  const seo = {
+    title: seoMetaTitle,
+    description: seoMetaDescription,
+    canonicalPath: `/insights/${post.slug}`,
+    ogType: "article",
+    keywords: seoKeywords,
+    publishedTime: post.date,
+    modifiedTime: post.date,
+    section: "Insights",
+    jsonLd: detailJsonLd,
+  };
 
   return (
     <>
-      <SeoHead
-        meta={{
-          title: post.seoTitle ?? post.title,
-          description: post.seoDescription ?? post.description,
-          canonicalPath: `/insights/${post.slug}`,
-          jsonLd,
-        }}
-      />
+      <SeoHead meta={seo} />
 
       <article className="py-16 px-6">
         <div className="mx-auto max-w-3xl">

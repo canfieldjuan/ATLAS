@@ -42,6 +42,38 @@ export default function Framework() {
             </p>
           </header>
 
+          <div className="mb-16 rounded-xl border border-primary-500/30 bg-primary-500/5 p-6">
+            <h2 className="text-xl font-bold text-white mb-4">
+              This Is Not Workflow Automation Alone
+            </h2>
+            <p className="text-surface-200/80 mb-4 leading-relaxed">
+              A lot of teams confuse automation with intelligence. Automation
+              makes operations repeatable. AI intelligence needs additional layers:
+              validation, observability, scoring, and recovery when uncertainty is
+              high.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div className="rounded-lg bg-surface-800/40 p-4 border border-surface-700/50">
+                <h3 className="text-sm uppercase tracking-widest text-rose-400/70 mb-2">
+                  Workflow Automation Focus
+                </h3>
+                <p className="text-surface-200/70 leading-relaxed">
+                  Rules-based repeatability: inputs in, outputs out. Great for
+                  fixed logic, but brittle when models are involved.
+                </p>
+              </div>
+              <div className="rounded-lg bg-surface-800/40 p-4 border border-surface-700/50">
+                <h3 className="text-sm uppercase tracking-widest text-primary-400/70 mb-2">
+                  Systems-First AI Focus
+                </h3>
+                <p className="text-surface-200/70 leading-relaxed">
+                  Decide where AI adds value, then add confidence gates, fallback
+                  logic, audits, and reproducibility before production access.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Tiers */}
           <div className="space-y-12 mb-20">
             {skillTiers.map((tier) => (

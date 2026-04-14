@@ -96,7 +96,34 @@ export default function ProjectDetail() {
   const { slug } = useParams<{ slug: string }>();
   const project = slug ? getProject(slug) : undefined;
 
-  if (!project) return <Navigate to="/projects" replace />;
+  if (!project) return <Navigate to="/404" replace />;
+
+  const siteOrigin = window.location.origin;
+  const pageUrl = `${siteOrigin}/projects/${project.slug}`;
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      {
+        "@type": "ListItem",
+        position: 1,
+        name: "Home",
+        item: new URL("/", siteOrigin).toString(),
+      },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: "Projects",
+        item: new URL("/projects", siteOrigin).toString(),
+      },
+      {
+        "@type": "ListItem",
+        position: 3,
+        name: project.title,
+        item: pageUrl,
+      },
+    ],
+  };
 
   return (
     <>
@@ -105,6 +132,25 @@ export default function ProjectDetail() {
           title: project.title,
           description: project.description.slice(0, 160),
           canonicalPath: `/projects/${project.slug}`,
+          ogType: "article",
+          jsonLd: [
+            {
+              "@context": "https://schema.org",
+              "@type": "SoftwareApplication",
+              name: project.title,
+              description: project.description,
+              applicationCategory: "DeveloperApplication",
+              operatingSystem: "Web",
+              url: pageUrl,
+              keywords: [...project.techStack],
+              creator: {
+                "@type": "Person",
+                name: "Juan Canfield",
+                jobTitle: "AI Systems Architect",
+              },
+            },
+            breadcrumbJsonLd,
+          ],
         }}
       />
 

@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { SeoHead } from "@/components/seo/SeoHead";
+import { allInsights } from "@/content/insights";
 import {
   ArrowRight,
   MailCheck,
@@ -10,7 +11,21 @@ import {
   Bot,
   Zap,
   CheckCircle,
+  BookOpen,
+  ExternalLink,
+  HelpCircle,
 } from "lucide-react";
+import type { InsightPost } from "@/types";
+
+type ProcessPhase = {
+  number: string;
+  title: string;
+  subtitle: string;
+  description: string;
+  details: string[];
+  outputs: string[];
+  proofSlugs: string[];
+};
 
 const automationCategories = [
   {
@@ -45,78 +60,239 @@ const automationCategories = [
   },
 ];
 
-const processPhases = [
+const processPhases: ProcessPhase[] = [
   {
     number: "01",
-    title: "Discover",
-    subtitle: "Map what actually happens today",
+    title: "Discovery and Process Capture",
+    subtitle: "Map repetitive work before proposing any AI",
     description:
-      "Before touching technology, we map the real workflow — not the documented one. Who touches it, what decisions they make, what information they need, where things fall through the cracks. The goal is to understand the process well enough to classify every step.",
+      "Before touching technology, we map the real process end-to-end. We document each human decision point, artifact handoff, and failure condition so automation is built on evidence, not assumptions.",
     details: [
-      "Stakeholder interviews — the people who do the work, not just the people who manage it",
-      "Process mapping — every step, every decision point, every handoff",
-      "Pain point identification — where time is wasted, where errors happen, where context is lost",
-      "Data audit — what exists, what's accessible, what's missing, what format it's in",
-      "Volume assessment — 50 items/day is a different architecture than 5,000/day",
+      "Stakeholder interviews with operators, not just stakeholders, to capture edge cases and exception handling",
+      "Task decomposition: trigger → action → review point → outcome for each repeatable workflow",
+      "Data inventory (CRM, email platform, calendar, analytics, support tools) and schema-level validation",
+      "Volume and variance baseline (daily/monthly peaks, burst windows, retry frequency, error rate by channel)",
+      "Definition of what 'good output' and 'safe output' means by business owner, with acceptance criteria",
     ],
+    outputs: [
+      "Workflow map (decision tree + handoff map)",
+      "Baseline KPI model (throughput, defect rate, cycle time)",
+      "Scope exclusions (what we intentionally do not automate yet)",
+    ],
+    proofSlugs: ["its-not-a-model-problem-its-a-context-problem"],
   },
   {
     number: "02",
-    title: "Classify",
-    subtitle: "Separate what needs AI from what doesn't",
+    title: "Classification and Control-Point Design",
+    subtitle: "Decide what is deterministic logic vs. AI judgment",
     description:
-      "Most of any workflow is deterministic — rules-based steps that don't need AI at all. Maybe 20-30% actually benefits from intelligence. The rest needs better traditional automation. Putting AI on a deterministic step wastes money and adds unpredictability.",
+      "Most operations are repeatable logic with a few high-judgment moments. We split the process into deterministic, AI-augmented, and AI-automated layers, then assign explicit control points where humans keep authority.",
     details: [
-      "Deterministic steps → rules engine or simple automation (routing, filtering, formatting)",
-      "Extraction steps → structured data extraction with validation (pull fields from unstructured text)",
-      "Judgment steps → classification with confidence scoring (urgency, sentiment, category)",
-      "Generation steps → content creation with approval gates (drafts, summaries, responses)",
-      "Human-required steps → kept manual, with better tooling to support the decision",
+      "Deterministic layer: routing, normalization, enrichment lookups, deduplication, and scheduling",
+      "AI-judgment layer: sentiment, intent, priority, and anomaly scoring where nuance changes outcomes",
+      "Generation layer: campaign drafts, summaries, and follow-up recommendations in constrained formats",
+      "Guardrails: human approvals and confidence thresholds before any external action",
+      "Rollback behavior: how the system recovers safely if data is missing, noisy, or contradictory",
+    ],
+    outputs: [
+      "Automation split map (rule-based / AI / human)",
+      "Gating policy (confidence thresholds, exceptions, escalation paths)",
+      "Approval matrix for campaign, CRM, and payment-side actions",
+    ],
+    proofSlugs: [
+      "seven-patterns-deterministic-llm-systems",
+      "prompting-is-a-science-rag-is-harder-than-you-think",
     ],
   },
   {
     number: "03",
-    title: "Design",
+    title: "Campaign and Workflow Blueprint",
     subtitle: "Architecture before code",
     description:
-      "Every automated workflow needs gates — points where the system checks its own work or waits for human approval before taking external action. The design phase defines what gets automated, what gets augmented, and what stays manual.",
+      "With the control model fixed, we create a system blueprint that is specific to the process being automated (marketing cadence, email campaigns, lead routing, reporting, or invoicing). The blueprint makes ownership, sequencing, and failure behavior explicit.",
     details: [
-      "Gate placement — where does a human review before external action?",
-      "Fallback paths — what happens when the AI isn't confident or the extraction fails?",
-      "Model selection — which steps need frontier-quality AI vs a rules engine vs a simple classifier?",
-      "Data flow — how does information move between steps without losing context?",
-      "Cost modeling — what does this cost to run at your volume, daily?",
+      "Campaign flow design: lead qualification → campaign selection → draft assembly → review queue → send window",
+      "Data contracts: source system schema, required fields, and immutable audit fields retained at each step",
+      "Context retention strategy so sequence history, vendor notes, and engagement signals remain coherent",
+      "Fallback and recovery for campaign drops, API outages, and ambiguous model output",
+      "Cost and latency model with expected volume at current and 3x growth scenarios",
     ],
+    outputs: [
+      "System architecture diagram (nodes, queues, triggers, outputs)",
+      "Sequence-state model (what happened, by whom, and why)",
+      "Runbook for campaign and operations exceptions",
+    ],
+    proofSlugs: ["replacing-state-machine-with-llm-tools", "deterministic-infrastructure-for-non-deterministic-intelligence"],
   },
   {
     number: "04",
-    title: "Build",
+    title: "Build in Controlled Layers",
     subtitle: "Incremental delivery, not a big bang",
     description:
-      "We build in layers: deterministic automation first (immediate value, zero AI risk), then augmented steps (AI assists, human decides), then automated steps (AI acts within validated boundaries). Each layer is testable independently.",
+      "We implement in layers so value appears early and risk stays bounded. Deterministic automation launches first, AI-augmented steps follow, and AI-executed steps are released only after repeated validation.",
     details: [
-      "Layer 1 — Deterministic automation: routing, formatting, data sync. Works day one.",
-      "Layer 2 — AI-augmented steps: extraction and classification running alongside human review. Building trust.",
-      "Layer 3 — AI-automated steps: generation and action with gates, confidence thresholds, and fallbacks. Earning autonomy.",
-      "Integration — connects to your existing tools (CRM, email, calendar, databases) without ripping anything out",
-      "Observability — every automated step is logged, traceable, and debuggable",
+      "Layer 1: deterministic pipelines (routing, normalization, sync) for immediate time savings",
+      "Layer 2: AI-assisted extraction/classification with strict review policies",
+      "Layer 3: AI-generated campaigns/notes/outputs with gating and signed approval state",
+      "Integration across existing systems (CRM, ESP, calendar, BI) without forced platform migrations",
+      "Audit-ready observability from ingestion to outbound action, including queue depth and worker behavior",
+    ],
+    outputs: [
+      "MVP workflow deployed in parallel with existing manual process",
+      "Release plan by phase with acceptance criteria for each layer",
+      "Automated test coverage for parsing, routing, and decision paths",
+    ],
+    proofSlugs: [
+      "building-b2b-churn-intelligence-pipeline",
+      "making-autonomous-ai-tasks-fail-safely",
+      "cloud-vs-local-llm-cost-quality-tradeoff",
     ],
   },
   {
     number: "05",
-    title: "Validate",
+    title: "Validate and Calibrate",
     subtitle: "Prove it works before you depend on it",
     description:
-      "AI outputs are probabilistic — the same input can produce different results. Validation isn't a one-time test; it's a continuous system. We build validation layers that run on every execution, catching quality regressions before they reach your customers.",
+      "We do not move from pilot to full automation without production-style validation. This is where reliability is measured over time, not in a single demo.",
     details: [
-      "Schema validation — does every output meet the required format and constraints?",
-      "Confidence gating — low-confidence results get flagged for human review, not pushed through",
-      "Outcome tracking — does the automation actually improve the metric it was built for?",
-      "Feedback loops — results that get corrected by humans feed back into the system's accuracy",
-      "Cost monitoring — is the system staying within the projected operational budget?",
+      "Schema and policy checks on every execution (format, required fields, timing, approvals)",
+      "Campaign A/B and holdout checks before changing outreach logic at scale",
+      "Human correction tracking: every override is turned into a retraining or rule adjustment signal",
+      "Cost, latency, and failure dashboards visible per subsystem and per campaign",
+      "Post-launch governance review: what changed, what broke, and what will be hardened next",
+    ],
+    outputs: [
+      "Control dashboard (quality, cost, latency, conversion outcomes)",
+      "Correction log and model/rule update backlog",
+      "Quarterly reliability and automation maturity assessment",
+    ],
+    proofSlugs: [
+      "testing-llm-systems-is-expensive",
+      "your-fallback-path-is-your-cost-path",
+    ],
+  },
+  {
+    number: "06",
+    title: "Operate, Iterate, Expand",
+    subtitle: "Keep systems stable as volume and variants increase",
+    description:
+      "After launch, we run workflows as products: monitor, tune, and expand only when constraints are met. Repetitive tasks keep evolving, so the system is measured and adjusted, not set once and forgotten.",
+    details: [
+      "Campaign fatigue and deliverability controls on outbound email programs",
+      "Drift detection for changed lead quality, seasonal campaign patterns, and tool behavior changes",
+      "Periodic reclassification of tasks as deterministic or AI-dependent based on outcomes",
+      "Operational runbooks for incident response and safe rollback in under an hour",
+      "Planned expansion checklist for adjacent workflows (support, onboarding, reporting, outreach)",
+    ],
+    outputs: [
+      "Monthly review pack with outcome deltas and cost/quality trade-offs",
+      "Iteration backlog tied to concrete metric changes",
+      "Expansion candidate list with confidence and effort scores",
+    ],
+    proofSlugs: ["the-tax-of-third-party-apps-vs-custom-code"],
+  },
+];
+
+const servicesCrossLinks = [
+  {
+    to: "/projects",
+    title: "Project Deep Dives",
+    blurb:
+      "See how each production subsystem was implemented, measured, and hardened over time.",
+  },
+  {
+    to: "/systems",
+    title: "System Map",
+    blurb:
+      "Review the end-to-end architecture before committing to a particular automation stack.",
+  },
+  {
+    to: "/framework",
+    title: "Implementation Framework",
+    blurb:
+      "Understand the discipline behind quality gates, governance, and AI/automation boundaries.",
+  },
+  {
+    to: "/insights",
+    title: "Proof Archive",
+    blurb:
+      "Read build logs, case studies, and lessons from production runs with real failures and fixes.",
+  },
+];
+
+const externalProofLinks = [
+  {
+    brand: "churnsignals.co",
+    blurb:
+      "Public campaign and reporting touchpoints that reinforce the same production reliability principles.",
+    links: [
+      {
+        title: "Freshdesk deep dive",
+        url: "https://churnsignals.co/blog/freshdesk-deep-dive",
+      },
+      {
+        title: "Why teams leave Azure (2026)",
+        url: "https://churnsignals.co/blog/why-teams-leave-azure-2026-03",
+      },
+      {
+        title: "HubSpot vs Power BI (2026)",
+        url: "https://churnsignals.co/blog/hubspot-vs-power-bi-2026-04",
+      },
+    ],
+  },
+  {
+    brand: "atlasbizintel.co",
+    blurb:
+      "Live business intelligence surface with campaign and analysis patterns aligned to this same operating model.",
+    links: [
+      {
+        title: "Business intelligence homepage",
+        url: "https://www.atlasbizintel.co/",
+      },
     ],
   },
 ];
+
+const whatWeWorkFaq = [
+  {
+    question: "Do you automate every repetitive task with AI?",
+    answer:
+      "No. We start with process mapping and split each step into deterministic logic, AI-supported judgment, and AI execution only where it is measurable and controlled.",
+  },
+  {
+    question: "How are marketing email campaigns handled safely?",
+    answer:
+      "Campaigns are treated as stateful workflows with suppression, cadence, content generation, approval, and reply capture gates. A model can draft and score, but send decisions stay policy-driven with clear rollback behavior.",
+  },
+  {
+    question: "What is your gating model before external action?",
+    answer:
+      "We use confidence thresholds, human approval paths, and auditable exception rules for every external action path, then tune thresholds based on observed drift and override patterns.",
+  },
+  {
+    question: "How do you prevent hidden drift in long-running automations?",
+    answer:
+      "Every workflow has a recurring validation cadence: schema checks, quality sampling, and drift alerts on cost, accuracy, and output behavior. Drift triggers controlled re-training or policy updates.",
+  },
+];
+
+const faqJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: whatWeWorkFaq.map((entry) => ({
+    "@type": "Question",
+    name: entry.question,
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: entry.answer,
+    },
+  })),
+};
+
+const phaseEvidence = (phase: ProcessPhase) =>
+  phase.proofSlugs
+    .map((slug) => allInsights.find((post) => post.slug === slug))
+    .filter((post): post is InsightPost => Boolean(post));
 
 const proofPoints = [
   {
@@ -147,19 +323,55 @@ export default function Services() {
           title: "What We Build",
           description:
             "We turn manual business workflows into repeatable, reliable automated systems. Customer operations, data pipelines, marketing, invoicing, reporting — built with the right tool for each step, not AI for everything.",
+          keywords: [
+            "workflow automation",
+            "AI systems architect",
+            "business process automation",
+            "marketing automation",
+            "email campaign automation",
+            "quality gates",
+            "deterministic logic",
+            "AI-augmented workflows",
+          ],
           canonicalPath: "/services",
-          jsonLd: {
-            "@context": "https://schema.org",
-            "@type": "Service",
-            name: "Business Workflow Automation",
-            description:
-              "End-to-end automation of business workflows — discovery, classification, design, build, and validation. AI where it helps, traditional automation where it doesn't.",
-            provider: {
-              "@type": "Person",
-              name: "Juan Canfield",
-              jobTitle: "AI Systems Architect",
+          jsonLd: [
+            {
+              "@context": "https://schema.org",
+              "@type": "Service",
+              name: "Business Workflow Automation",
+              description:
+                "End-to-end automation of business workflows — discovery, classification, design, build, and validation. AI where it helps, traditional automation where it doesn't.",
+              provider: {
+                "@type": "Person",
+                name: "Juan Canfield",
+                jobTitle: "AI Systems Architect",
+              },
+              hasOfferCatalog: {
+                "@type": "OfferCatalog",
+                name: "Workflow Systems Services",
+                itemListElement: [
+                  {
+                    "@type": "Offer",
+                    itemOffered: {
+                      "@type": "Service",
+                      name: "Automation Design",
+                      description: "Process discovery and deterministic workflow mapping.",
+                    },
+                  },
+                  {
+                    "@type": "Offer",
+                    itemOffered: {
+                      "@type": "Service",
+                      name: "AI-Augmented Production Build",
+                      description:
+                        "Campaign and business process automation with validation gates and approvals.",
+                    },
+                  },
+                ],
+              },
             },
-          },
+            faqJsonLd,
+          ],
         }}
       />
 
@@ -175,6 +387,11 @@ export default function Services() {
             both. We figure out which is which, then build the system that
             runs without you — with gates so it never acts without your
             approval.
+          </p>
+          <p className="text-sm text-surface-200/60 max-w-2xl mx-auto leading-relaxed mt-4">
+            From prompt-first automation to production systems: AI where it adds
+            value, deterministic logic where it saves risk, and guardrails where
+            failure is unacceptable.
           </p>
         </div>
       </section>
@@ -227,14 +444,44 @@ export default function Services() {
         </div>
       </section>
 
+      {/* Where this process lives */}
+      <section className="py-16 px-6 border-t border-surface-700/30">
+        <div className="mx-auto max-w-4xl">
+          <h2 className="text-2xl font-bold text-white mb-3">
+            Explore the Full Workflow Stack
+          </h2>
+          <p className="text-surface-200/60 mb-6 max-w-2xl">
+            If you're deciding where to start, begin with architecture, then move to
+            systems, projects, and evidence. Each page is written to support the same
+            operating model.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {servicesCrossLinks.map((link) => (
+              <Link
+                key={link.to}
+                to={link.to}
+                className="rounded-xl border border-surface-700/50 bg-surface-800/30 p-4 hover:border-primary-500/40 hover:bg-surface-800/50 transition-all"
+              >
+                <div className="text-base font-semibold text-white mb-1">
+                  {link.title}
+                </div>
+                <p className="text-sm text-surface-200/60">{link.blurb}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* How we work */}
       <section className="py-16 px-6 border-t border-surface-700/30">
         <div className="mx-auto max-w-4xl">
           <h2 className="text-2xl font-bold text-white mb-3">How We Work</h2>
           <p className="text-surface-200/60 mb-12 max-w-2xl">
-            A structured process that starts with understanding your
-            business — not your tech stack. Technology decisions come after
-            we know what needs to happen and why.
+            A production workflow design sequence for repetitive business tasks:
+            capture the operational reality first, split deterministic vs AI
+            responsibilities, then add automation layers that can be audited
+            per campaign, per workflow, and per business function (marketing,
+            outreach, invoicing, support, reporting).
           </p>
 
           <div className="space-y-8">
@@ -274,7 +521,82 @@ export default function Services() {
                       </li>
                     ))}
                   </ul>
+                  {phase.outputs && phase.outputs.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-surface-700/40 bg-surface-900/40 p-4">
+                      <p className="text-xs text-surface-200/70 uppercase tracking-widest mb-2">
+                        Deliverables from this phase
+                      </p>
+                      <ul className="space-y-2">
+                        {phase.outputs.map((output) => (
+                          <li
+                            key={output}
+                            className="text-sm text-surface-200/65 flex items-start gap-2"
+                          >
+                            <CheckCircle
+                              size={12}
+                              className="text-primary-400/70 mt-0.5 flex-shrink-0"
+                            />
+                            {output}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {phase.proofSlugs && phase.proofSlugs.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-surface-700/40 bg-surface-900/40 p-4">
+                      <p className="text-xs text-surface-200/70 uppercase tracking-widest mb-2">
+                        Proof from production writeups
+                      </p>
+                      <ul className="space-y-2">
+                        {phaseEvidence(phase).map((proof) => (
+                          <li
+                            key={proof.slug}
+                            className="text-sm text-surface-200/65 flex items-start gap-2"
+                          >
+                            <BookOpen
+                              size={12}
+                              className="text-primary-400/70 mt-0.5 flex-shrink-0"
+                            />
+                            <Link
+                              to={`/insights/${proof.slug}`}
+                              className="text-primary-400 hover:text-primary-300 transition-colors"
+                            >
+                              {proof.title}
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* How we work FAQ */}
+      <section className="py-16 px-6 border-t border-surface-700/30">
+        <div className="mx-auto max-w-4xl">
+          <div className="flex items-center gap-3 mb-4">
+            <HelpCircle size={20} className="text-primary-400" />
+            <h2 className="text-2xl font-bold text-white">Process Questions</h2>
+          </div>
+          <p className="text-surface-200/60 mb-8 max-w-2xl">
+            The answers below are the practical checkpoints you should use to
+            evaluate whether a prospective automation engagement is realistic and
+            trustworthy.
+          </p>
+          <div className="space-y-4">
+            {whatWeWorkFaq.map((item) => (
+              <div
+                key={item.question}
+                className="rounded-xl border border-surface-700/50 bg-surface-800/30 p-5"
+              >
+                <p className="font-semibold text-white mb-2">{item.question}</p>
+                <p className="text-sm text-surface-200/70 leading-relaxed">
+                  {item.answer}
+                </p>
               </div>
             ))}
           </div>
@@ -486,6 +808,48 @@ export default function Services() {
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="mt-8 pt-8 border-t border-surface-700/30">
+            <h3 className="text-lg font-semibold text-white mb-4">
+              External Production References
+            </h3>
+            <p className="text-sm text-surface-200/65 mb-4 max-w-2xl">
+              Live surfaces connected to these same automation and campaign systems.
+              Useful when you want to validate the operating model outside this site.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {externalProofLinks.map((resource) => (
+                <div
+                  key={resource.brand}
+                  className="rounded-xl border border-surface-700/50 bg-surface-800/30 p-5"
+                >
+                  <p className="font-semibold text-white mb-2">
+                    {resource.brand}
+                  </p>
+                  <p className="text-sm text-surface-200/70 mb-4">
+                    {resource.blurb}
+                  </p>
+                  <div className="space-y-2">
+                    {resource.links.map((link) => (
+                      <a
+                        key={link.title}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-start gap-2 text-sm text-primary-400 hover:text-primary-300 transition-colors"
+                      >
+                        <ExternalLink
+                          size={12}
+                          className="text-primary-400/70 mt-0.5 flex-shrink-0"
+                        />
+                        <span>{link.title}</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </section>

@@ -28,6 +28,10 @@ export function ManifestoSection() {
         <h2 className="text-3xl font-bold text-white mb-12 text-center">
           Why This Exists
         </h2>
+        <p className="text-surface-200/70 text-center max-w-3xl mx-auto mb-10 leading-relaxed">
+          From AI demos to systems, this site documents the discipline that turns
+          probabilistic model output into dependable production behavior.
+        </p>
 
         <div className="space-y-8">
           {points.map((point) => (
