@@ -214,7 +214,7 @@ class LLMConfig(BaseSettings):
 
     # Anthropic settings (email draft generation)
     anthropic_model: str = Field(
-        default="claude-3-5-haiku-latest",
+        default="claude-haiku-4-5",
         description="Anthropic model name for email drafting",
     )
     anthropic_api_key: Optional[str] = Field(
@@ -696,7 +696,7 @@ class EmailDraftConfig(BaseSettings):
         description="Use LLM to classify ambiguous emails as replyable/not",
     )
     triage_model: str = Field(
-        default="claude-3-5-haiku-latest",
+        default="claude-haiku-4-5",
         description="Anthropic model for replyable triage (cheap/fast)",
     )
     triage_max_tokens: int = Field(
@@ -2399,13 +2399,25 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     account_resolution_source_priority: list[str] = Field(
-        default=["g2", "gartner", "capterra", "software_advice", "trustpilot"],
+        default=[
+            "trustradius",
+            "g2",
+            "gartner",
+            "capterra",
+            "software_advice",
+            "reddit",
+            "peerspot",
+            "sourceforge",
+            "hackernews",
+            "github",
+            "trustpilot",
+        ],
         description=(
             "Preferred source order when draining deterministic account-resolution candidates"
         ),
     )
     account_resolution_excluded_sources: list[str] = Field(
-        default=["capterra", "software_advice", "trustpilot", "trustradius"],
+        default=["trustpilot"],
         description=(
             "Sources excluded from deterministic account resolution because they lack reliable identity signals"
         ),
@@ -2418,19 +2430,59 @@ class B2BChurnConfig(BaseSettings):
         default=50,
         ge=1,
         le=200,
-        description="Max profile fetches per batch (HN + GitHub combined). GitHub free tier allows 60 req/hr.",
+        description="Max profile fetches per batch for HN and GitHub account-resolution enrichment.",
+    )
+    account_resolution_reddit_max_profile_fetches: int = Field(
+        default=150,
+        ge=1,
+        le=500,
+        description="Max Reddit profile fetches per batch for account resolution. Kept separate because Reddit public profile capacity is much higher than GitHub.",
     )
     account_resolution_profile_fetch_concurrency: int = Field(
         default=10,
         ge=1,
         le=50,
-        description="Max concurrent HN/GitHub profile fetches. 10 concurrent x 5s timeout ~= 25s for 50 profiles.",
+        description="Max concurrent HN, GitHub, and Reddit profile fetches during account resolution.",
     )
     account_resolution_profile_fetch_timeout: float = Field(
         default=5.0,
         ge=0.5,
         le=30.0,
         description="Per-request timeout (seconds) for HN and GitHub profile fetches.",
+    )
+    account_resolution_reddit_profile_fetch_concurrency: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Max concurrent Reddit profile fetches during account resolution to reduce public API rate limiting.",
+    )
+    account_resolution_reddit_profile_fetch_delay_seconds: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=5.0,
+        description="Delay before each Reddit profile fetch request to avoid bursty public API rate limiting.",
+    )
+    account_resolution_reddit_profile_fetch_max_retries: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="Max retries for Reddit profile fetches after a 429 rate-limit response.",
+    )
+    account_resolution_reddit_profile_fetch_retry_after_cap_seconds: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=60.0,
+        description="Max sleep time to honor Reddit Retry-After headers during account-resolution profile fetches.",
+    )
+    account_resolution_retry_unresolved_sources: list[str] = Field(
+        default=["reddit", "hackernews", "github"],
+        description="Sources eligible for periodic deterministic account-resolution retries when prior attempts ended unresolved.",
+    )
+    account_resolution_unresolved_retry_interval_hours: int = Field(
+        default=24,
+        ge=1,
+        le=720,
+        description="Minimum age in hours before retrying a previously unresolved deterministic account-resolution attempt.",
     )
 
     enrichment_repair_enabled: bool = Field(
@@ -2577,17 +2629,25 @@ class B2BChurnConfig(BaseSettings):
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
     intelligence_source_allowlist: str = Field(
         default=(
-            "g2,gartner,peerspot,"
+            "g2,gartner,trustradius,peerspot,"
             "getapp,reddit,hackernews,github,stackoverflow,slashdot"
         ),
         description="Sources allowed in churn intelligence aggregation (comma-separated)",
     )
     intelligence_executive_sources: str = Field(
-        default="g2,gartner,peerspot,getapp",
+        default="g2,gartner,trustradius,peerspot,getapp",
         description="High-signal sources for executive-facing outputs (weekly_churn_feed, displacement, timeline)",
     )
+    intelligence_infra_blocked_sources: str = Field(
+        default="getapp",
+        description=(
+            "Sources that remain in the broader intelligence inventory but should be "
+            "excluded from executive-facing source lists because live access is "
+            "currently blocked or unreliable."
+        ),
+    )
     deprecated_review_sources: str = Field(
-        default="capterra,software_advice,trustpilot,trustradius",
+        default="capterra,software_advice,trustpilot",
         description="Sources deprecated from churn intelligence, blogs, and related downstream B2B review selection",
     )
     intelligence_llm_backend: str = Field(
@@ -3475,7 +3535,7 @@ class B2BChurnConfig(BaseSettings):
         description="Exclude globally deprecated review sources from canonical company-signal and named-account products",
     )
     company_signal_low_trust_sources: list[str] = Field(
-        default=["reddit"],
+        default=["reddit", "trustpilot"],
         description="Low-trust sources that require a higher confidence threshold before becoming canonical named-account signals",
     )
     company_signal_low_trust_min_confidence: float = Field(
@@ -3483,6 +3543,62 @@ class B2BChurnConfig(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Minimum unit-confidence required for low-trust company signals to enter canonical named-account products",
+    )
+    company_signal_low_trust_analyst_min_confidence: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="Minimum unit-confidence required for low-trust company signals to enter analyst-review queues at all",
+    )
+    company_signal_named_account_blocked_sources: list[str] = Field(
+        default=["trustpilot"],
+        description="Sources that should never seed named-account or company-signal candidate queues because they lack durable employer identity",
+    )
+    company_signal_verified_anchor_sources: list[str] = Field(
+        default=["g2", "gartner"],
+        description="Context-only sources that should receive account-level lift only when they carry a direct company anchor or a trusted resolved identity",
+    )
+    company_signal_high_identity_sources: list[str] = Field(
+        default=["trustradius"],
+        description="Sources with strong named-company yield that should receive an identity-confidence boost in account-level products",
+    )
+    company_signal_context_rich_sources: list[str] = Field(
+        default=["g2", "gartner", "peerspot", "sourceforge", "software_advice", "capterra"],
+        description="Sources with strong role and firmographic context that should receive a smaller account-confidence boost",
+    )
+    company_signal_context_rich_requires_company_anchor: bool = Field(
+        default=True,
+        description="Require a resolved company identity or company-domain anchor before context-rich sources can become canonical named-account signals",
+    )
+    company_signal_high_identity_source_bonus: float = Field(
+        default=0.18,
+        ge=0.0,
+        le=1.0,
+        description="Unit-confidence bonus applied to company-signal candidates from high named-identity-yield sources",
+    )
+    company_signal_context_rich_source_bonus: float = Field(
+        default=0.08,
+        ge=0.0,
+        le=1.0,
+        description="Unit-confidence bonus applied to company-signal candidates from context-rich review sources",
+    )
+    company_signal_identity_field_bonus: float = Field(
+        default=0.03,
+        ge=0.0,
+        le=0.25,
+        description="Per-field unit-confidence bonus for account-level reviewer context such as title, firmographics, or domain",
+    )
+    company_signal_identity_field_bonus_cap: float = Field(
+        default=0.12,
+        ge=0.0,
+        le=0.5,
+        description="Cap on the combined unit-confidence bonus from account-level identity/context fields",
+    )
+    company_signal_named_account_min_identity_fields: int = Field(
+        default=2,
+        ge=0,
+        le=4,
+        description="Minimum reviewer identity/context fields required for preferred sources to seed named-account consumers without resolved identity or a company domain",
     )
     company_signal_candidate_medium_confidence: float = Field(
         default=0.3,
@@ -3495,6 +3611,11 @@ class B2BChurnConfig(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Minimum unit-confidence for analyst-assist company-signal candidates to be labeled high confidence",
+    )
+    company_signal_below_threshold_analyst_max_urgency_gap: float = Field(
+        default=2.0,
+        ge=0.0,
+        description="Maximum urgency gap below the high-intent threshold for low-evidence company-signal rows to remain in analyst review",
     )
     company_signal_queue_promote_now_sla_days: float = Field(
         default=1.0,
@@ -3767,13 +3888,55 @@ class B2BScrapeConfig(BaseSettings):
     max_targets_per_run: int = Field(default=0, description="Max targets to scrape per run (0 = unlimited)")
     source_allowlist: str = Field(
         default=(
-            "g2,gartner,peerspot,"
+            "g2,capterra,gartner,trustradius,peerspot,"
             "getapp,reddit,hackernews,github,stackoverflow,slashdot"
         ),
         description="Sources allowed for automated scrape intake (comma-separated)",
     )
+    infra_blocked_sources: str = Field(
+        default="getapp",
+        description=(
+            "Sources that remain in scrape inventory but should be excluded from "
+            "automated intake, manual runs, and target planning because live "
+            "access is currently blocked or unreliable."
+        ),
+    )
+    high_yield_priority_sources: str = Field(
+        default="trustradius",
+        description=(
+            "Sources to prioritize first in scrape target execution when targets "
+            "are otherwise equally eligible."
+        ),
+    )
+    context_rich_priority_sources: str = Field(
+        default="g2,gartner,capterra,peerspot,software_advice",
+        description=(
+            "Second-tier structured sources to prioritize ahead of lower-yield "
+            "search and community lanes during scrape execution."
+        ),
+    )
+    deferred_inventory_sources: str = Field(
+        default="slashdot",
+        description=(
+            "Sources that should remain visible in coverage inventory for audit "
+            "purposes but whose non-seedable conditional rows should be treated "
+            "as deferred inventory instead of active runnable backlog."
+        ),
+    )
+    source_low_yield_pruning_high_yield_min_runs_floor: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="Minimum observed runs required before low-yield pruning can disable a high-yield source target.",
+    )
+    source_low_yield_pruning_context_rich_min_runs_floor: int = Field(
+        default=4,
+        ge=1,
+        le=50,
+        description="Minimum observed runs required before low-yield pruning can disable a context-rich structured source target.",
+    )
     deprecated_sources: str = Field(
-        default="capterra,software_advice,trustpilot,trustradius",
+        default="capterra,software_advice,trustpilot",
         description="Sources deprecated from automated scrape intake and target planning",
     )
     source_fit_filter_enabled: bool = Field(
@@ -3919,7 +4082,7 @@ class B2BScrapeConfig(BaseSettings):
     captcha_proxy_url: str = Field(default="", description="Sticky/static proxy URL for CAPTCHA solving (same IP for solve + retry)")
     captcha_2captcha_api_key: str = Field(default="", description="2Captcha API key (used as fallback or per-domain override)")
     captcha_2captcha_domains: str = Field(
-        default="getapp.com,gartner.com",
+        default="getapp.com,gartner.com,capterra.com",
         description="Domains that should use 2Captcha instead of primary provider (comma-separated)",
     )
 
@@ -4014,6 +4177,12 @@ class B2BScrapeConfig(BaseSettings):
     web_unlocker_url: str = Field(
         default="",
         description="Bright Data Web Unlocker proxy URL (bypasses DataDome/Cloudflare automatically)",
+    )
+    web_unlocker_timeout_seconds: float = Field(
+        default=45.0,
+        ge=5.0,
+        le=300.0,
+        description="Timeout in seconds for direct Web Unlocker HTTP fetches used by raw-source audits and proxy-backed scrape paths",
     )
     web_unlocker_domains: str = Field(
         default="g2.com,capterra.com,gartner.com,getapp.com,peerspot.com,softwareadvice.com,quora.com",

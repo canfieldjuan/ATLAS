@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException
+from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from graphiti_core import Graphiti
@@ -46,6 +47,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+_NEO4J_HEALTH_CONNECTION_TIMEOUT_SECONDS = 5.0
+_embedder_preload_task: asyncio.Task | None = None
+
+
 # ============================================================================
 # Configuration
 # ============================================================================
@@ -66,6 +71,8 @@ class Settings(BaseSettings):
     embedder_device: str = "cpu"
     embedder_batch_size: int = 32
     embedder_embedding_dim: int | None = None
+    embedder_preload_on_startup: bool = True
+    embedder_preload_blocking: bool = False
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent / '.env',
@@ -75,6 +82,51 @@ class Settings(BaseSettings):
 
 def get_settings():
     return Settings()
+
+
+async def _preload_embedder(settings: Settings) -> None:
+    logger.info("Preloading embedder model at startup...")
+    try:
+        embedder_config = EmbedderSettings(
+            provider=settings.embedder_provider,
+            model=settings.embedder_model,
+            api_key=settings.embedder_api_key or settings.openai_api_key,
+            base_url=settings.embedder_base_url or settings.openai_base_url,
+            device=settings.embedder_device,
+            batch_size=settings.embedder_batch_size,
+            embedding_dim=settings.embedder_embedding_dim,
+        )
+        embedder = create_embedder(embedder_config)
+        test_result = await embedder.create("startup test")
+        logger.info("Embedder preloaded successfully, test embedding dim: %d", len(test_result))
+    except Exception as exc:
+        logger.error("Failed to preload embedder: %s", exc)
+
+
+def _log_embedder_preload_result(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except Exception as exc:
+        logger.error("Background embedder preload task failed: %s", exc)
+
+
+async def _ensure_neo4j_ready(settings: Settings) -> None:
+    driver = AsyncGraphDatabase.driver(
+        settings.neo4j_uri,
+        auth=(settings.neo4j_user, settings.neo4j_password),
+        connection_timeout=_NEO4J_HEALTH_CONNECTION_TIMEOUT_SECONDS,
+        max_transaction_retry_time=0,
+    )
+
+    try:
+        await driver.verify_connectivity()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Neo4j readiness check failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Neo4j unavailable") from exc
+    finally:
+        await driver.close()
 
 
 # ============================================================================
@@ -468,37 +520,38 @@ app = FastAPI(title="Graphiti Wrapper API", version="1.0.0")
 
 @app.on_event("startup")
 async def startup_event():
-    """Preload the embedder model at startup to avoid meta tensor issues"""
-    logger.info("Preloading embedder model at startup...")
-    try:
-        settings = Settings()
-        embedder_config = EmbedderSettings(
-            provider=settings.embedder_provider,
-            model=settings.embedder_model,
-            api_key=settings.embedder_api_key or settings.openai_api_key,
-            base_url=settings.embedder_base_url or settings.openai_base_url,
-            device=settings.embedder_device,
-            batch_size=settings.embedder_batch_size,
-            embedding_dim=settings.embedder_embedding_dim,
-        )
-        embedder = create_embedder(embedder_config)
-        # Force model loading by running a test embedding
-        test_result = await embedder.create("startup test")
-        logger.info(f"Embedder preloaded successfully, test embedding dim: {len(test_result)}")
-    except Exception as e:
-        logger.error(f"Failed to preload embedder: {e}")
-        # Don't fail startup, let it fail on first request instead
+    """Optionally preload the embedder model at startup."""
+    global _embedder_preload_task
+
+    settings = Settings()
+    if not settings.embedder_preload_on_startup:
+        logger.info("Embedder preload at startup is disabled")
+        return
+
+    if settings.embedder_preload_blocking:
+        await _preload_embedder(settings)
+        return
+
+    _embedder_preload_task = asyncio.create_task(_preload_embedder(settings))
+    _embedder_preload_task.add_done_callback(_log_embedder_preload_result)
+    logger.info("Embedder preload started in background")
 
 
 @app.get('/health')
-async def health() -> HealthResponse:
-    """Health check endpoint"""
+async def health(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> HealthResponse:
+    """Health check endpoint."""
+    await _ensure_neo4j_ready(settings)
     return HealthResponse(status="healthy")
 
 
 @app.get('/healthcheck')
-async def healthcheck() -> HealthResponse:
-    """Health check alias (Zep-compatible, used by Atlas clients)"""
+async def healthcheck(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> HealthResponse:
+    """Health check alias (Zep-compatible, used by Atlas clients)."""
+    await _ensure_neo4j_ready(settings)
     return HealthResponse(status="healthy")
 
 

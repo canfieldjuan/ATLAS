@@ -15,6 +15,12 @@ class _FakeAnthropicResponse:
         self.id = "req_test"
 
 
+def test_anthropic_llm_normalizes_deprecated_haiku_alias():
+    llm = AnthropicLLM(model="claude-3-5-haiku-latest", api_key="test-key")
+    assert llm.model == "claude-haiku-4-5"
+    assert llm.model_id == "claude-haiku-4-5"
+
+
 def test_anthropic_chat_uses_request_timeout_override():
     base_client = MagicMock()
     timed_client = MagicMock()

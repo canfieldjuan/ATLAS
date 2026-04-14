@@ -45,6 +45,14 @@ services:
       # Override for Docker networking
       NEO4J_URI: bolt://neo4j:7687
       OPENAI_BASE_URL: http://host.docker.internal:11434/v1
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /root/.cache/huggingface/hub
+      TRANSFORMERS_CACHE: /root/.cache/huggingface/transformers
+      SENTENCE_TRANSFORMERS_HOME: /root/.cache/huggingface/sentence-transformers
+    volumes:
+      - graphiti_hf_cache:/root/.cache/huggingface
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -61,3 +69,4 @@ networks:
 volumes:
   neo4j_data:
   neo4j_logs:
+  graphiti_hf_cache:

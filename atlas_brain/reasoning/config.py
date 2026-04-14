@@ -25,14 +25,14 @@ class ReasoningConfig(BaseSettings):
 
     # LLM models (cross-domain reasoning agent)
     model: str = Field(
-        default="claude-3-5-haiku-latest",
+        default="claude-haiku-4-5",
         description="Anthropic model for deep reasoning",
     )
     max_tokens: int = Field(default=16384, description="Max tokens for reasoning calls (includes thinking tokens for reasoning models)")
     temperature: float = Field(default=0.3, description="Temperature for reasoning calls (ignored by some reasoning models)")
 
     triage_model: str = Field(
-        default="claude-3-5-haiku-latest",
+        default="claude-haiku-4-5",
         description="Cheap model for event triage classification",
     )
     triage_max_tokens: int = Field(default=256, description="Max tokens for triage calls")

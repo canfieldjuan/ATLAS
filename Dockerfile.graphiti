@@ -5,6 +5,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+ARG TORCH_CPU_SPEC=torch
+ARG TORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     git \
@@ -13,7 +16,11 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements first for layer caching
 COPY graphiti-wrapper/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN grep -v '^torch>=' requirements.txt > requirements.docker.txt \
+    && pip install --no-cache-dir \
+        --index-url ${TORCH_CPU_INDEX_URL} \
+        "${TORCH_CPU_SPEC}" \
+    && pip install --no-cache-dir -r requirements.docker.txt
 
 # Copy graphiti wrapper code
 COPY graphiti-wrapper/ ./graphiti-wrapper/

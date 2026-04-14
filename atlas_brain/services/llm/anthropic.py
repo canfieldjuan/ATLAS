@@ -18,6 +18,18 @@ from ..registry import register_llm
 
 logger = logging.getLogger("atlas.llm.anthropic")
 
+_ANTHROPIC_MODEL_ALIASES: dict[str, str] = {
+    "claude-3-5-haiku-latest": "claude-haiku-4-5",
+}
+
+
+def _normalize_anthropic_model(model: str) -> str:
+    """Map deprecated Anthropic model aliases to currently supported ids."""
+    normalized = str(model or "").strip()
+    if not normalized:
+        return "claude-haiku-4-5"
+    return _ANTHROPIC_MODEL_ALIASES.get(normalized, normalized)
+
 
 @register_llm("anthropic")
 class AnthropicLLM(BaseModelService):
@@ -27,12 +39,13 @@ class AnthropicLLM(BaseModelService):
 
     def __init__(
         self,
-        model: str = "claude-3-5-haiku-latest",
+        model: str = "claude-haiku-4-5",
         api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(name="anthropic", model_id=model)
-        self.model = model
+        normalized_model = _normalize_anthropic_model(model)
+        super().__init__(name="anthropic", model_id=normalized_model)
+        self.model = normalized_model
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self._sync_client = None
         self._async_client = None
