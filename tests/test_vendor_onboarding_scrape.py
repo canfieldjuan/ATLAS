@@ -648,6 +648,8 @@ async def test_provision_vendor_onboarding_targets_bootstraps_search_and_slug_so
     pool.fetchrow = AsyncMock(side_effect=[{"id": "t-1"}, {"id": "t-2"}, {"id": "t-3"}])
     cfg = MagicMock()
     cfg.source_allowlist = "reddit,g2,capterra"
+    cfg.deprecated_sources = ""
+    cfg.infra_blocked_sources = ""
 
     with patch(
         "atlas_brain.services.scraping.target_provisioning.settings",
@@ -690,6 +692,7 @@ async def test_provision_vendor_onboarding_targets_seeds_conditional_signal_lane
     cfg = MagicMock()
     cfg.source_allowlist = "github"
     cfg.deprecated_sources = ""
+    cfg.infra_blocked_sources = ""
 
     with patch(
         "atlas_brain.services.scraping.target_provisioning.settings",
@@ -712,3 +715,37 @@ async def test_provision_vendor_onboarding_targets_seeds_conditional_signal_lane
     assert result["applied_signal_targets"] == 1
     assert result["actions"][0]["source"] == "github"
     assert result["actions"][0]["metadata"]["source_fit_probation"] is True
+
+
+@pytest.mark.asyncio
+async def test_provision_vendor_onboarding_targets_excludes_infra_blocked_sources():
+    from atlas_brain.services.scraping.target_provisioning import (
+        provision_vendor_onboarding_targets,
+    )
+
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(side_effect=[[], [], []])
+    pool.fetchrow = AsyncMock(return_value={"id": "t-core"})
+    cfg = MagicMock()
+    cfg.source_allowlist = "getapp,g2"
+    cfg.deprecated_sources = ""
+    cfg.infra_blocked_sources = "getapp"
+
+    with patch(
+        "atlas_brain.services.scraping.target_provisioning.settings",
+        MagicMock(b2b_scrape=cfg),
+    ):
+        with patch(
+            "atlas_brain.services.scraping.target_provisioning.resolve_vendor_name",
+            new=AsyncMock(return_value="Linear"),
+        ):
+            result = await provision_vendor_onboarding_targets(
+                pool,
+                "Linear",
+                product_category="Project Management",
+                source_slug_overrides={"g2": "linear"},
+                dry_run=False,
+            )
+
+    assert result["status"] == "applied"
+    assert [item["source"] for item in result["actions"]] == ["g2"]

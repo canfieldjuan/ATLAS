@@ -461,6 +461,10 @@ class TestChurnReportReasoningContracts:
                     "account_reasoning": {
                         "schema_version": "v1",
                         "market_summary": "Two accounts are actively evaluating alternatives.",
+                        "account_actionability_note": (
+                            "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+                        ),
+                        "account_actionability_tier": "mixed",
                         "total_accounts": {"value": 6, "source_id": "accounts:summary:total_accounts"},
                         "high_intent_count": {"value": 4, "source_id": "accounts:summary:high_intent_count"},
                         "active_eval_count": {
@@ -548,6 +552,10 @@ class TestChurnReportReasoningContracts:
                     "account_reasoning": {
                         "schema_version": "v1",
                         "market_summary": "Two accounts are actively evaluating alternatives.",
+                        "account_actionability_note": (
+                            "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+                        ),
+                        "account_actionability_tier": "mixed",
                         "total_accounts": {"value": 6, "source_id": "accounts:summary:total_accounts"},
                         "high_intent_count": {"value": 4, "source_id": "accounts:summary:high_intent_count"},
                         "active_eval_count": {
@@ -574,6 +582,10 @@ class TestChurnReportReasoningContracts:
 
         assert entry["reasoning_contracts"]["account_reasoning"]["top_accounts"][0]["name"] == "Acme Corp"
         assert entry["account_pressure_summary"] == "Two accounts are actively evaluating alternatives."
+        assert entry["account_pressure_disclaimer"] == (
+            "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+        )
+        assert entry["account_actionability_tier"] == "mixed"
         assert entry["account_pressure_metrics"]["high_intent_count"] == 4
         assert entry["priority_account_names"] == ["Acme Corp", "Globex"]
         assert entry["named_accounts"][0]["company"] == "Acme Corp"
@@ -586,6 +598,10 @@ class TestChurnReportReasoningContracts:
             "account_reasoning": {
                 "schema_version": "v1",
                 "market_summary": "Two accounts are actively evaluating alternatives.",
+                "account_actionability_note": (
+                    "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+                ),
+                "account_actionability_tier": "mixed",
                 "total_accounts": {"value": 6, "source_id": "accounts:summary:total_accounts"},
                 "high_intent_count": {"value": 4, "source_id": "accounts:summary:high_intent_count"},
                 "active_eval_count": {
@@ -603,6 +619,10 @@ class TestChurnReportReasoningContracts:
 
         assert card["account_reasoning"]["top_accounts"][0]["name"] == "Acme Corp"
         assert card["account_pressure_summary"] == "Two accounts are actively evaluating alternatives."
+        assert card["account_pressure_disclaimer"] == (
+            "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+        )
+        assert card["account_actionability_tier"] == "mixed"
         assert card["account_pressure_metrics"]["high_intent_count"] == 4
         assert card["priority_account_names"] == ["Acme Corp", "Globex"]
 
@@ -611,6 +631,7 @@ class TestChurnReportReasoningContracts:
         card["account_reasoning_preview"] = {
             "preview_mode": "early_account_signal",
             "disclaimer": "Early account signal only.",
+            "account_actionability_tier": "low",
             "account_pressure_summary": "A single named account is showing early evaluation pressure.",
             "account_pressure_metrics": {"total_accounts": 1},
             "priority_account_names": ["Concentrix"],
@@ -622,6 +643,8 @@ class TestChurnReportReasoningContracts:
         assert card["account_pressure_summary"] == (
             "A single named account is showing early evaluation pressure."
         )
+        assert card["account_pressure_disclaimer"] == "Early account signal only."
+        assert card["account_actionability_tier"] == "low"
         assert card["account_pressure_metrics"]["total_accounts"] == 1
         assert card["priority_account_names"] == ["Concentrix"]
 
@@ -1093,6 +1116,147 @@ class TestAccountIntelligenceHygiene:
         assert account["first_seen_at"] == "2026-03-01T00:00:00+00:00"
         assert account["last_seen_at"] == "2026-03-18T00:00:00+00:00"
         assert account["confidence_score"] == 0.9
+
+    def test_build_account_intelligence_prefers_high_identity_sources_when_urgency_is_tied(self):
+        acct = build_account_intelligence(
+            "Zendesk",
+            persisted_signals=[
+                {
+                    "company_name": "Acme Corp",
+                    "urgency_score": 8.0,
+                    "buying_stage": "evaluation",
+                    "source": "g2",
+                    "confidence_score": 0.55,
+                },
+                {
+                    "company_name": "Beta Corp",
+                    "urgency_score": 8.0,
+                    "buying_stage": "evaluation",
+                    "source": "trustradius",
+                    "confidence_score": 0.55,
+                },
+            ],
+        )
+
+        assert [a["company_name"] for a in acct["accounts"][:2]] == [
+            "Beta Corp",
+            "Acme Corp",
+        ]
+
+    def test_build_account_intelligence_accepts_peerspot_with_company_anchor(self):
+        acct = build_account_intelligence(
+            "Zendesk",
+            persisted_signals=[
+                {
+                    "company_name": "Anchored PeerSpot Co",
+                    "urgency_score": 8.1,
+                    "buying_stage": "evaluation",
+                    "source": "peerspot",
+                    "confidence_score": 0.52,
+                },
+                {
+                    "company_name": "Trusted Context Co",
+                    "urgency_score": 8.0,
+                    "buying_stage": "evaluation",
+                    "source": "trustradius",
+                    "confidence_score": 0.55,
+                },
+            ],
+        )
+
+        assert {a["company_name"] for a in acct["accounts"]} == {
+            "Trusted Context Co",
+            "Anchored PeerSpot Co",
+        }
+
+    def test_build_account_intelligence_keeps_g2_direct_company_anchor(self):
+        acct = build_account_intelligence(
+            "Zendesk",
+            persisted_signals=[
+                {
+                    "company_name": "Anchored G2 Co",
+                    "urgency_score": 8.1,
+                    "buying_stage": "evaluation",
+                    "source": "g2",
+                    "confidence_score": 0.7,
+                    "company_domain": "domain-only.example",
+                    "title": "Director of Operations",
+                    "company_size": "201-500",
+                    "industry": "Software",
+                },
+                {
+                    "company_name": "Trusted Context Co",
+                    "urgency_score": 8.0,
+                    "buying_stage": "evaluation",
+                    "source": "trustradius",
+                    "confidence_score": 0.55,
+                },
+            ],
+        )
+
+        assert {a["company_name"] for a in acct["accounts"]} == {
+            "Trusted Context Co",
+            "Anchored G2 Co",
+        }
+
+    def test_build_account_intelligence_emits_source_quality_summary(self):
+        acct = build_account_intelligence(
+            "Zendesk",
+            persisted_signals=[
+                {
+                    "company_name": "Trusted Radius Co",
+                    "urgency_score": 8.3,
+                    "buying_stage": "evaluation",
+                    "source": "trustradius",
+                    "confidence_score": 0.62,
+                    "resolution_confidence": "high",
+                    "company_domain": "trustedradius.example",
+                },
+                {
+                    "company_name": "Anchored G2 Co",
+                    "urgency_score": 8.1,
+                    "buying_stage": "evaluation",
+                    "source": "g2",
+                    "confidence_score": 0.58,
+                    "company_name_raw": "Anchored G2 Co",
+                    "title": "Director of IT",
+                    "company_size": "201-500",
+                },
+                {
+                    "company_name": "Domain Only PeerSpot Co",
+                    "urgency_score": 7.4,
+                    "buying_stage": "evaluation",
+                    "source": "peerspot",
+                    "confidence_score": 0.55,
+                    "company_domain": "peerspot.example",
+                },
+            ],
+        )
+
+        summary = acct["summary"]
+        assert summary["trusted_identity_count"] == 3
+        assert summary["direct_company_anchor_count"] == 2
+        assert summary["domain_only_count"] == 0
+        assert summary["source_distribution"] == {
+            "trustradius": 1,
+            "g2": 1,
+            "peerspot": 1,
+        }
+        assert summary["source_tier_distribution"] == {
+            "high_identity": 1,
+            "context_only_requires_anchor": 1,
+            "context_rich": 1,
+        }
+        assert summary["identity_anchor_distribution"] == {
+            "trusted_resolution": 1,
+            "direct_company_anchor": 2,
+        }
+        assert summary["account_actionability_tier"] == "high"
+        assert summary["account_actionability_note"] == (
+            "High confidence: named accounts are backed by trusted identity anchors."
+        )
+        assert acct["accounts"][0]["source_actionability_tier"] == "high_identity"
+        assert acct["accounts"][0]["identity_anchor_quality"] == "trusted_resolution"
 
     def test_merge_canonical_company_signals_filters_persisted_vendor_names_from_review_alternatives(self):
         merged = _merge_canonical_company_signals(
@@ -4521,13 +4685,15 @@ class TestExecutiveSourceList:
     @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
     def test_parses_config(self, mock_settings):
         mock_settings.b2b_churn.intelligence_executive_sources = "g2,capterra,trustradius"
+        mock_settings.b2b_churn.intelligence_infra_blocked_sources = ""
         result = _executive_source_list()
-        assert result == ["g2", "capterra", "trustradius"]
+        assert result == ["g2", "capterra", "trustradius", "software_advice"]
 
     @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
     def test_separate_from_broad_allowlist(self, mock_settings):
         """Executive sources should be a subset of the broad allowlist."""
         mock_settings.b2b_churn.intelligence_executive_sources = "g2,capterra"
+        mock_settings.b2b_churn.intelligence_infra_blocked_sources = ""
         exec_sources = _executive_source_list()
         assert "reddit" not in exec_sources
         assert "trustpilot" not in exec_sources
@@ -4535,8 +4701,17 @@ class TestExecutiveSourceList:
     @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
     def test_handles_whitespace(self, mock_settings):
         mock_settings.b2b_churn.intelligence_executive_sources = " g2 , capterra , trustradius "
+        mock_settings.b2b_churn.intelligence_infra_blocked_sources = ""
         result = _executive_source_list()
-        assert result == ["g2", "capterra", "trustradius"]
+        assert result == ["g2", "capterra", "trustradius", "software_advice"]
+
+    @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
+    def test_excludes_infra_blocked_sources(self, mock_settings):
+        mock_settings.b2b_churn.intelligence_executive_sources = "g2,getapp,trustradius"
+        mock_settings.b2b_churn.intelligence_infra_blocked_sources = "getapp"
+        mock_settings.b2b_churn.deprecated_review_sources = ""
+        result = _executive_source_list()
+        assert result == ["g2", "trustradius", "software_advice"]
 
 
 # ---------------------------------------------------------------------------

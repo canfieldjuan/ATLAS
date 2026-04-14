@@ -48,6 +48,46 @@ _STAGE_LOADING_INPUTS = "loading_inputs"
 _STAGE_REASONING = "reasoning"
 _STAGE_PERSISTING_SIGNALS = "persisting_signals"
 _STAGE_FINALIZING = "finalizing"
+
+
+def _canonical_ready_company_signal_seeds(
+    candidates: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Promote canonical-ready company-signal candidates into mergeable account seeds."""
+    seeds: list[dict[str, Any]] = []
+    for candidate in candidates or []:
+        if str(candidate.get("candidate_bucket") or "").strip().lower() != "canonical_ready":
+            continue
+        vendor_name = _canonicalize_vendor(candidate.get("vendor_name") or candidate.get("vendor") or "")
+        company_name = str(candidate.get("company_name") or candidate.get("company") or "").strip()
+        if not vendor_name or not company_name:
+            continue
+        seeds.append({
+            "vendor": vendor_name,
+            "company": company_name,
+            "company_name": company_name,
+            "review_id": candidate.get("review_id"),
+            "source": candidate.get("source"),
+            "urgency": candidate.get("urgency_score"),
+            "urgency_score": candidate.get("urgency_score"),
+            "pain": candidate.get("pain_category") or candidate.get("pain"),
+            "pain_category": candidate.get("pain_category"),
+            "role_level": candidate.get("role_level") or candidate.get("buyer_role"),
+            "buyer_role": candidate.get("role_level") or candidate.get("buyer_role"),
+            "decision_maker": candidate.get("decision_maker"),
+            "seat_count": candidate.get("seat_count"),
+            "contract_end": candidate.get("contract_end"),
+            "buying_stage": candidate.get("buying_stage"),
+            "title": candidate.get("title") or candidate.get("reviewer_title"),
+            "company_size": candidate.get("company_size"),
+            "industry": candidate.get("industry"),
+            "company_domain": candidate.get("company_domain"),
+            "resolution_confidence": candidate.get("resolution_confidence"),
+            "confidence_score": candidate.get("confidence_score"),
+            "alternatives": candidate.get("alternatives") or [],
+            "quotes": candidate.get("quotes") or [],
+        })
+    return seeds
 _PERSISTENCE_PHASES = (
     "displacement_edges",
     "churn_signals",
@@ -2191,8 +2231,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             high_intent_entries=high_intent,
             integration_lookup=integration_lookup,
         )
+        _canonical_ready_account_seeds = _canonical_ready_company_signal_seeds(
+            company_signal_candidates,
+        )
         _canonical_company_signals = _merge_canonical_company_signals(
-            high_intent,
+            [*(high_intent or []), *_canonical_ready_account_seeds],
             existing_company_signals if isinstance(existing_company_signals, dict) else {},
             blocked_names_by_vendor=_company_signal_blocked_names,
         )
@@ -4015,6 +4058,65 @@ async def _upsert_company_signal_candidate_groups(
     return len(rows)
 
 
+def _parse_delete_count(result: Any) -> int:
+    text = str(result or "").strip()
+    if not text:
+        return 0
+    parts = text.split()
+    if not parts:
+        return 0
+    try:
+        return int(parts[-1])
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _delete_pending_company_signal_candidates(
+    pool,
+    *,
+    vendors: list[str] | None = None,
+) -> int:
+    canonical_vendors: list[str] = []
+    seen_vendors: set[str] = set()
+    for canonical in (_canonicalize_vendor(vendor) for vendor in (vendors or [])):
+        if not canonical or canonical in seen_vendors:
+            continue
+        seen_vendors.add(canonical)
+        canonical_vendors.append(canonical)
+    result = await pool.execute(
+        """
+        DELETE FROM b2b_company_signal_candidates
+        WHERE review_status = 'pending'
+          AND ($1::text[] IS NULL OR vendor_name = ANY($1::text[]))
+        """,
+        canonical_vendors or None,
+    )
+    return _parse_delete_count(result)
+
+
+async def _delete_pending_company_signal_candidate_groups(
+    pool,
+    *,
+    vendors: list[str] | None = None,
+) -> int:
+    canonical_vendors: list[str] = []
+    seen_vendors: set[str] = set()
+    for canonical in (_canonicalize_vendor(vendor) for vendor in (vendors or [])):
+        if not canonical or canonical in seen_vendors:
+            continue
+        seen_vendors.add(canonical)
+        canonical_vendors.append(canonical)
+    result = await pool.execute(
+        """
+        DELETE FROM b2b_company_signal_candidate_groups
+        WHERE review_status = 'pending'
+          AND ($1::text[] IS NULL OR vendor_name = ANY($1::text[]))
+        """,
+        canonical_vendors or None,
+    )
+    return _parse_delete_count(result)
+
+
 async def _sync_company_signal_candidate_member_status_from_groups(
     pool,
     *,
@@ -4088,6 +4190,8 @@ async def rebuild_company_signal_candidate_materializations(
         limit=limit,
     )
     groups = _build_company_signal_candidate_groups(candidates)
+    await _delete_pending_company_signal_candidates(pool, vendors=canonical_vendors)
+    await _delete_pending_company_signal_candidate_groups(pool, vendors=canonical_vendors)
     candidate_rows_persisted = await _upsert_company_signal_candidates(
         pool,
         candidates,

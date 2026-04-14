@@ -25,7 +25,13 @@ from ..services.scraping.target_provisioning import (
     provision_vendor_onboarding_targets,
 )
 from ..services.scraping.target_validation import validate_target_input
-from ..services.scraping.sources import filter_deprecated_sources, parse_source_allowlist
+from ..services.scraping.sources import (
+    filter_blocked_sources,
+    filter_deprecated_sources,
+    parse_source_allowlist,
+    REQUIRED_SCRAPE_SOURCES,
+    with_required_sources,
+)
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
@@ -67,6 +73,7 @@ class SeedMissingCoreRequest(BaseModel):
     limit: int = Field(default=200, ge=1, le=1000)
     vendors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    source_tiers: list[str] = Field(default_factory=list)
     verticals: list[str] = Field(default_factory=list)
 
 
@@ -83,6 +90,7 @@ class DisablePoorFitRequest(BaseModel):
     limit: int = Field(default=1000, ge=1, le=5000)
     vendors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    source_tiers: list[str] = Field(default_factory=list)
     verticals: list[str] = Field(default_factory=list)
     include_overrides: bool = False
 
@@ -92,6 +100,7 @@ class SeedConditionalProbationRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
     vendors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    source_tiers: list[str] = Field(default_factory=list)
     verticals: list[str] = Field(default_factory=list)
 
 
@@ -108,9 +117,13 @@ class DisableLowYieldProbationRequest(BaseModel):
     min_runs: int = Field(default=1, ge=1, le=100)
     max_reviews_inserted: int = Field(default=0, ge=0, le=10000)
     max_tracked_reviews: int = Field(default=0, ge=0, le=10000)
+    max_named_company_reviews: Optional[int] = Field(default=None, ge=0, le=10000)
+    max_actionable_reviews: Optional[int] = Field(default=None, ge=0, le=10000)
+    max_company_signal_reviews: Optional[int] = Field(default=None, ge=0, le=10000)
     statuses: list[str] = Field(default_factory=lambda: ["failed", "blocked"])
     vendors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    source_tiers: list[str] = Field(default_factory=list)
     verticals: list[str] = Field(default_factory=list)
 
 
@@ -133,9 +146,11 @@ class PromoteProbationTargetsRequest(BaseModel):
     min_tracked_reviews: int = Field(default=1, ge=0, le=10000)
     min_actionable_reviews: int = Field(default=0, ge=0, le=10000)
     min_company_signal_reviews: int = Field(default=0, ge=0, le=10000)
+    require_any_downstream_signal: bool = True
     statuses: list[str] = Field(default_factory=lambda: ["success", "partial"])
     vendors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    source_tiers: list[str] = Field(default_factory=list)
     verticals: list[str] = Field(default_factory=list)
 
 
@@ -149,10 +164,20 @@ def _normalize_filters(values: list[str]) -> set[str]:
 
 
 def _current_allowed_sources() -> list[str]:
-    return sorted(
-        filter_deprecated_sources(
+    deprecated_sources = set(
+        parse_source_allowlist(getattr(settings.b2b_scrape, "deprecated_sources", ""))
+    ) - set(REQUIRED_SCRAPE_SOURCES)
+    sources = filter_deprecated_sources(
+        with_required_sources(
             parse_source_allowlist(settings.b2b_scrape.source_allowlist),
-            settings.b2b_scrape.deprecated_sources,
+            required=REQUIRED_SCRAPE_SOURCES,
+        ),
+        deprecated_sources,
+    )
+    return sorted(
+        filter_blocked_sources(
+            sources,
+            getattr(settings.b2b_scrape, "infra_blocked_sources", ""),
         )
     )
 
@@ -161,14 +186,18 @@ def _matches_filters(
     item: dict[str, Any],
     vendors: set[str],
     sources: set[str],
+    source_tiers: set[str],
     verticals: set[str],
 ) -> bool:
     vendor = str(item.get("vendor_name") or "").strip().lower()
     source = str(item.get("source") or "").strip().lower()
+    source_tier = str(item.get("source_tier") or "").strip().lower()
     vertical = str(item.get("vertical") or "").strip().lower()
     if vendors and vendor not in vendors:
         return False
     if sources and source not in sources:
+        return False
+    if source_tiers and source_tier not in source_tiers:
         return False
     if verticals and vertical not in verticals:
         return False
@@ -576,6 +605,7 @@ async def disable_low_yield_probation_targets(body: DisableLowYieldProbationRequ
 
     vendors = _normalize_filters(body.vendors)
     sources = _normalize_filters(body.sources)
+    source_tiers = _normalize_filters(body.source_tiers)
     verticals = _normalize_filters(body.verticals)
     statuses = {status.strip().lower() for status in body.statuses if status and status.strip()}
 
@@ -590,13 +620,34 @@ async def disable_low_yield_probation_targets(body: DisableLowYieldProbationRequ
             continue
         if int(item.get("tracked_reviews") or 0) > body.max_tracked_reviews:
             continue
-        if not _matches_filters(item, vendors, sources, verticals):
+        if body.max_named_company_reviews is not None and (
+            int(item.get("named_company_reviews") or 0) > body.max_named_company_reviews
+        ):
+            continue
+        if body.max_actionable_reviews is not None and (
+            int(item.get("actionable_reviews") or 0) > body.max_actionable_reviews
+        ):
+            continue
+        if body.max_company_signal_reviews is not None and (
+            int(item.get("company_signal_reviews") or 0) > body.max_company_signal_reviews
+        ):
+            continue
+        if not _matches_filters(item, vendors, sources, source_tiers, verticals):
             continue
         candidates.append(item)
         if len(candidates) >= body.limit:
             break
 
     if not body.dry_run:
+        disable_reason = (
+            "low_downstream_signal_probation"
+            if (
+                body.max_named_company_reviews is not None
+                or body.max_actionable_reviews is not None
+                or body.max_company_signal_reviews is not None
+            )
+            else "low_yield_probation"
+        )
         for item in candidates:
             await pool.execute(
                 """
@@ -604,13 +655,14 @@ async def disable_low_yield_probation_targets(body: DisableLowYieldProbationRequ
                 SET enabled = false,
                     metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
                         'source_fit_probation_disabled', true,
-                        'source_fit_probation_disabled_reason', 'low_yield_probation',
+                        'source_fit_probation_disabled_reason', $2::text,
                         'source_fit_probation_disabled_at', NOW()::text
                     ),
                     updated_at = NOW()
                 WHERE id = $1
                 """,
                 item["target_id"],
+                disable_reason,
             )
 
     return {
@@ -622,6 +674,9 @@ async def disable_low_yield_probation_targets(body: DisableLowYieldProbationRequ
             "min_runs": body.min_runs,
             "max_reviews_inserted": body.max_reviews_inserted,
             "max_tracked_reviews": body.max_tracked_reviews,
+            "max_named_company_reviews": body.max_named_company_reviews,
+            "max_actionable_reviews": body.max_actionable_reviews,
+            "max_company_signal_reviews": body.max_company_signal_reviews,
             "statuses": sorted(statuses),
         },
         "targets": candidates,
@@ -649,6 +704,7 @@ async def promote_probation_targets(body: PromoteProbationTargetsRequest) -> dic
 
     vendors = _normalize_filters(body.vendors)
     sources = _normalize_filters(body.sources)
+    source_tiers = _normalize_filters(body.source_tiers)
     verticals = _normalize_filters(body.verticals)
     statuses = {status.strip().lower() for status in body.statuses if status and status.strip()}
 
@@ -667,7 +723,13 @@ async def promote_probation_targets(body: PromoteProbationTargetsRequest) -> dic
             continue
         if int(item.get("company_signal_reviews") or 0) < body.min_company_signal_reviews:
             continue
-        if not _matches_filters(item, vendors, sources, verticals):
+        if body.require_any_downstream_signal and (
+            int(item.get("named_company_reviews") or 0) <= 0
+            and int(item.get("actionable_reviews") or 0) <= 0
+            and int(item.get("company_signal_reviews") or 0) <= 0
+        ):
+            continue
+        if not _matches_filters(item, vendors, sources, source_tiers, verticals):
             continue
         defaults = _derive_promotion_defaults(
             existing_targets,
@@ -717,6 +779,7 @@ async def promote_probation_targets(body: PromoteProbationTargetsRequest) -> dic
             "min_tracked_reviews": body.min_tracked_reviews,
             "min_actionable_reviews": body.min_actionable_reviews,
             "min_company_signal_reviews": body.min_company_signal_reviews,
+            "require_any_downstream_signal": body.require_any_downstream_signal,
             "statuses": sorted(statuses),
         },
         "targets": candidates,
@@ -817,6 +880,7 @@ async def seed_missing_core_targets(body: SeedMissingCoreRequest) -> dict:
     )
     vendors = _normalize_filters(body.vendors)
     sources = _normalize_filters(body.sources)
+    source_tiers = _normalize_filters(body.source_tiers)
     verticals = _normalize_filters(body.verticals)
     candidates = [
         item
@@ -825,7 +889,7 @@ async def seed_missing_core_targets(body: SeedMissingCoreRequest) -> dict:
             item.get("existing_disabled_target_id")
             or item.get("verified_product_slug")
             or item.get("suggested_product_slug")
-        ) and _matches_filters(item, vendors, sources, verticals)
+        ) and _matches_filters(item, vendors, sources, source_tiers, verticals)
     ][:body.limit]
     applied = await apply_missing_core_targets(
         pool,
@@ -857,11 +921,12 @@ async def disable_poor_fit_targets(body: DisablePoorFitRequest) -> dict:
     )
     vendors = _normalize_filters(body.vendors)
     sources = _normalize_filters(body.sources)
+    source_tiers = _normalize_filters(body.source_tiers)
     verticals = _normalize_filters(body.verticals)
     candidates = []
     skipped_overrides = []
     for item in plan["poor_fit_enabled_targets"]:
-        if not _matches_filters(item, vendors, sources, verticals):
+        if not _matches_filters(item, vendors, sources, source_tiers, verticals):
             continue
         if item.get("source_fit_override") == "allow" and not body.include_overrides:
             skipped_overrides.append(item)
@@ -901,11 +966,12 @@ async def seed_conditional_probation_targets(body: SeedConditionalProbationReque
     )
     vendors = _normalize_filters(body.vendors)
     sources = _normalize_filters(body.sources)
+    source_tiers = _normalize_filters(body.source_tiers)
     verticals = _normalize_filters(body.verticals)
     candidates = [
         item
         for item in plan["conditional_opportunities"]
-        if item.get("can_probation_now") and _matches_filters(item, vendors, sources, verticals)
+        if item.get("can_probation_now") and _matches_filters(item, vendors, sources, source_tiers, verticals)
     ][:body.limit]
 
     applied: list[dict[str, Any]] = []
@@ -934,6 +1000,7 @@ async def seed_conditional_probation_targets(body: SeedConditionalProbationReque
                 "target_id": item["existing_disabled_target_id"],
                 "vendor_name": item["vendor_name"],
                 "source": item["source"],
+                "source_tier": item.get("source_tier"),
                 "product_slug": item.get("existing_disabled_product_slug"),
                 "priority": defaults["priority"],
                 "max_pages": defaults["max_pages"],
@@ -976,6 +1043,7 @@ async def seed_conditional_probation_targets(body: SeedConditionalProbationReque
             "action": "insert_probation_target",
             "vendor_name": item["vendor_name"],
             "source": source,
+            "source_tier": item.get("source_tier"),
             "product_slug": product_slug,
             "product_name": item.get("verified_product_name") or item["vendor_name"],
             "product_category": item.get("product_category"),

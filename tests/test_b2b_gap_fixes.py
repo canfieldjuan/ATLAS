@@ -31,6 +31,7 @@ async def test_apply_missing_core_targets_inserts_empty_metadata_json():
     candidate = {
         "vendor_name": "HubSpot",
         "source": "g2",
+        "source_tier": "context_rich",
         "suggested_product_slug": "hubspot",
         "product_category": "CRM",
     }
@@ -49,6 +50,7 @@ async def test_apply_missing_core_targets_inserts_empty_metadata_json():
     args = pool.fetchrow.await_args.args
     assert args[-1] == "{}"
     assert actions[0]["target_id"] == "target-1"
+    assert actions[0]["source_tier"] == "context_rich"
     assert "metadata" not in actions[0]
 
 

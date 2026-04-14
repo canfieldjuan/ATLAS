@@ -31,11 +31,12 @@ async def run(task: ScheduledTask) -> dict:
         enabled_only=True,
     )
     logger.info(
-        "Source pruning complete source=%s disabled=%d requested=%d dry_run=%s",
+        "Source pruning complete source=%s disabled=%d requested=%d dry_run=%s policy=%s",
         result["source"],
         result["disabled"],
         result["requested"],
         result["dry_run"],
+        result.get("policy_summary", ""),
     )
     result["_skip_synthesis"] = True
     return result

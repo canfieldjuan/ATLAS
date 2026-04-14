@@ -49,6 +49,10 @@ def _make_review_row(**overrides):
         "indicator_migration": False,
         "indicator_evaluation": True,
         "indicator_switch": False,
+        "indicator_named_alternative": False,
+        "indicator_timeline": False,
+        "indicator_price_pressure": False,
+        "has_budget_authority": False,
     }
     row.update(overrides)
     return row
@@ -196,8 +200,31 @@ async def test_review_candidates_keep_low_trust_rows_for_analyst_review():
 
 
 @pytest.mark.asyncio
-async def test_review_candidates_mark_trusted_ready_rows_as_canonical_ready():
-    pool = FakePool([_make_review_row(source="g2")])
+async def test_review_candidates_drop_very_low_confidence_low_trust_rows():
+    pool = FakePool([_make_review_row(
+        source="reddit",
+        resolution_confidence=None,
+        reviewer_title="",
+        company_size_raw="",
+        industry="",
+        company_domain=None,
+        is_dm=None,
+        buying_stage=None,
+        seat_count=None,
+    )])
+
+    results = await shared_mod._fetch_company_signal_review_candidates(
+        pool,
+        window_days=90,
+        urgency_threshold=7.0,
+    )
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_review_candidates_mark_high_identity_rows_as_canonical_ready():
+    pool = FakePool([_make_review_row(source="trustradius")])
 
     results = await shared_mod._fetch_company_signal_review_candidates(
         pool,
@@ -208,6 +235,113 @@ async def test_review_candidates_mark_trusted_ready_rows_as_canonical_ready():
     assert len(results) == 1
     assert results[0]["candidate_bucket"] == "canonical_ready"
     assert results[0]["canonical_gap_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_review_candidates_keep_context_rich_rows_in_analyst_review_without_company_anchor():
+    pool = FakePool([_make_review_row(
+        source="g2",
+        reviewer_company="",
+        raw_reviewer_company="",
+        resolution_confidence=None,
+        company_domain=None,
+    )])
+
+    results = await shared_mod._fetch_company_signal_review_candidates(
+        pool,
+        window_days=90,
+        urgency_threshold=7.0,
+    )
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_review_candidates_flag_weak_identity_context_rows():
+    pool = FakePool(
+        [
+            _make_review_row(
+                source="peerspot",
+                resolution_confidence=None,
+                reviewer_title="",
+                company_size_raw="",
+                industry="",
+                company_domain=None,
+            )
+        ]
+    )
+
+    results = await shared_mod._fetch_company_signal_review_candidates(
+        pool,
+        window_days=90,
+        urgency_threshold=7.0,
+    )
+
+    assert len(results) == 1
+    assert results[0]["candidate_bucket"] == "analyst_review"
+    assert results[0]["canonical_gap_reason"] == "weak_identity_context"
+
+
+def test_company_signal_confidence_biases_high_identity_sources():
+    trustradius_confidence = shared_mod._compute_company_signal_confidence(
+        {
+            "source": "trustradius",
+            "decision_maker": True,
+            "buying_stage": "evaluation",
+            "seat_count": 120,
+            "reviewer_title": "VP Operations",
+            "company_size": "201-500",
+            "industry": "SaaS",
+            "company_domain": "acme.example",
+            "resolution_confidence": "medium",
+        }
+    )
+    reddit_confidence = shared_mod._compute_company_signal_confidence(
+        {
+            "source": "reddit",
+            "decision_maker": True,
+            "buying_stage": "evaluation",
+            "seat_count": 120,
+            "reviewer_title": "VP Operations",
+            "company_size": "201-500",
+            "industry": "SaaS",
+            "company_domain": "acme.example",
+            "resolution_confidence": "medium",
+        }
+    )
+
+    assert trustradius_confidence > reddit_confidence
+
+
+def test_company_signal_confidence_biases_context_rich_sources():
+    peerspot_confidence = shared_mod._compute_company_signal_confidence(
+        {
+            "source": "peerspot",
+            "decision_maker": True,
+            "buying_stage": "active_purchase",
+            "seat_count": 120,
+            "reviewer_title": "VP Operations",
+            "company_size": "201-500",
+            "industry": "SaaS",
+            "company_domain": "acme.example",
+            "resolution_confidence": "medium",
+        }
+    )
+    reddit_confidence = shared_mod._compute_company_signal_confidence(
+        {
+            "source": "reddit",
+            "decision_maker": True,
+            "buying_stage": "active_purchase",
+            "seat_count": 120,
+            "reviewer_title": "VP Operations",
+            "company_size": "201-500",
+            "industry": "SaaS",
+            "company_domain": "acme.example",
+            "resolution_confidence": "medium",
+        }
+    )
+
+    assert peerspot_confidence > reddit_confidence
 
 
 @pytest.mark.asyncio
@@ -226,9 +360,233 @@ async def test_review_candidates_flag_below_threshold_rows():
 
 
 @pytest.mark.asyncio
+async def test_review_candidates_drop_far_below_threshold_rows_without_signal_evidence():
+    pool = FakePool([_make_review_row(
+        source="g2",
+        urgency=Decimal("1.5"),
+        actively_evaluating=False,
+        contract_renewal_mentioned=False,
+        indicator_cancel=False,
+        indicator_migration=False,
+        indicator_evaluation=False,
+        indicator_switch=False,
+    )])
+
+    results = await shared_mod._fetch_company_signal_review_candidates(
+        pool,
+        window_days=90,
+        urgency_threshold=7.0,
+    )
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_review_candidates_accept_structured_signal_support_for_active_purchase():
+    pool = FakePool([_make_review_row(
+        source="peerspot",
+        urgency=Decimal("7.0"),
+        buying_stage="active_purchase",
+        actively_evaluating=False,
+        contract_renewal_mentioned=False,
+        indicator_cancel=False,
+        indicator_migration=False,
+        indicator_evaluation=False,
+        indicator_switch=False,
+        indicator_named_alternative=True,
+        indicator_timeline=True,
+        indicator_price_pressure=True,
+        has_budget_authority=True,
+    )])
+
+    results = await shared_mod._fetch_company_signal_review_candidates(
+        pool,
+        window_days=90,
+        urgency_threshold=7.0,
+    )
+
+    assert len(results) == 1
+    assert results[0]["candidate_bucket"] == "canonical_ready"
+    assert results[0]["signal_evidence_present"] is True
+    assert results[0]["canonical_gap_reason"] is None
+
+
+def test_software_advice_without_company_anchor_is_not_named_account_trusted():
+    assert shared_mod._company_signal_named_account_identity_trusted(
+        {
+            "source": "software_advice",
+            "reviewer_title": "Operations Manager",
+            "company_size_raw": "201-500",
+            "industry": "SaaS",
+            "company_domain": None,
+            "company_name": None,
+            "reviewer_company": None,
+            "resolution_confidence": None,
+            "confidence_score": 0.92,
+        }
+    ) is False
+
+
+def test_capterra_without_company_anchor_is_not_named_account_trusted():
+    assert shared_mod._company_signal_named_account_identity_trusted(
+        {
+            "source": "capterra",
+            "reviewer_title": "IT Manager",
+            "company_size_raw": None,
+            "industry": "Cybersecurity",
+            "company_domain": None,
+            "company_name": None,
+            "reviewer_company": None,
+            "resolution_confidence": None,
+            "confidence_score": 0.92,
+        }
+    ) is False
+
+
+def test_trustpilot_is_not_named_account_trusted_even_with_company_anchor():
+    assert shared_mod._company_signal_named_account_identity_trusted(
+        {
+            "source": "trustpilot",
+            "reviewer_title": "VP Operations",
+            "company_size_raw": "201-500",
+            "industry": "SaaS",
+            "company_domain": "acme.com",
+            "company_name": "Acme Corp",
+            "reviewer_company": "Acme Corp",
+            "resolution_confidence": "high",
+            "confidence_score": 0.95,
+        }
+    ) is False
+    assert shared_mod._company_signal_named_account_gap_reason(
+        {
+            "source": "trustpilot",
+            "reviewer_title": "VP Operations",
+            "company_size_raw": "201-500",
+            "industry": "SaaS",
+            "company_domain": "acme.com",
+            "company_name": "Acme Corp",
+            "reviewer_company": "Acme Corp",
+            "resolution_confidence": "high",
+        },
+        confidence_score=0.95,
+    ) == "non_actionable_named_account_source"
+
+
+def test_g2_domain_only_context_is_not_named_account_trusted():
+    assert shared_mod._company_signal_named_account_identity_trusted(
+        {
+            "source": "g2",
+            "reviewer_title": "Director of Operations",
+            "company_size_raw": "201-500",
+            "industry": "Software",
+            "company_domain": "acme.com",
+            "company_name": None,
+            "reviewer_company": None,
+            "resolution_confidence": None,
+            "confidence_score": 0.82,
+        }
+    ) is False
+
+
+def test_g2_direct_company_anchor_remains_named_account_trusted():
+    assert shared_mod._company_signal_named_account_identity_trusted(
+        {
+            "source": "g2",
+            "reviewer_title": "Director of Operations",
+            "company_size_raw": "201-500",
+            "industry": "Software",
+            "company_domain": None,
+            "company_name": "Acme Corp",
+            "reviewer_company": "Acme Corp",
+            "resolution_confidence": None,
+            "confidence_score": 0.82,
+        }
+    ) is True
+
+
+def test_g2_context_bonus_requires_verified_or_direct_anchor():
+    no_anchor = shared_mod._compute_company_signal_confidence(
+        {
+            "source": "g2",
+            "decision_maker": True,
+            "buying_stage": "evaluation",
+            "seat_count": 50,
+            "reviewer_title": "Director of Operations",
+            "company_size": "201-500",
+            "industry": "Software",
+            "company_domain": "acme.com",
+            "resolution_confidence": None,
+            "reviewer_company": None,
+            "company_name": None,
+        }
+    )
+    direct_anchor = shared_mod._compute_company_signal_confidence(
+        {
+            "source": "g2",
+            "decision_maker": True,
+            "buying_stage": "evaluation",
+            "seat_count": 50,
+            "reviewer_title": "Director of Operations",
+            "company_size": "201-500",
+            "industry": "Software",
+            "company_domain": "acme.com",
+            "resolution_confidence": None,
+            "reviewer_company": "Acme Corp",
+            "company_name": "Acme Corp",
+        }
+    )
+
+    assert direct_anchor > no_anchor
+
+
+@pytest.mark.asyncio
 async def test_review_candidates_reject_ineligible_company_names():
     pool = FakePool([_make_review_row(
         reviewer_company="https://chatgpt.com/g/g-LsO4PHxnv-robert-on-ai-and-craftsmanship",
+    )])
+
+    results = await shared_mod._fetch_company_signal_review_candidates(
+        pool,
+        window_days=90,
+        urgency_threshold=7.0,
+    )
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_review_candidates_skip_non_actionable_named_account_sources():
+    pool = FakePool([_make_review_row(
+        source="trustpilot",
+        reviewer_company="Acme Corp",
+        raw_reviewer_company="Acme Corp",
+        resolution_confidence="high",
+        company_domain="acme.com",
+        reviewer_title="VP Operations",
+        company_size_raw="201-500",
+        industry="SaaS",
+        urgency=Decimal("8.0"),
+        actively_evaluating=True,
+    )])
+
+    results = await shared_mod._fetch_company_signal_review_candidates(
+        pool,
+        window_days=90,
+        urgency_threshold=7.0,
+    )
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_review_candidates_reject_company_size_labels_as_company_names():
+    pool = FakePool([_make_review_row(
+        source="g2",
+        reviewer_company="Mid-Market (51-1000 emp.)",
+        raw_reviewer_company="Mid-Market (51-1000 emp.)",
+        company_size_raw="Mid-Market (51-1000 emp.)",
+        resolution_confidence=None,
+        company_domain=None,
     )])
 
     results = await shared_mod._fetch_company_signal_review_candidates(
@@ -750,8 +1108,12 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "min_confidence_gap_to_canonical" in blocked_source_vendor_gap_sql
     assert "avg_urgency_gap_to_high_intent" in blocked_source_vendor_gap_sql
     assert "vendor_name" in blocked_source_vendor_gap_sql
-    assert "NOT (LOWER(source) IN ('reddit'))" in trusted_blocked_source_sql
-    assert "NOT (LOWER(source) IN ('reddit'))" in trusted_blocked_source_vendor_gap_sql
+    assert "NOT (LOWER(source) IN (" in trusted_blocked_source_sql
+    assert "'reddit'" in trusted_blocked_source_sql
+    assert "'trustpilot'" in trusted_blocked_source_sql
+    assert "NOT (LOWER(source) IN (" in trusted_blocked_source_vendor_gap_sql
+    assert "'reddit'" in trusted_blocked_source_vendor_gap_sql
+    assert "'trustpilot'" in trusted_blocked_source_vendor_gap_sql
     assert "jsonb_each_text" in near_threshold_source_sql
     assert "source_review_count" in near_threshold_source_sql
     assert "GROUP BY 1" in confidence_sql

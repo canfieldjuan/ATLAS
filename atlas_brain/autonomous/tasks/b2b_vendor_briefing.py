@@ -839,6 +839,8 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
         "named_accounts": briefing.get("named_accounts", [])[:5],
         "account_pressure_summary": briefing.get("account_pressure_summary"),
         "account_pressure_metrics": briefing.get("account_pressure_metrics"),
+        "account_pressure_disclaimer": briefing.get("account_pressure_disclaimer"),
+        "account_actionability_tier": briefing.get("account_actionability_tier"),
         "priority_account_names": briefing.get("priority_account_names", [])[:5],
         "top_feature_gaps": briefing.get("top_feature_gaps", [])[:3],
         "retention_strengths": briefing.get("retention_strengths", [])[:3],
@@ -1673,6 +1675,12 @@ def _apply_account_intelligence_to_briefing(
     briefing["account_pressure_metrics"] = {
         k: v for k, v in summary.items() if isinstance(v, (int, float))
     }
+    actionability_note = str(summary.get("account_actionability_note") or "").strip()
+    actionability_tier = str(summary.get("account_actionability_tier") or "").strip()
+    if actionability_note and not briefing.get("account_pressure_disclaimer"):
+        briefing["account_pressure_disclaimer"] = actionability_note
+    if actionability_tier and not briefing.get("account_actionability_tier"):
+        briefing["account_actionability_tier"] = actionability_tier
     if not briefing.get("account_pressure_summary"):
         high_intent = int(summary.get("high_intent_count") or 0)
         active_eval = int(summary.get("active_eval_signal_count") or 0)

@@ -315,6 +315,24 @@ async def test_low_trust_source_uses_provisional_confidence(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_weak_identity_source_rows_are_filtered_from_high_intent_results():
+    pool = FakePool(
+        [
+            _make_db_row(
+                source="peerspot",
+                resolution_confidence=None,
+                reviewer_title="",
+                company_size_raw="",
+                industry="",
+                company_domain=None,
+            )
+        ]
+    )
+    results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30)
+    assert results == []
+
+
+@pytest.mark.asyncio
 async def test_scoped_vendors_empty_returns_zero_rows():
     """Empty scoped_vendors means scoped user with no tracked vendors = zero results."""
     pool = FakePool([_make_db_row()])

@@ -576,13 +576,24 @@ async def get_trace(
     if review_ids:
         review_rows = await pool.fetch(
             """
-            SELECT id, source, source_url, vendor_name, rating, summary,
+            SELECT r.id,
+                   r.source,
+                   r.source_url,
+                   COALESCE(primary_vm.vendor_name, r.vendor_name) AS vendor_name,
+                   r.rating,
+                   r.summary,
                    LEFT(review_text, 500) AS review_excerpt,
-                   reviewer_name, reviewer_title, reviewer_company,
-                   reviewed_at, enrichment_status
-            FROM b2b_reviews
-            WHERE id = ANY($1::uuid[])
-            ORDER BY reviewed_at DESC
+                   r.reviewer_name,
+                   r.reviewer_title,
+                   r.reviewer_company,
+                   r.reviewed_at,
+                   r.enrichment_status
+            FROM b2b_reviews r
+            LEFT JOIN b2b_review_vendor_mentions primary_vm
+              ON primary_vm.review_id = r.id
+             AND primary_vm.is_primary = TRUE
+            WHERE r.id = ANY($1::uuid[])
+            ORDER BY r.reviewed_at DESC
             """,
             review_ids,
         )

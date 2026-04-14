@@ -345,10 +345,22 @@ def _apply_account_reasoning_to_report_entry(
             summary = f"{high_intent} accounts show high-intent churn signals."
         elif total_accounts is not None:
             summary = f"{total_accounts} accounts are currently in scope."
+    disclaimer = str(
+        account_reasoning.get("account_actionability_note")
+        or account_reasoning.get("disclaimer")
+        or ""
+    ).strip()
+    actionability_tier = str(
+        account_reasoning.get("account_actionability_tier") or ""
+    ).strip()
     if summary:
         entry["account_pressure_summary"] = summary
     if metrics:
         entry["account_pressure_metrics"] = metrics
+    if disclaimer:
+        entry["account_pressure_disclaimer"] = disclaimer
+    if actionability_tier:
+        entry["account_actionability_tier"] = actionability_tier
     reasoning_accounts = _account_reasoning_named_accounts(account_reasoning)
     if reasoning_accounts:
         entry["priority_account_names"] = [row["company"] for row in reasoning_accounts]

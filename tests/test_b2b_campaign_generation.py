@@ -2309,6 +2309,33 @@ def test_campaign_account_summary_uses_sparse_preview_when_contract_suppressed()
     assert "Early account signal only" in account_summary["account_summary_disclaimer"]
 
 
+def test_campaign_account_summary_preserves_actionability_fields_from_contract():
+    consumer_context = {
+        "reasoning_contracts": {
+            "account_reasoning": {
+                "market_summary": "Two enterprise accounts are evaluating alternatives.",
+                "account_actionability_note": (
+                    "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+                ),
+                "account_actionability_tier": "mixed",
+            },
+        },
+    }
+
+    account_summary = mod._campaign_account_summary_from_consumer_context(
+        consumer_context,
+    )
+
+    assert account_summary["account_summary"] == (
+        "Two enterprise accounts are evaluating alternatives."
+    )
+    assert account_summary["account_summary_source"] == "account_reasoning"
+    assert account_summary["account_summary_disclaimer"] == (
+        "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+    )
+    assert account_summary["account_actionability_tier"] == "mixed"
+
+
 def test_challenger_ctx_includes_incumbent_reasoning():
     """When incumbent views have Phase 3 contracts, challenger_ctx should
     include incumbent_reasoning with per-vendor summaries."""

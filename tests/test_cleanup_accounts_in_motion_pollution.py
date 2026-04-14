@@ -45,6 +45,27 @@ def test_polluted_company_signal_reason_rejects_descriptor_company_names():
     assert _polluted_company_signal_reason(row) == "ineligible_company_name"
 
 
+@pytest.mark.parametrize(
+    ("company_name", "vendor_name"),
+    [
+        ("senior product", "Slack"),
+        ("founder of a tech", "ActiveCampaign"),
+        ("aws cloud solution", "Linode"),
+        ("student landscaping business", "QuickBooks"),
+    ],
+)
+def test_polluted_company_signal_reason_rejects_live_descriptor_labels(company_name, vendor_name):
+    row = {
+        "company_name": company_name,
+        "vendor_name": vendor_name,
+        "source": "g2",
+        "content_type": "review",
+        "confidence_score": 0.74,
+        "actively_evaluating": True,
+    }
+    assert _polluted_company_signal_reason(row) == "ineligible_company_name"
+
+
 def test_polluted_company_signal_reason_rejects_low_confidence_reddit_insiders():
     row = {
         "company_name": "Acme Corp",

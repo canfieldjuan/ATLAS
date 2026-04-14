@@ -727,6 +727,10 @@ class TestBuildChallengerBrief:
                     "account_reasoning": {
                         "schema_version": "v1",
                         "market_summary": "Two accounts are actively evaluating alternatives while nine accounts show high intent signals overall.",
+                        "account_actionability_note": (
+                            "Mixed confidence: 2 of 9 named accounts are backed by trusted identity anchors."
+                        ),
+                        "account_actionability_tier": "mixed",
                         "total_accounts": {
                             "value": 9,
                             "source_id": "accounts:summary:total_accounts",
@@ -779,6 +783,10 @@ class TestBuildChallengerBrief:
         assert brief["incumbent_profile"]["account_pressure_summary"] == (
             "Two accounts are actively evaluating alternatives while nine accounts show high intent signals overall."
         )
+        assert brief["incumbent_profile"]["account_pressure_disclaimer"] == (
+            "Mixed confidence: 2 of 9 named accounts are backed by trusted identity anchors."
+        )
+        assert brief["incumbent_profile"]["account_actionability_tier"] == "mixed"
         assert brief["incumbent_profile"]["account_pressure_metrics"]["high_intent_count"] == 9
         assert brief["target_accounts_source"] == "account_reasoning"
         assert brief["target_accounts"][0]["company"] == "Acme Corp"
@@ -866,6 +874,7 @@ class TestBuildChallengerBrief:
         assert "account_reasoning" not in brief
         assert brief["account_reasoning_preview"]["top_accounts"][0]["name"] == "Concentrix"
         assert brief["incumbent_profile"]["account_pressure_summary"].startswith("Single account")
+        assert "Early account signal only" in brief["incumbent_profile"]["account_pressure_disclaimer"]
         assert brief["target_accounts_source"] == "account_reasoning_preview"
         assert brief["target_accounts"][0]["company"] == "Concentrix"
         assert brief["reasoning_section_disclaimers"]["account_reasoning"]

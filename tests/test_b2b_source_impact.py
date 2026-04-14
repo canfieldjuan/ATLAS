@@ -114,6 +114,7 @@ def test_build_source_impact_ledger_highlights_getapp_recovery():
     assert "scrape_coverage" in entry["work_type"]
     assert "accounts" in entry["target_pools"]
     assert "watchlists_accounts_in_motion" in entry["expected_consumers"]
+    assert entry["operational_status"] == "infra_blocked"
 
 
 def test_build_source_impact_ledger_exposes_quality_tier_alongside_source_family():
@@ -122,6 +123,16 @@ def test_build_source_impact_ledger_exposes_quality_tier_alongside_source_family
     entry = ledger["sources"][0]
     assert entry["source_family"] == "community_signal"
     assert entry["scrape_data_quality"] == "verified"
+
+
+def test_build_source_impact_ledger_marks_slashdot_as_deferred_inventory():
+    ledger = build_source_impact_ledger(source="slashdot")
+
+    assert ledger["summary"]["deferred_inventory_sources"] == ["slashdot"]
+    entry = ledger["sources"][0]
+    assert entry["source"] == "slashdot"
+    assert entry["operational_status"] == "deferred_inventory"
+    assert entry["expansion_stage"] == "deferred_conditional_inventory"
 
 
 def test_consumer_wiring_baseline_flags_mixed_consumers():

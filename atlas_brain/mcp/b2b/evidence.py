@@ -1055,6 +1055,13 @@ async def list_account_intelligence(
                 "decision_maker_count": summary.get("decision_maker_count", 0),
                 "with_contract_end": summary.get("with_contract_end", 0),
                 "with_seat_count": summary.get("with_seat_count", 0),
+                "trusted_identity_count": summary.get("trusted_identity_count", 0),
+                "direct_company_anchor_count": summary.get("direct_company_anchor_count", 0),
+                "domain_only_count": summary.get("domain_only_count", 0),
+                "source_distribution": summary.get("source_distribution", {}),
+                "source_tier_distribution": summary.get("source_tier_distribution", {}),
+                "account_actionability_tier": summary.get("account_actionability_tier"),
+                "account_actionability_note": summary.get("account_actionability_note"),
                 "top_urgency": top_urgency,
             })
 

@@ -11,8 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ...config import settings
 from ..scraping.capabilities import get_all_capabilities
-from ..scraping.sources import ReviewSource, display_name as source_display_name
+from ..scraping.sources import (
+    ReviewSource,
+    display_name as source_display_name,
+    parse_source_allowlist,
+)
 
 
 @dataclass(frozen=True)
@@ -400,7 +405,7 @@ _SOURCE_IMPACT_PROFILES: dict[str, SourceImpactProfile] = {
     "slashdot": _profile(
         "slashdot",
         source_family="developer_context",
-        expansion_stage="conditional_context_expansion",
+        expansion_stage="deferred_conditional_inventory",
         work_type=("scrape_coverage",),
         reliable_fields=(
             "technical_pain_quotes",
@@ -410,7 +415,7 @@ _SOURCE_IMPACT_PROFILES: dict[str, SourceImpactProfile] = {
         target_pools=("evidence_vault", "displacement"),
         expected_consumers=("b2b_battle_cards", "b2b_vendor_briefing"),
         consumers_without_material_benefit=_FIRMOGRAPHIC_NON_BENEFICIARIES,
-        notes="Useful for technical replacement chatter in infrastructure and developer categories.",
+        notes="Useful for technical replacement chatter, but current non-seedable coverage should be treated as deferred inventory rather than active scrape backlog.",
     ),
 }
 
@@ -452,6 +457,19 @@ def build_source_impact_ledger(source: str | None = None) -> dict[str, Any]:
             entry["capabilities"] = capability.to_dict()
         else:
             entry["scrape_data_quality"] = None
+        infra_blocked = source_name in parse_source_allowlist(
+            settings.b2b_churn.intelligence_infra_blocked_sources
+        )
+        deferred_inventory = source_name in parse_source_allowlist(
+            getattr(settings.b2b_scrape, "deferred_inventory_sources", "")
+        )
+        entry["operational_status"] = (
+            "infra_blocked"
+            if infra_blocked
+            else "deferred_inventory"
+            if deferred_inventory
+            else "active"
+        )
         sources_out.append(entry)
 
     summary = {
@@ -494,6 +512,11 @@ def build_source_impact_ledger(source: str | None = None) -> dict[str, Any]:
             entry["source"]
             for entry in sources_out
             if "query_strategy" in entry["work_type"]
+        ),
+        "deferred_inventory_sources": sorted(
+            entry["source"]
+            for entry in sources_out
+            if entry["operational_status"] == "deferred_inventory"
         ),
     }
     return {"sources": sources_out, "summary": summary}

@@ -31,7 +31,11 @@ from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ...services.scraping.sources import parse_source_allowlist
+from ...services.scraping.sources import (
+    REQUIRED_SCRAPE_SOURCES,
+    parse_source_allowlist,
+    with_required_sources,
+)
 from ...services.vendor_registry import resolve_vendor_name
 from ...services.scraping.source_fit import classify_source_fit, is_source_fit_allowed
 
@@ -109,6 +113,10 @@ _DISCUSSION_SOURCE_TECHNICAL_PATTERNS = (
     r"\blogin\b",
     r"\bplugin\b",
 )
+_COMPANY_SIZE_LABEL_RE = re.compile(
+    r"(?:\bsmall-business\b|\bmid-market\b|\benterprise\b|\b\d[\d,\- ]*\s*employees?\b|\bemp\.)",
+    re.I,
+)
 
 
 def _coerce_config_bool(value: Any, default: bool) -> bool:
@@ -138,6 +146,10 @@ def _normalize_source_quality_gate_sources(raw: Any) -> set[str]:
         if str(part).strip()
     }
     return sources or set(_DEFAULT_SOURCE_QUALITY_GATE_SOURCES)
+
+
+def _normalize_source_priority_band(raw: Any) -> list[str]:
+    return [source for source in parse_source_allowlist(str(raw or "")) if source]
 
 
 def _parse_date(raw: Any) -> datetime | None:
@@ -247,6 +259,11 @@ def _make_review_content_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _looks_like_synthetic_source_review_id(value: Any) -> bool:
+    """Detect hashed fallback source IDs so later scrapes can repair them."""
+    return bool(re.fullmatch(r"[0-9a-f]{16}", str(value or "").strip().lower()))
+
+
 def _review_text_payload_from_row(review: dict[str, Any]) -> str:
     return make_review_text_payload(
         review.get("summary"),
@@ -306,6 +323,10 @@ def _quality_name_tokens(value: Any) -> list[str]:
     if not normalized:
         return []
     return [token for token in normalized.split() if len(token) >= 3]
+
+
+def _looks_like_company_size_label(value: Any) -> bool:
+    return bool(_COMPANY_SIZE_LABEL_RE.search(str(value or "").strip()))
 
 
 def _quality_text_mentions_name(haystack: str, needle: Any) -> bool:
@@ -976,8 +997,20 @@ SET is_primary = b2b_review_vendor_mentions.is_primary OR EXCLUDED.is_primary,
 _REPAIR_PARSER_FIELDS_SQL = """
 UPDATE b2b_reviews
 SET reviewer_title = COALESCE(reviewer_title, $2::text),
-    reviewer_company = COALESCE(reviewer_company, $3::text),
-    reviewer_company_norm = COALESCE(reviewer_company_norm, $4::text),
+    reviewer_company = CASE
+        WHEN reviewer_company IS NULL THEN $3::text
+        WHEN $3::text IS NOT NULL THEN reviewer_company
+        WHEN $5::text IS NOT NULL AND reviewer_company = $5::text THEN NULL
+        WHEN $3::text IS NULL AND $6::text IS NOT NULL AND reviewer_company = $6::text THEN NULL
+        ELSE reviewer_company
+    END,
+    reviewer_company_norm = CASE
+        WHEN reviewer_company_norm IS NULL THEN $4::text
+        WHEN $4::text IS NOT NULL THEN reviewer_company_norm
+        WHEN $5::text IS NOT NULL AND reviewer_company = $5::text THEN NULL
+        WHEN $3::text IS NULL AND $6::text IS NOT NULL AND reviewer_company = $6::text THEN NULL
+        ELSE reviewer_company_norm
+    END,
     company_size_raw = COALESCE(company_size_raw, $5::text),
     reviewer_industry = COALESCE(reviewer_industry, $6::text),
     parser_version = COALESCE($7::text, parser_version)
@@ -987,7 +1020,71 @@ WHERE dedup_key = $1
     (reviewer_company IS NULL AND $3::text IS NOT NULL) OR
     (reviewer_company_norm IS NULL AND $4::text IS NOT NULL) OR
     (company_size_raw IS NULL AND $5::text IS NOT NULL) OR
-    (reviewer_industry IS NULL AND $6::text IS NOT NULL)
+    (reviewer_industry IS NULL AND $6::text IS NOT NULL) OR
+    (parser_version IS NULL AND $7::text IS NOT NULL) OR
+    ($3::text IS NULL AND $5::text IS NOT NULL AND reviewer_company = $5::text) OR
+    ($3::text IS NULL AND $6::text IS NOT NULL AND reviewer_company = $6::text)
+  )
+"""
+
+_REPAIR_EXISTING_REVIEW_BY_ID_SQL = """
+UPDATE b2b_reviews AS r
+SET dedup_key = CASE
+        WHEN $2::text IS NOT NULL
+         AND $3::text IS NOT NULL
+         AND (r.source_review_id IS NULL OR r.source_review_id ~ '^[0-9a-f]{16}$')
+         AND NOT EXISTS (
+             SELECT 1
+             FROM b2b_reviews AS other
+             WHERE other.dedup_key = $2::text
+               AND other.id <> r.id
+         )
+        THEN $2::text
+        ELSE r.dedup_key
+    END,
+    source_review_id = CASE
+        WHEN $3::text IS NOT NULL
+         AND (r.source_review_id IS NULL OR r.source_review_id ~ '^[0-9a-f]{16}$')
+        THEN $3::text
+        ELSE r.source_review_id
+    END,
+    summary = COALESCE(r.summary, $4::text),
+    pros = COALESCE(r.pros, $5::text),
+    cons = COALESCE(r.cons, $6::text),
+    reviewer_title = COALESCE(r.reviewer_title, $7::text),
+    reviewer_company = CASE
+        WHEN r.reviewer_company IS NULL THEN $8::text
+        WHEN $8::text IS NOT NULL THEN r.reviewer_company
+        WHEN $10::text IS NOT NULL AND r.reviewer_company = $10::text THEN NULL
+        WHEN $8::text IS NULL AND $11::text IS NOT NULL AND r.reviewer_company = $11::text THEN NULL
+        ELSE r.reviewer_company
+    END,
+    reviewer_company_norm = CASE
+        WHEN r.reviewer_company_norm IS NULL THEN $9::text
+        WHEN $9::text IS NOT NULL THEN r.reviewer_company_norm
+        WHEN $10::text IS NOT NULL AND r.reviewer_company = $10::text THEN NULL
+        WHEN $8::text IS NULL AND $11::text IS NOT NULL AND r.reviewer_company = $11::text THEN NULL
+        ELSE r.reviewer_company_norm
+    END,
+    company_size_raw = COALESCE(r.company_size_raw, $10::text),
+    reviewer_industry = COALESCE(r.reviewer_industry, $11::text),
+    parser_version = COALESCE($12::text, r.parser_version)
+WHERE r.id = $1::uuid
+  AND (
+    ($2::text IS NOT NULL AND $3::text IS NOT NULL
+     AND (r.source_review_id IS NULL OR r.source_review_id ~ '^[0-9a-f]{16}$')
+     AND (r.source_review_id IS DISTINCT FROM $3::text OR r.dedup_key IS DISTINCT FROM $2::text)) OR
+    (r.summary IS NULL AND $4::text IS NOT NULL) OR
+    (r.pros IS NULL AND $5::text IS NOT NULL) OR
+    (r.cons IS NULL AND $6::text IS NOT NULL) OR
+    (r.reviewer_title IS NULL AND $7::text IS NOT NULL) OR
+    (r.reviewer_company IS NULL AND $8::text IS NOT NULL) OR
+    (r.reviewer_company_norm IS NULL AND $9::text IS NOT NULL) OR
+    (r.company_size_raw IS NULL AND $10::text IS NOT NULL) OR
+    (r.reviewer_industry IS NULL AND $11::text IS NOT NULL) OR
+    (r.parser_version IS NULL AND $12::text IS NOT NULL) OR
+    ($8::text IS NULL AND $10::text IS NOT NULL AND r.reviewer_company = $10::text) OR
+    ($8::text IS NULL AND $11::text IS NOT NULL AND r.reviewer_company = $11::text)
   )
 """
 
@@ -1107,6 +1204,11 @@ WHERE enabled = true
        OR last_scrape_status != 'blocked'
        OR last_scraped_at < NOW() - make_interval(hours => $1))
 ORDER BY CASE WHEN last_scraped_at IS NULL THEN 0 ELSE 1 END,
+         CASE
+             WHEN source = ANY($4::text[]) THEN 0
+             WHEN source = ANY($5::text[]) THEN 1
+             ELSE 2
+         END,
          priority DESC,
          last_scraped_at ASC NULLS FIRST
 LIMIT $2
@@ -1477,7 +1579,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
 
     client = get_scrape_client()
-    allowed_sources = parse_source_allowlist(cfg.source_allowlist)
+    allowed_sources = with_required_sources(
+        parse_source_allowlist(cfg.source_allowlist),
+        required=REQUIRED_SCRAPE_SOURCES,
+    )
     if not allowed_sources:
         allowed_sources = list(get_all_parsers().keys())
 
@@ -1499,6 +1604,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         max(1, int(min_cooldown_hours)),
         target_limit,
         allowed_sources,
+        _normalize_source_priority_band(getattr(cfg, "high_yield_priority_sources", "")),
+        _normalize_source_priority_band(getattr(cfg, "context_rich_priority_sources", "")),
     )
 
     # Post-filter: apply per-source cooldown for blocked targets
@@ -1964,6 +2071,22 @@ async def _insert_reviews(
     promoted_existing = 0
     vendor_mentions_upserted = 0
     repair_candidates: list[tuple[str, str | None, str | None, str | None, str | None, str | None, str | None]] = []
+    repair_by_id_candidates: list[
+        tuple[
+            str,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+        ]
+    ] = []
     promotion_candidates: list[tuple[str, str, str, str | None, str | None, str | None, str | None, str | None, str | None, str, str | None]] = []
     promotion_by_id_candidates: list[tuple[str, str | None, str | None, str | None, str | None, str, str | None, str | None, str | None]] = []
     vendor_mention_rows: list[tuple[str, str, bool, str]] = []
@@ -2019,6 +2142,13 @@ async def _insert_reviews(
         )
         reviewer_company = r.get("reviewer_company")
         reviewer_title = sanitize_reviewer_title(r.get("reviewer_title"))
+        company_size_raw = r.get("company_size_raw")
+        if reviewer_company and (
+            (company_size_raw and str(reviewer_company).strip() == str(company_size_raw).strip())
+            or _looks_like_company_size_label(reviewer_company)
+        ):
+            company_size_raw = company_size_raw or reviewer_company
+            reviewer_company = None
         reviewer_company_norm = normalize_company_name(reviewer_company or "") or None
         raw_metadata = _build_scrape_review_metadata(
             r,
@@ -2056,12 +2186,39 @@ async def _insert_reviews(
                 or (content_hash is not None and content_hash in _existing_content_hashes)
             ):
                 duplicate_existing += 1
-                if any(
+                if existing_review_id is not None and any(
+                    value
+                    for value in (
+                        r.get("source_review_id"),
+                        r.get("summary"),
+                        pros,
+                        cons,
+                        reviewer_title,
+                        reviewer_company,
+                        company_size_raw,
+                        r.get("reviewer_industry"),
+                    )
+                ):
+                    repair_by_id_candidates.append((
+                        str(existing_review_id),
+                        dedup_key,
+                        r.get("source_review_id"),
+                        r.get("summary"),
+                        pros,
+                        cons,
+                        reviewer_title,
+                        reviewer_company,
+                        reviewer_company_norm,
+                        company_size_raw,
+                        r.get("reviewer_industry"),
+                        parser_version,
+                    ))
+                elif any(
                     value
                     for value in (
                         reviewer_title,
                         reviewer_company,
-                        r.get("company_size_raw"),
+                        company_size_raw,
                         r.get("reviewer_industry"),
                     )
                 ):
@@ -2070,7 +2227,7 @@ async def _insert_reviews(
                         reviewer_title,
                         reviewer_company,
                         reviewer_company_norm,
-                        r.get("company_size_raw"),
+                        company_size_raw,
                         r.get("reviewer_industry"),
                         parser_version,
                     ))
@@ -2231,7 +2388,7 @@ async def _insert_reviews(
             reviewer_title,
             reviewer_company,
             reviewer_company_norm,
-            r.get("company_size_raw"),
+            company_size_raw,
             r.get("reviewer_industry"),
             reviewed_at_ts,
             batch_id,
@@ -2353,6 +2510,11 @@ async def _insert_reviews(
     if repair_candidates:
         for candidate in repair_candidates:
             result = await pool.execute(_REPAIR_PARSER_FIELDS_SQL, *candidate)
+            if str(result).split()[-1:] == ["1"]:
+                repaired_existing += 1
+    if repair_by_id_candidates:
+        for candidate in repair_by_id_candidates:
+            result = await pool.execute(_REPAIR_EXISTING_REVIEW_BY_ID_SQL, *candidate)
             if str(result).split()[-1:] == ["1"]:
                 repaired_existing += 1
     if promotion_candidates:

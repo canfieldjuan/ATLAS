@@ -34,6 +34,7 @@ from ...services.scraping.sources import (
     display_name as source_display_name,
     filter_deprecated_sources,
     parse_source_allowlist,
+    with_required_sources,
 )
 from ...reasoning.wedge_registry import Wedge, get_wedge_meta
 from ._execution_progress import task_run_id as _task_execution_run_id
@@ -477,7 +478,7 @@ def _strip_nonexistent_internal_links(
 def _blog_source_allowlist() -> list[str]:
     """Return the configured source allowlist as a list for SQL ANY() binding."""
     return filter_deprecated_sources(
-        parse_source_allowlist(settings.b2b_churn.blog_source_allowlist),
+        with_required_sources(parse_source_allowlist(settings.b2b_churn.blog_source_allowlist)),
         settings.b2b_churn.deprecated_review_sources,
     )
 
@@ -552,6 +553,21 @@ def _blog_account_reasoning_stats(
         summary = str(account_preview.get("account_pressure_summary") or "").strip()
     if summary:
         stats["account_pressure_summary"] = summary
+    disclaimer = str(
+        account_reasoning.get("account_actionability_note")
+        or account_preview.get("account_actionability_note")
+        or account_preview.get("disclaimer")
+        or ""
+    ).strip()
+    if disclaimer:
+        stats["account_pressure_disclaimer"] = disclaimer
+    actionability_tier = str(
+        account_reasoning.get("account_actionability_tier")
+        or account_preview.get("account_actionability_tier")
+        or ""
+    ).strip()
+    if actionability_tier:
+        stats["account_actionability_tier"] = actionability_tier
     for key in ("total_accounts", "high_intent_count", "active_eval_count"):
         value = _reasoning_int(account_reasoning.get(key))
         if value is None:
@@ -6751,6 +6767,10 @@ def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
         verdict_stats["market_regime"] = contract_category["market_regime"]
     if contract_account.get("account_pressure_summary"):
         verdict_stats["account_pressure_summary"] = contract_account["account_pressure_summary"]
+    if contract_account.get("account_pressure_disclaimer"):
+        verdict_stats["account_pressure_disclaimer"] = contract_account["account_pressure_disclaimer"]
+    if contract_account.get("account_actionability_tier"):
+        verdict_stats["account_actionability_tier"] = contract_account["account_actionability_tier"]
 
     sections.append(SectionSpec(
         id="verdict",
@@ -7223,6 +7243,10 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
         outlook_stats["synthesis_wedge"] = wedge
     if contract_account.get("account_pressure_summary"):
         outlook_stats["account_pressure_summary"] = contract_account["account_pressure_summary"]
+    if contract_account.get("account_pressure_disclaimer"):
+        outlook_stats["account_pressure_disclaimer"] = contract_account["account_pressure_disclaimer"]
+    if contract_account.get("account_actionability_tier"):
+        outlook_stats["account_actionability_tier"] = contract_account["account_actionability_tier"]
     if contract_category.get("narrative"):
         outlook_stats["category_narrative"] = contract_category["narrative"]
 
@@ -7707,6 +7731,10 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
         verdict_stats["timing_summary"] = contract_timing["timing_summary"]
     if contract_account.get("account_pressure_summary"):
         verdict_stats["account_pressure_summary"] = contract_account["account_pressure_summary"]
+    if contract_account.get("account_pressure_disclaimer"):
+        verdict_stats["account_pressure_disclaimer"] = contract_account["account_pressure_disclaimer"]
+    if contract_account.get("account_actionability_tier"):
+        verdict_stats["account_actionability_tier"] = contract_account["account_actionability_tier"]
     if contract_category.get("market_regime"):
         verdict_stats["market_regime"] = contract_category["market_regime"]
 

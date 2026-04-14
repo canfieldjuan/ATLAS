@@ -275,6 +275,7 @@ class TestExecuteTask:
 
         mock_repo = AsyncMock()
         mock_repo.get_by_id.return_value = task
+        mock_repo.get_running_execution.return_value = None
         mock_repo.record_execution.return_value = exec_id
         mock_repo_fn.return_value = mock_repo
 
@@ -294,6 +295,26 @@ class TestExecuteTask:
         status_arg = mock_repo.complete_execution.call_args[0][1]
         assert status_arg == "completed"
         assert task.metadata["_execution_id"] == str(exec_id)
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.autonomous.runner.get_headless_runner")
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_scheduled_run_skips_when_execution_already_running(self, mock_repo_fn, mock_runner_fn):
+        s = _scheduler()
+        s._semaphore = __import__("asyncio").Semaphore(2)
+
+        task = _task(enabled=True)
+        running_exec = TaskExecution(id=uuid4(), task_id=task.id, status="running")
+
+        mock_repo = AsyncMock()
+        mock_repo.get_by_id.return_value = task
+        mock_repo.get_running_execution.return_value = running_exec
+        mock_repo_fn.return_value = mock_repo
+
+        await s._execute_task(task.id)
+
+        mock_repo.record_execution.assert_not_awaited()
+        mock_runner_fn.return_value.run.assert_not_called()
 
 
 class TestRunNow:

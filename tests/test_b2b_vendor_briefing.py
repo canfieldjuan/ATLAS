@@ -1190,6 +1190,8 @@ def test_apply_account_intelligence_populates_pressure_fields():
             "decision_maker_count": 1,
             "with_seat_count": 2,
             "with_contract_end": 0,
+            "account_actionability_tier": "mixed",
+            "account_actionability_note": "Mixed confidence: 2 of 5 named accounts are backed by trusted identity anchors.",
         },
         "accounts": [
             {"company_name": "Acme Corp", "urgency_score": 8.0, "high_intent": True},
@@ -1205,6 +1207,10 @@ def test_apply_account_intelligence_populates_pressure_fields():
     assert briefing["account_pressure_metrics"]["active_eval_signal_count"] == 2
     assert "3 high-intent accounts" in briefing["account_pressure_summary"]
     assert "2 active evaluation signals" in briefing["account_pressure_summary"]
+    assert briefing["account_pressure_disclaimer"] == (
+        "Mixed confidence: 2 of 5 named accounts are backed by trusted identity anchors."
+    )
+    assert briefing["account_actionability_tier"] == "mixed"
     assert "Acme Corp" in briefing["priority_account_names"]
     assert "Beta Inc" in briefing["priority_account_names"]
     assert "Low Inc" not in briefing["priority_account_names"]

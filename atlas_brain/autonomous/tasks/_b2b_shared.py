@@ -20,8 +20,11 @@ from ...services.apollo_company_overrides import fetch_company_override_map
 from ...services.b2b.corrections import suppress_predicate
 from ...services.company_normalization import normalize_company_name
 from ...services.scraping.sources import (
+    REQUIRED_ACTIONABLE_SOURCES,
     parse_source_allowlist,
+    filter_blocked_sources,
     filter_deprecated_sources,
+    with_required_sources,
     display_name as _source_display_name,
     VERIFIED_SOURCES,
 )
@@ -556,16 +559,20 @@ def _build_llm_trace_metadata(
 def _intelligence_source_allowlist() -> list[str]:
     """Return the configured intelligence source allowlist for SQL ANY() binding."""
     return filter_deprecated_sources(
-        parse_source_allowlist(settings.b2b_churn.intelligence_source_allowlist),
+        with_required_sources(parse_source_allowlist(settings.b2b_churn.intelligence_source_allowlist)),
         settings.b2b_churn.deprecated_review_sources,
     )
 
 
 def _executive_source_list() -> list[str]:
     """Return curated executive sources for headline-facing queries."""
-    return filter_deprecated_sources(
-        parse_source_allowlist(settings.b2b_churn.intelligence_executive_sources),
+    sources = filter_deprecated_sources(
+        with_required_sources(parse_source_allowlist(settings.b2b_churn.intelligence_executive_sources)),
         settings.b2b_churn.deprecated_review_sources,
+    )
+    return filter_blocked_sources(
+        sources,
+        getattr(settings.b2b_churn, "intelligence_infra_blocked_sources", ""),
     )
 
 
@@ -574,7 +581,8 @@ def _company_signal_skip_sources() -> set[str]:
     blocked: set[str] = set()
     if settings.b2b_churn.company_signal_skip_deprecated_sources:
         blocked.update(
-            parse_source_allowlist(settings.b2b_scrape.deprecated_sources)
+            set(parse_source_allowlist(settings.b2b_scrape.deprecated_sources))
+            - set(REQUIRED_ACTIONABLE_SOURCES)
         )
     return blocked
 
@@ -586,6 +594,282 @@ def _company_signal_low_trust_sources() -> set[str]:
         for source in (settings.b2b_churn.company_signal_low_trust_sources or [])
         if str(source).strip()
     }
+
+
+def _configured_source_name_set(raw: Any) -> set[str]:
+    """Normalize list-like source config values into a lowercase set."""
+    values = raw if isinstance(raw, (list, tuple, set)) else [raw]
+    normalized: set[str] = set()
+    for value in values:
+        if isinstance(value, str):
+            for part in value.split(","):
+                source = str(part or "").strip().lower()
+                if source:
+                    normalized.add(source)
+        else:
+            source = str(value or "").strip().lower()
+            if source:
+                normalized.add(source)
+    return normalized
+
+
+def _company_signal_named_account_blocked_sources() -> set[str]:
+    """Return sources that should never seed named-account queues."""
+    return _configured_source_name_set(
+        getattr(settings.b2b_churn, "company_signal_named_account_blocked_sources", []),
+    )
+
+
+def _company_signal_verified_anchor_sources() -> set[str]:
+    """Return context-only sources that need a verified or direct company anchor."""
+    return _configured_source_name_set(
+        getattr(settings.b2b_churn, "company_signal_verified_anchor_sources", []),
+    )
+
+
+def _company_signal_high_identity_sources() -> set[str]:
+    """Return sources with strong named-company yield for account-level confidence biasing."""
+    return _configured_source_name_set(
+        getattr(settings.b2b_churn, "company_signal_high_identity_sources", []),
+    )
+
+
+def _company_signal_context_rich_sources() -> set[str]:
+    """Return sources with rich reviewer context but weaker named-company yield."""
+    return _configured_source_name_set(
+        getattr(settings.b2b_churn, "company_signal_context_rich_sources", []),
+    )
+
+
+_COMPANY_SIGNAL_SIZE_LABEL_RE = re.compile(
+    r"(?:\bsmall-business\b|\bmid-market\b|\benterprise\b|\b\d[\d,\- ]*\s*employees?\b|\bemp\.)",
+    re.I,
+)
+
+
+def _company_signal_looks_like_company_size_label(value: Any) -> bool:
+    return bool(_COMPANY_SIGNAL_SIZE_LABEL_RE.search(str(value or "").strip()))
+
+
+def _company_signal_source_identity_bonus(source: Any) -> float:
+    """Return the configured account-level confidence bonus for a source."""
+    normalized_source = str(source or "").strip().lower()
+    if not normalized_source:
+        return 0.0
+    if normalized_source in _company_signal_high_identity_sources():
+        return float(
+            getattr(settings.b2b_churn, "company_signal_high_identity_source_bonus", 0.18),
+        )
+    if normalized_source in _company_signal_context_rich_sources():
+        return float(
+            getattr(settings.b2b_churn, "company_signal_context_rich_source_bonus", 0.08),
+        )
+    return 0.0
+
+
+def _company_signal_has_direct_company_anchor(signal: Mapping[str, Any]) -> bool:
+    """Return whether a row carries a direct company-name anchor."""
+    for value in (
+        signal.get("company_name"),
+        signal.get("reviewer_company"),
+        signal.get("company_name_raw"),
+        signal.get("raw_reviewer_company"),
+    ):
+        text = str(value or "").strip()
+        if text and not _company_signal_looks_like_company_size_label(text):
+            return True
+    return False
+
+
+def _company_signal_has_verified_or_direct_anchor(signal: Mapping[str, Any]) -> bool:
+    """Return whether a row carries a trusted resolved identity or direct employer anchor."""
+    resolution_confidence = str(signal.get("resolution_confidence") or "").strip().lower()
+    trusted_resolution = resolution_confidence in {"high", "medium"}
+    return trusted_resolution or _company_signal_has_direct_company_anchor(signal)
+
+
+def _company_signal_effective_source_identity_bonus(signal: Mapping[str, Any]) -> float:
+    """Return the usable source bonus after source-specific identity gates are applied."""
+    normalized_source = str(signal.get("source") or "").strip().lower()
+    base_bonus = _company_signal_source_identity_bonus(normalized_source)
+    if not normalized_source or base_bonus <= 0:
+        return 0.0
+    if (
+        normalized_source in _company_signal_verified_anchor_sources()
+        and not _company_signal_has_verified_or_direct_anchor(signal)
+    ):
+        return 0.0
+    return base_bonus
+
+
+def _company_signal_source_actionability_tier(source: Any) -> str:
+    """Return the configured actionability tier for a review source."""
+    normalized_source = str(source or "").strip().lower()
+    if not normalized_source:
+        return "unknown"
+    if normalized_source in _company_signal_named_account_blocked_sources():
+        return "blocked_named_account"
+    if normalized_source in _company_signal_high_identity_sources():
+        return "high_identity"
+    if normalized_source in _company_signal_verified_anchor_sources():
+        return "context_only_requires_anchor"
+    if normalized_source in _company_signal_context_rich_sources():
+        return "context_rich"
+    if normalized_source in _company_signal_low_trust_sources():
+        return "low_trust"
+    return "standard"
+
+
+def _company_signal_identity_anchor_quality(signal: Mapping[str, Any]) -> str:
+    """Return the strongest identity anchor quality available on a signal row."""
+    resolution_confidence = str(signal.get("resolution_confidence") or "").strip().lower()
+    if resolution_confidence in {"high", "medium"}:
+        return "trusted_resolution"
+    if _company_signal_has_direct_company_anchor(signal):
+        return "direct_company_anchor"
+    if str(signal.get("company_domain") or "").strip():
+        return "domain_only"
+    return "context_only"
+
+
+def _company_signal_named_account_identity_field_count(signal: Mapping[str, Any]) -> int:
+    """Count reviewer identity/context fields that strengthen named-account trust."""
+    return sum(
+        1
+        for field in (
+            signal.get("reviewer_title") or signal.get("title"),
+            signal.get("company_size") or signal.get("company_size_raw"),
+            signal.get("industry"),
+            signal.get("company_domain"),
+        )
+        if str(field or "").strip()
+    )
+
+
+def _company_signal_named_account_identity_trusted(
+    signal: Mapping[str, Any],
+    *,
+    confidence_score: Any = None,
+) -> bool:
+    """Return whether a row is strong enough for named-account consumers.
+
+    Analyst-review queues can still surface weaker rows. This gate is for
+    canonical-ready and account-level outputs that should prefer sources with
+    durable employer identity.
+    """
+    normalized_source = str(signal.get("source") or "").strip().lower()
+    if not normalized_source:
+        return False
+    if normalized_source in _company_signal_named_account_blocked_sources():
+        return False
+
+    resolution_confidence = str(signal.get("resolution_confidence") or "").strip().lower()
+    trusted_resolution = resolution_confidence in {"high", "medium"}
+    has_company_domain = bool(str(signal.get("company_domain") or "").strip())
+    company_anchor = (
+        signal.get("company_name")
+        or signal.get("reviewer_company")
+        or signal.get("company_name_raw")
+        or signal.get("raw_reviewer_company")
+        or ""
+    )
+    has_company_name = bool(str(company_anchor).strip()) and not _company_signal_looks_like_company_size_label(
+        company_anchor,
+    )
+    identity_fields = _company_signal_named_account_identity_field_count(signal)
+    min_identity_fields = int(
+        getattr(settings.b2b_churn, "company_signal_named_account_min_identity_fields", 2),
+    )
+    has_identity_context = identity_fields >= max(0, min_identity_fields)
+
+    confidence = _normalize_company_signal_confidence(
+        confidence_score if confidence_score is not None else signal.get("confidence_score"),
+    )
+    has_confidence = confidence is not None
+    low_trust_min_confidence = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_low_trust_min_confidence", 0.6),
+    )
+    if low_trust_min_confidence is None:
+        low_trust_min_confidence = 0.6
+
+    if not normalized_source:
+        return trusted_resolution or has_company_domain or has_company_name or has_identity_context
+
+    if normalized_source in _company_signal_verified_anchor_sources():
+        return trusted_resolution or has_company_name
+
+    if normalized_source in _company_signal_low_trust_sources():
+        return (
+            trusted_resolution
+            or has_company_domain
+            or has_company_name
+            or (
+                has_identity_context
+                and confidence is not None
+                and confidence >= low_trust_min_confidence
+            )
+        )
+
+    if normalized_source in _company_signal_high_identity_sources():
+        return trusted_resolution or has_company_domain or has_company_name or has_identity_context or has_confidence
+
+    if normalized_source in _company_signal_context_rich_sources():
+        if bool(
+            getattr(
+                settings.b2b_churn,
+                "company_signal_context_rich_requires_company_anchor",
+                True,
+            )
+        ):
+            return trusted_resolution or has_company_domain or has_company_name
+        return trusted_resolution or has_company_domain or has_company_name or has_identity_context or has_confidence
+
+    return trusted_resolution or has_company_domain
+
+
+def _company_signal_named_account_gap_reason(
+    signal: Mapping[str, Any],
+    *,
+    confidence_score: Any = None,
+) -> str | None:
+    """Return a stable gap reason when a row lacks durable named-account trust."""
+    normalized_source = str(signal.get("source") or "").strip().lower()
+    if normalized_source in _company_signal_named_account_blocked_sources():
+        return "non_actionable_named_account_source"
+    if _company_signal_named_account_identity_trusted(
+        signal,
+        confidence_score=confidence_score,
+    ):
+        return None
+    return "weak_identity_context"
+
+
+def _company_signal_low_trust_analyst_min_confidence() -> float:
+    """Return the minimum confidence for low-trust analyst-review queue admission."""
+    confidence = _normalize_company_signal_confidence(
+        getattr(
+            settings.b2b_churn,
+            "company_signal_low_trust_analyst_min_confidence",
+            0.35,
+        ),
+    )
+    if confidence is None:
+        return 0.35
+    return confidence
+
+
+def _company_signal_below_threshold_analyst_max_urgency_gap() -> float:
+    """Return the maximum urgency gap allowed for below-threshold analyst rows."""
+    try:
+        return float(
+            getattr(
+                settings.b2b_churn,
+                "company_signal_below_threshold_analyst_max_urgency_gap",
+                2.0,
+            )
+        )
+    except (TypeError, ValueError):
+        return 2.0
 
 
 def _company_signal_low_trust_source_membership_sql(expr: str) -> str:
@@ -6024,7 +6308,11 @@ async def _fetch_high_intent_companies(
             (r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
             (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
             (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
-            (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
+            (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch,
+            (r.enrichment->'urgency_indicators'->>'named_alternative_with_reason')::boolean AS indicator_named_alternative,
+            (r.enrichment->'urgency_indicators'->>'timeline_mentioned')::boolean AS indicator_timeline,
+            (r.enrichment->'urgency_indicators'->>'price_pressure_language')::boolean AS indicator_price_pressure,
+            (r.enrichment->'buyer_authority'->>'has_budget_authority')::boolean AS has_budget_authority
         FROM b2b_reviews r
         {vendor_join}
         LEFT JOIN b2b_account_resolution ar
@@ -6064,12 +6352,29 @@ async def _fetch_high_intent_companies(
             "decision_maker": bool(r["is_dm"]) if r["is_dm"] is not None else None,
             "buying_stage": r["buying_stage"],
             "seat_count": seat_count,
+            "reviewer_title": r["reviewer_title"],
+            "company_size": r["company_size_raw"],
+            "industry": r["industry"],
+            "company_domain": r["company_domain"],
+            "resolution_confidence": r["resolution_confidence"],
         })
         if _company_signal_exclusion_reason(
             r["reviewer_company"],
             current_vendor=r["vendor_name"],
             blocked_names=blocked_names,
             source=r["source"],
+            confidence_score=provisional_confidence,
+        ):
+            continue
+        if _company_signal_named_account_gap_reason(
+            {
+                "source": r["source"],
+                "resolution_confidence": r["resolution_confidence"],
+                "reviewer_title": r["reviewer_title"],
+                "company_size_raw": r["company_size_raw"],
+                "industry": r["industry"],
+                "company_domain": r["company_domain"],
+            },
             confidence_score=provisional_confidence,
         ):
             continue
@@ -6209,7 +6514,11 @@ async def _fetch_company_signal_review_candidates(
                (r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
                (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
                (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
-               (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
+               (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch,
+               (r.enrichment->'urgency_indicators'->>'named_alternative_with_reason')::boolean AS indicator_named_alternative,
+               (r.enrichment->'urgency_indicators'->>'timeline_mentioned')::boolean AS indicator_timeline,
+               (r.enrichment->'urgency_indicators'->>'price_pressure_language')::boolean AS indicator_price_pressure,
+               (r.enrichment->'buyer_authority'->>'has_budget_authority')::boolean AS has_budget_authority
         FROM b2b_reviews r
         {vendor_join}
         LEFT JOIN b2b_account_resolution ar
@@ -6253,6 +6562,11 @@ async def _fetch_company_signal_review_candidates(
             "decision_maker": bool(row["is_dm"]) if row.get("is_dm") is not None else None,
             "buying_stage": row.get("buying_stage"),
             "seat_count": seat_count,
+            "reviewer_title": row.get("reviewer_title"),
+            "company_size": row.get("company_size_raw"),
+            "industry": row.get("industry"),
+            "company_domain": row.get("company_domain"),
+            "resolution_confidence": row.get("resolution_confidence"),
         })
         exclusion_reason = _company_signal_exclusion_reason(
             row.get("reviewer_company"),
@@ -6269,6 +6583,18 @@ async def _fetch_company_signal_review_candidates(
             urgency = 0.0
         signal_evidence_present = _high_intent_row_has_signal_evidence(dict(row))
         canonical_gap_reason = exclusion_reason
+        if canonical_gap_reason is None:
+            canonical_gap_reason = _company_signal_named_account_gap_reason(
+                {
+                    "source": row.get("source"),
+                    "resolution_confidence": row.get("resolution_confidence"),
+                    "reviewer_title": row.get("reviewer_title"),
+                    "company_size_raw": row.get("company_size_raw"),
+                    "industry": row.get("industry"),
+                    "company_domain": row.get("company_domain"),
+                },
+                confidence_score=confidence_score,
+            )
         if canonical_gap_reason is None and urgency < min_urgency:
             canonical_gap_reason = "below_high_intent_threshold"
         if (
@@ -6277,6 +6603,22 @@ async def _fetch_company_signal_review_candidates(
             and not signal_evidence_present
         ):
             canonical_gap_reason = "missing_signal_evidence"
+        normalized_source = str(row.get("source") or "").strip().lower()
+        if (
+            canonical_gap_reason == "low_confidence_low_trust_source"
+            and normalized_source in _company_signal_low_trust_sources()
+            and confidence_score < _company_signal_low_trust_analyst_min_confidence()
+        ):
+            continue
+        if canonical_gap_reason == "non_actionable_named_account_source":
+            continue
+        if canonical_gap_reason == "below_high_intent_threshold":
+            urgency_gap = max(0.0, min_urgency - urgency)
+            if (
+                not signal_evidence_present
+                and urgency_gap > _company_signal_below_threshold_analyst_max_urgency_gap()
+            ):
+                continue
         bucket = "canonical_ready" if canonical_gap_reason is None else "analyst_review"
         if candidate_bucket and bucket != candidate_bucket:
             continue
@@ -6332,6 +6674,10 @@ async def _fetch_existing_company_signals(
                (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
                (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
                (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch,
+               (r.enrichment->'urgency_indicators'->>'named_alternative_with_reason')::boolean AS indicator_named_alternative,
+               (r.enrichment->'urgency_indicators'->>'timeline_mentioned')::boolean AS indicator_timeline,
+               (r.enrichment->'urgency_indicators'->>'price_pressure_language')::boolean AS indicator_price_pressure,
+               (r.enrichment->'buyer_authority'->>'has_budget_authority')::boolean AS has_budget_authority,
                r.reviewer_title,
                r.company_size_raw,
                COALESCE(
@@ -7965,6 +8311,16 @@ async def _fetch_latest_account_intelligence(
             continue
         data = _safe_json(row.get("accounts"), default={})
         if isinstance(data, dict):
+            summary = data.get("summary")
+            if isinstance(summary, dict):
+                tier = summary.get("account_actionability_tier")
+                note = summary.get("account_actionability_note")
+                if not tier or not note:
+                    derived_tier, derived_note = _derive_account_actionability_summary(summary)
+                    if derived_tier and not tier:
+                        summary["account_actionability_tier"] = derived_tier
+                    if derived_note and not note:
+                        summary["account_actionability_note"] = derived_note
             lookup[vendor] = data
     return lookup
 
@@ -10053,7 +10409,27 @@ def _compute_company_signal_confidence(signal: dict[str, Any]) -> float:
         )
         if field is not None
     )
-    return round(min(score + completeness * 0.05, 1.0), 2)
+    identity_fields = sum(
+        1
+        for field in (
+            signal.get("reviewer_title"),
+            signal.get("company_size"),
+            signal.get("industry"),
+            signal.get("company_domain"),
+        )
+        if str(field or "").strip()
+    )
+    field_bonus = float(
+        getattr(settings.b2b_churn, "company_signal_identity_field_bonus", 0.03),
+    )
+    field_bonus_cap = float(
+        getattr(settings.b2b_churn, "company_signal_identity_field_bonus_cap", 0.12),
+    )
+    identity_bonus = min(field_bonus_cap, identity_fields * field_bonus)
+    identity_bonus += _company_signal_effective_source_identity_bonus(signal)
+    if str(signal.get("resolution_confidence") or "").strip().lower() in {"high", "medium"}:
+        identity_bonus += field_bonus
+    return round(min(score + completeness * 0.05 + identity_bonus, 1.0), 2)
 
 
 def _merge_canonical_company_signals(
@@ -10086,6 +10462,7 @@ def _merge_canonical_company_signals(
         return (
             urgency_value,
             confidence_value,
+            _company_signal_effective_source_identity_bonus(signal),
             1 if signal.get("decision_maker") else 0,
             1 if signal.get("review_id") else 0,
             1 if signal.get("buying_stage") else 0,
@@ -11401,6 +11778,69 @@ def build_category_dynamics(
 _ACCOUNT_INTELLIGENCE_SCHEMA_VERSION = "v1"
 
 
+def _build_account_intelligence_quality_summary(accounts: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Summarize source actionability and identity-anchor quality for accounts."""
+    source_distribution: Counter[str] = Counter()
+    source_tier_distribution: Counter[str] = Counter()
+    identity_anchor_distribution: Counter[str] = Counter()
+    trusted_identity_count = 0
+    direct_anchor_count = 0
+    domain_only_count = 0
+
+    for account in accounts:
+        source_name = str(account.get("source") or "").strip().lower()
+        if source_name:
+            source_distribution[source_name] += 1
+        source_tier_distribution[_company_signal_source_actionability_tier(source_name)] += 1
+        anchor_quality = _company_signal_identity_anchor_quality(account)
+        identity_anchor_distribution[anchor_quality] += 1
+        if anchor_quality in {"trusted_resolution", "direct_company_anchor"}:
+            trusted_identity_count += 1
+        if anchor_quality == "direct_company_anchor":
+            direct_anchor_count += 1
+        elif anchor_quality == "domain_only":
+            domain_only_count += 1
+
+    return {
+        "trusted_identity_count": trusted_identity_count,
+        "direct_company_anchor_count": direct_anchor_count,
+        "domain_only_count": domain_only_count,
+        "source_distribution": dict(source_distribution),
+        "source_tier_distribution": dict(source_tier_distribution),
+        "identity_anchor_distribution": dict(identity_anchor_distribution),
+    }
+
+
+def _derive_account_actionability_summary(summary: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """Derive a stable actionability tier and note from account summary fields."""
+    if not isinstance(summary, Mapping):
+        return None, None
+    total_accounts = int(summary.get("total_accounts") or 0)
+    if total_accounts <= 0:
+        return None, None
+    trusted_identity_count = int(summary.get("trusted_identity_count") or 0)
+    domain_only_count = int(summary.get("domain_only_count") or 0)
+    if trusted_identity_count >= total_accounts:
+        return (
+            "high",
+            "High confidence: named accounts are backed by trusted identity anchors.",
+        )
+    if trusted_identity_count <= 0:
+        if domain_only_count > 0:
+            return (
+                "low",
+                "Low confidence: named accounts rely on weak or domain-only identity anchors.",
+            )
+        return (
+            "low",
+            "Low confidence: named accounts rely on context-rich evidence without trusted identity anchors.",
+        )
+    return (
+        "mixed",
+        f"Mixed confidence: {trusted_identity_count} of {total_accounts} named accounts are backed by trusted identity anchors.",
+    )
+
+
 def build_account_intelligence(
     vendor_name: str,
     *,
@@ -11451,6 +11891,11 @@ def build_account_intelligence(
             confidence_score=ps.get("confidence_score"),
         ):
             continue
+        if ps.get("source") and _company_signal_named_account_gap_reason(
+            ps,
+            confidence_score=ps.get("confidence_score"),
+        ):
+            continue
         key = cn.lower()
         if key in seen_companies:
             continue
@@ -11469,12 +11914,16 @@ def build_account_intelligence(
             "source": ps.get("source"),
             "content_type": ps.get("content_type"),
             "confidence_score": _sf(ps.get("confidence_score")),
+            "resolution_confidence": ps.get("resolution_confidence"),
+            "company_domain": ps.get("company_domain"),
             "first_seen_at": (
                 str(ps.get("first_seen_at") or "") or None
             ),
             "last_seen_at": (
                 str(ps.get("last_seen_at") or "") or None
             ),
+            "source_actionability_tier": _company_signal_source_actionability_tier(ps.get("source")),
+            "identity_anchor_quality": _company_signal_identity_anchor_quality(ps),
         }
         if ps.get("title"):
             acct["title"] = ps["title"]
@@ -11510,6 +11959,11 @@ def build_account_intelligence(
             confidence_score=hi.get("confidence_score"),
         ):
             continue
+        if hi.get("source") and _company_signal_named_account_gap_reason(
+            hi,
+            confidence_score=hi.get("confidence_score"),
+        ):
+            continue
         key = cn.lower()
         if key in seen_companies:
             continue
@@ -11527,8 +11981,12 @@ def build_account_intelligence(
             "buying_stage": hi.get("buying_stage"),
             "source": hi.get("source"),
             "confidence_score": None,
+            "resolution_confidence": hi.get("resolution_confidence"),
+            "company_domain": hi.get("company_domain"),
             "first_seen_at": None,
             "last_seen_at": None,
+            "source_actionability_tier": _company_signal_source_actionability_tier(hi.get("source")),
+            "identity_anchor_quality": _company_signal_identity_anchor_quality(hi),
         }
         if hi.get("title"):
             acct_hi["title"] = hi["title"]
@@ -11547,7 +12005,14 @@ def build_account_intelligence(
         accounts.append(acct_hi)
 
     accounts.sort(
-        key=lambda a: a.get("urgency_score") or 0, reverse=True,
+        key=lambda a: (
+            float(a.get("urgency_score") or 0),
+            float(a.get("confidence_score") or 0),
+            _company_signal_effective_source_identity_bonus(a),
+            1 if a.get("decision_maker") else 0,
+            1 if a.get("contract_end") else 0,
+        ),
+        reverse=True,
     )
 
     # Summary stats
@@ -11564,6 +12029,13 @@ def build_account_intelligence(
     with_seat_count = sum(
         1 for a in accounts if a.get("seat_count")
     )
+    quality_summary = _build_account_intelligence_quality_summary(accounts)
+    actionability_tier, actionability_note = _derive_account_actionability_summary(
+        {
+            "total_accounts": len(accounts),
+            **quality_summary,
+        }
+    )
 
     return {
         "vendor_name": vendor_name,
@@ -11578,6 +12050,14 @@ def build_account_intelligence(
             "active_eval_signal_count": active_eval_signal_count,
             "with_contract_end": with_contract_end,
             "with_seat_count": with_seat_count,
+            "trusted_identity_count": quality_summary["trusted_identity_count"],
+            "direct_company_anchor_count": quality_summary["direct_company_anchor_count"],
+            "domain_only_count": quality_summary["domain_only_count"],
+            "source_distribution": quality_summary["source_distribution"],
+            "source_tier_distribution": quality_summary["source_tier_distribution"],
+            "identity_anchor_distribution": quality_summary["identity_anchor_distribution"],
+            "account_actionability_tier": actionability_tier,
+            "account_actionability_note": actionability_note,
         },
     }
 
@@ -16173,6 +16653,12 @@ _GENERIC_COMPANY_PATTERNS = (
         re.I,
     ),
     re.compile(r"(^| )(agency|organization|vendor|provider|department)( |$)", re.I),
+    re.compile(
+        r"(^| )(senior|sr|junior|jr|staff|lead|head|director|manager|founder|owner|principal|regional|student|vp|vice president|ceo|cto|cfo|coo|engineer|developer|analyst|architect|consultant|specialist)( |-|_).*(business|company|startup|team|product|ops|operations|marketing|sales|support|tech|solution|solutions|cloud|landscaping)( |$)",
+        re.I,
+    ),
+    re.compile(r"(^| )(founder|owner|head|director|manager|lead|student) of (a |an )?(tech|software|cloud|landscaping|marketing|design|support|sales) (company|business|startup|team)( |$)", re.I),
+    re.compile(r"(^| )(aws|azure|gcp|cloud)( |-|_).*(solution|solutions|services?)( |$)", re.I),
     re.compile(r"(^| )\d+\s+employees?( |$)", re.I),
 )
 
@@ -16191,6 +16677,16 @@ _GENERIC_COMPANY_DESCRIPTOR_PREFIXES = {
     "public",
     "independent",
     "boutique",
+    "senior",
+    "junior",
+    "staff",
+    "lead",
+    "head",
+    "director",
+    "manager",
+    "founder",
+    "owner",
+    "student",
 }
 
 _GENERIC_COMPANY_DESCRIPTOR_TOKENS = {
@@ -16217,19 +16713,23 @@ _GENERIC_COMPANY_DESCRIPTOR_TOKENS = {
     "pharmaceutical",
     "pharma",
     "project",
+    "product",
     "provider",
     "recruitment",
     "retail",
     "saas",
     "software",
+    "cloud",
     "solution",
     "solutions",
     "support",
     "sized",
+    "tech",
     "team",
     "technical",
     "vendor",
     "video",
+    "landscaping",
 }
 
 _PLACEHOLDER_COMPANY_NAMES = {
@@ -16361,6 +16861,8 @@ def _company_signal_name_is_eligible(
     normalized = normalize_company_name(name)
     if not normalized:
         return False
+    if _company_signal_looks_like_company_size_label(name):
+        return False
     if _looks_like_company_domain(name):
         return False
     if _looks_like_company_url(name):
@@ -16398,6 +16900,9 @@ def _company_signal_exclusion_reason(
     normalized_source = str(source or "").strip().lower()
     if normalized_source and normalized_source in _company_signal_skip_sources():
         return "deprecated_source"
+
+    if normalized_source and normalized_source in _company_signal_named_account_blocked_sources():
+        return "non_actionable_named_account_source"
 
     if normalized_source and normalized_source in _company_signal_low_trust_sources():
         confidence = _normalize_company_signal_confidence(confidence_score)
@@ -16477,8 +16982,21 @@ def _high_intent_signal_evidence_enabled() -> bool:
     return bool(getattr(settings.b2b_churn, "high_intent_require_signal_evidence", True))
 
 
+def _high_intent_row_has_structured_signal_support(row: dict[str, Any]) -> bool:
+    if not bool(row.get("indicator_named_alternative")):
+        return False
+    if bool(row.get("has_budget_authority")):
+        return True
+    if bool(row.get("indicator_timeline")) and bool(row.get("indicator_price_pressure")):
+        return True
+    buying_stage = _normalize_buying_stage(row.get("buying_stage"))
+    if buying_stage in {"evaluation", "active_purchase", "renewal_decision"} and bool(row.get("indicator_timeline")):
+        return True
+    return False
+
+
 def _high_intent_row_has_signal_evidence(row: dict[str, Any]) -> bool:
-    return any(
+    if any(
         bool(row.get(key))
         for key in (
             "intent_to_leave",
@@ -16489,7 +17007,9 @@ def _high_intent_row_has_signal_evidence(row: dict[str, Any]) -> bool:
             "indicator_evaluation",
             "indicator_switch",
         )
-    )
+    ):
+        return True
+    return _high_intent_row_has_structured_signal_support(row)
 
 
 def _battle_card_company_is_display_safe(

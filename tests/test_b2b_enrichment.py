@@ -1408,6 +1408,54 @@ def test_derive_decision_timeline_ignores_ambiguous_noisy_source_without_vendor_
     assert b2b_enrichment._derive_decision_timeline(result, row) == "unknown"
 
 
+def test_derive_buyer_authority_fields_keeps_discussion_stage_unknown_without_explicit_buying_motion():
+    result = {
+        "reviewer_context": {"role_level": "manager", "decision_maker": False},
+        "churn_signals": {
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+        },
+    }
+    row = {
+        "source": "reddit",
+        "summary": "Helpful but frustrating",
+        "review_text": "Support is slow and setup is annoying, but I did not mention any buying process.",
+        "pros": "",
+        "cons": "",
+    }
+
+    role_type, executive_sponsor_mentioned, buying_stage = b2b_enrichment._derive_buyer_authority_fields(result, row)
+
+    assert role_type == "champion"
+    assert executive_sponsor_mentioned is False
+    assert buying_stage == "unknown"
+
+
+def test_derive_buyer_authority_fields_defaults_structured_reviews_to_post_purchase():
+    result = {
+        "reviewer_context": {"role_level": "manager", "decision_maker": False},
+        "churn_signals": {
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+        },
+    }
+    row = {
+        "source": "g2",
+        "summary": "Reliable tool after rollout",
+        "review_text": "We use this product every day across the team.",
+        "pros": "",
+        "cons": "",
+    }
+
+    _, _, buying_stage = b2b_enrichment._derive_buyer_authority_fields(result, row)
+
+    assert buying_stage == "post_purchase"
+
+
 def test_compute_derived_fields_promotes_contract_notice_into_evaluation_deadline(monkeypatch):
     class _Engine:
         map_hash = "test-hash"

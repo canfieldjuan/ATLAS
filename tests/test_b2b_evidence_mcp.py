@@ -198,6 +198,65 @@ async def test_list_account_intelligence_normalizes_blank_vendor_filter(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_list_account_intelligence_surfaces_source_quality_summary(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                "vendor_name": "Zendesk",
+                "as_of_date": date(2026, 3, 31),
+                "schema_version": 2,
+                "accounts": {
+                    "accounts": [{"urgency_score": 8.4}],
+                    "summary": {
+                        "total_accounts": 3,
+                        "decision_maker_count": 2,
+                        "with_contract_end": 1,
+                        "with_seat_count": 1,
+                        "trusted_identity_count": 2,
+                        "direct_company_anchor_count": 1,
+                        "domain_only_count": 1,
+                        "source_distribution": {"trustradius": 1, "g2": 1, "peerspot": 1},
+                        "source_tier_distribution": {
+                            "high_identity": 1,
+                            "context_only_requires_anchor": 1,
+                            "context_rich": 1,
+                        },
+                        "account_actionability_tier": "mixed",
+                        "account_actionability_note": "Mixed confidence: 2 of 3 named accounts are backed by trusted identity anchors.",
+                    },
+                },
+                "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.list_account_intelligence())
+
+    assert body["count"] == 1
+    item = body["accounts"][0]
+    assert item["trusted_identity_count"] == 2
+    assert item["direct_company_anchor_count"] == 1
+    assert item["domain_only_count"] == 1
+    assert item["source_distribution"] == {
+        "trustradius": 1,
+        "g2": 1,
+        "peerspot": 1,
+    }
+    assert item["source_tier_distribution"] == {
+        "high_identity": 1,
+        "context_only_requires_anchor": 1,
+        "context_rich": 1,
+    }
+    assert item["account_actionability_tier"] == "mixed"
+    assert item["account_actionability_note"] == (
+        "Mixed confidence: 2 of 3 named accounts are backed by trusted identity anchors."
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_segment_intelligence_trims_vendor_name_before_query(monkeypatch):
     pool = MagicMock()
     pool.is_initialized = True

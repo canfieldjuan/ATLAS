@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from atlas_brain.autonomous.tasks import b2b_account_resolution as task_mod
+from atlas_brain.services.b2b import account_resolver as resolver_mod
 from atlas_brain.services.b2b.account_resolver import (
     ExcludedCandidate,
     ResolutionResult,
@@ -27,6 +29,7 @@ from atlas_brain.services.b2b.account_resolver import (
     _extract_from_title_bio,
     extract_from_github_profile,
     extract_from_hn_profile,
+    fetch_reddit_profile,
     extract_from_reddit_profile,
     resolve_review,
 )
@@ -655,6 +658,17 @@ class TestHackerNewsExtractor:
         assert len(signals) == 0
 
 
+def test_unique_usernames_dedupes_before_limit():
+    rows = [
+        {"reviewer_name": "repeat"},
+        {"reviewer_name": "repeat"},
+        {"reviewer_name": "unique-one"},
+        {"reviewer_name": "unique-two"},
+    ]
+
+    assert task_mod._unique_usernames(rows, 2) == ["repeat", "unique-one"]
+
+
 @pytest.mark.asyncio
 async def test_account_resolution_task_claims_safe_enrichment_statuses(monkeypatch):
     pool = SimpleNamespace(
@@ -668,6 +682,8 @@ async def test_account_resolution_task_claims_safe_enrichment_statuses(monkeypat
         account_resolution_eligible_statuses=["enriched", "no_signal", "quarantined"],
         account_resolution_source_priority=["g2", "gartner", "capterra"],
         account_resolution_excluded_sources=["software_advice", "trustpilot"],
+        account_resolution_retry_unresolved_sources=["reddit", "hackernews"],
+        account_resolution_unresolved_retry_interval_hours=48,
     )
     monkeypatch.setattr(task_mod, "get_db_pool", lambda: pool)
     monkeypatch.setattr(task_mod, "settings", SimpleNamespace(b2b_churn=cfg))
@@ -678,16 +694,335 @@ async def test_account_resolution_task_claims_safe_enrichment_statuses(monkeypat
         "_skip_synthesis": "No reviews pending resolution",
         "excluded_sources": 0,
     }
-    query, statuses, excluded_sources, text_pattern, source_priority, batch_size = pool.fetch.await_args.args
+    (
+        query,
+        statuses,
+        excluded_sources,
+        text_pattern,
+        source_priority,
+        retry_unresolved_sources,
+        retry_interval_hours,
+        batch_size,
+    ) = pool.fetch.await_args.args
+    assert "LEFT JOIN b2b_review_vendor_mentions primary_vm" in query
+    assert "COALESCE(primary_vm.vendor_name, r.vendor_name) AS vendor_name" in query
     assert "r.enrichment_status = ANY($1::text[])" in query
     assert "r.enrichment IS NOT NULL" in query
     assert "NOT (r.source = ANY($2::text[]))" in query
+    assert "ar.resolution_status = 'excluded'" in query
+    assert "ar.resolution_method = 'unsupported_source'" in query
+    assert "ar.resolution_status = 'unresolved'" in query
+    assert "r.source = ANY($5::text[])" in query
+    assert "make_interval(hours => $6::int)" in query
     assert "array_position($4::text[], r.source)" in query
     assert statuses == ["enriched", "no_signal", "quarantined"]
-    assert excluded_sources == ["software_advice", "trustpilot"]
+    assert excluded_sources == ["trustpilot"]
     assert "i work at" in text_pattern
     assert source_priority == ["g2", "gartner", "capterra"]
+    assert retry_unresolved_sources == ["reddit", "hackernews"]
+    assert retry_interval_hours == 48
     assert batch_size == 250
+
+
+@pytest.mark.asyncio
+async def test_account_resolution_task_defaults_unresolved_retry_sources(monkeypatch):
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[]),
+        execute=AsyncMock(return_value="INSERT 0 0"),
+    )
+    cfg = SimpleNamespace(
+        account_resolution_batch_size=10,
+        account_resolution_backfill_min_confidence="medium",
+        account_resolution_eligible_statuses=["enriched"],
+        account_resolution_source_priority=["reddit"],
+        account_resolution_excluded_sources=["trustpilot"],
+    )
+    monkeypatch.setattr(task_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(task_mod, "settings", SimpleNamespace(b2b_churn=cfg))
+
+    await task_mod.run(SimpleNamespace())
+
+    _, _, _, _, _, retry_unresolved_sources, retry_interval_hours, _ = pool.fetch.await_args.args
+    assert retry_unresolved_sources == ["reddit", "hackernews", "github"]
+    assert retry_interval_hours == 24
+
+
+@pytest.mark.asyncio
+async def test_account_resolution_task_prefetches_unique_reddit_profiles_before_cap(monkeypatch):
+    rows = [
+        {
+            "id": "r1",
+            "source": "reddit",
+            "source_url": "https://example.com/1",
+            "reviewer_name": "repeat",
+            "reviewer_title": None,
+            "reviewer_company": None,
+            "reviewer_company_norm": None,
+            "company_size_raw": None,
+            "reviewer_industry": None,
+            "review_text": "text",
+            "enrichment": {},
+            "raw_metadata": {},
+            "vendor_name": "Zendesk",
+            "product_category": "Support",
+            "rating": None,
+            "rating_max": None,
+        },
+        {
+            "id": "r2",
+            "source": "reddit",
+            "source_url": "https://example.com/2",
+            "reviewer_name": "repeat",
+            "reviewer_title": None,
+            "reviewer_company": None,
+            "reviewer_company_norm": None,
+            "company_size_raw": None,
+            "reviewer_industry": None,
+            "review_text": "text",
+            "enrichment": {},
+            "raw_metadata": {},
+            "vendor_name": "Zendesk",
+            "product_category": "Support",
+            "rating": None,
+            "rating_max": None,
+        },
+        {
+            "id": "r3",
+            "source": "reddit",
+            "source_url": "https://example.com/3",
+            "reviewer_name": "unique-one",
+            "reviewer_title": None,
+            "reviewer_company": None,
+            "reviewer_company_norm": None,
+            "company_size_raw": None,
+            "reviewer_industry": None,
+            "review_text": "text",
+            "enrichment": {},
+            "raw_metadata": {},
+            "vendor_name": "Zendesk",
+            "product_category": "Support",
+            "rating": None,
+            "rating_max": None,
+        },
+        {
+            "id": "r4",
+            "source": "reddit",
+            "source_url": "https://example.com/4",
+            "reviewer_name": "unique-two",
+            "reviewer_title": None,
+            "reviewer_company": None,
+            "reviewer_company_norm": None,
+            "company_size_raw": None,
+            "reviewer_industry": None,
+            "review_text": "text",
+            "enrichment": {},
+            "raw_metadata": {},
+            "vendor_name": "Zendesk",
+            "product_category": "Support",
+            "rating": None,
+            "rating_max": None,
+        },
+    ]
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=rows),
+        execute=AsyncMock(return_value="INSERT 0 1"),
+    )
+    cfg = SimpleNamespace(
+        account_resolution_batch_size=100,
+        account_resolution_backfill_min_confidence="medium",
+        account_resolution_eligible_statuses=["enriched"],
+        account_resolution_source_priority=["reddit"],
+        account_resolution_excluded_sources=["trustpilot"],
+        account_resolution_max_profile_fetches=1,
+        account_resolution_reddit_max_profile_fetches=2,
+        account_resolution_profile_fetch_concurrency=5,
+        account_resolution_profile_fetch_timeout=1.0,
+        account_resolution_reddit_profile_fetch_concurrency=2,
+        account_resolution_reddit_profile_fetch_delay_seconds=0.5,
+        account_resolution_reddit_profile_fetch_max_retries=2,
+        account_resolution_reddit_profile_fetch_retry_after_cap_seconds=3.0,
+    )
+    fetch_reddit = AsyncMock(side_effect=[{}, {}])
+    monkeypatch.setattr(task_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(task_mod, "settings", SimpleNamespace(b2b_churn=cfg))
+    monkeypatch.setattr(task_mod, "_exclude_unsupported_sources", AsyncMock(return_value=0))
+    monkeypatch.setattr(task_mod, "_propagate_user_resolutions", AsyncMock(return_value=0))
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.account_resolver.fetch_reddit_profile",
+        fetch_reddit,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.account_resolver.resolve_review",
+        lambda *args, **kwargs: ResolutionResult(),
+    )
+
+    result = await task_mod.run(SimpleNamespace())
+
+    assert result["reviews_processed"] == 4
+    assert fetch_reddit.await_count == 2
+    assert [call.args[0] for call in fetch_reddit.await_args_list] == ["repeat", "unique-one"]
+    for call in fetch_reddit.await_args_list:
+        assert call.kwargs["request_delay_seconds"] == 0.5
+        assert call.kwargs["max_retries"] == 2
+        assert call.kwargs["retry_after_cap_seconds"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_reddit_profile_retries_rate_limited_response(monkeypatch):
+    class _Response:
+        def __init__(self, status_code, payload=None, headers=None):
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self, responses):
+            self._responses = list(responses)
+
+        async def get(self, url, headers=None):
+            assert "/user/example/about.json" in url
+            assert headers and "User-Agent" in headers
+            return self._responses.pop(0)
+
+    sleep_calls = []
+
+    async def _fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.account_resolver.asyncio.sleep",
+        _fake_sleep,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.account_resolver._get_reddit_credentials",
+        lambda: ("", ""),
+    )
+    profile = await fetch_reddit_profile(
+        "example",
+        _Client([
+            _Response(429, headers={"Retry-After": "7"}),
+            _Response(
+                200,
+                payload={"data": {"subreddit": {"public_description": "Engineer at Stripe https://stripe.com"}}},
+            ),
+        ]),
+        request_delay_seconds=0.25,
+        max_retries=1,
+        retry_after_cap_seconds=2.0,
+    )
+
+    assert profile["bio"] == "Engineer at Stripe https://stripe.com"
+    assert profile["profile_urls"] == ["https://stripe.com"]
+    assert sleep_calls == [0.25, 2.0, 0.25]
+
+
+@pytest.mark.asyncio
+async def test_fetch_reddit_profile_uses_oauth_when_credentials_available(monkeypatch):
+    class _Response:
+        def __init__(self, status_code, payload=None, headers=None):
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def get(self, url, headers=None):
+            self.calls.append((url, headers))
+            return _Response(
+                200,
+                payload={"data": {"subreddit": {"public_description": "Works at Cloudflare"}}},
+            )
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.account_resolver._get_reddit_credentials",
+        lambda: ("client-id", "client-secret"),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.account_resolver._get_reddit_oauth_token",
+        AsyncMock(return_value="oauth-token"),
+    )
+    client = _Client()
+
+    profile = await fetch_reddit_profile("example", client, request_delay_seconds=0.0)
+
+    assert profile["bio"] == "Works at Cloudflare"
+    assert client.calls
+    url, headers = client.calls[0]
+    assert url == "https://oauth.reddit.com/user/example/about"
+    assert headers["Authorization"] == "Bearer oauth-token"
+    assert headers["User-Agent"]
+
+
+@pytest.mark.asyncio
+async def test_get_reddit_oauth_token_uses_single_request_under_concurrency(monkeypatch):
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"access_token": "shared-token", "expires_in": 3600}
+
+    class _Client:
+        def __init__(self):
+            self.post_calls = 0
+
+        async def post(self, url, auth=None, data=None, headers=None):
+            self.post_calls += 1
+            assert url == "https://www.reddit.com/api/v1/access_token"
+            return _Response()
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.account_resolver._get_reddit_credentials",
+        lambda: ("client-id", "client-secret"),
+    )
+    resolver_mod._REDDIT_OAUTH_TOKEN = None
+    resolver_mod._REDDIT_OAUTH_TOKEN_EXPIRES_AT = 0.0
+    client = _Client()
+
+    first, second = await asyncio.gather(
+        resolver_mod._get_reddit_oauth_token(client),
+        resolver_mod._get_reddit_oauth_token(client),
+    )
+
+    assert first == "shared-token"
+    assert second == "shared-token"
+    assert client.post_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_backfill_review_company_context_updates_enrichment_company_name():
+    class _Pool:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, query, *args):
+            self.calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = _Pool()
+
+    changed = await task_mod._backfill_review_company_context(
+        pool,
+        review_id="review-1",
+        company_name="Acme Corp",
+        company_norm="acme corp",
+    )
+
+    assert changed is True
+    query, args = pool.calls[0]
+    assert "jsonb_set" in query
+    assert "{reviewer_context,company_name}" in query
+    assert args == ("review-1", "Acme Corp", "acme corp")
 
 
 # -- Review Text Extraction -------------------------------------------------

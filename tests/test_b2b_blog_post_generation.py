@@ -1148,6 +1148,7 @@ def test_blueprint_vendor_deep_dive_uses_sparse_account_preview():
             "account_reasoning_preview": {
                 "preview_mode": "early_account_signal",
                 "disclaimer": "Early account signal only.",
+                "account_actionability_tier": "low",
                 "account_pressure_summary": "A small set of named accounts is showing early churn pressure.",
                 "account_pressure_metrics": {"total_accounts": 1},
                 "priority_account_names": ["Concentrix"],
@@ -1162,10 +1163,14 @@ def test_blueprint_vendor_deep_dive_uses_sparse_account_preview():
     assert account_pressure.key_stats["account_pressure_summary"] == (
         "A small set of named accounts is showing early churn pressure."
     )
+    assert account_pressure.key_stats["account_pressure_disclaimer"] == "Early account signal only."
+    assert account_pressure.key_stats["account_actionability_tier"] == "low"
     assert account_pressure.key_stats["priority_accounts"] == ["Concentrix"]
     assert verdict.key_stats["account_pressure_summary"] == (
         "A small set of named accounts is showing early churn pressure."
     )
+    assert verdict.key_stats["account_pressure_disclaimer"] == "Early account signal only."
+    assert verdict.key_stats["account_actionability_tier"] == "low"
 
 
 def test_blueprint_best_fit_guide_adds_tradeoff_and_voice_sections():
@@ -2172,6 +2177,7 @@ def test_blueprint_vendor_alternative_uses_sparse_account_preview_when_suppresse
             "account_reasoning_preview": {
                 "preview_mode": "early_account_signal",
                 "disclaimer": "Early account signal only.",
+                "account_actionability_tier": "low",
                 "account_pressure_summary": "Two named accounts are showing early evaluation pressure.",
                 "account_pressure_metrics": {"total_accounts": 2},
                 "priority_account_names": ["Acme Corp", "Globex"],
@@ -2187,10 +2193,14 @@ def test_blueprint_vendor_alternative_uses_sparse_account_preview_when_suppresse
     assert market_context.key_stats["account_pressure_summary"] == (
         "Two named accounts are showing early evaluation pressure."
     )
+    assert market_context.key_stats["account_pressure_disclaimer"] == "Early account signal only."
+    assert market_context.key_stats["account_actionability_tier"] == "low"
     assert market_context.key_stats["priority_accounts"] == ["Acme Corp", "Globex"]
     assert verdict.key_stats["account_pressure_summary"] == (
         "Two named accounts are showing early evaluation pressure."
     )
+    assert verdict.key_stats["account_pressure_disclaimer"] == "Early account signal only."
+    assert verdict.key_stats["account_actionability_tier"] == "low"
 
 
 def test_blueprint_churn_report_uses_contract_sections_when_pool_slices_are_thin():
@@ -2226,7 +2236,13 @@ def test_blueprint_churn_report_uses_contract_sections_when_pool_slices_are_thin
                 "displacement_reasoning": {
                     "migration_proof": {"switching_is_real": True, "switch_volume": {"value": 4}},
                 },
-                "account_reasoning": {"market_summary": "Two named accounts are in active evaluation."},
+                "account_reasoning": {
+                    "market_summary": "Two named accounts are in active evaluation.",
+                    "account_actionability_note": (
+                        "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+                    ),
+                    "account_actionability_tier": "mixed",
+                },
                 "category_reasoning": {
                     "market_regime": "fragmented",
                     "narrative": "Buyers are actively re-evaluating vendor fit.",
@@ -2249,6 +2265,10 @@ def test_blueprint_churn_report_uses_contract_sections_when_pool_slices_are_thin
     assert outlook.key_stats["account_pressure_summary"] == (
         "Two named accounts are in active evaluation."
     )
+    assert outlook.key_stats["account_pressure_disclaimer"] == (
+        "Mixed confidence: 2 of 6 named accounts are backed by trusted identity anchors."
+    )
+    assert outlook.key_stats["account_actionability_tier"] == "mixed"
     assert outlook.key_stats["category_narrative"] == (
         "Buyers are actively re-evaluating vendor fit."
     )

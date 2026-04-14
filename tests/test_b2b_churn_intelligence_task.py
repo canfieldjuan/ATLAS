@@ -217,6 +217,23 @@ async def test_upsert_company_signal_candidates_persists_materialization_run_id(
     assert rows[0][-2] == "analyst_review"
 
 
+@pytest.mark.asyncio
+async def test_delete_pending_company_signal_candidates_scopes_vendor_filter():
+    pool = CapturePool()
+
+    deleted = await mod._delete_pending_company_signal_candidates(
+        pool,
+        vendors=["Zendesk", "zendesk", "HubSpot"],
+    )
+
+    assert deleted == 0
+    assert len(pool.execute_calls) == 1
+    query, params = pool.execute_calls[0]
+    assert "DELETE FROM b2b_company_signal_candidates" in query
+    assert "review_status = 'pending'" in query
+    assert params == (["Zendesk", "HubSpot"],)
+
+
 def test_build_company_signal_candidate_groups_corroborates_low_trust_cluster():
     review_ids = [str(uuid4()) for _ in range(4)]
 
@@ -347,6 +364,23 @@ async def test_upsert_company_signal_candidate_groups_persists_materialization_r
 
 
 @pytest.mark.asyncio
+async def test_delete_pending_company_signal_candidate_groups_scopes_vendor_filter():
+    pool = CapturePool()
+
+    deleted = await mod._delete_pending_company_signal_candidate_groups(
+        pool,
+        vendors=["Zendesk", "zendesk", "HubSpot"],
+    )
+
+    assert deleted == 0
+    assert len(pool.execute_calls) == 1
+    query, params = pool.execute_calls[0]
+    assert "DELETE FROM b2b_company_signal_candidate_groups" in query
+    assert "review_status = 'pending'" in query
+    assert params == (["Zendesk", "HubSpot"],)
+
+
+@pytest.mark.asyncio
 async def test_rebuild_company_signal_candidate_materializations_returns_counts(monkeypatch):
     pool = CapturePool()
     fetch_mock = AsyncMock(
@@ -367,6 +401,8 @@ async def test_rebuild_company_signal_candidate_materializations_returns_counts(
     )
     upsert_candidates_mock = AsyncMock(return_value=2)
     upsert_groups_mock = AsyncMock(return_value=1)
+    delete_candidates_mock = AsyncMock(return_value=4)
+    delete_groups_mock = AsyncMock(return_value=2)
     sync_mock = AsyncMock(return_value=None)
     monkeypatch.setattr(mod, "_fetch_company_signal_review_candidates", fetch_mock)
     monkeypatch.setattr(
@@ -380,6 +416,8 @@ async def test_rebuild_company_signal_candidate_materializations_returns_counts(
             },
         ],
     )
+    monkeypatch.setattr(mod, "_delete_pending_company_signal_candidates", delete_candidates_mock)
+    monkeypatch.setattr(mod, "_delete_pending_company_signal_candidate_groups", delete_groups_mock)
     monkeypatch.setattr(mod, "_upsert_company_signal_candidates", upsert_candidates_mock)
     monkeypatch.setattr(mod, "_upsert_company_signal_candidate_groups", upsert_groups_mock)
     monkeypatch.setattr(mod, "_sync_company_signal_candidate_member_status_from_groups", sync_mock)
@@ -400,6 +438,8 @@ async def test_rebuild_company_signal_candidate_materializations_returns_counts(
         "company_signal_candidate_groups_persisted": 1,
     }
     fetch_mock.assert_awaited_once()
+    delete_candidates_mock.assert_awaited_once_with(pool, vendors=["Zendesk"])
+    delete_groups_mock.assert_awaited_once_with(pool, vendors=["Zendesk"])
     upsert_candidates_mock.assert_awaited_once()
     upsert_groups_mock.assert_awaited_once()
     sync_mock.assert_awaited_once_with(pool, materialization_run_id="run-backfill")
@@ -409,3 +449,53 @@ def test_run_uses_scoped_vendors_for_company_signal_candidate_materializations()
     source = inspect.getsource(mod.run)
 
     assert "vendors=scoped_vendors or None" in source
+
+
+def test_canonical_ready_company_signal_seeds_only_promotes_canonical_ready_rows():
+    seeds = mod._canonical_ready_company_signal_seeds(
+        [
+            {
+                "review_id": str(uuid4()),
+                "company_name": "Infohob",
+                "vendor_name": "Trello",
+                "candidate_bucket": "canonical_ready",
+                "source": "peerspot",
+                "urgency_score": 7.0,
+                "pain_category": "pricing",
+                "role_level": "director",
+                "decision_maker": True,
+                "buying_stage": "active_purchase",
+                "company_domain": "infohob.example",
+                "confidence_score": 0.64,
+            },
+            {
+                "review_id": str(uuid4()),
+                "company_name": "Analyst Review Co",
+                "vendor_name": "Trello",
+                "candidate_bucket": "analyst_review",
+                "source": "reddit",
+            },
+        ]
+    )
+
+    assert len(seeds) == 1
+    assert seeds[0]["vendor"] == "Trello"
+    assert seeds[0]["company"] == "Infohob"
+    assert seeds[0]["company_name"] == "Infohob"
+    assert seeds[0]["source"] == "peerspot"
+    assert seeds[0]["urgency"] == 7.0
+    assert seeds[0]["pain"] == "pricing"
+    assert seeds[0]["buyer_role"] == "director"
+    assert seeds[0]["decision_maker"] is True
+    assert seeds[0]["buying_stage"] == "active_purchase"
+    assert seeds[0]["company_domain"] == "infohob.example"
+    assert seeds[0]["confidence_score"] == 0.64
+    assert seeds[0]["alternatives"] == []
+    assert seeds[0]["quotes"] == []
+
+
+def test_run_merges_canonical_ready_company_signal_candidates_into_canonical_signals():
+    source = inspect.getsource(mod.run)
+
+    assert "_canonical_ready_account_seeds = _canonical_ready_company_signal_seeds(" in source
+    assert "[*(high_intent or []), *_canonical_ready_account_seeds]" in source

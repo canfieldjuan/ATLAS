@@ -288,6 +288,10 @@ class TestFallbackIntentRows:
 
         assert not _company_signal_name_is_eligible("midsized ERP software", current_vendor="Salesforce")
         assert not _company_signal_name_is_eligible("a multinational pharmaceutical", current_vendor="ClickUp")
+        assert not _company_signal_name_is_eligible("senior product", current_vendor="Slack")
+        assert not _company_signal_name_is_eligible("founder of a tech", current_vendor="ActiveCampaign")
+        assert not _company_signal_name_is_eligible("aws cloud solution", current_vendor="Linode")
+        assert not _company_signal_name_is_eligible("student landscaping business", current_vendor="QuickBooks")
         assert not _company_signal_name_is_eligible(
             "https://chatgpt.com/g/g-LsO4PHxnv-robert-on-ai-and-craftsmanship",
             current_vendor="Salesforce",
@@ -1084,6 +1088,32 @@ class TestBuildVendorAggregate:
         )
         assert agg["total_accounts_in_motion"] == 0
         assert agg["accounts"] == []
+
+    def test_account_pool_quality_note_is_exposed_on_aggregate(self):
+        agg = _build_vendor_aggregate(
+            "Trello",
+            [self._make_account()],
+            category="Project Management",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+            account_pool_lookup={
+                "Trello": {
+                    "summary": {
+                        "account_actionability_tier": "mixed",
+                        "account_actionability_note": "Mixed confidence: 1 of 2 named accounts are backed by trusted identity anchors.",
+                    }
+                }
+            },
+        )
+
+        assert agg["account_pressure_disclaimer"] == (
+            "Mixed confidence: 1 of 2 named accounts are backed by trusted identity anchors."
+        )
+        assert agg["account_actionability_tier"] == "mixed"
 
     def test_empty_accounts_suppresses_stale_account_reasoning_contract(self):
         class _View:

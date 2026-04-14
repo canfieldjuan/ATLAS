@@ -29,6 +29,15 @@ _PROFILE_URL_TEMPLATES = {
 _SELF_IDENT_TEXT_PATTERN = (
     r"( i work at | i work for | we work at | we work for | we use this at )"
 )
+_ACCOUNT_RESOLUTION_ALWAYS_SUPPORTED_SOURCES = frozenset({
+    "g2",
+    "gartner",
+    "trustradius",
+    "capterra",
+    "software_advice",
+    "peerspot",
+    "sourceforge",
+})
 
 
 def _build_author_profile_url(source: str, username: str) -> str | None:
@@ -36,6 +45,91 @@ def _build_author_profile_url(source: str, username: str) -> str | None:
     if template and username:
         return template.format(username=username)
     return None
+
+
+def _normalize_account_resolution_excluded_sources(raw: Any) -> list[str]:
+    """Keep truly unsupported sources excluded while allowing structured B2B review sources."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(part or "").strip() for part in raw]
+    else:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        source = str(value or "").strip().lower()
+        if not source or source in seen:
+            continue
+        seen.add(source)
+        if source in _ACCOUNT_RESOLUTION_ALWAYS_SUPPORTED_SOURCES:
+            continue
+        normalized.append(source)
+    return normalized
+
+
+def _unique_usernames(rows: list[dict[str, Any]], limit: int) -> list[str]:
+    """Return up to ``limit`` unique non-empty reviewer handles in row order."""
+    seen: set[str] = set()
+    usernames: list[str] = []
+    for row in rows:
+        username = str(row.get("reviewer_name") or "").strip()
+        if not username or username in seen:
+            continue
+        seen.add(username)
+        usernames.append(username)
+        if len(usernames) >= limit:
+            break
+    return usernames
+
+
+async def _backfill_review_company_context(
+    pool: Any,
+    *,
+    review_id: Any,
+    company_name: str,
+    company_norm: str | None,
+) -> bool:
+    """Promote a resolved company into both raw review fields and enrichment reviewer context."""
+    status = await pool.execute(
+        """
+        UPDATE b2b_reviews
+        SET reviewer_company = CASE
+                WHEN reviewer_company IS NULL OR reviewer_company = '' THEN $2
+                ELSE reviewer_company
+            END,
+            reviewer_company_norm = CASE
+                WHEN reviewer_company IS NULL OR reviewer_company = '' THEN $3
+                ELSE reviewer_company_norm
+            END,
+            enrichment = CASE
+                WHEN NULLIF(trim(coalesce(enrichment #>> '{reviewer_context,company_name}', '')), '') IS NULL
+                    THEN jsonb_set(
+                        COALESCE(enrichment, '{}'::jsonb),
+                        '{reviewer_context,company_name}',
+                        to_jsonb($2::text),
+                        true
+                    )
+                ELSE enrichment
+            END
+        WHERE id = $1
+          AND (
+                reviewer_company IS NULL
+             OR reviewer_company = ''
+             OR NULLIF(trim(coalesce(enrichment #>> '{reviewer_context,company_name}', '')), '') IS NULL
+          )
+        """,
+        review_id,
+        company_name,
+        company_norm,
+    )
+    try:
+        return int(str(status).split()[-1]) > 0
+    except Exception:
+        return False
 
 
 async def _exclude_unsupported_sources(
@@ -164,14 +258,12 @@ async def _propagate_user_resolutions(pool: Any, backfill_labels: set) -> int:
                 propagated += 1
 
                 if prop_label in backfill_labels and not (review["reviewer_company"] or "").strip():
-                    await pool.execute("""
-                        UPDATE b2b_reviews
-                        SET reviewer_company = $2,
-                            reviewer_company_norm = $3
-                        WHERE id = $1
-                          AND (reviewer_company IS NULL OR reviewer_company = '')
-                    """, review["review_id"], user["resolved_company_name"],
-                        user["normalized_company_name"])
+                    await _backfill_review_company_context(
+                        pool,
+                        review_id=review["review_id"],
+                        company_name=user["resolved_company_name"],
+                        company_norm=user["normalized_company_name"],
+                    )
             except Exception:
                 logger.warning(
                     "Username propagation failed for %s", review["ar_id"], exc_info=True,
@@ -204,11 +296,27 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ) or ["g2", "gartner", "capterra", "software_advice", "trustpilot"]
     )
     excluded_sources = list(
+        _normalize_account_resolution_excluded_sources(
+            getattr(
+                cfg,
+                "account_resolution_excluded_sources",
+                ["trustpilot"],
+            ) or ["trustpilot"]
+        )
+    )
+    retry_unresolved_sources = list(
         getattr(
             cfg,
-            "account_resolution_excluded_sources",
-            ["capterra", "software_advice", "trustpilot", "trustradius"],
-        ) or ["capterra", "software_advice", "trustpilot", "trustradius"]
+            "account_resolution_retry_unresolved_sources",
+            ["reddit", "hackernews", "github"],
+        ) or ["reddit", "hackernews", "github"]
+    )
+    retry_interval_hours = int(
+        getattr(
+            cfg,
+            "account_resolution_unresolved_retry_interval_hours",
+            24,
+        )
     )
     backfill_labels = {"high"}
     if backfill_min == "medium":
@@ -231,14 +339,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                r.reviewer_title, r.reviewer_company, r.reviewer_company_norm,
                r.company_size_raw, r.reviewer_industry,
                r.review_text, r.enrichment, r.raw_metadata,
-               r.vendor_name, r.product_category, r.rating, r.rating_max
+               COALESCE(primary_vm.vendor_name, r.vendor_name) AS vendor_name,
+               r.product_category, r.rating, r.rating_max
         FROM b2b_reviews r
+        LEFT JOIN b2b_review_vendor_mentions primary_vm
+          ON primary_vm.review_id = r.id
+         AND primary_vm.is_primary = TRUE
         LEFT JOIN b2b_account_resolution ar ON ar.review_id = r.id
         WHERE r.enrichment_status = ANY($1::text[])
           AND r.duplicate_of_review_id IS NULL
           AND r.enrichment IS NOT NULL
           AND NOT (r.source = ANY($2::text[]))
-          AND ar.id IS NULL
+          AND (
+                ar.id IS NULL
+             OR (
+                    ar.resolution_status = 'excluded'
+                AND ar.resolution_method = 'unsupported_source'
+                AND NOT (r.source = ANY($2::text[]))
+             )
+             OR (
+                    ar.resolution_status = 'unresolved'
+                AND r.source = ANY($5::text[])
+                AND COALESCE(ar.resolved_at, NOW() - make_interval(hours => ($6::int + 1)))
+                    <= NOW() - make_interval(hours => $6::int)
+             )
+          )
         ORDER BY
             CASE
                 WHEN NULLIF(trim(coalesce(r.reviewer_company, '')), '') IS NOT NULL THEN 0
@@ -251,12 +376,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             END,
             COALESCE(array_position($4::text[], r.source), 999),
             r.enriched_at DESC
-        LIMIT $5
+        LIMIT $7
         """,
         eligible_statuses,
         excluded_sources,
         _SELF_IDENT_TEXT_PATTERN,
         source_priority,
+        retry_unresolved_sources,
+        retry_interval_hours,
         batch_size,
     )
 
@@ -280,8 +407,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     import httpx
 
     max_fetches = getattr(cfg, "account_resolution_max_profile_fetches", 50)
+    reddit_max_fetches = getattr(cfg, "account_resolution_reddit_max_profile_fetches", 150)
     fetch_concurrency = getattr(cfg, "account_resolution_profile_fetch_concurrency", 10)
     fetch_timeout = getattr(cfg, "account_resolution_profile_fetch_timeout", 5.0)
+    reddit_fetch_concurrency = getattr(
+        cfg,
+        "account_resolution_reddit_profile_fetch_concurrency",
+        3,
+    )
+    reddit_fetch_delay_seconds = getattr(
+        cfg,
+        "account_resolution_reddit_profile_fetch_delay_seconds",
+        0.25,
+    )
+    reddit_fetch_max_retries = getattr(
+        cfg,
+        "account_resolution_reddit_profile_fetch_max_retries",
+        1,
+    )
+    reddit_fetch_retry_after_cap_seconds = getattr(
+        cfg,
+        "account_resolution_reddit_profile_fetch_retry_after_cap_seconds",
+        5.0,
+    )
 
     hn_reviews = [r for r in rows if (r["source"] or "") == "hackernews" and r["reviewer_name"]]
     gh_reviews = [r for r in rows if (r["source"] or "") == "github" and r["reviewer_name"]]
@@ -290,18 +438,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     if hn_reviews or gh_reviews or reddit_reviews:
         # Deduplicate usernames before launching coroutines
-        hn_usernames = list(dict.fromkeys(
-            r["reviewer_name"] for r in hn_reviews[:max_fetches] if r["reviewer_name"]
-        ))
-        gh_usernames = list(dict.fromkeys(
-            r["reviewer_name"] for r in gh_reviews[:max_fetches] if r["reviewer_name"]
-        ))
-        reddit_usernames = list(dict.fromkeys(
-            r["reviewer_name"] for r in reddit_reviews[:max_fetches] if r["reviewer_name"]
-        ))
+        hn_usernames = _unique_usernames([dict(r) for r in hn_reviews], max_fetches)
+        gh_usernames = _unique_usernames([dict(r) for r in gh_reviews], max_fetches)
+        reddit_usernames = _unique_usernames([dict(r) for r in reddit_reviews], reddit_max_fetches)
 
         async with httpx.AsyncClient(timeout=fetch_timeout) as http:
             sem = asyncio.Semaphore(fetch_concurrency)
+            reddit_sem = asyncio.Semaphore(reddit_fetch_concurrency)
 
             async def _fetch_hn(username: str) -> None:
                 async with sem:
@@ -316,8 +459,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         profile_cache[f"gh:{username}"] = profile
 
             async def _fetch_reddit(username: str) -> None:
-                async with sem:
-                    profile = await fetch_reddit_profile(username, http)
+                async with reddit_sem:
+                    profile = await fetch_reddit_profile(
+                        username,
+                        http,
+                        request_delay_seconds=reddit_fetch_delay_seconds,
+                        max_retries=reddit_fetch_max_retries,
+                        retry_after_cap_seconds=reddit_fetch_retry_after_cap_seconds,
+                    )
                     if profile:
                         profile_cache[f"reddit:{username}"] = profile
 
@@ -329,13 +478,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
 
         logger.info(
-            "Fetched %d profiles (HN=%d, GH=%d, Reddit=%d) concurrency=%d timeout=%.1fs",
+            "Fetched %d profiles (HN=%d, GH=%d, Reddit=%d) concurrency=%d reddit_concurrency=%d timeout=%.1fs caps=(hn_gh=%d reddit=%d)",
             len(profile_cache),
             sum(1 for k in profile_cache if k.startswith("hn:")),
             sum(1 for k in profile_cache if k.startswith("gh:")),
             sum(1 for k in profile_cache if k.startswith("reddit:")),
             fetch_concurrency,
+            reddit_fetch_concurrency,
             fetch_timeout,
+            max_fetches,
+            reddit_max_fetches,
         )
 
     # Build vendor blocklist
@@ -461,22 +613,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if (
             result.resolved_company_name
             and result.confidence_label in backfill_labels
-            and not (row["reviewer_company"] or "").strip()
         ):
             try:
-                await pool.execute(
-                    """
-                    UPDATE b2b_reviews
-                    SET reviewer_company = $2,
-                        reviewer_company_norm = $3
-                    WHERE id = $1
-                      AND (reviewer_company IS NULL OR reviewer_company = '')
-                    """,
-                    row["id"],
-                    result.resolved_company_name,
-                    result.normalized_company_name,
+                changed = await _backfill_review_company_context(
+                    pool,
+                    review_id=row["id"],
+                    company_name=result.resolved_company_name,
+                    company_norm=result.normalized_company_name,
                 )
-                backfilled_count += 1
+                if changed:
+                    backfilled_count += 1
             except Exception:
                 logger.warning(
                     "Failed to backfill reviewer_company for %s",

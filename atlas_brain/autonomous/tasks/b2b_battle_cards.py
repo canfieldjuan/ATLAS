@@ -362,13 +362,42 @@ def _battle_card_account_summary_payload(
     return summary, metrics, priority_names[:3]
 
 
+def _battle_card_account_actionability_payload(
+    account_reasoning: dict[str, Any] | None,
+    account_preview: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Derive disclaimer and actionability tier from account reasoning inputs."""
+    if not isinstance(account_reasoning, dict):
+        account_reasoning = {}
+    if not isinstance(account_preview, dict):
+        account_preview = {}
+    disclaimer = str(
+        account_reasoning.get("account_actionability_note")
+        or account_preview.get("account_actionability_note")
+        or account_preview.get("disclaimer")
+        or ""
+    ).strip()
+    tier = str(
+        account_reasoning.get("account_actionability_tier")
+        or account_preview.get("account_actionability_tier")
+        or ""
+    ).strip()
+    return disclaimer, tier
+
+
 def _battle_card_compact_account_preview(preview: dict[str, Any]) -> dict[str, Any]:
     """Compact sparse account preview for battle-card prompt payloads."""
     if not isinstance(preview, dict):
         return {}
     compact = {
         key: preview.get(key)
-        for key in ("preview_mode", "disclaimer", "account_pressure_summary")
+        for key in (
+            "preview_mode",
+            "disclaimer",
+            "account_pressure_summary",
+            "account_actionability_note",
+            "account_actionability_tier",
+        )
         if preview.get(key) not in (None, "", [], {})
     }
     metrics = preview.get("account_pressure_metrics")
@@ -409,12 +438,20 @@ def _promote_account_reasoning_to_battle_card(card: dict[str, Any]) -> None:
         account_reasoning,
         account_preview,
     )
+    disclaimer, tier = _battle_card_account_actionability_payload(
+        account_reasoning,
+        account_preview,
+    )
     if summary and not card.get("account_pressure_summary"):
         card["account_pressure_summary"] = summary
     if metrics and not card.get("account_pressure_metrics"):
         card["account_pressure_metrics"] = metrics
     if priority_names and not card.get("priority_account_names"):
         card["priority_account_names"] = priority_names
+    if disclaimer and not card.get("account_pressure_disclaimer"):
+        card["account_pressure_disclaimer"] = disclaimer
+    if tier and not card.get("account_actionability_tier"):
+        card["account_actionability_tier"] = tier
 
 
 def _normalize_stage(value: Any) -> str:

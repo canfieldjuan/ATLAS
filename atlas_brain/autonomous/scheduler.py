@@ -68,6 +68,27 @@ class TaskScheduler:
         task.metadata["_execution_id"] = str(exec_id)
         return task
 
+    async def _begin_execution_if_idle(
+        self,
+        repo,
+        task: ScheduledTask,
+        *,
+        retry_count: int = 0,
+        metadata: Optional[dict] = None,
+    ):
+        """Record a new execution only when the task is not already running."""
+        task_key = str(task.id)
+        async with self._manual_run_lock:
+            running_exec = await repo.get_running_execution(task.id)
+            if running_exec or task_key in self._manual_running_task_ids:
+                return None, running_exec
+            exec_id = await repo.record_execution(
+                task.id,
+                retry_count=retry_count,
+                metadata=metadata,
+            )
+            return exec_id, None
+
     async def start(self) -> None:
         """Create the scheduler, start it, and load tasks from DB."""
         if self._running:
@@ -1175,7 +1196,18 @@ class TaskScheduler:
                 logger.debug("Skipping disabled/missing task %s", task_id)
                 return
 
-            exec_id = await repo.record_execution(task_id, retry_count=retry_count)
+            exec_id, running_exec = await self._begin_execution_if_idle(
+                repo,
+                task,
+                retry_count=retry_count,
+            )
+            if exec_id is None:
+                logger.info(
+                    "Skipping task '%s' because execution %s is already running",
+                    task.name,
+                    getattr(running_exec, "id", None),
+                )
+                return
             start_time = time.monotonic()
             now = datetime.now(timezone.utc)
 
@@ -1350,16 +1382,19 @@ class TaskScheduler:
 
         repo = get_scheduled_task_repo()
         task_key = str(task.id)
+        exec_id, running_exec = await self._begin_execution_if_idle(
+            repo,
+            task,
+            metadata={"trigger": "manual"},
+        )
+        if exec_id is None:
+            return {
+                "execution_id": str(running_exec.id) if running_exec else None,
+                "status": "running",
+                "message": f"Task '{task.name}' is already running.",
+                "already_running": True,
+            }
         async with self._manual_run_lock:
-            running_exec = await repo.get_running_execution(task.id)
-            if running_exec or task_key in self._manual_running_task_ids:
-                return {
-                    "execution_id": str(running_exec.id) if running_exec else None,
-                    "status": "running",
-                    "message": f"Task '{task.name}' is already running.",
-                    "already_running": True,
-                }
-            exec_id = await repo.record_execution(task.id, metadata={"trigger": "manual"})
             self._manual_running_task_ids.add(task_key)
 
         bg_task = asyncio.create_task(

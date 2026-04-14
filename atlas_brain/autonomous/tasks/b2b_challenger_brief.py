@@ -963,17 +963,25 @@ def _reasoning_int(value: Any) -> int | None:
 
 def _account_reasoning_summary_payload(
     account_reasoning: dict[str, Any] | None,
-) -> tuple[str, dict[str, int]]:
+) -> tuple[str, dict[str, int], str, str]:
     """Derive readable summary fields from account reasoning."""
     if not isinstance(account_reasoning, dict):
-        return "", {}
+        return "", {}, "", ""
     summary = str(account_reasoning.get("market_summary") or "").strip()
     metrics: dict[str, int] = {}
     for key in ("total_accounts", "high_intent_count", "active_eval_count"):
         value = _reasoning_int(account_reasoning.get(key))
         if value is not None:
             metrics[key] = value
-    return summary, metrics
+    disclaimer = str(
+        account_reasoning.get("account_actionability_note")
+        or account_reasoning.get("disclaimer")
+        or ""
+    ).strip()
+    actionability_tier = str(
+        account_reasoning.get("account_actionability_tier") or ""
+    ).strip()
+    return summary, metrics, disclaimer, actionability_tier
 
 
 def _fallback_target_accounts_from_reasoning(
@@ -1511,7 +1519,12 @@ def _build_challenger_brief(
                 ]
                 if fallback_signals:
                     incumbent_section["key_signals"] = fallback_signals
-        account_pressure_summary, account_pressure_metrics = (
+        (
+            account_pressure_summary,
+            account_pressure_metrics,
+            account_pressure_disclaimer,
+            account_actionability_tier,
+        ) = (
             _account_reasoning_summary_payload(account_reasoning)
         )
         if (
@@ -1519,15 +1532,34 @@ def _build_challenger_brief(
             and (not account_pressure_metrics)
             and account_reasoning_preview
         ):
-            account_pressure_summary, account_pressure_metrics = (
+            (
+                account_pressure_summary,
+                account_pressure_metrics,
+                account_pressure_disclaimer,
+                account_actionability_tier,
+            ) = (
                 _account_reasoning_summary_payload(account_reasoning_preview)
             )
+            if not account_pressure_disclaimer:
+                account_pressure_disclaimer = str(
+                    account_preview_payload.get("account_actionability_note")
+                    or account_preview_payload.get("disclaimer")
+                    or ""
+                ).strip()
+            if not account_actionability_tier:
+                account_actionability_tier = str(
+                    account_preview_payload.get("account_actionability_tier") or ""
+                ).strip()
             if account_reasoning_preview:
                 incumbent_section["account_reasoning_preview"] = account_reasoning_preview
         if account_pressure_summary:
             incumbent_section["account_pressure_summary"] = account_pressure_summary
         if account_pressure_metrics:
             incumbent_section["account_pressure_metrics"] = account_pressure_metrics
+        if account_pressure_disclaimer:
+            incumbent_section["account_pressure_disclaimer"] = account_pressure_disclaimer
+        if account_actionability_tier:
+            incumbent_section["account_actionability_tier"] = account_actionability_tier
         timing_intelligence = (
             vendor_core_reasoning.get("timing_intelligence")
             if isinstance(vendor_core_reasoning.get("timing_intelligence"), dict)

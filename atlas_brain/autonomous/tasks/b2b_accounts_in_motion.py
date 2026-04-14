@@ -1004,6 +1004,21 @@ def _build_vendor_aggregate(
             "account_pool": bool((account_pool_lookup or {}).get(vendor)),
         },
     }
+    account_pool_summary = {}
+    if isinstance((account_pool_lookup or {}).get(vendor), dict):
+        raw_summary = (account_pool_lookup or {}).get(vendor, {}).get("summary")
+        if isinstance(raw_summary, dict):
+            account_pool_summary = raw_summary
+    account_pressure_disclaimer = str(
+        account_pool_summary.get("account_actionability_note") or ""
+    ).strip()
+    account_actionability_tier = str(
+        account_pool_summary.get("account_actionability_tier") or ""
+    ).strip()
+    if account_pressure_disclaimer:
+        result["account_pressure_disclaimer"] = account_pressure_disclaimer
+    if account_actionability_tier:
+        result["account_actionability_tier"] = account_actionability_tier
     view = (synthesis_views or {}).get(vendor)
     if view is None:
         view = (synthesis_views or {}).get(_normalize_company_key(vendor))

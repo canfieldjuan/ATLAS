@@ -17,6 +17,8 @@ import html as _html
 import json
 import logging
 import re
+import asyncio
+import time
 from dataclasses import dataclass, field as dc_field
 from typing import Any
 from urllib.parse import urlparse
@@ -726,8 +728,75 @@ def resolve_review(
 
 _HN_USER_API = "https://hacker-news.firebaseio.com/v0/user/{username}.json"
 _GITHUB_USER_API = "https://api.github.com/users/{username}"
-_REDDIT_USER_API = "https://www.reddit.com/user/{username}/about.json"
-_REDDIT_USER_AGENT = "python:atlas.b2b.resolver:v1.0 (by /u/atlas_bot)"
+_REDDIT_PUBLIC_USER_API = "https://www.reddit.com/user/{username}/about.json"
+_REDDIT_OAUTH_USER_API = "https://oauth.reddit.com/user/{username}/about"
+_REDDIT_USER_AGENT = "Atlas/2.0 B2B Intelligence"
+_REDDIT_OAUTH_TOKEN: str | None = None
+_REDDIT_OAUTH_TOKEN_EXPIRES_AT: float = 0.0
+_REDDIT_OAUTH_TOKEN_LOCK = asyncio.Lock()
+
+
+def _get_reddit_credentials() -> tuple[str, str]:
+    try:
+        from ...config import settings
+
+        return (
+            settings.b2b_scrape.reddit_client_id,
+            settings.b2b_scrape.reddit_client_secret,
+        )
+    except Exception:
+        pass
+    import os
+
+    return (
+        os.environ.get("ATLAS_B2B_SCRAPE_REDDIT_CLIENT_ID", ""),
+        os.environ.get("ATLAS_B2B_SCRAPE_REDDIT_CLIENT_SECRET", ""),
+    )
+
+
+async def _get_reddit_oauth_token(
+    http_client: Any = None,
+    *,
+    timeout: float = 10.0,
+) -> str | None:
+    global _REDDIT_OAUTH_TOKEN, _REDDIT_OAUTH_TOKEN_EXPIRES_AT
+    if _REDDIT_OAUTH_TOKEN and time.monotonic() < _REDDIT_OAUTH_TOKEN_EXPIRES_AT:
+        return _REDDIT_OAUTH_TOKEN
+    async with _REDDIT_OAUTH_TOKEN_LOCK:
+        if _REDDIT_OAUTH_TOKEN and time.monotonic() < _REDDIT_OAUTH_TOKEN_EXPIRES_AT:
+            return _REDDIT_OAUTH_TOKEN
+
+        client_id, client_secret = _get_reddit_credentials()
+        if not client_id or not client_secret:
+            return None
+
+        import httpx
+
+        client = http_client or httpx.AsyncClient(timeout=timeout)
+        close_after = http_client is None
+        try:
+            resp = await client.post(
+                "https://www.reddit.com/api/v1/access_token",
+                auth=(client_id, client_secret),
+                data={"grant_type": "client_credentials"},
+                headers={"User-Agent": _REDDIT_USER_AGENT},
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            token = str(data.get("access_token") or "").strip()
+            if not token:
+                return None
+            expires_in = int(data.get("expires_in") or 3600)
+            _REDDIT_OAUTH_TOKEN = token
+            _REDDIT_OAUTH_TOKEN_EXPIRES_AT = time.monotonic() + max(expires_in - 300, 300)
+            return token
+        except Exception:
+            logger.debug("Reddit OAuth token request failed", exc_info=True)
+            return None
+        finally:
+            if close_after:
+                await client.aclose()
 
 # Domains that are platforms/tools, not company identifiers
 _PLATFORM_DOMAINS = frozenset({
@@ -941,6 +1010,9 @@ async def fetch_reddit_profile(
     http_client: Any = None,
     *,
     timeout: float = 10.0,
+    request_delay_seconds: float = 0.0,
+    max_retries: int = 1,
+    retry_after_cap_seconds: float = 5.0,
 ) -> dict[str, str]:
     """Fetch Reddit user profile. Returns {bio, profile_urls}.
 
@@ -955,29 +1027,51 @@ async def fetch_reddit_profile(
     client = http_client or httpx.AsyncClient(timeout=timeout, headers=headers)
     close_after = http_client is None
     try:
-        url = _REDDIT_USER_API.format(username=username.strip())
-        resp = await client.get(url, headers=headers)
-        if resp.status_code != 200:
-            return {}
-        data = resp.json()
-        if not isinstance(data, dict):
-            return {}
-        user_data = data.get("data") or {}
-        result: dict[str, str] = {}
-        # Public description lives under subreddit (user's profile page)
-        subreddit = user_data.get("subreddit") or {}
-        bio_raw = (subreddit.get("public_description") or "").strip()
-        if bio_raw:
-            # Decode HTML entities, strip tags
-            bio_decoded = _html.unescape(bio_raw)
-            profile_urls = re.findall(r'https?://[^\s<>"\']+', bio_decoded)
-            bio_clean = re.sub(r"<[^>]+>", " ", bio_decoded)
-            bio_clean = re.sub(r"\s+", " ", bio_clean).strip()
-            if bio_clean:
-                result["bio"] = bio_clean
-            if profile_urls:
-                result["profile_urls"] = profile_urls[:5]
-        return result
+        token = await _get_reddit_oauth_token(client, timeout=timeout)
+        if token:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "User-Agent": _REDDIT_USER_AGENT,
+            }
+            url = _REDDIT_OAUTH_USER_API.format(username=username.strip())
+        else:
+            url = _REDDIT_PUBLIC_USER_API.format(username=username.strip())
+        for attempt in range(max_retries + 1):
+            if request_delay_seconds > 0:
+                await asyncio.sleep(request_delay_seconds)
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 429:
+                if attempt >= max_retries:
+                    return {}
+                retry_after = resp.headers.get("Retry-After", "").strip()
+                try:
+                    retry_after_seconds = float(retry_after)
+                except (TypeError, ValueError):
+                    retry_after_seconds = 1.0
+                await asyncio.sleep(min(retry_after_seconds, retry_after_cap_seconds))
+                continue
+            if resp.status_code != 200:
+                return {}
+            data = resp.json()
+            if not isinstance(data, dict):
+                return {}
+            user_data = data.get("data") or {}
+            result: dict[str, str] = {}
+            # Public description lives under subreddit (user's profile page)
+            subreddit = user_data.get("subreddit") or {}
+            bio_raw = (subreddit.get("public_description") or "").strip()
+            if bio_raw:
+                # Decode HTML entities, strip tags
+                bio_decoded = _html.unescape(bio_raw)
+                profile_urls = re.findall(r'https?://[^\s<>"\']+', bio_decoded)
+                bio_clean = re.sub(r"<[^>]+>", " ", bio_decoded)
+                bio_clean = re.sub(r"\s+", " ", bio_clean).strip()
+                if bio_clean:
+                    result["bio"] = bio_clean
+                if profile_urls:
+                    result["profile_urls"] = profile_urls[:5]
+            return result
+        return {}
     except Exception:
         logger.debug("Reddit profile fetch failed for %s", username, exc_info=True)
         return {}

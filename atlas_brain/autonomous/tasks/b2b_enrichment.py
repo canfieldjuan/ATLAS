@@ -1804,6 +1804,42 @@ def _derive_contract_value_signal(result: dict) -> str:
     return "unknown"
 
 
+_POST_PURCHASE_REVIEW_SOURCES = frozenset({
+    "g2",
+    "gartner",
+    "trustradius",
+    "capterra",
+    "software_advice",
+    "peerspot",
+    "sourceforge",
+    "trustpilot",
+})
+_POST_PURCHASE_USAGE_PATTERNS = (
+    "we use",
+    "we've used",
+    "we have used",
+    "been using",
+    "using this",
+    "using it",
+    "in production",
+    "implemented",
+    "deployed",
+    "rolled out",
+    "adopted",
+    "renewed",
+    "customer since",
+    "our team uses",
+    "our company uses",
+)
+
+
+def _has_post_purchase_signal(source_row: dict[str, Any], review_blob: str) -> bool:
+    source = str(source_row.get("source") or "").strip().lower()
+    if source in _POST_PURCHASE_REVIEW_SOURCES:
+        return True
+    return _contains_any(review_blob, _POST_PURCHASE_USAGE_PATTERNS)
+
+
 def _derive_buyer_authority_fields(result: dict, source_row: dict[str, Any]) -> tuple[str, bool, str]:
     reviewer_context = result.get("reviewer_context") or {}
     churn = result.get("churn_signals") or {}
@@ -1833,8 +1869,10 @@ def _derive_buyer_authority_fields(result: dict, source_row: dict[str, Any]) -> 
         buying_stage = "evaluation"
     elif decision_maker and _contains_any(review_blob, ("approved", "signed off", "purchased", "bought")):
         buying_stage = "active_purchase"
-    else:
+    elif _has_post_purchase_signal(source_row, review_blob):
         buying_stage = "post_purchase"
+    else:
+        buying_stage = "unknown"
     return role_type, executive_sponsor_mentioned, buying_stage
 
 

@@ -826,10 +826,23 @@ def _campaign_account_summary_from_consumer_context(
         if isinstance(account_reasoning, dict):
             summary = str(account_reasoning.get("market_summary") or "").strip()
             if summary:
-                return {
+                payload = {
                     "account_summary": summary,
                     "account_summary_source": "account_reasoning",
                 }
+                disclaimer = str(
+                    account_reasoning.get("account_actionability_note")
+                    or account_reasoning.get("disclaimer")
+                    or ""
+                ).strip()
+                if disclaimer:
+                    payload["account_summary_disclaimer"] = disclaimer
+                actionability_tier = str(
+                    account_reasoning.get("account_actionability_tier") or ""
+                ).strip()
+                if actionability_tier:
+                    payload["account_actionability_tier"] = actionability_tier
+                return payload
 
     preview = consumer_context.get("account_reasoning_preview") or {}
     if not isinstance(preview, dict):
@@ -846,6 +859,9 @@ def _campaign_account_summary_from_consumer_context(
     disclaimer = str(preview.get("disclaimer") or "").strip()
     if disclaimer:
         payload["account_summary_disclaimer"] = disclaimer
+    actionability_tier = str(preview.get("account_actionability_tier") or "").strip()
+    if actionability_tier:
+        payload["account_actionability_tier"] = actionability_tier
 
     priority_names = preview.get("priority_account_names") or []
     if isinstance(priority_names, list):
