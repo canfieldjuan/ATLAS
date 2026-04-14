@@ -54,7 +54,7 @@ class SoftwareAdviceParser:
 
     source_name = "software_advice"
     prefer_residential = True
-    version = "software_advice:2"
+    version = "software_advice:3"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape Software Advice reviews -- Web Unlocker first, then HTTP client."""
@@ -497,6 +497,12 @@ def _build_review_match_keys(review: dict[str, object]) -> set[str]:
     return keys
 
 
+def _looks_like_synthetic_review_id(review_id: object) -> bool:
+    """Detect hashed fallback IDs so richer payload IDs can replace them."""
+    value = str(review_id or "").strip().lower()
+    return bool(re.fullmatch(r"[0-9a-f]{16}", value))
+
+
 def _get_reviewer_title(card) -> str | None:
     """Extract reviewer title without confusing it with the review headline."""
     return _get_text(
@@ -516,8 +522,9 @@ def _extract_reviews_from_next_f_payload(html: str) -> list[dict[str, str | floa
     if not payloads:
         return []
 
+    payload_blob = "\n".join(payloads)
     objects: dict[str, dict] = {}
-    for line in "\n".join(payloads).splitlines():
+    for line in payload_blob.splitlines():
         if ":" not in line:
             continue
         key, value = line.split(":", 1)
@@ -531,6 +538,7 @@ def _extract_reviews_from_next_f_payload(html: str) -> list[dict[str, str | floa
             objects[key] = obj
 
     records = []
+    seen_ids: set[str] = set()
     seen: set[tuple[str, str]] = set()
     for obj in objects.values():
         reviewer_ref = str(obj.get("reviewer") or "")
@@ -553,20 +561,127 @@ def _extract_reviews_from_next_f_payload(html: str) -> list[dict[str, str | floa
             review_text = "\n".join(parts) if parts else None
         if not review_text:
             continue
-        records.append({
+        reviewer_name = _extract_payload_reviewer_name(reviewer)
+        record = {
             "source_review_id": review_id,
             "summary": _payload_text(obj.get("title")),
             "review_text": review_text,
             "pros": pros,
             "cons": cons,
-            "reviewer_name": _payload_text(reviewer.get("firstName")),
-            "reviewer_title": None,
-            "reviewer_company": None,
+            "reviewer_name": reviewer_name,
+            "reviewer_title": _extract_payload_reviewer_title(reviewer),
+            "reviewer_company": _extract_payload_reviewer_company(reviewer),
             "company_size_raw": _COMPANY_SIZE_CODE_MAP.get(str(reviewer.get("companySize") or "").strip().upper()),
             "reviewer_industry": _payload_text(reviewer.get("industry")),
             "reviewed_at": written_on or None,
             "rating": float(obj["overallRating"]) if obj.get("overallRating") is not None else None,
-        })
+        }
+        records.append(record)
+        seen_ids.add(review_id)
+
+    for record in _extract_reviews_from_next_f_text_reviews(payload_blob):
+        review_id = str(record.get("source_review_id") or "").strip()
+        if review_id and review_id in seen_ids:
+            continue
+        records.append(record)
+        if review_id:
+            seen_ids.add(review_id)
+    return records
+
+
+def _find_json_array_end(payload: str, start_index: int) -> int:
+    """Return the end index for a JSON array inside a serialized flight payload."""
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start_index, len(payload)):
+        char = payload[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "[":
+            depth += 1
+            continue
+        if char == "]":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _extract_reviews_from_next_f_text_reviews(payload_blob: str) -> list[dict[str, str | float | None]]:
+    """Extract review metadata from current textReviews.nodes payloads."""
+    records: list[dict[str, str | float | None]] = []
+    seen_ids: set[str] = set()
+    marker = '"textReviews":{"totalCount"'
+    search_start = 0
+    while True:
+        marker_index = payload_blob.find(marker, search_start)
+        if marker_index < 0:
+            break
+        nodes_index = payload_blob.find('"nodes":[', marker_index)
+        if nodes_index < 0:
+            search_start = marker_index + len(marker)
+            continue
+        array_start = payload_blob.find("[", nodes_index)
+        if array_start < 0:
+            search_start = nodes_index + 1
+            continue
+        array_end = _find_json_array_end(payload_blob, array_start)
+        if array_end < 0:
+            break
+        try:
+            nodes = json.loads(payload_blob[array_start:array_end + 1])
+        except json.JSONDecodeError:
+            search_start = array_end + 1
+            continue
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            review_text = _payload_text(node.get("generalComments")) or ""
+            pros = _payload_text(node.get("prosText"))
+            cons = _payload_text(node.get("consText"))
+            if not review_text:
+                parts = [part for part in (pros, cons) if isinstance(part, str) and part.strip()]
+                review_text = "\n".join(parts) if parts else None
+            if not review_text:
+                continue
+            review_id = _payload_text(node.get("id"))
+            if not review_id:
+                review_id = hashlib.sha256(review_text.encode()).hexdigest()[:16]
+            if review_id in seen_ids:
+                continue
+            seen_ids.add(review_id)
+            reviewer = node.get("reviewer") if isinstance(node.get("reviewer"), dict) else {}
+            rating = None
+            if node.get("overallRating") is not None:
+                try:
+                    rating = float(node["overallRating"])
+                except (TypeError, ValueError):
+                    rating = None
+            records.append({
+                "source_review_id": review_id,
+                "summary": _payload_text(node.get("title")),
+                "review_text": review_text,
+                "pros": pros,
+                "cons": cons,
+                "reviewer_name": _extract_payload_reviewer_name(reviewer),
+                "reviewer_title": _extract_payload_reviewer_title(reviewer),
+                "reviewer_company": _extract_payload_reviewer_company(reviewer),
+                "company_size_raw": _COMPANY_SIZE_CODE_MAP.get(str(reviewer.get("companySize") or "").strip().upper()),
+                "reviewer_industry": _payload_text(reviewer.get("industry") or reviewer.get("industryName")),
+                "reviewed_at": _payload_text(node.get("writtenOn")),
+                "rating": rating,
+            })
+        search_start = array_end + 1
     return records
 
 
@@ -607,7 +722,15 @@ def _supplement_reviews_from_html(html: str, reviews: list[dict]) -> None:
                 break
         if not card_data:
             continue
+        card_review_id = str(card_data.get("source_review_id") or "").strip()
+        if (
+            card_review_id
+            and not _looks_like_synthetic_review_id(card_review_id)
+            and _looks_like_synthetic_review_id(review.get("source_review_id"))
+        ):
+            review["source_review_id"] = card_review_id
         for field in (
+            "summary",
             "reviewer_title",
             "reviewer_company",
             "company_size_raw",
@@ -642,6 +765,58 @@ def _extract_review_card_metadata(card) -> dict[str, str | None]:
         "company_size_raw": _get_text(card, '[class*="size"], [class*="employees"]'),
         "reviewer_industry": _get_text(card, '[class*="industry"], [class*="sector"]'),
     }
+
+
+def _extract_payload_reviewer_name(reviewer: object) -> str | None:
+    """Build a stable display name from Software Advice reviewer payloads."""
+    if not isinstance(reviewer, dict):
+        return None
+    full_name = _payload_text(reviewer.get("fullName") or reviewer.get("name"))
+    if full_name:
+        return full_name
+    first_name = _payload_text(reviewer.get("firstName"))
+    last_name = _payload_text(reviewer.get("lastName"))
+    if first_name and last_name:
+        return f"{first_name} {last_name}".strip()
+    return first_name or last_name
+
+
+def _extract_payload_reviewer_title(reviewer: object) -> str | None:
+    """Extract reviewer title from Software Advice React payloads."""
+    if not isinstance(reviewer, dict):
+        return None
+    for key in ("jobTitle", "title", "role", "position", "jobRole"):
+        value = _payload_text(reviewer.get(key))
+        if value:
+            return value
+    return None
+
+
+def _extract_payload_reviewer_company(reviewer: object) -> str | None:
+    """Extract company identity from Software Advice React payloads."""
+    if not isinstance(reviewer, dict):
+        return None
+    for key in (
+        "companyName",
+        "company",
+        "organizationName",
+        "organization",
+        "employer",
+        "employerName",
+        "businessName",
+        "companyDisplayName",
+    ):
+        value = reviewer.get(key)
+        if isinstance(value, str):
+            text = _payload_text(value)
+            if text:
+                return text
+        if isinstance(value, dict):
+            for nested_key in ("name", "legalName", "displayName", "companyName"):
+                nested = _payload_text(value.get(nested_key))
+                if nested:
+                    return nested
+    return None
 
 
 def _extract_itemlist_notes(notes_obj: dict) -> list[str]:

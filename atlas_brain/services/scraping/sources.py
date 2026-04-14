@@ -132,6 +132,7 @@ STRUCTURED_SOURCES: frozenset[ReviewSource] = VERIFIED_SOURCES | frozenset({
 EXECUTIVE_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.G2,
     ReviewSource.GARTNER,
+    ReviewSource.TRUSTRADIUS,
     ReviewSource.PEERSPOT,
     ReviewSource.GETAPP,
 })
@@ -139,6 +140,7 @@ EXECUTIVE_SOURCES: frozenset[ReviewSource] = frozenset({
 DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.G2,
     ReviewSource.GARTNER,
+    ReviewSource.TRUSTRADIUS,
     ReviewSource.PEERSPOT,
     ReviewSource.GETAPP,
     ReviewSource.REDDIT,
@@ -153,9 +155,35 @@ DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
 # Helpers
 # ---------------------------------------------------------------------------
 
+REQUIRED_ACTIONABLE_SOURCES: frozenset[str] = frozenset({
+    ReviewSource.TRUSTRADIUS.value,
+    ReviewSource.SOFTWARE_ADVICE.value,
+})
+
+REQUIRED_SCRAPE_SOURCES: frozenset[str] = REQUIRED_ACTIONABLE_SOURCES | frozenset({
+    ReviewSource.CAPTERRA.value,
+})
+
 def parse_source_allowlist(raw: str) -> list[str]:
     """Return a normalized source allowlist from a comma-separated string."""
     return [part.strip().lower() for part in raw.split(",") if part.strip()]
+
+
+def with_required_sources(
+    sources: Iterable[str],
+    required: Iterable[str] | None = None,
+) -> list[str]:
+    """Append required sources while preserving order and deduplicating."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    required_sources = list(REQUIRED_ACTIONABLE_SOURCES if required is None else required)
+    for source in list(sources) + required_sources:
+        normalized = str(source).strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        merged.append(normalized)
+        seen.add(normalized)
+    return merged
 
 
 def filter_deprecated_sources(
@@ -171,11 +199,36 @@ def filter_deprecated_sources(
             for source in (deprecated or [])
             if str(source).strip()
         }
+    deprecated_set -= REQUIRED_ACTIONABLE_SOURCES
     filtered: list[str] = []
     seen: set[str] = set()
     for source in sources:
         normalized = str(source).strip().lower()
         if not normalized or normalized in deprecated_set or normalized in seen:
+            continue
+        filtered.append(normalized)
+        seen.add(normalized)
+    return filtered
+
+
+def filter_blocked_sources(
+    sources: Iterable[str],
+    blocked: str | Iterable[str] | None,
+) -> list[str]:
+    """Remove operationally blocked sources from an allowlist."""
+    if isinstance(blocked, str):
+        blocked_set = set(parse_source_allowlist(blocked))
+    else:
+        blocked_set = {
+            str(source).strip().lower()
+            for source in (blocked or [])
+            if str(source).strip()
+        }
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for source in sources:
+        normalized = str(source).strip().lower()
+        if not normalized or normalized in blocked_set or normalized in seen:
             continue
         filtered.append(normalized)
         seen.add(normalized)

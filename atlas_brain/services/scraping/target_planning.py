@@ -7,12 +7,21 @@ import re
 from collections import Counter
 from typing import Any
 
+from ...config import settings
 from .source_fit import SourceFit, classify_source_fit
-from .sources import ALL_SOURCES, SEARCH_SOURCES
+from .sources import ALL_SOURCES, SEARCH_SOURCES, parse_source_allowlist
 
 _GENERIC_CATEGORIES = frozenset({"", "unknown", "<null>", "b2b software"})
 
 _VERIFIED_CORE_TARGETS: dict[tuple[str, str, str], dict[str, str]] = {
+    (
+        "gartner",
+        "Microsoft Defender for Endpoint",
+        "Cybersecurity",
+    ): {
+        "product_slug": "endpoint-protection-platforms/microsoft/product/microsoft-defender-for-endpoint",
+        "product_name": "Microsoft Defender for Endpoint",
+    },
     (
         "software_advice",
         "Jira",
@@ -28,6 +37,14 @@ _VERIFIED_CORE_TARGETS: dict[tuple[str, str, str], dict[str, str]] = {
     ): {
         "product_slug": "project-management/trello-profile",
         "product_name": "Trello",
+    },
+    (
+        "software_advice",
+        "Microsoft Defender for Endpoint",
+        "Cybersecurity",
+    ): {
+        "product_slug": "security/microsoft-365-defender-profile",
+        "product_name": "Microsoft Defender XDR",
     },
 }
 
@@ -45,6 +62,12 @@ _INVENTORY_SOURCE_PRIORITY: dict[str, int] = {
     "tracked_vendors": 2,
     "vendor_targets": 3,
 }
+
+_HIGH_IDENTITY_STRUCTURED_SOURCES = frozenset({"trustradius"})
+_CONTEXT_RICH_STRUCTURED_SOURCES = frozenset(
+    {"g2", "gartner", "capterra", "peerspot", "software_advice"}
+)
+_SEARCH_SOURCE_VALUES = frozenset(member.value for member in SEARCH_SOURCES)
 
 
 def _normalize_vendor(value: str | None) -> str:
@@ -75,6 +98,28 @@ def _safe_metadata(value: Any) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _source_yield_priority(source: str) -> int:
+    normalized = str(source or "").strip().lower()
+    if normalized in _HIGH_IDENTITY_STRUCTURED_SOURCES:
+        return 0
+    if normalized in _CONTEXT_RICH_STRUCTURED_SOURCES:
+        return 1
+    if normalized in _SEARCH_SOURCE_VALUES:
+        return 3
+    return 2
+
+
+def _source_yield_tier(source: str) -> str:
+    normalized = str(source or "").strip().lower()
+    if normalized in _HIGH_IDENTITY_STRUCTURED_SOURCES:
+        return "high_yield"
+    if normalized in _CONTEXT_RICH_STRUCTURED_SOURCES:
+        return "context_rich"
+    if normalized in _SEARCH_SOURCE_VALUES:
+        return "search"
+    return "standard"
 
 
 def _is_auto_seedable(source: str) -> bool:
@@ -161,11 +206,15 @@ def build_scrape_coverage_plan(
     allowed = {src.strip().lower() for src in (allowed_sources or []) if src.strip()}
     if not allowed:
         allowed = {member.value for member in ALL_SOURCES}
+    deferred_inventory_sources = set(
+        parse_source_allowlist(getattr(settings.b2b_scrape, "deferred_inventory_sources", ""))
+    )
 
     enabled_by_vendor_source: set[tuple[str, str]] = set()
     disabled_by_vendor_source: dict[tuple[str, str], dict[str, Any]] = {}
     poor_fit_enabled_targets: list[dict[str, Any]] = []
     conditional_opportunities: list[dict[str, Any]] = []
+    deferred_conditional_inventory: list[dict[str, Any]] = []
 
     for row in existing_targets:
         vendor = _normalize_vendor(row.get("vendor_name"))
@@ -183,6 +232,7 @@ def build_scrape_coverage_plan(
                     {
                         "id": str(row.get("id") or ""),
                         "source": source,
+                        "source_tier": _source_yield_tier(source),
                         "vendor_name": vendor,
                         "product_category": category,
                         "product_slug": row.get("product_slug"),
@@ -201,7 +251,7 @@ def build_scrape_coverage_plan(
     for row in collapsed_inventory:
         vendor = row["vendor_name"]
         category = row["product_category"]
-        for source in sorted(allowed):
+        for source in sorted(allowed, key=lambda item: (_source_yield_priority(item), item)):
             if not is_vendor_source_target_supported(source, vendor, category):
                 continue
             decision = classify_source_fit(source, category)
@@ -212,27 +262,30 @@ def build_scrape_coverage_plan(
             if decision.fit == SourceFit.conditional.value:
                 key = (vendor, source)
                 if key not in enabled_by_vendor_source:
-                    conditional_opportunities.append(
-                        {
-                            "vendor_name": vendor,
-                            "product_category": category,
-                            "inventory_source": row.get("inventory_source"),
-                            "source": source,
-                            "vertical": decision.vertical,
-                            "source_fit": decision.fit,
-                            "reason": decision.reason,
-                            "total_reviews_analyzed": row["total_reviews_analyzed"],
-                            "confidence_score": row["confidence_score"],
-                            "auto_seedable": auto_seedable,
-                            "requires_product_slug": not auto_seedable,
-                            "suggested_product_slug": _slugify_vendor(vendor) if auto_seedable else None,
-                            "can_probation_now": can_seed_now,
-                            "verified_product_slug": (verified_target or {}).get("product_slug"),
-                            "verified_product_name": (verified_target or {}).get("product_name"),
-                            "existing_disabled_target_id": str(existing_disabled.get("id")) if existing_disabled else None,
-                            "existing_disabled_product_slug": existing_disabled.get("product_slug") if existing_disabled else None,
-                        }
-                    )
+                    candidate = {
+                        "vendor_name": vendor,
+                        "product_category": category,
+                        "inventory_source": row.get("inventory_source"),
+                        "source": source,
+                        "source_tier": _source_yield_tier(source),
+                        "vertical": decision.vertical,
+                        "source_fit": decision.fit,
+                        "reason": decision.reason,
+                        "total_reviews_analyzed": row["total_reviews_analyzed"],
+                        "confidence_score": row["confidence_score"],
+                        "auto_seedable": auto_seedable,
+                        "requires_product_slug": not auto_seedable,
+                        "suggested_product_slug": _slugify_vendor(vendor) if auto_seedable else None,
+                        "can_probation_now": can_seed_now,
+                        "verified_product_slug": (verified_target or {}).get("product_slug"),
+                        "verified_product_name": (verified_target or {}).get("product_name"),
+                        "existing_disabled_target_id": str(existing_disabled.get("id")) if existing_disabled else None,
+                        "existing_disabled_product_slug": existing_disabled.get("product_slug") if existing_disabled else None,
+                    }
+                    if source in deferred_inventory_sources and not candidate["can_probation_now"]:
+                        deferred_conditional_inventory.append(candidate)
+                    else:
+                        conditional_opportunities.append(candidate)
                 continue
             if decision.fit != SourceFit.core.value:
                 continue
@@ -245,6 +298,7 @@ def build_scrape_coverage_plan(
                     "product_category": category,
                     "inventory_source": row.get("inventory_source"),
                     "source": source,
+                    "source_tier": _source_yield_tier(source),
                     "vertical": decision.vertical,
                     "source_fit": decision.fit,
                     "reason": decision.reason,
@@ -262,8 +316,19 @@ def build_scrape_coverage_plan(
             )
 
     missing_by_source = Counter(item["source"] for item in missing_core_targets)
+    missing_by_tier = Counter(item["source_tier"] for item in missing_core_targets)
+    missing_seedable_by_tier = Counter(
+        item["source_tier"] for item in missing_core_targets if item["can_seed_now"]
+    )
     poor_fit_by_source = Counter(item["source"] for item in poor_fit_enabled_targets)
+    poor_fit_by_tier = Counter(item["source_tier"] for item in poor_fit_enabled_targets)
     conditional_by_source = Counter(item["source"] for item in conditional_opportunities)
+    conditional_by_tier = Counter(item["source_tier"] for item in conditional_opportunities)
+    conditional_seedable_by_tier = Counter(
+        item["source_tier"] for item in conditional_opportunities if item["can_probation_now"]
+    )
+    deferred_conditional_by_source = Counter(item["source"] for item in deferred_conditional_inventory)
+    deferred_conditional_by_tier = Counter(item["source_tier"] for item in deferred_conditional_inventory)
     inventory_breakdown = Counter(
         str(row.get("inventory_source") or "b2b_product_profiles")
         for row in collapsed_inventory
@@ -278,6 +343,7 @@ def build_scrape_coverage_plan(
         "summary": {
             "missing_core_targets": len(missing_core_targets),
             "conditional_opportunities": len(conditional_opportunities),
+            "deferred_conditional_inventory": len(deferred_conditional_inventory),
             "poor_fit_enabled_targets": len(poor_fit_enabled_targets),
             "missing_core_auto_seedable": sum(1 for item in missing_core_targets if item["auto_seedable"]),
             "missing_core_seedable_now": sum(1 for item in missing_core_targets if item["can_seed_now"]),
@@ -285,16 +351,43 @@ def build_scrape_coverage_plan(
                 1 for item in conditional_opportunities if item["can_probation_now"]
             ),
             "missing_core_by_source": dict(sorted(missing_by_source.items())),
+            "missing_core_by_tier": dict(sorted(missing_by_tier.items())),
+            "missing_core_seedable_now_by_tier": dict(sorted(missing_seedable_by_tier.items())),
             "conditional_by_source": dict(sorted(conditional_by_source.items())),
+            "conditional_by_tier": dict(sorted(conditional_by_tier.items())),
+            "conditional_probation_seedable_now_by_tier": dict(sorted(conditional_seedable_by_tier.items())),
+            "deferred_conditional_by_source": dict(sorted(deferred_conditional_by_source.items())),
+            "deferred_conditional_by_tier": dict(sorted(deferred_conditional_by_tier.items())),
             "poor_fit_by_source": dict(sorted(poor_fit_by_source.items())),
+            "poor_fit_by_tier": dict(sorted(poor_fit_by_tier.items())),
         },
         "missing_core_targets": sorted(
             missing_core_targets,
-            key=lambda item: (-item["total_reviews_analyzed"], item["vendor_name"], item["source"]),
+            key=lambda item: (
+                -item["total_reviews_analyzed"],
+                _source_yield_priority(item["source"]),
+                item["vendor_name"],
+                item["source"],
+            ),
         ),
         "conditional_opportunities": sorted(
             conditional_opportunities,
-            key=lambda item: (-item["total_reviews_analyzed"], item["vendor_name"], item["source"]),
+            key=lambda item: (
+                not item["can_probation_now"],
+                _source_yield_priority(item["source"]),
+                -item["total_reviews_analyzed"],
+                item["vendor_name"],
+                item["source"],
+            ),
+        ),
+        "deferred_conditional_inventory": sorted(
+            deferred_conditional_inventory,
+            key=lambda item: (
+                _source_yield_priority(item["source"]),
+                -item["total_reviews_analyzed"],
+                item["vendor_name"],
+                item["source"],
+            ),
         ),
         "poor_fit_enabled_targets": sorted(
             poor_fit_enabled_targets,

@@ -395,6 +395,92 @@ async def test_source_yield_prune_apply_disables_selected_targets():
 
 
 @pytest.mark.asyncio
+async def test_source_yield_prune_uses_higher_min_runs_for_trustradius(monkeypatch):
+    from atlas_brain.services.scraping.source_yield import prune_low_yield_targets
+    from atlas_brain.config import settings
+
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(settings.b2b_scrape, "high_yield_priority_sources", "trustradius")
+    monkeypatch.setattr(settings.b2b_scrape, "context_rich_priority_sources", "g2,gartner")
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_high_yield_min_runs_floor", 5)
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_context_rich_min_runs_floor", 4)
+
+    result = await prune_low_yield_targets(
+        pool,
+        source="trustradius",
+        lookback_runs=3,
+        min_runs=2,
+        max_inserted_total=0,
+        max_disable_per_run=10,
+        dry_run=True,
+    )
+
+    assert result["min_runs"] == 5
+    assert result["requested_min_runs"] == 2
+    assert result["source_tier"] == "high_yield"
+    assert result["min_runs_floor_applied"] is True
+    assert result["policy_summary"] == (
+        "trustradius is a high yield source, so the pruning floor rose from 2 to 5 runs "
+        "across the last 3 runs, with at most 0 inserted reviews."
+    )
+    assert result["policy_context"] == {
+        "source_tier": "high_yield",
+        "requested_min_runs": 2,
+        "effective_min_runs": 5,
+        "min_runs_floor_applied": True,
+        "lookback_runs": 3,
+        "max_inserted_total": 0,
+        "max_disable_per_run": 10,
+    }
+    assert pool.fetch.await_args.args[4] == 5
+
+
+@pytest.mark.asyncio
+async def test_source_yield_prune_uses_context_rich_floor_for_g2(monkeypatch):
+    from atlas_brain.services.scraping.source_yield import prune_low_yield_targets
+    from atlas_brain.config import settings
+
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(settings.b2b_scrape, "high_yield_priority_sources", "trustradius")
+    monkeypatch.setattr(settings.b2b_scrape, "context_rich_priority_sources", "g2,gartner")
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_high_yield_min_runs_floor", 5)
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_context_rich_min_runs_floor", 4)
+
+    result = await prune_low_yield_targets(
+        pool,
+        source="g2",
+        lookback_runs=3,
+        min_runs=2,
+        max_inserted_total=0,
+        max_disable_per_run=10,
+        dry_run=True,
+    )
+
+    assert result["min_runs"] == 4
+    assert result["requested_min_runs"] == 2
+    assert result["source_tier"] == "context_rich"
+    assert result["min_runs_floor_applied"] is True
+    assert result["policy_summary"] == (
+        "g2 is a context rich source, so the pruning floor rose from 2 to 4 runs across "
+        "the last 3 runs, with at most 0 inserted reviews."
+    )
+    assert result["policy_context"] == {
+        "source_tier": "context_rich",
+        "requested_min_runs": 2,
+        "effective_min_runs": 4,
+        "min_runs_floor_applied": True,
+        "lookback_runs": 3,
+        "max_inserted_total": 0,
+        "max_disable_per_run": 10,
+    }
+    assert pool.fetch.await_args.args[4] == 4
+
+
+@pytest.mark.asyncio
 async def test_disable_low_yield_source_endpoint_uses_config_defaults(monkeypatch):
     from atlas_brain.api.b2b_scrape import (
         DisableLowYieldSourceRequest,
@@ -456,12 +542,20 @@ async def test_scrape_target_pruning_task_uses_shared_policy(monkeypatch):
                 "requested": 1,
                 "disabled": 1,
                 "dry_run": False,
+                "policy_summary": (
+                    "twitter uses the standard pruning floor of 2 runs across the last 3 runs, "
+                    "with at most 0 inserted reviews."
+                ),
                 "targets": [],
             }
             result = await run(MagicMock())
 
     assert result["disabled"] == 1
     assert result["_skip_synthesis"] is True
+    assert result["policy_summary"] == (
+        "twitter uses the standard pruning floor of 2 runs across the last 3 runs, "
+        "with at most 0 inserted reviews."
+    )
     kwargs = mock_prune.await_args.kwargs
     assert kwargs["source"] == "twitter"
     assert kwargs["lookback_runs"] == 3
@@ -555,8 +649,85 @@ def test_coverage_planner_exposes_verified_software_advice_seed():
 
     jira_sa = next(row for row in plan["missing_core_targets"] if row["source"] == "software_advice")
     assert jira_sa["can_seed_now"] is True
+    assert jira_sa["source_tier"] == "context_rich"
     assert jira_sa["verified_product_slug"] == "project-management/atlassian-jira-profile"
     assert jira_sa["verified_product_name"] == "Jira"
+
+
+def test_coverage_planner_exposes_verified_gartner_seed():
+    from atlas_brain.services.scraping.target_planning import build_scrape_coverage_plan
+
+    plan = build_scrape_coverage_plan(
+        [
+            {
+                "vendor_name": "Microsoft Defender for Endpoint",
+                "product_category": "Cybersecurity",
+                "total_reviews_analyzed": 30,
+                "confidence_score": 0.98,
+            }
+        ],
+        [],
+        allowed_sources=["gartner"],
+    )
+
+    defender_gartner = next(row for row in plan["missing_core_targets"] if row["source"] == "gartner")
+    assert defender_gartner["can_seed_now"] is True
+    assert defender_gartner["source_tier"] == "context_rich"
+    assert defender_gartner["verified_product_slug"] == (
+        "endpoint-protection-platforms/microsoft/product/microsoft-defender-for-endpoint"
+    )
+    assert defender_gartner["verified_product_name"] == "Microsoft Defender for Endpoint"
+
+
+def test_coverage_planner_exposes_verified_software_advice_defender_seed():
+    from atlas_brain.services.scraping.target_planning import build_scrape_coverage_plan
+
+    plan = build_scrape_coverage_plan(
+        [
+            {
+                "vendor_name": "Microsoft Defender for Endpoint",
+                "product_category": "Cybersecurity",
+                "total_reviews_analyzed": 30,
+                "confidence_score": 0.98,
+            }
+        ],
+        [],
+        allowed_sources=["software_advice"],
+    )
+
+    defender_sa = next(row for row in plan["conditional_opportunities"] if row["source"] == "software_advice")
+    assert defender_sa["can_probation_now"] is True
+    assert defender_sa["source_tier"] == "context_rich"
+    assert defender_sa["verified_product_slug"] == "security/microsoft-365-defender-profile"
+    assert defender_sa["verified_product_name"] == "Microsoft Defender XDR"
+
+
+def test_coverage_planner_prioritizes_high_yield_structured_sources_before_search():
+    from atlas_brain.services.scraping.target_planning import build_scrape_coverage_plan
+
+    plan = build_scrape_coverage_plan(
+        [
+            {
+                "vendor_name": "HubSpot",
+                "product_category": "CRM",
+                "total_reviews_analyzed": 300,
+                "confidence_score": 0.8,
+            }
+        ],
+        [],
+        allowed_sources=["reddit", "g2", "trustradius"],
+    )
+
+    ordered_sources = [row["source"] for row in plan["missing_core_targets"]]
+    assert ordered_sources[:3] == ["trustradius", "g2", "reddit"]
+    ordered_tiers = [row["source_tier"] for row in plan["missing_core_targets"]]
+    assert ordered_tiers[:3] == ["high_yield", "context_rich", "search"]
+    assert plan["summary"]["missing_core_by_tier"] == {
+        "context_rich": 1,
+        "high_yield": 1,
+        "search": 1,
+    }
+    assert plan["summary"]["missing_core_seedable_now_by_tier"] == {"search": 1}
 
 
 def test_coverage_planner_exposes_conditional_probation_opportunities():
@@ -590,9 +761,107 @@ def test_coverage_planner_exposes_conditional_probation_opportunities():
     assert plan["summary"]["conditional_opportunities"] == 1
     opportunity = plan["conditional_opportunities"][0]
     assert opportunity["source"] == "twitter"
+    assert opportunity["source_tier"] == "search"
     assert opportunity["can_probation_now"] is True
     assert opportunity["auto_seedable"] is True
     assert opportunity["suggested_product_slug"] == "hubspot"
+    assert plan["summary"]["conditional_by_tier"] == {"search": 1}
+    assert plan["summary"]["conditional_probation_seedable_now_by_tier"] == {"search": 1}
+
+
+def test_coverage_planner_prioritizes_seedable_conditional_opportunities_before_dead_ends():
+    from atlas_brain.services.scraping.target_planning import build_scrape_coverage_plan
+
+    plan = build_scrape_coverage_plan(
+        [
+            {
+                "vendor_name": "Salesforce",
+                "product_category": "CRM",
+                "total_reviews_analyzed": 1402,
+                "confidence_score": 0.73,
+            },
+            {
+                "vendor_name": "Asana",
+                "product_category": "Project Management",
+                "total_reviews_analyzed": 549,
+                "confidence_score": 0.8,
+            },
+        ],
+        [
+            {
+                "id": "sl-1",
+                "source": "slashdot",
+                "vendor_name": "Asana",
+                "product_category": "Project Management",
+                "product_slug": "asana",
+                "enabled": False,
+                "scrape_mode": "incremental",
+                "priority": 5,
+                "metadata": {},
+            }
+        ],
+        allowed_sources=["slashdot"],
+    )
+
+    ordered = plan["conditional_opportunities"][:1]
+    assert ordered[0]["vendor_name"] == "Asana"
+    assert ordered[0]["source"] == "slashdot"
+    assert ordered[0]["can_probation_now"] is True
+    assert plan["summary"]["conditional_opportunities"] == 1
+    assert plan["summary"]["deferred_conditional_inventory"] == 1
+    assert plan["summary"]["deferred_conditional_by_source"] == {"slashdot": 1}
+    deferred = plan["deferred_conditional_inventory"][0]
+    assert deferred["vendor_name"] == "Salesforce"
+    assert deferred["source"] == "slashdot"
+    assert deferred["can_probation_now"] is False
+
+
+def test_coverage_planner_keeps_non_seedable_context_rich_conditionals_in_active_backlog():
+    from atlas_brain.services.scraping.target_planning import build_scrape_coverage_plan
+
+    plan = build_scrape_coverage_plan(
+        [
+            {
+                "vendor_name": "SentinelOne",
+                "product_category": "Cybersecurity",
+                "total_reviews_analyzed": 30,
+                "confidence_score": 0.98,
+            }
+        ],
+        [],
+        allowed_sources=["software_advice"],
+    )
+
+    assert plan["summary"]["conditional_opportunities"] == 1
+    assert plan["summary"]["deferred_conditional_inventory"] == 0
+    opportunity = plan["conditional_opportunities"][0]
+    assert opportunity["source"] == "software_advice"
+    assert opportunity["source_tier"] == "context_rich"
+    assert opportunity["can_probation_now"] is False
+
+
+def test_coverage_planner_only_defers_sources_in_configured_deferred_inventory_set():
+    from atlas_brain.services.scraping.target_planning import build_scrape_coverage_plan
+
+    plan = build_scrape_coverage_plan(
+        [
+            {
+                "vendor_name": "HubSpot",
+                "product_category": "CRM",
+                "total_reviews_analyzed": 300,
+                "confidence_score": 0.8,
+            }
+        ],
+        [],
+        allowed_sources=["rss"],
+    )
+
+    assert plan["summary"]["conditional_opportunities"] == 1
+    assert plan["summary"]["deferred_conditional_inventory"] == 0
+    opportunity = plan["conditional_opportunities"][0]
+    assert opportunity["source"] == "rss"
+    assert opportunity["source_tier"] == "standard"
+    assert opportunity["can_probation_now"] is False
 
 
 def test_coverage_planner_skips_unsupported_vendor_level_software_advice_target():
@@ -678,6 +947,13 @@ def test_target_query_prioritizes_never_scraped_targets_before_repeats():
     from atlas_brain.autonomous.tasks.b2b_scrape_intake import _TARGET_QUERY
 
     assert "CASE WHEN last_scraped_at IS NULL THEN 0 ELSE 1 END" in _TARGET_QUERY
+
+
+def test_target_query_prioritizes_high_yield_sources_before_lower_tiers():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _TARGET_QUERY
+
+    assert "WHEN source = ANY($4::text[]) THEN 0" in _TARGET_QUERY
+    assert "WHEN source = ANY($5::text[]) THEN 1" in _TARGET_QUERY
 
 
 @pytest.mark.asyncio
@@ -774,8 +1050,80 @@ async def test_seed_missing_core_endpoint_inserts_verified_target():
 
     assert result["applied"] == 1
     assert result["actions"][0]["source"] == "software_advice"
+    assert result["actions"][0]["source_tier"] == "context_rich"
     assert result["actions"][0]["product_slug"] == "project-management/atlassian-jira-profile"
     pool.fetchrow.assert_awaited_once()
+
+
+def test_validate_target_input_accepts_gartner_product_path_slug():
+    from atlas_brain.services.scraping.target_validation import validate_target_input
+
+    source, slug = validate_target_input(
+        "gartner",
+        "endpoint-protection-platforms/microsoft/product/microsoft-defender-for-endpoint",
+    )
+
+    assert source == "gartner"
+    assert slug == "endpoint-protection-platforms/microsoft/product/microsoft-defender-for-endpoint"
+
+
+@pytest.mark.asyncio
+async def test_seed_missing_core_endpoint_filters_by_source_tier():
+
+    from atlas_brain.api.b2b_scrape import SeedMissingCoreRequest, seed_missing_core_targets
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "vendor_name": "HubSpot",
+                    "product_category": "CRM",
+                    "total_reviews_analyzed": 450,
+                    "confidence_score": 0.8,
+                    "last_computed_at": None,
+                }
+            ],
+            [],
+            [
+                {
+                    "id": "t-1",
+                    "source": "trustradius",
+                    "vendor_name": "HubSpot",
+                    "product_name": "HubSpot",
+                    "product_category": "CRM",
+                    "product_slug": "hubspot",
+                    "enabled": False,
+                    "scrape_mode": "incremental",
+                    "priority": 5,
+                    "max_pages": 3,
+                    "scrape_interval_hours": 168,
+                    "metadata": {},
+                }
+            ],
+        ]
+    )
+
+    cfg = MagicMock()
+    cfg.source_allowlist = "g2,trustradius"
+    cfg.deprecated_sources = ""
+    cfg.infra_blocked_sources = ""
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch("atlas_brain.api.b2b_scrape.settings", MagicMock(b2b_scrape=cfg)):
+            result = await seed_missing_core_targets(
+                SeedMissingCoreRequest(
+                    dry_run=True,
+                    source_tiers=["high_yield"],
+                )
+            )
+
+    assert result["requested"] == 1
+    assert result["applied"] == 1
+    assert result["actions"][0]["source"] == "trustradius"
+    assert result["actions"][0]["source_tier"] == "high_yield"
+    assert result["actions"][0]["action"] == "enable_existing"
 
 
 @pytest.mark.asyncio
@@ -1123,6 +1471,86 @@ async def test_disable_low_yield_probation_endpoint_disables_failed_zero_yield_t
 
 
 @pytest.mark.asyncio
+async def test_disable_low_yield_probation_endpoint_can_disable_zero_downstream_signal_targets():
+    from atlas_brain.api.b2b_scrape import (
+        DisableLowYieldProbationRequest,
+        disable_low_yield_probation_targets,
+    )
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "target_id": "target-1",
+                    "vendor_name": "HubSpot",
+                    "source": "slashdot",
+                    "product_name": "HubSpot CRM",
+                    "product_slug": "HubSpot-CRM",
+                    "product_category": "Marketing Automation",
+                    "priority": 3,
+                    "max_pages": 5,
+                    "scrape_interval_hours": 24,
+                    "last_scraped_at": None,
+                    "last_scrape_status": "success",
+                    "last_scrape_reviews": 0,
+                    "metadata": {
+                        "source_fit_probation_reason": "vertical_conditional_source",
+                        "source_fit_probation_seeded_at": "2026-03-19T00:00:00+00:00",
+                    },
+                    "runs_total": 18,
+                    "reviews_found_total": 92,
+                    "reviews_inserted_total": 75,
+                    "last_run_at": None,
+                }
+            ],
+            [
+                {
+                    "target_id": "target-1",
+                    "tracked_reviews": 75,
+                    "named_company_reviews": 0,
+                    "actionable_reviews": 0,
+                }
+            ],
+            [
+                {
+                    "target_id": "target-1",
+                    "company_signal_reviews": 0,
+                }
+            ],
+        ]
+    )
+    pool.execute = AsyncMock(return_value="UPDATE 1")
+
+    cfg = MagicMock()
+    cfg.source_fit_probation_telemetry_lookback_days = 30
+    cfg.source_fit_probation_actionable_urgency_min = 7.0
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch("atlas_brain.api.b2b_scrape.settings", MagicMock(b2b_scrape=cfg)):
+            result = await disable_low_yield_probation_targets(
+                DisableLowYieldProbationRequest(
+                    dry_run=False,
+                    sources=["slashdot"],
+                    statuses=["success"],
+                    max_reviews_inserted=1000,
+                    max_tracked_reviews=1000,
+                    max_named_company_reviews=0,
+                    max_actionable_reviews=0,
+                    max_company_signal_reviews=0,
+                )
+            )
+
+    assert result["disabled"] == 1
+    assert result["criteria"]["max_named_company_reviews"] == 0
+    assert result["criteria"]["max_actionable_reviews"] == 0
+    assert result["criteria"]["max_company_signal_reviews"] == 0
+    pool.execute.assert_awaited_once()
+    assert pool.execute.await_args.args[2] == "low_downstream_signal_probation"
+
+
+@pytest.mark.asyncio
 async def test_promote_probation_endpoint_promotes_useful_target():
     from atlas_brain.api.b2b_scrape import (
         PromoteProbationTargetsRequest,
@@ -1229,6 +1657,79 @@ async def test_promote_probation_endpoint_promotes_useful_target():
 
 
 @pytest.mark.asyncio
+async def test_promote_probation_endpoint_rejects_targets_without_any_downstream_signal():
+    from atlas_brain.api.b2b_scrape import (
+        PromoteProbationTargetsRequest,
+        promote_probation_targets,
+    )
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "target_id": "target-1",
+                    "vendor_name": "HubSpot",
+                    "source": "slashdot",
+                    "product_name": "HubSpot CRM",
+                    "product_slug": "HubSpot-CRM",
+                    "product_category": "Marketing Automation",
+                    "priority": 3,
+                    "max_pages": 3,
+                    "scrape_interval_hours": 72,
+                    "last_scraped_at": None,
+                    "last_scrape_status": "success",
+                    "last_scrape_reviews": 0,
+                    "metadata": {
+                        "source_fit_probation_reason": "vertical_conditional_source",
+                        "source_fit_probation_seeded_at": "2026-03-19T00:00:00+00:00",
+                    },
+                    "runs_total": 4,
+                    "reviews_found_total": 40,
+                    "reviews_inserted_total": 12,
+                    "last_run_at": None,
+                }
+            ],
+            [
+                {
+                    "target_id": "target-1",
+                    "tracked_reviews": 12,
+                    "named_company_reviews": 0,
+                    "actionable_reviews": 0,
+                }
+            ],
+            [
+                {
+                    "target_id": "target-1",
+                    "company_signal_reviews": 0,
+                }
+            ],
+            [],
+        ]
+    )
+    pool.execute = AsyncMock(return_value="UPDATE 0")
+
+    cfg = MagicMock()
+    cfg.source_fit_probation_telemetry_lookback_days = 30
+    cfg.source_fit_probation_actionable_urgency_min = 7.0
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch("atlas_brain.api.b2b_scrape.settings", MagicMock(b2b_scrape=cfg)):
+            result = await promote_probation_targets(
+                PromoteProbationTargetsRequest(
+                    dry_run=False,
+                    sources=["slashdot"],
+                )
+            )
+
+    assert result["promoted"] == 0
+    assert result["criteria"]["require_any_downstream_signal"] is True
+    assert result["targets"] == []
+    pool.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_seed_conditional_probation_endpoint_inserts_capped_target():
     from atlas_brain.api.b2b_scrape import SeedConditionalProbationRequest, seed_conditional_probation_targets
 
@@ -1282,6 +1783,7 @@ async def test_seed_conditional_probation_endpoint_inserts_capped_target():
     assert result["applied"] == 1
     target = result["targets"][0]
     assert target["source"] == "twitter"
+    assert target["source_tier"] == "search"
     assert target["priority"] == 3
     assert target["max_pages"] == 3
     assert target["scrape_interval_hours"] == 336
@@ -1366,6 +1868,7 @@ async def test_seed_conditional_probation_endpoint_filters_by_vertical():
     assert result["applied"] == 1
     assert result["targets"][0]["vendor_name"] == "HubSpot"
     assert result["targets"][0]["source"] == "twitter"
+    assert result["targets"][0]["source_tier"] == "search"
     pool.execute.assert_awaited_once()
 
 
@@ -1422,6 +1925,7 @@ async def test_seed_conditional_probation_endpoint_reenables_with_caps():
     assert result["applied"] == 1
     target = result["targets"][0]
     assert target["action"] == "enable_existing_probation"
+    assert target["source_tier"] == "search"
     assert target["priority"] == 3
     assert target["max_pages"] == 3
     assert target["scrape_interval_hours"] == 336

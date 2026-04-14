@@ -707,6 +707,80 @@ async def test_insert_reviews_repairs_missing_fields_on_existing_duplicate(monke
 
 
 @pytest.mark.asyncio
+async def test_insert_reviews_repairs_existing_row_by_id_when_stable_source_id_arrives(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import (
+        _REPAIR_EXISTING_REVIEW_BY_ID_SQL,
+        _insert_reviews,
+        _make_review_content_hash,
+        _make_dedup_key,
+    )
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    existing_id = "11111111-1111-1111-1111-111111111111"
+    review_text = (
+        "Good value for the money, usefull and easy to get started. "
+        "Make tasks and content as well as time tracking available for the entire team"
+    )
+    expected_content_hash = _make_review_content_hash(review_text, None, None)
+    pool = _FakeInsertPool()
+    pool.execute = AsyncMock(side_effect=["UPDATE 1", "UPDATE 0"])
+    pool.fetch_rows = [{
+        "id": existing_id,
+        "dedup_key": "old-dedup",
+        "identity_key": "fallback:software_advice:clickup reviewer:2026-03-19T19:33:59+00:00",
+        "review_content_hash": expected_content_hash,
+    }]
+    reviews = [
+        {
+            "source": "software_advice",
+            "vendor_name": "ClickUp",
+            "source_review_id": "Capterra___7035855",
+            "summary": "Good value for the money",
+            "review_text": review_text,
+            "reviewed_at": "2026-03-19T19:33:59Z",
+            "company_size_raw": "51-200",
+            "reviewer_industry": "Consumer Goods",
+        },
+    ]
+    expected_dedup_key = _make_dedup_key(
+        "software_advice",
+        "ClickUp",
+        "Capterra___7035855",
+        None,
+        "2026-03-19T19:33:59Z",
+    )
+
+    stats = await _insert_reviews(
+        pool,
+        reviews,
+        "batch-sa-repair",
+        parser_version="software_advice:3",
+        known_keys=set(),
+        known_identities=set(),
+        known_content_hashes={expected_content_hash},
+    )
+
+    assert pool.inserted_rows == []
+    assert stats["inserted"] == 0
+    assert stats["duplicate_existing"] == 1
+    assert stats["repaired_existing"] == 1
+    assert pool.execute.await_args_list[0].args[0] == _REPAIR_EXISTING_REVIEW_BY_ID_SQL
+    assert pool.execute.await_args_list[0].args[1:5] == (
+        existing_id,
+        expected_dedup_key,
+        "Capterra___7035855",
+        "Good value for the money",
+    )
+
+
+@pytest.mark.asyncio
 async def test_insert_reviews_promotes_existing_raw_only_duplicate_with_fuller_payload(monkeypatch):
     from atlas_brain.autonomous.tasks.b2b_scrape_intake import (
         _PROMOTE_RAW_ONLY_DUPLICATE_SQL,
@@ -793,3 +867,59 @@ def test_repair_parser_fields_sql_casts_nullable_params():
 
     for token in ("$2::text", "$3::text", "$4::text", "$5::text", "$6::text", "$7::text"):
         assert token in _REPAIR_PARSER_FIELDS_SQL
+    assert "WHEN $5::text IS NOT NULL AND reviewer_company = $5::text THEN NULL" in _REPAIR_PARSER_FIELDS_SQL
+    assert "WHEN $3::text IS NULL AND $6::text IS NOT NULL AND reviewer_company = $6::text THEN NULL" in _REPAIR_PARSER_FIELDS_SQL
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_clears_company_when_it_matches_company_size(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "g2",
+            "vendor_name": "Slack",
+            "source_review_id": "rev-size-company",
+            "reviewer_name": "Piyusha P.",
+            "review_text": "A" * 180,
+            "reviewed_at": "2026-04-13",
+            "reviewer_title": "Solution Architect",
+            "reviewer_company": "Small-Business (50 or fewer emp.)",
+            "company_size_raw": "Small-Business (50 or fewer emp.)",
+        },
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-size-company", parser_version="g2:3")
+
+    assert stats["inserted"] == 1
+    assert len(pool.inserted_rows) == 1
+    inserted = pool.inserted_rows[0]
+    assert inserted[15] is None
+    assert inserted[17] == "Small-Business (50 or fewer emp.)"
+
+
+def test_repair_existing_review_by_id_sql_clears_company_when_it_matches_industry():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _REPAIR_EXISTING_REVIEW_BY_ID_SQL
+
+    assert "WHEN $8::text IS NULL AND $11::text IS NOT NULL AND r.reviewer_company = $11::text THEN NULL" in _REPAIR_EXISTING_REVIEW_BY_ID_SQL
+
+
+def test_repair_parser_fields_sql_updates_when_only_parser_version_is_missing():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _REPAIR_PARSER_FIELDS_SQL
+
+    assert "(parser_version IS NULL AND $7::text IS NOT NULL)" in _REPAIR_PARSER_FIELDS_SQL
+
+
+def test_repair_existing_review_by_id_sql_updates_when_only_parser_version_is_missing():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _REPAIR_EXISTING_REVIEW_BY_ID_SQL
+
+    assert "(r.parser_version IS NULL AND $12::text IS NOT NULL)" in _REPAIR_EXISTING_REVIEW_BY_ID_SQL

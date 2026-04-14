@@ -36,7 +36,10 @@ class ScrapeTarget:
       - g2: ``salesforce-crm`` -> g2.com/products/salesforce-crm/reviews
       - capterra: ``123456/salesforce`` -> capterra.com/p/123456/salesforce/reviews/
       - trustradius: ``salesforce-crm`` -> trustradius.com/products/salesforce-crm/reviews
-      - gartner: ``market-slug/vendor-slug`` -> gartner.com/reviews/market/{m}/vendor/{v}/reviews
+      - gartner: ``market-slug/vendor-slug`` or
+        ``market-slug/vendor-slug/product/product-slug`` ->
+        gartner.com/reviews/market/{m}/vendor/{v}/reviews or
+        gartner.com/reviews/market/{m}/vendor/{v}/product/{p}/reviews
       - peerspot: ``monday-com`` -> peerspot.com/products/monday-com-reviews
       - getapp: ``category/a/product`` -> getapp.com/software/{cat}/a/{slug}/reviews/
       - producthunt: ``my-product`` -> GraphQL slug + producthunt.com/products/{slug}/reviews

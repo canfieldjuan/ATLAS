@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ...config import settings
+from .sources import parse_source_allowlist
+
 
 def _normalize_source(value: str) -> str:
     source = str(value or "").strip().lower()
@@ -25,6 +28,84 @@ def _normalize_metadata(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _effective_min_runs(source: str, requested_min_runs: int) -> int:
+    source_norm = _normalize_source(source)
+    high_yield = set(
+        parse_source_allowlist(
+            getattr(settings.b2b_scrape, "high_yield_priority_sources", "")
+        )
+    )
+    context_rich = set(
+        parse_source_allowlist(
+            getattr(settings.b2b_scrape, "context_rich_priority_sources", "")
+        )
+    )
+    if source_norm in high_yield:
+        return max(
+            int(requested_min_runs),
+            int(
+                getattr(
+                    settings.b2b_scrape,
+                    "source_low_yield_pruning_high_yield_min_runs_floor",
+                    requested_min_runs,
+                )
+            ),
+        )
+    if source_norm in context_rich:
+        return max(
+            int(requested_min_runs),
+            int(
+                getattr(
+                    settings.b2b_scrape,
+                    "source_low_yield_pruning_context_rich_min_runs_floor",
+                    requested_min_runs,
+                )
+            ),
+        )
+    return int(requested_min_runs)
+
+
+def _source_yield_tier(source: str) -> str:
+    source_norm = _normalize_source(source)
+    high_yield = set(
+        parse_source_allowlist(
+            getattr(settings.b2b_scrape, "high_yield_priority_sources", "")
+        )
+    )
+    context_rich = set(
+        parse_source_allowlist(
+            getattr(settings.b2b_scrape, "context_rich_priority_sources", "")
+        )
+    )
+    if source_norm in high_yield:
+        return "high_yield"
+    if source_norm in context_rich:
+        return "context_rich"
+    return "standard"
+
+
+def _policy_summary(
+    *,
+    source: str,
+    source_tier: str,
+    lookback_runs: int,
+    requested_min_runs: int,
+    effective_min_runs: int,
+    max_inserted_total: int,
+) -> str:
+    tier_label = source_tier.replace("_", " ")
+    if effective_min_runs > requested_min_runs:
+        return (
+            f"{source} is a {tier_label} source, so the pruning floor rose from "
+            f"{requested_min_runs} to {effective_min_runs} runs across the last "
+            f"{lookback_runs} runs, with at most {max_inserted_total} inserted reviews."
+        )
+    return (
+        f"{source} uses the standard pruning floor of {effective_min_runs} runs across "
+        f"the last {lookback_runs} runs, with at most {max_inserted_total} inserted reviews."
+    )
+
+
 async def select_low_yield_targets(
     pool,
     *,
@@ -38,7 +119,7 @@ async def select_low_yield_targets(
     """Return targets whose recent runs inserted at most max_inserted_total reviews."""
     source_norm = _normalize_source(source)
     lookback = max(1, int(lookback_runs))
-    min_observed = max(1, int(min_runs))
+    min_observed = max(1, _effective_min_runs(source_norm, int(min_runs)))
     max_inserted = max(0, int(max_inserted_total))
     max_rows = max(1, int(limit))
 
@@ -188,10 +269,20 @@ async def prune_low_yield_targets(
     """Select and optionally disable low-yield targets for a source."""
     source_norm = _normalize_source(source)
     lookback = max(1, int(lookback_runs))
-    min_observed = max(1, int(min_runs))
+    requested_min_runs = max(1, int(min_runs))
+    min_observed = max(1, _effective_min_runs(source_norm, requested_min_runs))
     max_inserted = max(0, int(max_inserted_total))
     max_disable = max(1, int(max_disable_per_run))
     selected_policy = str(policy_name or f"{source_norm}_low_yield_last{lookback}runs")
+    source_tier = _source_yield_tier(source_norm)
+    policy_summary = _policy_summary(
+        source=source_norm,
+        source_tier=source_tier,
+        lookback_runs=lookback,
+        requested_min_runs=requested_min_runs,
+        effective_min_runs=min_observed,
+        max_inserted_total=max_inserted,
+    )
 
     candidates = await select_low_yield_targets(
         pool,
@@ -213,11 +304,24 @@ async def prune_low_yield_targets(
     return {
         "dry_run": bool(dry_run),
         "source": source_norm,
+        "source_tier": source_tier,
         "policy_name": selected_policy,
         "lookback_runs": lookback,
         "min_runs": min_observed,
+        "requested_min_runs": requested_min_runs,
+        "min_runs_floor_applied": min_observed > requested_min_runs,
         "max_inserted_total": max_inserted,
         "max_disable_per_run": max_disable,
+        "policy_context": {
+            "source_tier": source_tier,
+            "requested_min_runs": requested_min_runs,
+            "effective_min_runs": min_observed,
+            "min_runs_floor_applied": min_observed > requested_min_runs,
+            "lookback_runs": lookback,
+            "max_inserted_total": max_inserted,
+            "max_disable_per_run": max_disable,
+        },
+        "policy_summary": policy_summary,
         "requested": len(candidates),
         "disabled": disabled,
         "targets": candidates,

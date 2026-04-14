@@ -224,6 +224,155 @@ class TestParseReviewCard:
         assert reviews[0]["reviewer_name"] == "Verified User"
         assert reviews[0]["reviewer_industry"] == "Human Resources"
 
+    def test_tailwind_reviewer_block_recovers_company_industry_and_size(self):
+        from atlas_brain.services.scraping.parsers.g2 import _parse_page
+
+        target = _make_target()
+        html = """
+        <html><body>
+        <div data-review-id="tailwind-1">
+            <div itemprop="reviewBody">This review body is long enough to parse and includes enough detail for the parser to keep it.</div>
+            <div>
+              <div>
+                <div class="elv-font-bold">Jane Doe</div>
+              </div>
+              <div>
+                <div class="elv-text-subtle">VP Operations</div>
+                <div class="elv-text-subtle">BrowserStack</div>
+                <div class="elv-text-subtle">Computer Software</div>
+                <div class="elv-text-subtle">51-200 employees</div>
+              </div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        reviews = _parse_page(html, target, set())
+
+        assert len(reviews) == 1
+        assert reviews[0]["reviewer_title"] == "VP Operations"
+        assert reviews[0]["reviewer_company"] == "BrowserStack"
+        assert reviews[0]["reviewer_industry"] == "Computer Software"
+        assert reviews[0]["company_size_raw"] == "51-200 employees"
+
+    def test_tailwind_reviewer_block_still_fills_company_when_title_already_present(self):
+        from atlas_brain.services.scraping.parsers.g2 import _parse_page
+
+        target = _make_target()
+        html = """
+        <html><body>
+        <div data-review-id="tailwind-2">
+            <div itemprop="reviewBody">This review body is long enough to parse and includes enough detail for the parser to keep it.</div>
+            <span class="reviewer-title">Director of IT</span>
+            <div>
+              <div>
+                <div class="elv-font-bold">Jane Doe</div>
+              </div>
+              <div>
+                <div class="elv-text-subtle">Northwind</div>
+                <div class="elv-text-subtle">Information Technology and Services</div>
+                <div class="elv-text-subtle">201-500 employees</div>
+              </div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        reviews = _parse_page(html, target, set())
+
+        assert len(reviews) == 1
+        assert reviews[0]["reviewer_title"] == "Director of IT"
+        assert reviews[0]["reviewer_company"] == "Northwind"
+        assert reviews[0]["reviewer_industry"] == "Information Technology and Services"
+        assert reviews[0]["company_size_raw"] == "201-500 employees"
+
+    def test_tailwind_reviewer_block_maps_small_business_label_to_company_size(self):
+        from atlas_brain.services.scraping.parsers.g2 import _parse_page
+
+        target = _make_target()
+        html = """
+        <html><body>
+        <div data-review-id="tailwind-3">
+            <div itemprop="reviewBody">This review body is long enough to parse and includes enough detail for the parser to keep it.</div>
+            <div>
+              <div>
+                <div class="elv-font-bold">Piyusha P.</div>
+              </div>
+              <div>
+                <div class="elv-text-subtle">Solution Architect</div>
+                <div class="elv-text-subtle">Small-Business (50 or fewer emp.)</div>
+              </div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        reviews = _parse_page(html, target, set())
+
+        assert len(reviews) == 1
+        assert reviews[0]["reviewer_title"] == "Solution Architect"
+        assert reviews[0]["reviewer_company"] is None
+        assert reviews[0]["company_size_raw"] == "Small-Business (50 or fewer emp.)"
+
+    def test_tailwind_reviewer_block_clears_prefilled_company_size_label(self):
+        from atlas_brain.services.scraping.parsers.g2 import _parse_page
+
+        target = _make_target()
+        html = """
+        <html><body>
+        <div data-review-id="tailwind-4">
+            <div itemprop="reviewBody">This review body is long enough to parse and includes enough detail for the parser to keep it.</div>
+            <span class="reviewer-company">Small-Business (50 or fewer emp.)</span>
+            <div>
+              <div>
+                <div class="elv-font-bold">Piyusha P.</div>
+              </div>
+              <div>
+                <div class="elv-text-subtle">Solution Architect</div>
+                <div class="elv-text-subtle">Small-Business (50 or fewer emp.)</div>
+              </div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        reviews = _parse_page(html, target, set())
+
+        assert len(reviews) == 1
+        assert reviews[0]["reviewer_title"] == "Solution Architect"
+        assert reviews[0]["reviewer_company"] is None
+        assert reviews[0]["company_size_raw"] == "Small-Business (50 or fewer emp.)"
+
+    def test_tailwind_reviewer_block_clears_industry_label_from_company(self):
+        from atlas_brain.services.scraping.parsers.g2 import _parse_page
+
+        target = _make_target()
+        html = """
+        <html><body>
+        <div data-review-id="tailwind-5">
+            <div itemprop="reviewBody">This review body is long enough to parse and includes enough detail for the parser to keep it.</div>
+            <div>
+              <div>
+                <div class="elv-font-bold">Verified User in Newspapers</div>
+              </div>
+              <div>
+                <div class="elv-text-subtle">Product Manager</div>
+                <div class="elv-text-subtle">Newspapers</div>
+                <div class="elv-text-subtle">Mid-Market (51-1000 emp.)</div>
+              </div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        reviews = _parse_page(html, target, set())
+
+        assert len(reviews) == 1
+        assert reviews[0]["reviewer_title"] == "Product Manager"
+        assert reviews[0]["reviewer_company"] is None
+        assert reviews[0]["reviewer_industry"] == "Newspapers"
+        assert reviews[0]["company_size_raw"] == "Mid-Market (51-1000 emp.)"
+
     def test_review_text_truncated_at_10000(self):
         from atlas_brain.services.scraping.parsers.g2 import _parse_page
         target = _make_target()
@@ -250,6 +399,7 @@ class TestParseReviewCard:
         reviews = _parse_page(html, target, seen)
         meta = reviews[0]["raw_metadata"]
         assert meta["extraction_method"] == "html"
+        assert meta["parser_version"] == "g2:3"
         assert meta["source_weight"] == 1.0
         assert meta["source_type"] == "verified_review_platform"
 

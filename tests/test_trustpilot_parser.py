@@ -72,3 +72,43 @@ async def test_http_stops_on_first_404_page():
     assert result.errors == ["Page 2: HTTP 404"]
     assert result.page_logs[-1].status_code == 404
     assert result.page_logs[-1].stop_reason == "http_error"
+
+
+def test_parse_json_ld_does_not_map_publisher_name_to_reviewer_company():
+    from atlas_brain.services.scraping.parsers.trustpilot import _parse_json_ld
+
+    target = _make_target(product_slug="jira.com")
+    html = """
+    <html><body>
+    <script type="application/ld+json">
+    {
+      "@type": "Organization",
+      "name": "Jira",
+      "review": [{
+        "@type": "Review",
+        "@id": "tp-jsonld-1",
+        "name": "Detailed writeup",
+        "reviewBody": "This review has enough detail to be parsed correctly and exceeds the minimum length requirement.",
+        "datePublished": "2026-03-01",
+        "reviewRating": {"ratingValue": "4", "bestRating": "5"},
+        "author": {"name": "Jane"},
+        "publisher": {"name": "Publisher Org"}
+      }]
+    }
+    </script>
+    </body></html>
+    """
+
+    reviews = _parse_json_ld(html, target, set())
+
+    assert len(reviews) == 1
+    assert reviews[0]["reviewer_company"] is None
+    assert reviews[0]["reviewer_name"] == "Jane"
+    assert reviews[0]["raw_metadata"]["extraction_method"] == "json_ld"
+    assert reviews[0]["raw_metadata"]["publisher_name"] == "Publisher Org"
+
+
+def test_trustpilot_parser_version_bumped():
+    from atlas_brain.services.scraping.parsers.trustpilot import TrustpilotParser
+
+    assert TrustpilotParser.version == "trustpilot:2"

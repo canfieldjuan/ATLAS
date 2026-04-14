@@ -35,7 +35,7 @@ class TrustpilotParser:
 
     source_name = "trustpilot"
     prefer_residential = True
-    version = "trustpilot:1"
+    version = "trustpilot:2"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape Trustpilot reviews -- Web Unlocker first, then HTTP client."""
@@ -405,9 +405,16 @@ def _parse_json_ld(
                 # Extract headline / title
                 headline = r.get("name") or r.get("headline")
 
-                # Extract publisher info (sometimes present)
+                # Publisher is the reviewed business or page owner, not the reviewer employer.
                 publisher = r.get("publisher", {})
                 publisher_name = publisher.get("name") if isinstance(publisher, dict) else None
+                raw_metadata = {
+                    "extraction_method": "json_ld",
+                    "source_weight": 0.7,
+                    "source_type": "consumer_review_platform",
+                }
+                if publisher_name:
+                    raw_metadata["publisher_name"] = publisher_name
 
                 reviews.append({
                     "source": "trustpilot",
@@ -424,15 +431,11 @@ def _parse_json_ld(
                     "cons": None,
                     "reviewer_name": reviewer_name or None,
                     "reviewer_title": None,
-                    "reviewer_company": publisher_name,
+                    "reviewer_company": None,
                     "company_size_raw": None,
                     "reviewer_industry": None,
                     "reviewed_at": reviewed_at,
-                    "raw_metadata": {
-                        "extraction_method": "json_ld",
-                        "source_weight": 0.7,
-                        "source_type": "consumer_review_platform",
-                    },
+                    "raw_metadata": raw_metadata,
                 })
 
     return reviews

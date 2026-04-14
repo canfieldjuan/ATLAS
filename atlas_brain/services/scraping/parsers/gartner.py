@@ -2,6 +2,7 @@
 Gartner Peer Insights parser for B2B review scraping.
 
 URL pattern: gartner.com/reviews/market/{market-slug}/vendor/{vendor-slug}/reviews
+or gartner.com/reviews/market/{market-slug}/vendor/{vendor-slug}/product/{product-slug}/reviews
 Akamai-protected -- needs Web Unlocker as primary strategy.
 
 Primary: Bright Data Web Unlocker (handles Akamai automatically).
@@ -34,12 +35,22 @@ _BASE_URL = "https://www.gartner.com/reviews/market"
 _REVIEWS_PER_PAGE = 10
 
 
+def _looks_like_gartner_company_size_or_revenue(value: str | None) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if " usd" in lowered or lowered.endswith(" usd"):
+        return True
+    return bool(re.fullmatch(r"\d+[mbk]?-\d+[mbk]?\s+usd", lowered))
+
+
 class GartnerParser:
     """Parse Gartner Peer Insights review pages with Akamai bypass."""
 
     source_name = "gartner"
     prefer_residential = True
-    version = "gartner:1"
+    version = "gartner:2"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape Gartner Peer Insights -- Web Unlocker first, then HTTP."""
@@ -312,8 +323,12 @@ class GartnerParser:
 def _build_reviews_url(product_slug: str, offset: int = 0) -> str:
     """Build the Gartner Peer Insights reviews URL.
 
-    product_slug format: ``{market-slug}/{vendor-slug}``
-    Result: ``https://www.gartner.com/reviews/market/{market-slug}/vendor/{vendor-slug}/reviews``
+    product_slug format:
+      - ``{market-slug}/{vendor-slug}``
+      - ``{market-slug}/{vendor-slug}/product/{product-slug}``
+    Result:
+      - ``https://www.gartner.com/reviews/market/{market-slug}/vendor/{vendor-slug}/reviews``
+      - ``https://www.gartner.com/reviews/market/{market-slug}/vendor/{vendor-slug}/product/{product-slug}/reviews``
     """
     parts = product_slug.split("/", 1)
     if len(parts) == 2:
@@ -386,9 +401,11 @@ def _parse_json_ld(
                 author = r.get("author", {})
                 reviewer_name = None
                 reviewer_title = None
+                reviewer_company = None
                 if isinstance(author, dict):
                     reviewer_name = author.get("name") or None
                     reviewer_title = author.get("jobTitle") or None
+                    reviewer_company = _extract_gartner_company_name(author)
 
                 # Extract date
                 reviewed_at = r.get("datePublished")
@@ -408,7 +425,7 @@ def _parse_json_ld(
                     "cons": None,
                     "reviewer_name": reviewer_name,
                     "reviewer_title": reviewer_title,
-                    "reviewer_company": None,
+                    "reviewer_company": reviewer_company,
                     "company_size_raw": None,
                     "reviewer_industry": None,
                     "reviewed_at": reviewed_at,
@@ -525,6 +542,13 @@ def _parse_next_data_review(entry: object, snippet_map: dict[str, dict], target:
     except (TypeError, ValueError):
         rating = None
 
+    reviewer_name = (
+        entry.get("reviewerName")
+        or snippet.get("reviewerName")
+        or None
+    )
+    reviewer_company = _extract_gartner_company_name(entry, snippet)
+
     return {
         "source": "gartner",
         "source_url": f"{_build_reviews_url(target.product_slug)}#review-{review_id}",
@@ -538,9 +562,9 @@ def _parse_next_data_review(entry: object, snippet_map: dict[str, dict], target:
         "review_text": review_text[:10000],
         "pros": pros,
         "cons": cons,
-        "reviewer_name": None,
+        "reviewer_name": reviewer_name,
         "reviewer_title": entry.get("jobTitle") or None,
-        "reviewer_company": None,
+        "reviewer_company": reviewer_company,
         "company_size_raw": entry.get("companySize") or snippet.get("companySize"),
         "reviewer_industry": entry.get("industryName") or snippet.get("industryName"),
         "reviewed_at": entry.get("formattedReviewDate") or snippet.get("formattedReviewDate"),
@@ -553,6 +577,49 @@ def _parse_next_data_review(entry: object, snippet_map: dict[str, dict], target:
             "source_type": "verified_review_platform",
         },
     }
+
+
+def _extract_gartner_company_name(*sources: object) -> str | None:
+    """Extract company identity from Gartner payload objects when present."""
+    candidate_keys = (
+        "companyName",
+        "company",
+        "organizationName",
+        "organization",
+        "employer",
+        "employerName",
+        "worksFor",
+        "affiliation",
+    )
+    nested_keys = (
+        "name",
+        "legalName",
+        "displayName",
+        "companyName",
+        "organizationName",
+    )
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in candidate_keys:
+            value = source.get(key)
+            if isinstance(value, str):
+                text = value.strip()
+                if text:
+                    return text
+            if isinstance(value, dict):
+                for nested in nested_keys:
+                    nested_value = value.get(nested)
+                    if isinstance(nested_value, str):
+                        text = nested_value.strip()
+                        if text:
+                            return text
+        author = source.get("author")
+        if isinstance(author, dict):
+            nested = _extract_gartner_company_name(author)
+            if nested:
+                return nested
+    return None
 
 
 # ------------------------------------------------------------------
@@ -569,7 +636,8 @@ def _parse_html(
     # Gartner review cards: look for common container patterns
     review_cards = soup.select(
         '[data-testid="review-card"], '
-        '[class*="review-card"], '
+        'li[class*="review-card_reviewCard"], '
+        'div[class*="review-card_reviewCard"], '
         '[class*="ReviewCard"], '
         '[itemprop="review"]'
     )
@@ -616,6 +684,7 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
     summary = _get_text(card, (
         '[class*="review-title"], '
         '[class*="ReviewTitle"], '
+        '[class*="reviewHeadline"], '
         '[itemprop="name"], '
         'h3, h4'
     ))
@@ -631,6 +700,7 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
         '[class*="review-body"], '
         '[class*="ReviewBody"], '
         '[class*="review-text"], '
+        '[class*="reviewSummary"], '
         '[class*="reviewContent"]'
     )
     if body_el:
@@ -658,6 +728,7 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
     reviewer_title = _get_text(card, (
         '[class*="reviewer-title"], '
         '[class*="ReviewerTitle"], '
+        '[class*="reviewerRole"], '
         '[class*="job-title"], '
         '[class*="jobTitle"]'
     ))
@@ -670,6 +741,7 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
     company_size = _get_text(card, (
         '[class*="company-size"], '
         '[class*="CompanySize"], '
+        '[class*="reviewerCompany"], '
         '[class*="employees"], '
         '[class*="revenue"]'
     ))
@@ -694,6 +766,11 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
             or date_el.get("content")
             or date_el.get_text(strip=True)
         )
+
+    if _looks_like_gartner_company_size_or_revenue(reviewer_company):
+        if not company_size:
+            company_size = reviewer_company
+        reviewer_company = None
 
     return {
         "source": "gartner",

@@ -35,8 +35,15 @@ class CapterraParser:
     version = "capterra:2"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
-        """Scrape Capterra reviews -- Web Unlocker first, then HTTP client."""
+        """Scrape Capterra reviews -- Web Unlocker first, then browser, then HTTP client."""
         from atlas_brain.config import settings
+        sb_url = settings.b2b_scrape.scraping_browser_ws_url.strip()
+        sb_domains = {
+            d.strip().lower()
+            for d in settings.b2b_scrape.scraping_browser_domains.split(",")
+            if d.strip()
+        }
+        browser_enabled = bool(sb_url and _DOMAIN in sb_domains)
 
         # Priority 1: Bright Data Web Unlocker (handles Cloudflare automatically)
         if settings.b2b_scrape.web_unlocker_url:
@@ -60,7 +67,23 @@ class CapterraParser:
                         target.vendor_name, exc,
                     )
 
-        # Priority 2: curl_cffi HTTP client with residential proxy
+        # Priority 2: Bright Data Scraping Browser
+        if browser_enabled:
+            try:
+                result = await self._scrape_browser(target, sb_url)
+                if result.reviews:
+                    return result
+                logger.warning(
+                    "Scraping Browser for %s returned 0 reviews, falling back to HTTP",
+                    target.vendor_name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Scraping Browser failed for %s: %s -- falling back to HTTP",
+                    target.vendor_name, exc,
+                )
+
+        # Priority 3: curl_cffi HTTP client with residential proxy
         return await self._scrape_http(target, client)
 
     # ------------------------------------------------------------------
@@ -165,6 +188,183 @@ class CapterraParser:
 
         logger.info(
             "Capterra Web Unlocker scrape for %s: %d reviews from %d pages",
+            target.vendor_name, len(reviews), pages_scraped,
+        )
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
+
+    # ------------------------------------------------------------------
+    # Browser path (Playwright stealth browser)
+    # ------------------------------------------------------------------
+
+    async def _scrape_browser(self, target: ScrapeTarget, ws_url: str) -> ScrapeResult:
+        """Scrape Capterra via Bright Data Scraping Browser (cloud Chromium)."""
+        from atlas_brain.config import settings
+        from playwright.async_api import async_playwright
+        from ..browser import solve_browser_challenge
+
+        reviews: list[dict] = []
+        errors: list[str] = []
+        pages_scraped = 0
+        seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
+        stop_reason = ""
+        timeout_ms = settings.b2b_scrape.playwright_timeout_ms
+
+        try:
+            async with async_playwright() as pw:
+                logger.info(
+                    "Connecting Capterra Scraping Browser for vendor=%s slug=%s ws_host=%s",
+                    target.vendor_name,
+                    target.product_slug,
+                    ws_url.split("@")[-1],
+                )
+                browser = await pw.chromium.connect_over_cdp(ws_url, timeout=timeout_ms)
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                page_obj = await context.new_page()
+
+                for page_num in range(1, target.max_pages + 1):
+                    base_path = f"{_BASE_URL}/{target.product_slug}/reviews/"
+                    url = base_path if page_num == 1 else f"{base_path}?page={page_num}"
+                    referer = (
+                        f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+capterra+reviews"
+                        if page_num == 1
+                        else f"{base_path}?page={page_num - 1}" if page_num > 2 else base_path
+                    )
+
+                    try:
+                        logger.info(
+                            "Capterra Scraping Browser navigating vendor=%s page=%d url=%s",
+                            target.vendor_name,
+                            page_num,
+                            url,
+                        )
+                        page_start = _time.monotonic()
+                        resp = await page_obj.goto(
+                            url,
+                            wait_until="commit",
+                            timeout=timeout_ms,
+                            referer=referer,
+                        )
+                        status = resp.status if resp else 0
+                        pages_scraped += 1
+                        elapsed_ms = int((_time.monotonic() - page_start) * 1000)
+                        logger.info(
+                            "Capterra Scraping Browser response vendor=%s page=%d status=%s final_url=%s duration_ms=%d",
+                            target.vendor_name,
+                            page_num,
+                            status,
+                            page_obj.url,
+                            elapsed_ms,
+                        )
+                        try:
+                            await page_obj.wait_for_load_state("domcontentloaded", timeout=min(timeout_ms, 15000))
+                        except Exception:
+                            pass
+                        html_body = await page_obj.content()
+
+                        if await solve_browser_challenge(
+                            page_obj,
+                            domain=_DOMAIN,
+                            html=html_body,
+                            status_code=status,
+                        ):
+                            retry_start = _time.monotonic()
+                            resp = await page_obj.goto(
+                                url,
+                                wait_until="commit",
+                                timeout=timeout_ms,
+                                referer=referer,
+                            )
+                            status = resp.status if resp else 0
+                            elapsed_ms += int((_time.monotonic() - retry_start) * 1000)
+                            try:
+                                await page_obj.wait_for_load_state("domcontentloaded", timeout=min(timeout_ms, 15000))
+                            except Exception:
+                                pass
+                            html_body = await page_obj.content()
+
+                        if status == 403:
+                            errors.append(f"Page {page_num}: blocked (403) via scraping_browser")
+                            page_logs.append(log_page(
+                                page_num, url, status_code=403, duration_ms=elapsed_ms,
+                                response_bytes=len(html_body), raw_body=html_body,
+                                prior_hashes=prior_hashes, errors=["blocked (403) via scraping_browser"],
+                            ))
+                            break
+                        if status != 200:
+                            errors.append(f"Page {page_num}: HTTP {status}")
+                            page_logs.append(log_page(
+                                page_num, url, status_code=status, duration_ms=elapsed_ms,
+                                response_bytes=len(html_body), raw_body=html_body,
+                                prior_hashes=prior_hashes, errors=[f"HTTP {status}"],
+                            ))
+                            continue
+
+                        try:
+                            await page_obj.wait_for_selector(
+                                '[data-testid="review-card"], [class*="review-card"], [itemprop="review"]',
+                                timeout=min(timeout_ms, 15000),
+                            )
+                        except Exception:
+                            pass
+                        html_body = await page_obj.content()
+
+                        page_reviews = _parse_json_ld(html_body, target, seen_ids)
+                        if page_reviews:
+                            _supplement_pros_cons_from_html(html_body, page_reviews)
+                        else:
+                            page_reviews = _parse_html(html_body, target, seen_ids)
+                        page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+
+                        pl = log_page(
+                            page_num, url, status_code=200, duration_ms=elapsed_ms,
+                            response_bytes=len(html_body), reviews=page_reviews,
+                            raw_body=html_body, prior_hashes=prior_hashes,
+                            prior_review_ids=prior_review_ids,
+                            next_page_found=bool(page_reviews),
+                        )
+                        if cutoff_hit:
+                            pl.stop_reason = "date_cutoff"
+                            stop_reason = "date_cutoff"
+                        page_logs.append(pl)
+
+                        if not page_reviews:
+                            if page_num == 1:
+                                logger.warning(
+                                    "Capterra scraping browser page 1 returned 0 reviews for %s",
+                                    target.product_slug,
+                                )
+                            break
+
+                        reviews.extend(page_reviews)
+
+                    except Exception as exc:
+                        errors.append(f"Page {page_num}: {exc}")
+                        logger.warning(
+                            "Capterra scraping browser page %d failed for %s: %s",
+                            page_num, target.product_slug, exc,
+                        )
+                        break
+
+                    await asyncio.sleep(random.uniform(2.0, 5.0))
+        except Exception as exc:
+            errors.append(f"Browser setup: {exc}")
+            logger.warning(
+                "Capterra scraping browser setup failed for vendor=%s slug=%s: %s",
+                target.vendor_name, exc,
+            )
+
+        logger.info(
+            "Capterra scraping browser scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
         return ScrapeResult(

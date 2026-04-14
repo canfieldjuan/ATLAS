@@ -8,7 +8,14 @@ from typing import Any
 
 from ...config import settings
 from ..vendor_registry import resolve_vendor_name
-from .sources import SEARCH_SOURCES, filter_deprecated_sources, parse_source_allowlist
+from .sources import (
+    REQUIRED_SCRAPE_SOURCES,
+    SEARCH_SOURCES,
+    filter_blocked_sources,
+    filter_deprecated_sources,
+    parse_source_allowlist,
+    with_required_sources,
+)
 from .target_planning import (
     build_scrape_coverage_plan,
     collapse_inventory_rows,
@@ -98,6 +105,7 @@ async def apply_missing_core_targets(
                 "target_id": item["existing_disabled_target_id"],
                 "vendor_name": item["vendor_name"],
                 "source": item["source"],
+                "source_tier": item.get("source_tier"),
                 "product_slug": item.get("existing_disabled_product_slug"),
             }
             if not dry_run:
@@ -125,6 +133,7 @@ async def apply_missing_core_targets(
             "action": "insert_target",
             "vendor_name": item["vendor_name"],
             "source": source,
+            "source_tier": item.get("source_tier"),
             "product_slug": product_slug,
             "product_name": product_name,
             "product_category": item.get("product_category"),
@@ -198,9 +207,19 @@ async def provision_missing_core_targets_for_vendors(
         }
 
     inventory_rows, existing_targets = await fetch_coverage_inputs(pool)
+    deprecated_sources = set(
+        parse_source_allowlist(getattr(settings.b2b_scrape, "deprecated_sources", ""))
+    ) - set(REQUIRED_SCRAPE_SOURCES)
     allowed_sources = filter_deprecated_sources(
-        parse_source_allowlist(settings.b2b_scrape.source_allowlist),
-        settings.b2b_scrape.deprecated_sources,
+        with_required_sources(
+            parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+            required=REQUIRED_SCRAPE_SOURCES,
+        ),
+        deprecated_sources,
+    )
+    allowed_sources = filter_blocked_sources(
+        allowed_sources,
+        getattr(settings.b2b_scrape, "infra_blocked_sources", ""),
     )
     plan = build_scrape_coverage_plan(
         inventory_rows,
@@ -290,9 +309,19 @@ async def provision_vendor_onboarding_targets(
         inventory_rows = list(inventory_rows)
         inventory_rows.append(_bootstrap_inventory_row(canonical_vendor, bootstrap_category))
 
+    deprecated_sources = set(
+        parse_source_allowlist(getattr(settings.b2b_scrape, "deprecated_sources", ""))
+    ) - set(REQUIRED_SCRAPE_SOURCES)
     allowed_sources = filter_deprecated_sources(
-        parse_source_allowlist(settings.b2b_scrape.source_allowlist),
-        settings.b2b_scrape.deprecated_sources,
+        with_required_sources(
+            parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+            required=REQUIRED_SCRAPE_SOURCES,
+        ),
+        deprecated_sources,
+    )
+    allowed_sources = filter_blocked_sources(
+        allowed_sources,
+        getattr(settings.b2b_scrape, "infra_blocked_sources", ""),
     )
     plan = build_scrape_coverage_plan(
         inventory_rows,

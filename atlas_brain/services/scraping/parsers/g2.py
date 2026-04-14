@@ -19,6 +19,7 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from ....config import settings
+from ....services.company_normalization import normalize_company_name
 from ..client import AntiDetectionClient
 from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
 
@@ -30,6 +31,20 @@ _VERIFIED_USER_RE = re.compile(
     r"^Verified User in\s+(?P<industry>.+?)\s*This reviewer's identity",
     re.I | re.S,
 )
+_COMPANY_SIZE_RE = re.compile(
+    r"(?:\bsmall-business\b|\bmid-market\b|\benterprise\b|\b\d[\d,\- ]*\s*employees?\b|\bemp\.)",
+    re.I,
+)
+_INDUSTRY_HINT_RE = re.compile(
+    r"\b("
+    r"software|technology|services|marketing|advertising|insurance|health|healthcare|"
+    r"financial|finance|banking|retail|education|government|manufacturing|media|"
+    r"telecommunications|telecom|hospital|hospitality|construction|legal|accounting|"
+    r"real estate|internet|computer|human resources|hr|pharma|pharmaceutical|"
+    r"logistics|transportation|consumer goods|biotech|automotive|newspapers?|publishing"
+    r")\b",
+    re.I,
+)
 
 
 class G2Parser:
@@ -37,7 +52,7 @@ class G2Parser:
 
     source_name = "g2"
     prefer_residential = True
-    version = "g2:2"
+    version = "g2:3"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape G2 reviews -- Web Unlocker first, then browser, then HTTP."""
@@ -559,31 +574,36 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
     reviewer_industry = _get_text(card, '[class*="industry"]')
 
     # G2 2025+ uses Tailwind utility classes (elv-*) with no semantic names.
-    # Reviewer info is: bold div = name, then sibling subtle divs = title,
-    # optional industry, and company size segment (contains "emp.").
-    if not reviewer_title:
-        name_el = card.select_one(
-            'div[class*="elv-font-bold"]:not([class*="elv-text-lg"])'
-        )
-        if name_el:
-            if not reviewer_name:
-                reviewer_name = name_el.get_text(strip=True) or None
-            # Collect subtle sibling divs in the same info block
-            info_parent = name_el.parent.parent if name_el.parent else None
-            if info_parent:
-                subtle = [
-                    d.get_text(strip=True)
-                    for d in info_parent.select('div[class*="elv-text-subtle"]')
-                    if d.get_text(strip=True)
-                ]
-                # Last element with "emp." is company size; others are title/industry
-                for idx, text in enumerate(subtle):
-                    if "emp." in text or "employees" in text.lower():
-                        company_size = company_size or text
-                    elif idx == 0:
-                        reviewer_title = reviewer_title or text
-                    else:
-                        reviewer_industry = reviewer_industry or text
+    # Reviewer info is: bold div = name, then sibling subtle divs that may
+    # include title, company, industry, and size. Parse them even if one field
+    # was already captured semantically so we do not lose employer identity.
+    name_el = card.select_one(
+        'div[class*="elv-font-bold"]:not([class*="elv-text-lg"])'
+    )
+    if name_el:
+        if not reviewer_name:
+            reviewer_name = name_el.get_text(strip=True) or None
+        info_parent = name_el.parent.parent if name_el.parent else None
+        if info_parent:
+            subtle = [
+                d.get_text(strip=True)
+                for d in info_parent.select('div[class*="elv-text-subtle"]')
+                if d.get_text(strip=True)
+            ]
+            reviewer_title, reviewer_company, reviewer_industry, company_size = _merge_tailwind_reviewer_info(
+                subtle,
+                reviewer_title=reviewer_title,
+                reviewer_company=reviewer_company,
+                reviewer_industry=reviewer_industry,
+                company_size=company_size,
+            )
+
+    if _looks_like_company_size_label(reviewer_company):
+        company_size = company_size or reviewer_company
+        reviewer_company = None
+    if _looks_like_company_size_label(reviewer_industry):
+        company_size = company_size or reviewer_industry
+        reviewer_industry = None
 
     # Date
     reviewed_at = None
@@ -595,6 +615,14 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
         reviewer_name,
         reviewer_industry,
     )
+    if reviewer_company:
+        normalized_company = normalize_company_name(reviewer_company)
+        normalized_industry = normalize_company_name(reviewer_industry or "")
+        if _looks_like_industry_label(reviewer_company) and (
+            not normalized_industry or normalized_company == normalized_industry
+        ):
+            reviewer_industry = reviewer_industry or reviewer_company
+            reviewer_company = None
 
     return {
         "source": "g2",
@@ -617,6 +645,7 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
         "reviewed_at": reviewed_at,
         "raw_metadata": {
             "extraction_method": "html",
+            "parser_version": G2Parser.version,
             "source_weight": 1.0,
             "source_type": "verified_review_platform",
         },
@@ -664,6 +693,60 @@ def _sanitize_reviewer_identity(
         return reviewer_name, reviewer_industry
     industry = reviewer_industry or match.group("industry").strip()
     return "Verified User", industry or None
+
+
+def _looks_like_company_size_label(text: str | None) -> bool:
+    return bool(text and _COMPANY_SIZE_RE.search(text))
+
+
+def _looks_like_industry_label(text: str | None) -> bool:
+    candidate = str(text or "").strip()
+    if not candidate:
+        return False
+    return bool(_INDUSTRY_HINT_RE.search(candidate))
+
+
+def _merge_tailwind_reviewer_info(
+    subtle: list[str],
+    *,
+    reviewer_title: str | None,
+    reviewer_company: str | None,
+    reviewer_industry: str | None,
+    company_size: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    remaining: list[str] = []
+    title = reviewer_title
+    company = reviewer_company
+    industry = reviewer_industry
+    size = company_size
+
+    if _looks_like_company_size_label(company):
+        size = size or company
+        company = None
+    if _looks_like_company_size_label(industry):
+        size = size or industry
+        industry = None
+
+    for idx, text in enumerate(subtle):
+        if _looks_like_company_size_label(text):
+            size = size or text
+            continue
+        if idx == 0 and not title:
+            title = text
+            continue
+        remaining.append(text)
+
+    for text in remaining:
+        if _looks_like_company_size_label(text):
+            size = size or text
+        elif _looks_like_industry_label(text):
+            industry = industry or text
+        elif not company:
+            company = text
+        elif not industry:
+            industry = text
+
+    return title, company, industry, size
 
 
 def _get_text(card, selector: str) -> str | None:

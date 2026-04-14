@@ -78,6 +78,8 @@ class TestGetAppBrowser:
         mock_page = AsyncMock()
         mock_page.goto = AsyncMock(return_value=MagicMock(status=200))
         mock_page.content = AsyncMock(return_value=html)
+        mock_page.wait_for_load_state = AsyncMock()
+        mock_page.wait_for_selector = AsyncMock()
         mock_page.close = AsyncMock()
 
         mock_context = AsyncMock()
@@ -103,7 +105,7 @@ class TestGetAppBrowser:
         assert len(result.page_logs) == 1
         mock_page.goto.assert_awaited_once_with(
             "https://www.getapp.com/software/project-management-software/a/acme/reviews/",
-            wait_until="domcontentloaded",
+            wait_until="commit",
             timeout=30000,
         )
 
@@ -118,6 +120,8 @@ class TestGetAppBrowser:
         mock_page = AsyncMock()
         mock_page.goto = AsyncMock(return_value=MagicMock(status=502))
         mock_page.content = AsyncMock(return_value=blocked_html)
+        mock_page.wait_for_load_state = AsyncMock()
+        mock_page.wait_for_selector = AsyncMock()
         mock_page.close = AsyncMock()
 
         mock_context = AsyncMock()
@@ -164,6 +168,8 @@ class TestGetAppBrowser:
             side_effect=[MagicMock(status=403), MagicMock(status=200)]
         )
         mock_page.content = AsyncMock(side_effect=[challenge_html, html])
+        mock_page.wait_for_load_state = AsyncMock()
+        mock_page.wait_for_selector = AsyncMock()
         mock_page.close = AsyncMock()
 
         mock_context = AsyncMock()
@@ -272,13 +278,11 @@ class TestGetAppRouting:
             text="<html>captcha or protection page found</html>",
             content=b"blocked",
         )
-        client = AsyncMock()
-        client.__aenter__.return_value = client
-        client.__aexit__.return_value = None
-        client.get = AsyncMock(side_effect=[page_one, page_two])
-
         with patch("atlas_brain.config.settings") as mock_settings, \
-             patch("httpx.AsyncClient", return_value=client), \
+             patch(
+                 "atlas_brain.services.scraping.parsers.getapp.get_with_web_unlocker",
+                 new=AsyncMock(side_effect=[page_one, page_two]),
+             ), \
              patch("atlas_brain.services.scraping.parsers.getapp.asyncio.sleep", new=AsyncMock()):
             mock_settings.b2b_scrape.web_unlocker_url = "http://unlocker"
             result = await parser._scrape_web_unlocker(target)
@@ -287,6 +291,35 @@ class TestGetAppRouting:
         assert len(result.reviews) == 1
         assert result.resume_page == 2
         assert "Page 2: HTTP 502" in result.errors[0]
+
+    @pytest.mark.asyncio
+    async def test_web_unlocker_surfaces_brightdata_reject_block_reason(self):
+        from atlas_brain.services.scraping.parsers.getapp import GetAppParser
+
+        parser = GetAppParser()
+        target = _make_target(max_pages=1)
+        blocked_page = MagicMock(
+            status_code=502,
+            text="",
+            content=b"",
+            headers={
+                "x-brd-error-code": "reject_block",
+                "x-brd-error": "captcha or protection page found",
+            },
+        )
+
+        with patch("atlas_brain.config.settings") as mock_settings, \
+             patch(
+                 "atlas_brain.services.scraping.parsers.getapp.get_with_web_unlocker",
+                 new=AsyncMock(return_value=blocked_page),
+             ):
+            mock_settings.b2b_scrape.web_unlocker_url = "http://unlocker"
+            result = await parser._scrape_web_unlocker(target)
+
+        assert result.stop_reason == "blocked_or_throttled"
+        assert result.errors == [
+            "Page 1: HTTP 502 (reject_block: captcha or protection page found)"
+        ]
 
     @pytest.mark.asyncio
     async def test_http_stops_after_repeated_protection_pages(self):

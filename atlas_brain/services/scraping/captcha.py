@@ -28,6 +28,7 @@ class CaptchaType(enum.Enum):
     NONE = "none"
     DATADOME = "datadome"        # G2
     CLOUDFLARE = "cloudflare"    # Capterra
+    CLOUDFLARE_BLOCK = "cloudflare_block"  # Hard block page, not a solvable challenge
     AKAMAI = "akamai"            # Gartner
 
 
@@ -55,6 +56,11 @@ def detect_captcha(response_text: str, status_code: int) -> CaptchaType:
         or "challenge-platform" in body
         or "cf-browser-verification" in body
     )
+    cloudflare_block_text = (
+        "sorry, you have been blocked" in body
+        or "you are unable to access" in body
+        or "what can i do to resolve this?" in body
+    )
     cloudflare_challenge_text = (
         "attention required" in body
         or "just a moment" in body
@@ -62,6 +68,8 @@ def detect_captcha(response_text: str, status_code: int) -> CaptchaType:
         or "checking your browser" in body
         or "challenge-platform" in body
     )
+    if cloudflare_markers and cloudflare_block_text:
+        return CaptchaType.CLOUDFLARE_BLOCK
     if cloudflare_markers and cloudflare_challenge_text:
         return CaptchaType.CLOUDFLARE
 
@@ -644,6 +652,19 @@ _checked: bool = False
 _init_lock = __import__("threading").Lock()
 
 
+def _required_2captcha_domains() -> set[str]:
+    return {"gartner.com", "capterra.com"}
+
+
+def _domain_in_set(domain: str | None, domain_set: set[str]) -> bool:
+    normalized = (domain or "").strip().lower().strip(".")
+    if not normalized:
+        return False
+    if normalized in domain_set:
+        return True
+    return any(normalized.endswith(f".{candidate}") for candidate in domain_set)
+
+
 def get_captcha_solver(domain: str | None = None) -> CaptchaSolver | None:
     """Get the CAPTCHA solver for a domain.
 
@@ -659,7 +680,7 @@ def get_captcha_solver(domain: str | None = None) -> CaptchaSolver | None:
         return None
 
     # Route to 2Captcha for specific domains
-    if domain and domain.lower() in _2captcha_domains and _solver_2captcha:
+    if _domain_in_set(domain, _2captcha_domains) and _solver_2captcha:
         return _solver_2captcha
     return _solver
 
@@ -688,6 +709,7 @@ def _init_solvers() -> None:
         _2captcha_domains.update(
             d.strip().lower() for d in cfg.captcha_2captcha_domains.split(",") if d.strip()
         )
+        _2captcha_domains.update(_required_2captcha_domains())
         logger.info(
             "2Captcha override initialized for domains: %s", _2captcha_domains,
         )
@@ -697,10 +719,37 @@ def is_captcha_enabled_for_domain(domain: str) -> bool:
     """Check if CAPTCHA solving is enabled for a specific domain."""
     # Ensure singleton is initialized
     get_captcha_solver()
-    return domain.lower() in _enabled_domains
+    return _domain_in_set(domain, _enabled_domains)
 
 
 _captcha_proxy_base: str | None = None
+
+
+def _capsolver_incompatible_proxy_host(hostname: str) -> bool:
+    normalized = (hostname or "").strip().lower()
+    return normalized.endswith("brd.superproxy.io")
+
+
+def _select_capsolver_compatible_proxy_url() -> str:
+    from urllib.parse import urlparse
+    from ...config import settings
+
+    configured = settings.b2b_scrape.captcha_proxy_url.strip()
+    if configured:
+        host = urlparse(configured).hostname or ""
+        if not _capsolver_incompatible_proxy_host(host):
+            return configured
+
+    for candidate in settings.b2b_scrape.proxy_residential_urls.split(","):
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        host = urlparse(candidate).hostname or ""
+        if _capsolver_incompatible_proxy_host(host):
+            continue
+        return candidate
+
+    return configured
 
 
 def get_captcha_proxy() -> str | None:
@@ -712,8 +761,7 @@ def get_captcha_proxy() -> str | None:
     global _captcha_proxy_base
     if _captcha_proxy_base is None:
         get_captcha_solver()
-        from ...config import settings
-        url = settings.b2b_scrape.captcha_proxy_url.strip()
+        url = _select_capsolver_compatible_proxy_url().strip()
         _captcha_proxy_base = url or ""
         if url:
             logger.info("CAPTCHA sticky proxy configured: %s", url.split("@")[-1])

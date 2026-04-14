@@ -17,11 +17,13 @@ import logging
 import random
 import re
 from urllib.parse import quote_plus
+from collections.abc import Mapping
 
 from bs4 import BeautifulSoup
 
 from ..captcha import CaptchaType, detect_captcha
 from ..client import AntiDetectionClient
+from ..web_unlocker_http import get_with_web_unlocker
 from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.getapp")
@@ -64,6 +66,20 @@ def _merge_results(primary: ScrapeResult, continuation: ScrapeResult) -> ScrapeR
         stop_reason=continuation.stop_reason or primary.stop_reason,
         resume_page=continuation.resume_page,
     )
+
+
+def _unlocker_header_detail(headers: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(headers, Mapping):
+        return None
+    error_code = str(headers.get("x-brd-error-code") or headers.get("x-luminati-error-code") or "").strip()
+    error_text = str(headers.get("x-brd-error") or headers.get("x-luminati-error") or "").strip()
+    if error_code and error_text:
+        return f"{error_code}: {error_text}"
+    if error_code:
+        return error_code
+    if error_text:
+        return error_text
+    return None
 
 
 class GetAppParser:
@@ -247,10 +263,8 @@ class GetAppParser:
 
     async def _scrape_web_unlocker(self, target: ScrapeTarget) -> ScrapeResult:
         """Scrape GetApp via Bright Data Web Unlocker proxy."""
-        import httpx
         from atlas_brain.config import settings
 
-        proxy_url = settings.b2b_scrape.web_unlocker_url.strip()
         reviews: list[dict] = []
         errors: list[str] = []
         pages_scraped = 0
@@ -277,16 +291,14 @@ class GetAppParser:
 
             page_start = _time.monotonic()
             try:
-                async with httpx.AsyncClient(
-                    proxy=proxy_url, verify=False, timeout=90
-                ) as http:
-                    resp = await http.get(url, headers=headers)
+                resp = await get_with_web_unlocker(url, headers=headers, domain=_DOMAIN)
 
                 pages_scraped += 1
                 elapsed_ms = int((_time.monotonic() - page_start) * 1000)
+                unlocker_detail = _unlocker_header_detail(resp.headers)
 
                 if resp.status_code == 403:
-                    detail = _describe_getapp_response(resp.text, resp.status_code)
+                    detail = _describe_getapp_response(resp.text, resp.status_code, resp.headers)
                     if detail:
                         errors.append(f"Page {page}: blocked (403) via Web Unlocker ({detail})")
                     else:
@@ -300,7 +312,9 @@ class GetAppParser:
                     resume_page = page
                     break
                 if resp.status_code != 200:
-                    detail = _describe_getapp_response(resp.text, resp.status_code)
+                    detail = _describe_getapp_response(resp.text, resp.status_code, resp.headers)
+                    if not detail:
+                        detail = unlocker_detail
                     if detail:
                         errors.append(f"Page {page}: HTTP {resp.status_code} ({detail})")
                     else:
@@ -333,7 +347,9 @@ class GetAppParser:
                 page_logs.append(pl)
 
                 if not page_reviews:
-                    detail = _describe_getapp_response(resp.text, resp.status_code)
+                    detail = _describe_getapp_response(resp.text, resp.status_code, resp.headers)
+                    if not detail:
+                        detail = unlocker_detail
                     if detail:
                         errors.append(f"Page {page}: 0 reviews after Web Unlocker ({detail})")
                         stop_reason = _BLOCKED_STOP_REASON
@@ -417,10 +433,21 @@ class GetAppParser:
 
                     try:
                         page_start = _time.monotonic()
-                        resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                        resp = await page.goto(url, wait_until="commit", timeout=timeout_ms)
                         status = resp.status if resp else 0
                         pages_scraped += 1
                         elapsed_ms = int((_time.monotonic() - page_start) * 1000)
+                        try:
+                            await page.wait_for_load_state("domcontentloaded", timeout=min(timeout_ms, 15000))
+                        except Exception:
+                            pass
+                        try:
+                            await page.wait_for_selector(
+                                '[data-review-id], [data-testid="review-card"], [itemtype*="Review"]',
+                                timeout=min(timeout_ms, 15000),
+                            )
+                        except Exception:
+                            pass
                         html = await page.content()
 
                         if await solve_browser_challenge(
@@ -432,11 +459,18 @@ class GetAppParser:
                             retry_start = _time.monotonic()
                             resp = await page.goto(
                                 url,
-                                wait_until="domcontentloaded",
+                                wait_until="commit",
                                 timeout=timeout_ms,
                             )
                             status = resp.status if resp else 0
                             elapsed_ms += int((_time.monotonic() - retry_start) * 1000)
+                            try:
+                                await page.wait_for_load_state(
+                                    "domcontentloaded",
+                                    timeout=min(timeout_ms, 15000),
+                                )
+                            except Exception:
+                                pass
                             html = await page.content()
 
                         if status == 404:
@@ -746,13 +780,22 @@ def _is_protection_like_response(status_code: int, detail: str | None) -> bool:
             "challenge",
             "cloudflare",
             "access denied",
+            "reject_block",
+            "captcha or protection page found",
             "gateway/proxy error page",
         )
     )
 
 
-def _describe_getapp_response(html: str, status_code: int) -> str | None:
+def _describe_getapp_response(
+    html: str,
+    status_code: int,
+    headers: Mapping[str, Any] | None = None,
+) -> str | None:
     """Return a concise reason string for blocked or empty GetApp responses."""
+    header_detail = _unlocker_header_detail(headers)
+    if header_detail:
+        return header_detail
     captcha_type = detect_captcha(html, status_code)
     if captcha_type != CaptchaType.NONE:
         return f"{captcha_type.value} challenge"

@@ -50,7 +50,7 @@ async def solve_browser_challenge(
     from .captcha import CaptchaType, detect_captcha, get_captcha_proxy, get_captcha_solver
 
     captcha_type = detect_captcha(html, status_code)
-    if captcha_type == CaptchaType.NONE:
+    if captcha_type in (CaptchaType.NONE, CaptchaType.CLOUDFLARE_BLOCK):
         return False
     solver = get_captcha_solver(domain)
     if not solver:

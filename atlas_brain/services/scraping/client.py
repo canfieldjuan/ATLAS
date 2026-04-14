@@ -193,6 +193,14 @@ class AntiDetectionClient:
                         "Challenge page detected on %s with HTTP %s (%s)",
                         domain, resp.status_code, captcha_type.value,
                     )
+                    if captcha_type == CaptchaType.CLOUDFLARE_BLOCK:
+                        logger.warning(
+                            "Cloudflare hard block detected on %s; skipping CAPTCHA solve",
+                            domain,
+                        )
+                        captcha_type = CaptchaType.NONE
+                    
+                if captcha_type != CaptchaType.NONE:
                     self.captcha_attempts += 1
                     self.captcha_types_seen.add(captcha_type.value)
                     solver = get_captcha_solver(domain)

@@ -21,8 +21,10 @@ _SLUG_RULES: dict[str, tuple[re.Pattern[str], str]] = {
     "capterra": (re.compile(r"\d+/[A-Za-z0-9][A-Za-z0-9-]*"), "184581/Asana-PM"),
     "trustradius": (re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"), "asana"),
     "gartner": (
-        re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"),
-        "collaborative-work-management/asana",
+        re.compile(
+            r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?:/product/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)?"
+        ),
+        "endpoint-protection-platforms/microsoft/product/microsoft-defender-for-endpoint",
     ),
     "peerspot": (re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"), "asana"),
     "getapp": (
