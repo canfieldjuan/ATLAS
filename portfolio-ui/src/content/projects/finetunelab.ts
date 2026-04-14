@@ -67,5 +67,66 @@ export const finetunelabProject: Project = {
     { label: "Eval Tiers", value: "3" },
     { label: "Encryption", value: "AES-256" },
   ],
+  subsystems: [
+    {
+      name: "Training Pipeline",
+      description:
+        "Full job lifecycle management: queuing, GPU allocation (RunPod serverless), training with Unsloth (2-4x speedup), checkpoint saving at configurable intervals, pause/resume mid-training, WebSocket live metrics streaming, and orphan job recovery for runs that die mid-flight. ~9,000 lines of Python orchestration.",
+      icon: "Cpu",
+      stats: [
+        { label: "Training Code", value: "9K lines" },
+        { label: "Speedup", value: "2-4x (Unsloth)" },
+      ],
+    },
+    {
+      name: "LLM-as-Judge Evaluation",
+      description:
+        "3-tier evaluation: rule-based checks (format, length, keyword presence), human review (manual scoring with rubric), and LLM judge (configurable model evaluates quality against criteria). Scheduled recurring evaluations detect regression — if a fine-tuned model degrades over time, the system flags it before production impact.",
+      icon: "Scale",
+      stats: [
+        { label: "Eval Tiers", value: "3" },
+        { label: "Anomaly Detection", value: "Z-score / IQR" },
+      ],
+    },
+    {
+      name: "Unified LLM Client",
+      description:
+        "Single adapter pattern supporting 12+ providers: OpenAI, Anthropic Claude (with extended thinking and prompt caching), RunPod, Ollama, HuggingFace Inference, AWS SageMaker, Google Vertex AI, Together, and more. Provider-agnostic interface means switching models is a config change, not a code change.",
+      icon: "Layers",
+      stats: [
+        { label: "Providers", value: "12+" },
+        { label: "Features", value: "Extended thinking, prompt caching" },
+      ],
+    },
+    {
+      name: "GraphRAG Knowledge Grounding",
+      description:
+        "Multi-format document ingestion (PDF, DOCX, TXT, markdown), chunk-level embedding, Neo4j knowledge graph construction with entity and relationship extraction. Hybrid retrieval: semantic vector search + keyword BM25. Source attribution on every retrieved chunk so the model's answers are traceable to documents.",
+      icon: "GitBranch",
+      stats: [
+        { label: "Search Modes", value: "Semantic + keyword hybrid" },
+      ],
+    },
+    {
+      name: "Hierarchical Tracing & Observability",
+      description:
+        "Every LLM call, training step, and evaluation is traced with 50+ fields: input/output tokens, cost, latency, model version, prompt hash, RAG context used, and parent-child relationships between operations. Enables cost attribution per feature, latency profiling, and debugging of complex multi-step workflows.",
+      icon: "Activity",
+      stats: [
+        { label: "Trace Fields", value: "50+" },
+        { label: "Cost Attribution", value: "Per-operation" },
+      ],
+    },
+    {
+      name: "Security & Multi-Tenancy",
+      description:
+        "AES-256-GCM encryption with PBKDF2 key derivation for all API keys at rest. Supabase row-level security ensures tenant isolation at the database layer. Multi-tier authentication: JWT for web sessions, API keys for programmatic access, service role for internal operations. Every data query is scoped to the authenticated tenant.",
+      icon: "Shield",
+      stats: [
+        { label: "Encryption", value: "AES-256-GCM" },
+        { label: "Auth Tiers", value: "3 (JWT/API key/service)" },
+      ],
+    },
+  ],
   media: [],
 };
