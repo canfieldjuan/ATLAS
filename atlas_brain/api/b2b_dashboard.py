@@ -6391,10 +6391,11 @@ def _webhook_delivery_vendor_scope_condition(
     report_alias: str,
     signal_report_alias: str,
 ) -> str:
+    vendor_param = f"{vendor_param_ref}::text"
     return (
-        f"AND ({vendor_param_ref} IS NULL OR "
+        f"AND ({vendor_param} IS NULL OR "
         f"LOWER(COALESCE({delivery_alias}.vendor_name, {signal_alias}.vendor_name, "
-        f"{report_alias}.vendor_filter, {signal_report_alias}.vendor_filter)) = LOWER({vendor_param_ref}))"
+        f"{report_alias}.vendor_filter, {signal_report_alias}.vendor_filter)) = LOWER({vendor_param}))"
     )
 
 
@@ -6403,9 +6404,10 @@ def _webhook_delivery_company_scope_condition(
     delivery_alias: str,
     signal_alias: str,
 ) -> str:
+    company_param = f"{company_param_ref}::text"
     return (
-        f"AND ({company_param_ref} IS NULL OR "
-        f"LOWER(COALESCE({delivery_alias}.company_name, {signal_alias}.company_name)) = LOWER({company_param_ref}))"
+        f"AND ({company_param} IS NULL OR "
+        f"LOWER(COALESCE({delivery_alias}.company_name, {signal_alias}.company_name)) = LOWER({company_param}))"
     )
 
 
@@ -6430,10 +6432,11 @@ def _webhook_crm_vendor_scope_condition(
     signal_alias: str,
     report_alias: str,
 ) -> str:
+    vendor_param = f"{vendor_param_ref}::text"
     return (
-        f"AND ({vendor_param_ref} IS NULL OR "
+        f"AND ({vendor_param} IS NULL OR "
         f"LOWER(COALESCE({crm_alias}.vendor_name, {signal_alias}.vendor_name, "
-        f"{report_alias}.vendor_filter)) = LOWER({vendor_param_ref}))"
+        f"{report_alias}.vendor_filter)) = LOWER({vendor_param}))"
     )
 
 
@@ -6442,9 +6445,10 @@ def _webhook_crm_company_scope_condition(
     crm_alias: str,
     signal_alias: str,
 ) -> str:
+    company_param = f"{company_param_ref}::text"
     return (
-        f"AND ({company_param_ref} IS NULL OR "
-        f"LOWER(COALESCE({crm_alias}.company_name, {signal_alias}.company_name)) = LOWER({company_param_ref}))"
+        f"AND ({company_param} IS NULL OR "
+        f"LOWER(COALESCE({crm_alias}.company_name, {signal_alias}.company_name)) = LOWER({company_param}))"
     )
 
 
