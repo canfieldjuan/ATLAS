@@ -13,6 +13,26 @@ import type {
 } from '../types'
 import { fmtDuration, timeAgo } from '../utils'
 
+function titleizeToken(value: string | null | undefined): string {
+  return String(value ?? '')
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function tierBadgeClass(value: string | null | undefined): string {
+  if (value === 'high_yield') return 'bg-emerald-500/10 text-emerald-400'
+  if (value === 'context_rich') return 'bg-cyan-500/10 text-cyan-400'
+  return 'bg-slate-500/10 text-slate-400'
+}
+
+function statusBadgeClass(value: string | null | undefined): string {
+  if (value === 'infra_blocked' || value === 'deferred_inventory') return 'bg-red-500/10 text-red-400'
+  if (value === 'parser_upgrade_deferred') return 'bg-amber-500/10 text-amber-400'
+  return 'bg-slate-500/10 text-slate-400'
+}
+
 export default function ScrapingPipeline({
   summary,
   details,
@@ -113,6 +133,35 @@ export default function ScrapingPipeline({
         </div>
       )}
 
+      {summary?.maintenance && (
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-widest text-slate-600">Parser Maintenance</div>
+            <div className="mt-1 font-mono text-sm text-slate-200">
+              {summary.maintenance.enabled ? 'scheduled' : 'disabled'}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-widest text-slate-600">Maintenance Interval</div>
+            <div className="mt-1 font-mono text-sm text-cyan-400">
+              {Math.round(summary.maintenance.interval_seconds / 3600)}h
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-widest text-slate-600">Repair Depth</div>
+            <div className="mt-1 font-mono text-sm text-slate-200">
+              {summary.maintenance.run_scrape_mode}:{summary.maintenance.run_max_pages}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800/70 bg-slate-950/50 px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-widest text-slate-600">Next Run</div>
+            <div className="mt-1 font-mono text-sm text-slate-200">
+              {summary.maintenance.next_run_at ? timeAgo(summary.maintenance.next_run_at) : '--'}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sub-tabs */}
       <div className="mb-3 flex gap-1">
         {(['throughput', 'details', 'top-posts', 'reddit'] as const).map(t => (
@@ -176,6 +225,18 @@ function ThroughputTab({ summary }: { summary: ScrapeSummaryData | null }) {
                   <span className="font-mono text-xs font-medium text-slate-300">{q.source}</span>
                   <span className="font-mono text-[10px] text-slate-500">{q.total_reviews.toLocaleString()} reviews</span>
                 </div>
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {q.source_tier && (
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${tierBadgeClass(q.source_tier)}`}>
+                      {titleizeToken(q.source_tier)}
+                    </span>
+                  )}
+                  {q.operational_status && q.operational_status !== 'active' && (
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusBadgeClass(q.operational_status)}`}>
+                      {titleizeToken(q.operational_status)}
+                    </span>
+                  )}
+                </div>
                 <div className="space-y-1.5">
                   <div className="flex justify-between text-[10px]">
                     <span className="text-slate-500">High Signal ({'>'}0.7)</span>
@@ -199,6 +260,22 @@ function ThroughputTab({ summary }: { summary: ScrapeSummaryData | null }) {
                   <div className="mt-1 flex gap-3 text-[10px] text-slate-500">
                     <span>Avg weight: <span className="font-mono text-slate-400">{q.avg_source_weight.toFixed(3)}</span></span>
                     <span>HV authors: <span className="font-mono text-violet-400">{q.high_value_authors}</span></span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-slate-500">
+                    <span>
+                      Targets: <span className="font-mono text-slate-400">{q.target_state?.enabled_targets ?? 0}</span>
+                    </span>
+                    <span>
+                      Max pages: <span className="font-mono text-slate-400">{q.target_state?.enabled_max_max_pages ?? 0}</span>
+                    </span>
+                    <span>
+                      Recent depth: <span className="font-mono text-slate-400">{q.recent_depth?.avg_pages_2d ?? 0}</span>
+                    </span>
+                    <span>
+                      Parser backlog: <span className="font-mono text-amber-400">
+                        {(q.parser_backlog?.missing_parser_version_reviews ?? 0) + (q.parser_backlog?.outdated_parser_version_reviews ?? 0)}
+                      </span>
+                    </span>
                   </div>
                 </div>
               </div>
@@ -231,7 +308,26 @@ function ThroughputTab({ summary }: { summary: ScrapeSummaryData | null }) {
                   <td className="py-2 pr-3">
                     <div className="flex items-center gap-2">
                       <span className="inline-block h-1.5 w-1.5 rounded-full bg-cyan-400" />
-                      <span className="font-mono text-[11px] text-slate-300">{t.vendor_name}</span>
+                      <div>
+                        <div className="font-mono text-[11px] text-slate-300">{t.vendor_name}</div>
+                        <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+                          <span>{t.source}</span>
+                          {t.source_tier && (
+                            <span className={`rounded-full px-1.5 py-0.5 font-medium ${tierBadgeClass(t.source_tier)}`}>
+                              {titleizeToken(t.source_tier)}
+                            </span>
+                          )}
+                          {t.operational_status && t.operational_status !== 'active' && (
+                            <span className={`rounded-full px-1.5 py-0.5 font-medium ${statusBadgeClass(t.operational_status)}`}>
+                              {titleizeToken(t.operational_status)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-600">
+                          <span>depth {t.recent_depth?.avg_pages_2d ?? 0}/{t.target_state?.enabled_max_max_pages ?? 0}</span>
+                          <span>parser backlog {(t.parser_backlog?.missing_parser_version_reviews ?? 0) + (t.parser_backlog?.outdated_parser_version_reviews ?? 0)}</span>
+                        </div>
+                      </div>
                     </div>
                   </td>
                   <td className="py-2 pr-3 text-right font-mono text-[11px] text-slate-400">{t.total_runs}</td>
@@ -454,7 +550,28 @@ function DetailsTab({
                 <td className="py-2 pr-3 text-right font-mono text-[11px] text-slate-400">{(d.insert_rate * 100).toFixed(1)}%</td>
                 <td className="py-2 pr-3 text-right font-mono text-[11px] text-slate-500">{fmtDuration(d.duration_ms)}</td>
                 <td className="py-2 pr-3 font-mono text-[10px] text-slate-600">{d.parser_version}</td>
-                <td className="py-2 pr-3 font-mono text-[10px] text-slate-600">{d.proxy_type || 'none'}</td>
+                <td className="py-2 pr-3">
+                  <div className="font-mono text-[10px] text-slate-600">{d.proxy_type || 'none'}</div>
+                  <div className="mt-0.5 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+                    <span>{d.source}</span>
+                    {d.source_tier && (
+                      <span className={`rounded-full px-1.5 py-0.5 font-medium ${tierBadgeClass(d.source_tier)}`}>
+                        {titleizeToken(d.source_tier)}
+                      </span>
+                    )}
+                    {d.operational_status && d.operational_status !== 'active' && (
+                      <span className={`rounded-full px-1.5 py-0.5 font-medium ${statusBadgeClass(d.operational_status)}`}>
+                        {titleizeToken(d.operational_status)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-600">
+                    <span>{d.target_scrape_mode || 'unknown'}:{d.target_max_pages ?? 0}</span>
+                    {!d.target_enabled && d.target_disabled_policy && (
+                      <span>{titleizeToken(d.target_disabled_policy)}</span>
+                    )}
+                  </div>
+                </td>
                 <td className="py-2 text-[10px] text-slate-500">{d.started_at ? timeAgo(d.started_at) : '--'}</td>
               </tr>
               {expandedRunId === d.id && (

@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env.local", override=True)
 
+from atlas_brain.config import settings
 from atlas_brain.services.scraping.parsers import get_all_parsers
 from atlas_brain.storage.config import db_settings
 
@@ -120,6 +121,65 @@ def _target_priority_score(item: dict[str, Any]) -> tuple[int, int, int, str, st
     )
 
 
+def _parser_backlog_reviews(item: dict[str, Any]) -> int:
+    return int(item.get("outdated_reviews") or 0) + int(item.get("missing_parser_version_reviews") or 0)
+
+
+def _has_stable_pagination_signal(
+    item: dict[str, Any],
+    *,
+    min_pages_scraped: int,
+    baseline_run_max_pages: int | None,
+) -> bool:
+    pages_scraped = int(item.get("last_scrape_pages_scraped") or 0)
+    reviews_found = int(item.get("last_scrape_reviews_found") or 0)
+    stop_reason = str(item.get("last_scrape_stop_reason") or "").strip().lower()
+    status = str(item.get("last_scrape_status") or "").strip().lower()
+    required_pages = max(1, int(min_pages_scraped or 0))
+    if baseline_run_max_pages:
+        required_pages = max(required_pages, int(baseline_run_max_pages))
+    return (
+        status in {"success", "partial"}
+        and pages_scraped >= required_pages
+        and reviews_found > 0
+        and stop_reason in {"page_cap", "pages_exhausted"}
+    )
+
+
+def _effective_run_overrides(
+    item: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    deep_targets_used: int,
+) -> tuple[int | None, str | None, bool]:
+    default_max_pages = int(args.run_max_pages or 0) or None
+    default_scrape_mode = str(args.run_scrape_mode or "").strip() or None
+
+    deep_sources = set(_parse_csv(getattr(args, "deep_sources", "")))
+    deep_min_backlog = max(0, int(getattr(args, "deep_min_parser_backlog_reviews", 0) or 0))
+    deep_run_max_pages = int(getattr(args, "deep_run_max_pages", 0) or 0)
+    deep_min_stable_pages_scraped = max(1, int(getattr(args, "deep_min_stable_pages_scraped", 1) or 1))
+    deep_max_targets = max(0, int(getattr(args, "deep_max_targets_per_batch", 0) or 0))
+
+    qualifies_for_deep = (
+        deep_targets_used < deep_max_targets
+        and deep_run_max_pages > 0
+        and str(item.get("source") or "").strip().lower() in deep_sources
+        and _parser_backlog_reviews(item) >= deep_min_backlog
+        and _has_stable_pagination_signal(
+            item,
+            min_pages_scraped=deep_min_stable_pages_scraped,
+            baseline_run_max_pages=default_max_pages,
+        )
+    )
+    if not qualifies_for_deep:
+        return default_max_pages, default_scrape_mode, False
+
+    effective_mode = default_scrape_mode or "exhaustive"
+    effective_max_pages = max(int(default_max_pages or 0), deep_run_max_pages) or None
+    return effective_max_pages, effective_mode, True
+
+
 def _campaign_metadata(
     metadata: Any,
     *,
@@ -147,6 +207,48 @@ def _is_runnable_target(item: dict[str, Any], *, include_blocked: bool) -> bool:
     if status == "blocked" and not include_blocked:
         return False
     return True
+
+
+def _is_blocked_target(item: dict[str, Any]) -> bool:
+    return str(item.get("last_scrape_status") or "").strip().lower() == "blocked"
+
+
+def _mark_blocked_parser_upgrade_deferred(
+    metadata: Any,
+    *,
+    deferred_at: datetime,
+    reason: str,
+) -> dict[str, Any]:
+    updated = _coerce_json_dict(metadata)
+    parser_upgrade = _coerce_json_dict(updated.get("parser_upgrade_rescrape"))
+    parser_upgrade["blocked_deferred_at"] = deferred_at.astimezone(timezone.utc).isoformat()
+    parser_upgrade["blocked_deferred_reason"] = reason
+    updated["parser_upgrade_rescrape"] = parser_upgrade
+    return updated
+
+
+def _clear_blocked_parser_upgrade_deferred(metadata: Any) -> dict[str, Any]:
+    updated = _coerce_json_dict(metadata)
+    parser_upgrade = _coerce_json_dict(updated.get("parser_upgrade_rescrape"))
+    parser_upgrade.pop("blocked_deferred_at", None)
+    parser_upgrade.pop("blocked_deferred_reason", None)
+    if parser_upgrade:
+        updated["parser_upgrade_rescrape"] = parser_upgrade
+    else:
+        updated.pop("parser_upgrade_rescrape", None)
+    return updated
+
+
+def _is_blocked_parser_upgrade_deferred(
+    metadata: Any,
+    *,
+    cooldown_hours: int,
+) -> bool:
+    parser_upgrade = _coerce_json_dict(_coerce_json_dict(metadata).get("parser_upgrade_rescrape"))
+    deferred_at = parser_upgrade.get("blocked_deferred_at")
+    if not deferred_at:
+        return False
+    return _is_in_recent_cooldown(deferred_at, cooldown_hours=cooldown_hours)
 
 
 def _trigger_target_run(base_url: str, target_id: str, *, timeout_s: int = 330) -> dict[str, Any]:
@@ -278,6 +380,39 @@ async def _trigger_target_run_direct_bounded(
         await conn.close()
 
 
+async def _sync_blocked_maintenance_metadata(conn: asyncpg.Connection, target_id: str) -> None:
+    row = await conn.fetchrow(
+        """
+        SELECT last_scrape_status, metadata
+        FROM b2b_scrape_targets
+        WHERE id = $1::uuid
+        """,
+        UUID(str(target_id)),
+    )
+    if not row:
+        return
+    status = str(row.get("last_scrape_status") or "").strip().lower()
+    metadata = row.get("metadata")
+    if status == "blocked":
+        updated_metadata = _mark_blocked_parser_upgrade_deferred(
+            metadata,
+            deferred_at=datetime.now(timezone.utc),
+            reason="last_scrape_status_blocked",
+        )
+    else:
+        updated_metadata = _clear_blocked_parser_upgrade_deferred(metadata)
+    await conn.execute(
+        """
+        UPDATE b2b_scrape_targets
+        SET metadata = $2::jsonb,
+            updated_at = NOW()
+        WHERE id = $1::uuid
+        """,
+        UUID(str(target_id)),
+        json.dumps(updated_metadata, default=str),
+    )
+
+
 def _should_fallback_to_direct(result: dict[str, Any]) -> bool:
     if str(result.get("status") or "").strip().lower() != "failed":
         return False
@@ -301,7 +436,13 @@ async def _collect_candidates(
         for source, parser in get_all_parsers().items()
         if getattr(parser, "version", None)
     }
-    requested_sources = set(sources or parser_versions.keys())
+    deferred_sources = set(
+        _parse_csv(getattr(settings.b2b_scrape, "parser_upgrade_deferred_sources", ""))
+    )
+    requested_sources = {
+        source for source in set(sources or parser_versions.keys())
+        if source not in deferred_sources
+    }
     rows: list[dict[str, Any]] = []
 
     for source in sorted(requested_sources):
@@ -322,6 +463,9 @@ async def _collect_candidates(
                    t.scrape_mode,
                    t.last_scraped_at,
                    t.last_scrape_status,
+                   t.last_scrape_stop_reason,
+                   t.last_scrape_pages_scraped,
+                   t.last_scrape_reviews_found,
                    t.metadata,
                    COUNT(*) FILTER (
                        WHERE r.parser_version IS NOT NULL
@@ -342,6 +486,7 @@ async def _collect_candidates(
              AND r.raw_metadata ? 'scrape_target_id'
              AND (r.raw_metadata->>'scrape_target_id') = t.id::text
             WHERE t.source = $1
+              AND t.enabled = true
             GROUP BY t.id
             HAVING COUNT(*) FILTER (
                        WHERE r.parser_version IS NOT NULL
@@ -358,6 +503,8 @@ async def _collect_candidates(
         )
         for row in query_rows:
             item = dict(row)
+            if not bool(item.get("enabled")):
+                continue
             item["current_parser_version"] = current_version
             rows.append(item)
 
@@ -441,6 +588,46 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Temporary scrape_mode override for direct --run-now execution only",
     )
     parser.add_argument("--include-blocked", action="store_true", help="Allow --run-now to include targets whose last scrape status is blocked")
+    parser.add_argument(
+        "--deep-sources",
+        default="",
+        help="Comma-separated sources eligible for selective deeper direct maintenance runs",
+    )
+    parser.add_argument(
+        "--deep-min-parser-backlog-reviews",
+        type=int,
+        default=0,
+        help="Minimum missing+outdated canonical reviews before a target qualifies for a deeper maintenance run",
+    )
+    parser.add_argument(
+        "--deep-run-max-pages",
+        type=int,
+        default=0,
+        help="Temporary max_pages override for qualifying deep maintenance targets",
+    )
+    parser.add_argument(
+        "--deep-min-stable-pages-scraped",
+        type=int,
+        default=1,
+        help="Require the most recent target scrape to have reached at least this many pages cleanly before deep maintenance is allowed",
+    )
+    parser.add_argument(
+        "--deep-max-targets-per-batch",
+        type=int,
+        default=0,
+        help="Maximum number of selectively deep maintenance targets per batch",
+    )
+    parser.add_argument(
+        "--drain",
+        action="store_true",
+        help="Repeat selection and optional --run-now execution until the active queue is empty or the batch limit is reached",
+    )
+    parser.add_argument(
+        "--drain-max-batches",
+        type=int,
+        default=25,
+        help="Maximum batches to run when --drain is enabled",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     return parser
 
@@ -448,6 +635,24 @@ def _build_parser() -> argparse.ArgumentParser:
 def _render_result(result: dict[str, Any], *, emit_json: bool) -> None:
     if emit_json:
         print(json.dumps(result, indent=2, default=str, sort_keys=True))
+        return
+    if bool(result.get("drain")):
+        logger.info(
+            "drain sources=%s batches=%d remaining=%d deferred_blocked=%d run_started=%d",
+            ",".join(result.get("sources") or []),
+            int(result.get("batches_run") or 0),
+            int(result.get("requested_targets") or 0),
+            int(result.get("deferred_blocked_targets") or 0),
+            int(result.get("run_started") or 0),
+        )
+        for batch in result.get("batches") or []:
+            logger.info(
+                "batch=%s requested=%s run_started=%s deferred_blocked=%s",
+                batch.get("batch"),
+                batch.get("requested_targets"),
+                batch.get("run_started"),
+                batch.get("deferred_blocked_targets"),
+            )
         return
     logger.info(
         "sources=%s requested=%d emitted=%d applied=%d",
@@ -477,6 +682,10 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         candidates = await _collect_candidates(conn, sources=sources)
         recent_cooldown_hours = max(0, int(args.recent_cooldown_hours))
+        blocked_cooldown_hours = max(
+            1,
+            int(getattr(settings.b2b_scrape, "parser_upgrade_blocked_target_cooldown_hours", 168)),
+        )
         candidates = [
             item
             for item in candidates
@@ -485,6 +694,32 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 cooldown_hours=recent_cooldown_hours,
             )
         ]
+        deferred_blocked_targets = [
+            item
+            for item in candidates
+            if _is_blocked_target(item)
+            and (
+                _is_blocked_parser_upgrade_deferred(
+                    item.get("metadata"),
+                    cooldown_hours=blocked_cooldown_hours,
+                )
+                or not bool(args.include_blocked)
+            )
+        ]
+        if not bool(args.include_blocked):
+            candidates = [item for item in candidates if not _is_blocked_target(item)]
+        elif deferred_blocked_targets:
+            candidates = [
+                item
+                for item in candidates
+                if not (
+                    _is_blocked_target(item)
+                    and _is_blocked_parser_upgrade_deferred(
+                        item.get("metadata"),
+                        cooldown_hours=blocked_cooldown_hours,
+                    )
+                )
+            ]
         selected = candidates[: max(0, int(args.limit_targets))]
         applied = 0
         if args.apply and selected:
@@ -522,14 +757,22 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 if _is_runnable_target(item, include_blocked=bool(args.include_blocked))
             ]
             run_limit = int(args.run_limit) if int(args.run_limit) > 0 else len(runnable_targets)
+            deep_targets_used = 0
             for item in runnable_targets[:run_limit]:
                 run_mode = str(args.run_now_mode or "auto").strip().lower()
+                effective_run_max_pages, effective_run_scrape_mode, deep_applied = _effective_run_overrides(
+                    item,
+                    args,
+                    deep_targets_used=deep_targets_used,
+                )
+                if deep_applied:
+                    deep_targets_used += 1
                 if run_mode == "direct":
-                    if int(args.run_max_pages or 0) > 0 or str(args.run_scrape_mode or "").strip():
+                    if effective_run_max_pages is not None or effective_run_scrape_mode:
                         result = await _trigger_target_run_direct_bounded(
                             str(item["target_id"]),
-                            max_pages=int(args.run_max_pages or 0) or None,
-                            scrape_mode=str(args.run_scrape_mode or "").strip() or None,
+                            max_pages=effective_run_max_pages,
+                            scrape_mode=effective_run_scrape_mode,
                         )
                     else:
                         result = await _trigger_target_run_direct(str(item["target_id"]))
@@ -540,11 +783,11 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                         str(item["target_id"]),
                     )
                     if run_mode == "auto" and _should_fallback_to_direct(result):
-                        if int(args.run_max_pages or 0) > 0 or str(args.run_scrape_mode or "").strip():
+                        if effective_run_max_pages is not None or effective_run_scrape_mode:
                             direct_result = await _trigger_target_run_direct_bounded(
                                 str(item["target_id"]),
-                                max_pages=int(args.run_max_pages or 0) or None,
-                                scrape_mode=str(args.run_scrape_mode or "").strip() or None,
+                                max_pages=effective_run_max_pages,
+                                scrape_mode=effective_run_scrape_mode,
                             )
                         else:
                             direct_result = await _trigger_target_run_direct(str(item["target_id"]))
@@ -559,12 +802,17 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                         "target_id": item["target_id"],
                         "source": item["source"],
                         "vendor_name": item["vendor_name"],
+                        "run_max_pages_applied": effective_run_max_pages,
+                        "run_scrape_mode_applied": effective_run_scrape_mode,
+                        "deep_maintenance_applied": deep_applied,
                         "result": result,
                     }
                 )
+                await _sync_blocked_maintenance_metadata(conn, str(item["target_id"]))
         return {
             "sources": sources or sorted({str(item.get("source") or "") for item in candidates}),
             "requested_targets": len(candidates),
+            "deferred_blocked_targets": len(deferred_blocked_targets),
             "applied": applied,
             "run_started": len(run_results),
             "targets": selected_targets,
@@ -574,9 +822,50 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         await conn.close()
 
 
+async def _run_drain(args: argparse.Namespace) -> dict[str, Any]:
+    batches: list[dict[str, Any]] = []
+    max_batches = max(1, int(args.drain_max_batches or 1))
+
+    for batch_number in range(1, max_batches + 1):
+        batch_result = await _run(args)
+        batches.append(
+            {
+                "batch": batch_number,
+                "requested_targets": int(batch_result.get("requested_targets") or 0),
+                "deferred_blocked_targets": int(batch_result.get("deferred_blocked_targets") or 0),
+                "applied": int(batch_result.get("applied") or 0),
+                "run_started": int(batch_result.get("run_started") or 0),
+                "targets": list(batch_result.get("targets") or []),
+                "run_results": list(batch_result.get("run_results") or []),
+            }
+        )
+        if int(batch_result.get("requested_targets") or 0) <= 0:
+            break
+        if args.run_now and int(batch_result.get("run_started") or 0) <= 0:
+            break
+
+    final_state = await _run(
+        argparse.Namespace(**{**vars(args), "run_now": False, "apply": False, "drain": False})
+    )
+    return {
+        "drain": True,
+        "sources": final_state.get("sources") or [],
+        "batches_run": len(batches),
+        "batches": batches,
+        "final_state": final_state,
+        "requested_targets": int(final_state.get("requested_targets") or 0),
+        "deferred_blocked_targets": int(final_state.get("deferred_blocked_targets") or 0),
+        "applied": sum(int(batch.get("applied") or 0) for batch in batches),
+        "run_started": sum(int(batch.get("run_started") or 0) for batch in batches),
+        "targets": list(final_state.get("targets") or []),
+        "run_results": [],
+    }
+
+
 def main() -> None:
     args = _build_parser().parse_args()
-    result = asyncio.run(_run(args))
+    runner = _run_drain if args.drain else _run
+    result = asyncio.run(runner(args))
     _render_result(result, emit_json=args.json)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
@@ -254,6 +255,34 @@ async def apply_low_yield_policy(
     return disabled
 
 
+async def apply_disable_policy(
+    pool,
+    *,
+    candidates: list[dict[str, Any]],
+    policy_name: str,
+    metadata_builder,
+) -> int:
+    """Disable selected scrape targets with a caller-supplied metadata payload."""
+    disabled = 0
+    for item in candidates:
+        metadata_payload = metadata_builder(item)
+        result = await pool.execute(
+            """
+            UPDATE b2b_scrape_targets
+            SET enabled = false,
+                metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                updated_at = NOW()
+            WHERE id = $1::uuid
+              AND enabled = true
+            """,
+            str(item["target_id"]),
+            json.dumps(metadata_payload, default=str),
+        )
+        if isinstance(result, str) and result.endswith("1"):
+            disabled += 1
+    return disabled
+
+
 async def prune_low_yield_targets(
     pool,
     *,
@@ -322,6 +351,88 @@ async def prune_low_yield_targets(
             "max_disable_per_run": max_disable,
         },
         "policy_summary": policy_summary,
+        "requested": len(candidates),
+        "disabled": disabled,
+        "targets": candidates,
+    }
+
+
+async def disable_persistently_blocked_targets(
+    pool,
+    *,
+    min_blocked_age_hours: int,
+    max_disable_per_run: int,
+    dry_run: bool = True,
+    sources: list[str] | None = None,
+    vendors: list[str] | None = None,
+) -> dict[str, Any]:
+    """Select and optionally disable enabled targets that remain blocked past a cooldown."""
+    min_age = max(1, int(min_blocked_age_hours))
+    max_disable = max(1, int(max_disable_per_run))
+    source_filters = {_normalize_source(item) for item in (sources or []) if str(item).strip()}
+    vendor_filters = {str(item).strip().lower() for item in (vendors or []) if str(item).strip()}
+    rows = await pool.fetch(
+        """
+        SELECT id AS target_id,
+               source,
+               vendor_name,
+               product_name,
+               product_slug,
+               product_category,
+               priority,
+               max_pages,
+               scrape_mode,
+               last_scraped_at,
+               last_scrape_status,
+               metadata
+        FROM b2b_scrape_targets
+        WHERE enabled = true
+          AND last_scrape_status = 'blocked'
+          AND last_scraped_at IS NOT NULL
+          AND last_scraped_at <= NOW() - make_interval(hours => $1::int)
+        ORDER BY priority DESC, last_scraped_at ASC, vendor_name ASC, id ASC
+        LIMIT $2::int
+        """,
+        min_age,
+        max_disable,
+    )
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        source_norm = _normalize_source(item.get("source"))
+        vendor_norm = str(item.get("vendor_name") or "").strip().lower()
+        if source_filters and source_norm not in source_filters:
+            continue
+        if vendor_filters and vendor_norm not in vendor_filters:
+            continue
+        item["source_tier"] = _source_yield_tier(source_norm)
+        candidates.append(item)
+
+    policy_name = "persistently_blocked_target"
+    disabled = len(candidates)
+    if not dry_run and candidates:
+        def _build_metadata(item: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "disabled_by_policy": True,
+                "disabled_policy": policy_name,
+                "disabled_policy_at": datetime.now(timezone.utc).isoformat(),
+                "disabled_policy_last_scrape_status": str(item.get("last_scrape_status") or ""),
+                "disabled_policy_last_scraped_at": str(item.get("last_scraped_at") or ""),
+                "disabled_policy_min_blocked_age_hours": min_age,
+            }
+
+        disabled = await apply_disable_policy(
+            pool,
+            candidates=candidates,
+            policy_name=policy_name,
+            metadata_builder=_build_metadata,
+        )
+
+    return {
+        "dry_run": bool(dry_run),
+        "policy_name": policy_name,
+        "min_blocked_age_hours": min_age,
+        "max_disable_per_run": max_disable,
         "requested": len(candidates),
         "disabled": disabled,
         "targets": candidates,

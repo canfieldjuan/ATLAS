@@ -28,6 +28,8 @@ from ..services.b2b.enrichment_repair_policy import (
     strict_discussion_lists,
 )
 from ..services.b2b.cache_strategy import iter_core_b2b_cache_strategies
+from ..services.scraping.parsers import get_all_parsers
+from ..services.scraping.sources import parse_source_allowlist
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.admin_costs")
@@ -86,6 +88,39 @@ def _campaign_batch_stale_minutes() -> int:
 def _canonical_review_predicate(alias: str = "") -> str:
     prefix = f"{alias}." if alias else ""
     return f"{prefix}duplicate_of_review_id IS NULL"
+
+
+def _scrape_source_tier(source: str) -> str:
+    normalized = str(source or "").strip().lower()
+    high_yield = set(parse_source_allowlist(settings.b2b_scrape.high_yield_priority_sources))
+    context_rich = set(parse_source_allowlist(settings.b2b_scrape.context_rich_priority_sources))
+    if normalized in high_yield:
+        return "high_yield"
+    if normalized in context_rich:
+        return "context_rich"
+    return "standard"
+
+
+def _scrape_operational_status(source: str) -> str:
+    normalized = str(source or "").strip().lower()
+    infra_blocked = set(parse_source_allowlist(getattr(settings.b2b_scrape, "infra_blocked_sources", "")))
+    deferred_inventory = set(parse_source_allowlist(getattr(settings.b2b_scrape, "deferred_inventory_sources", "")))
+    parser_upgrade_deferred = set(parse_source_allowlist(getattr(settings.b2b_scrape, "parser_upgrade_deferred_sources", "")))
+    if normalized in infra_blocked:
+        return "infra_blocked"
+    if normalized in deferred_inventory:
+        return "deferred_inventory"
+    if normalized in parser_upgrade_deferred:
+        return "parser_upgrade_deferred"
+    return "active"
+
+
+def _current_parser_versions() -> dict[str, str]:
+    return {
+        str(source).strip().lower(): str(getattr(parser, "version", "")).strip()
+        for source, parser in get_all_parsers().items()
+        if str(getattr(parser, "version", "")).strip()
+    }
 
 def _recent_metadata_value(metadata: dict, key: str) -> str | None:
     value = metadata.get(key)
@@ -181,6 +216,18 @@ def _safe_float(value: Any) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _record_value(row: Any, key: str, default: Any = None) -> Any:
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        value = row[key]
+    except Exception:
+        return default
+    return default if value is None else value
 
 
 def _parse_task_result_payload(result_text: str | None) -> dict[str, Any]:
@@ -3593,6 +3640,41 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
         since,
     )
 
+    target_state_rows = await pool.fetch(
+        """
+        SELECT
+            source,
+            COUNT(*)                                                  AS total_targets,
+            COUNT(*) FILTER (WHERE enabled = true)                    AS enabled_targets,
+            COUNT(*) FILTER (WHERE enabled = false)                   AS disabled_targets,
+            COUNT(*) FILTER (WHERE enabled = true AND scrape_mode = 'exhaustive')  AS enabled_exhaustive_targets,
+            COUNT(*) FILTER (WHERE enabled = true AND scrape_mode = 'incremental') AS enabled_incremental_targets,
+            ROUND(AVG(max_pages) FILTER (WHERE enabled = true)::numeric, 2)        AS enabled_avg_max_pages,
+            COALESCE(MAX(max_pages) FILTER (WHERE enabled = true), 0)              AS enabled_max_max_pages,
+            COUNT(*) FILTER (WHERE enabled = true AND last_scrape_status = 'blocked') AS enabled_blocked_targets,
+            COUNT(*) FILTER (
+                WHERE enabled = false
+                  AND COALESCE(metadata->>'disabled_policy', '') = 'persistently_blocked_target'
+            ) AS persistently_blocked_disabled_targets
+        FROM b2b_scrape_targets
+        GROUP BY source
+        """,
+    )
+
+    recent_depth_rows = await pool.fetch(
+        """
+        SELECT
+            source,
+            COUNT(*)                    AS runs_2d,
+            ROUND(AVG(pages_scraped)::numeric, 2) AS avg_pages_2d,
+            COALESCE(MAX(pages_scraped), 0)       AS max_pages_2d
+        FROM b2b_scrape_log
+        WHERE started_at >= $1
+        GROUP BY source
+        """,
+        datetime.now(timezone.utc) - timedelta(days=2),
+    )
+
     # -- Signal quality from b2b_reviews (imported in period) --
     quality_rows = await pool.fetch(
         f"""
@@ -3613,6 +3695,18 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
         since,
     )
 
+    parser_backlog_rows = await pool.fetch(
+        f"""
+        SELECT
+            source,
+            parser_version,
+            COUNT(*) AS review_count
+        FROM b2b_reviews
+        WHERE {_canonical_review_predicate()}
+        GROUP BY source, parser_version
+        """,
+    )
+
     # -- Today totals (quick headline numbers) --
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_row = await pool.fetchrow(
@@ -3627,12 +3721,58 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
         today_start,
     )
 
+    maintenance_row = await pool.fetchrow(
+        """
+        SELECT
+            enabled,
+            interval_seconds,
+            timeout_seconds,
+            last_run_at,
+            next_run_at
+        FROM scheduled_tasks
+        WHERE name = 'b2b_parser_upgrade_maintenance'
+        """,
+    )
+
+    target_state_by_source = {str(r["source"]): dict(r) for r in target_state_rows}
+    recent_depth_by_source = {str(r["source"]): dict(r) for r in recent_depth_rows}
+    parser_versions = _current_parser_versions()
+    parser_backlog_by_source: dict[str, dict[str, int | str | None]] = {}
+    for row in parser_backlog_rows:
+        source_name = str(_record_value(row, "source", "") or "")
+        if not source_name:
+            continue
+        parser_version = str(_record_value(row, "parser_version", "") or "").strip()
+        count = int(_record_value(row, "review_count", 0) or 0)
+        current_version = parser_versions.get(source_name)
+        bucket = parser_backlog_by_source.setdefault(
+            source_name,
+            {
+                "current_parser_version": current_version,
+                "missing_parser_version_reviews": 0,
+                "outdated_parser_version_reviews": 0,
+                "current_parser_version_reviews": 0,
+            },
+        )
+        if not parser_version:
+            bucket["missing_parser_version_reviews"] = int(bucket["missing_parser_version_reviews"]) + count
+        elif current_version and parser_version != current_version:
+            bucket["outdated_parser_version_reviews"] = int(bucket["outdated_parser_version_reviews"]) + count
+        else:
+            bucket["current_parser_version_reviews"] = int(bucket["current_parser_version_reviews"]) + count
+
     def _throughput(r: dict) -> dict:
+        source = str(r["source"] or "")
+        target_state = target_state_by_source.get(source, {})
+        recent_depth = recent_depth_by_source.get(source, {})
+        parser_backlog = parser_backlog_by_source.get(source, {})
         found = int(r["reviews_found"])
         inserted = int(r["reviews_inserted"])
         runs = int(r["total_runs"])
         return {
-            "source": r["source"],
+            "source": source,
+            "source_tier": _scrape_source_tier(source),
+            "operational_status": _scrape_operational_status(source),
             "vendor_name": r["vendor_name"],
             "total_runs": runs,
             "successes": int(r["successes"]),
@@ -3645,14 +3785,44 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
             "avg_duration_ms": round(float(r["avg_duration_ms"]), 1),
             "captcha_attempts": int(r["captcha_attempts"]),
             "blocked_requests": int(r["blocked_requests"]),
+            "target_state": {
+                "total_targets": int(target_state.get("total_targets") or 0),
+                "enabled_targets": int(target_state.get("enabled_targets") or 0),
+                "disabled_targets": int(target_state.get("disabled_targets") or 0),
+                "enabled_exhaustive_targets": int(target_state.get("enabled_exhaustive_targets") or 0),
+                "enabled_incremental_targets": int(target_state.get("enabled_incremental_targets") or 0),
+                "enabled_avg_max_pages": float(target_state.get("enabled_avg_max_pages") or 0),
+                "enabled_max_max_pages": int(target_state.get("enabled_max_max_pages") or 0),
+                "enabled_blocked_targets": int(target_state.get("enabled_blocked_targets") or 0),
+                "persistently_blocked_disabled_targets": int(
+                    target_state.get("persistently_blocked_disabled_targets") or 0
+                ),
+            },
+            "recent_depth": {
+                "runs_2d": int(recent_depth.get("runs_2d") or 0),
+                "avg_pages_2d": float(recent_depth.get("avg_pages_2d") or 0),
+                "max_pages_2d": int(recent_depth.get("max_pages_2d") or 0),
+            },
+            "parser_backlog": {
+                "current_parser_version": parser_backlog.get("current_parser_version"),
+                "missing_parser_version_reviews": int(parser_backlog.get("missing_parser_version_reviews") or 0),
+                "outdated_parser_version_reviews": int(parser_backlog.get("outdated_parser_version_reviews") or 0),
+                "current_parser_version_reviews": int(parser_backlog.get("current_parser_version_reviews") or 0),
+            },
         }
 
     def _quality(r: dict) -> dict:
+        source = str(r["source"] or "")
+        target_state = target_state_by_source.get(source, {})
+        recent_depth = recent_depth_by_source.get(source, {})
+        parser_backlog = parser_backlog_by_source.get(source, {})
         total = int(r["total_reviews"])
         high = int(r["high_signal_reviews"])
         enriched = int(r["enriched_reviews"])
         return {
-            "source": r["source"],
+            "source": source,
+            "source_tier": _scrape_source_tier(source),
+            "operational_status": _scrape_operational_status(source),
             "total_reviews": total,
             "high_signal_reviews": high,
             "high_signal_rate": round(high / total, 3) if total else 0.0,
@@ -3661,12 +3831,53 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
             "failed_enrichments": int(r["failed_enrichments"]),
             "avg_source_weight": float(r["avg_source_weight"] or 0),
             "high_value_authors": int(r["high_value_authors"]),
+            "target_state": {
+                "total_targets": int(target_state.get("total_targets") or 0),
+                "enabled_targets": int(target_state.get("enabled_targets") or 0),
+                "disabled_targets": int(target_state.get("disabled_targets") or 0),
+                "enabled_avg_max_pages": float(target_state.get("enabled_avg_max_pages") or 0),
+                "enabled_max_max_pages": int(target_state.get("enabled_max_max_pages") or 0),
+            },
+            "recent_depth": {
+                "runs_2d": int(recent_depth.get("runs_2d") or 0),
+                "avg_pages_2d": float(recent_depth.get("avg_pages_2d") or 0),
+                "max_pages_2d": int(recent_depth.get("max_pages_2d") or 0),
+            },
+            "parser_backlog": {
+                "current_parser_version": parser_backlog.get("current_parser_version"),
+                "missing_parser_version_reviews": int(parser_backlog.get("missing_parser_version_reviews") or 0),
+                "outdated_parser_version_reviews": int(parser_backlog.get("outdated_parser_version_reviews") or 0),
+                "current_parser_version_reviews": int(parser_backlog.get("current_parser_version_reviews") or 0),
+            },
         }
 
     return {
         "period_days": days,
         "throughput_basis": _SCRAPE_LOG_BASIS_RAW,
         "quality_basis": _REVIEW_BASIS_CANONICAL,
+        "maintenance": {
+            "task_name": "b2b_parser_upgrade_maintenance",
+            "enabled": bool(_record_value(maintenance_row, "enabled", False)),
+            "interval_seconds": int(_record_value(maintenance_row, "interval_seconds", 0) or 0),
+            "timeout_seconds": int(_record_value(maintenance_row, "timeout_seconds", 0) or 0),
+            "last_run_at": (
+                _record_value(maintenance_row, "last_run_at").isoformat()
+                if _record_value(maintenance_row, "last_run_at")
+                else None
+            ),
+            "next_run_at": (
+                _record_value(maintenance_row, "next_run_at").isoformat()
+                if _record_value(maintenance_row, "next_run_at")
+                else None
+            ),
+            "sources": parse_source_allowlist(settings.b2b_scrape.parser_upgrade_maintenance_sources),
+            "deferred_sources": parse_source_allowlist(
+                getattr(settings.b2b_scrape, "parser_upgrade_deferred_sources", "")
+            ),
+            "run_max_pages": int(settings.b2b_scrape.parser_upgrade_maintenance_run_max_pages),
+            "run_scrape_mode": str(settings.b2b_scrape.parser_upgrade_maintenance_run_scrape_mode),
+            "recent_cooldown_hours": int(settings.b2b_scrape.parser_upgrade_maintenance_recent_cooldown_hours),
+        },
         "today": {
             "runs": int(today_row["runs_today"]),
             "reviews_inserted": int(today_row["inserted_today"]),
@@ -3733,7 +3944,12 @@ async def scraping_details(
             jsonb_array_length(l.errors)            AS error_count,
             t.vendor_name,
             t.product_name,
-            t.product_slug
+            t.product_slug,
+            t.enabled,
+            t.scrape_mode,
+            t.max_pages,
+            t.last_scrape_status,
+            t.metadata
         FROM b2b_scrape_log l
         JOIN b2b_scrape_targets t ON t.id = l.target_id
         {where}
@@ -3748,10 +3964,21 @@ async def scraping_details(
             {
                 "id": str(r["id"]),
                 "source": r["source"],
+                "source_tier": _scrape_source_tier(str(r["source"] or "")),
+                "operational_status": _scrape_operational_status(str(r["source"] or "")),
                 "status": r["status"],
                 "vendor_name": r["vendor_name"],
                 "product_name": r["product_name"],
                 "product_slug": r["product_slug"],
+                "target_enabled": bool(r["enabled"]),
+                "target_scrape_mode": r["scrape_mode"],
+                "target_max_pages": int(r["max_pages"] or 0),
+                "target_last_scrape_status": r["last_scrape_status"],
+                "target_disabled_policy": (
+                    _normalize_metadata(r["metadata"]).get("disabled_policy")
+                    if _normalize_metadata(r["metadata"])
+                    else None
+                ),
                 "reviews_found": r["reviews_found"],
                 "reviews_inserted": r["reviews_inserted"],
                 "insert_rate": (

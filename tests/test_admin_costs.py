@@ -19,6 +19,14 @@ class _FakePool:
         self.provider_snapshot_rows = []
 
     async def fetchrow(self, query, *args):
+        if "FROM scheduled_tasks" in query and "b2b_parser_upgrade_maintenance" in query:
+            return {
+                "enabled": True,
+                "interval_seconds": 21600,
+                "timeout_seconds": 5400,
+                "last_run_at": datetime(2026, 3, 31, 21, 0, tzinfo=timezone.utc),
+                "next_run_at": datetime(2026, 4, 1, 3, 0, tzinfo=timezone.utc),
+            }
         if "artifact_type = 'cross_vendor_reasoning'" in query and "ORDER BY created_at DESC" in query:
             return {
                 "status": "succeeded",
@@ -1050,6 +1058,152 @@ def test_scraping_summary_quality_uses_canonical_reviews(monkeypatch):
     assert body["throughput_basis"] == "raw_scrape_log"
     assert body["quality_basis"] == "canonical_reviews"
     assert "duplicate_of_review_id IS NULL" in pool.last_fetch_query
+
+
+def test_scraping_summary_exposes_source_tier_operational_state_and_maintenance(monkeypatch):
+    client, pool = _client(monkeypatch)
+
+    async def _fetch(query, *args):
+        pool.last_fetch_query = query
+        pool.last_fetch_args = args
+        if "JOIN b2b_scrape_targets t ON t.id = l.target_id" in query:
+            return [{
+                "source": "trustradius",
+                "vendor_name": "Zendesk",
+                "total_runs": 3,
+                "successes": 3,
+                "failures": 0,
+                "blocked": 0,
+                "partial": 0,
+                "reviews_found": 15,
+                "reviews_inserted": 9,
+                "avg_duration_ms": Decimal("420.5"),
+                "captcha_attempts": 0,
+                "blocked_requests": 0,
+            }]
+        if "FROM b2b_scrape_targets" in query and "enabled_avg_max_pages" in query:
+            return [{
+                "source": "trustradius",
+                "total_targets": 4,
+                "enabled_targets": 3,
+                "disabled_targets": 1,
+                "enabled_exhaustive_targets": 2,
+                "enabled_incremental_targets": 1,
+                "enabled_avg_max_pages": Decimal("49.5"),
+                "enabled_max_max_pages": 50,
+                "enabled_blocked_targets": 0,
+                "persistently_blocked_disabled_targets": 0,
+            }]
+        if "FROM b2b_scrape_log" in query and "avg_pages_2d" in query:
+            return [{
+                "source": "trustradius",
+                "runs_2d": 6,
+                "avg_pages_2d": Decimal("3.8"),
+                "max_pages_2d": 6,
+            }]
+        if "FROM b2b_reviews" in query and "GROUP BY source, parser_version" in query:
+            return [
+                {"source": "trustradius", "parser_version": None, "review_count": 2},
+                {"source": "trustradius", "parser_version": "trustradius:1", "review_count": 7},
+            ]
+        if "FROM b2b_reviews" in query and "GROUP BY source" in query:
+            return [{
+                "source": "trustradius",
+                "total_reviews": 9,
+                "high_signal_reviews": 7,
+                "enriched_reviews": 8,
+                "failed_enrichments": 1,
+                "avg_source_weight": Decimal("0.912"),
+                "high_value_authors": 4,
+            }]
+        return []
+
+    pool.fetch = _fetch
+    pool.fetchrow = AsyncMock(side_effect=[
+        {"runs_today": 4, "inserted_today": 17, "errors_today": 1},
+        {
+            "enabled": True,
+            "interval_seconds": 21600,
+            "timeout_seconds": 5400,
+            "last_run_at": datetime(2026, 3, 31, 21, 0, tzinfo=timezone.utc),
+            "next_run_at": datetime(2026, 4, 1, 3, 0, tzinfo=timezone.utc),
+        },
+    ])
+
+    with client:
+        res = client.get("/admin/costs/scraping/summary?days=7")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["maintenance"]["task_name"] == "b2b_parser_upgrade_maintenance"
+    assert body["maintenance"]["enabled"] is True
+    assert body["maintenance"]["run_max_pages"] == 3
+    assert "trustradius" in body["maintenance"]["sources"]
+    throughput = body["throughput"][0]
+    assert throughput["source_tier"] == "high_yield"
+    assert throughput["operational_status"] == "active"
+    assert throughput["target_state"]["enabled_targets"] == 3
+    assert throughput["recent_depth"]["avg_pages_2d"] == 3.8
+    assert throughput["parser_backlog"]["missing_parser_version_reviews"] == 2
+    quality = body["quality"][0]
+    assert quality["source_tier"] == "high_yield"
+    assert quality["parser_backlog"]["current_parser_version_reviews"] == 7
+
+
+def test_scraping_details_exposes_target_depth_and_operational_context(monkeypatch):
+    client, pool = _client(monkeypatch)
+
+    async def _fetch(query, *args):
+        pool.last_fetch_query = query
+        pool.last_fetch_args = args
+        if "FROM b2b_scrape_log l" in query and "t.enabled" in query:
+            return [{
+                "id": uuid4(),
+                "source": "g2",
+                "status": "blocked",
+                "reviews_found": 12,
+                "reviews_inserted": 3,
+                "pages_scraped": 3,
+                "duration_ms": 1500,
+                "errors": ["Page block detected"],
+                "started_at": datetime(2026, 3, 31, 22, 0, tzinfo=timezone.utc),
+                "captcha_attempts": 2,
+                "captcha_types": ["datadome"],
+                "captcha_solve_ms": 750,
+                "block_type": "peer_blocked",
+                "parser_version": "g2:3",
+                "proxy_type": "web_unlocker",
+                "stop_reason": "blocked",
+                "oldest_review": None,
+                "newest_review": None,
+                "date_dropped": 0,
+                "duplicate_pages": 0,
+                "has_page_logs": True,
+                "error_count": 1,
+                "vendor_name": "Zoom",
+                "product_name": "Zoom Workplace",
+                "product_slug": "zoom-workplace",
+                "enabled": False,
+                "scrape_mode": "exhaustive",
+                "max_pages": 50,
+                "last_scrape_status": "blocked",
+                "metadata": {"disabled_policy": "persistently_blocked_target"},
+            }]
+        return []
+
+    pool.fetch = _fetch
+
+    with client:
+        res = client.get("/admin/costs/scraping/details?source=g2&status=blocked&limit=10")
+
+    assert res.status_code == 200
+    row = res.json()["scrapes"][0]
+    assert row["source_tier"] == "context_rich"
+    assert row["operational_status"] == "parser_upgrade_deferred"
+    assert row["target_enabled"] is False
+    assert row["target_scrape_mode"] == "exhaustive"
+    assert row["target_max_pages"] == 50
+    assert row["target_disabled_policy"] == "persistently_blocked_target"
 
 
 def test_reddit_overview_is_labeled_raw_source_provenance(monkeypatch):

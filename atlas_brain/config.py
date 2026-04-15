@@ -4013,6 +4013,25 @@ class B2BScrapeConfig(BaseSettings):
         default=False,
         description="Run low-yield pruning in dry-run mode even when scheduled",
     )
+    blocked_target_disable_min_age_hours: int = Field(
+        default=168,
+        ge=1,
+        le=2160,
+        description="Minimum blocked age before a persistently blocked scrape target can be disabled by policy.",
+    )
+    blocked_target_disable_max_disable_per_run: int = Field(
+        default=25,
+        ge=1,
+        le=1000,
+        description="Safety cap on number of persistently blocked scrape targets disabled per run.",
+    )
+    parser_upgrade_deferred_sources: str = Field(
+        default="g2",
+        description=(
+            "Sources to exclude from parser-upgrade maintenance selection while their "
+            "fetch path is operationally degraded, without removing them from normal scrape inventory."
+        ),
+    )
 
     # Proxies (comma-separated URLs)
     proxy_datacenter_urls: str = Field(default="", description="Datacenter proxy URLs (comma-separated)")
@@ -4072,6 +4091,91 @@ class B2BScrapeConfig(BaseSettings):
     # Resilience
     max_retries: int = Field(default=2, description="Max retries per request")
     blocked_cooldown_hours: int = Field(default=24, description="Hours to cool down after blocked")
+    parser_upgrade_blocked_target_cooldown_hours: int = Field(
+        default=168,
+        ge=1,
+        le=1440,
+        description="Hours to defer blocked targets from parser-upgrade maintenance selection unless explicitly included.",
+    )
+    parser_upgrade_maintenance_enabled: bool = Field(
+        default=True,
+        description="Enable scheduled parser-upgrade maintenance for healthy structured sources.",
+    )
+    parser_upgrade_maintenance_interval_seconds: int = Field(
+        default=21600,
+        ge=300,
+        le=604800,
+        description="Scheduler interval for parser-upgrade maintenance runs.",
+    )
+    parser_upgrade_maintenance_sources: str = Field(
+        default="trustradius,gartner,software_advice,capterra",
+        description=(
+            "Comma-separated healthy sources to include in scheduled parser-upgrade maintenance. "
+            "Operationally degraded sources like g2 should stay excluded until fetch quality improves."
+        ),
+    )
+    parser_upgrade_maintenance_limit_targets: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Targets selected per parser-upgrade maintenance batch.",
+    )
+    parser_upgrade_maintenance_drain_max_batches: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="Maximum maintenance batches to run in a single scheduled parser-upgrade drain.",
+    )
+    parser_upgrade_maintenance_recent_cooldown_hours: int = Field(
+        default=12,
+        ge=0,
+        le=720,
+        description="Skip parser-upgrade maintenance for targets scraped within this recent cooldown window.",
+    )
+    parser_upgrade_maintenance_run_max_pages: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        description="Temporary max_pages override for scheduled parser-upgrade maintenance runs.",
+    )
+    parser_upgrade_maintenance_run_scrape_mode: str = Field(
+        default="exhaustive",
+        description="Temporary scrape_mode override for scheduled parser-upgrade maintenance runs.",
+    )
+    parser_upgrade_maintenance_deep_sources: str = Field(
+        default="trustradius,capterra",
+        description=(
+            "Comma-separated maintenance sources eligible for selective deeper parser-upgrade runs "
+            "when the target still has a meaningful parser-version backlog."
+        ),
+    )
+    parser_upgrade_maintenance_deep_min_parser_backlog_reviews: int = Field(
+        default=20,
+        ge=1,
+        le=10000,
+        description="Minimum missing+outdated canonical reviews before a target qualifies for selective deep maintenance.",
+    )
+    parser_upgrade_maintenance_deep_run_max_pages: int = Field(
+        default=8,
+        ge=1,
+        le=100,
+        description="Temporary max_pages override for selectively deep maintenance targets.",
+    )
+    parser_upgrade_maintenance_deep_min_stable_pages_scraped: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        description=(
+            "Minimum pages successfully scraped on the most recent target run before the target "
+            "qualifies for selective deep maintenance."
+        ),
+    )
+    parser_upgrade_maintenance_deep_max_targets_per_batch: int = Field(
+        default=2,
+        ge=0,
+        le=25,
+        description="Maximum number of selectively deep maintenance targets per scheduled batch.",
+    )
     scrape_log_retention_days: int = Field(default=30, description="Days to retain scrape logs")
 
     # CAPTCHA solving
@@ -4195,7 +4299,7 @@ class B2BScrapeConfig(BaseSettings):
         description="Bright Data Scraping Browser WebSocket URL (wss://...@brd.superproxy.io:9222)",
     )
     scraping_browser_domains: str = Field(
-        default="getapp.com,x.com,slashdot.org",
+        default="g2.com,capterra.com,getapp.com,x.com,slashdot.org",
         description="Domains to route through Scraping Browser instead of Web Unlocker (comma-separated)",
     )
 

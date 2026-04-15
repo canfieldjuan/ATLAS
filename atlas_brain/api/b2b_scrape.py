@@ -16,7 +16,10 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import settings
-from ..services.scraping.source_yield import prune_low_yield_targets
+from ..services.scraping.source_yield import (
+    disable_persistently_blocked_targets,
+    prune_low_yield_targets,
+)
 from ..services.scraping.source_fit import classify_source_fit
 from ..services.scraping.target_planning import build_scrape_coverage_plan
 from ..services.scraping.target_provisioning import (
@@ -135,6 +138,14 @@ class DisableLowYieldSourceRequest(BaseModel):
     max_inserted_total: Optional[int] = Field(default=None, ge=0, le=10000)
     max_disable_per_run: Optional[int] = Field(default=None, ge=1, le=1000)
     enabled_only: bool = True
+
+
+class DisableBlockedTargetsRequest(BaseModel):
+    dry_run: bool = True
+    min_blocked_age_hours: Optional[int] = Field(default=None, ge=1, le=2160)
+    max_disable_per_run: Optional[int] = Field(default=None, ge=1, le=1000)
+    vendors: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
 
 
 class PromoteProbationTargetsRequest(BaseModel):
@@ -820,6 +831,33 @@ async def disable_low_yield_source_targets(body: DisableLowYieldSourceRequest) -
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/targets/disable-blocked")
+async def disable_blocked_targets(body: DisableBlockedTargetsRequest) -> dict:
+    """Disable enabled scrape targets that have remained blocked past a cooldown."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    cfg = settings.b2b_scrape
+    min_blocked_age_hours = int(
+        body.min_blocked_age_hours
+        or cfg.blocked_target_disable_min_age_hours
+    )
+    max_disable_per_run = int(
+        body.max_disable_per_run
+        or cfg.blocked_target_disable_max_disable_per_run
+    )
+    result = await disable_persistently_blocked_targets(
+        pool,
+        min_blocked_age_hours=min_blocked_age_hours,
+        max_disable_per_run=max_disable_per_run,
+        dry_run=body.dry_run,
+        sources=body.sources,
+        vendors=body.vendors,
+    )
+    return result
 
 
 @router.get("/targets/coverage-plan")

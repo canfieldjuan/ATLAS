@@ -420,8 +420,38 @@ class TestG2ParserRouting:
     """Test browser-first / HTTP-fallback routing in G2Parser.scrape()."""
 
     @pytest.mark.asyncio
-    async def test_browser_primary_when_enabled(self):
-        """When playwright_enabled=True and browser returns reviews, use them."""
+    async def test_scraping_browser_primary_when_configured(self):
+        """When Scraping Browser is configured for g2.com, route browser through ws_url."""
+        from atlas_brain.services.scraping.parsers.g2 import G2Parser
+
+        parser = G2Parser()
+        target = _make_target()
+        client = _make_client()
+
+        browser_result = MagicMock()
+        browser_result.reviews = [{"source_review_id": "b1"}]
+        browser_result.pages_scraped = 1
+        browser_result.errors = []
+
+        with (
+            patch("atlas_brain.services.scraping.parsers.g2.settings") as mock_settings,
+        ):
+            mock_settings.b2b_scrape.playwright_enabled = False
+            mock_settings.b2b_scrape.web_unlocker_url = ""
+            mock_settings.b2b_scrape.scraping_browser_ws_url = "wss://browser"
+            mock_settings.b2b_scrape.scraping_browser_domains = "g2.com,capterra.com"
+            parser._scrape_browser = AsyncMock(return_value=browser_result)
+            parser._scrape_http = AsyncMock()
+
+            result = await parser.scrape(target, client)
+
+        assert result.reviews == [{"source_review_id": "b1"}]
+        parser._scrape_browser.assert_awaited_once_with(target, "wss://browser")
+        parser._scrape_http.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_local_browser_primary_when_playwright_enabled(self):
+        """When local Playwright is enabled without Scraping Browser, use the local branch."""
         from atlas_brain.services.scraping.parsers.g2 import G2Parser
 
         parser = G2Parser()
@@ -437,13 +467,16 @@ class TestG2ParserRouting:
             patch("atlas_brain.services.scraping.parsers.g2.settings") as mock_settings,
         ):
             mock_settings.b2b_scrape.playwright_enabled = True
+            mock_settings.b2b_scrape.web_unlocker_url = ""
+            mock_settings.b2b_scrape.scraping_browser_ws_url = ""
+            mock_settings.b2b_scrape.scraping_browser_domains = ""
             parser._scrape_browser = AsyncMock(return_value=browser_result)
             parser._scrape_http = AsyncMock()
 
             result = await parser.scrape(target, client)
 
         assert result.reviews == [{"source_review_id": "b1"}]
-        parser._scrape_browser.assert_awaited_once_with(target)
+        parser._scrape_browser.assert_awaited_once_with(target, None)
         parser._scrape_http.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -465,6 +498,9 @@ class TestG2ParserRouting:
 
         with patch("atlas_brain.services.scraping.parsers.g2.settings") as mock_settings:
             mock_settings.b2b_scrape.playwright_enabled = True
+            mock_settings.b2b_scrape.web_unlocker_url = ""
+            mock_settings.b2b_scrape.scraping_browser_ws_url = ""
+            mock_settings.b2b_scrape.scraping_browser_domains = ""
             parser._scrape_browser = AsyncMock(return_value=browser_result)
             parser._scrape_http = AsyncMock(return_value=http_result)
 
@@ -488,6 +524,9 @@ class TestG2ParserRouting:
 
         with patch("atlas_brain.services.scraping.parsers.g2.settings") as mock_settings:
             mock_settings.b2b_scrape.playwright_enabled = True
+            mock_settings.b2b_scrape.web_unlocker_url = ""
+            mock_settings.b2b_scrape.scraping_browser_ws_url = ""
+            mock_settings.b2b_scrape.scraping_browser_domains = ""
             parser._scrape_browser = AsyncMock(side_effect=RuntimeError("Browser crashed"))
             parser._scrape_http = AsyncMock(return_value=http_result)
 
@@ -509,6 +548,9 @@ class TestG2ParserRouting:
 
         with patch("atlas_brain.services.scraping.parsers.g2.settings") as mock_settings:
             mock_settings.b2b_scrape.playwright_enabled = False
+            mock_settings.b2b_scrape.web_unlocker_url = ""
+            mock_settings.b2b_scrape.scraping_browser_ws_url = ""
+            mock_settings.b2b_scrape.scraping_browser_domains = ""
             parser._scrape_browser = AsyncMock()
             parser._scrape_http = AsyncMock(return_value=http_result)
 

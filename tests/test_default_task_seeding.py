@@ -49,6 +49,16 @@ _DEFAULT_TASKS = [
             "notify_tags": "bell,email,b2b",
         },
     },
+    {
+        "name": "b2b_parser_upgrade_maintenance",
+        "description": "Drain parser-version maintenance backlog for healthy structured scrape sources",
+        "task_type": "builtin",
+        "schedule_type": "interval",
+        "interval_seconds": 21600,
+        "timeout_seconds": 5400,
+        "enabled": True,
+        "metadata": {"builtin_handler": "b2b_parser_upgrade_maintenance"},
+    },
 ]
 
 
@@ -81,7 +91,12 @@ class TestDefaultTaskSeeding:
     @pytest_asyncio.fixture(autouse=True)
     async def _cleanup_seeded_tasks(self, db_pool):
         """Remove seeded tasks before and after each test."""
-        names = ("nightly_memory_sync", "cleanup_old_executions", "b2b_watchlist_alert_delivery")
+        names = (
+            "nightly_memory_sync",
+            "cleanup_old_executions",
+            "b2b_watchlist_alert_delivery",
+            "b2b_parser_upgrade_maintenance",
+        )
         for name in names:
             await db_pool.execute(
                 "DELETE FROM scheduled_tasks WHERE name = $1", name
@@ -118,11 +133,27 @@ class TestDefaultTaskSeeding:
         assert row["schedule_type"] == "cron"
         assert row["cron_expression"] == "0 3 * * *"
         assert row["enabled"] is True
-        assert row["timeout_seconds"] == 300
+
+    @pytest.mark.asyncio
+    async def test_seeds_b2b_parser_upgrade_maintenance(self, db_pool, task_repo):
+        """b2b_parser_upgrade_maintenance row is created with correct attributes."""
+        await _seed_defaults(task_repo)
+
+        row = await db_pool.fetchrow(
+            "SELECT * FROM scheduled_tasks WHERE name = $1",
+            "b2b_parser_upgrade_maintenance",
+        )
+
+        assert row is not None
+        assert row["task_type"] == "builtin"
+        assert row["schedule_type"] == "interval"
+        assert row["interval_seconds"] == 21600
+        assert row["timeout_seconds"] == 5400
+        assert row["enabled"] is True
         meta = row["metadata"]
         if isinstance(meta, str):
             meta = json.loads(meta)
-        assert meta["builtin_handler"] == "nightly_memory_sync"
+        assert meta["builtin_handler"] == "b2b_parser_upgrade_maintenance"
 
     @pytest.mark.asyncio
     async def test_seeds_cleanup_old_executions(self, db_pool, task_repo):

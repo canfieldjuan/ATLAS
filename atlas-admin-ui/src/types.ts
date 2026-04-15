@@ -130,6 +130,8 @@ export interface SystemResources {
 
 export interface ScrapeThroughput {
   source: string
+  source_tier?: string
+  operational_status?: string
   vendor_name: string
   total_runs: number
   successes: number
@@ -142,10 +144,34 @@ export interface ScrapeThroughput {
   avg_duration_ms: number
   captcha_attempts: number
   blocked_requests: number
+  target_state?: {
+    total_targets: number
+    enabled_targets: number
+    disabled_targets: number
+    enabled_exhaustive_targets: number
+    enabled_incremental_targets: number
+    enabled_avg_max_pages: number
+    enabled_max_max_pages: number
+    enabled_blocked_targets: number
+    persistently_blocked_disabled_targets: number
+  }
+  recent_depth?: {
+    runs_2d: number
+    avg_pages_2d: number
+    max_pages_2d: number
+  }
+  parser_backlog?: {
+    current_parser_version: string | null
+    missing_parser_version_reviews: number
+    outdated_parser_version_reviews: number
+    current_parser_version_reviews: number
+  }
 }
 
 export interface ScrapeQuality {
   source: string
+  source_tier?: string
+  operational_status?: string
   total_reviews: number
   high_signal_reviews: number
   high_signal_rate: number
@@ -154,11 +180,31 @@ export interface ScrapeQuality {
   failed_enrichments: number
   avg_source_weight: number
   high_value_authors: number
+  target_state?: {
+    total_targets: number
+    enabled_targets: number
+    disabled_targets: number
+    enabled_avg_max_pages: number
+    enabled_max_max_pages: number
+  }
+  recent_depth?: {
+    runs_2d: number
+    avg_pages_2d: number
+    max_pages_2d: number
+  }
+  parser_backlog?: {
+    current_parser_version: string | null
+    missing_parser_version_reviews: number
+    outdated_parser_version_reviews: number
+    current_parser_version_reviews: number
+  }
 }
 
 export interface ScrapeDetail {
   id: string
   source: string
+  source_tier?: string
+  operational_status?: string
   status: string
   vendor_name: string
   product_name: string
@@ -183,6 +229,11 @@ export interface ScrapeDetail {
   duplicate_pages: number
   has_page_logs: boolean
   started_at: string | null
+  target_enabled?: boolean
+  target_scrape_mode?: string | null
+  target_max_pages?: number
+  target_last_scrape_status?: string | null
+  target_disabled_policy?: string | null
 }
 
 export interface ScrapeRunPage {
@@ -252,6 +303,19 @@ export interface ScrapeTopPost {
 
 export interface ScrapeSummaryData {
   today: { runs: number; reviews_inserted: number; errors: number }
+  maintenance?: {
+    task_name: string
+    enabled: boolean
+    interval_seconds: number
+    timeout_seconds: number
+    last_run_at: string | null
+    next_run_at: string | null
+    sources: string[]
+    deferred_sources: string[]
+    run_max_pages: number
+    run_scrape_mode: string
+    recent_cooldown_hours: number
+  }
   throughput: ScrapeThroughput[]
   quality: ScrapeQuality[]
 }

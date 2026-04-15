@@ -56,6 +56,13 @@ class G2Parser:
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape G2 reviews -- Web Unlocker first, then browser, then HTTP."""
+        sb_url = settings.b2b_scrape.scraping_browser_ws_url.strip()
+        sb_domains = {
+            d.strip().lower()
+            for d in settings.b2b_scrape.scraping_browser_domains.split(",")
+            if d.strip()
+        }
+        browser_ws_url = sb_url if sb_url and _DOMAIN in sb_domains else None
 
         # Priority 1: Bright Data Web Unlocker (handles DataDome automatically)
         if settings.b2b_scrape.web_unlocker_url:
@@ -79,10 +86,10 @@ class G2Parser:
                         target.vendor_name, exc,
                     )
 
-        # Priority 2: Playwright stealth browser
-        if settings.b2b_scrape.playwright_enabled:
+        # Priority 2: Bright Data Scraping Browser or local Playwright
+        if browser_ws_url or settings.b2b_scrape.playwright_enabled:
             try:
-                result = await self._scrape_browser(target)
+                result = await self._scrape_browser(target, browser_ws_url)
                 if result.reviews:
                     return result
                 logger.warning(
@@ -250,8 +257,10 @@ class G2Parser:
     # Browser path (Playwright stealth)
     # ------------------------------------------------------------------
 
-    async def _scrape_browser(self, target: ScrapeTarget) -> ScrapeResult:
-        """Scrape G2 via Playwright stealth browser."""
+    async def _scrape_browser(self, target: ScrapeTarget, ws_url: str | None = None) -> ScrapeResult:
+        """Scrape G2 via Bright Data Scraping Browser or local Playwright."""
+        if ws_url:
+            return await self._scrape_scraping_browser(target, ws_url)
         from ..browser import get_stealth_browser
         from ..proxy import ProxyManager
 
@@ -349,6 +358,170 @@ class G2Parser:
 
         logger.info(
             "G2 browser scrape for %s: %d reviews from %d pages",
+            target.vendor_name, len(reviews), pages_scraped,
+        )
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
+
+    async def _scrape_scraping_browser(self, target: ScrapeTarget, ws_url: str) -> ScrapeResult:
+        """Scrape G2 via Bright Data Scraping Browser (cloud Chromium)."""
+        from playwright.async_api import async_playwright
+
+        from ..browser import solve_browser_challenge
+
+        reviews: list[dict] = []
+        errors: list[str] = []
+        pages_scraped = 0
+        seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
+        stop_reason = ""
+        timeout_ms = settings.b2b_scrape.playwright_timeout_ms
+
+        try:
+            async with async_playwright() as pw:
+                logger.info(
+                    "Connecting G2 Scraping Browser for vendor=%s slug=%s ws_host=%s",
+                    target.vendor_name,
+                    target.product_slug,
+                    ws_url.split("@")[-1],
+                )
+                browser = await pw.chromium.connect_over_cdp(ws_url, timeout=timeout_ms)
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                page_obj = await context.new_page()
+
+                for page in range(1, target.max_pages + 1):
+                    url = f"{_BASE_URL}/{target.product_slug}/reviews"
+                    if page > 1:
+                        url += f"?page={page}"
+                    referer = (
+                        f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+g2+reviews"
+                        if page == 1
+                        else f"{_BASE_URL}/{target.product_slug}/reviews?page={page - 1}"
+                        if page > 2
+                        else f"{_BASE_URL}/{target.product_slug}/reviews"
+                    )
+                    try:
+                        page_start = _time.monotonic()
+                        resp = await page_obj.goto(
+                            url,
+                            wait_until="commit",
+                            timeout=timeout_ms,
+                            referer=referer,
+                        )
+                        status = resp.status if resp else 0
+                        pages_scraped += 1
+                        elapsed_ms = int((_time.monotonic() - page_start) * 1000)
+                        try:
+                            await page_obj.wait_for_load_state(
+                                "domcontentloaded",
+                                timeout=min(timeout_ms, 15000),
+                            )
+                        except Exception:
+                            pass
+                        html_body = await page_obj.content()
+
+                        if await solve_browser_challenge(
+                            page_obj,
+                            domain=_DOMAIN,
+                            html=html_body,
+                            status_code=status,
+                        ):
+                            retry_start = _time.monotonic()
+                            resp = await page_obj.goto(
+                                url,
+                                wait_until="commit",
+                                timeout=timeout_ms,
+                                referer=referer,
+                            )
+                            status = resp.status if resp else 0
+                            elapsed_ms += int((_time.monotonic() - retry_start) * 1000)
+                            try:
+                                await page_obj.wait_for_load_state(
+                                    "domcontentloaded",
+                                    timeout=min(timeout_ms, 15000),
+                                )
+                            except Exception:
+                                pass
+                            html_body = await page_obj.content()
+
+                        if status == 403:
+                            errors.append(f"Page {page}: blocked (403) via scraping_browser")
+                            page_logs.append(log_page(
+                                page, url, status_code=403, duration_ms=elapsed_ms,
+                                response_bytes=len(html_body), raw_body=html_body,
+                                prior_hashes=prior_hashes, errors=["blocked (403) via scraping_browser"],
+                            ))
+                            break
+                        if status != 200:
+                            errors.append(f"Page {page}: HTTP {status}")
+                            page_logs.append(log_page(
+                                page, url, status_code=status, duration_ms=elapsed_ms,
+                                response_bytes=len(html_body), raw_body=html_body,
+                                prior_hashes=prior_hashes, errors=[f"HTTP {status}"],
+                            ))
+                            continue
+
+                        try:
+                            await page_obj.wait_for_selector(
+                                '[data-review-id], [id^="review-"], [itemprop="review"]',
+                                timeout=min(timeout_ms, 15000),
+                            )
+                        except Exception:
+                            pass
+                        html_body = await page_obj.content()
+
+                        page_reviews = _parse_page(html_body, target, seen_ids)
+                        page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+
+                        pl = log_page(
+                            page, url, status_code=200, duration_ms=elapsed_ms,
+                            response_bytes=len(html_body), reviews=page_reviews,
+                            raw_body=html_body, prior_hashes=prior_hashes,
+                            prior_review_ids=prior_review_ids,
+                            next_page_found=bool(page_reviews),
+                        )
+                        if cutoff_hit:
+                            pl.stop_reason = "date_cutoff"
+                            stop_reason = "date_cutoff"
+                        page_logs.append(pl)
+
+                        if not page_reviews:
+                            if page == 1:
+                                logger.warning(
+                                    "G2 scraping browser page 1 returned 0 reviews for %s",
+                                    target.product_slug,
+                                )
+                            break
+
+                        reviews.extend(page_reviews)
+                    except Exception as exc:
+                        errors.append(f"Page {page}: {exc}")
+                        logger.warning(
+                            "G2 scraping browser page %d failed for %s: %s",
+                            page, target.product_slug, exc,
+                        )
+                        break
+
+                    await asyncio.sleep(random.uniform(2.0, 5.0))
+        except Exception as exc:
+            errors.append(f"Browser setup: {exc}")
+            logger.warning(
+                "G2 scraping browser setup failed for vendor=%s slug=%s: %s",
+                target.vendor_name,
+                target.product_slug,
+                exc,
+            )
+
+        logger.info(
+            "G2 scraping browser scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
         return ScrapeResult(

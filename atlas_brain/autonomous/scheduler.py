@@ -746,6 +746,16 @@ class TaskScheduler:
             "metadata": {"builtin_handler": "b2b_scrape_target_pruning"},
         },
         {
+            "name": "b2b_parser_upgrade_maintenance",
+            "description": "Drain parser-version maintenance backlog for healthy structured scrape sources",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds
+            "timeout_seconds": 5400,
+            "enabled": True,  # task handler applies config gating
+            "metadata": {"builtin_handler": "b2b_parser_upgrade_maintenance"},
+        },
+        {
             "name": "consumer_weekly_digest",
             "description": "Weekly email digest with review metrics for consumer accounts with tracked ASINs",
             "task_type": "builtin",
@@ -886,6 +896,7 @@ class TaskScheduler:
                 "b2b_report_subscription_delivery": settings.b2b_report_delivery.interval_seconds,
                 "b2b_watchlist_alert_delivery": settings.b2b_watchlist_delivery.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
+                "b2b_parser_upgrade_maintenance": settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds,
                 "llm_provider_cost_sync": settings.provider_cost.interval_seconds,
             }
 
@@ -1027,6 +1038,7 @@ class TaskScheduler:
                 "b2b_report_subscription_delivery": settings.b2b_report_delivery.interval_seconds,
                 "b2b_watchlist_alert_delivery": settings.b2b_watchlist_delivery.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
+                "b2b_parser_upgrade_maintenance": settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds,
             }
 
             # Merge pipeline interval overrides

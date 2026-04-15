@@ -93,10 +93,11 @@ def test_capabilities_match_getapp_twitter_sourceforge_and_slashdot_profiles():
     assert slashdot.proxy_class == ProxyClass.residential
 
 
-def test_builtin_task_registry_includes_scrape_target_pruning():
+def test_builtin_task_registry_includes_scrape_maintenance_tasks():
     from atlas_brain.autonomous.tasks import _BUILTIN_TASKS
 
     assert ("b2b_scrape_target_pruning", "run", "b2b_scrape_target_pruning") in _BUILTIN_TASKS
+    assert ("b2b_parser_upgrade_maintenance", "run", "b2b_parser_upgrade_maintenance") in _BUILTIN_TASKS
 
 
 def test_source_fit_policy_keeps_crm_github_conditional_and_cloud_github_core():
@@ -511,6 +512,98 @@ async def test_disable_low_yield_source_endpoint_uses_config_defaults(monkeypatc
     assert kwargs["max_inserted_total"] == 0
     assert kwargs["max_disable_per_run"] == 25
     assert kwargs["dry_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_disable_blocked_targets_endpoint_uses_config_defaults(monkeypatch):
+    from atlas_brain.api.b2b_scrape import (
+        DisableBlockedTargetsRequest,
+        disable_blocked_targets,
+    )
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch(
+            "atlas_brain.api.b2b_scrape.disable_persistently_blocked_targets",
+            new_callable=AsyncMock,
+        ) as mock_disable:
+            mock_disable.return_value = {"disabled": 0, "requested": 0, "targets": []}
+            from atlas_brain.config import settings
+
+            monkeypatch.setattr(settings.b2b_scrape, "blocked_target_disable_min_age_hours", 168)
+            monkeypatch.setattr(settings.b2b_scrape, "blocked_target_disable_max_disable_per_run", 25)
+
+            result = await disable_blocked_targets(DisableBlockedTargetsRequest())
+
+    assert result["disabled"] == 0
+    kwargs = mock_disable.await_args.kwargs
+    assert kwargs["min_blocked_age_hours"] == 168
+    assert kwargs["max_disable_per_run"] == 25
+    assert kwargs["dry_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_disable_blocked_targets_endpoint_disables_blocked_capterra_targets():
+    from atlas_brain.api.b2b_scrape import (
+        DisableBlockedTargetsRequest,
+        disable_blocked_targets,
+    )
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                "target_id": "target-1",
+                "source": "capterra",
+                "vendor_name": "Slack",
+                "product_name": "Slack",
+                "product_slug": "135003/Slack",
+                "product_category": "Team Chat",
+                "priority": 90,
+                "max_pages": 30,
+                "scrape_mode": "exhaustive",
+                "last_scraped_at": "2026-04-06T11:27:49.258308+00:00",
+                "last_scrape_status": "blocked",
+                "metadata": {},
+            },
+            {
+                "target_id": "target-2",
+                "source": "capterra",
+                "vendor_name": "Brevo",
+                "product_name": "Brevo",
+                "product_slug": "132996/brevo",
+                "product_category": "Email Marketing",
+                "priority": 90,
+                "max_pages": 30,
+                "scrape_mode": "exhaustive",
+                "last_scraped_at": "2026-04-06T10:05:54.919627+00:00",
+                "last_scrape_status": "blocked",
+                "metadata": {},
+            },
+        ]
+    )
+    pool.execute = AsyncMock(return_value="UPDATE 1")
+
+    cfg = MagicMock()
+    cfg.blocked_target_disable_min_age_hours = 168
+    cfg.blocked_target_disable_max_disable_per_run = 25
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch("atlas_brain.api.b2b_scrape.settings", MagicMock(b2b_scrape=cfg)):
+            result = await disable_blocked_targets(
+                DisableBlockedTargetsRequest(
+                    dry_run=False,
+                    sources=["capterra"],
+                )
+            )
+
+    assert result["disabled"] == 2
+    assert result["requested"] == 2
+    assert [item["vendor_name"] for item in result["targets"]] == ["Slack", "Brevo"]
+    assert pool.execute.await_count == 2
 
 
 @pytest.mark.asyncio
