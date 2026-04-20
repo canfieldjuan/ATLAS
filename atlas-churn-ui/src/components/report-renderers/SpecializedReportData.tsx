@@ -925,6 +925,8 @@ function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }:
     ? 'bg-emerald-500/15 text-emerald-300'
     : data.quality_status === 'needs_review'
       ? 'bg-amber-500/15 text-amber-300'
+      : data.quality_status === 'thin_evidence'
+        ? 'bg-amber-500/15 text-amber-300'
       : data.quality_status === 'deterministic_fallback'
         ? 'bg-rose-500/15 text-rose-300'
         : 'bg-slate-500/15 text-slate-300'
@@ -994,6 +996,13 @@ function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }:
                   <li key={i} className="text-xs text-amber-300/80">{w}</li>
                 ))}
               </ul>
+            </div>
+          )}
+          {data.quality_status === 'thin_evidence' && data.quality_warnings.length === 0 && data.quality_failed_checks.length === 0 && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+              <p className="text-xs text-amber-300">
+                This battle card is usable for directional validation, but the evidence base is still thin.
+              </p>
             </div>
           )}
         </div>

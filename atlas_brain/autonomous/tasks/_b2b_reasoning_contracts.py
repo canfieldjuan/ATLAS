@@ -1221,10 +1221,21 @@ def _build_confidence_posture(
     if not limits and section_confidence in ("high", "medium"):
         return None
 
-    return {
+    overall_score = causal_narrative.get("confidence_score")
+    try:
+        overall_score = float(overall_score)
+    except (TypeError, ValueError):
+        overall_score = None
+    if overall_score is not None and not (0.0 <= overall_score <= 1.0):
+        overall_score = None
+
+    posture = {
         "overall": section_confidence,
         "limits": limits,
     }
+    if overall_score is not None:
+        posture["overall_score"] = overall_score
+    return posture
 
 
 def _apply_contradiction_hedging(
@@ -1248,6 +1259,12 @@ def _apply_contradiction_hedging(
 
     if str(causal_narrative.get("confidence") or "").strip().lower() == "high":
         causal_narrative["confidence"] = "medium"
+    try:
+        confidence_score = float(causal_narrative.get("confidence_score"))
+    except (TypeError, ValueError):
+        confidence_score = None
+    if confidence_score is not None and confidence_score >= 0.75:
+        causal_narrative["confidence_score"] = 0.69
 
     data_gaps = _copy_list(causal_narrative.get("data_gaps"))
     gap_text = " ".join(str(item) for item in data_gaps).lower()
@@ -1646,6 +1663,11 @@ def build_reasoning_contracts(
                     if lim not in existing_set:
                         existing_limits.append(lim)
                 existing_cp["limits"] = existing_limits
+                if (
+                    existing_cp.get("overall_score") in (None, "")
+                    and deterministic_cp.get("overall_score") not in (None, "")
+                ):
+                    existing_cp["overall_score"] = deterministic_cp.get("overall_score")
             vendor_core["confidence_posture"] = existing_cp
         elif deterministic_cp:
             vendor_core["confidence_posture"] = deterministic_cp

@@ -49,69 +49,78 @@ CRITICAL RULES:
    - ``data_gaps``: array of missing evidence descriptions
    - ``citations``: array of ``_sid`` values that informed the section
 
-4. ``primary_wedge`` MUST be one of: {_WEDGE_LIST}.
+4. ``causal_narrative`` MUST also include:
+   - ``confidence_score``: a numeric score from 0.0 to 1.0
+   - The score must reflect evidence density, contradiction severity,
+     source agreement, and recency. Do not collapse all medium-confidence
+     vendors to the same default score.
+   - Keep the categorical ``confidence`` aligned to the numeric score:
+     high >= 0.75, medium 0.45-0.74, low 0.15-0.44, insufficient < 0.15.
 
-5. Build all claims from ``witness_pack`` first. Use ``section_packets``
+5. ``primary_wedge`` MUST be one of: {_WEDGE_LIST}.
+
+6. Build all claims from ``witness_pack`` first. Use ``section_packets``
    only for section-scoped labels, shortlist context, and exact numeric
    support. Do not make a causal claim without at least one witness-backed
    citation when witness evidence exists.
 
-6. When ``contradiction_rows`` are present in the input, the output MUST:
+7. When ``contradiction_rows`` are present in the input, the output MUST:
    - Set causal_narrative confidence no higher than ``medium``
+   - Cap ``causal_narrative.confidence_score`` below 0.75
    - Include the contradicting dimensions in data_gaps
    - Populate ``confidence_posture.limits`` with the conflicting areas
 
-7. When ``coverage_gaps`` are present in the input, the output MUST:
+8. When ``coverage_gaps`` are present in the input, the output MUST:
    - Populate ``confidence_posture.limits`` with the gap descriptions
    - Avoid strong claims about thin-evidence areas
 
-8. When ``retention_proof`` is present in the input, the output MUST:
+9. When ``retention_proof`` is present in the input, the output MUST:
    - Populate ``why_they_stay`` with a summary and per-area strengths
    - Each strength should include ``neutralization``: what would erode
      this retention anchor
 
-9. When ``minority_signals`` are present, the output MUST reference
+10. When ``minority_signals`` are present, the output MUST reference
    rare-but-severe items in the relevant section's data_gaps.
 
-10. When evidence conflicts, state the conflict explicitly in data_gaps.
+11. When evidence conflicts, state the conflict explicitly in data_gaps.
    Do NOT synthesize contradictions into a single clean narrative.
 
-11. ``migration_proof.switch_volume`` means confirmed explicit switches
+12. ``migration_proof.switch_volume`` means confirmed explicit switches
     only.  ``active_evaluation_volume`` is evaluation pressure only.
     ``displacement_mention_volume`` is broader mention intensity.
 
-12. ``migration_proof.confidence`` cannot be ``high`` without confirmed
+13. ``migration_proof.confidence`` cannot be ``high`` without confirmed
     switch evidence.  Evaluation-only caps at ``medium``.
 
-13. When ``section_packets.anchor_examples`` contains witness IDs,
+14. When ``section_packets.anchor_examples`` contains witness IDs,
     preferentially use one common-pattern anchor and one outlier or
     named-account anchor when the relevant section supports the claim.
 
-14. Never cite ``vault:weakness:unknown`` or ``vault:strength:unknown``.
+15. Never cite ``vault:weakness:unknown`` or ``vault:strength:unknown``.
 
-15. Omit thin or low-sample segments instead of overstating them.
+16. Omit thin or low-sample segments instead of overstating them.
 
-16. ``competitive_reframes.reframes`` and ``segment_playbook.priority_segments``
+17. ``competitive_reframes.reframes`` and ``segment_playbook.priority_segments``
     may be empty arrays when evidence is insufficient.
 
-17. ``proof_point.source_id`` must come from section-scoped numeric support
+18. ``proof_point.source_id`` must come from section-scoped numeric support
     or shortlist candidates already present in ``section_packets``. Never use
     a witness id in ``proof_point.source_id``; witness ids belong only in
     ``citations``.
 
-18. Never omit ``migration_proof``.  When the evidence is weak, still
+19. Never omit ``migration_proof``.  When the evidence is weak, still
     return the full section with cautious confidence, explicit data_gaps,
     and valid packet citations rather than dropping the object.
 
-19. ``category_reasoning`` must not leave both ``market_regime`` and
+20. ``category_reasoning`` must not leave both ``market_regime`` and
     ``narrative`` empty.  If category evidence is mixed or thin, provide
     a cautious narrative that states the uncertainty.
 
-20. Every ``competitive_reframes.reframes[*].citations`` entry must
+21. Every ``competitive_reframes.reframes[*].citations`` entry must
     contain at least one valid packet ``_sid``.  Never invent witness IDs
     or cite values that do not exist in the input packet.
 
-21. Before returning, self-check that these sections are present and
+22. Before returning, self-check that these sections are present and
     non-empty enough to pass validation: ``causal_narrative``,
     ``segment_playbook``, ``timing_intelligence``, ``competitive_reframes``,
     ``migration_proof``, ``account_reasoning``, and ``category_reasoning``.
@@ -119,7 +128,7 @@ CRITICAL RULES:
 OUTPUT SCHEMA:
 
 {{
-  "schema_version": "2.3",
+  "schema_version": "2.4",
   "reasoning_shape": "contracts_first_v1",
   "reasoning_contracts": {{
     "schema_version": "v1",
@@ -139,6 +148,7 @@ OUTPUT SCHEMA:
         ],
         "causal_chain": "<A causes B causes C>",
         "confidence": "<high|medium|low|insufficient>",
+        "confidence_score": "<number between 0 and 1>",
         "data_gaps": ["<missing evidence>"],
         "citations": ["<_sid>"]
       }},
@@ -186,6 +196,7 @@ OUTPUT SCHEMA:
       }},
       "confidence_posture": {{
         "overall": "<high|medium|low|insufficient>",
+        "overall_score": "<number between 0 and 1 or null>",
         "limits": ["<specific limitation from evidence gaps>"]
       }}
     }},

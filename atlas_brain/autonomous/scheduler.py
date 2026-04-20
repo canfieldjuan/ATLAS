@@ -50,6 +50,12 @@ class TaskScheduler:
         self._manual_run_lock = asyncio.Lock()
         self._running = False
 
+    def _ensure_execution_semaphore(self) -> asyncio.Semaphore:
+        """Lazily initialize concurrency control for direct/manual execution paths."""
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(autonomous_config.max_concurrent_tasks)
+        return self._semaphore
+
     @property
     def is_running(self) -> bool:
         return self._running
@@ -95,7 +101,7 @@ class TaskScheduler:
             logger.warning("Scheduler already running")
             return
 
-        self._semaphore = asyncio.Semaphore(autonomous_config.max_concurrent_tasks)
+        self._ensure_execution_semaphore()
 
         self._scheduler = AsyncIOScheduler(
             job_defaults={
@@ -1202,7 +1208,7 @@ class TaskScheduler:
 
         repo = get_scheduled_task_repo()
 
-        async with self._semaphore:
+        async with self._ensure_execution_semaphore():
             task = await repo.get_by_id(task_id)
             if not task or not task.enabled:
                 logger.debug("Skipping disabled/missing task %s", task_id)
@@ -1393,6 +1399,7 @@ class TaskScheduler:
         from ..storage.repositories.scheduled_task import get_scheduled_task_repo
 
         repo = get_scheduled_task_repo()
+        self._ensure_execution_semaphore()
         task_key = str(task.id)
         exec_id, running_exec = await self._begin_execution_if_idle(
             repo,
@@ -1433,7 +1440,7 @@ class TaskScheduler:
         duration_ms = 0
 
         try:
-            async with self._semaphore:
+            async with self._ensure_execution_semaphore():
                 timeout = task.timeout_seconds or autonomous_config.task_timeout_seconds
                 runner = get_headless_runner()
                 task = self._attach_execution_metadata(task, exec_id)

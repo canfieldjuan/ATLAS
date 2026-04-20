@@ -3267,6 +3267,29 @@ class TestReasoningContracts:
         result = validate_synthesis(persisted, packet, governance_blocking=True)
         assert result.is_valid, result.summary()
 
+    def test_build_persistable_synthesis_caps_numeric_confidence_on_contradictions(self):
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks._b2b_reasoning_contracts import (
+            build_persistable_synthesis,
+        )
+
+        packet = compress_vendor_pools("ContractVendor", _make_layers())
+        packet.contradiction_rows = [{"dimension": "support"}]
+        synthesis, _ = _make_valid_synthesis(packet)
+        synthesis["causal_narrative"]["confidence"] = "high"
+        synthesis["causal_narrative"]["confidence_score"] = 0.88
+
+        persisted = build_persistable_synthesis(synthesis, packet)
+        vendor_core = persisted["reasoning_contracts"]["vendor_core_reasoning"]
+        causal = vendor_core["causal_narrative"]
+        posture = vendor_core["confidence_posture"]
+
+        assert causal["confidence"] == "medium"
+        assert causal["confidence_score"] == pytest.approx(0.69)
+        assert posture["overall_score"] == pytest.approx(0.69)
+
     def test_build_reasoning_contracts_uses_broader_displacement_mentions(self):
         from atlas_brain.autonomous.tasks._b2b_pool_compression import (
             compress_vendor_pools,
@@ -4040,6 +4063,29 @@ class TestEdgeCases:
         assert not view.should_suppress("causal_narrative")
         assert view.is_quotable("causal_narrative")
 
+    def test_synthesis_reader_prefers_numeric_confidence_score(self):
+        from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
+            load_synthesis_view,
+            synthesis_view_to_reasoning_entry,
+        )
+        raw = {
+            "schema_version": "2.4",
+            "causal_narrative": {
+                "primary_wedge": "price_squeeze",
+                "confidence": "medium",
+                "confidence_score": 0.68,
+                "trigger": "Price hike",
+            },
+            "segment_playbook": {"confidence": "medium"},
+            "timing_intelligence": {"confidence": "medium"},
+            "competitive_reframes": {"confidence": "medium"},
+            "migration_proof": {"confidence": "medium"},
+        }
+        view = load_synthesis_view(raw, "V")
+        entry = synthesis_view_to_reasoning_entry(view)
+        assert entry["confidence"] == pytest.approx(0.68)
+        assert view.confidence("causal_narrative") == "medium"
+
     def test_empty_slug_defaults_to_unknown(self):
         """Pool items with empty category default to 'unknown' in source_id."""
         from atlas_brain.autonomous.tasks._b2b_pool_compression import (
@@ -4399,7 +4445,7 @@ class TestReasoningSynthesisTask:
         assert len(retry_events) == 1
 
     @pytest.mark.asyncio
-    async def test_run_uses_vendor_batch_when_available(self, monkeypatch):
+    async def test_run_uses_vendor_batch_when_available_for_scheduled_full_universe(self, monkeypatch):
         from atlas_brain.autonomous.tasks._b2b_pool_compression import (
             compress_vendor_pools,
         )
@@ -4523,7 +4569,7 @@ class TestReasoningSynthesisTask:
             settings.b2b_churn, "reasoning_synthesis_anthropic_batch_min_items", 1, raising=False,
         )
 
-        result = await run(SimpleNamespace(metadata={"force": True, "test_vendors": ["BatchVendor"]}))
+        result = await run(SimpleNamespace(metadata={}, schedule_type="interval"))
 
         assert result["vendors_reasoned"] == 1
         assert result["vendors_failed"] == 0
@@ -4541,7 +4587,7 @@ class TestReasoningSynthesisTask:
         assert len(synthesis_writes) == 1
 
     @pytest.mark.asyncio
-    async def test_run_vendor_batch_fallback_records_usage(self, monkeypatch):
+    async def test_run_vendor_batch_fallback_records_usage_for_scheduled_full_universe(self, monkeypatch):
         from atlas_brain.config import settings
         from atlas_brain.autonomous.tasks._b2b_pool_compression import compress_vendor_pools
         from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
@@ -4656,7 +4702,7 @@ class TestReasoningSynthesisTask:
         monkeypatch.setattr(settings.b2b_churn, "reasoning_synthesis_anthropic_batch_min_items", 1, raising=False)
         monkeypatch.setattr(settings.b2b_churn, "reasoning_synthesis_attempts", 2, raising=False)
 
-        result = await run(SimpleNamespace(metadata={"force": True, "test_vendors": ["BatchVendor"]}))
+        result = await run(SimpleNamespace(metadata={}, schedule_type="interval"))
 
         assert result["vendors_reasoned"] == 1
         assert batch_llm.calls
@@ -4668,6 +4714,96 @@ class TestReasoningSynthesisTask:
         assert kwargs["provider"] == "anthropic"
         assert kwargs["model"] == "claude-sonnet-4-5"
         assert kwargs["provider_request_id"] == "req_reason_vendor_123"
+
+    @pytest.mark.asyncio
+    async def test_run_manual_scoped_vendor_bypasses_batch(self, monkeypatch):
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+        from atlas_brain.config import settings
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+                self.executemany_calls = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                rows = list(args_iterable)
+                self.executemany_calls.append((query, rows))
+
+        class FakeSynthesisLLM:
+            model = "fake-synthesis"
+
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "response": json.dumps(valid_synthesis),
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                    "_trace_meta": {},
+                }
+
+        layers = _make_layers()
+        packet = compress_vendor_pools("BatchVendor", layers)
+        valid_synthesis, _ = _make_valid_synthesis(packet)
+        fake_pool = FakePool()
+        direct_llm = FakeSynthesisLLM()
+        batch_calls = []
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
+            return {"BatchVendor": layers}
+
+        def _fake_get_pipeline_llm(*, workload, **kwargs):
+            return direct_llm
+
+        async def _fake_run_anthropic_message_batch(**kwargs):
+            batch_calls.append(kwargs)
+            raise AssertionError("Manual scoped reasoning should not use Anthropic batch")
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.storage.repositories.competitive_set.CompetitiveSetRepository.list_due_scheduled",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._scheduled_scope_strategy",
+            lambda _task: "full_universe",
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            _fake_get_pipeline_llm,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+            _fake_run_anthropic_message_batch,
+        )
+        monkeypatch.setattr(settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False)
+        monkeypatch.setattr(settings.b2b_churn, "anthropic_batch_enabled", True, raising=False)
+        monkeypatch.setattr(settings.b2b_churn, "reasoning_synthesis_anthropic_batch_enabled", True, raising=False)
+
+        result = await run(SimpleNamespace(metadata={"force": True, "test_vendors": ["BatchVendor"]}))
+
+        assert result["vendors_reasoned"] == 1
+        assert batch_calls == []
+        assert len(direct_llm.calls) == 1
 
     @pytest.mark.asyncio
     async def test_run_retries_with_targeted_guidance_for_contract_gaps(self, monkeypatch):
@@ -4763,6 +4899,32 @@ class TestReasoningSynthesisTask:
         assert "migration_proof" in retry_text
         assert "category_reasoning.confidence" in retry_text
         assert "already present in the input packet" in retry_text
+
+    def test_validate_synthesis_warns_when_numeric_confidence_disagrees_with_label(self):
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks._b2b_reasoning_contracts import (
+            build_persistable_synthesis,
+        )
+        from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
+            validate_synthesis,
+        )
+
+        packet = compress_vendor_pools("ContractVendor", _make_layers())
+        synthesis, _ = _make_valid_synthesis(packet)
+        synthesis["causal_narrative"]["confidence"] = "medium"
+        synthesis["causal_narrative"]["confidence_score"] = 0.9
+
+        persisted = build_persistable_synthesis(synthesis, packet)
+        result = validate_synthesis(persisted, packet, governance_blocking=True)
+
+        assert result.is_valid, result.summary()
+        assert any(
+            warning.code == "confidence_score_label_mismatch"
+            and warning.path == "causal_narrative.confidence_score"
+            for warning in result.warnings
+        )
 
     @pytest.mark.asyncio
     async def test_record_validation_attempt_escalates_repeated_and_costly_retries(self):
@@ -5227,6 +5389,63 @@ class TestReasoningSynthesisTask:
         )
         await run(SimpleNamespace(metadata={"force": True}))
         assert "anthropic/claude-sonnet-4-5" in seen_models
+
+    @pytest.mark.asyncio
+    async def test_run_prefers_task_reasoning_synthesis_model_override(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        class FakePool:
+            is_initialized = True
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                return None
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+        seen_models: list[str | None] = []
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
+            return {"ModelVendor": _make_layers()}
+
+        def _fake_get_pipeline_llm(*, workload, openrouter_model=None, **kwargs):
+            seen_models.append(openrouter_model)
+            return FakeLLM()
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: FakePool(),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            _fake_get_pipeline_llm,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_model", "anthropic/claude-sonnet-4-5", raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+
+        await run(
+            SimpleNamespace(
+                metadata={
+                    "force": True,
+                    "test_vendors": ["ModelVendor"],
+                    "reasoning_synthesis_model": "anthropic/claude-opus-4.1",
+                }
+            )
+        )
+
+        assert seen_models[0] == "anthropic/claude-opus-4.1"
 
     @pytest.mark.asyncio
     async def test_run_force_cross_vendor_bypasses_vendor_skip_only(self, monkeypatch):

@@ -209,3 +209,36 @@ def test_synthesis_strict_openrouter_does_not_fallback(monkeypatch):
 
     assert llm is None
     assert calls == []
+
+
+def test_anthropic_workload_uses_anthropic_primary_without_vllm_fallback(monkeypatch):
+    calls = []
+
+    def _fake_activate_anthropic(*, fallback_from=None):
+        calls.append(fallback_from)
+        return object()
+
+    monkeypatch.setattr("atlas_brain.pipelines.llm._activate_anthropic", _fake_activate_anthropic)
+    monkeypatch.setattr("atlas_brain.pipelines.llm._activate_vllm", lambda: pytest.fail("unexpected vLLM activation"))
+
+    llm = get_pipeline_llm(workload="anthropic", auto_activate_ollama=False)
+
+    assert llm is not None
+    assert calls == [None]
+
+
+def test_vllm_workload_uses_anthropic_as_labeled_fallback(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr("atlas_brain.pipelines.llm._activate_vllm", lambda: None)
+
+    def _fake_activate_anthropic(*, fallback_from=None):
+        calls.append(fallback_from)
+        return object()
+
+    monkeypatch.setattr("atlas_brain.pipelines.llm._activate_anthropic", _fake_activate_anthropic)
+
+    llm = get_pipeline_llm(workload="vllm", auto_activate_ollama=False)
+
+    assert llm is not None
+    assert calls == ["vLLM"]

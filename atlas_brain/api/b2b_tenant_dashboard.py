@@ -69,6 +69,8 @@ from .b2b_dashboard import (
     _normalize_vendor_name,
     _overlay_reasoning_detail_from_view,
     _overlay_reasoning_summary_from_view,
+    _run_vendor_refresh_stage,
+    _stage_blocks_followups,
 )
 
 logger = logging.getLogger("atlas.api.b2b_tenant")
@@ -979,6 +981,12 @@ class AccountDeepDiveRequest(BaseModel):
 class BattleCardRequest(BaseModel):
     vendor_name: str = Field(..., min_length=1, max_length=200)
     refresh: bool = False
+
+
+class VendorRefreshRequest(BaseModel):
+    force_reasoning: bool = False
+    refresh_battle_cards: bool = True
+    refresh_accounts_in_motion: bool = True
 
 
 class ReportSubscriptionUpsertRequest(BaseModel):
@@ -3647,6 +3655,111 @@ async def generate_tenant_battle_card_report(
         "vendor_name": tracked_vendor,
         "reused": False,
         "message": "Battle card ready.",
+    }
+
+
+@router.post("/vendors/{vendor_name}/refresh")
+async def refresh_tenant_vendor_pipeline(
+    vendor_name: str,
+    body: VendorRefreshRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    """Refresh one tracked vendor across core intelligence and key outputs."""
+    _require_b2b_product(user)
+    vendor_name = _clean_required_text(vendor_name, "vendor_name")
+    pool = _pool_or_503()
+
+    tracked_vendor = vendor_name
+    if settings.saas_auth.enabled and not _is_admin_user(user):
+        tracked_vendor = await _resolve_tracked_vendor_for_view(
+            pool,
+            _uuid.UUID(user.account_id),
+            vendor_name,
+        )
+        if not tracked_vendor:
+            raise HTTPException(status_code=403, detail="Vendor must be in your tracked vendor list")
+
+    core = await _run_vendor_refresh_stage(
+        task_name="b2b_churn_intelligence",
+        vendor_name=tracked_vendor,
+        maintenance_run=True,
+        scope_trigger="tenant_manual_request",
+    )
+
+    if _stage_blocks_followups(core):
+        blocked_reason = core.get("skip_reason") or (
+            "already_running" if core.get("already_running") else "core_stage_blocked"
+        )
+        return {
+            "vendor_name": tracked_vendor,
+            "triggered_by": f"api:{user.email}" if getattr(user, "email", None) else "api",
+            "stages": {
+                "core": core,
+                "reasoning_synthesis": {
+                    "task_name": "b2b_reasoning_synthesis",
+                    "triggered": False,
+                    "reason": f"blocked_by_core:{blocked_reason}",
+                },
+                "battle_cards": {
+                    "task_name": "b2b_battle_cards",
+                    "triggered": False,
+                    "reason": f"blocked_by_core:{blocked_reason}",
+                },
+                "accounts_in_motion": {
+                    "task_name": "b2b_accounts_in_motion",
+                    "triggered": False,
+                    "reason": f"blocked_by_core:{blocked_reason}",
+                },
+            },
+        }
+
+    reasoning = await _run_vendor_refresh_stage(
+        task_name="b2b_reasoning_synthesis",
+        vendor_name=tracked_vendor,
+        maintenance_run=True,
+        scope_trigger="tenant_manual_request",
+        extra_metadata={"force": bool(body.force_reasoning)},
+    )
+
+    if body.refresh_battle_cards:
+        battle_cards = await _run_vendor_refresh_stage(
+            task_name="b2b_battle_cards",
+            vendor_name=tracked_vendor,
+            maintenance_run=True,
+            required=False,
+            scope_trigger="tenant_manual_request",
+        )
+    else:
+        battle_cards = {
+            "task_name": "b2b_battle_cards",
+            "triggered": False,
+            "reason": "disabled_by_request",
+        }
+
+    if body.refresh_accounts_in_motion:
+        accounts_in_motion = await _run_vendor_refresh_stage(
+            task_name="b2b_accounts_in_motion",
+            vendor_name=tracked_vendor,
+            maintenance_run=True,
+            required=False,
+            scope_trigger="tenant_manual_request",
+        )
+    else:
+        accounts_in_motion = {
+            "task_name": "b2b_accounts_in_motion",
+            "triggered": False,
+            "reason": "disabled_by_request",
+        }
+
+    return {
+        "vendor_name": tracked_vendor,
+        "triggered_by": f"api:{user.email}" if getattr(user, "email", None) else "api",
+        "stages": {
+            "core": core,
+            "reasoning_synthesis": reasoning,
+            "battle_cards": battle_cards,
+            "accounts_in_motion": accounts_in_motion,
+        },
     }
 
 

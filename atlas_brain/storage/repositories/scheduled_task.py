@@ -493,6 +493,30 @@ class ScheduledTaskRepository:
         except Exception as e:
             raise DatabaseOperationError("get task executions", e)
 
+    async def get_execution_by_id(self, exec_id: UUID) -> Optional[TaskExecution]:
+        """Get a single task execution by execution ID."""
+        pool = get_db_pool()
+
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("get task execution by id")
+
+        try:
+            row = await pool.fetchrow(
+                """
+                SELECT id, task_id, status, started_at, completed_at,
+                       duration_ms, result_text, error, retry_count, metadata
+                FROM task_executions
+                WHERE id = $1
+                """,
+                exec_id,
+            )
+            return self._row_to_execution(row) if row else None
+
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("get task execution by id", e)
+
     async def get_running_execution(self, task_id: UUID) -> Optional[TaskExecution]:
         """Get the latest running execution for a task, if any."""
         pool = get_db_pool()

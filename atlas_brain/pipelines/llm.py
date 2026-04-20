@@ -152,7 +152,7 @@ def _resolve_workload(workload: str):
         return _activate_vllm()
 
     if workload == "anthropic":
-        return _anthropic_fallback()
+        return _activate_anthropic()
 
     logger.warning("Unknown workload: '%s'", workload)
     return None
@@ -246,8 +246,8 @@ def _activate_vllm():
     return None
 
 
-def _anthropic_fallback():
-    """Activate Anthropic Sonnet as cloud fallback. Returns LLM or None."""
+def _activate_anthropic(*, fallback_from: str | None = None):
+    """Activate Anthropic as a primary route or fallback. Returns LLM or None."""
     from ..config import settings
 
     api_key = (
@@ -269,7 +269,10 @@ def _anthropic_fallback():
         )
         llm = llm_registry.get_active()
         if llm is not None:
-            logger.warning("vLLM unavailable, falling back to Anthropic Sonnet")
+            if fallback_from:
+                logger.warning("%s unavailable, falling back to Anthropic %s", fallback_from, model)
+            else:
+                logger.info("Activated Anthropic (%s)", model)
             return llm
     except Exception as e:
         logger.error("Anthropic fallback failed: %s", e)
@@ -340,7 +343,7 @@ def get_pipeline_llm(
             return None
         # vllm: fall back to Anthropic (no Ollama, no OpenRouter)
         if workload == "vllm":
-            llm = _anthropic_fallback()
+            llm = _activate_anthropic(fallback_from="vLLM")
             if llm is not None:
                 return llm
             return None

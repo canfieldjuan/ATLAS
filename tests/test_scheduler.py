@@ -362,6 +362,31 @@ class TestRunNow:
         assert str(task.id) in s._manual_running_task_ids
         mock_repo.record_execution.assert_awaited_once()
         mock_create_task.assert_called_once()
+        assert s._semaphore is not None
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_run_now_lazily_initializes_semaphore(self, mock_repo_fn):
+        s = _scheduler()
+        task = _task(enabled=True)
+        exec_id = uuid4()
+
+        mock_repo = AsyncMock()
+        mock_repo.get_running_execution.return_value = None
+        mock_repo.record_execution.return_value = exec_id
+        mock_repo_fn.return_value = mock_repo
+
+        dummy_task = MagicMock()
+
+        def _fake_create_task(coro, **_kwargs):
+            coro.close()
+            return dummy_task
+
+        assert s._semaphore is None
+        with patch("asyncio.create_task", side_effect=_fake_create_task):
+            await s.run_now(task)
+
+        assert s._semaphore is not None
 
     @pytest.mark.asyncio
     @patch.object(TaskScheduler, "_check_consecutive_failures", new_callable=AsyncMock)

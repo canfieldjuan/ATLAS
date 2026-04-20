@@ -314,6 +314,14 @@ class _FakeInsertPool:
         return None
 
 
+class _FakeFetchPool:
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    async def fetch(self, _sql, *_args):
+        return list(self.rows)
+
+
 @pytest.mark.asyncio
 async def test_insert_reviews_dedupes_duplicate_reviews_within_same_batch(monkeypatch):
     from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
@@ -353,6 +361,55 @@ async def test_insert_reviews_dedupes_duplicate_reviews_within_same_batch(monkey
     assert stats["duplicate_same_batch"] == 1
     assert stats["duplicate_existing"] == 0
     assert stats["duplicate_db_conflict"] == 0
+
+
+def test_page_has_only_known_source_reviews_requires_full_known_page():
+    from atlas_brain.services.scraping.parsers import (
+        ScrapeTarget,
+        page_has_only_known_source_reviews,
+    )
+
+    target = ScrapeTarget(
+        id="target-1",
+        source="capterra",
+        vendor_name="HubSpot",
+        product_name="HubSpot CRM",
+        product_slug="hubspot",
+        product_category="CRM",
+        max_pages=5,
+        metadata={"known_source_review_ids": ["cap-1", "cap-2"]},
+    )
+
+    assert page_has_only_known_source_reviews(
+        [{"source_review_id": "cap-1"}, {"source_review_id": "cap-2"}],
+        target,
+    ) is True
+    assert page_has_only_known_source_reviews(
+        [{"source_review_id": "cap-1"}, {"source_review_id": "cap-3"}],
+        target,
+    ) is False
+    assert page_has_only_known_source_reviews(
+        [{"source_review_id": ""}, {"source_review_id": "cap-2"}],
+        target,
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_load_existing_source_review_ids_filters_blank_values():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _load_existing_source_review_ids
+
+    pool = _FakeFetchPool(
+        [
+            {"source_review_id": "cap-1"},
+            {"source_review_id": " cap-2 "},
+            {"source_review_id": ""},
+            {"source_review_id": None},
+        ]
+    )
+
+    loaded = await _load_existing_source_review_ids(pool, "HubSpot", "capterra")
+
+    assert loaded == {"cap-1", "cap-2"}
 
 
 @pytest.mark.asyncio
@@ -550,6 +607,73 @@ async def test_insert_reviews_retains_short_reviews_in_raw_only_lane(monkeypatch
     ]
 
     stats = await _insert_reviews(pool, reviews, "batch-short", parser_version="reddit:1")
+
+    assert len(pool.inserted_rows) == 1
+    assert stats["inserted"] == 1
+    assert stats["short_flagged"] == 1
+    assert stats["retained_raw_only"] == 1
+    assert pool.inserted_rows[0][43] == "raw_only"
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_promotes_capterra_short_form_structured_reviews_to_pending(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "capterra",
+            "vendor_name": "HubSpot",
+            "source_review_id": "cap-short-1",
+            "review_text": "Useful for shared spreadsheets but expensive on larger teams.",
+            "reviewed_at": "2026-03-20",
+        }
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-cap-short", parser_version="capterra:2")
+
+    assert len(pool.inserted_rows) == 1
+    assert stats["inserted"] == 1
+    assert stats["short_flagged"] == 0
+    assert stats["retained_pending"] == 1
+    assert stats["retained_raw_only"] == 0
+    assert pool.inserted_rows[0][43] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_still_retains_tiny_capterra_reviews_in_raw_only_lane(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "capterra",
+            "vendor_name": "HubSpot",
+            "source_review_id": "cap-tiny-1",
+            "review_text": "Works fine.",
+            "pros": "Easy.",
+            "cons": "Pricey.",
+            "reviewed_at": "2026-03-20",
+        }
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-cap-tiny", parser_version="capterra:2")
 
     assert len(pool.inserted_rows) == 1
     assert stats["inserted"] == 1

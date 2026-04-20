@@ -121,14 +121,13 @@ def test_effective_enrichment_skip_sources_includes_deprecated_sources(monkeypat
     monkeypatch.setattr(
         b2b_enrichment.settings.b2b_churn,
         "deprecated_review_sources",
-        "capterra,software_advice,trustpilot,trustradius",
+        "software_advice,trustpilot,trustradius",
         raising=False,
     )
 
     assert b2b_enrichment._effective_enrichment_skip_sources() == {
         "stackoverflow",
         "github",
-        "capterra",
         "software_advice",
         "trustpilot",
         "trustradius",
@@ -145,11 +144,40 @@ def test_trusted_repair_sources_filters_deprecated_sources(monkeypatch):
     monkeypatch.setattr(
         b2b_enrichment.settings.b2b_churn,
         "deprecated_review_sources",
-        "capterra,software_advice,trustpilot,trustradius",
+        "software_advice,trustpilot,trustradius",
         raising=False,
     )
 
-    assert b2b_enrichment._trusted_repair_sources() == {"g2", "gartner", "peerspot"}
+    assert b2b_enrichment._trusted_repair_sources() == {
+        "g2",
+        "gartner",
+        "peerspot",
+        "capterra",
+        "software_advice",
+        "trustradius",
+    }
+
+
+def test_effective_min_review_text_length_relaxes_capterra_to_scrape_floor(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_scrape,
+        "capterra_min_enrichable_text_len",
+        40,
+        raising=False,
+    )
+
+    assert b2b_enrichment._effective_min_review_text_length({"source": "capterra"}) == 40
+    assert b2b_enrichment._effective_min_review_text_length({"source": "reddit"}) == 80
+
+
+def test_combined_review_text_length_counts_pros_and_cons():
+    row = {
+        "review_text": "short",
+        "pros": "works well",
+        "cons": "pricey",
+    }
+
+    assert b2b_enrichment._combined_review_text_length(row) == len("short") + len("works well") + len("pricey")
 
 
 def test_tier2_system_prompt_trims_insider_section_for_non_insider_content():

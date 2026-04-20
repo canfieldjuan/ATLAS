@@ -12,17 +12,41 @@ elif [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
+# Prefer the repo venv when VLLM_PYTHON is not set explicitly.
+if [[ -z "${VLLM_PYTHON:-}" ]]; then
+  if [[ -x "$ROOT_DIR/.venv/bin/python" ]] && "$ROOT_DIR/.venv/bin/python" -c "import vllm" >/dev/null 2>&1; then
+    VLLM_PYTHON="$ROOT_DIR/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1 && python3 -c "import vllm" >/dev/null 2>&1; then
+    VLLM_PYTHON="$(command -v python3)"
+  fi
+fi
+
+# Fall back to the primary Atlas vLLM config when raw VLLM_* vars are absent.
+if [[ -z "${VLLM_MODEL:-}" && -n "${ATLAS_LLM__VLLM_MODEL:-}" ]]; then
+  VLLM_MODEL="$ATLAS_LLM__VLLM_MODEL"
+fi
+
+if [[ (-z "${VLLM_HOST:-}" || -z "${VLLM_PORT:-}") && -n "${ATLAS_LLM__VLLM_URL:-}" ]]; then
+  url_no_scheme="${ATLAS_LLM__VLLM_URL#http://}"
+  url_no_scheme="${url_no_scheme#https://}"
+  host_port="${url_no_scheme%%/*}"
+  if [[ "$host_port" == *:* ]]; then
+    [[ -z "${VLLM_HOST:-}" ]] && VLLM_HOST="${host_port%%:*}"
+    [[ -z "${VLLM_PORT:-}" ]] && VLLM_PORT="${host_port##*:}"
+  fi
+fi
+
 : "${VLLM_PYTHON:?}"
 : "${VLLM_MODEL:?}"
-: "${VLLM_HOST:?}"
-: "${VLLM_PORT:?}"
-: "${VLLM_DTYPE:?}"
-: "${VLLM_GPU_MEMORY_UTILIZATION:?}"
-: "${VLLM_MAX_NUM_BATCHED_TOKENS:?}"
-: "${VLLM_MAX_NUM_SEQS:?}"
-: "${VLLM_MAX_MODEL_LEN:?}"
+: "${VLLM_HOST:=localhost}"
+: "${VLLM_PORT:=8082}"
+: "${VLLM_DTYPE:=auto}"
+: "${VLLM_GPU_MEMORY_UTILIZATION:=0.9}"
+: "${VLLM_MAX_NUM_BATCHED_TOKENS:=8192}"
+: "${VLLM_MAX_NUM_SEQS:=16}"
+: "${VLLM_MAX_MODEL_LEN:=8192}"
 : "${VLLM_KV_CACHE_DTYPE:=auto}"
-: "${VLLM_ENABLE_PREFIX_CACHING:?}"
+: "${VLLM_ENABLE_PREFIX_CACHING:=true}"
 
 # Ensure venv bin is in PATH (FlashInfer JIT needs ninja)
 export PATH="$(dirname "$VLLM_PYTHON"):$PATH"

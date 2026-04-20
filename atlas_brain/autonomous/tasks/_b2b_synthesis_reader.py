@@ -36,6 +36,13 @@ _CONFIDENCE_RANK = {
     "insufficient": 1,
 }
 
+_CONFIDENCE_SCORE_BANDS = (
+    (0.75, "high"),
+    (0.45, "medium"),
+    (0.15, "low"),
+    (0.0, "insufficient"),
+)
+
 _REQUIRED_SECTIONS = (
     "causal_narrative", "segment_playbook", "timing_intelligence",
     "competitive_reframes", "migration_proof",
@@ -124,6 +131,26 @@ def _coerce_json_dict(value: Any) -> dict[str, Any]:
             return {}
         return dict(parsed) if isinstance(parsed, dict) else {}
     return {}
+
+
+def _coerce_confidence_score(value: Any) -> float | None:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0.0 <= score <= 1.0:
+        return score
+    return None
+
+
+def _confidence_numeric_to_label(confidence_score: float | None) -> str:
+    score = _coerce_confidence_score(confidence_score)
+    if score is None:
+        return "insufficient"
+    for floor, label in _CONFIDENCE_SCORE_BANDS:
+        if score >= floor:
+            return label
+    return "insufficient"
 
 
 def _collect_reference_source_ids(value: Any, sink: set[str]) -> None:
@@ -404,12 +431,27 @@ class SynthesisView:
         conf = sec.get("confidence")
         if isinstance(conf, str) and conf.strip():
             return conf
+        score = self.confidence_score(section, fallback_to_label=False)
+        if score is not None:
+            return _confidence_numeric_to_label(score)
         # Backward compatibility: older minimal contracts may omit an explicit
         # confidence field. Treat non-empty sections as usable instead of
         # suppressing them as "insufficient" by default.
         if sec:
             return "medium"
         return "insufficient"
+
+    def confidence_score(self, section: str, *, fallback_to_label: bool = True) -> float | None:
+        """Get a numeric confidence score for a section when available."""
+        sec = self.section(section)
+        score = _coerce_confidence_score(sec.get("confidence_score"))
+        if score is None and section == "causal_narrative":
+            score = _coerce_confidence_score(self.confidence_posture.get("overall_score"))
+        if score is not None or not fallback_to_label:
+            return score
+        if sec:
+            return _confidence_label_to_numeric(self.confidence(section))
+        return 0.0
 
     def should_suppress(self, section: str, vendor_evidence: dict[str, Any] | None = None) -> bool:
         """True if section should not display.
@@ -1422,8 +1464,9 @@ def synthesis_view_to_reasoning_entry(view: SynthesisView) -> dict[str, Any]:
     archetype = wedge.value if wedge else cn.get("primary_wedge", "")
 
     confidence_str = view.confidence("causal_narrative")
-    # Map confidence label -> numeric for backward compat
-    confidence_num = _confidence_label_to_numeric(confidence_str)
+    confidence_num = view.confidence_score("causal_narrative")
+    if confidence_num is None:
+        confidence_num = _confidence_label_to_numeric(confidence_str)
 
     # Build summary from available fields -- v2.3 uses trigger/why_now/causal_chain
     executive_summary = cn.get("summary") or cn.get("executive_summary") or ""
@@ -1713,7 +1756,11 @@ async def load_prior_reasoning_snapshots(
         )
         snapshots[requested_name] = {
             "archetype": view.primary_wedge.value if view.primary_wedge else "",
-            "confidence": _confidence_label_to_numeric(view.confidence("causal_narrative")),
+            "confidence": (
+                view.confidence_score("causal_narrative")
+                if view.confidence_score("causal_narrative") is not None
+                else _confidence_label_to_numeric(view.confidence("causal_narrative"))
+            ),
             "snapshot_date": view.as_of_date_iso,
         }
 

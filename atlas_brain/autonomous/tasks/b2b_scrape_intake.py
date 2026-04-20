@@ -73,6 +73,7 @@ _TWITTER_MARKETING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:now\s+available|product\s+update|release\s+notes|hiring)\b", re.I),
 )
 _CAPTERRA_AGGREGATE_METHOD = "jsonld_aggregate"
+_KNOWN_REVIEWS_PAGE_STOP_SOURCES = frozenset({"capterra", "gartner", "trustradius", "software_advice"})
 _DEFAULT_SOURCE_QUALITY_GATE_SOURCES = frozenset(
     {"quora", "twitter", "capterra", "reddit", "hackernews", "software_advice", "trustpilot"}
 )
@@ -597,6 +598,29 @@ async def _load_existing_source_review_lookup(
         "by_dedup_key": by_dedup_key,
         "by_identity_key": by_identity_key,
         "by_content_hash": by_content_hash,
+    }
+
+
+async def _load_existing_source_review_ids(
+    pool,
+    vendor_name: str,
+    source: str,
+) -> set[str]:
+    rows = await pool.fetch(
+        """
+        SELECT source_review_id
+        FROM b2b_reviews
+        WHERE source = $1
+          AND vendor_name = $2
+          AND source_review_id IS NOT NULL
+        """,
+        source,
+        vendor_name,
+    )
+    return {
+        str(row.get("source_review_id") or "").strip()
+        for row in rows
+        if str(row.get("source_review_id") or "").strip()
     }
 
 
@@ -1672,6 +1696,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             client.reset_captcha_stats()
             previous_state = _scrape_state_from_row(row, metadata)
 
+            if target.source in _KNOWN_REVIEWS_PAGE_STOP_SOURCES:
+                try:
+                    known_source_review_ids = await _load_existing_source_review_ids(
+                        pool,
+                        target.vendor_name,
+                        target.source,
+                    )
+                    if known_source_review_ids:
+                        target.metadata["known_source_review_ids"] = sorted(known_source_review_ids)
+                except Exception:
+                    logger.debug(
+                        "Known review-id preload failed for %s/%s",
+                        target.source,
+                        target.vendor_name,
+                        exc_info=True,
+                    )
+
             try:
                 result = await parser.scrape(target, client)
             except Exception as exc:
@@ -2030,6 +2071,29 @@ async def _fire_enrichment(batch_id: str, source: str, vendor: str) -> None:
 _MIN_ENRICHABLE_TEXT_LEN = 80  # Reviews shorter than this can't produce useful enrichment
 
 
+def _effective_min_enrichable_text_len(source: str, cfg) -> int:
+    """Return the per-source text floor required for enrichment eligibility."""
+    source_norm = str(source or "").strip().lower()
+    if source_norm == "capterra":
+        try:
+            return min(
+                _MIN_ENRICHABLE_TEXT_LEN,
+                max(
+                    20,
+                    int(
+                        getattr(
+                            cfg,
+                            "capterra_min_enrichable_text_len",
+                            40,
+                        ) or 40
+                    ),
+                ),
+            )
+        except (TypeError, ValueError):
+            return 40
+    return _MIN_ENRICHABLE_TEXT_LEN
+
+
 async def _insert_reviews(
     pool,
     reviews: list[dict],
@@ -2113,7 +2177,8 @@ async def _insert_reviews(
         pros = r.get("pros") or ""
         cons = r.get("cons") or ""
         combined_len = len(review_text) + len(pros) + len(cons)
-        if combined_len < _MIN_ENRICHABLE_TEXT_LEN:
+        min_enrichable_text_len = _effective_min_enrichable_text_len(source, cfg)
+        if combined_len < min_enrichable_text_len:
             short_flagged += 1
             retention_reasons.append("short_text")
 
@@ -2497,7 +2562,7 @@ async def _insert_reviews(
 
     if short_flagged:
         logger.info(
-            "Retained %d short reviews in raw-only lane (< %d chars)",
+            "Retained %d short reviews in raw-only lane (< source-specific min chars; global default %d)",
             short_flagged,
             _MIN_ENRICHABLE_TEXT_LEN,
         )

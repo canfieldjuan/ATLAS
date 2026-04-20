@@ -108,6 +108,13 @@ _PLACEHOLDER_NAMED_EXAMPLE_PATTERNS = (
     re.compile(r"\b(smb|mid[\s_-]?market|enterprise)\b", re.I),
 )
 
+_CONFIDENCE_SCORE_BANDS = (
+    (0.75, "high"),
+    (0.45, "medium"),
+    (0.15, "low"),
+    (0.0, "insufficient"),
+)
+
 
 def _looks_like_tool_label(value: str) -> bool:
     text = str(value or "").strip().lower()
@@ -121,6 +128,26 @@ def _looks_like_tool_label(value: str) -> bool:
     return any(token in text for token in generic_modifiers) and any(
         token in text for token in generic_artifacts
     )
+
+
+def _coerce_confidence_score(value: Any) -> float | None:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0.0 <= score <= 1.0:
+        return score
+    return None
+
+
+def _confidence_label_for_score(score: float) -> str:
+    normalized = _coerce_confidence_score(score)
+    if normalized is None:
+        return "insufficient"
+    for floor, label in _CONFIDENCE_SCORE_BANDS:
+        if normalized >= floor:
+            return label
+    return "insufficient"
 
 
 @dataclass(slots=True)
@@ -682,6 +709,55 @@ def _check_confidence_fields(
                 f"confidence '{conf}' not in {sorted(_VALID_CONFIDENCE)}",
                 severity="warning",
             )
+        score_raw = sec.get("confidence_score")
+        if score_raw is None:
+            continue
+        score = _coerce_confidence_score(score_raw)
+        if score is None:
+            _add(
+                result,
+                f"{section}.confidence_score",
+                "invalid_confidence_score",
+                "confidence_score must be a number between 0.0 and 1.0",
+                severity="warning",
+            )
+            continue
+        if conf in _VALID_CONFIDENCE:
+            expected = _confidence_label_for_score(score)
+            if conf != expected:
+                _add(
+                    result,
+                    f"{section}.confidence_score",
+                    "confidence_score_label_mismatch",
+                    f"confidence_score={score:.2f} maps to '{expected}', not '{conf}'",
+                    severity="warning",
+                )
+
+    cp = _get_confidence_posture(synthesis)
+    if isinstance(cp, dict) and cp:
+        overall_score_raw = cp.get("overall_score")
+        if overall_score_raw is not None:
+            overall_score = _coerce_confidence_score(overall_score_raw)
+            if overall_score is None:
+                _add(
+                    result,
+                    "vendor_core_reasoning.confidence_posture.overall_score",
+                    "invalid_confidence_score",
+                    "overall_score must be a number between 0.0 and 1.0",
+                    severity="warning",
+                )
+            else:
+                overall_label = str(cp.get("overall") or "").strip().lower()
+                if overall_label in _VALID_CONFIDENCE:
+                    expected = _confidence_label_for_score(overall_score)
+                    if overall_label != expected:
+                        _add(
+                            result,
+                            "vendor_core_reasoning.confidence_posture.overall_score",
+                            "confidence_score_label_mismatch",
+                            f"overall_score={overall_score:.2f} maps to '{expected}', not '{overall_label}'",
+                            severity="warning",
+                        )
 
 
 def _check_data_gaps_on_insufficient(
@@ -1298,6 +1374,16 @@ def _check_contradiction_hedging(
             "must be 'medium' or lower when contradictory evidence exists",
             severity=sev,
         )
+    score = _coerce_confidence_score(cn.get("confidence_score"))
+    if score is not None and score >= 0.75:
+        _add(
+            result,
+            "causal_narrative.confidence_score",
+            "contradiction_confidence_score_cap",
+            f"{len(contradictions)} contradiction(s) detected but confidence_score={score:.2f}; "
+            "must stay below 0.75 when contradictory evidence exists",
+            severity=sev,
+        )
 
     # 2. Contradicting dimensions must appear in data_gaps
     data_gaps = cn.get("data_gaps") or []
@@ -1473,12 +1559,20 @@ def _check_high_confidence_without_evidence(
         if not isinstance(sec, dict):
             continue
         conf = str(sec.get("confidence") or "").strip().lower()
-        if conf == "high":
+        score = _coerce_confidence_score(sec.get("confidence_score"))
+        if conf == "high" or (score is not None and score >= 0.75):
             _add(
                 result,
-                f"{section_name}.confidence",
+                (
+                    f"{section_name}.confidence_score"
+                    if score is not None and score >= 0.75
+                    else f"{section_name}.confidence"
+                ),
                 "high_confidence_without_evidence",
-                f"section '{section_name}' claims high confidence but its supporting pool has a coverage gap",
+                (
+                    f"section '{section_name}' claims high confidence "
+                    "but its supporting pool has a coverage gap"
+                ),
                 severity="error" if governance_blocking else "warning",
             )
 

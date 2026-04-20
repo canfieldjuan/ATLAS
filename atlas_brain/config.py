@@ -2647,7 +2647,7 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     deprecated_review_sources: str = Field(
-        default="capterra,software_advice,trustpilot",
+        default="software_advice,trustpilot",
         description="Sources deprecated from churn intelligence, blogs, and related downstream B2B review selection",
     )
     intelligence_llm_backend: str = Field(
@@ -4212,6 +4212,15 @@ class B2BScrapeConfig(BaseSettings):
         ge=80,
         le=2000,
         description="Minimum normalized text length for review-platform sources before raw-only retention kicks in",
+    )
+    capterra_min_enrichable_text_len: int = Field(
+        default=40,
+        ge=20,
+        le=80,
+        description=(
+            "Minimum combined review_text+pros+cons length before non-aggregate "
+            "Capterra rows are retained in raw_only instead of pending."
+        ),
     )
     source_quality_twitter_require_intent: bool = Field(
         default=True,

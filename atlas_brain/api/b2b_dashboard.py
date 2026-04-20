@@ -7,6 +7,7 @@ for direct consumption by thin delivery surfaces.
 """
 
 import asyncio
+import ast
 import csv
 import io
 import json
@@ -15,6 +16,7 @@ import re
 import uuid as _uuid
 from datetime import date, datetime, timezone
 from typing import Any, Mapping, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
@@ -139,6 +141,12 @@ class BulkCompanySignalCandidateGroupReviewBody(BaseModel):
     trigger_rebuild: bool = True
 
 
+class VendorRefreshBody(BaseModel):
+    force_reasoning: bool = False
+    refresh_battle_cards: bool = True
+    refresh_accounts_in_motion: bool = True
+
+
 def _safe_json(val):
     """Return val if already a list/dict, else try json.loads, else as-is."""
     if isinstance(val, (list, dict)):
@@ -180,6 +188,64 @@ def _pool_or_503():
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
     return pool
+
+
+def _get_task_scheduler():
+    from ..autonomous.scheduler import get_task_scheduler
+
+    return get_task_scheduler()
+
+
+def _get_scheduled_task_repo():
+    from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+
+    return get_scheduled_task_repo()
+
+
+async def _wait_for_execution_terminal_state(
+    exec_id: str,
+    *,
+    timeout_seconds: int,
+    poll_interval_seconds: float = 1.0,
+):
+    repo = _get_scheduled_task_repo()
+    deadline = asyncio.get_running_loop().time() + max(1, int(timeout_seconds))
+    exec_uuid = UUID(str(exec_id))
+    while True:
+        execution = await repo.get_execution_by_id(exec_uuid)
+        if execution is not None and execution.status in {"completed", "failed", "timeout"}:
+            return execution
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(f"Timed out waiting for execution {exec_id}")
+        await asyncio.sleep(poll_interval_seconds)
+
+
+def _decode_execution_result_text(raw_text: Any) -> dict[str, Any]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        pass
+    try:
+        parsed = ast.literal_eval(text)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _is_followup_blocking_skip_reason(reason: Any) -> bool:
+    text = str(reason or "").strip()
+    if not text:
+        return False
+    return text in {
+        "No enriched B2B reviews to analyze",
+        "B2B churn pipeline disabled",
+        "DB not ready",
+        "No B2B reviews to enrich",
+    }
 
 
 def _canonical_review_predicate(alias: str = "") -> str:
@@ -1328,6 +1394,84 @@ async def _trigger_accounts_in_motion_rebuild(pool, vendor_name: str) -> dict[st
     }
 
 
+async def _run_vendor_refresh_stage(
+    *,
+    task_name: str,
+    vendor_name: str,
+    maintenance_run: bool = True,
+    required: bool = True,
+    scope_trigger: str = "vendor_manual_refresh",
+    wait_for_completion: bool = True,
+    extra_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    task_repo = _get_scheduled_task_repo()
+    task = await task_repo.get_by_name(task_name)
+    if not task:
+        if required:
+            raise HTTPException(status_code=503, detail=f"{task_name} task is not registered")
+        return {
+            "task_name": task_name,
+            "triggered": False,
+            "reason": "task_not_registered",
+        }
+
+    task.metadata = {
+        **(task.metadata or {}),
+        "scope_name": vendor_name,
+        "scope_trigger": scope_trigger,
+        "maintenance_run": maintenance_run,
+        "test_vendors": [vendor_name],
+        **(dict(extra_metadata or {})),
+    }
+    scheduler = _get_task_scheduler()
+    result = await scheduler.run_now(task)
+    initial_skip_reason = str(result.get("_skip_synthesis") or "").strip() or None
+    stage_result = {
+        "task_name": task_name,
+        "triggered": not bool(result.get("already_running")),
+        "already_running": bool(result.get("already_running")),
+        "skipped": _is_followup_blocking_skip_reason(initial_skip_reason),
+        "skip_reason": initial_skip_reason,
+        "result": result,
+    }
+    exec_id = result.get("execution_id")
+    if wait_for_completion and exec_id and not stage_result["already_running"] and not stage_result["skipped"]:
+        try:
+            execution = await _wait_for_execution_terminal_state(
+                str(exec_id),
+                timeout_seconds=int(task.timeout_seconds or 120),
+            )
+            execution_payload = _decode_execution_result_text(execution.result_text)
+            stage_result["execution"] = execution.to_dict()
+            stage_result["status"] = execution.status
+            stage_result["completed"] = execution.status == "completed"
+            stage_result["error"] = execution.error
+            if execution_payload:
+                stage_result["terminal_result"] = execution_payload
+            terminal_skip = str(execution_payload.get("_skip_synthesis") or "").strip()
+            if terminal_skip:
+                stage_result["skip_reason"] = terminal_skip
+                stage_result["skipped"] = _is_followup_blocking_skip_reason(terminal_skip)
+        except TimeoutError as exc:
+            stage_result["status"] = "timeout_wait"
+            stage_result["completed"] = False
+            stage_result["error"] = str(exc)
+    return stage_result
+
+
+def _stage_blocks_followups(stage_result: Mapping[str, Any] | None) -> bool:
+    if not stage_result:
+        return True
+    if bool(stage_result.get("already_running")):
+        return True
+    if bool(stage_result.get("skipped")):
+        return True
+    status = str(stage_result.get("status") or "").strip().lower()
+    if status and status != "completed":
+        return True
+    return False
+
+
 from ..services.b2b.corrections import suppress_predicate as _suppress_predicate  # noqa: E402
 from ..services.b2b.corrections import apply_field_overrides as _apply_field_overrides  # noqa: E402
 
@@ -1951,6 +2095,98 @@ async def generate_account_deep_dive_report(
 # ---------------------------------------------------------------------------
 # On-demand vendor reasoning
 # ---------------------------------------------------------------------------
+
+
+@router.post("/vendors/{vendor_name}/refresh")
+async def refresh_vendor_pipeline(
+    vendor_name: str,
+    body: VendorRefreshBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Refresh one vendor across core intelligence, synthesis, and key outputs."""
+    _ = user
+    vendor_name = _required_query_text(vendor_name, "vendor_name")
+    pool = _pool_or_503()
+    _ = pool
+
+    core = await _run_vendor_refresh_stage(
+        task_name="b2b_churn_intelligence",
+        vendor_name=vendor_name,
+        maintenance_run=True,
+    )
+
+    if _stage_blocks_followups(core):
+        blocked_reason = core.get("skip_reason") or (
+            "already_running" if core.get("already_running") else "core_stage_blocked"
+        )
+        return {
+            "vendor_name": vendor_name,
+            "triggered_by": f"api:{user.email}" if user and getattr(user, "email", None) else "api",
+            "stages": {
+                "core": core,
+                "reasoning_synthesis": {
+                    "task_name": "b2b_reasoning_synthesis",
+                    "triggered": False,
+                    "reason": f"blocked_by_core:{blocked_reason}",
+                },
+                "battle_cards": {
+                    "task_name": "b2b_battle_cards",
+                    "triggered": False,
+                    "reason": f"blocked_by_core:{blocked_reason}",
+                },
+                "accounts_in_motion": {
+                    "task_name": "b2b_accounts_in_motion",
+                    "triggered": False,
+                    "reason": f"blocked_by_core:{blocked_reason}",
+                },
+            },
+        }
+
+    reasoning = await _run_vendor_refresh_stage(
+        task_name="b2b_reasoning_synthesis",
+        vendor_name=vendor_name,
+        maintenance_run=True,
+        extra_metadata={"force": bool(body.force_reasoning)},
+    )
+
+    if body.refresh_battle_cards:
+        battle_cards = await _run_vendor_refresh_stage(
+            task_name="b2b_battle_cards",
+            vendor_name=vendor_name,
+            maintenance_run=True,
+            required=False,
+        )
+    else:
+        battle_cards = {
+            "task_name": "b2b_battle_cards",
+            "triggered": False,
+            "reason": "disabled_by_request",
+        }
+
+    if body.refresh_accounts_in_motion:
+        accounts_in_motion = await _run_vendor_refresh_stage(
+            task_name="b2b_accounts_in_motion",
+            vendor_name=vendor_name,
+            maintenance_run=True,
+            required=False,
+        )
+    else:
+        accounts_in_motion = {
+            "task_name": "b2b_accounts_in_motion",
+            "triggered": False,
+            "reason": "disabled_by_request",
+        }
+
+    return {
+        "vendor_name": vendor_name,
+        "triggered_by": f"api:{user.email}" if user and getattr(user, "email", None) else "api",
+        "stages": {
+            "core": core,
+            "reasoning_synthesis": reasoning,
+            "battle_cards": battle_cards,
+            "accounts_in_motion": accounts_in_motion,
+        },
+    }
 
 
 @router.post("/vendors/{vendor_name}/reason")

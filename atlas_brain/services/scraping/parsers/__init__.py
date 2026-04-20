@@ -312,6 +312,35 @@ class ReviewParser(Protocol):
         ...
 
 
+def known_source_review_ids(target: ScrapeTarget | None) -> set[str]:
+    """Return preloaded same-source review ids attached to the scrape target."""
+    metadata = (target.metadata if target is not None else None) or {}
+    raw_ids = metadata.get("known_source_review_ids")
+    if not isinstance(raw_ids, (list, tuple, set, frozenset)):
+        return set()
+    return {
+        str(review_id).strip()
+        for review_id in raw_ids
+        if str(review_id).strip()
+    }
+
+
+def page_has_only_known_source_reviews(
+    reviews: list[dict[str, Any]],
+    target: ScrapeTarget | None,
+) -> bool:
+    """Return True when every parsed review on a page is already known."""
+    if not reviews:
+        return False
+    known_ids = known_source_review_ids(target)
+    if not known_ids:
+        return False
+    page_ids = [str(review.get("source_review_id") or "").strip() for review in reviews]
+    if not page_ids or any(not review_id for review_id in page_ids):
+        return False
+    return all(review_id in known_ids for review_id in page_ids)
+
+
 # Parser registry
 _PARSERS: dict[str, ReviewParser] = {}
 

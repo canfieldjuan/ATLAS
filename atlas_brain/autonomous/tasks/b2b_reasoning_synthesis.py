@@ -1484,9 +1484,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     synthesis_model = normalize_openrouter_model(
-        getattr(cfg, "reasoning_synthesis_model", ""),
-        context="vendor reasoning synthesis override",
+        metadata.get("reasoning_synthesis_model"),
+        context="vendor reasoning synthesis task override",
     )
+    if not synthesis_model:
+        synthesis_model = normalize_openrouter_model(
+            getattr(cfg, "reasoning_synthesis_model", ""),
+            context="vendor reasoning synthesis override",
+        )
     if not synthesis_model:
         synthesis_model = normalize_openrouter_model(
             getattr(settings.llm, "openrouter_reasoning_model", ""),
@@ -1513,6 +1518,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         task_default=bool(getattr(cfg, "cross_vendor_anthropic_batch_enabled", True)),
         task_keys=("cross_vendor_anthropic_batch_enabled",),
     )
+    if manual_scope_requested:
+        vendor_batch_requested = False
+        cross_vendor_batch_requested = False
     batch_llm = (
         resolve_anthropic_batch_llm(
             current_llm=llm,

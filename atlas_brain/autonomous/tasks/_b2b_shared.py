@@ -18899,8 +18899,16 @@ def _get_battle_card_reasoning_state(
                     break
         if view is not None:
             w = getattr(view, "primary_wedge", None)
-            c = view.confidence("causal_narrative") if hasattr(view, "confidence") else ""
-            has_confident = bool(w) and c in ("medium", "high")
+            score = (
+                view.confidence_score("causal_narrative")
+                if hasattr(view, "confidence_score")
+                else None
+            )
+            if score is not None:
+                has_confident = bool(w) and score >= 0.7
+            else:
+                c = view.confidence("causal_narrative") if hasattr(view, "confidence") else ""
+                has_confident = bool(w) and c in ("medium", "high")
 
     return {
         "archetype": archetype,

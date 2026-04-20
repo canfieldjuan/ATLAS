@@ -21,7 +21,14 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
+from . import (
+    ScrapeResult,
+    ScrapeTarget,
+    apply_date_cutoff,
+    log_page,
+    page_has_only_known_source_reviews,
+    register_parser,
+)
 
 logger = logging.getLogger("atlas.services.scraping.parsers.trustradius")
 
@@ -213,6 +220,9 @@ class TrustRadiusParser:
                 if cutoff_hit:
                     pl.stop_reason = "date_cutoff"
                     stop_reason = "date_cutoff"
+                elif page_has_only_known_source_reviews(page_reviews, target):
+                    pl.stop_reason = "known_reviews_page"
+                    stop_reason = "known_reviews_page"
                 page_logs.append(pl)
 
                 if not page_reviews:
@@ -232,6 +242,8 @@ class TrustRadiusParser:
                     continue
 
                 consecutive_empty = 0
+                if stop_reason == "known_reviews_page":
+                    break
                 reviews.extend(page_reviews)
 
             except Exception as exc:

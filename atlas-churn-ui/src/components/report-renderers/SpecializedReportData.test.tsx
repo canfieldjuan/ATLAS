@@ -5,6 +5,47 @@ import { describe, expect, it, vi } from 'vitest'
 import { SpecializedReportData } from './SpecializedReportData'
 
 describe('SpecializedReportData', () => {
+  it('renders thin-evidence battle cards without a headline using executive summary, talk track, and plays', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="battle_card"
+          data={{
+            vendor: 'Zendesk',
+            quality_status: 'thin_evidence',
+            executive_summary:
+              'Zendesk customers are trapped in multi-month support failures that cascade into billing disputes and email delivery breakdowns.',
+            talk_track: {
+              opening: 'Buyers are actively pressure-testing Zendesk because contract lock in concerns keep resurfacing.',
+              mid_call_pivot: 'This is not just a support problem. It is a trust problem.',
+              closing: 'Let us run a quick audit of support reliability and billing predictability.',
+            },
+            recommended_plays: [
+              {
+                play: 'Target evaluators with a side-by-side evaluation on fit and switching friction.',
+                key_message: 'Lead with faster evaluation clarity and fewer edge-case surprises.',
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('thin evidence')).toBeInTheDocument()
+    expect(
+      screen.getByText('This battle card is usable for directional validation, but the evidence base is still thin.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Zendesk customers are trapped in multi-month support failures/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Buyers are actively pressure-testing Zendesk/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Target evaluators with a side-by-side evaluation/i),
+    ).toBeInTheDocument()
+  })
+
   it('renders accounts-in-motion reports with witness actions', async () => {
     const user = userEvent.setup()
     const onOpenWitness = vi.fn()

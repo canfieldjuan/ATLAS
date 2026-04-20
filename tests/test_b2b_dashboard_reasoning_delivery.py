@@ -1025,6 +1025,185 @@ async def test_reason_vendor_rejects_blank_vendor_name_without_db_touch(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_refresh_vendor_pipeline_rejects_blank_vendor_name_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_pool_or_503",
+        lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")),
+    )
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.refresh_vendor_pipeline("   ", mod.VendorRefreshBody(), user=None)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "vendor_name is required"
+
+
+@pytest.mark.asyncio
+async def test_refresh_vendor_pipeline_runs_scoped_vendor_chain(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace()
+    tasks = {
+        "b2b_churn_intelligence": SimpleNamespace(metadata={"seed": "core"}),
+        "b2b_reasoning_synthesis": SimpleNamespace(metadata={"seed": "reasoning"}),
+        "b2b_battle_cards": SimpleNamespace(metadata={"seed": "battle"}),
+        "b2b_accounts_in_motion": SimpleNamespace(metadata={"seed": "accounts"}),
+    }
+    task_repo = SimpleNamespace(
+        get_by_name=AsyncMock(side_effect=lambda name: tasks.get(name)),
+    )
+    scheduler = SimpleNamespace(
+        run_now=AsyncMock(
+            side_effect=[
+                {"vendors_analyzed": 1},
+                {"vendors_reasoned": 1},
+                {"persisted": 1},
+                {"persisted": 2},
+            ]
+        )
+    )
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "_get_scheduled_task_repo", lambda: task_repo)
+    monkeypatch.setattr(mod, "_get_task_scheduler", lambda: scheduler)
+
+    result = await mod.refresh_vendor_pipeline(
+        "  Zendesk  ",
+        mod.VendorRefreshBody(force_reasoning=True),
+        user=None,
+    )
+
+    assert result["vendor_name"] == "Zendesk"
+    assert scheduler.run_now.await_count == 4
+    assert tasks["b2b_churn_intelligence"].metadata["test_vendors"] == ["Zendesk"]
+    assert tasks["b2b_churn_intelligence"].metadata["maintenance_run"] is True
+    assert tasks["b2b_churn_intelligence"].metadata["scope_trigger"] == "vendor_manual_refresh"
+    assert tasks["b2b_reasoning_synthesis"].metadata["force"] is True
+    assert tasks["b2b_battle_cards"].metadata["test_vendors"] == ["Zendesk"]
+    assert tasks["b2b_accounts_in_motion"].metadata["test_vendors"] == ["Zendesk"]
+    assert result["stages"]["core"]["triggered"] is True
+    assert result["stages"]["reasoning_synthesis"]["triggered"] is True
+    assert result["stages"]["battle_cards"]["triggered"] is True
+    assert result["stages"]["accounts_in_motion"]["triggered"] is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_vendor_pipeline_stops_followups_when_core_skips(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace()
+    tasks = {
+        "b2b_churn_intelligence": SimpleNamespace(metadata={}),
+    }
+    task_repo = SimpleNamespace(
+        get_by_name=AsyncMock(side_effect=lambda name: tasks.get(name)),
+    )
+    scheduler = SimpleNamespace(
+        run_now=AsyncMock(return_value={"_skip_synthesis": "No enriched B2B reviews to analyze"}),
+    )
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "_get_scheduled_task_repo", lambda: task_repo)
+    monkeypatch.setattr(mod, "_get_task_scheduler", lambda: scheduler)
+
+    result = await mod.refresh_vendor_pipeline(
+        "Zendesk",
+        mod.VendorRefreshBody(),
+        user=None,
+    )
+
+    assert scheduler.run_now.await_count == 1
+    assert result["stages"]["core"]["skipped"] is True
+    assert result["stages"]["reasoning_synthesis"]["reason"] == (
+        "blocked_by_core:No enriched B2B reviews to analyze"
+    )
+    assert result["stages"]["battle_cards"]["reason"] == (
+        "blocked_by_core:No enriched B2B reviews to analyze"
+    )
+    assert result["stages"]["accounts_in_motion"]["reason"] == (
+        "blocked_by_core:No enriched B2B reviews to analyze"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_vendor_refresh_stage_promotes_terminal_skip_reason(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    task = SimpleNamespace(metadata={}, timeout_seconds=10)
+    task_repo = SimpleNamespace(get_by_name=AsyncMock(return_value=task))
+    scheduler = SimpleNamespace(
+        run_now=AsyncMock(
+            return_value={
+                "execution_id": "11111111-1111-1111-1111-111111111111",
+                "status": "running",
+                "message": "Task started.",
+            }
+        )
+    )
+    execution = SimpleNamespace(
+        status="completed",
+        error=None,
+        result_text="{'_skip_synthesis': 'No enriched B2B reviews to analyze'}",
+        to_dict=lambda: {"status": "completed"},
+    )
+
+    monkeypatch.setattr(mod, "_get_scheduled_task_repo", lambda: task_repo)
+    monkeypatch.setattr(mod, "_get_task_scheduler", lambda: scheduler)
+    monkeypatch.setattr(mod, "_wait_for_execution_terminal_state", AsyncMock(return_value=execution))
+
+    result = await mod._run_vendor_refresh_stage(
+        task_name="b2b_churn_intelligence",
+        vendor_name="Zendesk",
+        wait_for_completion=True,
+    )
+
+    assert result["status"] == "completed"
+    assert result["skipped"] is True
+    assert result["skip_reason"] == "No enriched B2B reviews to analyze"
+    assert result["terminal_result"]["_skip_synthesis"] == "No enriched B2B reviews to analyze"
+
+
+@pytest.mark.asyncio
+async def test_run_vendor_refresh_stage_keeps_completion_skip_reason_non_blocking(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    task = SimpleNamespace(metadata={}, timeout_seconds=10)
+    task_repo = SimpleNamespace(get_by_name=AsyncMock(return_value=task))
+    scheduler = SimpleNamespace(
+        run_now=AsyncMock(
+            return_value={
+                "execution_id": "11111111-1111-1111-1111-111111111111",
+                "status": "running",
+                "message": "Task started.",
+            }
+        )
+    )
+    execution = SimpleNamespace(
+        status="completed",
+        error=None,
+        result_text="{'_skip_synthesis': 'B2B churn intelligence complete'}",
+        to_dict=lambda: {"status": "completed"},
+    )
+
+    monkeypatch.setattr(mod, "_get_scheduled_task_repo", lambda: task_repo)
+    monkeypatch.setattr(mod, "_get_task_scheduler", lambda: scheduler)
+    monkeypatch.setattr(mod, "_wait_for_execution_terminal_state", AsyncMock(return_value=execution))
+
+    result = await mod._run_vendor_refresh_stage(
+        task_name="b2b_churn_intelligence",
+        vendor_name="Zendesk",
+        wait_for_completion=True,
+    )
+
+    assert result["status"] == "completed"
+    assert result["skip_reason"] == "B2B churn intelligence complete"
+    assert result["skipped"] is False
+
+
+@pytest.mark.asyncio
 async def test_reason_vendor_trims_vendor_name_before_reader_call(monkeypatch):
     from atlas_brain.api import b2b_dashboard as mod
     from atlas_brain.autonomous.tasks import _b2b_synthesis_reader as reader_mod

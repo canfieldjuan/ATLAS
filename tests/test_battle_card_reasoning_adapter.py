@@ -43,20 +43,24 @@ def _make_synthesis_view(
     vendor: str = "TestVendor",
     wedge: str = "price_squeeze",
     confidence: str = "high",
+    confidence_score: float | None = None,
 ) -> SynthesisView:
+    causal = {
+        "primary_wedge": wedge,
+        "confidence": confidence,
+        "trigger": "Q1 price hike",
+        "why_now": "Budget cycle alignment",
+        "data_gaps": [],
+        "what_would_weaken_thesis": [
+            {"condition": "Price rollback", "signal_source": "temporal", "monitorable": True},
+        ],
+    }
+    if confidence_score is not None:
+        causal["confidence_score"] = confidence_score
     raw = {
         "reasoning_contracts": {
             "vendor_core_reasoning": {
-                "causal_narrative": {
-                    "primary_wedge": wedge,
-                    "confidence": confidence,
-                    "trigger": "Q1 price hike",
-                    "why_now": "Budget cycle alignment",
-                    "data_gaps": [],
-                    "what_would_weaken_thesis": [
-                        {"condition": "Price rollback", "signal_source": "temporal", "monitorable": True},
-                    ],
-                },
+                "causal_narrative": causal,
             },
         },
     }
@@ -150,6 +154,17 @@ class TestBattleCardReasoningState:
             reasoning_lookup=lookup,
         )
         assert state["has_confident_reasoning"] is True
+
+    def test_synthesis_view_numeric_confidence_can_block_medium_label(self):
+        lookup = _make_legacy_lookup(confidence=0.3)
+        view = _make_synthesis_view(confidence="medium", confidence_score=0.46)
+        state = _get_battle_card_reasoning_state(
+            "TestVendor",
+            synthesis_views={"TestVendor": view},
+            reasoning_lookup=lookup,
+        )
+        assert abs(state["confidence"] - 0.46) < 1e-9
+        assert state["has_confident_reasoning"] is False
 
     def test_empty_vendor_returns_defaults(self):
         state = _get_battle_card_reasoning_state("Unknown")

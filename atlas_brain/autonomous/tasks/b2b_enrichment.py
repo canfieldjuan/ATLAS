@@ -2647,8 +2647,7 @@ async def _enrich_rows(
     )
 
     def _eligible_for_batch(row: dict[str, Any]) -> bool:
-        review_text = row.get("review_text") or ""
-        if len(review_text) < _MIN_REVIEW_TEXT_LENGTH:
+        if _combined_review_text_length(row) < _effective_min_review_text_length(row):
             return False
         source = str(row.get("source") or "").strip().lower()
         return source not in _effective_enrichment_skip_sources()
@@ -3641,6 +3640,36 @@ _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
 # Verified review platforms -- every review gets full extraction (skip triage).
 
 
+def _combined_review_text_length(row: dict[str, Any] | None) -> int:
+    row = row or {}
+    return sum(
+        len(str(row.get(field) or ""))
+        for field in ("review_text", "pros", "cons")
+    )
+
+
+def _effective_min_review_text_length(row: dict[str, Any] | None) -> int:
+    source = str((row or {}).get("source") or "").strip().lower()
+    if source == "capterra":
+        try:
+            return min(
+                _MIN_REVIEW_TEXT_LENGTH,
+                max(
+                    20,
+                    int(
+                        getattr(
+                            settings.b2b_scrape,
+                            "capterra_min_enrichable_text_len",
+                            40,
+                        ) or 40
+                    ),
+                ),
+            )
+        except (TypeError, ValueError):
+            return 40
+    return _MIN_REVIEW_TEXT_LENGTH
+
+
 async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                          max_tokens: int, truncate_length: int = 3000,
                          run_id: str | None = None,
@@ -3656,8 +3685,8 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         return status
 
     # Skip reviews with insufficient text -- title-only scrapes can't yield 47 fields
-    review_text = row.get("review_text") or ""
-    if len(review_text) < _MIN_REVIEW_TEXT_LENGTH:
+    combined_text_len = _combined_review_text_length(row)
+    if combined_text_len < _effective_min_review_text_length(row):
         await pool.execute(
             "UPDATE b2b_reviews SET enrichment_status = 'not_applicable' WHERE id = $1",
             review_id,
