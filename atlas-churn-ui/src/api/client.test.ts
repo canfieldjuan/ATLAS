@@ -79,7 +79,7 @@ describe('api client helpers', () => {
     await listWebhooks({ vendor_name: 'Acme Rival', company_name: 'Acme Bank' })
 
     const requestedUrl = String(fetchMock.mock.calls[0]?.[0] ?? '')
-    expect(requestedUrl).toContain('/api/v1/b2b/tenant/webhooks')
+    expect(requestedUrl).toContain('/api/v1/b2b/dashboard/webhooks')
     expect(requestedUrl).toContain('vendor_name=Acme+Rival')
     expect(requestedUrl).toContain('company_name=Acme+Bank')
   })
@@ -120,17 +120,17 @@ describe('api client helpers', () => {
     })
 
     expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/delivery-summary?days=30&vendor_name=Acme+Rival&company_name=Acme+Bank',
+      '/api/v1/b2b/dashboard/webhooks/delivery-summary?days=30&vendor_name=Acme+Rival&company_name=Acme+Bank',
     )
     expect(String(fetchMock.mock.calls[1]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/wh-1/deliveries?success=false&event_type=signal_update&limit=10&vendor_name=Acme+Rival&company_name=Acme+Bank',
+      '/api/v1/b2b/dashboard/webhooks/wh-1/deliveries?success=false&event_type=signal_update&limit=10&vendor_name=Acme+Rival&company_name=Acme+Bank',
     )
     expect(String(fetchMock.mock.calls[2]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/wh-1/crm-push-log?limit=5&status=success&vendor_name=Acme+Rival&company_name=Acme+Bank',
+      '/api/v1/b2b/dashboard/webhooks/wh-1/crm-push-log?limit=5&status=success&vendor_name=Acme+Rival&company_name=Acme+Bank',
     )
   })
 
-  it('uses the grouped review tenant routes for queue summaries and actions', async () => {
+  it('uses the mixed dashboard and tenant grouped-review routes correctly', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -203,7 +203,7 @@ describe('api client helpers', () => {
     })
 
     expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/company-signal-review-impact-summary',
+      '/api/v1/b2b/dashboard/company-signal-review-impact-summary',
     )
     expect(String(fetchMock.mock.calls[1]?.[0] ?? '')).toContain(
       '/api/v1/b2b/tenant/company-signal-candidate-group-summary',

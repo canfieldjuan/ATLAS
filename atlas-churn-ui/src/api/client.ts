@@ -72,7 +72,8 @@ const EVIDENCE_BASE = `${API_BASE}/api/v1/b2b/evidence`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
-const WEBHOOKS_BASE = TENANT_BASE
+const B2B_DASHBOARD_BASE = `${API_BASE}/api/v1/b2b/dashboard`
+const WEBHOOKS_BASE = B2B_DASHBOARD_BASE
 const AUTONOMOUS_BASE = `${API_BASE}/api/v1/autonomous`
 const CACHE_BUSTER_PARAM = '_ts'
 
@@ -697,7 +698,7 @@ export async function fetchCompanySignalReviewImpactSummary(params?: {
   top_n?: number
 }) {
   return get<CompanySignalReviewImpactSummary>(
-    TENANT_BASE,
+    B2B_DASHBOARD_BASE,
     '/company-signal-review-impact-summary',
     params,
   )
