@@ -2161,11 +2161,12 @@ export interface EvidenceWitnessDetail extends EvidenceWitness {
   review_source: string | null
   source_url: string | null
   enrichment_status: string | null
+  highlight_start: number | null
+  highlight_end: number | null
   evidence_spans: Array<{
     signal_type: string
-    raw_text: string
+    text: string
     pain_category: string | null
-    excerpt_text: string | null
     start_char: number | null
     end_char: number | null
   }>

@@ -114,6 +114,27 @@ _CONCRETE_PAIN_PATTERNS = (
     "downtime",
     "latency",
 )
+_POSITIVE_SENTIMENT_DIRECTIONS = {
+    "stable_positive",
+    "consistently_positive",
+    "improving",
+}
+_NEGATIVE_SENTIMENT_DIRECTIONS = {
+    "consistently_negative",
+    "declining",
+    "negative",
+}
+_NEGATIVE_RECOMMENDATION_PATTERNS = (
+    "never use",
+    "stay away",
+    "would not recommend",
+    "wouldn't recommend",
+    "do not recommend",
+    "don't recommend",
+    "avoid this company",
+    "avoid this service",
+    "steer clear",
+)
 _MIN_GENERIC_ANCHOR_SCORE = 2.0
 _SHORT_GENERIC_EXCERPT_CHARS = 55
 _LONG_EXCERPT_CHARS = 80
@@ -179,12 +200,82 @@ def _has_pricing_currency_signal(text: str) -> bool:
     return False
 
 
+_PAIN_KEYWORDS_BY_CATEGORY: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pricing", (
+        "price", "pricing", "priced", "expensive", "costly", "cost",
+        "billing", "invoice", "refund", "overcharge", "overcharged", "subscription",
+        "license", "per seat", "per user", "renewal", "quote", "budget",
+    )),
+    ("support", (
+        "support", "customer service", "help desk", "helpdesk",
+        "robot", "chatbot", "chat bot", "response time", "ticket",
+        "unresponsive", "no response", "talk to a human",
+        "talk to a person", "talk to someone",
+        "hold time", "waiting on hold",
+    )),
+    ("features", (
+        "feature", "missing", "lack of", "lacking",
+        "no way to", "limitation", "limited", "wish it had", "need more",
+    )),
+    ("reliability", (
+        "bug", "crash", "slow", "laggy", "downtime", "outage",
+        "broken", "glitch", "error", "unreliable", "unstable",
+    )),
+    ("onboarding", (
+        "onboarding", "learning curve", "hard to learn", "steep curve",
+        "setup", "complicated to set up", "documentation",
+    )),
+    ("privacy", (
+        "spam", "unsubscribe", "sales email", "unsolicited",
+        "privacy", "data breach", "tracking",
+    )),
+)
+_PAIN_CATEGORY_PRIORITY = {
+    "privacy": 4,
+    "support": 3,
+    "reliability": 2,
+    "features": 1,
+    "onboarding": 1,
+    "pricing": 0,
+}
+_PAIN_KEYWORD_MAP: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = tuple(
+    (
+        category,
+        tuple(re.compile(r"\b" + re.escape(keyword) + r"\b", re.IGNORECASE) for keyword in keywords),
+    )
+    for category, keywords in _PAIN_KEYWORDS_BY_CATEGORY
+)
+
+
+def _classify_complaint_pain(phrase: str, default: str | None) -> str | None:
+    """Classify a complaint phrase into a pain category by scored keyword match."""
+    best_category = default
+    best_score = 0
+    for category, patterns in _PAIN_KEYWORD_MAP:
+        hit_count = sum(1 for pattern in patterns if pattern.search(phrase))
+        if hit_count <= 0:
+            continue
+        score = (hit_count * 10) + int(_PAIN_CATEGORY_PRIORITY.get(category, 0))
+        if score > best_score:
+            best_category = category
+            best_score = score
+    if best_score > 0:
+        return best_category
+    return default
+
+
 def _normalize_key(value: Any) -> str:
     text = str(value or "").strip().lower()
     return re.sub(r"\s+", " ", text)
 
 
-def _excerpt_text(summary: Any, review_text: Any, phrase: str) -> tuple[str, int | None, int | None]:
+def _excerpt_text(
+    summary: Any,
+    review_text: Any,
+    phrase: str,
+    *,
+    exact_phrase: bool = False,
+) -> tuple[str, int | None, int | None]:
     full_text = " ".join(
         part.strip() for part in (str(summary or ""), str(review_text or ""))
         if str(part or "").strip()
@@ -200,6 +291,9 @@ def _excerpt_text(summary: Any, review_text: Any, phrase: str) -> tuple[str, int
     if idx < 0:
         excerpt = phrase[:220].strip() or full_text[:180].strip()
         return excerpt, None, None
+    if exact_phrase:
+        excerpt = full_text[idx:idx + len(phrase)].strip()
+        return excerpt, idx, idx + len(phrase)
     start = max(0, idx - 40)
     end = min(len(full_text), idx + len(phrase) + 40)
     excerpt = full_text[start:end].strip()
@@ -215,6 +309,59 @@ def _extract_numeric_literals(text: str) -> dict[str, Any]:
     if numbers:
         literals["numbers"] = numbers[:5]
     return literals
+
+
+def _review_supports_counterevidence(review: dict[str, Any], enrichment: dict[str, Any]) -> bool:
+    churn = _coerce_json_dict(enrichment.get("churn_signals"))
+    sentiment = _coerce_json_dict(enrichment.get("sentiment_trajectory"))
+    recommendation_language = _normalize_list(enrichment.get("recommendation_language"))
+    if enrichment.get("would_recommend") is False:
+        return False
+    if any(churn.get(flag) for flag in ("intent_to_leave", "actively_evaluating", "migration_in_progress")):
+        return False
+    direction = str(sentiment.get("direction") or "").strip().lower()
+    if direction in _NEGATIVE_SENTIMENT_DIRECTIONS:
+        return False
+    if any(_contains_any(text, _NEGATIVE_RECOMMENDATION_PATTERNS) for text in recommendation_language):
+        return False
+    if enrichment.get("would_recommend") is True:
+        return True
+    return direction in _POSITIVE_SENTIMENT_DIRECTIONS
+
+
+def _has_derivable_evidence_inputs(result: dict[str, Any]) -> bool:
+    scalar_fields = (
+        "specific_complaints",
+        "pricing_phrases",
+        "feature_gaps",
+        "recommendation_language",
+        "positive_aspects",
+        "event_mentions",
+    )
+    if any(_normalize_list(result.get(field)) for field in scalar_fields[:-1]):
+        return True
+    if any(isinstance(item, dict) and str(item.get("event") or "").strip() for item in (result.get("event_mentions") or [])):
+        return True
+    if any(isinstance(item, dict) and str(item.get("name") or "").strip() for item in (result.get("competitors_mentioned") or [])):
+        return True
+    return False
+
+
+def resolve_evidence_spans(
+    result: dict[str, Any],
+    source_row: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str]:
+    persisted = result.get("evidence_spans")
+    persisted_spans = [item for item in (persisted if isinstance(persisted, list) else []) if isinstance(item, dict)]
+    if _has_derivable_evidence_inputs(result):
+        derived_spans = derive_evidence_spans(result, source_row)
+        if derived_spans:
+            if persisted_spans:
+                return derived_spans, "refreshed"
+            return derived_spans, "derived"
+    if persisted_spans:
+        return persisted_spans, "persisted"
+    return [], "missing"
 
 
 def derive_replacement_mode(result: dict[str, Any], source_row: dict[str, Any]) -> str:
@@ -429,6 +576,7 @@ def derive_evidence_spans(
             source_row.get("summary"),
             source_row.get("review_text"),
             phrase,
+            exact_phrase=signal_type == "positive_anchor",
         )
         flags: list[str] = []
         if _has_pricing_currency_signal(excerpt):
@@ -474,10 +622,13 @@ def derive_evidence_spans(
             time_anchor = None
             if signal_type == "event":
                 time_anchor = default_time_anchor
+            span_pain = pain_category
+            if signal_type in ("complaint", "recommendation"):
+                span_pain = _classify_complaint_pain(str(raw_value or ""), pain_category)
             _append_span(
                 signal_type=signal_type,
                 raw_text=raw_value,
-                pain_category=pain_category,
+                pain_category=span_pain,
                 competitor=competitor,
                 time_anchor=time_anchor,
             )
@@ -599,9 +750,7 @@ def _candidate_types(review: dict[str, Any], enrichment: dict[str, Any], span: d
         types.add("outlier")
     if span.get("replacement_mode") not in {None, "", "none"} or span.get("operating_model_shift") not in {None, "", "none"}:
         types.add("category_shift")
-    if enrichment.get("would_recommend") is True or str(_coerce_json_dict(enrichment.get("sentiment_trajectory")).get("direction") or "") == "stable_positive":
-        types.add("counterevidence")
-    if span.get("signal_type") == "positive_anchor":
+    if span.get("signal_type") == "positive_anchor" and _review_supports_counterevidence(review, enrichment):
         types.add("counterevidence")
     return types
 
@@ -694,7 +843,6 @@ def compute_witness_hash(witness: dict[str, Any]) -> str:
         "review_id": str(witness.get("review_id") or "").strip(),
         "excerpt_text": _normalized_excerpt_key(witness.get("excerpt_text")),
         "source": str(witness.get("source") or "").strip().lower(),
-        "source_span_id": str(witness.get("source_span_id") or "").strip().lower(),
         "signal_type": str(witness.get("signal_type") or "").strip().lower(),
         "pain_category": str(witness.get("pain_category") or "").strip().lower(),
         "competitor": str(witness.get("competitor") or "").strip().lower(),
@@ -737,21 +885,25 @@ def build_vendor_witness_artifacts(
     candidates: list[dict[str, Any]] = []
     _spans_persisted = 0
     _spans_fallback = 0
+    _spans_refreshed = 0
 
     for review in reviews:
         enrichment = _coerce_json_dict(review.get("enrichment"))
         if not enrichment:
             continue
-        spans = enrichment.get("evidence_spans")
-        if not isinstance(spans, list) or not spans:
-            spans = derive_evidence_spans(enrichment, review)
+        spans, span_source = resolve_evidence_spans(enrichment, review)
+        if span_source == "derived":
             _spans_fallback += 1
-        else:
+        elif span_source in {"persisted", "refreshed"}:
             _spans_persisted += 1
+        if span_source == "refreshed":
+            _spans_refreshed += 1
         for idx, raw_span in enumerate(spans):
             if not isinstance(raw_span, dict):
                 continue
             span = dict(raw_span)
+            if span.get("signal_type") == "positive_anchor" and not _review_supports_counterevidence(review, enrichment):
+                continue
             excerpt_text = str(span.get("text") or "").strip()
             if not excerpt_text:
                 continue
@@ -930,6 +1082,7 @@ def build_vendor_witness_artifacts(
             ),
             "spans_persisted": _spans_persisted,
             "spans_fallback": _spans_fallback,
+            "spans_refreshed": _spans_refreshed,
         },
     }
     if _spans_fallback > 0:

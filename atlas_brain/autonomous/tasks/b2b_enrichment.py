@@ -900,13 +900,24 @@ def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
     return result
 
 
-_PAIN_KEYWORDS = {
+def _build_pain_patterns(
+    keywords: dict[str, tuple[str, ...]],
+) -> dict[str, re.Pattern[str]]:
+    """Compile keyword tuples into word-boundary regexes per category."""
+    compiled: dict[str, re.Pattern[str]] = {}
+    for category, needles in keywords.items():
+        parts = [r"\b" + re.escape(n) + r"\b" for n in needles]
+        compiled[category] = re.compile("|".join(parts), re.IGNORECASE)
+    return compiled
+
+
+_PAIN_KEYWORDS_RAW = {
     "pricing": (
-        "price", "pricing", "cost", "expensive", "overpriced", "value", "renewal",
+        "price", "pricing", "cost", "costly", "expensive", "overpriced", "renewal",
         "invoice", "invoiced", "billing", "billed", "charged", "charge", "overcharge",
         "fee", "fees", "refund", "cost increase", "price increase",
     ),
-    "support": ("support", "ticket", "response", "customer service", "escalat"),
+    "support": ("support", "ticket", "response", "customer service", "escalation", "escalated", "escalate"),
     "features": ("feature", "functionality", "capability", "missing"),
     "ux": ("ui", "ux", "interface", "clunky", "usability", "navigation"),
     "reliability": ("outage", "downtime", "crash", "bug", "unstable", "reliable"),
@@ -923,7 +934,12 @@ _PAIN_KEYWORDS = {
     ),
     "data_migration": ("migration", "migrate", "import", "export", "data transfer"),
     "api_limitations": ("api", "webhook", "sdk", "rate limit", "endpoint"),
+    "privacy": ("spam", "unsubscribe", "unsolicited", "data breach", "privacy violation"),
 }
+# Keep the dict name for any external references; remove "value" (matches
+# valuable/evaluate/values too broadly in review text).
+_PAIN_KEYWORDS = _PAIN_KEYWORDS_RAW
+_PAIN_PATTERNS = _build_pain_patterns(_PAIN_KEYWORDS_RAW)
 
 
 def _normalize_text_list(values: Any) -> list[str]:
@@ -940,11 +956,10 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
 
 
 def _pain_scores(texts: list[str]) -> dict[str, int]:
-    scores = {category: 0 for category in _PAIN_KEYWORDS}
+    scores = {category: 0 for category in _PAIN_PATTERNS}
     for text in texts:
-        lowered = text.lower()
-        for category, needles in _PAIN_KEYWORDS.items():
-            if any(needle in lowered for needle in needles):
+        for category, pattern in _PAIN_PATTERNS.items():
+            if pattern.search(text):
                 scores[category] += 1
     return scores
 
@@ -4106,6 +4121,7 @@ _KNOWN_PAIN_CATEGORIES = {
     "performance", "security", "ux", "onboarding", "overall_dissatisfaction",
     "technical_debt", "contract_lock_in", "data_migration", "api_limitations",
     "outcome_gap", "admin_burden", "ai_hallucination", "integration_debt",
+    "privacy",
 }
 
 _LEGACY_GENERIC_PAIN_CATEGORIES = {"other", "general_dissatisfaction"}

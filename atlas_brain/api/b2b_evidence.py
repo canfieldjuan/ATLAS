@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..config import settings
+from ..autonomous.tasks._b2b_witnesses import resolve_evidence_spans
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
@@ -365,28 +366,52 @@ async def get_witness(
 
     result = _row_to_dict(witness)
 
-    # Extract evidence spans from enrichment that relate to this witness
+    # Extract evidence spans from enrichment that relate to this witness.
+    # Prefer exact source_span_id match; fall back to text overlap for old rows.
     enrichment = _safe_json(witness["enrichment"])
     if enrichment and isinstance(enrichment, dict):
-        spans = enrichment.get("evidence_spans", [])
-        # Filter spans relevant to this witness's pain/competitor/signal
+        source_row = dict(result)
+        source_row["id"] = result.get("review_id")
+        all_spans, span_source = resolve_evidence_spans(enrichment, source_row)
+        source_span_id = (witness.get("source_span_id") or "").strip()
         relevant_spans = []
-        for span in (spans if isinstance(spans, list) else []):
-            if not isinstance(span, dict):
-                continue
-            # Match by excerpt overlap or pain category
-            span_text = span.get("excerpt_text", span.get("raw_text", "")).lower()
-            witness_text = (witness["excerpt_text"] or "").lower()
-            if (
-                span_text and witness_text and (
-                    span_text in witness_text
-                    or witness_text in span_text
-                    or span.get("pain_category") == witness["pain_category"]
-                )
-            ):
-                relevant_spans.append(span)
+        if source_span_id:
+            relevant_spans = [s for s in all_spans if s.get("span_id") == source_span_id]
+        if not relevant_spans:
+            witness_text = (witness["excerpt_text"] or "").strip().lower()
+            for span in all_spans:
+                span_text = (span.get("text") or "").strip().lower()
+                if not span_text or not witness_text:
+                    continue
+                if span_text in witness_text or witness_text in span_text:
+                    relevant_spans.append(span)
         result["evidence_spans"] = relevant_spans
-        result["all_evidence_span_count"] = len(spans) if isinstance(spans, list) else 0
+        result["all_evidence_span_count"] = len(all_spans)
+        result["evidence_span_source"] = span_source
+
+        # Surface highlight offsets adjusted for review_text-only display.
+        # Stored offsets are into (summary + " " + review_text); subtract
+        # the summary prefix so the UI can slice review_text directly.
+        source_span = None
+        if source_span_id:
+            source_span = next((s for s in relevant_spans if s.get("span_id") == source_span_id), None)
+        if source_span is None and relevant_spans:
+            source_span = relevant_spans[0]
+        if source_span and source_span.get("start_char") is not None and source_span.get("end_char") is not None:
+            summary_str = str(witness["summary"] or "").strip()
+            prefix_len = (len(summary_str) + 1) if summary_str else 0
+            adj_start = int(source_span["start_char"]) - prefix_len
+            adj_end = int(source_span["end_char"]) - prefix_len
+            # Offsets are into stripped review_text (as _excerpt_text strips
+            # each part). Adjust for any leading whitespace in the raw value
+            # so the UI can slice the raw text directly.
+            raw_review = str(witness["review_text"] or "")
+            leading_ws = len(raw_review) - len(raw_review.lstrip())
+            adj_start += leading_ws
+            adj_end += leading_ws
+            if 0 <= adj_start < adj_end <= len(raw_review):
+                result["highlight_start"] = adj_start
+                result["highlight_end"] = adj_end
 
     return {"witness": result}
 

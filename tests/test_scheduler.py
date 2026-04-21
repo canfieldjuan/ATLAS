@@ -5,6 +5,7 @@ Tests _build_trigger and _maybe_schedule_retry directly (no DB).
 Tests _execute_task with mocked DB repo and headless runner.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -339,29 +340,26 @@ class TestRunNow:
 
     @pytest.mark.asyncio
     @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
-    async def test_records_execution_when_not_running(self, mock_repo_fn):
+    async def test_records_execution_and_waits_inline_when_scheduler_not_running(self, mock_repo_fn):
         s = _scheduler()
         task = _task(enabled=True)
         exec_id = uuid4()
+        execution = TaskExecution(id=exec_id, task_id=task.id, status="completed", result_text="done")
 
         mock_repo = AsyncMock()
         mock_repo.get_running_execution.return_value = None
         mock_repo.record_execution.return_value = exec_id
+        mock_repo.get_execution_by_id.return_value = execution
         mock_repo_fn.return_value = mock_repo
 
-        dummy_task = MagicMock()
-        def _fake_create_task(coro, **_kwargs):
-            coro.close()
-            return dummy_task
-
-        with patch("asyncio.create_task", side_effect=_fake_create_task) as mock_create_task:
+        with patch.object(TaskScheduler, "_run_task_background", new_callable=AsyncMock) as mock_bg:
             result = await s.run_now(task)
 
         assert result["execution_id"] == str(exec_id)
-        assert result["status"] == "running"
-        assert str(task.id) in s._manual_running_task_ids
+        assert result["status"] == "completed"
+        assert result["completed"] is True
         mock_repo.record_execution.assert_awaited_once()
-        mock_create_task.assert_called_once()
+        mock_bg.assert_awaited_once_with(task, exec_id)
         assert s._semaphore is not None
 
     @pytest.mark.asyncio
@@ -374,6 +372,26 @@ class TestRunNow:
         mock_repo = AsyncMock()
         mock_repo.get_running_execution.return_value = None
         mock_repo.record_execution.return_value = exec_id
+        mock_repo.get_execution_by_id.return_value = TaskExecution(id=exec_id, task_id=task.id, status="completed")
+        mock_repo_fn.return_value = mock_repo
+
+        assert s._semaphore is None
+        with patch.object(TaskScheduler, "_run_task_background", new_callable=AsyncMock):
+            await s.run_now(task)
+
+        assert s._semaphore is not None
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_records_execution_and_spawns_background_when_scheduler_running(self, mock_repo_fn):
+        s = _scheduler()
+        s._running = True
+        task = _task(enabled=True)
+        exec_id = uuid4()
+
+        mock_repo = AsyncMock()
+        mock_repo.get_running_execution.return_value = None
+        mock_repo.record_execution.return_value = exec_id
         mock_repo_fn.return_value = mock_repo
 
         dummy_task = MagicMock()
@@ -382,11 +400,14 @@ class TestRunNow:
             coro.close()
             return dummy_task
 
-        assert s._semaphore is None
-        with patch("asyncio.create_task", side_effect=_fake_create_task):
-            await s.run_now(task)
+        with patch("asyncio.create_task", side_effect=_fake_create_task) as mock_create_task:
+            result = await s.run_now(task)
 
-        assert s._semaphore is not None
+        assert result["execution_id"] == str(exec_id)
+        assert result["status"] == "running"
+        mock_repo.record_execution.assert_awaited_once()
+        mock_create_task.assert_called_once()
+        assert str(task.id) in s._manual_running_task_ids
 
     @pytest.mark.asyncio
     @patch.object(TaskScheduler, "_check_consecutive_failures", new_callable=AsyncMock)
@@ -417,6 +438,38 @@ class TestRunNow:
         mock_runner.run.assert_awaited_once_with(task)
         assert task.metadata["_execution_id"] == str(exec_id)
         mock_repo.complete_execution.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch.object(TaskScheduler, "_check_consecutive_failures", new_callable=AsyncMock)
+    @patch.object(TaskScheduler, "_get_next_run_time", return_value=None)
+    @patch("atlas_brain.autonomous.runner.get_headless_runner")
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_manual_background_run_marks_failed_on_cancellation(
+        self, mock_repo_fn, mock_runner_fn, _next_run, _check_fail
+    ):
+        s = _scheduler()
+        s._semaphore = __import__("asyncio").Semaphore(2)
+        task = _task(enabled=True)
+        exec_id = uuid4()
+
+        mock_repo = AsyncMock()
+        mock_repo_fn.return_value = mock_repo
+
+        async def _cancelled(_task):
+            raise asyncio.CancelledError()
+
+        mock_runner = AsyncMock()
+        mock_runner.run.side_effect = _cancelled
+        mock_runner_fn.return_value = mock_runner
+
+        with pytest.raises(asyncio.CancelledError):
+            await s._run_task_background(task, exec_id)
+
+        mock_repo.complete_execution.assert_awaited_once()
+        call = mock_repo.complete_execution.await_args
+        assert call.args[0] == exec_id
+        assert call.args[1] == "failed"
+        assert "cancelled" in str(call.kwargs.get("error") or "").lower()
 
 
 class TestScheduleSync:

@@ -1394,8 +1394,13 @@ class TaskScheduler:
             self.unregister_task(str(task.id))
         return await self._sync_next_run_time(task)
 
-    async def run_now(self, task: ScheduledTask) -> dict:
-        """Execute a task immediately (manual trigger). Returns immediately with execution ID."""
+    async def run_now(self, task: ScheduledTask, *, wait_for_completion: bool | None = None) -> dict:
+        """Execute a task immediately.
+
+        When the scheduler service is not running, default to inline execution so
+        one-off shells do not orphan a `running` execution row when their event
+        loop exits.
+        """
         from ..storage.repositories.scheduled_task import get_scheduled_task_repo
 
         repo = get_scheduled_task_repo()
@@ -1413,8 +1418,23 @@ class TaskScheduler:
                 "message": f"Task '{task.name}' is already running.",
                 "already_running": True,
             }
+        if wait_for_completion is None:
+            wait_for_completion = not self._running
         async with self._manual_run_lock:
             self._manual_running_task_ids.add(task_key)
+
+        if wait_for_completion:
+            await self._run_task_background(task, exec_id)
+            execution = await repo.get_execution_by_id(exec_id)
+            status = getattr(execution, "status", "failed")
+            return {
+                "execution_id": str(exec_id),
+                "status": status,
+                "message": f"Task {status}.",
+                "completed": status == "completed",
+                "error": getattr(execution, "error", None),
+                "result_text": getattr(execution, "result_text", None),
+            }
 
         bg_task = asyncio.create_task(
             self._run_task_background(task, exec_id),
@@ -1486,6 +1506,18 @@ class TaskScheduler:
             await repo.update_last_run(task.id, now, self._get_next_run_time(task))
             logger.warning("Manual task '%s' timed out after %ds", task.name, task.timeout_seconds)
             await self._check_consecutive_failures(task.id)
+
+        except asyncio.CancelledError:
+            status = "failed"
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            await repo.complete_execution(
+                exec_id, "failed",
+                duration_ms=duration_ms,
+                error="Manual task cancelled before completion",
+            )
+            await repo.update_last_run(task.id, now, self._get_next_run_time(task))
+            logger.warning("Manual task '%s' cancelled before completion", task.name)
+            raise
 
         except Exception as e:
             status = "failed"

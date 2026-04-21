@@ -837,6 +837,7 @@ def _witness_row_payload(witness: dict[str, Any]) -> dict[str, Any]:
         "generic_reason": str(witness.get("generic_reason") or "").strip() or None,
         "witness_hash": str(witness.get("witness_hash") or "").strip()
         or compute_witness_hash(witness),
+        "source_span_id": str(witness.get("source_span_id") or "").strip() or None,
     }
 
 
@@ -947,9 +948,9 @@ async def _persist_packet_artifacts(
                  source, reviewed_at, reviewer_company, reviewer_title,
                  pain_category, competitor, salience_score, selection_reason,
                  signal_tags, source_id, specificity_score, generic_reason,
-                 witness_hash)
+                 witness_hash, source_span_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17, $18::jsonb, $19, $20, $21, $22)
+                    $14, $15, $16, $17, $18::jsonb, $19, $20, $21, $22, $23)
             ON CONFLICT (
                 vendor_name, as_of_date, analysis_window_days, schema_version, witness_id
             )
@@ -970,7 +971,8 @@ async def _persist_packet_artifacts(
                 source_id = EXCLUDED.source_id,
                 specificity_score = EXCLUDED.specificity_score,
                 generic_reason = EXCLUDED.generic_reason,
-                witness_hash = EXCLUDED.witness_hash
+                witness_hash = EXCLUDED.witness_hash,
+                source_span_id = EXCLUDED.source_span_id
             """,
             vendor_name,
             as_of_date,
@@ -994,6 +996,7 @@ async def _persist_packet_artifacts(
             witness["specificity_score"],
             witness["generic_reason"],
             witness["witness_hash"],
+            witness.get("source_span_id"),
         )
 
 

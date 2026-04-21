@@ -60,11 +60,34 @@ function SourceBadge({ source }: { source: string }) {
   )
 }
 
-function highlightExcerpt(fullText: string, excerptText: string): ReactNode {
-  if (!fullText || !excerptText) return <>{fullText || ''}</>
+function highlightExcerpt(
+  fullText: string,
+  excerptText: string,
+  highlightStart?: number | null,
+  highlightEnd?: number | null,
+): ReactNode {
+  if (!fullText) return <></>
 
+  // Prefer offset-based highlighting when the API provides adjusted positions
+  if (highlightStart != null && highlightEnd != null
+      && highlightStart >= 0 && highlightEnd > highlightStart
+      && highlightEnd <= fullText.length) {
+    const before = fullText.slice(0, highlightStart)
+    const match = fullText.slice(highlightStart, highlightEnd)
+    const after = fullText.slice(highlightEnd)
+    return (
+      <>
+        {before}
+        <mark className="bg-cyan-500/20 text-cyan-200 rounded px-0.5">{match}</mark>
+        {after}
+      </>
+    )
+  }
+
+  // Fall back to substring search
+  if (!excerptText) return <>{fullText}</>
   const lower = fullText.toLowerCase()
-  const excerptLower = excerptText.toLowerCase().slice(0, 120)
+  const excerptLower = excerptText.toLowerCase()
   const idx = lower.indexOf(excerptLower)
 
   if (idx === -1) return <>{fullText}</>
@@ -736,6 +759,11 @@ export default function EvidenceDrawer({
               </div>
               <div className="flex items-center gap-3 mt-3 flex-wrap">
                 <SourceBadge source={witness.source || 'unknown'} />
+                {witness.witness_type && (
+                  <span className="text-xs px-2 py-0.5 rounded bg-cyan-900/30 text-cyan-300 border border-cyan-800/40 font-medium">
+                    {witness.witness_type.replace(/_/g, ' ')}
+                  </span>
+                )}
                 {witness.pain_category && (
                   <span className="text-xs px-2 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-800/40">
                     {witness.pain_category}
@@ -887,7 +915,7 @@ export default function EvidenceDrawer({
                   )}
                 </h3>
                 <div className="bg-slate-950/60 rounded-lg p-4 border border-slate-700/30 text-sm text-slate-300 leading-relaxed max-h-80 overflow-y-auto">
-                  {highlightExcerpt(witness.review_text, witness.excerpt_text)}
+                  {highlightExcerpt(witness.review_text, witness.excerpt_text, witness.highlight_start, witness.highlight_end)}
                 </div>
               </div>
             )}
@@ -914,7 +942,7 @@ export default function EvidenceDrawer({
                         )}
                       </div>
                       <p className="text-xs text-slate-400 italic">
-                        &ldquo;{span.raw_text || span.excerpt_text}&rdquo;
+                        &ldquo;{span.text}&rdquo;
                       </p>
                     </div>
                   ))}

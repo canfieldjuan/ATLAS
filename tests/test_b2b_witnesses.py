@@ -145,6 +145,217 @@ def test_derive_evidence_spans_only_marks_explicit_dollar_for_pricing_context():
     assert "explicit_dollar" not in spans[0]["flags"]
 
 
+def test_positive_anchor_excerpt_uses_exact_phrase_without_adjacent_negative_context():
+    result = {
+        "specific_complaints": ["a little too expensive"],
+        "pricing_phrases": ["a little too expensive"],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "positive_aspects": ["it was helpful"],
+        "competitors_mentioned": [],
+        "event_mentions": [],
+        "pain_category": "pricing",
+        "timeline": {},
+        "churn_signals": {},
+        "reviewer_context": {},
+        "budget_signals": {},
+    }
+    row = _source_row(
+        "I used Monday few years ago, it was helpful but a little too expensive."
+    )
+
+    spans = derive_evidence_spans(result, row)
+
+    positive_anchor = next(span for span in spans if span["signal_type"] == "positive_anchor")
+    assert positive_anchor["text"] == "it was helpful"
+
+
+def test_derive_evidence_spans_prefers_support_when_complaint_mentions_renewal_and_support():
+    result = {
+        "specific_complaints": ["talked to a robot who could not help me and support never replied before renewal"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "positive_aspects": [],
+        "competitors_mentioned": [],
+        "event_mentions": [],
+        "pain_category": "pricing",
+        "timeline": {},
+        "churn_signals": {},
+        "reviewer_context": {},
+        "budget_signals": {},
+    }
+    row = _source_row("At Acme I talked to a robot who could not help me and support never replied before renewal.")
+
+    spans = derive_evidence_spans(result, row)
+
+    complaint = next(span for span in spans if span["signal_type"] == "complaint")
+    assert complaint["pain_category"] == "support"
+
+
+def test_derive_evidence_spans_prefers_privacy_for_unsubscribe_complaint():
+    result = {
+        "specific_complaints": ["getting sales emails that I can't unsubscribe from"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "positive_aspects": [],
+        "competitors_mentioned": [],
+        "event_mentions": [],
+        "pain_category": "pricing",
+        "timeline": {},
+        "churn_signals": {},
+        "reviewer_context": {},
+        "budget_signals": {},
+    }
+    row = _source_row("I did not subscribe but I am still getting sales emails that I can't unsubscribe from.")
+
+    spans = derive_evidence_spans(result, row)
+
+    complaint = next(span for span in spans if span["signal_type"] == "complaint")
+    assert complaint["pain_category"] == "privacy"
+
+
+def test_mixed_negative_review_does_not_produce_counterevidence_witness():
+    reviews = [{
+        "id": "r1",
+        "source": "trustpilot",
+        "review_text": (
+            "I used Monday few years ago, it was helpful but a little too expensive. "
+            "Few days ago I visited monday.com to take a look as I am looking for similar app. "
+            "I did not subscribe or give my email but still I'm getting sales emails that I can't unsubscribe from. "
+            "Tried going to the site again and talked to a robot who could not help me and if I wanted to talk to a human "
+            "I needed to start a 14day free trial. Needless to say I will never use their service and recommend staying away."
+        ),
+        "reviewed_at": "2026-03-29T09:47:13+00:00",
+        "rating": 1,
+        "enrichment": {
+            "pain_categories": [{"category": "pricing", "severity": "primary"}],
+            "would_recommend": False,
+            "sentiment_trajectory": {"direction": "consistently_negative"},
+            "churn_signals": {
+                "intent_to_leave": True,
+                "actively_evaluating": True,
+                "migration_in_progress": False,
+                "contract_renewal_mentioned": False,
+            },
+            "recommendation_language": [
+                "I will never use their service",
+                "recommend staying away",
+            ],
+            "evidence_spans": [
+                {
+                    "text": "it was helpful",
+                    "pain_category": None,
+                    "flags": [],
+                    "signal_type": "positive_anchor",
+                },
+                {
+                    "text": "talked to a robot who could not help me",
+                    "pain_category": "support",
+                    "flags": [],
+                    "signal_type": "complaint",
+                    "time_anchor": "few days",
+                },
+            ],
+        },
+    }]
+
+    selected, section_packets = build_vendor_witness_artifacts(
+        "Monday.com",
+        reviews,
+        fallback_min_witnesses=0,
+    )
+
+    assert all(item["witness_type"] != "counterevidence" for item in selected)
+    assert section_packets["retention_packet"]["witness_ids"] == []
+    assert section_packets["anchor_examples"]["counterevidence"] == []
+
+
+def test_positive_review_can_surface_counterevidence_witness():
+    reviews = [{
+        "id": "r1",
+        "source": "g2",
+        "review_text": (
+            "The team stayed with the product because the support team is excellent and "
+            "the workflow is reliable for daily use."
+        ),
+        "reviewed_at": "2026-03-29T09:47:13+00:00",
+        "rating": 5,
+        "enrichment": {
+            "pain_categories": [{"category": "pricing", "severity": "primary"}],
+            "would_recommend": True,
+            "sentiment_trajectory": {"direction": "stable_positive"},
+            "churn_signals": {
+                "intent_to_leave": False,
+                "actively_evaluating": False,
+                "migration_in_progress": False,
+                "contract_renewal_mentioned": False,
+            },
+            "recommendation_language": [],
+            "evidence_spans": [
+                {
+                    "text": "the support team is excellent and the workflow is reliable for daily use",
+                    "pain_category": "support",
+                    "flags": [],
+                    "signal_type": "positive_anchor",
+                    "productivity_delta_claim": "more_productive",
+                },
+            ],
+        },
+    }]
+
+    selected, section_packets = build_vendor_witness_artifacts(
+        "PositiveVendor",
+        reviews,
+        fallback_min_witnesses=0,
+    )
+
+    assert any(item["witness_type"] == "counterevidence" for item in selected)
+    assert len(section_packets["retention_packet"]["witness_ids"]) == 1
+
+
+def test_witness_builder_prefers_current_derived_spans_over_stale_persisted_spans():
+    reviews = [{
+        "id": "r3",
+        "source": "trustpilot",
+        "review_text": "At Acme I talked to a robot who could not help me and support never replied before renewal.",
+        "reviewed_at": "2026-03-29T09:47:13+00:00",
+        "rating": 1,
+        "reviewer_company": "Acme",
+        "enrichment": {
+            "pain_category": "pricing",
+            "pain_categories": [{"category": "support", "severity": "primary"}],
+            "specific_complaints": ["talked to a robot who could not help me and support never replied before renewal"],
+            "pricing_phrases": [],
+            "recommendation_language": [],
+            "positive_aspects": [],
+            "competitors_mentioned": [],
+            "event_mentions": [],
+            "evidence_spans": [
+                {
+                    "text": "talked to a robot who could not help me and support never replied before renewal",
+                    "pain_category": "pricing",
+                    "signal_type": "complaint",
+                    "flags": [],
+                }
+            ],
+        },
+    }]
+
+    selected, section_packets = build_vendor_witness_artifacts(
+        "TestVendor",
+        reviews,
+        fallback_min_witnesses=0,
+    )
+
+    assert any(item["pain_category"] == "support" for item in selected)
+    gov = section_packets["_witness_governance"]
+    assert gov["spans_persisted"] == 1
+    assert gov["spans_fallback"] == 0
+    assert gov["spans_refreshed"] == 1
+
+
 # -- Witness fallback visibility tests --
 
 
@@ -201,6 +412,7 @@ def test_witness_governance_tracks_persisted_spans():
     gov = packets["_witness_governance"]
     assert gov["spans_persisted"] == 1
     assert gov["spans_fallback"] == 0
+    assert gov["spans_refreshed"] == 1
 
 
 def test_witness_governance_tracks_fallback_spans():
@@ -209,6 +421,7 @@ def test_witness_governance_tracks_fallback_spans():
     gov = packets["_witness_governance"]
     assert gov["spans_persisted"] == 0
     assert gov["spans_fallback"] == 1
+    assert gov["spans_refreshed"] == 0
 
 
 def test_witness_governance_mixed_persisted_and_fallback():
@@ -217,3 +430,4 @@ def test_witness_governance_mixed_persisted_and_fallback():
     gov = packets["_witness_governance"]
     assert gov["spans_persisted"] == 1
     assert gov["spans_fallback"] == 1
+    assert gov["spans_refreshed"] == 1
