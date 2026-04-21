@@ -16313,6 +16313,7 @@ def _vendor_evidence_base_filters(
     alias: str = "r",
     window_param: int = 1,
     recency_column: str = "enriched_at",
+    vendor_expr: str | None = None,
 ) -> str:
     """Base WHERE clause for vendor evidence queries.
 
@@ -16325,11 +16326,12 @@ def _vendor_evidence_base_filters(
         recency = f"{alias}.enriched_at"
     else:
         recency = f"COALESCE({alias}.reviewed_at, {alias}.imported_at, {alias}.enriched_at)"
+    suppress_vendor_expr = vendor_expr or f"{alias}.vendor_name"
 
     return (
         f"{alias}.enrichment_status = 'enriched'"
         f" AND {recency} > NOW() - make_interval(days => ${window_param})"
-        f" AND {suppress_predicate('review', id_expr=f'{alias}.id', source_expr=f'{alias}.source', vendor_expr=f'{alias}.vendor_name')}"
+        f" AND {suppress_predicate('review', id_expr=f'{alias}.id', source_expr=f'{alias}.source', vendor_expr=suppress_vendor_expr)}"
     )
 
 

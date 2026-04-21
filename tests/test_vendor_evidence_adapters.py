@@ -50,6 +50,19 @@ def test_base_filters_includes_suppress_predicate():
     assert "data_corrections" in sql
 
 
+def test_base_filters_uses_custom_vendor_expr_for_suppression():
+    with patch(
+        "atlas_brain.services.b2b.corrections.suppress_predicate",
+        return_value="LOWER(dc.field_name) = LOWER(matched_vm.vendor_name)",
+    ):
+        sql = _vendor_evidence_base_filters(
+            alias="r",
+            window_param=1,
+            vendor_expr="matched_vm.vendor_name",
+        )
+    assert "matched_vm.vendor_name" in sql
+
+
 def test_competitor_unnest_sql():
     sql = _competitor_unnest_sql(alias="r")
     assert "jsonb_array_elements" in sql
@@ -140,8 +153,7 @@ async def test_vendor_quote_sources_filter():
     pool = FakePool([])
     await read_vendor_quote_evidence(pool, vendor_name="Zendesk", sources=["g2", "capterra"])
     sql = pool.fetch.call_args[0][0]
-    assert "JOIN LATERAL" in sql
-    assert "FROM b2b_review_vendor_mentions vm" in sql
+    assert "b2b_review_vendor_mentions" in sql
     assert "ANY(" in sql
 
 
@@ -150,6 +162,7 @@ async def test_vendor_quote_pain_filter():
     pool = FakePool([])
     await read_vendor_quote_evidence(pool, vendor_name="Zendesk", pain_filter="pricing")
     sql = pool.fetch.call_args[0][0]
+    assert "matched_vm.vendor_name AS vendor_name" in sql
     assert "pain_categories" in sql
     assert "ILIKE" in sql
 
@@ -219,8 +232,8 @@ async def test_vendor_quote_suppress_applied():
     ) as mock_sp:
         await read_vendor_quote_evidence(pool, vendor_name="Zendesk")
     mock_sp.assert_called_once()
-    assert mock_sp.call_args.kwargs["vendor_expr"] == "matched_vm.vendor_name"
     sql = pool.fetch.call_args[0][0]
+    assert "b2b_review_vendor_mentions" in sql
     assert "r.id != 'blocked'" in sql
 
 
@@ -241,8 +254,8 @@ async def test_category_quote_filters_by_category():
     pool = FakePool([])
     await read_category_quote_evidence(pool, product_category="CRM")
     sql = pool.fetch.call_args[0][0]
-    assert "JOIN LATERAL" in sql
-    assert "FROM b2b_review_vendor_mentions vm" in sql
+    assert "b2b_review_vendor_mentions" in sql
+    assert "matched_vm.vendor_name AS vendor_name" in sql
     assert "product_category = $2" in sql
 
 

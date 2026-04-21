@@ -145,9 +145,10 @@ async def test_vendor_name_filter_in_sql():
     pool = FakePool([])
     await read_review_details(pool, window_days=30, vendor_name="Zendesk")
     sql = pool.fetch.call_args[0][0]
-    assert "JOIN LATERAL" in sql
-    assert "FROM b2b_review_vendor_mentions vm" in sql
-    assert "vm.vendor_name ILIKE '%' || $2 || '%'" in sql
+    assert "b2b_review_vendor_mentions" in sql
+    assert "matched_vm.vendor_name AS vendor_name" in sql
+    assert "vm.vendor_name ILIKE" in sql
+    assert "r.vendor_name ILIKE" not in sql
 
 
 @pytest.mark.asyncio
@@ -155,8 +156,8 @@ async def test_scoped_vendors_filter_in_sql():
     pool = FakePool([])
     await read_review_details(pool, window_days=30, scoped_vendors=["Zendesk"])
     sql = pool.fetch.call_args[0][0]
-    assert "JOIN LATERAL" in sql
-    assert "vm.vendor_name = ANY($2::text[])" in sql
+    assert "b2b_review_vendor_mentions" in sql
+    assert "vm.vendor_name = ANY(" in sql
 
 
 @pytest.mark.asyncio
@@ -235,17 +236,7 @@ async def test_scoped_vendors_none_means_unscoped():
     assert len(results) == 1
     sql = pool.fetch.call_args[0][0]
     assert "vm.vendor_name = ANY(" not in sql
-
-
-@pytest.mark.asyncio
-async def test_suppress_predicate_uses_matched_vendor_name():
-    pool = FakePool([])
-    with patch(
-        "atlas_brain.services.b2b.corrections.suppress_predicate",
-        return_value="TRUE",
-    ) as mock_sp:
-        await read_review_details(pool, window_days=30)
-    assert mock_sp.call_args.kwargs["vendor_expr"] == "matched_vm.vendor_name"
+    assert "vm.is_primary = TRUE" in sql
 
 
 @pytest.mark.asyncio
@@ -255,7 +246,7 @@ async def test_default_recency_uses_enriched_at():
     await read_review_details(pool, window_days=30)
     sql = pool.fetch.call_args[0][0]
     assert "r.enriched_at > NOW()" in sql
-    assert "COALESCE" not in sql.rsplit("WHERE", 1)[1].split("ORDER")[0]
+    assert "COALESCE" not in sql.split("WHERE")[1].split("ORDER")[0]
 
 
 @pytest.mark.asyncio

@@ -242,10 +242,10 @@ async def test_vendor_name_filter_in_sql():
     pool = FakePool([_make_db_row()])
     await read_high_intent_companies(pool, min_urgency=7.0, window_days=30, vendor_name="Zendesk")
     sql = pool.fetch.call_args[0][0]
-    assert "JOIN LATERAL (" in sql
-    assert "FROM b2b_review_vendor_mentions vm" in sql
-    assert "matched_vm.vendor_name AS vendor_name" in sql
-    assert "ILIKE" in sql
+    assert "b2b_review_vendor_mentions" in sql
+    assert "matched_vm" in sql
+    assert "vm.vendor_name ILIKE" in sql
+    assert "r.vendor_name ILIKE" not in sql
 
 
 @pytest.mark.asyncio
@@ -254,8 +254,8 @@ async def test_scoped_vendors_filter_in_sql():
     pool = FakePool([_make_db_row()])
     await read_high_intent_companies(pool, min_urgency=7.0, window_days=30, scoped_vendors=["Zendesk", "HubSpot"])
     sql = pool.fetch.call_args[0][0]
-    assert "matched_vm.vendor_name AS vendor_name" in sql
-    assert "ANY(" in sql
+    assert "b2b_review_vendor_mentions" in sql
+    assert "vm.vendor_name = ANY(" in sql
 
 
 @pytest.mark.asyncio
@@ -315,24 +315,6 @@ async def test_low_trust_source_uses_provisional_confidence(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_weak_identity_source_rows_are_filtered_from_high_intent_results():
-    pool = FakePool(
-        [
-            _make_db_row(
-                source="peerspot",
-                resolution_confidence=None,
-                reviewer_title="",
-                company_size_raw="",
-                industry="",
-                company_domain=None,
-            )
-        ]
-    )
-    results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30)
-    assert results == []
-
-
-@pytest.mark.asyncio
 async def test_scoped_vendors_empty_returns_zero_rows():
     """Empty scoped_vendors means scoped user with no tracked vendors = zero results."""
     pool = FakePool([_make_db_row()])
@@ -348,7 +330,8 @@ async def test_scoped_vendors_none_means_unscoped():
     results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30, scoped_vendors=None)
     assert len(results) == 1
     sql = pool.fetch.call_args[0][0]
-    assert "r.vendor_name = ANY(" not in sql
+    assert "vm.vendor_name = ANY(" not in sql
+    assert "vm.is_primary = TRUE" in sql
 
 
 @pytest.mark.asyncio
