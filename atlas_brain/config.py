@@ -2301,7 +2301,7 @@ class B2BChurnConfig(BaseSettings):
     # Hybrid two-pass enrichment (Tier 1 local + Tier 2 local)
     enrichment_schema_version: int = Field(
         default=3,
-        description="Current enrichment schema version (1 = original LLM inference, 2 = extract plus Tier 2 LLM, 3 = Tier 1 extract plus conditional Tier 2 plus deterministic compute)",
+        description="Current enrichment schema version (1 = original LLM inference, 2 = extract plus Tier 2 LLM, 3 = Tier 1 extract plus conditional Tier 2 plus deterministic compute, 4 = v3 plus parallel phrase_metadata with subject/polarity/role/verbatim tags). This setting is descriptive only; the actual persisted version is decided by _compute_derived_fields based on whether the LLM returned phrase_metadata.",
     )
     evidence_map_path: str = Field(
         default="",

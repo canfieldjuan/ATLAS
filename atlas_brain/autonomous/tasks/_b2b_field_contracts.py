@@ -458,6 +458,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "backfill_derived_fields",
+            "_b2b_phrase_metadata",
         ),
         "migration_target": None,
     },

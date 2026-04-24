@@ -1984,6 +1984,204 @@ def _is_no_signal_result(result: dict, source_row: dict[str, Any]) -> bool:
         return True
 
 
+# ---------------------------------------------------------------------------
+# Phrase metadata v2 schema (parallel to legacy list[str] phrase arrays).
+# See atlas_brain/autonomous/tasks/_b2b_phrase_metadata.py for the reader API.
+# ---------------------------------------------------------------------------
+
+_PHRASE_METADATA_FIELDS: tuple[str, ...] = (
+    "specific_complaints",
+    "pricing_phrases",
+    "feature_gaps",
+    "quotable_phrases",
+    "recommendation_language",
+    "positive_aspects",
+)
+_PHRASE_SUBJECT_VALUES: tuple[str, ...] = (
+    "subject_vendor", "alternative", "self", "third_party", "unclear",
+)
+_PHRASE_POLARITY_VALUES: tuple[str, ...] = (
+    "negative", "positive", "mixed", "unclear",
+)
+_PHRASE_ROLE_VALUES: tuple[str, ...] = (
+    "primary_driver", "supporting_context", "passing_mention", "unclear",
+)
+_PHRASE_UNCLEAR = "unclear"
+
+
+def _coerce_legacy_phrase_arrays(result: dict) -> None:
+    """Force the six legacy phrase arrays to list[str]. In-place mutation.
+
+    Invariant: legacy arrays stay list[str] regardless of what the LLM
+    returned. If the LLM returned a dict with a 'text' field (v2-style), we
+    pull the text out; if it returned something unusable, we drop the entry.
+    This defends downstream scoring/witness code that assumes str elements.
+    """
+    for field in _PHRASE_METADATA_FIELDS:
+        value = result.get(field)
+        if not isinstance(value, list):
+            result[field] = []
+            continue
+        coerced: list[str] = []
+        for entry in value:
+            if isinstance(entry, str):
+                text = entry.strip()
+                if text:
+                    coerced.append(text)
+            elif isinstance(entry, dict):
+                text = str(entry.get("text") or "").strip()
+                if text:
+                    coerced.append(text)
+        result[field] = coerced
+
+
+def _normalize_tag_value(value: Any, allowed: tuple[str, ...]) -> tuple[str, bool]:
+    """Coerce a tag to the allowed enum. Returns (normalized, was_coerced).
+
+    Coercion counts only unknown-value flattening ("WEIRD" -> "unclear");
+    silent lowercasing or None->"unclear" are not counted as coercions.
+    """
+    raw = value if isinstance(value, str) else None
+    if raw is None:
+        return _PHRASE_UNCLEAR, False
+    normalized = raw.strip().lower()
+    if not normalized:
+        return _PHRASE_UNCLEAR, False
+    if normalized in allowed:
+        return normalized, False
+    return _PHRASE_UNCLEAR, True
+
+
+def _normalize_phrase_metadata(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Build canonical phrase_metadata for v2 enrichments.
+
+    Produces one metadata row per non-empty legacy-array element. Fills
+    defaults for phrases the LLM didn't tag. Enforces the text-invariant:
+    each row's `text` must equal the legacy array entry at (field, index);
+    if it doesn't, we overwrite with the legacy value and flag verbatim=False
+    so grounding downstream cannot be fooled.
+
+    When `source_row` is provided (with `summary` + `review_text`), an LLM
+    self-reported `verbatim=True` is additionally validated against the
+    source text via `check_phrase_grounded`. If grounding rejects it, the
+    flag is coerced to False and counted in `verbatim_grounding_failures`.
+    This is Phase 1b's write-time grounding gate. Phase 1a tests pass
+    `source_row=None` and skip the gate.
+
+    Returns (canonical_list, telemetry_counters). Caller is expected to emit
+    the counters via logger.info for visibility into LLM tag quality.
+    """
+    from ._b2b_grounding import check_phrase_grounded
+
+    source_metadata = result.get("phrase_metadata")
+    if not isinstance(source_metadata, list):
+        source_metadata = []
+
+    source_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    for entry in source_metadata:
+        if not isinstance(entry, dict):
+            continue
+        field = str(entry.get("field") or "")
+        try:
+            idx = int(entry.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if field and idx >= 0:
+            source_by_key[(field, idx)] = entry
+
+    counters = {
+        "llm_provided_rows": 0,
+        "llm_missing_rows": 0,
+        "text_mismatch_rows": 0,
+        "unknown_tag_coercions": 0,
+        "verbatim_grounding_failures": 0,
+        "verbatim_grounding_wins": 0,
+    }
+    canonical: list[dict[str, Any]] = []
+
+    summary_text = (source_row or {}).get("summary") if source_row else None
+    review_text = (source_row or {}).get("review_text") if source_row else None
+    grounding_enabled = source_row is not None
+
+    for field in _PHRASE_METADATA_FIELDS:
+        legacy_array = result.get(field) or []
+        for index, legacy_text in enumerate(legacy_array):
+            llm_row = source_by_key.get((field, index))
+            if llm_row is None:
+                counters["llm_missing_rows"] += 1
+                canonical.append({
+                    "field": field,
+                    "index": index,
+                    "text": str(legacy_text),
+                    "subject": _PHRASE_UNCLEAR,
+                    "polarity": _PHRASE_UNCLEAR,
+                    "role": _PHRASE_UNCLEAR,
+                    "verbatim": False,
+                    "category_hint": None,
+                })
+                continue
+
+            counters["llm_provided_rows"] += 1
+            subject, sub_coerced = _normalize_tag_value(
+                llm_row.get("subject"), _PHRASE_SUBJECT_VALUES,
+            )
+            polarity, pol_coerced = _normalize_tag_value(
+                llm_row.get("polarity"), _PHRASE_POLARITY_VALUES,
+            )
+            role, role_coerced = _normalize_tag_value(
+                llm_row.get("role"), _PHRASE_ROLE_VALUES,
+            )
+            counters["unknown_tag_coercions"] += int(sub_coerced) + int(pol_coerced) + int(role_coerced)
+
+            # Strict boolean: "false", "no", 0 must not become True after
+            # bool() coercion. Only the literal Python True is accepted as
+            # an LLM affirmative; everything else is False.
+            verbatim = llm_row.get("verbatim") is True
+            hint = llm_row.get("category_hint")
+            category_hint = (
+                str(hint).strip()
+                if isinstance(hint, str) and str(hint).strip()
+                else None
+            )
+
+            # Text invariant: metadata text must equal the legacy array entry
+            llm_text = str(llm_row.get("text") or "").strip()
+            if llm_text != str(legacy_text).strip():
+                counters["text_mismatch_rows"] += 1
+                verbatim = False
+
+            # Phase 1b grounding gate: only retain verbatim=True when the
+            # phrase actually appears (after normalization) in the source
+            # text. Skipped when source_row is unavailable (Phase 1a unit
+            # tests pass source_row=None).
+            if verbatim and grounding_enabled:
+                if check_phrase_grounded(
+                    str(legacy_text),
+                    summary=summary_text,
+                    review_text=review_text,
+                ):
+                    counters["verbatim_grounding_wins"] += 1
+                else:
+                    counters["verbatim_grounding_failures"] += 1
+                    verbatim = False
+
+            canonical.append({
+                "field": field,
+                "index": index,
+                "text": str(legacy_text),
+                "subject": subject,
+                "polarity": polarity,
+                "role": role,
+                "verbatim": verbatim,
+                "category_hint": category_hint,
+            })
+
+    return canonical, counters
+
+
 def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     """Layer 3: compute deterministic fields from Layer 1 + Layer 2 extractions.
 
@@ -2002,6 +2200,12 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     content_type = source_row.get("content_type") or result.get("content_classification") or "review"
     rating = float(source_row["rating"]) if source_row.get("rating") is not None else None
     rating_max = float(source_row.get("rating_max") or 5)
+
+    # Sanitize legacy phrase arrays to list[str] before any downstream scoring
+    # sees them. Defends against dict-form entries the LLM may emit under the
+    # new v2 prompt; downstream code (pain scoring, witnesses) assumes strings.
+    # Done BEFORE reading the locals below so pain derivation never sees dicts.
+    _coerce_legacy_phrase_arrays(result)
 
     complaints = result.get("specific_complaints", [])
     quotable = result.get("quotable_phrases", [])
@@ -2131,8 +2335,44 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     result["salience_flags"] = derive_salience_flags(result, source_row)
     result["evidence_spans"] = derive_evidence_spans(result, source_row)
 
-    # Mark schema version + evidence map hash for recomputation tracking
-    result["enrichment_schema_version"] = 3
+    # Parallel phrase_metadata (Phase 1a). Bump to v4 only when the LLM
+    # genuinely tried: either it returned at least one valid source row that
+    # maps to a real phrase, or the review has zero phrases to tag (valid
+    # empty extraction). An array with only garbage rows AND non-empty legacy
+    # phrase arrays is a malformed attempt -- fall back to v3 so downstream
+    # readers stay on the legacy keyword path and telemetry reflects reality.
+    # See docs/PHRASE_SEMANTIC_TAGGING_PLAN.md for the contract.
+    if isinstance(result.get("phrase_metadata"), list):
+        canonical_metadata, metadata_counters = _normalize_phrase_metadata(
+            result, source_row,
+        )
+        total_legacy_phrases = sum(
+            len(result.get(f) or []) for f in _PHRASE_METADATA_FIELDS
+        )
+        llm_genuinely_tried = (
+            metadata_counters["llm_provided_rows"] > 0
+            or total_legacy_phrases == 0
+        )
+        if llm_genuinely_tried:
+            result["phrase_metadata"] = canonical_metadata
+            result["enrichment_schema_version"] = 4
+            logger.info(
+                "phrase_metadata normalized for %s: %s",
+                source_row.get("id"),
+                metadata_counters,
+            )
+        else:
+            result.pop("phrase_metadata", None)
+            result["enrichment_schema_version"] = 3
+            logger.warning(
+                "phrase_metadata present but unusable for %s "
+                "(legacy_phrases=%d, provided_rows=0); falling back to v3",
+                source_row.get("id"),
+                total_legacy_phrases,
+            )
+    else:
+        result.pop("phrase_metadata", None)
+        result["enrichment_schema_version"] = 3
     result["evidence_map_hash"] = engine.map_hash
 
     return result
