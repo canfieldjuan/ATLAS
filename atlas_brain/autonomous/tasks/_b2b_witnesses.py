@@ -247,8 +247,25 @@ _PAIN_KEYWORD_MAP: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = tuple(
 )
 
 
-def _classify_complaint_pain(phrase: str, default: str | None) -> str | None:
-    """Classify a complaint phrase into a pain category by scored keyword match."""
+def _classify_complaint_pain(
+    phrase: str,
+    default: str | None,
+    *,
+    subject: str | None = None,
+) -> str | None:
+    """Classify a complaint phrase into a pain category by scored keyword match.
+
+    Phase 2 (Layer 1 -- subject attribution gate): when the caller passes
+    `subject` and it is anything other than 'subject_vendor', return None
+    so the witness span carries no pain category. Self-pricing comparisons,
+    competitor mentions, and third-party observations must not contribute
+    to the subject vendor's pain classification.
+
+    Callers that don't pass `subject` (legacy v1 path) get the existing
+    keyword-based behavior unchanged.
+    """
+    if subject is not None and subject != "subject_vendor":
+        return None
     best_category = default
     best_score = 0
     for category, patterns in _PAIN_KEYWORD_MAP:
@@ -567,17 +584,22 @@ def derive_evidence_spans(
         if isinstance(comp, dict) and str(comp.get("name") or "").strip()
     ]
     primary_competitor = str(competitors[0].get("name") or "").strip() if competitors else None
-    item_sources: list[tuple[str, list[Any], str | None, str | None]] = [
+    # Each item_source carries a `metadata_field` so we can look up the
+    # phrase's v2 metadata row when the gate runs. competitor_pressure and
+    # event spans synthesize their own text and have no metadata coverage,
+    # so they pass `metadata_field=None`.
+    item_sources: list[tuple[str, str | None, list[Any], str | None, str | None]] = [
         (
             "pricing_backlash",
+            "pricing_phrases",
             (result.get("pricing_phrases") or []) if bool(contract_context.get("price_complaint")) else [],
             "pricing",
             None,
         ),
-        ("complaint", result.get("specific_complaints") or [], default_pain, None),
-        ("feature_gap", result.get("feature_gaps") or [], "features", None),
-        ("recommendation", result.get("recommendation_language") or [], default_pain, None),
-        ("positive_anchor", result.get("positive_aspects") or [], None, None),
+        ("complaint", "specific_complaints", result.get("specific_complaints") or [], default_pain, None),
+        ("feature_gap", "feature_gaps", result.get("feature_gaps") or [], "features", None),
+        ("recommendation", "recommendation_language", result.get("recommendation_language") or [], default_pain, None),
+        ("positive_anchor", "positive_aspects", result.get("positive_aspects") or [], None, None),
     ]
     for comp in competitors:
         reasons = [
@@ -589,6 +611,7 @@ def derive_evidence_spans(
             texts = [f"considering {primary_competitor}"]
         item_sources.append((
             "competitor_pressure",
+            None,
             texts,
             str(comp.get("reason_category") or "").strip() or default_pain,
             str(comp.get("name") or "").strip() or None,
@@ -598,6 +621,7 @@ def derive_evidence_spans(
             continue
         item_sources.append((
             "event",
+            None,
             [event.get("event")],
             default_pain,
             None,
@@ -665,14 +689,28 @@ def derive_evidence_spans(
         })
         seen.add(key)
 
-    for signal_type, raw_values, pain_category, competitor in item_sources:
-        for raw_value in raw_values:
+    # Phase 2 (Layer 1): when v2 metadata is present, look up each phrase's
+    # subject so the complaint classifier can drop non-subject_vendor
+    # phrases. Empty map for v1 enrichments leaves the legacy behavior.
+    from ._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
+    phrase_meta = phrase_metadata_map(result) if is_v2_tagged(result) else {}
+
+    for signal_type, metadata_field, raw_values, pain_category, competitor in item_sources:
+        for index, raw_value in enumerate(raw_values):
             time_anchor = None
             if signal_type == "event":
                 time_anchor = default_time_anchor
             span_pain = pain_category
             if signal_type in ("complaint", "recommendation"):
-                span_pain = _classify_complaint_pain(str(raw_value or ""), pain_category)
+                subject_tag = None
+                if metadata_field is not None and phrase_meta:
+                    row = phrase_meta.get((metadata_field, index)) or {}
+                    subject_tag = row.get("subject")
+                span_pain = _classify_complaint_pain(
+                    str(raw_value or ""),
+                    pain_category,
+                    subject=subject_tag,
+                )
             _append_span(
                 signal_type=signal_type,
                 raw_text=raw_value,

@@ -976,13 +976,57 @@ def _primary_reason_category(*texts: str) -> str | None:
     return ranked[0][1] if ranked else None
 
 
+_PAIN_DERIVATION_FIELDS: tuple[str, ...] = (
+    "specific_complaints",
+    "pricing_phrases",
+    "feature_gaps",
+    "quotable_phrases",
+)
+
+
+def _subject_vendor_phrase_texts(result: dict, field: str) -> list[str]:
+    """Return phrase texts allowed to describe the subject vendor's pain.
+
+    v1 rows have no subject metadata, so this preserves legacy behavior.
+    v2 rows are conservative: only subject_vendor phrases survive.
+    """
+    raw = result.get(field) or []
+    if not raw:
+        return []
+
+    from ._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
+
+    if not is_v2_tagged(result):
+        return _normalize_text_list(raw)
+
+    meta = phrase_metadata_map(result)
+    texts: list[str] = []
+    for index, value in enumerate(raw):
+        phrase = str(value or "").strip()
+        if not phrase:
+            continue
+        row = meta.get((field, index)) or {}
+        if row.get("subject") == "subject_vendor":
+            texts.append(phrase)
+    return texts
+
+
 def _derive_pain_categories(result: dict) -> list[dict[str, str]]:
-    texts = (
-        _normalize_text_list(result.get("specific_complaints"))
-        + _normalize_text_list(result.get("pricing_phrases"))
-        + _normalize_text_list(result.get("feature_gaps"))
-        + _normalize_text_list(result.get("quotable_phrases"))
-    )
+    """Derive pain_categories list from extracted phrases.
+
+    Phase 2 (Layer 1 -- subject attribution gate): when v2 phrase metadata
+    is available, only phrases the LLM tagged with subject='subject_vendor'
+    feed pain scoring. Phrases tagged 'self', 'alternative', 'third_party',
+    or 'unclear' are filtered out so a self-cost mention or competitor
+    pricing reference cannot dominate the review's pain_category.
+
+    v1 (legacy) data has no metadata and falls through to keyword-only
+    scoring across all phrases.
+    """
+    texts: list[str] = []
+    for field in _PAIN_DERIVATION_FIELDS:
+        texts.extend(_subject_vendor_phrase_texts(result, field))
+
     if not texts:
         return []
     scored = _pain_scores(texts)
@@ -2182,6 +2226,50 @@ def _normalize_phrase_metadata(
     return canonical, counters
 
 
+def _apply_phrase_metadata_contract(
+    result: dict,
+    source_row: dict[str, Any],
+) -> None:
+    """Normalize phrase_metadata before deterministic derived fields run.
+
+    Phase 2 gates read phrase_metadata through the helper API, which only
+    activates when the enrichment is already schema version 4. The version
+    marker therefore must be set before pain, price, and witness derivation,
+    not after them.
+    """
+    if isinstance(result.get("phrase_metadata"), list):
+        canonical_metadata, metadata_counters = _normalize_phrase_metadata(
+            result, source_row,
+        )
+        total_legacy_phrases = sum(
+            len(result.get(f) or []) for f in _PHRASE_METADATA_FIELDS
+        )
+        llm_genuinely_tried = (
+            metadata_counters["llm_provided_rows"] > 0
+            or total_legacy_phrases == 0
+        )
+        if llm_genuinely_tried:
+            result["phrase_metadata"] = canonical_metadata
+            result["enrichment_schema_version"] = 4
+            logger.info(
+                "phrase_metadata normalized for %s: %s",
+                source_row.get("id"),
+                metadata_counters,
+            )
+        else:
+            result.pop("phrase_metadata", None)
+            result["enrichment_schema_version"] = 3
+            logger.warning(
+                "phrase_metadata present but unusable for %s "
+                "(legacy_phrases=%d, provided_rows=0); falling back to v3",
+                source_row.get("id"),
+                total_legacy_phrases,
+            )
+    else:
+        result.pop("phrase_metadata", None)
+        result["enrichment_schema_version"] = 3
+
+
 def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     """Layer 3: compute deterministic fields from Layer 1 + Layer 2 extractions.
 
@@ -2206,6 +2294,7 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     # new v2 prompt; downstream code (pain scoring, witnesses) assumes strings.
     # Done BEFORE reading the locals below so pain derivation never sees dicts.
     _coerce_legacy_phrase_arrays(result)
+    _apply_phrase_metadata_contract(result, source_row)
 
     complaints = result.get("specific_complaints", [])
     quotable = result.get("quotable_phrases", [])
@@ -2272,11 +2361,11 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
             primary_pain = pain_cats[0].get("category", "overall_dissatisfaction")
     result["pain_category"] = engine.override_pain(
         _normalize_pain_category(primary_pain),
-        complaints,
-        quotable,
-        _normalize_text_list(result.get("pricing_phrases")),
-        _normalize_text_list(result.get("feature_gaps")),
-        _normalize_text_list(result.get("recommendation_language")),
+        _subject_vendor_phrase_texts(result, "specific_complaints"),
+        _subject_vendor_phrase_texts(result, "quotable_phrases"),
+        _subject_vendor_phrase_texts(result, "pricing_phrases"),
+        _subject_vendor_phrase_texts(result, "feature_gaps"),
+        _subject_vendor_phrase_texts(result, "recommendation_language"),
     )
 
     # 3. would_recommend
@@ -2335,44 +2424,6 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     result["salience_flags"] = derive_salience_flags(result, source_row)
     result["evidence_spans"] = derive_evidence_spans(result, source_row)
 
-    # Parallel phrase_metadata (Phase 1a). Bump to v4 only when the LLM
-    # genuinely tried: either it returned at least one valid source row that
-    # maps to a real phrase, or the review has zero phrases to tag (valid
-    # empty extraction). An array with only garbage rows AND non-empty legacy
-    # phrase arrays is a malformed attempt -- fall back to v3 so downstream
-    # readers stay on the legacy keyword path and telemetry reflects reality.
-    # See docs/PHRASE_SEMANTIC_TAGGING_PLAN.md for the contract.
-    if isinstance(result.get("phrase_metadata"), list):
-        canonical_metadata, metadata_counters = _normalize_phrase_metadata(
-            result, source_row,
-        )
-        total_legacy_phrases = sum(
-            len(result.get(f) or []) for f in _PHRASE_METADATA_FIELDS
-        )
-        llm_genuinely_tried = (
-            metadata_counters["llm_provided_rows"] > 0
-            or total_legacy_phrases == 0
-        )
-        if llm_genuinely_tried:
-            result["phrase_metadata"] = canonical_metadata
-            result["enrichment_schema_version"] = 4
-            logger.info(
-                "phrase_metadata normalized for %s: %s",
-                source_row.get("id"),
-                metadata_counters,
-            )
-        else:
-            result.pop("phrase_metadata", None)
-            result["enrichment_schema_version"] = 3
-            logger.warning(
-                "phrase_metadata present but unusable for %s "
-                "(legacy_phrases=%d, provided_rows=0); falling back to v3",
-                source_row.get("id"),
-                total_legacy_phrases,
-            )
-    else:
-        result.pop("phrase_metadata", None)
-        result["enrichment_schema_version"] = 3
     result["evidence_map_hash"] = engine.map_hash
 
     return result

@@ -222,11 +222,42 @@ class EvidenceEngine:
         self,
         enrichment: dict[str, Any],
     ) -> bool:
-        """Derive price_complaint from Tier 1 flags + extracted phrases."""
+        """Derive price_complaint from Tier 1 flags + extracted phrases.
+
+        Phase 2 (Layer 1 -- subject attribution gate): on v2-tagged
+        enrichments, restrict the rule check to pricing_phrases the LLM
+        marked as subject='subject_vendor'. A self-cost mention like
+        "I pay $X for my own setup" must not flip the price_complaint flag
+        on the vendor being reviewed.
+
+        v1 enrichments fall through to the legacy code path: every
+        non-empty pricing_phrase counts.
+        """
+        from ..autonomous.tasks._b2b_phrase_metadata import (
+            is_v2_tagged, phrase_metadata_map,
+        )
+
         cfg = self._enrichment.get("price_complaint_derivation", {})
+
+        rule_input = enrichment
+        if is_v2_tagged(enrichment):
+            meta = phrase_metadata_map(enrichment)
+            raw_pricing = enrichment.get("pricing_phrases") or []
+            filtered = [
+                phrase
+                for index, phrase in enumerate(raw_pricing)
+                if str(phrase or "").strip()
+                and (meta.get(("pricing_phrases", index)) or {}).get("subject")
+                == "subject_vendor"
+            ]
+            # Build a shallow view that the rule check sees as the "pricing
+            # phrases the LLM said are about the subject vendor". Other
+            # fields are pass-through.
+            rule_input = {**enrichment, "pricing_phrases": filtered}
+
         pricing_phrases = [
             str(phrase or "").strip()
-            for phrase in enrichment.get("pricing_phrases") or []
+            for phrase in rule_input.get("pricing_phrases") or []
             if str(phrase or "").strip()
         ]
         all_pricing_phrases_positive = bool(pricing_phrases) and all(
@@ -240,7 +271,7 @@ class EvidenceEngine:
                 and all_pricing_phrases_positive
             ):
                 continue
-            if self._check_derivation_rule(rule, enrichment):
+            if self._check_derivation_rule(rule, rule_input):
                 return True
         return False
 
