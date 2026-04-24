@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..config import settings
-from ..autonomous.tasks._b2b_witnesses import resolve_evidence_spans
+from ..autonomous.tasks._b2b_witnesses import resolve_evidence_spans, sentence_bounds
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
@@ -389,29 +389,69 @@ async def get_witness(
         result["all_evidence_span_count"] = len(all_spans)
         result["evidence_span_source"] = span_source
 
-        # Surface highlight offsets adjusted for review_text-only display.
-        # Stored offsets are into (summary + " " + review_text); subtract
-        # the summary prefix so the UI can slice review_text directly.
+        # Highlight contract: when highlight_start/end are returned, the slice
+        # review_text[highlight_start:highlight_end] is the EXACT text shown
+        # in the quote card (excerpt_text). The excerpt is snapped to
+        # sentence boundaries so it never starts or ends mid-word.
+        #
+        # Resolution order:
+        #   1. span has phrase bounds in review_text -> derive sentence
+        #      containing the phrase, use as excerpt + highlight
+        #   2. stored excerpt_text found verbatim in review_text -> use as-is
+        #   3. excerpt found only in summary+review -> match_summary, no highlight
+        #   4. no match -> inferred, no highlight
+        raw_review = str(witness["review_text"] or "")
+        stored_excerpt = str(witness["excerpt_text"] or "").strip()
+        summary_str = str(witness["summary"] or "").strip()
+        highlight_source = "none"
+
+        # Pick the span this witness was derived from: prefer exact match on
+        # source_span_id, fall back to the first relevant span.
         source_span = None
         if source_span_id:
             source_span = next((s for s in relevant_spans if s.get("span_id") == source_span_id), None)
         if source_span is None and relevant_spans:
             source_span = relevant_spans[0]
-        if source_span and source_span.get("start_char") is not None and source_span.get("end_char") is not None:
-            summary_str = str(witness["summary"] or "").strip()
+
+        # Step 1: try phrase-bounds -> containing-sentence path
+        if source_span \
+                and source_span.get("start_char") is not None \
+                and source_span.get("end_char") is not None \
+                and raw_review:
             prefix_len = (len(summary_str) + 1) if summary_str else 0
-            adj_start = int(source_span["start_char"]) - prefix_len
-            adj_end = int(source_span["end_char"]) - prefix_len
-            # Offsets are into stripped review_text (as _excerpt_text strips
-            # each part). Adjust for any leading whitespace in the raw value
-            # so the UI can slice the raw text directly.
-            raw_review = str(witness["review_text"] or "")
             leading_ws = len(raw_review) - len(raw_review.lstrip())
-            adj_start += leading_ws
-            adj_end += leading_ws
-            if 0 <= adj_start < adj_end <= len(raw_review):
-                result["highlight_start"] = adj_start
-                result["highlight_end"] = adj_end
+            phrase_start = int(source_span["start_char"]) - prefix_len + leading_ws
+            phrase_end = int(source_span["end_char"]) - prefix_len + leading_ws
+            if 0 <= phrase_start < phrase_end <= len(raw_review):
+                sent_start, sent_end = sentence_bounds(raw_review, phrase_start, phrase_end)
+                if sent_start < sent_end <= len(raw_review):
+                    sentence_text = raw_review[sent_start:sent_end].strip()
+                    if sentence_text:
+                        # Re-anchor the strip(): recompute exact bounds so the
+                        # slice equals excerpt_text without leading/trailing ws.
+                        rel_start = raw_review[sent_start:sent_end].find(sentence_text)
+                        final_start = sent_start + rel_start
+                        final_end = final_start + len(sentence_text)
+                        result["excerpt_text"] = sentence_text
+                        result["highlight_start"] = final_start
+                        result["highlight_end"] = final_end
+                        highlight_source = "match_excerpt"
+
+        # Step 2: fallback substring match on stored excerpt
+        if highlight_source == "none" and stored_excerpt and raw_review:
+            idx = raw_review.lower().find(stored_excerpt.lower())
+            if idx >= 0:
+                result["highlight_start"] = idx
+                result["highlight_end"] = idx + len(stored_excerpt)
+                highlight_source = "match_excerpt"
+            elif summary_str and (summary_str + " " + raw_review).lower().find(stored_excerpt.lower()) >= 0:
+                highlight_source = "match_summary"
+            else:
+                highlight_source = "inferred"
+        elif highlight_source == "none" and not stored_excerpt:
+            highlight_source = "none"
+
+        result["highlight_source"] = highlight_source
 
     return {"witness": result}
 

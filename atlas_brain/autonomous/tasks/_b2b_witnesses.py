@@ -269,6 +269,55 @@ def _normalize_key(value: Any) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+_SENTENCE_TERMINATORS = (".", "!", "?", "\n")
+_MAX_EXCERPT_CHARS = 320
+_WORD_BOUNDARY_FALLBACK_CHARS = 60
+
+
+def sentence_bounds(text: str, phrase_start: int, phrase_end: int) -> tuple[int, int]:
+    """Return (start, end) for the sentence containing [phrase_start:phrase_end].
+
+    Walks backward from ``phrase_start`` to the previous sentence terminator
+    (``.!?\\n``) and forward from ``phrase_end`` to the next terminator. If the
+    resulting span exceeds ``_MAX_EXCERPT_CHARS``, falls back to a word-bounded
+    window of ``_WORD_BOUNDARY_FALLBACK_CHARS`` on each side of the phrase so
+    long runs (reddit walls of text, minimal punctuation) still yield a
+    bounded excerpt with no partial words at the edges.
+    """
+    n = len(text)
+    phrase_start = max(0, min(phrase_start, n))
+    phrase_end = max(phrase_start, min(phrase_end, n))
+
+    # Walk backward to previous sentence terminator or start-of-text
+    sent_start = phrase_start
+    while sent_start > 0 and text[sent_start - 1] not in _SENTENCE_TERMINATORS:
+        sent_start -= 1
+    while sent_start < phrase_start and text[sent_start].isspace():
+        sent_start += 1
+
+    # Walk forward to next sentence terminator (inclusive) or end-of-text
+    sent_end = phrase_end
+    while sent_end < n and text[sent_end - 1] not in _SENTENCE_TERMINATORS:
+        sent_end += 1
+
+    if sent_end - sent_start <= _MAX_EXCERPT_CHARS and sent_end > sent_start:
+        return sent_start, sent_end
+
+    # Sentence too long or unbounded (no terminator found). Fall back to a
+    # word-bounded window.
+    lo = max(0, phrase_start - _WORD_BOUNDARY_FALLBACK_CHARS)
+    hi = min(n, phrase_end + _WORD_BOUNDARY_FALLBACK_CHARS)
+    # Advance lo forward until we clear any partial word on the left.
+    while lo > 0 and lo < phrase_start and text[lo - 1].isalnum() and text[lo].isalnum():
+        lo += 1
+    while lo < phrase_start and text[lo].isspace():
+        lo += 1
+    # Retreat hi backward until we clear any partial word on the right.
+    while hi < n and hi > phrase_end and text[hi - 1].isalnum() and text[hi].isalnum():
+        hi -= 1
+    return lo, hi
+
+
 def _excerpt_text(
     summary: Any,
     review_text: Any,
@@ -294,8 +343,7 @@ def _excerpt_text(
     if exact_phrase:
         excerpt = full_text[idx:idx + len(phrase)].strip()
         return excerpt, idx, idx + len(phrase)
-    start = max(0, idx - 40)
-    end = min(len(full_text), idx + len(phrase) + 40)
+    start, end = sentence_bounds(full_text, idx, idx + len(phrase))
     excerpt = full_text[start:end].strip()
     return excerpt, idx, idx + len(phrase)
 

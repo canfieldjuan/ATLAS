@@ -2164,6 +2164,7 @@ export interface EvidenceWitnessDetail extends EvidenceWitness {
   enrichment_status: string | null
   highlight_start: number | null
   highlight_end: number | null
+  highlight_source: 'match_excerpt' | 'match_summary' | 'inferred' | 'none' | null
   evidence_spans: Array<{
     signal_type: string
     text: string

@@ -914,6 +914,16 @@ export default function EvidenceDrawer({
                     </a>
                   )}
                 </h3>
+                {witness.highlight_source === 'match_summary' && (
+                  <div className="mb-2 text-xs text-amber-400/80">
+                    Excerpt is drawn from the review title or summary, not the body shown below.
+                  </div>
+                )}
+                {witness.highlight_source === 'inferred' && (
+                  <div className="mb-2 text-xs text-amber-400/80">
+                    Excerpt was synthesized from the review content and is not a verbatim quote.
+                  </div>
+                )}
                 <div className="bg-slate-950/60 rounded-lg p-4 border border-slate-700/30 text-sm text-slate-300 leading-relaxed max-h-80 overflow-y-auto">
                   {highlightExcerpt(witness.review_text, witness.excerpt_text, witness.highlight_start, witness.highlight_end)}
                 </div>
