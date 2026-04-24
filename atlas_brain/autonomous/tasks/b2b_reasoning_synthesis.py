@@ -32,6 +32,7 @@ from uuid import UUID, uuid4
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_grounding import check_phrase_grounded
 from ._b2b_witnesses import compute_witness_hash
 from ._execution_progress import task_run_id as _task_execution_run_id
 
@@ -817,6 +818,59 @@ def _canonicalize_scoped_vendor_pairs(
     return canonical_pairs
 
 
+async def _classify_witness_grounding(
+    pool,
+    witnesses: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Compute grounding_status for each witness from b2b_reviews source text.
+
+    Returns {witness_id: 'grounded' | 'not_grounded'}. A witness whose
+    review_id does not resolve to an enriched review (or whose source text
+    is empty) is classified 'not_grounded' since we cannot prove the
+    excerpt is verbatim. The Phase 1b write-time gate intentionally errs
+    toward signal-grade rather than quote-grade in ambiguous cases.
+    """
+    if not witnesses:
+        return {}
+    review_ids = sorted({
+        str(w.get("review_id"))
+        for w in witnesses
+        if w.get("review_id")
+    })
+    if not review_ids:
+        return {wid: "not_grounded" for w in witnesses
+                if (wid := str(w.get("witness_id") or ""))}
+
+    rows = await pool.fetch(
+        """
+        SELECT id::text AS id, summary, review_text
+        FROM b2b_reviews
+        WHERE id = ANY($1::uuid[])
+        """,
+        review_ids,
+    )
+
+    by_review_id = {row["id"]: row for row in rows}
+
+    statuses: dict[str, str] = {}
+    for witness in witnesses:
+        wid = str(witness.get("witness_id") or "")
+        if not wid:
+            continue
+        rid = str(witness.get("review_id") or "")
+        review_row = by_review_id.get(rid)
+        if review_row is None:
+            statuses[wid] = "not_grounded"
+            continue
+        is_grounded = check_phrase_grounded(
+            witness.get("excerpt_text"),
+            summary=review_row["summary"],
+            review_text=review_row["review_text"],
+        )
+        statuses[wid] = "grounded" if is_grounded else "not_grounded"
+    return statuses
+
+
 def _witness_row_payload(witness: dict[str, Any]) -> dict[str, Any]:
     return {
         "witness_id": str(witness.get("witness_id") or witness.get("_sid") or ""),
@@ -838,6 +892,7 @@ def _witness_row_payload(witness: dict[str, Any]) -> dict[str, Any]:
         "witness_hash": str(witness.get("witness_hash") or "").strip()
         or compute_witness_hash(witness),
         "source_span_id": str(witness.get("source_span_id") or "").strip() or None,
+        "grounding_status": str(witness.get("grounding_status") or "not_grounded"),
     }
 
 
@@ -895,7 +950,7 @@ async def _persist_packet_artifacts(
     )
     existing_rows = await pool.fetch(
         """
-        SELECT witness_id, witness_hash
+        SELECT witness_id, witness_hash, grounding_status
         FROM b2b_vendor_witnesses
         WHERE vendor_name = $1
           AND as_of_date = $2
@@ -911,11 +966,38 @@ async def _persist_packet_artifacts(
         str(row["witness_id"]): str(row["witness_hash"] or "")
         for row in existing_rows
     }
+    # Use .get() so tests/pre-migration DBs without the grounding column
+    # degrade to "pending" instead of raising KeyError. asyncpg Record and
+    # dict both support .get().
+    existing_grounding = {
+        str(row["witness_id"]): str(row.get("grounding_status") or "pending")
+        for row in existing_rows
+    }
     incoming_rows = [
         _witness_row_payload(witness)
         for witness in (getattr(packet, "witness_pack", []) or [])
         if isinstance(witness, dict)
     ]
+    # Phase 1b: classify each witness's grounding state from the source
+    # text BEFORE INSERT so freshly-written rows never carry the 'pending'
+    # default. Lazy-on-read in the API exists only as a safety net for
+    # rows the batch-populate didn't catch.
+    grounding_by_id = await _classify_witness_grounding(pool, incoming_rows)
+    grounding_counts = {"grounded": 0, "not_grounded": 0}
+    for row in incoming_rows:
+        wid = row.get("witness_id")
+        if wid in grounding_by_id:
+            row["grounding_status"] = grounding_by_id[wid]
+        status = str(row.get("grounding_status") or "not_grounded")
+        grounding_counts[status] = grounding_counts.get(status, 0) + 1
+    if incoming_rows:
+        logger.info(
+            "witness_grounding_classified vendor=%s incoming=%d grounded=%d not_grounded=%d",
+            vendor_name,
+            len(incoming_rows),
+            grounding_counts.get("grounded", 0),
+            grounding_counts.get("not_grounded", 0),
+        )
     incoming_ids = {
         row["witness_id"] for row in incoming_rows
         if row["witness_id"]
@@ -937,9 +1019,29 @@ async def _persist_packet_artifacts(
             _PACKET_SCHEMA_VERSION,
             stale_ids,
         )
+    skipped_unchanged = 0
+    recovered_stale_pending = 0
+    upserted_new = 0
+    upserted_changed = 0
     for witness in incoming_rows:
-        if existing_hashes.get(witness["witness_id"]) == witness["witness_hash"]:
-            continue
+        wid = witness["witness_id"]
+        existing_hash = existing_hashes.get(wid)
+        existing_status = existing_grounding.get(wid)
+        # Skip unchanged witnesses ONLY when their grounding was also
+        # already checked. A row left at 'pending' (e.g., inserted before
+        # step 6 landed, or by an external path) should be rewritten so
+        # it picks up a real grounding_status even if its content hash
+        # matched. Avoids leaving stale 'pending' rows invisible to the
+        # write path forever.
+        if existing_hash == witness["witness_hash"]:
+            if existing_status != "pending":
+                skipped_unchanged += 1
+                continue
+            recovered_stale_pending += 1
+        elif existing_hash is None:
+            upserted_new += 1
+        else:
+            upserted_changed += 1
         await pool.execute(
             """
             INSERT INTO b2b_vendor_witnesses
@@ -948,9 +1050,11 @@ async def _persist_packet_artifacts(
                  source, reviewed_at, reviewer_company, reviewer_title,
                  pain_category, competitor, salience_score, selection_reason,
                  signal_tags, source_id, specificity_score, generic_reason,
-                 witness_hash, source_span_id)
+                 witness_hash, source_span_id,
+                 grounding_status, grounding_checked_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17, $18::jsonb, $19, $20, $21, $22, $23)
+                    $14, $15, $16, $17, $18::jsonb, $19, $20, $21, $22, $23,
+                    $24, NOW())
             ON CONFLICT (
                 vendor_name, as_of_date, analysis_window_days, schema_version, witness_id
             )
@@ -972,7 +1076,9 @@ async def _persist_packet_artifacts(
                 specificity_score = EXCLUDED.specificity_score,
                 generic_reason = EXCLUDED.generic_reason,
                 witness_hash = EXCLUDED.witness_hash,
-                source_span_id = EXCLUDED.source_span_id
+                source_span_id = EXCLUDED.source_span_id,
+                grounding_status = EXCLUDED.grounding_status,
+                grounding_checked_at = EXCLUDED.grounding_checked_at
             """,
             vendor_name,
             as_of_date,
@@ -997,6 +1103,19 @@ async def _persist_packet_artifacts(
             witness["generic_reason"],
             witness["witness_hash"],
             witness.get("source_span_id"),
+            witness["grounding_status"],
+        )
+
+    if incoming_rows:
+        logger.info(
+            "witness_persist vendor=%s incoming=%d skipped_unchanged=%d "
+            "recovered_stale_pending=%d upserted_new=%d upserted_changed=%d",
+            vendor_name,
+            len(incoming_rows),
+            skipped_unchanged,
+            recovered_stale_pending,
+            upserted_new,
+            upserted_changed,
         )
 
 

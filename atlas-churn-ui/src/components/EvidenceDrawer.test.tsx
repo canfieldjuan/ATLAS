@@ -511,4 +511,45 @@ describe('EvidenceDrawer', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Remove pin' }).length).toBeGreaterThan(0)
   })
+
+  it('does not highlight source text when witness is signal-grade only', async () => {
+    api.fetchWitness.mockResolvedValueOnce({
+      witness: {
+        witness_id: 'w1',
+        excerpt_text: 'Pricing spiked after renewal.',
+        source: 'g2',
+        reviewed_at: '2026-04-07T18:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP IT',
+        pain_category: 'pricing',
+        competitor: 'Zendesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        review_text: 'Pricing spiked after renewal and support dropped.',
+        evidence_spans: [],
+        all_evidence_span_count: 0,
+        quote_grade: false,
+        grounding_status: 'not_grounded',
+        highlight_start: 0,
+        highlight_end: 'Pricing spiked after renewal.'.length,
+      },
+    })
+
+    const { container } = render(
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/Excerpt could not be verified verbatim/i)).toBeInTheDocument()
+    expect(screen.getByText('Pricing spiked after renewal and support dropped.')).toBeInTheDocument()
+    expect(container.querySelector('mark')).toBeNull()
+  })
 })

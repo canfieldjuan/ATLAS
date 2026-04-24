@@ -65,8 +65,10 @@ function highlightExcerpt(
   excerptText: string,
   highlightStart?: number | null,
   highlightEnd?: number | null,
+  allowHighlight = true,
 ): ReactNode {
   if (!fullText) return <></>
+  if (!allowHighlight) return <>{fullText}</>
 
   // Prefer offset-based highlighting when the API provides adjusted positions
   if (highlightStart != null && highlightEnd != null
@@ -914,18 +916,39 @@ export default function EvidenceDrawer({
                     </a>
                   )}
                 </h3>
-                {witness.highlight_source === 'match_summary' && (
+                {/* Phase 1b step 9: quote-grade gate.
+                    quote_grade=false suppresses the highlight (the API has
+                    already stripped highlight_start/end) and surfaces an
+                    honest note. The note text varies by why the witness
+                    failed grounding so reviewers can act on it.            */}
+                {witness.quote_grade === false && witness.grounding_status === 'not_grounded' && (
+                  <div className="mb-2 text-xs text-amber-400/80">
+                    Excerpt could not be verified verbatim against the review text. Treating as signal-grade only -- not rendered as a quote.
+                  </div>
+                )}
+                {witness.quote_grade === false && witness.grounding_status === 'pending' && (
+                  <div className="mb-2 text-xs text-amber-400/80">
+                    Grounding check has not yet run for this witness. Quote-grade rendering is suppressed until verification completes.
+                  </div>
+                )}
+                {witness.quote_grade !== false && witness.highlight_source === 'match_summary' && (
                   <div className="mb-2 text-xs text-amber-400/80">
                     Excerpt is drawn from the review title or summary, not the body shown below.
                   </div>
                 )}
-                {witness.highlight_source === 'inferred' && (
+                {witness.quote_grade !== false && witness.highlight_source === 'inferred' && (
                   <div className="mb-2 text-xs text-amber-400/80">
                     Excerpt was synthesized from the review content and is not a verbatim quote.
                   </div>
                 )}
                 <div className="bg-slate-950/60 rounded-lg p-4 border border-slate-700/30 text-sm text-slate-300 leading-relaxed max-h-80 overflow-y-auto">
-                  {highlightExcerpt(witness.review_text, witness.excerpt_text, witness.highlight_start, witness.highlight_end)}
+                  {highlightExcerpt(
+                    witness.review_text,
+                    witness.excerpt_text,
+                    witness.highlight_start,
+                    witness.highlight_end,
+                    witness.quote_grade !== false,
+                  )}
                 </div>
               </div>
             )}

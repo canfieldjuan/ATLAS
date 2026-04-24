@@ -4263,10 +4263,15 @@ class TestReasoningSynthesisTask:
             {
                 "witness_id": first["witness_id"],
                 "witness_hash": first["witness_hash"],
+                # grounding_status must be non-pending for the skip-unchanged
+                # optimization to fire. A stale 'pending' row with matching
+                # hash should NOT be skipped -- see the dedicated test below.
+                "grounding_status": "grounded",
             },
             {
                 "witness_id": "witness:stale:0",
                 "witness_hash": "stalehash",
+                "grounding_status": "grounded",
             },
         ])
 
@@ -4303,6 +4308,285 @@ class TestReasoningSynthesisTask:
 
         assert payload["reviewed_at"] is not None
         assert payload["reviewed_at"].year == 2026
+
+    # ------------------------------------------------------------------
+    # Phase 1b: _classify_witness_grounding + write-path grounding
+    # ------------------------------------------------------------------
+
+    def test_witness_row_payload_defaults_grounding_status_not_grounded(self):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _witness_row_payload,
+        )
+
+        payload = _witness_row_payload({"witness_id": "w1"})
+        # Default conservative -- write-path classifier overrides before
+        # INSERT. If the classifier is never called (e.g. missing review_id),
+        # the row remains signal-grade rather than mislabelled as grounded.
+        assert payload["grounding_status"] == "not_grounded"
+
+    def test_witness_row_payload_preserves_explicit_grounding_status(self):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _witness_row_payload,
+        )
+
+        payload = _witness_row_payload({
+            "witness_id": "w1",
+            "grounding_status": "grounded",
+        })
+        assert payload["grounding_status"] == "grounded"
+
+    @pytest.mark.asyncio
+    async def test_classify_witness_grounding_returns_grounded_when_excerpt_in_review(self):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _classify_witness_grounding,
+        )
+
+        class FakePool:
+            def __init__(self, review_rows):
+                self._review_rows = review_rows
+
+            async def fetch(self, query, *args):
+                if "FROM b2b_reviews" in query:
+                    return self._review_rows
+                return []
+
+        witnesses = [
+            {"witness_id": "w1", "review_id": "11111111-1111-1111-1111-111111111111",
+             "excerpt_text": "it was too expensive"},
+            {"witness_id": "w2", "review_id": "22222222-2222-2222-2222-222222222222",
+             "excerpt_text": "phrase that does not exist"},
+        ]
+        fake_pool = FakePool([
+            {"id": "11111111-1111-1111-1111-111111111111",
+             "summary": None,
+             "review_text": "We loved it but it was too expensive for us."},
+            {"id": "22222222-2222-2222-2222-222222222222",
+             "summary": None,
+             "review_text": "Nothing about that phrase in this review."},
+        ])
+        result = await _classify_witness_grounding(fake_pool, witnesses)
+        assert result == {"w1": "grounded", "w2": "not_grounded"}
+
+    @pytest.mark.asyncio
+    async def test_classify_witness_grounding_missing_review_defaults_not_grounded(self):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _classify_witness_grounding,
+        )
+
+        class FakePool:
+            async def fetch(self, query, *args):
+                return []  # no review matched
+
+        witnesses = [
+            {"witness_id": "w1",
+             "review_id": "11111111-1111-1111-1111-111111111111",
+             "excerpt_text": "anything"},
+        ]
+        result = await _classify_witness_grounding(FakePool(), witnesses)
+        assert result == {"w1": "not_grounded"}
+
+    @pytest.mark.asyncio
+    async def test_classify_witness_grounding_empty_input_returns_empty(self):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _classify_witness_grounding,
+        )
+
+        class FakePool:
+            async def fetch(self, query, *args):
+                return []
+
+        assert await _classify_witness_grounding(FakePool(), []) == {}
+
+    @pytest.mark.asyncio
+    async def test_persist_packet_reupserts_stale_pending_row_with_matching_hash(self):
+        """Skip-unchanged optimization must NOT strand a row whose
+        grounding_status is still 'pending'. The write path should re-upsert
+        it so the new grounding_status overwrites the stale value."""
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _persist_packet_artifacts,
+        )
+
+        class FakePool:
+            def __init__(self, existing_rows):
+                self._existing_rows = existing_rows
+                self.executed = []
+
+            async def fetch(self, query, *args):
+                if "FROM b2b_vendor_witnesses" in query:
+                    return self._existing_rows
+                return []  # b2b_reviews lookup returns no source rows
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+        packet = compress_vendor_pools("PersistVendor", _make_layers())
+        first = packet.witness_pack[0]
+        # Both rows match on hash, but first is still 'pending' and should
+        # be rewritten. Second is 'grounded' and should be skipped.
+        fake_pool = FakePool([
+            {
+                "witness_id": first["witness_id"],
+                "witness_hash": first["witness_hash"],
+                "grounding_status": "pending",
+            },
+            {
+                "witness_id": packet.witness_pack[1]["witness_id"],
+                "witness_hash": packet.witness_pack[1]["witness_hash"],
+                "grounding_status": "grounded",
+            },
+        ])
+
+        await _persist_packet_artifacts(
+            fake_pool,
+            vendor_name="PersistVendor",
+            as_of_date=date(2026, 3, 30),
+            analysis_window_days=90,
+            evidence_hash="abc123",
+            packet=packet,
+        )
+
+        upsert_ops = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_vendor_witnesses" in item[0]
+        ]
+        # Only the 'pending' row should have been re-upserted (1 of 2)
+        assert len(upsert_ops) == 1, \
+            "stale pending row must be re-upserted even when hash matches"
+
+    @pytest.mark.asyncio
+    async def test_persist_packet_insert_carries_grounding_status_column(self):
+        """The INSERT statement must include grounding_status + grounding_checked_at
+        columns so freshly-written witnesses never inherit the 'pending' default."""
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _persist_packet_artifacts,
+        )
+
+        class FakePool:
+            def __init__(self):
+                self.executed = []
+
+            async def fetch(self, query, *args):
+                return []  # no existing witnesses, no review source
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+        packet = compress_vendor_pools("PersistVendor", _make_layers())
+        fake_pool = FakePool()
+
+        await _persist_packet_artifacts(
+            fake_pool,
+            vendor_name="PersistVendor",
+            as_of_date=date(2026, 3, 30),
+            analysis_window_days=90,
+            evidence_hash="abc123",
+            packet=packet,
+        )
+
+        upsert_ops = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_vendor_witnesses" in item[0]
+        ]
+        assert upsert_ops, "expected at least one INSERT"
+        for query, args in upsert_ops:
+            assert "grounding_status" in query
+            assert "grounding_checked_at" in query
+            # Last positional arg is the grounding_status value; must be
+            # a valid enum member (not 'pending' since classifier ran).
+            assert args[-1] in ("grounded", "not_grounded"), \
+                f"invalid grounding_status value: {args[-1]!r}"
+
+    @pytest.mark.asyncio
+    async def test_persist_packet_emits_grounding_and_persist_telemetry(self, caplog):
+        """Step 8 telemetry: write-time grounding classification AND
+        persist-decision counters must both be logged so operators can see
+        what the synthesis path is doing without instrumenting downstream."""
+        import logging
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _persist_packet_artifacts,
+        )
+
+        class FakePool:
+            def __init__(self, existing_rows):
+                self._existing_rows = existing_rows
+                self.executed = []
+
+            async def fetch(self, query, *args):
+                if "FROM b2b_vendor_witnesses" in query:
+                    return self._existing_rows
+                return []  # b2b_reviews lookup empty -> classifier marks not_grounded
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+        packet = compress_vendor_pools("PersistVendor", _make_layers())
+        # Setup so we exercise every branch of the persist counter:
+        #  - first witness: pre-existing with matching hash + grounded -> skipped_unchanged
+        #  - second witness: pre-existing with matching hash + pending -> recovered_stale_pending
+        #  - any others in the pack: no existing row -> upserted_new
+        first = packet.witness_pack[0]
+        second = packet.witness_pack[1]
+        fake_pool = FakePool([
+            {
+                "witness_id": first["witness_id"],
+                "witness_hash": first["witness_hash"],
+                "grounding_status": "grounded",
+            },
+            {
+                "witness_id": second["witness_id"],
+                "witness_hash": second["witness_hash"],
+                "grounding_status": "pending",
+            },
+        ])
+
+        with caplog.at_level(
+            logging.INFO,
+            logger="atlas.autonomous.tasks.b2b_reasoning_synthesis",
+        ):
+            await _persist_packet_artifacts(
+                fake_pool,
+                vendor_name="PersistVendor",
+                as_of_date=date(2026, 3, 30),
+                analysis_window_days=90,
+                evidence_hash="abc123",
+                packet=packet,
+            )
+
+        messages = [r.getMessage() for r in caplog.records]
+        # Classifier counters logged
+        grounding_msg = next(
+            (m for m in messages if "witness_grounding_classified" in m), None,
+        )
+        assert grounding_msg is not None, \
+            "expected witness_grounding_classified telemetry"
+        assert "vendor=PersistVendor" in grounding_msg
+        assert f"incoming={len(packet.witness_pack)}" in grounding_msg
+        # b2b_reviews lookup is empty in this fake -> all witnesses classified
+        # not_grounded. The counter should reflect that, proving the log
+        # actually carries the per-status numbers (not just a label).
+        assert f"not_grounded={len(packet.witness_pack)}" in grounding_msg
+        assert "grounded=0" in grounding_msg
+
+        # Persist counters logged with all four breakdowns
+        persist_msg = next(
+            (m for m in messages if m.startswith("witness_persist ")), None,
+        )
+        assert persist_msg is not None, "expected witness_persist telemetry"
+        assert "vendor=PersistVendor" in persist_msg
+        assert "skipped_unchanged=1" in persist_msg
+        assert "recovered_stale_pending=1" in persist_msg
+        new_count = max(0, len(packet.witness_pack) - 2)
+        assert f"upserted_new={new_count}" in persist_msg
+        assert "upserted_changed=0" in persist_msg
 
     @pytest.mark.asyncio
     async def test_run_retries_validation_failure_and_persists_success(self, monkeypatch):

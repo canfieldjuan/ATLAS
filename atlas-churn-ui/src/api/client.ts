@@ -2165,6 +2165,12 @@ export interface EvidenceWitnessDetail extends EvidenceWitness {
   highlight_start: number | null
   highlight_end: number | null
   highlight_source: 'match_excerpt' | 'match_summary' | 'inferred' | 'none' | null
+  // Phase 1b step 9: quote-grade gate.
+  // quote_grade is true iff grounding_status === 'grounded'. The UI must
+  // gate any verbatim-quote rendering on this flag, not on highlight_source
+  // alone (a substring match can succeed against a non-grounded excerpt).
+  quote_grade: boolean
+  grounding_status: 'grounded' | 'not_grounded' | 'pending' | null
   evidence_spans: Array<{
     signal_type: string
     text: string

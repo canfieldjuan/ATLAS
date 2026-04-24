@@ -13,6 +13,7 @@ Endpoints:
 """
 
 import json
+import logging
 import uuid as _uuid
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -23,9 +24,12 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..config import settings
+from ..autonomous.tasks._b2b_grounding import check_phrase_grounded
 from ..autonomous.tasks._b2b_witnesses import resolve_evidence_spans, sentence_bounds
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
+
+logger = logging.getLogger("atlas.api.b2b_evidence")
 
 # -- Pagination and query defaults --------------------------------------------
 
@@ -366,6 +370,59 @@ async def get_witness(
 
     result = _row_to_dict(witness)
 
+    # Lazy-on-read grounding fallback (Phase 1b step 7).
+    # Batch-populate (scripts/backfill_witness_grounding.py) and the
+    # write-path classifier (_classify_witness_grounding in synthesis) own
+    # the primary migration. This path exists ONLY for rows that slipped
+    # through both: manual inserts, partial batch runs, schema-bump races.
+    # If this counter rises above zero in steady state, investigate the
+    # batch job rather than leaning on this fallback.
+    if str(witness.get("grounding_status") or "pending").strip() == "pending":
+        is_grounded = check_phrase_grounded(
+            witness.get("excerpt_text"),
+            summary=witness.get("summary"),
+            review_text=witness.get("review_text"),
+        )
+        fresh_status = "grounded" if is_grounded else "not_grounded"
+        try:
+            await pool.execute(
+                """
+                UPDATE b2b_vendor_witnesses
+                   SET grounding_status = $1,
+                       grounding_checked_at = NOW()
+                 WHERE vendor_name = $2
+                   AND as_of_date = $3
+                   AND analysis_window_days = $4
+                   AND schema_version = $5
+                   AND witness_id = $6
+                   AND grounding_status = 'pending'
+                """,
+                fresh_status,
+                witness["vendor_name"],
+                witness["as_of_date"],
+                witness["analysis_window_days"],
+                witness["schema_version"],
+                witness["witness_id"],
+            )
+        except Exception:
+            # Don't block the response on a transient UPDATE failure. Log
+            # and return the fresh classification anyway; a future call or
+            # the backfill job will persist it.
+            logger.warning(
+                "lazy_grounding_fallback UPDATE failed witness=%s; "
+                "returning fresh status without persisting",
+                witness["witness_id"],
+                exc_info=True,
+            )
+        else:
+            logger.info(
+                "lazy_grounding_fallback_hit witness=%s fresh_status=%s",
+                witness["witness_id"],
+                fresh_status,
+            )
+        result["grounding_status"] = fresh_status
+        result["grounding_checked_at"] = datetime.now(timezone.utc).isoformat()
+
     # Extract evidence spans from enrichment that relate to this witness.
     # Prefer exact source_span_id match; fall back to text overlap for old rows.
     enrichment = _safe_json(witness["enrichment"])
@@ -452,6 +509,20 @@ async def get_witness(
             highlight_source = "none"
 
         result["highlight_source"] = highlight_source
+
+    # Phase 1b step 9: quote-grade gate.
+    # The witness is quote-grade iff its excerpt has been validated against
+    # source text via normalized grounding (grounding_status='grounded').
+    # 'pending' (lazy-on-read missed it for some reason) and 'not_grounded'
+    # (excerpt is not verbatim) both fall back to signal-grade, and the API
+    # actively suppresses highlight bounds so the UI cannot render a quote
+    # cards even if a stale client tries to.
+    grounding_status = str(result.get("grounding_status") or "pending").strip()
+    quote_grade = grounding_status == "grounded"
+    result["quote_grade"] = quote_grade
+    if not quote_grade:
+        result.pop("highlight_start", None)
+        result.pop("highlight_end", None)
 
     return {"witness": result}
 
