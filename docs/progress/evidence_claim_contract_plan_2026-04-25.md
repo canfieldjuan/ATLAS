@@ -538,8 +538,14 @@ CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_status
 -- signature filters by (vendor_name, claim_type, target_entity, as_of_date,
 -- analysis_window_days) and orders by (salience_score DESC, grounding_rank,
 -- pain_confidence_rank, witness_id). All filter and order columns are in
--- the index, so Postgres can satisfy the query with an index-only scan
--- (status='valid' is the partial WHERE clause; row_id columns join after).
+-- the index, so Postgres can do an index-backed ordered top-N scan with
+-- heap fetches only for the LIMIT-N rows it returns. claim_payload (JSONB)
+-- and the joined witness render data are not in the index by design --
+-- including them would bloat the index for little gain. The expensive
+-- part of the query (filter + sort) is index-resident; only the projected
+-- payload triggers heap reads, and only for the N rows the consumer asked
+-- for. (status='valid' is the partial WHERE clause; the rest happens at
+-- LIMIT time.)
 CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_select_best
     ON b2b_evidence_claims (
         vendor_name,
