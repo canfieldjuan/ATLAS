@@ -6961,6 +6961,14 @@ async def _fetch_pain_provenance(
     Returns ``{(vendor, pain_category): {mention_count, primary_count,
     secondary_count, minor_count, avg_urgency, avg_rating,
     source_distribution, sample_review_ids}}``.
+
+    Phase 2.2.B: aggregation moved from SQL GROUP BY to Python so each row
+    can be gated through ``pain_category_for_bucket`` before contributing
+    to the rollup. The contract resolver also handles legacy v3 rows that
+    have no stamped ``pain_confidence`` -- those resolve via the
+    deterministic recompute path. Severity-breakdown rows continue to come
+    from a separate SQL aggregate and remain augment-only (they only
+    update keys already populated by the gated core pass).
     """
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(
@@ -6970,22 +6978,23 @@ async def _fetch_pain_provenance(
         vendor_expr="vm.vendor_name",
     )
 
-    # 1. Core counts + averages grouped by vendor, pain_category, source
+    # 1. Core: fetch un-aggregated rows so we can apply the contract gate
+    #    per-review before bucketing. ORDER BY urgency keeps the highest
+    #    urgency reviews first inside each (vendor, pain) bucket up to the
+    #    20-row sample cap.
     core_rows = await pool.fetch(
         f"""
         SELECT vm.vendor_name AS vendor_name,
-            r.enrichment->>'pain_category' AS pain_category,
+            r.id AS review_id,
             r.source,
-            count(*) AS cnt,
-            avg((r.enrichment->>'urgency_score')::numeric) AS avg_urgency,
-            avg(r.rating) AS avg_rating,
-            array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
-                FILTER (WHERE r.id IS NOT NULL) AS review_ids
+            r.rating,
+            r.enrichment AS enrichment_raw,
+            (r.enrichment->>'urgency_score')::numeric AS urgency_score
         FROM b2b_reviews r
         {_review_vendor_association_join(review_alias='r', output_alias='vm')}
         WHERE {filters}
           AND r.enrichment->>'pain_category' IS NOT NULL
-        GROUP BY vm.vendor_name, r.enrichment->>'pain_category', r.source
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
         """,
         window_days,
         sources,
@@ -7013,13 +7022,28 @@ async def _fetch_pain_provenance(
 
     result: dict[tuple[str, str], dict] = {}
 
-    # Aggregate core rows
+    # Aggregate core rows in Python after applying the contract gate.
     for r in core_rows:
         vendor = _canonicalize_vendor(r["vendor_name"] or "")
-        pain = r["pain_category"] or ""
-        if not vendor or not pain:
+        if not vendor:
             continue
-        key = (vendor, pain)
+        raw_enrichment = r["enrichment_raw"]
+        if isinstance(raw_enrichment, dict):
+            enrichment_dict = raw_enrichment
+        elif isinstance(raw_enrichment, str) and raw_enrichment:
+            try:
+                parsed = json.loads(raw_enrichment)
+                enrichment_dict = parsed if isinstance(parsed, dict) else None
+            except (json.JSONDecodeError, TypeError):
+                enrichment_dict = None
+        else:
+            enrichment_dict = None
+        gated_pain = pain_category_for_bucket(
+            enrichment_dict, min_confidence="weak", allow_generic=True,
+        )
+        if not gated_pain:
+            continue
+        key = (vendor, gated_pain)
         if key not in result:
             result[key] = {
                 "mention_count": 0,
@@ -7031,24 +7055,38 @@ async def _fetch_pain_provenance(
                 "source_distribution": {},
                 "sample_review_ids": [],
                 "_urgency_sum": 0.0,
+                "_urgency_count": 0,
                 "_rating_sum": 0.0,
-                "_total": 0,
+                "_rating_count": 0,
             }
         entry = result[key]
-        cnt = r["cnt"]
-        entry["mention_count"] += cnt
-        entry["_total"] += cnt
-        entry["_urgency_sum"] += float(r["avg_urgency"] or 0) * cnt
-        entry["_rating_sum"] += float(r["avg_rating"] or 0) * cnt
+        entry["mention_count"] += 1
+        urgency = r["urgency_score"]
+        if urgency is not None:
+            try:
+                entry["_urgency_sum"] += float(urgency)
+                entry["_urgency_count"] += 1
+            except (TypeError, ValueError):
+                pass
+        rating = r["rating"]
+        if rating is not None:
+            try:
+                entry["_rating_sum"] += float(rating)
+                entry["_rating_count"] += 1
+            except (TypeError, ValueError):
+                pass
         source = r["source"] or "unknown"
         entry["source_distribution"][source] = (
-            entry["source_distribution"].get(source, 0) + cnt
+            entry["source_distribution"].get(source, 0) + 1
         )
-        for rid in (r["review_ids"] or []):
-            if len(entry["sample_review_ids"]) < 20 and str(rid) not in entry["sample_review_ids"]:
-                entry["sample_review_ids"].append(str(rid))
+        rid = r["review_id"]
+        if rid is not None and len(entry["sample_review_ids"]) < 20:
+            rid_str = str(rid)
+            if rid_str not in entry["sample_review_ids"]:
+                entry["sample_review_ids"].append(rid_str)
 
-    # Aggregate severity breakdown
+    # Aggregate severity breakdown -- augment-only against keys already
+    # populated by the gated core pass.
     for r in severity_rows:
         vendor = _canonicalize_vendor(r["vendor_name"] or "")
         pain = r["pain_category"] or ""
@@ -7066,11 +7104,17 @@ async def _fetch_pain_provenance(
         elif severity == "minor":
             result[key]["minor_count"] += cnt
 
-    # Finalize averages and clean internal fields
+    # Finalize averages and clean internal fields. NULL-safe: divides by
+    # the count of rows that actually contributed a value, not by total
+    # mention_count, so a vendor with a few null-rating sources isn't
+    # punished by the missing values.
     for entry in result.values():
-        total = entry.pop("_total", 0) or 1
-        entry["avg_urgency"] = round(entry.pop("_urgency_sum", 0) / total, 1)
-        entry["avg_rating"] = round(entry.pop("_rating_sum", 0) / total, 2)
+        urg_sum = entry.pop("_urgency_sum", 0.0)
+        urg_count = entry.pop("_urgency_count", 0)
+        rat_sum = entry.pop("_rating_sum", 0.0)
+        rat_count = entry.pop("_rating_count", 0)
+        entry["avg_urgency"] = round(urg_sum / urg_count, 1) if urg_count else 0.0
+        entry["avg_rating"] = round(rat_sum / rat_count, 2) if rat_count else 0.0
 
     return result
 

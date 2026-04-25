@@ -1224,17 +1224,33 @@ async def test_fetch_insider_aggregates_reads_vendor_mentions():
 @pytest.mark.asyncio
 async def test_fetch_pain_provenance_reads_vendor_mentions():
     review_id = uuid4()
+    review_id_2 = uuid4()
     pool = FakePool(
         fetch_map={
-            "avg((r.enrichment->>'urgency_score')::numeric) AS avg_urgency": [
+            "r.enrichment AS enrichment_raw": [
                 {
                     "vendor_name": "Zendesk",
-                    "pain_category": "pricing",
+                    "review_id": review_id,
                     "source": "g2",
-                    "cnt": 2,
-                    "avg_urgency": 6.5,
-                    "avg_rating": 2.5,
-                    "review_ids": [review_id],
+                    "rating": 2.0,
+                    "urgency_score": 6.0,
+                    "enrichment_raw": {
+                        "pain_category": "pricing",
+                        "pain_confidence": "strong",
+                        "urgency_score": 6.0,
+                    },
+                },
+                {
+                    "vendor_name": "Zendesk",
+                    "review_id": review_id_2,
+                    "source": "g2",
+                    "rating": 3.0,
+                    "urgency_score": 7.0,
+                    "enrichment_raw": {
+                        "pain_category": "pricing",
+                        "pain_confidence": "strong",
+                        "urgency_score": 7.0,
+                    },
                 },
             ],
             "p.value->>'severity' AS severity": [
@@ -1250,7 +1266,7 @@ async def test_fetch_pain_provenance_reads_vendor_mentions():
 
     rows = await shared_mod._fetch_pain_provenance(pool, 90)
 
-    core_call = next(call for call in pool.calls if "avg((r.enrichment->>'urgency_score')::numeric) AS avg_urgency" in call[0])
+    core_call = next(call for call in pool.calls if "r.enrichment AS enrichment_raw" in call[0])
     severity_call = next(call for call in pool.calls if "p.value->>'severity' AS severity" in call[0])
     assert "JOIN b2b_review_vendor_mentions vm" in core_call[0]
     assert "JOIN b2b_review_vendor_mentions vm" in severity_call[0]
@@ -1262,7 +1278,7 @@ async def test_fetch_pain_provenance_reads_vendor_mentions():
         "avg_urgency": 6.5,
         "avg_rating": 2.5,
         "source_distribution": {"g2": 2},
-        "sample_review_ids": [str(review_id)],
+        "sample_review_ids": [str(review_id), str(review_id_2)],
     }
 
 
@@ -2870,6 +2886,10 @@ def test_deterministic_displacement_map_uses_synthesis_views_for_source_wedge():
         def confidence(self, section):
             assert section == "causal_narrative"
             return "medium"
+
+        def confidence_score(self, section):
+            assert section == "causal_narrative"
+            return 0.6
 
         def falsification_conditions(self):
             return []

@@ -311,3 +311,244 @@ async def test_result_row_preserves_existing_keys():
     }
     missing = expected_keys - keys
     assert not missing, f"migration dropped keys: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# _fetch_pain_provenance (Phase 2.2.B): SQL aggregation moved to Python so
+# pain_category_for_bucket can gate per-row before bucketing.
+# ---------------------------------------------------------------------------
+
+
+def _provenance_row(
+    *,
+    vendor: str = "Shopify",
+    review_id: str = "00000000-0000-0000-0000-000000000001",
+    source: str = "g2",
+    rating: float | None = 3.0,
+    urgency: float | None = 7.0,
+    enrichment: dict | None = None,
+) -> dict[str, Any]:
+    if enrichment is None:
+        enrichment = {
+            "enrichment_schema_version": 4,
+            "pain_category": "pricing",
+            "pain_confidence": "strong",
+            "urgency_score": urgency,
+        }
+    return {
+        "vendor_name": vendor,
+        "review_id": review_id,
+        "source": source,
+        "rating": rating,
+        "enrichment_raw": json.dumps(enrichment) if enrichment is not None else None,
+        "urgency_score": urgency,
+    }
+
+
+class _ProvenancePool:
+    """Fake pool that returns core_rows on the first fetch and severity_rows on the second."""
+
+    def __init__(self, core_rows: list[dict], severity_rows: list[dict] | None = None):
+        self._core = core_rows
+        self._severity = severity_rows or []
+        self._calls = 0
+
+    async def fetch(self, _sql: str, *_args: Any) -> list[dict[str, Any]]:
+        self._calls += 1
+        if self._calls == 1:
+            return list(self._core)
+        return list(self._severity)
+
+
+@pytest.fixture(autouse=True)
+def _provenance_canonicalizers(monkeypatch):
+    """Make _canonicalize_vendor a no-op for tests so vendor names pass through."""
+    from atlas_brain.autonomous.tasks import _b2b_shared
+
+    monkeypatch.setattr(_b2b_shared, "_canonicalize_vendor", lambda v: v)
+    yield
+
+
+@pytest.mark.asyncio
+async def test_provenance_v4_strong_pricing_row_contributes():
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_pain_provenance
+
+    pool = _ProvenancePool([_provenance_row(
+        enrichment={
+            "enrichment_schema_version": 4,
+            "pain_category": "pricing",
+            "pain_confidence": "strong",
+            "urgency_score": 8.0,
+        },
+        rating=2.5, urgency=8.0,
+    )])
+    out = await _fetch_pain_provenance(pool, window_days=30)
+
+    assert ("Shopify", "pricing") in out
+    entry = out[("Shopify", "pricing")]
+    assert entry["mention_count"] == 1
+    assert entry["avg_urgency"] == 8.0
+    assert entry["avg_rating"] == 2.5
+    assert entry["source_distribution"] == {"g2": 1}
+    assert "00000000-0000-0000-0000-000000000001" in entry["sample_review_ids"]
+
+
+@pytest.mark.asyncio
+async def test_provenance_v4_weak_specific_pain_contributes_at_default():
+    """Default min_confidence='weak' permits weak signal."""
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_pain_provenance
+
+    pool = _ProvenancePool([_provenance_row(
+        enrichment={
+            "enrichment_schema_version": 4,
+            "pain_category": "ux",
+            "pain_confidence": "weak",
+            "urgency_score": 6.0,
+        },
+        rating=3.5, urgency=6.0,
+    )])
+    out = await _fetch_pain_provenance(pool, window_days=30)
+
+    assert ("Shopify", "ux") in out
+    assert out[("Shopify", "ux")]["mention_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_provenance_v4_confidence_none_row_dropped():
+    """Rows with explicit pain_confidence='none' must NOT contribute."""
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_pain_provenance
+
+    pool = _ProvenancePool([_provenance_row(
+        enrichment={
+            "enrichment_schema_version": 4,
+            "pain_category": "overall_dissatisfaction",
+            "pain_confidence": "none",
+        },
+    )])
+    out = await _fetch_pain_provenance(pool, window_days=30)
+
+    assert out == {}, "confidence=none row must not contribute to rollup"
+
+
+@pytest.mark.asyncio
+async def test_provenance_legacy_v3_row_resolves_via_recompute():
+    """Legacy row missing pain_confidence resolves via the contract recompute."""
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_pain_provenance
+
+    pool = _ProvenancePool([_provenance_row(
+        enrichment={
+            "pain_category": "pricing",
+            "specific_complaints": ["far too expensive for value"],
+            "urgency_score": 7.0,
+            "churn_signals": {"intent_to_leave": True},
+        },
+        rating=2.0, urgency=7.0,
+    )])
+    out = await _fetch_pain_provenance(pool, window_days=30)
+
+    # Resolved tier should be at least 'weak' for a legacy row with
+    # intent + a complaint, so it survives the bucket gate
+    assert ("Shopify", "pricing") in out
+
+
+@pytest.mark.asyncio
+async def test_provenance_aggregates_three_rows_same_bucket():
+    """Three v4 strong rows for the same (vendor, pain) accumulate correctly."""
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_pain_provenance
+
+    rows = [
+        _provenance_row(
+            review_id="00000000-0000-0000-0000-00000000000a",
+            source="g2", rating=2.0, urgency=8.0,
+        ),
+        _provenance_row(
+            review_id="00000000-0000-0000-0000-00000000000b",
+            source="capterra", rating=3.0, urgency=7.0,
+        ),
+        _provenance_row(
+            review_id="00000000-0000-0000-0000-00000000000c",
+            source="g2", rating=2.5, urgency=9.0,
+        ),
+    ]
+    pool = _ProvenancePool(rows)
+    out = await _fetch_pain_provenance(pool, window_days=30)
+
+    entry = out[("Shopify", "pricing")]
+    assert entry["mention_count"] == 3
+    assert entry["source_distribution"] == {"g2": 2, "capterra": 1}
+    assert len(entry["sample_review_ids"]) == 3
+    # avg_urgency = (8+7+9)/3 = 8.0
+    assert entry["avg_urgency"] == 8.0
+    # avg_rating = (2+3+2.5)/3 = 2.5
+    assert entry["avg_rating"] == 2.5
+
+
+@pytest.mark.asyncio
+async def test_provenance_null_rating_does_not_skew_average():
+    """Rows with null rating should be excluded from avg_rating denominator."""
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_pain_provenance
+
+    rows = [
+        _provenance_row(rating=4.0, urgency=8.0,
+                        review_id="00000000-0000-0000-0000-00000000000a"),
+        _provenance_row(rating=None, urgency=8.0,
+                        review_id="00000000-0000-0000-0000-00000000000b"),
+    ]
+    pool = _ProvenancePool(rows)
+    out = await _fetch_pain_provenance(pool, window_days=30)
+
+    entry = out[("Shopify", "pricing")]
+    assert entry["mention_count"] == 2
+    # avg_rating = 4.0 / 1 row that had a rating, NOT 4.0/2
+    assert entry["avg_rating"] == 4.0
+    # both contributed urgency
+    assert entry["avg_urgency"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_provenance_severity_augments_only_kept_keys():
+    """Severity rows must ONLY augment (vendor, pain) keys that survived
+    the gate. Severity for a gated-out key is silently dropped."""
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_pain_provenance
+
+    core = [_provenance_row(
+        enrichment={
+            "enrichment_schema_version": 4,
+            "pain_category": "pricing",
+            "pain_confidence": "strong",
+        },
+    )]
+    severity = [
+        # Augments the kept (Shopify, pricing) key
+        {"vendor_name": "Shopify", "pain_category": "pricing",
+         "severity": "primary", "cnt": 5},
+        # No corresponding core row -- must be dropped
+        {"vendor_name": "Shopify", "pain_category": "support",
+         "severity": "primary", "cnt": 99},
+    ]
+    pool = _ProvenancePool(core, severity)
+    out = await _fetch_pain_provenance(pool, window_days=30)
+
+    assert ("Shopify", "pricing") in out
+    assert out[("Shopify", "pricing")]["primary_count"] == 5
+    assert ("Shopify", "support") not in out
+
+
+@pytest.mark.asyncio
+async def test_provenance_gated_pain_may_differ_from_raw_pain_category():
+    """If a row's raw pain_category is 'overall_dissatisfaction' but
+    confidence='weak', the bucket gate keeps it under that same category
+    (allow_generic=True default). Verify the bucket key matches gated value."""
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_pain_provenance
+
+    pool = _ProvenancePool([_provenance_row(
+        enrichment={
+            "enrichment_schema_version": 4,
+            "pain_category": "overall_dissatisfaction",
+            "pain_confidence": "weak",
+            "urgency_score": 6.0,
+        },
+    )])
+    out = await _fetch_pain_provenance(pool, window_days=30)
+
+    assert ("Shopify", "overall_dissatisfaction") in out
