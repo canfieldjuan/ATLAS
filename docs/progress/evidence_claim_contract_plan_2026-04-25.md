@@ -571,60 +571,124 @@ Script:
 
 `scripts/audit_evidence_claims.py`
 
+### Product Priority
+
+The UIs are the primary product. Reports (battle cards, briefings, challenger
+briefs, scorecards) are secondary surfaces sold separately or bundled as
+upper-management material. Migration order reflects this: the API and the
+React UI migrate first so customer-facing surfaces dogfood the contract
+immediately; reports follow as server-side consumers of the same API; MCP
+is last.
+
+### Cost Guardrail
+
+UI-first migration also gates LLM spend on contract validation. Tier 1
+(API + UI) is pure code + DB-read work — no LLM calls, no synthesis
+re-runs, no token budget. We can iterate on claim gates and rejection
+reasons in the browser at zero per-iteration cost.
+
+Tier 2 (server-side reports) is where money starts: re-generating reports
+to consume validated claims may trigger synthesis re-runs (Sonnet 4.5 on
+the current Phase 8b config) or downstream cache invalidations. Those costs
+should not be incurred until the UI A/B has confirmed the contract gates
+are correct.
+
+The rule: we do not burn token budget on report regeneration until the
+browser experience validates that the contract is producing the right
+selections. If the UI A/B reveals a gate is too strict or too lenient, we
+tune the gate first — at zero LLM cost — before any server-side consumer
+migration touches synthesis.
+
 ### First Consumer Migration
+
+The first migration target is the API endpoint that backs the UI:
 
 File:
 
-`atlas_brain/autonomous/tasks/b2b_battle_cards.py`
+`atlas_brain/api/b2b_evidence.py`
 
 Reason:
 
-- highest business impact
-- already has `anchor_examples` and `witness_highlights`
-- narrowest surface for hand inspection
+- the UI is the primary product surface; the API is the only path between
+  the contract and what customers see
+- list_witnesses + get_witness are the smallest surface that exercises the
+  contract end-to-end (HTTP -> service -> shadow table read -> UI)
+- introducing a `?claim_type=<type>` filter on list_witnesses gives the UI
+  a targeted query that the existing per-witness endpoint never had
+- old clients that don't pass claim_type fall back to the existing
+  list_witnesses behavior unchanged
 
-Migration rule:
+API migration rule:
 
-- render from valid claims when `claim_schema_version >= v1`
-- fall back to current witness behavior only for legacy rows
-- keep quality warnings when valid claim volume is thin
+- new optional query parameter `claim_type` on `GET /witnesses`. When set,
+  return only witnesses where a validated claim of that type exists for
+  the target_entity in `b2b_evidence_claims`.
+- new optional response field `claim_validations: list[ClaimValidationDTO]`
+  on `GET /witnesses/{id}`. Returns every claim row for that witness,
+  enabling the UI to show "this witness validates as a pain claim about
+  Monday but invalid as a counterevidence claim because polarity=negative."
+- keep `quote_grade: bool` as backwards-compat (see API Compatibility
+  section above).
+
+UI migration rule (immediately after API):
+
+- `atlas-churn-ui/src/api/client.ts`: extend `EvidenceWitnessDetail` with
+  `claim_validations` array; add `listWitnesses(vendor, {claim_type?})`
+  helper.
+- `atlas-churn-ui/src/components/EvidenceDrawer.tsx`: surface
+  per-claim-type validity banners (in addition to the existing
+  pain_confidence and quote_grade banners). When a witness has both
+  "valid pain claim" and "invalid counterevidence" entries, the drawer
+  shows both with rejection reasons.
+- `atlas-churn-ui/src/lib/reportViewModels.ts` and
+  `atlas-churn-ui/src/types/reportViewModels.ts`: add
+  `ClaimValidationViewModel`; map for the report pages that already
+  consume `ReasoningWitnessViewModel`.
+- pages that already consume EvidenceDrawer (Opportunities,
+  VendorDetail, etc.): no change required — drawer enhancement is
+  additive.
 
 ### Later Consumer Migration Order
 
-Tier 1 — narrow surface, highest business impact (migrate fully):
+Tier 1 — primary product surface (migrate first, in this order):
 
-1. `b2b_battle_cards.py`
-2. `b2b_vendor_briefing.py` + `atlas_brain/templates/email/vendor_briefing.py`
-3. `b2b_challenger_brief.py`
-4. `b2b_churn_reports.py` (scorecard + deep dive evidence subsections)
+1. `atlas_brain/api/b2b_evidence.py` — claim_type filter, claim_validations
+   response field. The contract becomes externally visible here.
+2. `atlas-churn-ui/src/api/client.ts` + `EvidenceDrawer.tsx` +
+   `reportViewModels.ts` — UI consumes the new API shape. Customer-facing
+   experience picks up the contract here.
 
-Tier 2 — content generation, claim-aware fallback (migrate when select_best_claim is stable):
+Tier 2 — secondary product surfaces (server-rendered reports, consume the
+same service layer the API uses):
 
-5. `b2b_campaign_generation.py`
-6. `b2b_blog_post_generation.py`
+3. `b2b_battle_cards.py` — already has `anchor_examples` and
+   `witness_highlights`; narrowest server-side surface for hand inspection.
+4. `b2b_vendor_briefing.py` + `atlas_brain/templates/email/vendor_briefing.py`
+   — email exports of the same data the UI shows.
+5. `b2b_challenger_brief.py`
+6. `b2b_churn_reports.py` (scorecard + deep dive evidence subsections)
 
-Tier 3 — broad surface, intelligence_data passthrough (consume validated
-claims when present, else legacy):
+Tier 3 — content generation (claim-aware fallback when select_best_claim is
+stable; fall back to legacy otherwise):
 
-7. `b2b_intelligence` report types not already covered by 1-4:
-   `accounts_in_motion`, `weekly_churn_feed`, `vendor_scorecard`,
-   `displacement_report`, `category_overview`, `churn_alert`,
-   `watchlist_alert`, `tenant_report`. These rendererders read
-   intelligence_data JSONB; they migrate by adding a claim-aware fallback
-   path rather than full rewrite.
+7. `b2b_campaign_generation.py`
+8. `b2b_blog_post_generation.py`
 
-Tier 4 — APIs and MCP (final migration):
+Tier 4 — broad intelligence_data surface (passthrough; consume validated
+claims when present, else legacy. Most of these surfaces are upper-management
+exports rather than primary UI surfaces):
 
-8. `atlas_brain/api/b2b_evidence.py` — add optional `claim_type` filter on
-   list_witnesses; add `claim_validations` array on EvidenceWitnessDetail.
-   Keep `quote_grade` for backwards compat.
-9. `atlas_brain/mcp/b2b_churn_server.py` MCP tools (60+) that surface
-   witness data: `get_witness`, `list_witnesses`, plus the 7 report-type
-   fetch tools. Add an optional claim_type parameter that, when set,
-   filters to only valid claims of that type.
-10. UI view models: `atlas-churn-ui/src/lib/reportViewModels.ts` and
-    `atlas-churn-ui/src/types/reportViewModels.ts` — add typed
-    `ClaimValidationViewModel` and per-claim banners.
+9. `b2b_intelligence` report types not already covered: `accounts_in_motion`,
+   `weekly_churn_feed`, `vendor_scorecard`, `displacement_report`,
+   `category_overview`, `churn_alert`, `watchlist_alert`, `tenant_report`.
+
+Tier 5 — MCP (final):
+
+10. `atlas_brain/mcp/b2b_churn_server.py` — 60+ tools. Add `claim_type`
+    parameter to `get_witness`, `list_witnesses`, and the 7 report-type
+    fetch tools. MCP migrates last because it is a developer-tooling
+    surface, not a primary product surface; consistency with the API
+    matters more than priority.
 
 ## Acceptance Tests
 
@@ -790,14 +854,21 @@ For each canary vendor, document:
 
 - valid / invalid / cannot_validate counts per claim_type
 - rejection reason distribution
+- **browser-side comparison**: open the EvidenceDrawer for the same
+  vendor with and without the `claim_type` filter; compare what the UI
+  surfaces for each Phase 6 banner type. The customer-facing experience
+  is the primary acceptance signal.
 - compare select_best_claim output to the legacy battle-card witness pick
+  (server-side report comparison, secondary signal).
 - record any disagreement and classify: contract correct / contract
   too-strict / contract too-lenient / legacy was wrong
 
 Record findings in `docs/progress/evidence_claim_canary_audit_<date>.md`.
-Do NOT proceed to step 10 until at least 5 of 7 canary vendors show
-"contract correct or contract correctly stricter than legacy." Anything
-worse means tightening or relaxing gates first.
+Do NOT proceed to Tier 2 (server-side reports) until at least 5 of 7
+canary vendors show "contract correct or contract correctly stricter
+than legacy" *in the browser*. Anything worse means tightening or
+relaxing gates first. Server-side report migration is gated on UI
+acceptance, not the other way around.
 
 ## Deletion Gates
 
