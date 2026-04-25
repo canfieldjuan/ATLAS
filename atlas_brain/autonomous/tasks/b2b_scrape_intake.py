@@ -1729,6 +1729,114 @@ async def _evaluate_pre_scrape_skip(
     }
 
 
+async def _evaluate_pre_scrape_low_yield_skip(
+    pool,
+    *,
+    target_id: Any,
+    source: str,
+    vendor_name: str,
+    parser_version: str | None,
+    cfg,
+) -> dict[str, Any] | None:
+    """Decide whether this target's next scrape can be skipped because recent
+    runs produced almost no NET-NEW reviews.
+
+    Net-new = reviews_inserted minus cross_source_duplicates (cross-source
+    dup rows are inserted with duplicate_of_review_id but contribute zero
+    actionable churn signal -- they should not flatter the yield ratio).
+
+    Returns None to scrape normally, or a decision dict describing why the
+    skip is safe. The lookback is filtered to rows that match the current
+    parser_version so historical broken-parser logs cannot suppress a newly
+    fixed parser. Six conditions must ALL hold to skip (see plan).
+    """
+    if not getattr(cfg, "pre_scrape_low_yield_skip_enabled", False):
+        return None
+    source_key = str(source or "").strip().lower()
+    if not source_key:
+        return None
+    paid_sources = _resolve_pre_scrape_skip_paid_sources(cfg)
+    if source_key not in paid_sources:
+        return None
+    current_parser_version = str(parser_version or "").strip()
+    if not current_parser_version:
+        # No baseline to compare against -- never suppress
+        return None
+    lookback = max(2, int(getattr(cfg, "pre_scrape_low_yield_skip_lookback_runs", 5) or 5))
+    row = await pool.fetchrow(
+        """
+        WITH recent AS (
+            SELECT status, reviews_found, reviews_inserted,
+                   COALESCE(cross_source_duplicates, 0) AS cross_source_duplicates,
+                   started_at
+            FROM b2b_scrape_log
+            WHERE target_id = $1
+              AND COALESCE(status, '') NOT LIKE 'skipped%'
+              AND parser_version = $3
+            ORDER BY started_at DESC
+            LIMIT $2
+        )
+        SELECT
+            COUNT(*)                                              AS real_runs,
+            COALESCE(SUM(reviews_found), 0)                       AS total_found,
+            COALESCE(SUM(reviews_inserted), 0)                    AS total_inserted,
+            COALESCE(SUM(cross_source_duplicates), 0)             AS total_cross_source_duplicates,
+            COALESCE(SUM(GREATEST(reviews_inserted - COALESCE(cross_source_duplicates, 0), 0)), 0)
+                                                                  AS total_unique_inserted,
+            MAX(started_at)                                       AS last_real_scrape_at
+        FROM recent
+        """,
+        target_id,
+        lookback,
+        current_parser_version,
+    )
+    if row is None:
+        return None
+    real_runs = int(row["real_runs"] or 0)
+    total_found = int(row["total_found"] or 0)
+    total_inserted = int(row["total_inserted"] or 0)
+    total_cross_source_duplicates = int(row["total_cross_source_duplicates"] or 0)
+    total_unique_inserted = int(row["total_unique_inserted"] or 0)
+    last_real_scrape_at = row["last_real_scrape_at"]
+    if real_runs < lookback:
+        return None
+    min_found = int(getattr(cfg, "pre_scrape_low_yield_skip_min_found_total", 50) or 50)
+    if total_found < min_found:
+        return None
+    if total_found <= 0:
+        # Defense in depth: zero-found runs alone must never trigger this gate.
+        return None
+    ratio = total_unique_inserted / total_found
+    raw_threshold = getattr(cfg, "pre_scrape_low_yield_skip_ratio_threshold", 0.05)
+    threshold = 0.05 if raw_threshold is None else float(raw_threshold)
+    if ratio >= threshold:
+        return None
+    max_age_days = int(getattr(cfg, "pre_scrape_low_yield_skip_max_age_days", 14) or 14)
+    if last_real_scrape_at is not None:
+        age = datetime.now(timezone.utc) - last_real_scrape_at
+        if age.total_seconds() > max_age_days * 24 * 60 * 60:
+            return None
+    return {
+        "reason": "pre_scrape_low_incremental_yield",
+        "source": source_key,
+        "vendor_name": vendor_name,
+        "parser_version": current_parser_version,
+        "real_runs": real_runs,
+        "total_found": total_found,
+        "total_inserted": total_inserted,
+        "total_cross_source_duplicates": total_cross_source_duplicates,
+        "total_unique_inserted": total_unique_inserted,
+        "unique_insert_ratio": round(ratio, 4),
+        "ratio_threshold": threshold,
+        "lookback_runs": lookback,
+        "min_found_total": min_found,
+        "max_age_days": max_age_days,
+        "last_real_scrape_at": (
+            last_real_scrape_at.isoformat() if last_real_scrape_at is not None else None
+        ),
+    }
+
+
 async def _log_pre_scrape_skip(
     pool,
     *,
@@ -1736,11 +1844,18 @@ async def _log_pre_scrape_skip(
     source: str,
     parser_version: str | None,
     decision: dict[str, Any],
+    status: str = "skipped_redundant",
+    stop_reason: str = "pre_scrape_cross_source_coverage",
 ) -> None:
     """Write a b2b_scrape_log row recording the skip decision.
 
     Distinct from _log_scrape: no captcha telemetry, no page logs, proxy_type
     is hard-coded 'none' (no proxy was used), stop_reason names the gate.
+
+    The status and stop_reason kwargs let multiple gate types share this
+    helper while still distinguishing themselves in the log. Defaults
+    preserve the original cross-source path so existing callers keep their
+    behavior.
     """
     try:
         await pool.execute(
@@ -1758,7 +1873,7 @@ async def _log_pre_scrape_skip(
             """,
             _uuid.UUID(str(target_id)),
             str(source or "").strip().lower(),
-            "skipped_redundant",
+            str(status or "skipped_redundant"),
             0,
             0,
             0,
@@ -1770,7 +1885,7 @@ async def _log_pre_scrape_skip(
             [],
             None,
             None,
-            "pre_scrape_cross_source_coverage",
+            str(stop_reason or "pre_scrape_cross_source_coverage"),
             None,
             None,
             0,
@@ -1967,6 +2082,68 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         "Pre-scrape skip for %s/%s: ratio=%.2f over %d runs (saved 1 paid call)",
                         target.source, target.vendor_name,
                         skip_decision["duplicate_ratio"], skip_decision["real_runs"],
+                    )
+                    return
+
+            # Pre-scrape low-incremental-yield gate: skip paid scrapes when
+            # recent same-parser-version runs produced almost no NET-NEW
+            # reviews (inserts minus cross-source dups) relative to found.
+            # Catches the dominant same-source already-known waste pattern
+            # the cross-source gate above does not address.
+            if cfg.pre_scrape_low_yield_skip_enabled:
+                low_yield_decision = None
+                try:
+                    low_yield_decision = await _evaluate_pre_scrape_low_yield_skip(
+                        pool,
+                        target_id=row["id"],
+                        source=target.source,
+                        vendor_name=target.vendor_name,
+                        parser_version=getattr(parser, "version", None),
+                        cfg=cfg,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Pre-scrape low-yield evaluation failed for %s/%s; proceeding with scrape",
+                        target.source, target.vendor_name,
+                        exc_info=True,
+                    )
+                if low_yield_decision:
+                    await _log_pre_scrape_skip(
+                        pool,
+                        target_id=row["id"],
+                        source=target.source,
+                        parser_version=getattr(parser, "version", None),
+                        decision=low_yield_decision,
+                        status="skipped_low_incremental_yield",
+                        stop_reason="pre_scrape_low_incremental_yield",
+                    )
+                    await _update_target_cooldown_only(pool, row["id"])
+                    try:
+                        await record_dedup(
+                            pool,
+                            stage="b2b_scrape_pre_skip_low_yield",
+                            entity_type="scrape_target",
+                            entity_id=str(row["id"]),
+                            reason=low_yield_decision["reason"],
+                            detail=low_yield_decision,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "record_dedup failed for low-yield skip on %s/%s",
+                            target.source, target.vendor_name,
+                            exc_info=True,
+                        )
+                    async with results_lock:
+                        results_summary.append({
+                            "source": target.source,
+                            "vendor": target.vendor_name,
+                            "status": "skipped_low_incremental_yield",
+                            "skip_decision": low_yield_decision,
+                        })
+                    logger.info(
+                        "Pre-scrape low-yield skip for %s/%s: ratio=%.3f over %d runs (saved 1 paid call)",
+                        target.source, target.vendor_name,
+                        low_yield_decision["unique_insert_ratio"], low_yield_decision["real_runs"],
                     )
                     return
 
@@ -2303,6 +2480,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ),
         "total_company_signal_eligible_reviews": sum(
             int(result.get("company_signal_eligible_reviews") or 0) for result in results_summary
+        ),
+        "total_skipped_low_yield": sum(
+            1 for result in results_summary
+            if str(result.get("status") or "") == "skipped_low_incremental_yield"
+        ),
+        "total_pre_scrape_skipped": sum(
+            1 for result in results_summary
+            if str(result.get("status") or "").startswith("skipped")
         ),
         "funnel": {
             "found": total_reviews,

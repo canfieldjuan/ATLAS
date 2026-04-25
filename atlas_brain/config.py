@@ -4318,6 +4318,42 @@ class B2BScrapeConfig(BaseSettings):
         description="Comma-separated source allowlist override; empty value derives the paid-source set from services.scraping.capabilities (verified data quality + web_unlocker access pattern or residential proxy class)",
     )
 
+    # Pre-scrape low-incremental-yield gate: skip a paid scrape when recent
+    # runs of this target produced almost no NET-NEW reviews
+    # (reviews_inserted minus cross_source_duplicates) relative to
+    # reviews_found. Catches the dominant same-source already-known waste
+    # that the cross-source gate above does not address. Reuses the same
+    # paid-source override and is filtered by parser_version so historical
+    # broken-parser logs cannot suppress a newly fixed parser.
+    pre_scrape_low_yield_skip_enabled: bool = Field(
+        default=True,
+        description="Gate paid scrapes on recent unique-insert yield ratios",
+    )
+    pre_scrape_low_yield_skip_lookback_runs: int = Field(
+        default=5,
+        ge=2,
+        le=20,
+        description="Number of most recent same-parser-version non-skipped runs to evaluate per target",
+    )
+    pre_scrape_low_yield_skip_ratio_threshold: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="Skip when total_unique_inserted / total_reviews_found falls below this ratio over the lookback window",
+    )
+    pre_scrape_low_yield_skip_min_found_total: int = Field(
+        default=50,
+        ge=1,
+        le=10000,
+        description="Statistical sample floor: lookback window must have at least this many reviews_found before the gate can fire",
+    )
+    pre_scrape_low_yield_skip_max_age_days: int = Field(
+        default=14,
+        ge=1,
+        le=180,
+        description="Force a real scrape if the most recent same-parser-version non-skipped run is older than this many days (escape hatch)",
+    )
+
     # Exhaustive scrape mode
     exhaustive_lookback_days: int = Field(default=365, description="Date cutoff for exhaustive mode (days)")
     exhaustive_max_pages_default: int = Field(default=100, description="Safety cap for exhaustive pagination")
