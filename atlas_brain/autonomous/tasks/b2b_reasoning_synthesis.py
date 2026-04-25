@@ -872,6 +872,7 @@ async def _classify_witness_grounding(
 
 
 def _witness_row_payload(witness: dict[str, Any]) -> dict[str, Any]:
+    verbatim = witness.get("phrase_verbatim")
     return {
         "witness_id": str(witness.get("witness_id") or witness.get("_sid") or ""),
         "review_id": str(witness.get("review_id") or ""),
@@ -893,6 +894,15 @@ def _witness_row_payload(witness: dict[str, Any]) -> dict[str, Any]:
         or compute_witness_hash(witness),
         "source_span_id": str(witness.get("source_span_id") or "").strip() or None,
         "grounding_status": str(witness.get("grounding_status") or "not_grounded"),
+        # Phase 5: phrase tags + pain confidence. INSERT/UPDATE in
+        # _persist_packet_artifacts only writes these once migration 303
+        # adds the columns. Until then, the values ride on the row dict
+        # but are silently dropped at the SQL boundary.
+        "phrase_polarity": str(witness.get("phrase_polarity") or "").strip() or None,
+        "phrase_subject": str(witness.get("phrase_subject") or "").strip() or None,
+        "phrase_role": str(witness.get("phrase_role") or "").strip() or None,
+        "phrase_verbatim": verbatim if isinstance(verbatim, bool) else None,
+        "pain_confidence": str(witness.get("pain_confidence") or "").strip() or None,
     }
 
 

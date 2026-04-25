@@ -645,6 +645,9 @@ def derive_evidence_spans(
         competitor: str | None,
         time_anchor: str | None,
         polarity: str | None = None,
+        subject: str | None = None,
+        role: str | None = None,
+        verbatim: bool | None = None,
     ) -> None:
         phrase = str(raw_text or "").strip()
         if not phrase:
@@ -698,6 +701,13 @@ def derive_evidence_spans(
             # counterevidence (positive/subject_vendor) from pain spans.
             # None when not available (v1 path, synthesized spans).
             "polarity": polarity,
+            # Phase 5: source-phrase subject and role attribution, so the
+            # candidate-types gate can drop passing_mention phrases from
+            # common_pattern witnesses and the API can surface confidence
+            # to the UI. None on v1 / synthesized spans.
+            "subject": subject,
+            "role": role,
+            "verbatim": verbatim,
             "_review_id": review_id,
         })
         seen.add(key)
@@ -714,15 +724,22 @@ def derive_evidence_spans(
             if signal_type == "event":
                 time_anchor = default_time_anchor
 
-            # Pull polarity + subject from v2 metadata when available so
-            # the complaint classifier can gate and the span can carry
-            # polarity through for witness routing.
+            # Pull polarity, subject, role, verbatim from v2 metadata when
+            # available so the complaint classifier can gate, the span can
+            # carry the tags through for witness routing, and downstream
+            # consumers can surface confidence on the UI.
             subject_tag: str | None = None
             polarity_tag: str | None = None
+            role_tag: str | None = None
+            verbatim_tag: bool | None = None
             if metadata_field is not None and phrase_meta:
                 row = phrase_meta.get((metadata_field, index)) or {}
                 subject_tag = row.get("subject")
                 polarity_tag = row.get("polarity")
+                role_tag = row.get("role")
+                vrb = row.get("verbatim")
+                if isinstance(vrb, bool):
+                    verbatim_tag = vrb
 
             span_pain = pain_category
             if signal_type in ("complaint", "recommendation"):
@@ -739,6 +756,9 @@ def derive_evidence_spans(
                 competitor=competitor,
                 time_anchor=time_anchor,
                 polarity=polarity_tag,
+                subject=subject_tag,
+                role=role_tag,
+                verbatim=verbatim_tag,
             )
             if len(spans) >= max_spans:
                 return spans
@@ -859,7 +879,17 @@ def _candidate_types(review: dict[str, Any], enrichment: dict[str, Any], span: d
             types.add("counterevidence")
         return types
 
-    if span.get("pain_category") and str(span.get("pain_category")) in primary_pains:
+    # Phase 5: a phrase tagged role=passing_mention is, by the LLM's own
+    # admission, a side reference rather than a real description of the
+    # pain. Block it from common_pattern so witness packs do not present
+    # passing mentions as representative examples. None / unknown role
+    # falls through (v1 path, synthesized spans).
+    span_role = str(span.get("role") or "").strip().lower()
+    if (
+        span.get("pain_category")
+        and str(span.get("pain_category")) in primary_pains
+        and span_role != "passing_mention"
+    ):
         types.add("common_pattern")
     if review.get("reviewer_company") or reviewer.get("decision_maker"):
         types.add("named_account")
@@ -959,6 +989,7 @@ def _witness_specificity_signals(
 
 
 def compute_witness_hash(witness: dict[str, Any]) -> str:
+    verbatim = witness.get("phrase_verbatim")
     payload = {
         "witness_id": str(witness.get("witness_id") or witness.get("_sid") or "").strip(),
         "review_id": str(witness.get("review_id") or "").strip(),
@@ -976,6 +1007,15 @@ def compute_witness_hash(witness: dict[str, Any]) -> str:
             for tag in (witness.get("signal_tags") or [])
             if str(tag or "").strip()
         ),
+        # Phase 5: include phrase tags + pain confidence so re-extraction
+        # under v2 metadata propagates as a hash change and triggers row
+        # rewrites. Empty string for None keeps v1 hashes stable until a
+        # row is genuinely re-tagged.
+        "phrase_polarity": str(witness.get("phrase_polarity") or "").strip().lower(),
+        "phrase_subject": str(witness.get("phrase_subject") or "").strip().lower(),
+        "phrase_role": str(witness.get("phrase_role") or "").strip().lower(),
+        "phrase_verbatim": "true" if verbatim is True else ("false" if verbatim is False else ""),
+        "pain_confidence": str(witness.get("pain_confidence") or "").strip().lower(),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
@@ -1053,6 +1093,15 @@ def build_vendor_witness_artifacts(
                 "candidate_types": sorted(types),
                 "selection_reason": "",
                 "source_span_id": span.get("span_id"),
+                # Phase 5: source-phrase tags + per-review pain confidence
+                # carried through so the API and UI can surface why a
+                # witness is graded the way it is. v1 / synthesized spans
+                # leave these as None.
+                "phrase_polarity": span.get("polarity"),
+                "phrase_subject": span.get("subject"),
+                "phrase_role": span.get("role"),
+                "phrase_verbatim": span.get("verbatim"),
+                "pain_confidence": enrichment.get("pain_confidence"),
             }
             specificity_score, generic_reasons = _witness_specificity_signals(
                 candidate,
