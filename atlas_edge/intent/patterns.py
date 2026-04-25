@@ -187,12 +187,12 @@ DEVICE_PATTERNS = [
     ),
     (
         re.compile(
-            r"(turn\s+)?(volume\s+)?(up|down)(?:\s+(?:on|for)\s+(?:the\s+)?(.+))?$",
+            r"(?:turn\s+)?volume\s+(up|down)(?:\s+(?:on|for)\s+(?:the\s+)?(.+))?$",
             re.IGNORECASE,
         ),
-        lambda m: ("volume_up" if m.group(3).lower() == "up" else "volume_down"),
+        lambda m: ("volume_up" if m.group(1).lower() == "up" else "volume_down"),
         "media_player",
-        lambda m: {"target_name": m.group(4).strip() if m.group(4) else None},
+        lambda m: {"target_name": m.group(2).strip() if m.group(2) else None},
     ),
     # Generic "turn on/off the X" pattern (fallback)
     (

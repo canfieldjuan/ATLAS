@@ -31,16 +31,27 @@ class TimeSkill:
         except Exception:
             return datetime.now()
 
+    @staticmethod
+    def _format_date(now: datetime) -> str:
+        """Format a date string without platform-specific strftime directives."""
+        return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {now.day}, {now.year}."
+
+    @staticmethod
+    def _format_time(now: datetime) -> str:
+        """Format a 12-hour time string without platform-specific strftime directives."""
+        hour_12 = now.hour % 12 or 12
+        return f"It's {hour_12}:{now.minute:02d} {now.strftime('%p')}."
+
     async def execute(self, query: str, match: re.Match) -> SkillResult:
         now = self._now()
         query_lower = query.lower()
 
         if "date" in query_lower:
-            text = now.strftime("Today is %A, %B %-d, %Y.")
+            text = self._format_date(now)
         elif "day" in query_lower and "time" not in query_lower:
-            text = now.strftime("Today is %A, %B %-d.")
+            text = f"Today is {now.strftime('%A')}, {now.strftime('%B')} {now.day}."
         else:
-            text = now.strftime("It's %-I:%M %p.")
+            text = self._format_time(now)
 
         return SkillResult(
             success=True,
