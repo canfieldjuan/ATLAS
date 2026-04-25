@@ -18,6 +18,10 @@ from typing import Any, Iterable, Mapping
 from ...config import settings
 from ...services.apollo_company_overrides import fetch_company_override_map
 from ...services.b2b.corrections import suppress_predicate
+from ...services.b2b.enrichment_contract import (
+    pain_category_for_bucket,
+    resolve_pain_confidence,
+)
 from ...services.company_normalization import normalize_company_name
 from ...services.scraping.sources import (
     REQUIRED_ACTIONABLE_SOURCES,
@@ -6292,6 +6296,7 @@ async def _fetch_high_intent_companies(
             (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
             (r.enrichment->>'urgency_score')::numeric AS urgency,
             r.enrichment->>'pain_category' AS pain,
+            r.enrichment AS enrichment_raw,
             r.enrichment->'competitors_mentioned' AS alternatives,
             r.enrichment->'quotable_phrases' AS quotes,
             r.enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
@@ -6384,6 +6389,31 @@ async def _fetch_high_intent_companies(
             urgency = float(r["urgency"]) if r["urgency"] is not None else 0
         except (ValueError, TypeError):
             urgency = 0
+        # Gate pain_category via the contract helper. High-intent rows are
+        # admitted on urgency + identity + relevance + signal evidence; pain
+        # is an annotation, not an admission ticket. So we keep the row even
+        # when gated_pain is None and surface pain_confidence so downstream
+        # consumers can decide how to render the annotation.
+        #
+        # Parse enrichment_raw into a dict or None (NOT {}). A None enrichment
+        # must propagate as None so the contract resolver returns 'unknown'
+        # for the malformed/missing case -- {} would incorrectly recompute to
+        # 'none' via the empty-signals path.
+        raw_enrichment = r["enrichment_raw"]
+        if isinstance(raw_enrichment, dict):
+            enrichment_dict = raw_enrichment
+        elif isinstance(raw_enrichment, str) and raw_enrichment:
+            try:
+                parsed = json.loads(raw_enrichment)
+                enrichment_dict = parsed if isinstance(parsed, dict) else None
+            except (json.JSONDecodeError, TypeError):
+                enrichment_dict = None
+        else:
+            enrichment_dict = None
+        gated_pain = pain_category_for_bucket(
+            enrichment_dict, min_confidence="weak",
+        )
+        pain_conf = resolve_pain_confidence(enrichment_dict)
         results.append({
             "company": r["reviewer_company"],
             "raw_company": r["raw_reviewer_company"],
@@ -6409,7 +6439,8 @@ async def _fetch_high_intent_companies(
             "role_level": r["role_level"],
             "decision_maker": r["is_dm"],
             "urgency": urgency,
-            "pain": r["pain"],
+            "pain": gated_pain,
+            "pain_confidence": pain_conf,
             "alternatives": alternatives,
             "quotes": _safe_json(r["quotes"]),
             "contract_signal": r["value_signal"],
