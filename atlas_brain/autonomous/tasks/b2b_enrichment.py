@@ -131,6 +131,57 @@ def _tier2_system_prompt_for_content_type(prompt: str, content_type: str | None)
     return f"{before.rstrip()}\n\n{_TIER2_OUTPUT_SECTION_HEADER}{output_tail}"
 
 
+_ANTHROPIC_CACHE_MIN_CHARS = 1024
+
+
+def _maybe_anthropic_cache(
+    model_id: str,
+    messages: list[dict],
+) -> list[dict]:
+    """Add cache_control: ephemeral to the system message for Anthropic models.
+
+    The direct httpx callers in this module bypass the OpenRouterLLM wrapper,
+    so they were sending plain string `content` to Anthropic models -- which
+    means OpenRouter never marked the system block as cacheable. Result: 0
+    cached tokens across all enrichment calls even with a static ~12k-token
+    Tier 1 prompt.
+
+    This helper rewrites the system message in-place to the Anthropic
+    content-block array form when:
+      - the model is an Anthropic model on OpenRouter ("anthropic/" prefix)
+      - the system content is large enough to be worth caching (>= 1024 chars,
+        matching the OpenRouterLLM heuristic and Anthropic's cache minimum)
+
+    For non-Anthropic models, returns messages unchanged so OpenAI/Mistral/etc
+    callers aren't broken.
+    """
+    if not str(model_id or "").startswith("anthropic/"):
+        return messages
+    converted: list[dict] = []
+    for msg in messages:
+        content = msg.get("content")
+        if (
+            msg.get("role") == "system"
+            and isinstance(content, str)
+            and len(content) >= _ANTHROPIC_CACHE_MIN_CHARS
+        ):
+            converted.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": content,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            )
+        else:
+            converted.append(msg)
+    return converted
+
+
 _tier1_client = None
 _tier1_client_signature = None
 
@@ -461,7 +512,7 @@ async def _call_openrouter_tier1(
                 },
                 json={
                     "model": model_id,
-                    "messages": messages,
+                    "messages": _maybe_anthropic_cache(model_id, messages),
                     "max_tokens": max(cfg.enrichment_tier1_max_tokens, 4096),
                     "temperature": 0.0,
                     "response_format": {"type": "json_object"},
@@ -768,7 +819,7 @@ async def _call_openrouter_tier2(
                 },
                 json={
                     "model": model_id,
-                    "messages": messages,
+                    "messages": _maybe_anthropic_cache(model_id, messages),
                     "max_tokens": cfg.enrichment_tier2_max_tokens,
                     "temperature": 0.0,
                     "response_format": {"type": "json_object"},
