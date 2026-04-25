@@ -184,10 +184,33 @@ must reject claims that pass an unexpected secondary_target.
 
 Validation answers "is this witness valid for this claim?" — but consumers
 need "what is the best witness for this claim type for this vendor?" That
-is a separate API that consumes the shadow table.
+is a separate API that reads the shadow table.
+
+The selection API is split from `validate_claim()` so the validation
+layer stays a pure deterministic function (no DB pool, no I/O) and the
+DB-bound query layer lives in a repository. This matches the rest of
+the codebase, which is async-first and uses asyncpg pools.
+
+Validation function (pure, sync, callable from tests without a pool):
 
 ```python
-def select_best_claim(
+def validate_claim(
+    *,
+    claim_type: ClaimType,
+    witness: dict[str, Any],
+    target_entity: str,
+    secondary_target: str | None = None,
+    source_review: dict[str, Any] | None = None,
+) -> ClaimValidation:
+    ...  # deterministic gates + antecedent regex; no DB
+```
+
+Selection API (async, takes pool, lives in
+`atlas_brain/services/b2b/evidence_claim_repository.py`):
+
+```python
+async def select_best_claim(
+    pool,
     *,
     claim_type: ClaimType,
     target_entity: str,
@@ -199,15 +222,16 @@ def select_best_claim(
 ) -> list[ClaimSelection]:
     """Return the highest-quality validated claims for the given query.
 
-    Reads only `b2b_evidence_claims` rows where status = VALID. Ranks by:
-      1. claim_payload.salience_score DESC
+    Reads only `b2b_evidence_claims` rows where status = VALID. Ranks by
+    top-level columns so the partial index covers the ORDER BY:
+      1. salience_score DESC
       2. grounding_status = 'grounded' first (boolean lift)
-      3. pain_confidence in (strong, weak, none) priority
+      3. pain_confidence priority: strong > weak > none/null
       4. witness_id ASC for stable tie-break
 
-    Dedups across multi-claim-per-witness rows by source_review_id +
-    excerpt_text fingerprint so a single phrase that validated for several
-    claim types is not returned twice for the same call.
+    Dedups across multi-claim-per-witness rows by
+    source_excerpt_fingerprint so a single phrase that validated for
+    several claim types is not returned twice for the same call.
 
     Returns empty list (not None) when no valid claim exists. Consumer
     decides whether to fall back to legacy witness picks or render a
@@ -215,9 +239,23 @@ def select_best_claim(
     """
 ```
 
-`ClaimSelection` is a thin wrapper around a row's claim_payload + the
-joined witness data needed to render. Keep the shape stable so consumers
-don't reach back into b2b_vendor_witnesses.
+`ClaimSelection` is a thin frozen dataclass wrapping a row's
+`claim_payload` + the joined witness data needed to render. Keep the
+shape stable so consumers don't reach back into `b2b_vendor_witnesses`.
+
+The repository module also owns the writer:
+
+```python
+async def upsert_claim(pool, claim: PersistedClaim) -> None:
+    """Idempotent INSERT ... ON CONFLICT ... DO UPDATE on the
+    (artifact_type, artifact_id, witness_id, claim_type, target_entity,
+    secondary_target) replay key."""
+```
+
+Validation lives in the service module; persistence lives in the
+repository. Consumers depend on the repository's async API. The split
+keeps unit tests for `validate_claim()` pool-free and lets repository
+tests exercise the real DB schema.
 
 This API is consumed by the migrated consumers (battle_cards, vendor_briefing,
 etc). It must be specified BEFORE consumer migration starts (rollout step 8),
@@ -330,29 +368,44 @@ applied to the sentence containing the phrase plus the immediately
 preceding sentence. `\[VENDOR\]` is a placeholder for the target vendor
 name (with normalized aliases).
 
+Each pattern requires BOTH a temporal/comparative marker AND a competitor
+or self-transition phrase. A bare `before [VENDOR]` is not an antecedent
+trap on its own — "Before Monday introduced this feature, our team
+struggled" is a valid temporal statement about the subject vendor. The
+trap fires only when the source window is talking about a *different*
+entity (a competitor or the reviewer's own org).
+
 Reject (return `invalid` with `rejection_reason='antecedent_trap'`) when
-the phrase target is `subject_vendor` but the source window matches:
+the phrase target is `subject_vendor` AND the source window matches one
+of these full patterns:
 
 ```
-\b(before|previously|originally|initially|formerly|prior to)\s+\[VENDOR\]\b
-\bunlike\s+\[VENDOR\]\b
-\b(switched|moved|migrated|graduated|upgraded)\s+(from|away from)\s+\[VENDOR\]\b
-\bcompared to\s+\[VENDOR\]\b
-\b(used to use|used to be on|came from)\s+\[VENDOR\]\b
-\b\[VENDOR\]\s+(was our|were our|used to be|used to provide)\b
+\b(before|prior to|previously|originally|initially|formerly)\s+\[VENDOR\][^.]{0,80}\bwe\s+(used|had|were on|were using|relied on|ran)\b
+\b(before|prior to|previously|originally|initially|formerly)\s+\[VENDOR\][^.]{0,80}\bour\s+(team|company|org|stack)\b
+\bunlike\s+\[VENDOR\][^.]{0,80}\b\[COMPETITOR\]\b
+\b(switched|moved|migrated|graduated|upgraded)\s+(from|away from)\s+\[COMPETITOR\][^.]{0,80}\bto\s+\[VENDOR\]\b
+\bwe\s+(used to use|used to be on|came from|moved off)\s+\[COMPETITOR\][^.]{0,80}
+\b\[COMPETITOR\]\s+(was our|were our|used to be)\b
 ```
 
-The same patterns also apply when the phrase target is a competitor and
-the source window names the subject vendor — used by the displacement
-claim validator.
+`\[COMPETITOR\]` matches any vendor name from the canonical-aliases table
+that is NOT the subject vendor. The patterns require BOTH `\[VENDOR\]`
+and `\[COMPETITOR\]` to appear within the same source window for the trap
+to fire — the failure mode is specifically *another vendor's* trait being
+attributed to the subject vendor.
+
+When the phrase target is a competitor (used by the displacement claim
+validator), the patterns swap roles: the trap fires when the negative
+trait belongs to the subject_vendor but the displacement claim is about
+the competitor.
 
 Anything not matching deterministic patterns falls through to the existing
 phrase-level subject/polarity gates. If those gates pass but the validator
 detects ambiguous attribution (multiple vendor names within the source
-window with no clear antecedent marker), return `cannot_validate` with
-`rejection_reason='ambiguous_attribution'`. Do NOT return `valid` in
-ambiguous cases — the claim contract's whole point is to be safer than
-the per-phrase gates.
+window with no clear antecedent marker AND no matching transition pattern),
+return `cannot_validate` with `rejection_reason='ambiguous_attribution'`.
+Do NOT return `valid` in ambiguous cases — the claim contract's whole
+point is to be safer than the per-phrase gates.
 
 LLM-grade attribution checks (anything beyond the pattern set above) are
 explicitly out of scope for v1. The audit will surface `cannot_validate`
@@ -370,6 +423,12 @@ Proposed schema:
 ```sql
 CREATE TABLE IF NOT EXISTS b2b_evidence_claims (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- Provenance: every claim is tied to exactly one source artifact.
+    -- artifact_type discriminates (synthesis | intelligence) so uniqueness
+    -- and joins can be expressed without partial-index gymnastics.
+    artifact_type text NOT NULL CHECK (artifact_type IN ('synthesis', 'intelligence')),
+    artifact_id uuid NOT NULL,
+    -- Convenience nullable cross-references kept for join readability.
     synthesis_id uuid NULL,
     intelligence_id uuid NULL,
     vendor_name text NOT NULL,
@@ -383,6 +442,18 @@ CREATE TABLE IF NOT EXISTS b2b_evidence_claims (
     witness_hash text NULL,
     source_review_id uuid NULL,
     source_span_id text NULL,
+    -- Top-level ranking columns. Duplicated from claim_payload so the
+    -- select_best_claim query plan can ORDER BY without materialising
+    -- JSONB and so the partial index below actually accelerates ranking.
+    salience_score numeric NOT NULL DEFAULT 0,
+    grounding_status text NULL,
+    pain_confidence text NULL,
+    -- Stable fingerprint for cross-claim-type dedup in select_best_claim.
+    -- Computed at write time as a normalized hash of source_review_id +
+    -- excerpt_text. Lets a phrase that legitimately validates for three
+    -- claim types be deduped to one row when a consumer assembles a mixed
+    -- list.
+    source_excerpt_fingerprint text NULL,
     status text NOT NULL,
     rejection_reason text NULL,
     supporting_fields jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -391,39 +462,69 @@ CREATE TABLE IF NOT EXISTS b2b_evidence_claims (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Idempotency on replay. Synthesis re-runs (manual triggers, batch retries)
--- must update existing claim rows in place rather than appending duplicates.
--- A given (synthesis_id, witness_id, claim_type, target_entity, secondary_target)
--- produces exactly one row whose status / rejection_reason / supporting_fields
--- reflect the latest validation result. Replays update validated_at; created_at
--- preserves the first-seen timestamp.
+-- Idempotency on replay across BOTH artifact types. A given
+-- (artifact_type, artifact_id, witness_id, claim_type, target_entity,
+-- secondary_target) produces exactly one row whose status / rejection_reason
+-- / supporting_fields reflect the latest validation result. Replays update
+-- validated_at; created_at preserves the first-seen timestamp.
+--
+-- The COALESCE wraps secondary_target so NULL and '' compare equal in the
+-- index. witness_id is COALESCED for synthesized spans that have no
+-- witness anchor.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_b2b_evidence_claims_replay
-    ON b2b_evidence_claims (synthesis_id, witness_id, claim_type, target_entity, COALESCE(secondary_target, ''))
-    WHERE synthesis_id IS NOT NULL AND witness_id IS NOT NULL;
+    ON b2b_evidence_claims (
+        artifact_type,
+        artifact_id,
+        COALESCE(witness_id, ''),
+        claim_type,
+        target_entity,
+        COALESCE(secondary_target, '')
+    );
 
 CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_vendor_created
     ON b2b_evidence_claims (vendor_name, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_synthesis
-    ON b2b_evidence_claims (synthesis_id);
+    ON b2b_evidence_claims (synthesis_id) WHERE synthesis_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_intelligence
+    ON b2b_evidence_claims (intelligence_id) WHERE intelligence_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_status
     ON b2b_evidence_claims (status, claim_type);
 
+-- Partial index covering the select_best_claim hot path. Includes the
+-- ranking columns so Postgres can use an index-only scan for the
+-- "valid claims for this vendor + claim_type, ordered by salience" query.
 CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_select_best
-    ON b2b_evidence_claims (vendor_name, claim_type, target_entity, status)
+    ON b2b_evidence_claims (
+        vendor_name,
+        claim_type,
+        target_entity,
+        salience_score DESC,
+        grounding_status,
+        pain_confidence
+    )
     WHERE status = 'valid';
+
+CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_dedup
+    ON b2b_evidence_claims (source_excerpt_fingerprint)
+    WHERE status = 'valid' AND source_excerpt_fingerprint IS NOT NULL;
 ```
 
-Shadow rows are upserted on replay. The unique index on
-`(synthesis_id, witness_id, claim_type, target_entity, secondary_target)`
-makes the writer idempotent — a re-run of the same synthesis produces no
-duplicate audit history. Do not block production rendering until the
-capture window proves stable.
+Shadow rows are upserted on replay. The unique index now covers BOTH
+`synthesis` and `intelligence` artifact types via the `(artifact_type,
+artifact_id, ...)` key, eliminating the earlier partial-index gymnastics
+and giving intelligence-tied rows the same idempotency guarantees as
+synthesis-tied rows.
 
-The `idx_b2b_evidence_claims_select_best` partial index supports the
-`select_best_claim()` query path (only valid claims, hottest filter
-combination).
+The `idx_b2b_evidence_claims_select_best` index covers the hot path query
+(valid claims for a given vendor + claim_type, ordered by salience +
+grounding + pain_confidence). Top-level columns make this a pure-index
+operation; ranking does not have to materialise JSONB.
+
+`source_excerpt_fingerprint` powers cross-claim-type dedup in
+`select_best_claim()` without forcing consumers to compute it themselves.
 
 ## Versioning
 
@@ -678,9 +779,19 @@ Tier 4 — broad intelligence_data surface (passthrough; consume validated
 claims when present, else legacy. Most of these surfaces are upper-management
 exports rather than primary UI surfaces):
 
-9. `b2b_intelligence` report types not already covered: `accounts_in_motion`,
-   `weekly_churn_feed`, `vendor_scorecard`, `displacement_report`,
-   `category_overview`, `churn_alert`, `watchlist_alert`, `tenant_report`.
+9. `b2b_intelligence.report_type` rows not already covered by Tier 2's
+   `b2b_churn_reports.py` migration: `accounts_in_motion`,
+   `weekly_churn_feed`, `displacement_report`, `category_overview`,
+   `churn_alert`, `watchlist_alert`, `tenant_report`.
+
+   Note on `vendor_scorecard`: the **scorecard rendering code** lives in
+   `b2b_churn_reports.py` (Tier 2, full migration). The
+   `vendor_scorecard` entry in this Tier 4 list refers to the
+   *persisted* `b2b_intelligence` rows of `report_type='vendor_scorecard'`
+   that pre-date the Tier 2 migration. Tier 4 means "for legacy persisted
+   rows of these types, add a claim-aware fallback path so consumers can
+   read either old or new schema." It does NOT mean re-migrating the
+   live rendering code, which is owned by Tier 2.
 
 Tier 5 — MCP (final):
 
@@ -821,13 +932,39 @@ Mitigations:
    per-vendor synthesis path; the Monday batch covers weekly-batch-bound
    consumers (`challenger_brief`, `weekly_churn_feed`) so the capture set
    includes their actual claim distribution before any consumer migrates.
-8. Migrate battle cards to valid claims behind a feature flag.
-9. Hand-audit the canary vendor set (below).
-10. Migrate scorecard/deep-dive evidence after battle-card results are clean.
+
+   --- UI-first migration starts here. Tier 1 is browser-iterable at $0/iteration. ---
+
+8. Migrate `atlas_brain/api/b2b_evidence.py` to expose validated claims
+   (claim_type filter on list_witnesses + claim_validations field on
+   detail). Add behind a feature flag; default off so unmigrated clients
+   are unaffected.
+9. Migrate `atlas-churn-ui/src/api/client.ts` types and helpers to consume
+   the new API shape. Migrate `EvidenceDrawer.tsx` to surface per-claim
+   validity banners. Migrate `reportViewModels.ts` for report pages.
+10. Hand-audit the canary vendor set in the browser. Iterate on claim
+    gates while the UI is the only consumer; LLM cost stays $0 because
+    no synthesis re-runs are required to tune deterministic gates.
+
+    --- UI-acceptance gate. Do NOT proceed until 5 of 7 canary vendors
+        pass. Server-side migration begins only after browser is clean. ---
+
+11. Migrate `b2b_battle_cards.py` to consume validated claims via
+    `select_best_claim()`. Behind feature flag.
+12. Hand-audit battle cards on the same canary set.
+13. Migrate `b2b_vendor_briefing.py` + email template.
+14. Migrate `b2b_challenger_brief.py`.
+15. Migrate `b2b_churn_reports.py` (scorecard + deep dive evidence).
+16. Migrate Tier 3 content generators (campaign, blog) when
+    `select_best_claim()` is stable across all migrated reports.
+17. Tier 4 passthrough surfaces (other intelligence_data report types):
+    add claim-aware fallback path; legacy passthrough otherwise.
+18. Tier 5: MCP server tools.
 
 ### Canary Vendor Set
 
-The hand-audit at step 9 must cover every observed failure mode and the
+The hand-audit at rollout step 10 (browser-side, immediately after the UI
+migration at step 9) must cover every observed failure mode and the
 realistic mix of pool compositions. Use this exact set:
 
 1. **Pipedrive** — clean all-v4 baseline (post-Step-B winner). Confirms the
