@@ -426,6 +426,45 @@ def test_compute_derived_fields_keeps_corroborated_pain_category():
     assert out["pain_confidence"] == "weak"
 
 
+def test_compute_derived_fields_uses_derived_recommendation_and_sentiment_for_confidence():
+    """The causality gate must run after deterministic recommendation and
+    sentiment derivation. Otherwise real pipeline rows without prefilled
+    would_recommend/sentiment fields get under-graded and demoted."""
+    result = _v2(
+        {
+            "specific_complaints": ["pricing is too expensive"],
+            "pricing_phrases": [],
+            "feature_gaps": [],
+            "quotable_phrases": [],
+            "churn_signals": {},
+            "recommendation_language": ["cannot recommend"],
+            "reviewer_context": {},
+            "buyer_authority": {},
+            "timeline": {},
+            "contract_context": {},
+            "urgency_indicators": {},
+            "event_mentions": [],
+            "sentiment_trajectory": {},
+        },
+        [
+            {
+                "field": "specific_complaints",
+                "index": 0,
+                "subject": "subject_vendor",
+                "polarity": "negative",
+                "role": "primary_driver",
+                "verbatim": True,
+            }
+        ],
+    )
+    source = {**_base_source_row(), "rating": 1.0}
+    out = _compute_derived_fields(result, source)
+    assert out["would_recommend"] is False
+    assert out["sentiment_trajectory"]["direction"] == "consistently_negative"
+    assert out["pain_category"] == "pricing"
+    assert out["pain_confidence"] == "weak"
+
+
 def test_compute_derived_fields_strong_confidence_with_multi_phrase_evidence():
     result = _v2(
         {

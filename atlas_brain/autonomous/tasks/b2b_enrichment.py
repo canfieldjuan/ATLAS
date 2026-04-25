@@ -2548,28 +2548,10 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
         _subject_vendor_phrase_texts(result, "recommendation_language"),
     )
 
-    # 2b. Phase 4 (Layer 3 -- causality gate): grade the primary pain. A
-    # pain category backed by a single keyword match with no churn /
-    # sentiment corroboration is an unreliable classification (passing
-    # mention, not a real pain), so we demote it to overall_dissatisfaction
-    # and keep the original as a secondary entry for visibility.
-    final_pain = _normalize_pain_category(result.get("pain_category"))
-    confidence = _compute_pain_confidence(result, final_pain)
-    if confidence == "none" and final_pain != "overall_dissatisfaction":
-        _demote_primary_pain(result, final_pain)
-        result["pain_category"] = "overall_dissatisfaction"
-        # Re-grade against the new (fallback) primary so pain_confidence
-        # reflects the surviving classification, not the demoted one.
-        confidence = _compute_pain_confidence(result, "overall_dissatisfaction")
-    result["pain_confidence"] = confidence
-
-    # 3. would_recommend
+    # 2b. Recommendation + sentiment are corroborating inputs to the Phase 4
+    # causality gate below, so compute them before pain_confidence.
     result["would_recommend"] = engine.derive_recommend(rec_lang, rating, rating_max)
 
-    # 4. sentiment_trajectory.direction -- derived deterministically from rating,
-    #    churn signals, and would_recommend. "declining" / "improving" require
-    #    multi-review time context and are left for future cross-review jobs;
-    #    per-review we classify as positive, negative, or unknown.
     st = result.get("sentiment_trajectory")
     if not isinstance(st, dict):
         st = {}
@@ -2590,7 +2572,22 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     else:
         st["direction"] = "unknown"
 
-    # 5. sentiment_trajectory.turning_point from event_mentions
+    # 2c. Phase 4 (Layer 3 -- causality gate): grade the primary pain. A
+    # pain category backed by a single keyword match with no churn /
+    # sentiment corroboration is an unreliable classification (passing
+    # mention, not a real pain), so we demote it to overall_dissatisfaction
+    # and keep the original as a secondary entry for visibility.
+    final_pain = _normalize_pain_category(result.get("pain_category"))
+    confidence = _compute_pain_confidence(result, final_pain)
+    if confidence == "none" and final_pain != "overall_dissatisfaction":
+        _demote_primary_pain(result, final_pain)
+        result["pain_category"] = "overall_dissatisfaction"
+        # Re-grade against the new (fallback) primary so pain_confidence
+        # reflects the surviving classification, not the demoted one.
+        confidence = _compute_pain_confidence(result, "overall_dissatisfaction")
+    result["pain_confidence"] = confidence
+
+    # 3. sentiment_trajectory.turning_point from event_mentions
     if events and isinstance(events, list) and len(events) > 0:
         first = events[0] if isinstance(events[0], dict) else {}
         event_text = str(first.get("event", "")).strip()
