@@ -16379,7 +16379,7 @@ async def read_campaign_opportunities(
                r.enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
                r.enrichment->'competitors_mentioned' AS competitors_json,
                r.enrichment->'pain_categories' AS pain_json,
-               r.enrichment->'quotable_phrases' AS quotable_phrases,
+               r.enrichment AS enrichment_raw,
                r.enrichment->'feature_gaps' AS feature_gaps,
                r.enrichment->'use_case'->>'primary_workflow' AS primary_workflow,
                r.enrichment->'use_case'->'integration_stack' AS integration_stack,
@@ -16403,6 +16403,8 @@ async def read_campaign_opportunities(
         if not isinstance(competitors, list):
             competitors = []
         seat_count = r["seat_count"]
+        urgency = float(r["urgency"]) if r["urgency"] is not None else None
+        enrichment = _parse_enrichment_dict(r["enrichment_raw"])
         results.append({
             "review_id": str(r["review_id"]) if r["review_id"] else None,
             "vendor_name": r["vendor_name"],
@@ -16411,7 +16413,7 @@ async def read_campaign_opportunities(
             "product_category": r["product_category"],
             "source": r["source"],
             "reviewed_at": r["reviewed_at"],
-            "urgency": float(r["urgency"]) if r["urgency"] is not None else None,
+            "urgency": urgency,
             "is_dm": bool(r["is_dm"]) if r["is_dm"] is not None else None,
             "role_type": r["role_type"],
             "buying_stage": r["buying_stage"],
@@ -16421,7 +16423,16 @@ async def read_campaign_opportunities(
             "competitors": competitors,
             "competitors_json": r["competitors_json"],
             "pain_json": r["pain_json"],
-            "quotable_phrases": _safe_json(r["quotable_phrases"]),
+            "quotable_phrases": _quote_grade_rows_from_enrichment(
+                enrichment,
+                urgency=urgency,
+                review_id=r["review_id"],
+                source=r["source"],
+                company=r["reviewer_company"],
+                title=r["reviewer_title"],
+                company_size=r["company_size_raw"],
+                industry=r["industry"],
+            ),
             "feature_gaps": _safe_json(r["feature_gaps"]),
             "primary_workflow": r["primary_workflow"],
             "integration_stack": _safe_json(r["integration_stack"]),

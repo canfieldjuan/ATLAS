@@ -423,6 +423,72 @@ async def test_quotable_evidence_returns_only_quote_grade_rows():
     assert quote["field"] == "quotable_phrases"
 
 
+def _campaign_row(
+    *,
+    review_id: str = "00000000-0000-0000-0000-000000000001",
+    enrichment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "review_id": review_id,
+        "vendor_name": "Monday.com",
+        "reviewer_company": "Acme Co",
+        "reviewer_name": "Alex",
+        "product_category": "Project Management",
+        "source": "g2",
+        "reviewed_at": None,
+        "urgency": 8.5,
+        "is_dm": True,
+        "role_type": "decision_maker",
+        "buying_stage": "evaluation",
+        "seat_count": 120,
+        "contract_end": "Q2",
+        "decision_timeline": "30 days",
+        "competitors_json": [{"name": "ClickUp"}],
+        "pain_json": [{"category": "pricing"}],
+        "enrichment_raw": json.dumps(enrichment or _v4_quote_enrichment()),
+        "feature_gaps": [{"feature": "automation"}],
+        "primary_workflow": "project management",
+        "integration_stack": ["Slack"],
+        "sentiment_direction": "down",
+        "industry": "Software",
+        "reviewer_title": "VP Operations",
+        "company_size_raw": "51-200 employees",
+    }
+
+
+@pytest.mark.asyncio
+async def test_campaign_opportunities_emit_quote_grade_rows():
+    from atlas_brain.autonomous.tasks._b2b_shared import read_campaign_opportunities
+
+    pool = _FakePool([_campaign_row(enrichment=_v4_quote_enrichment())])
+
+    out = await read_campaign_opportunities(pool, window_days=90, min_urgency=5.0)
+
+    quote = out[0]["quotable_phrases"][0]
+    assert quote["quote"] == "We need to switch before renewal."
+    assert quote["phrase_verbatim"] is True
+    assert quote["quote_origin"] == "review"
+    assert quote["review_id"] == "00000000-0000-0000-0000-000000000001"
+    assert quote["source_site"] == "g2"
+    assert quote["field"] == "quotable_phrases"
+
+
+@pytest.mark.asyncio
+async def test_campaign_opportunities_drop_legacy_quote_arrays():
+    from atlas_brain.autonomous.tasks._b2b_shared import read_campaign_opportunities
+
+    pool = _FakePool([_campaign_row(
+        enrichment={
+            "pain_category": "pricing",
+            "quotable_phrases": ["Legacy quote should not render"],
+        },
+    )])
+
+    out = await read_campaign_opportunities(pool, window_days=90, min_urgency=5.0)
+
+    assert out[0]["quotable_phrases"] == []
+
+
 # ---------------------------------------------------------------------------
 # _fetch_pain_provenance (Phase 2.2.B): SQL aggregation moved to Python so
 # pain_category_for_bucket can gate per-row before bucketing.

@@ -2250,15 +2250,11 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
             if label:
                 gap_counts[label] = gap_counts.get(label, 0) + 1
 
-    # Quotable phrases from enrichment
+    # Quote-grade phrases from enrichment
     quote_list: list[str] = []
     for s in ordered_signals:
-        phrases = _parse_json_field(s.get("quotable_phrases"))
-        for phrase in phrases:
-            text = phrase if isinstance(phrase, str) else (
-                phrase.get("text", "") if isinstance(phrase, dict) else ""
-            )
-            if text and text not in quote_list:
+        for text in _campaign_quote_texts(s.get("quotable_phrases")):
+            if text not in quote_list:
                 quote_list.append(text)
 
     # Timeline signals
@@ -3070,15 +3066,11 @@ def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict
                 if reason and reason not in feature_mentions:
                     feature_mentions.append(reason)
 
-    # Quotable phrases from enrichment
+    # Quote-grade phrases from enrichment
     quote_list: list[str] = []
     for s in ordered_signals:
-        phrases = _parse_json_field(s.get("quotable_phrases"))
-        for phrase in phrases:
-            text = phrase if isinstance(phrase, str) else (
-                phrase.get("text", "") if isinstance(phrase, dict) else ""
-            )
-            if text and text not in quote_list:
+        for text in _campaign_quote_texts(s.get("quotable_phrases")):
+            if text not in quote_list:
                 quote_list.append(text)
 
     return {
@@ -3814,14 +3806,15 @@ async def _fetch_accounts_in_motion_opportunities(
             if score < min_score:
                 continue
             quote = str(account.get("top_quote") or "").strip()
+            review_ids = account.get("source_reviews") or []
+            review_id = review_ids[0] if review_ids else None
             alternatives = [
                 {"name": str(name).strip(), "reason": ""}
                 for name in (account.get("alternatives_considering") or [])
                 if str(name).strip()
             ]
-            review_ids = account.get("source_reviews") or []
             results.append({
-                "review_id": review_ids[0] if review_ids else None,
+                "review_id": review_id,
                 "vendor_name": vendor_name or str(report.get("vendor") or "").strip(),
                 "reviewer_company": company,
                 "product_category": category,
@@ -3832,7 +3825,12 @@ async def _fetch_accounts_in_motion_opportunities(
                     if account.get("pain_category") else []
                 ),
                 "competitors": alternatives,
-                "quotable_phrases": [{"text": quote}] if quote else [],
+                "quotable_phrases": [{
+                    "text": quote,
+                    "phrase_verbatim": True,
+                    "quote_origin": "accounts_in_motion",
+                    "review_id": review_id,
+                }] if quote else [],
                 "feature_gaps": feature_gaps,
                 "integration_stack": [],
                 "seat_count": account.get("seat_count"),
@@ -3876,9 +3874,7 @@ def _campaign_quote_texts(value: Any) -> list[str]:
     phrases = _parse_json_field(value)
     texts: list[str] = []
     for phrase in phrases:
-        if isinstance(phrase, str):
-            text = phrase.strip()
-        elif isinstance(phrase, dict):
+        if isinstance(phrase, dict) and phrase.get("phrase_verbatim") is True:
             text = str(
                 phrase.get("text")
                 or phrase.get("phrase")
@@ -3978,6 +3974,7 @@ def _build_churning_company_anchor_context(
             "time_anchor": time_anchor,
             "competitor": competitor,
             "pain_category": pain_category,
+            "phrase_verbatim": True,
             "signal_tags": feature_gaps[:3],
             "numeric_literals": numeric_literals,
             "_urgency": _safe_float(opp.get("urgency"), 0),
@@ -4081,11 +4078,9 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
                         "reason": c.get("reason", ""),
                     })
 
-        # Curated quotes from enrichment (replaces raw review_text truncation)
-        phrases = _parse_json_field(opp.get("quotable_phrases"))
-        for phrase in phrases:
-            text = phrase if isinstance(phrase, str) else (phrase.get("text", "") if isinstance(phrase, dict) else "")
-            if text and text not in key_quotes:
+        # Quote-grade phrases from enrichment (replaces raw review_text truncation)
+        for text in _campaign_quote_texts(opp.get("quotable_phrases")):
+            if text not in key_quotes:
                 key_quotes.append(text)
 
         # Feature gaps

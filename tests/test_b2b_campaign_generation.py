@@ -418,7 +418,7 @@ async def test_generate_vendor_campaigns_uses_mode_aware_briefing_context(monkey
             "pain_json": [{"category": "support"}],
             "competitors": [{"name": "ClickUp", "reason": "automation"}],
             "feature_gaps": [{"feature": "reporting"}],
-            "quotable_phrases": [{"text": "support has slowed down"}],
+            "quotable_phrases": [{"text": "support has slowed down", "phrase_verbatim": True}],
             "contract_end": None,
             "decision_timeline": "30 days",
             "buying_stage": "evaluation",
@@ -507,7 +507,7 @@ async def test_generate_vendor_campaigns_injects_synthesis_anchor_examples(monke
             "pain_json": [{"category": "pricing"}],
             "competitors": [{"name": "ClickUp", "reason": "pricing"}],
             "feature_gaps": [{"feature": "reporting"}],
-            "quotable_phrases": [{"text": "pricing has become a renewal issue"}],
+            "quotable_phrases": [{"text": "pricing has become a renewal issue", "phrase_verbatim": True}],
             "contract_end": None,
             "decision_timeline": "30 days",
             "buying_stage": "evaluation",
@@ -590,7 +590,7 @@ async def test_generate_challenger_campaigns_uses_mode_aware_briefing_context(mo
             "urgency": 8,
             "pain_json": [{"category": "pricing"}],
             "competitors": [{"name": "HubSpot", "reason": "ease of use"}],
-            "quotable_phrases": [{"text": "we are evaluating alternatives"}],
+            "quotable_phrases": [{"text": "we are evaluating alternatives", "phrase_verbatim": True}],
             "contract_end": None,
             "decision_timeline": "this quarter",
             "buying_stage": "evaluation",
@@ -674,7 +674,7 @@ async def test_generate_churning_company_campaigns_generates_without_partner(mon
             "urgency": 8,
             "pain_json": [{"category": "pricing", "severity": "primary"}],
             "competitors": [{"name": "Asana", "reason": "lower cost"}],
-            "quotable_phrases": [{"text": "pricing keeps going up"}],
+            "quotable_phrases": [{"text": "pricing keeps going up", "phrase_verbatim": True}],
             "feature_gaps": [{"feature": "automation"}],
             "integration_stack": ["Slack"],
             "seat_count": 120,
@@ -751,7 +751,7 @@ async def test_generate_churning_company_campaigns_attaches_comparison_asset(mon
             "urgency": 8,
             "pain_json": [{"category": "pricing", "severity": "primary"}],
             "competitors": [{"name": "Asana", "reason": "lower cost"}],
-            "quotable_phrases": [{"text": "pricing keeps going up"}],
+            "quotable_phrases": [{"text": "pricing keeps going up", "phrase_verbatim": True}],
             "feature_gaps": [{"feature": "automation"}],
             "integration_stack": ["Slack"],
             "seat_count": 120,
@@ -867,7 +867,7 @@ async def test_generate_churning_company_campaigns_skips_unqualified_without_blo
             "urgency": 8,
             "pain_json": [{"category": "pricing", "severity": "primary"}],
             "competitors": [{"name": "Asana", "reason": "lower cost"}],
-            "quotable_phrases": [{"text": "pricing keeps going up"}],
+            "quotable_phrases": [{"text": "pricing keeps going up", "phrase_verbatim": True}],
             "feature_gaps": [{"feature": "automation"}],
             "integration_stack": ["Slack"],
             "seat_count": 120,
@@ -1026,7 +1026,7 @@ async def test_list_churning_company_review_candidates_returns_mid_band_named_ac
             "urgency": 8,
             "pain_json": [{"category": "pricing", "severity": "primary"}],
             "competitors": [{"name": "ClickUp", "reason": "lower cost"}],
-            "quotable_phrases": [{"text": "pricing keeps going up"}],
+            "quotable_phrases": [{"text": "pricing keeps going up", "phrase_verbatim": True}],
             "feature_gaps": [{"feature": "automation"}],
             "integration_stack": [],
             "seat_count": 120,
@@ -1091,7 +1091,7 @@ async def test_list_churning_company_review_candidates_tracks_missing_requiremen
             "urgency": 8,
             "pain_json": [{"category": "pricing", "severity": "primary"}],
             "competitors": [{"name": "ClickUp", "reason": "lower cost"}],
-            "quotable_phrases": [{"text": "pricing keeps going up"}],
+            "quotable_phrases": [{"text": "pricing keeps going up", "phrase_verbatim": True}],
             "feature_gaps": [],
             "integration_stack": [],
             "seat_count": 120,
@@ -1151,7 +1151,7 @@ async def test_generate_vendor_campaigns_bypass_briefing_gate(monkeypatch):
             "pain_json": [{"category": "support"}],
             "competitors": [{"name": "ClickUp", "reason": "automation"}],
             "feature_gaps": [{"feature": "reporting"}],
-            "quotable_phrases": [{"text": "support has slowed down"}],
+            "quotable_phrases": [{"text": "support has slowed down", "phrase_verbatim": True}],
             "contract_end": None,
             "decision_timeline": "30 days",
             "buying_stage": "evaluation",
@@ -2166,6 +2166,34 @@ def test_briefing_context_surfaces_sanitized_reasoning_anchor_examples():
     assert anchor["phrase_verbatim"] is True
     assert anchor["pain_confidence"] == "strong"
     assert context["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
+
+
+def test_campaign_quote_texts_requires_explicit_verbatim_marker():
+    quotes = mod._campaign_quote_texts([
+        "legacy string quote",
+        {"text": "unmarked dict quote"},
+        {"text": "false dict quote", "phrase_verbatim": False},
+        {"text": "safe quote", "phrase_verbatim": True},
+    ])
+
+    assert quotes == ["safe quote"]
+
+
+def test_churning_company_anchor_context_drops_unmarked_quotes():
+    context = mod._build_churning_company_anchor_context(
+        {"vendor_name": "Monday.com"},
+        [{
+            "review_id": "rev-1",
+            "reviewer_company": "Acme Co",
+            "vendor_name": "Monday.com",
+            "urgency": 8,
+            "pain_json": [{"category": "pricing", "severity": "primary"}],
+            "competitors": [{"name": "ClickUp", "reason": "lower cost"}],
+            "quotable_phrases": [{"text": "legacy quote should not render"}],
+        }],
+    )
+
+    assert context == {}
 
 
 def test_inject_reasoning_campaign_context_surfaces_section_disclaimers():
