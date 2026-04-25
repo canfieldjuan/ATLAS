@@ -243,16 +243,22 @@ class EvidenceEngine:
         if is_v2_tagged(enrichment):
             meta = phrase_metadata_map(enrichment)
             raw_pricing = enrichment.get("pricing_phrases") or []
-            filtered = [
-                phrase
-                for index, phrase in enumerate(raw_pricing)
-                if str(phrase or "").strip()
-                and (meta.get(("pricing_phrases", index)) or {}).get("subject")
-                == "subject_vendor"
-            ]
-            # Build a shallow view that the rule check sees as the "pricing
-            # phrases the LLM said are about the subject vendor". Other
-            # fields are pass-through.
+            filtered: list[str] = []
+            for index, phrase in enumerate(raw_pricing):
+                if not str(phrase or "").strip():
+                    continue
+                row = meta.get(("pricing_phrases", index)) or {}
+                if row.get("subject") != "subject_vendor":
+                    continue
+                # Phase 3 (Layer 2): only negative / mixed pricing phrases
+                # should trip the price_complaint flag. "Great value at $X"
+                # tagged polarity=positive must not count.
+                if row.get("polarity") not in ("negative", "mixed"):
+                    continue
+                filtered.append(phrase)
+            # Build a shallow view that the rule check sees as the pricing
+            # phrases the LLM said are about the subject vendor AND carry
+            # negative / mixed sentiment. Other fields are pass-through.
             rule_input = {**enrichment, "pricing_phrases": filtered}
 
         pricing_phrases = [

@@ -1014,23 +1014,70 @@ def _subject_vendor_phrase_texts(result: dict, field: str) -> list[str]:
 def _derive_pain_categories(result: dict) -> list[dict[str, str]]:
     """Derive pain_categories list from extracted phrases.
 
-    Phase 2 (Layer 1 -- subject attribution gate): when v2 phrase metadata
-    is available, only phrases the LLM tagged with subject='subject_vendor'
-    feed pain scoring. Phrases tagged 'self', 'alternative', 'third_party',
-    or 'unclear' are filtered out so a self-cost mention or competitor
-    pricing reference cannot dominate the review's pain_category.
+    Phase 2 (Layer 1 -- subject attribution gate): v2 phrase metadata
+    filters phrases to subject='subject_vendor' before scoring so self /
+    alternative / third_party references cannot inflate the subject
+    vendor's pain.
 
-    v1 (legacy) data has no metadata and falls through to keyword-only
-    scoring across all phrases.
+    Phase 3 (Layer 2 -- polarity gate): v2 phrase metadata further
+    filters phrases by polarity. `positive` and `unclear` are dropped
+    entirely. `negative` phrases count at full weight (1.0). `mixed`
+    phrases count at half weight (0.5) because the phrase carries some
+    negative content but the LLM flagged ambiguity.
+
+    v1 data falls through to keyword-only scoring across all phrases at
+    uniform weight.
     """
-    texts: list[str] = []
-    for field in _PAIN_DERIVATION_FIELDS:
-        texts.extend(_subject_vendor_phrase_texts(result, field))
+    from ._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
 
-    if not texts:
-        return []
-    scored = _pain_scores(texts)
-    ranked = [(score, category) for category, score in scored.items() if score > 0]
+    if is_v2_tagged(result):
+        meta = phrase_metadata_map(result)
+        weighted_items: list[tuple[str, float]] = []
+        for field in _PAIN_DERIVATION_FIELDS:
+            raw = result.get(field) or []
+            for index, value in enumerate(raw):
+                phrase = str(value or "").strip()
+                if not phrase:
+                    continue
+                row = meta.get((field, index)) or {}
+                if row.get("subject") != "subject_vendor":
+                    continue
+                polarity = row.get("polarity")
+                if polarity == "negative":
+                    weighted_items.append((phrase, 1.0))
+                elif polarity == "mixed":
+                    weighted_items.append((phrase, 0.5))
+                # positive / unclear -> dropped (Layer 2)
+        if not weighted_items:
+            return []
+        # Weighted scoring: each matched category accumulates the phrase's
+        # polarity weight. Mirrors _pain_scores semantics but with weights.
+        scores: dict[str, float] = {category: 0.0 for category in _PAIN_PATTERNS}
+        for text, weight in weighted_items:
+            for category, pattern in _PAIN_PATTERNS.items():
+                if pattern.search(text):
+                    scores[category] += weight
+        ranked: list[tuple[float, str]] = [
+            (score, category)
+            for category, score in scores.items()
+            if score > 0
+        ]
+    else:
+        texts = (
+            _normalize_text_list(result.get("specific_complaints"))
+            + _normalize_text_list(result.get("pricing_phrases"))
+            + _normalize_text_list(result.get("feature_gaps"))
+            + _normalize_text_list(result.get("quotable_phrases"))
+        )
+        if not texts:
+            return []
+        scored = _pain_scores(texts)
+        ranked = [
+            (float(score), category)
+            for category, score in scored.items()
+            if score > 0
+        ]
+
     ranked.sort(reverse=True)
     if not ranked:
         return [{"category": "overall_dissatisfaction", "severity": "primary"}]

@@ -252,19 +252,26 @@ def _classify_complaint_pain(
     default: str | None,
     *,
     subject: str | None = None,
+    polarity: str | None = None,
 ) -> str | None:
     """Classify a complaint phrase into a pain category by scored keyword match.
 
     Phase 2 (Layer 1 -- subject attribution gate): when the caller passes
-    `subject` and it is anything other than 'subject_vendor', return None
-    so the witness span carries no pain category. Self-pricing comparisons,
-    competitor mentions, and third-party observations must not contribute
+    `subject` and it is anything other than 'subject_vendor', return None.
+    Self, alternative, third_party and unclear subjects cannot contribute
     to the subject vendor's pain classification.
 
-    Callers that don't pass `subject` (legacy v1 path) get the existing
+    Phase 3 (Layer 2 -- polarity gate): when the caller passes `polarity`
+    and it is anything other than 'negative' or 'mixed', return None.
+    Positive and unclear polarities cannot feed pain classification. A
+    positive complaint is a counterevidence signal, not a pain.
+
+    Callers that don't pass the kwargs (legacy v1 path) get the existing
     keyword-based behavior unchanged.
     """
     if subject is not None and subject != "subject_vendor":
+        return None
+    if polarity is not None and polarity not in ("negative", "mixed"):
         return None
     best_category = default
     best_score = 0
@@ -637,6 +644,7 @@ def derive_evidence_spans(
         pain_category: str | None,
         competitor: str | None,
         time_anchor: str | None,
+        polarity: str | None = None,
     ) -> None:
         phrase = str(raw_text or "").strip()
         if not phrase:
@@ -685,6 +693,11 @@ def derive_evidence_spans(
             "replacement_mode": replacement_mode,
             "operating_model_shift": operating_model_shift,
             "productivity_delta_claim": productivity_delta,
+            # Phase 3 (Layer 2): carries the source-phrase polarity from
+            # v2 metadata so downstream witness routing can distinguish
+            # counterevidence (positive/subject_vendor) from pain spans.
+            # None when not available (v1 path, synthesized spans).
+            "polarity": polarity,
             "_review_id": review_id,
         })
         seen.add(key)
@@ -700,16 +713,24 @@ def derive_evidence_spans(
             time_anchor = None
             if signal_type == "event":
                 time_anchor = default_time_anchor
+
+            # Pull polarity + subject from v2 metadata when available so
+            # the complaint classifier can gate and the span can carry
+            # polarity through for witness routing.
+            subject_tag: str | None = None
+            polarity_tag: str | None = None
+            if metadata_field is not None and phrase_meta:
+                row = phrase_meta.get((metadata_field, index)) or {}
+                subject_tag = row.get("subject")
+                polarity_tag = row.get("polarity")
+
             span_pain = pain_category
             if signal_type in ("complaint", "recommendation"):
-                subject_tag = None
-                if metadata_field is not None and phrase_meta:
-                    row = phrase_meta.get((metadata_field, index)) or {}
-                    subject_tag = row.get("subject")
                 span_pain = _classify_complaint_pain(
                     str(raw_value or ""),
                     pain_category,
                     subject=subject_tag,
+                    polarity=polarity_tag,
                 )
             _append_span(
                 signal_type=signal_type,
@@ -717,6 +738,7 @@ def derive_evidence_spans(
                 pain_category=span_pain,
                 competitor=competitor,
                 time_anchor=time_anchor,
+                polarity=polarity_tag,
             )
             if len(spans) >= max_spans:
                 return spans
@@ -824,6 +846,19 @@ def _candidate_types(review: dict[str, Any], enrichment: dict[str, Any], span: d
     reviewer = _coerce_json_dict(enrichment.get("reviewer_context"))
     churn = _coerce_json_dict(enrichment.get("churn_signals"))
     flags = {str(flag).strip().lower() for flag in span.get("flags") or []}
+
+    # Phase 3 (Layer 2): a span whose source phrase carries positive
+    # polarity cannot contribute to pain-category witness types even when
+    # the review itself has decision-maker, competitor, or timing signals.
+    # Route positive+subject_vendor to counterevidence, everything else
+    # (positive + non-subject_vendor, or polarity=unclear on this span)
+    # stays flex-only. v1 data leaves polarity=None and falls through.
+    span_polarity = span.get("polarity")
+    if span_polarity == "positive":
+        if _review_supports_counterevidence(review, enrichment):
+            types.add("counterevidence")
+        return types
+
     if span.get("pain_category") and str(span.get("pain_category")) in primary_pains:
         types.add("common_pattern")
     if review.get("reviewer_company") or reviewer.get("decision_maker"):
