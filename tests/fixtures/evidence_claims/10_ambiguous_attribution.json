@@ -1,0 +1,39 @@
+{
+  "name": "ambiguous_attribution",
+  "description": "Acceptance fixture #10. The source window contains TWO known vendor names (subject vendor + a competitor) but no matching antecedent pattern, so the validator cannot prove which entity owns the negative trait. Per the plan: 'If those gates pass but the validator detects ambiguous attribution (multiple vendor names within the source window with no clear antecedent marker AND no matching transition pattern), return cannot_validate with rejection_reason=ambiguous_attribution. Do NOT return valid in ambiguous cases.'",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000010",
+    "vendor_name": "Monday.com",
+    "summary": "Evaluating project management options",
+    "review_text": "We compared Monday.com and HubSpot for our team scheduling and pipeline tracking. Pricing keeps creeping up at every renewal and we are revisiting the decision next quarter.",
+    "rating": 3,
+    "rating_max": 5,
+    "source": "g2"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000010:0",
+    "review_id": "00000000-0000-0000-0000-000000000010",
+    "vendor_name": "Monday.com",
+    "excerpt_text": "Pricing keeps creeping up at every renewal",
+    "pain_category": "pricing",
+    "phrase_subject": "subject_vendor",
+    "phrase_polarity": "negative",
+    "phrase_role": "primary_driver",
+    "phrase_verbatim": true,
+    "pain_confidence": "strong",
+    "grounding_status": "grounded",
+    "salience_score": 5.5,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000010:span:88-130"
+  },
+  "known_vendor_names": ["Monday.com", "HubSpot"],
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "cannot_validate",
+      "rejection_reason": "ambiguous_attribution"
+    },
+    "pricing_urgency_claim": {
+      "status": "cannot_validate",
+      "rejection_reason": "ambiguous_attribution"
+    }
+  }
+}

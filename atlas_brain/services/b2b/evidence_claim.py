@@ -166,19 +166,38 @@ def _extract_source_window(
     return review_text
 
 
-def _antecedent_trap_reason(
+def _check_attribution(
     *,
     target_vendor: str,
     source_window: str,
     known_vendor_names: frozenset[str] | None,
-) -> str | None:
-    """Return 'antecedent_trap' if the source window matches a v1
-    antecedent pattern; None otherwise. Pure regex; no LLM.
+) -> tuple[ClaimValidationStatus, str] | None:
+    """Decide whether the source window proves the negative trait belongs to
+    a different entity (antecedent_trap, INVALID), to nobody we can be sure
+    of (ambiguous_attribution, CANNOT_VALIDATE), or is consistent with the
+    target vendor (None, fall through to per-phrase gates).
 
-    Self-transition patterns (1-2) fire without a named competitor.
-    Competitor-named patterns (3-6) fire only when known_vendor_names
-    contains a token that appears in the source window and is not the
-    subject vendor.
+    Three passes:
+
+      1. Self-transition patterns (templates 1-2). Fire without needing a
+         named competitor token; the trap is "before [VENDOR] we used /
+         had / our team ..." attributing the trait to the reviewer's prior
+         setup. Pure regex.
+
+      2. Competitor-named patterns (templates 3-6). Fire only when
+         known_vendor_names contains a token that appears in the window
+         and is not the subject vendor. Pure regex over canonical aliases.
+
+      3. Ambiguous fallback. If known_vendor_names is provided AND the
+         window mentions the target plus at least one other known vendor
+         AND no transition pattern fired, attribution is unclear and the
+         validator must return cannot_validate. Per the plan: "Do NOT
+         return valid in ambiguous cases -- the claim contract's whole
+         point is to be safer than the per-phrase gates."
+
+    Returns None when none of the three pass triggered, meaning the window
+    is unambiguously about the target vendor (or contains no other vendor
+    references at all).
     """
     if not source_window or not target_vendor:
         return None
@@ -187,21 +206,32 @@ def _antecedent_trap_reason(
 
     for template in _SELF_TRANSITION_TEMPLATES:
         if re.search(template.format(vendor=vendor_re), source_window, flags):
-            return "antecedent_trap"
+            return (ClaimValidationStatus.INVALID, "antecedent_trap")
 
     if not known_vendor_names:
         return None
+
     target_lc = target_vendor.strip().lower()
-    for competitor in known_vendor_names:
-        if not competitor:
+    competitors_in_window: list[str] = []
+    for name in known_vendor_names:
+        if not name:
             continue
-        if competitor.strip().lower() == target_lc:
+        if name.strip().lower() == target_lc:
             continue
+        if re.search(rf"\b{_vendor_pattern(name)}\b", source_window, flags):
+            competitors_in_window.append(name)
+
+    for competitor in competitors_in_window:
         comp_re = _vendor_pattern(competitor)
         for template in _COMPETITOR_NAMED_TEMPLATES:
             pattern = template.format(vendor=vendor_re, competitor=comp_re)
             if re.search(pattern, source_window, flags):
-                return "antecedent_trap"
+                return (ClaimValidationStatus.INVALID, "antecedent_trap")
+
+    target_in_window = bool(re.search(rf"\b{vendor_re}\b", source_window, flags))
+    if target_in_window and competitors_in_window:
+        return (ClaimValidationStatus.CANNOT_VALIDATE, "ambiguous_attribution")
+
     return None
 
 
@@ -389,15 +419,15 @@ def _validate_pain_like(
     if required_categories is not None and pain_category not in required_categories:
         return result(ClaimValidationStatus.INVALID, "pain_category_mismatch")
 
-    # Source-window antecedent-trap regex.
+    # Source-window attribution check (antecedent trap or ambiguous).
     window = _extract_source_window(witness, source_review)
-    trap = _antecedent_trap_reason(
+    attribution = _check_attribution(
         target_vendor=target,
         source_window=window,
         known_vendor_names=known_vendor_names,
     )
-    if trap:
-        return result(ClaimValidationStatus.INVALID, trap)
+    if attribution is not None:
+        return result(attribution[0], attribution[1])
 
     supporting = _build_supporting_fields(
         witness,
@@ -532,13 +562,13 @@ def _validate_displacement(
             return result(ClaimValidationStatus.INVALID, "polarity_not_positive_or_mixed")
 
     window = _extract_source_window(witness, source_review)
-    trap = _antecedent_trap_reason(
+    attribution = _check_attribution(
         target_vendor=target,
         source_window=window,
         known_vendor_names=known_vendor_names,
     )
-    if trap:
-        return result(ClaimValidationStatus.INVALID, trap)
+    if attribution is not None:
+        return result(attribution[0], attribution[1])
 
     supporting = _build_supporting_fields(
         witness,

@@ -1,0 +1,35 @@
+{
+  "name": "antecedent_trap_mislabeled_subject",
+  "description": "Acceptance fixture #9. Companion to #1: this time the LLM mistakenly tagged phrase_subject='subject_vendor' on a phrase whose source window proves the negative trait actually belongs to the prior tool. The per-phrase subject gate would *pass* this witness; the source-window antecedent regex must catch it. Exercises competitor-named antecedent pattern 4 ('migrated from [COMPETITOR] to [VENDOR]') and depends on known_vendor_names being plumbed through validate_claim. Without that plumbing the trap is undetectable for patterns 3-6.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000009",
+    "vendor_name": "Monday.com",
+    "summary": "Switched to Monday from HubSpot for tutoring scheduling",
+    "review_text": "We migrated from HubSpot to Monday.com last year. The previous tool did not provide a good UI for non-sales users and our tutors could not pick it up. Monday has been a clear improvement.",
+    "rating": 4,
+    "rating_max": 5,
+    "source": "g2"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000009:0",
+    "review_id": "00000000-0000-0000-0000-000000000009",
+    "vendor_name": "Monday.com",
+    "excerpt_text": "did not provide a good UI for non-sales users",
+    "pain_category": "ux",
+    "phrase_subject": "subject_vendor",
+    "phrase_polarity": "negative",
+    "phrase_role": "primary_driver",
+    "phrase_verbatim": true,
+    "pain_confidence": "strong",
+    "grounding_status": "grounded",
+    "salience_score": 6.5,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000009:span:50-96"
+  },
+  "known_vendor_names": ["Monday.com", "HubSpot"],
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "invalid",
+      "rejection_reason": "antecedent_trap"
+    }
+  }
+}

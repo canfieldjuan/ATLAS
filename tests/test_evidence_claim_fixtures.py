@@ -70,15 +70,18 @@ def _ids(case: tuple[str, str, dict, dict, dict, dict]) -> str:
 
 @pytest.mark.parametrize("case", _CASES, ids=_ids)
 def test_evidence_claim_fixture(case):
-    name, claim_type_str, witness, expected, review, _fixture = case
+    name, claim_type_str, witness, expected, review, fixture = case
     claim_type = ClaimType(claim_type_str)
     secondary_target = _secondary_target_for(claim_type, witness)
+    raw_known = fixture.get("known_vendor_names") or []
+    known_vendor_names = frozenset(raw_known) if raw_known else None
     result = validate_claim(
         claim_type=claim_type,
         witness=witness,
         target_entity=witness.get("vendor_name") or review.get("vendor_name", ""),
         secondary_target=secondary_target,
         source_review=review,
+        known_vendor_names=known_vendor_names,
     )
     assert result.status.value == expected["status"], (
         f"{name}::{claim_type_str} expected status={expected['status']} "
