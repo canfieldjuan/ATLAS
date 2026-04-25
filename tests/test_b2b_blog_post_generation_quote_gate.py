@@ -28,7 +28,11 @@ sys.modules.setdefault("asyncpg", _asyncpg_mock)
 sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
 from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E402
+    _blueprint_best_fit_guide,
+    _blueprint_market_landscape,
+    _blueprint_pain_point_roundup,
     _blueprint_pricing_reality_check,
+    _blueprint_vendor_showdown,
     _quote_grade_blueprint_phrases,
     _remove_unmatched_quote_lines,
     _split_and_gate_blog_quotes,
@@ -496,3 +500,121 @@ def test_pricing_blueprint_drops_unmarked_rows_closing_loophole():
         {"pricing_reviews": [unmarked_sql_row]},
     )
     assert blueprint.quotable_phrases == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.3 Commit B2 -- category-scoped blueprint integration tests
+#
+# Each test verifies the four traceability fields the contract gate
+# stamps onto its output: review_id, source, field, and the exact
+# verbatim phrase text. This locks in that the wrapper is wired at the
+# PostBlueprint.quotable_phrases assignment site for every category-
+# scoped producer.
+# ---------------------------------------------------------------------------
+
+
+def test_vendor_showdown_blueprint_routes_quotes_through_contract_gate():
+    row = _v4_row(
+        text="Shopify charges way too much for what you actually get",
+        review_id="vs-review-1",
+        source="g2",
+        vendor_name="Shopify",
+        urgency=8.4,
+        field="pricing_phrases",
+    )
+    ctx = {
+        "slug": "shopify-vs-bigcommerce",
+        "vendor_a": "Shopify",
+        "vendor_b": "BigCommerce",
+        "category": "ecommerce",
+        "total_reviews": 240,
+        "reviews_a": 130,
+        "reviews_b": 110,
+        "urgency_a": 7.4,
+        "urgency_b": 6.8,
+        "pain_diff": 0.6,
+    }
+    data = {"data_context": {"category": "ecommerce"}, "quotes": [row]}
+    blueprint = _blueprint_vendor_showdown(ctx, data)
+    assert len(blueprint.quotable_phrases) == 1
+    quote = blueprint.quotable_phrases[0]
+    assert quote["phrase"] == "Shopify charges way too much for what you actually get"
+    assert quote["review_id"] == "vs-review-1"
+    assert quote["source"] == "g2"
+    assert quote["field"] == "pricing_phrases"
+
+
+def test_market_landscape_blueprint_routes_quotes_through_contract_gate():
+    row = _v4_row(
+        text="HubSpot's pricing tiers force you into upgrades you don't need",
+        review_id="ml-review-1",
+        source="capterra",
+        vendor_name="HubSpot",
+        urgency=7.9,
+        field="pricing_phrases",
+    )
+    ctx = {
+        "slug": "crm-landscape-2026",
+        "category": "crm",
+        "vendor_count": 8,
+        "total_reviews": 1200,
+        "avg_urgency": 6.5,
+    }
+    data = {"data_context": {"category": "crm"}, "quotes": [row]}
+    blueprint = _blueprint_market_landscape(ctx, data)
+    assert len(blueprint.quotable_phrases) == 1
+    quote = blueprint.quotable_phrases[0]
+    assert quote["phrase"] == "HubSpot's pricing tiers force you into upgrades you don't need"
+    assert quote["review_id"] == "ml-review-1"
+    assert quote["source"] == "capterra"
+    assert quote["field"] == "pricing_phrases"
+
+
+def test_pain_point_roundup_blueprint_routes_quotes_through_contract_gate():
+    row = _v4_row(
+        text="Salesforce reporting takes forever to load and constantly times out",
+        review_id="pp-review-1",
+        source="trustradius",
+        vendor_name="Salesforce",
+        urgency=8.1,
+        field="specific_complaints",
+    )
+    ctx = {
+        "slug": "crm-complaints-2026",
+        "category": "crm",
+        "vendor_count": 6,
+        "total_complaints": 480,
+    }
+    data = {"vendor_pains": [], "quotes": [row]}
+    blueprint = _blueprint_pain_point_roundup(ctx, data)
+    assert len(blueprint.quotable_phrases) == 1
+    quote = blueprint.quotable_phrases[0]
+    assert quote["phrase"] == "Salesforce reporting takes forever to load and constantly times out"
+    assert quote["review_id"] == "pp-review-1"
+    assert quote["source"] == "trustradius"
+    assert quote["field"] == "specific_complaints"
+
+
+def test_best_fit_guide_blueprint_routes_quotes_through_contract_gate():
+    row = _v4_row(
+        text="Asana feels overwhelming for a small team and most features go unused",
+        review_id="bf-review-1",
+        source="g2",
+        vendor_name="Asana",
+        urgency=6.7,
+        field="specific_complaints",
+    )
+    ctx = {
+        "slug": "best-pm-tools-smb",
+        "category": "project management",
+        "vendor_count": 5,
+        "total_reviews": 800,
+    }
+    data = {"vendor_profiles": [], "vendor_signals": [], "quotes": [row]}
+    blueprint = _blueprint_best_fit_guide(ctx, data)
+    assert len(blueprint.quotable_phrases) == 1
+    quote = blueprint.quotable_phrases[0]
+    assert quote["phrase"] == "Asana feels overwhelming for a small team and most features go unused"
+    assert quote["review_id"] == "bf-review-1"
+    assert quote["source"] == "g2"
+    assert quote["field"] == "specific_complaints"

@@ -7210,7 +7210,7 @@ def _blueprint_vendor_showdown(ctx: dict, data: dict) -> PostBlueprint:
         data_context=data["data_context"],
         sections=sections,
         charts=charts,
-        quotable_phrases=data.get("quotes", []),
+        quotable_phrases=_split_and_gate_blog_quotes(data.get("quotes", []), limit=15),
     )
 
 
@@ -8128,7 +8128,7 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
         data_context={**data["data_context"], "category": category},
         sections=sections,
         charts=charts,
-        quotable_phrases=data.get("quotes", []),
+        quotable_phrases=_split_and_gate_blog_quotes(data.get("quotes", []), limit=15),
     )
 
 
@@ -8476,7 +8476,7 @@ def _blueprint_pain_point_roundup(ctx: dict, data: dict) -> PostBlueprint:
         data_context={**data.get("data_context", {}), "category": category},
         sections=sections,
         charts=charts,
-        quotable_phrases=data.get("quotes", []),
+        quotable_phrases=_split_and_gate_blog_quotes(data.get("quotes", []), limit=15),
     )
 
 
@@ -8653,7 +8653,7 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
         data_context={**data.get("data_context", {}), "category": category, "company_size": company_size},
         sections=sections,
         charts=charts,
-        quotable_phrases=data.get("quotes", []),
+        quotable_phrases=_split_and_gate_blog_quotes(data.get("quotes", []), limit=15),
     )
 
 
