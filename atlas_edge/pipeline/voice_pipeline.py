@@ -304,6 +304,7 @@ class EdgeVoicePipeline:
             if skill_result and skill_result.success:
                 result.response_text = skill_result.response_text
                 result.action_type = skill_result.action_type
+                result.escalated = False
                 result.handled_locally = True
                 result.success = True
                 return result
