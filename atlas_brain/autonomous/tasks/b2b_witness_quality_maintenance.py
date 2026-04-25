@@ -86,7 +86,7 @@ async def _send_alert(*, fillable_total: int, leaking: list[dict[str, Any]]) -> 
         await notify_tool._send_notification(
             message=message,
             title="Atlas: Witness Quality Invariant Breached",
-            priority=4,
+            priority="4",
             tags="warning,b2b,witness",
         )
     except Exception:

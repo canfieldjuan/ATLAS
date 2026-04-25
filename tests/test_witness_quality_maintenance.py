@@ -239,3 +239,32 @@ async def test_task_handler_no_alert_when_clean(monkeypatch):
     result = await task_mod.run(_Task())
     assert result["alert_triggered"] is False
     assert sent_count == 0  # silent success path
+
+
+@pytest.mark.asyncio
+async def test_send_alert_uses_ntfy_header_safe_values(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_witness_quality_maintenance as task_mod
+    from atlas_brain.tools.notify import notify_tool
+
+    monkeypatch.setattr(task_mod.settings.alerts, "ntfy_enabled", True)
+    captured: dict[str, Any] = {}
+
+    async def _fake_send_notification(*, message, title, priority, tags):
+        captured["message"] = message
+        captured["title"] = title
+        captured["priority"] = priority
+        captured["tags"] = tags
+
+    monkeypatch.setattr(notify_tool, "_send_notification", _fake_send_notification)
+
+    await task_mod._send_alert(
+        fillable_total=7,
+        leaking=[
+            {"surface": "b2b_intelligence:battle_card", "fillable_missing_fields": 7, "witness_objects": 20},
+        ],
+    )
+
+    assert "b2b_intelligence:battle_card" in captured["message"]
+    assert captured["title"] == "Atlas: Witness Quality Invariant Breached"
+    assert captured["priority"] == "4"
+    assert captured["tags"] == "warning,b2b,witness"
