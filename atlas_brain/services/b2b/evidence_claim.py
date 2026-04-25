@@ -285,9 +285,8 @@ def validate_claim(
 ) -> ClaimValidation:
     """Return a ClaimValidation for the given (witness, claim_type) pair.
 
-    Pure deterministic. No DB. No I/O. The caller is responsible for
-    persisting the result to b2b_evidence_claims via the repository
-    module if shadow capture is enabled.
+    Pure deterministic. No DB. No I/O. Persistence to b2b_evidence_claims
+    is handled by the repository module; this function only decides.
 
     `secondary_target` is required for dual-target claim types (displacement
     pair, named-competitor feature gap). For single-target claim types,
