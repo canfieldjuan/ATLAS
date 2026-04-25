@@ -257,6 +257,16 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
                 assert "FROM b2b_vendor_witnesses w" in query
                 assert "WHERE w.vendor_name = $1" in query
                 assert "WHERE vendor_name = $1" not in query
+                for field in (
+                    "grounding_status",
+                    "phrase_polarity",
+                    "phrase_subject",
+                    "phrase_role",
+                    "phrase_verbatim",
+                    "pain_confidence",
+                ):
+                    assert f"w.{field}" in query
+                assert "(w.grounding_status = 'grounded') AS quote_grade" in query
                 assert args == (
                     "Salesforce",
                     30,
@@ -282,6 +292,13 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
                         "selection_reason": "high_signal",
                         "signal_tags": ["support"],
                         "as_of_date": datetime(2026, 4, 1, tzinfo=timezone.utc).date(),
+                        "grounding_status": "grounded",
+                        "phrase_polarity": "negative",
+                        "phrase_subject": "subject_vendor",
+                        "phrase_role": "primary_driver",
+                        "phrase_verbatim": True,
+                        "pain_confidence": "strong",
+                        "quote_grade": True,
                     }
                 ]
             if "GROUP BY w.pain_category, w.source, w.witness_type" in query:
@@ -309,6 +326,13 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
     assert body["analysis_window_days"] == 30
     assert body["total"] == 1
     assert body["witnesses"][0]["witness_id"] == "w1"
+    assert body["witnesses"][0]["grounding_status"] == "grounded"
+    assert body["witnesses"][0]["phrase_polarity"] == "negative"
+    assert body["witnesses"][0]["phrase_subject"] == "subject_vendor"
+    assert body["witnesses"][0]["phrase_role"] == "primary_driver"
+    assert body["witnesses"][0]["phrase_verbatim"] is True
+    assert body["witnesses"][0]["pain_confidence"] == "strong"
+    assert body["witnesses"][0]["quote_grade"] is True
 
 
 def test_b2b_evidence_annotations_list_uses_b2b_gate_and_canonical_vendor(monkeypatch):

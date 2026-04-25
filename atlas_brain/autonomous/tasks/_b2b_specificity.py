@@ -98,6 +98,12 @@ def _sanitize_witness_row(
         "source",
         "source_id",
         "_sid",
+        "grounding_status",
+        "phrase_polarity",
+        "phrase_subject",
+        "phrase_role",
+        "phrase_verbatim",
+        "pain_confidence",
     ):
         value = witness.get(key)
         if value in (None, "", [], {}):

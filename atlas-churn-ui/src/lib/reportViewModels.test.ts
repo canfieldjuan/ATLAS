@@ -15,6 +15,12 @@ describe('toBattleCardViewModel', () => {
           witness_id: 'witness:shopify:1',
           reviewer_company: 'Acme Co',
           excerpt_text: 'Pricing got out of hand at renewal.',
+          grounding_status: 'grounded',
+          phrase_polarity: 'negative',
+          phrase_subject: 'subject_vendor',
+          phrase_role: 'primary_driver',
+          phrase_verbatim: false,
+          pain_confidence: 'strong',
         },
       ],
     })
@@ -22,6 +28,12 @@ describe('toBattleCardViewModel', () => {
     expect(viewModel.reasoning_reference_ids?.witness_ids).toEqual(['witness:shopify:1'])
     expect(viewModel.reasoning_witness_highlights?.[0]?.witness_id).toBe('witness:shopify:1')
     expect(viewModel.reasoning_witness_highlights?.[0]?.reviewer_company).toBe('Acme Co')
+    expect(viewModel.reasoning_witness_highlights?.[0]?.grounding_status).toBe('grounded')
+    expect(viewModel.reasoning_witness_highlights?.[0]?.phrase_polarity).toBe('negative')
+    expect(viewModel.reasoning_witness_highlights?.[0]?.phrase_subject).toBe('subject_vendor')
+    expect(viewModel.reasoning_witness_highlights?.[0]?.phrase_role).toBe('primary_driver')
+    expect(viewModel.reasoning_witness_highlights?.[0]?.phrase_verbatim).toBe(false)
+    expect(viewModel.reasoning_witness_highlights?.[0]?.pain_confidence).toBe('strong')
   })
 
   it('preserves account-pressure quality fields', () => {

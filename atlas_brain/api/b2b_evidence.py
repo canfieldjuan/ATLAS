@@ -266,7 +266,10 @@ async def list_witnesses(
         SELECT w.witness_id, w.review_id, w.witness_type, w.excerpt_text, w.source,
                w.reviewed_at, w.reviewer_company, w.reviewer_title,
                w.pain_category, w.competitor, w.salience_score, w.specificity_score,
-               w.selection_reason, w.signal_tags, w.as_of_date
+               w.selection_reason, w.signal_tags, w.as_of_date,
+               w.grounding_status, w.phrase_polarity, w.phrase_subject,
+               w.phrase_role, w.phrase_verbatim, w.pain_confidence,
+               (w.grounding_status = 'grounded') AS quote_grade
                {annotation_select}
         FROM b2b_vendor_witnesses w
         {annotation_join}

@@ -2151,31 +2151,10 @@ export interface EvidenceWitness {
   selection_reason: string | null
   signal_tags: string[] | null
   as_of_date: string | null
-}
-
-export interface EvidenceWitnessDetail extends EvidenceWitness {
-  review_text: string | null
-  summary: string | null
-  pros: string | null
-  cons: string | null
-  rating: number | null
-  review_source: string | null
-  source_url: string | null
-  enrichment_status: string | null
-  highlight_start: number | null
-  highlight_end: number | null
-  highlight_source: 'match_excerpt' | 'match_summary' | 'inferred' | 'none' | null
-  // Phase 1b step 9: quote-grade gate.
-  // quote_grade is true iff grounding_status === 'grounded'. The UI must
-  // gate any verbatim-quote rendering on this flag, not on highlight_source
-  // alone (a substring match can succeed against a non-grounded excerpt).
-  quote_grade: boolean
+  // quote_grade is true iff grounding_status === 'grounded'. List and detail
+  // consumers should use this before rendering excerpt_text as a quote.
+  quote_grade: boolean | null
   grounding_status: 'grounded' | 'not_grounded' | 'pending' | null
-  // Phase 5/6: phrase-level provenance + per-review pain confidence.
-  // Populated when the source enrichment was tagged under v2 phrase
-  // metadata (enrichment_schema_version >= 4); null on legacy v1 rows
-  // and synthesized spans (event, competitor_pressure). The drawer
-  // uses pain_confidence to decide whether to show a confidence banner.
   phrase_polarity: 'negative' | 'mixed' | 'positive' | 'unclear' | null
   phrase_subject:
     | 'subject_vendor'
@@ -2192,6 +2171,20 @@ export interface EvidenceWitnessDetail extends EvidenceWitness {
     | null
   phrase_verbatim: boolean | null
   pain_confidence: 'strong' | 'weak' | 'none' | null
+}
+
+export interface EvidenceWitnessDetail extends EvidenceWitness {
+  review_text: string | null
+  summary: string | null
+  pros: string | null
+  cons: string | null
+  rating: number | null
+  review_source: string | null
+  source_url: string | null
+  enrichment_status: string | null
+  highlight_start: number | null
+  highlight_end: number | null
+  highlight_source: 'match_excerpt' | 'match_summary' | 'inferred' | 'none' | null
   evidence_spans: Array<{
     signal_type: string
     text: string

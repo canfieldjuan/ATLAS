@@ -2125,6 +2125,12 @@ def test_briefing_context_surfaces_sanitized_reasoning_anchor_examples():
                     "numeric_literals": {"currency_mentions": ["$200k/year"]},
                     "competitor": "Google Chat",
                     "pain_category": "pricing",
+                    "grounding_status": "grounded",
+                    "phrase_polarity": "negative",
+                    "phrase_subject": "subject_vendor",
+                    "phrase_role": "primary_driver",
+                    "phrase_verbatim": True,
+                    "pain_confidence": "strong",
                 },
             ],
         },
@@ -2137,6 +2143,12 @@ def test_briefing_context_surfaces_sanitized_reasoning_anchor_examples():
                 "numeric_literals": {"currency_mentions": ["$200k/year"]},
                 "competitor": "Google Chat",
                 "pain_category": "pricing",
+                "grounding_status": "grounded",
+                "phrase_polarity": "negative",
+                "phrase_subject": "subject_vendor",
+                "phrase_role": "primary_driver",
+                "phrase_verbatim": True,
+                "pain_confidence": "strong",
             },
         ],
         "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
@@ -2147,6 +2159,12 @@ def test_briefing_context_surfaces_sanitized_reasoning_anchor_examples():
     anchor = context["reasoning_anchor_examples"]["outlier_or_named_account"][0]
     assert anchor["excerpt_text"].startswith("a customer said Slack")
     assert "reviewer_company" not in anchor
+    assert anchor["grounding_status"] == "grounded"
+    assert anchor["phrase_polarity"] == "negative"
+    assert anchor["phrase_subject"] == "subject_vendor"
+    assert anchor["phrase_role"] == "primary_driver"
+    assert anchor["phrase_verbatim"] is True
+    assert anchor["pain_confidence"] == "strong"
     assert context["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
 
 

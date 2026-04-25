@@ -15,6 +15,12 @@ export interface ReasoningWitnessViewModel {
   selection_reason?: string
   salience_score?: number | null
   numeric_literals?: Record<string, unknown>
+  grounding_status?: string
+  phrase_polarity?: string
+  phrase_subject?: string
+  phrase_role?: string
+  phrase_verbatim?: boolean
+  pain_confidence?: string
 }
 
 export type ReasoningAnchorExamplesViewModel = Record<string, ReasoningWitnessViewModel[]>

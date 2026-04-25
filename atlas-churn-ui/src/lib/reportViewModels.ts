@@ -249,6 +249,12 @@ function toReasoningWitness(value: unknown): ReasoningWitnessViewModel {
     selection_reason: asString(obj.selection_reason),
     salience_score: asNumber(obj.salience_score) ?? null,
     numeric_literals: Object.keys(numericLiterals).length > 0 ? numericLiterals : undefined,
+    grounding_status: asString(obj.grounding_status),
+    phrase_polarity: asString(obj.phrase_polarity),
+    phrase_subject: asString(obj.phrase_subject),
+    phrase_role: asString(obj.phrase_role),
+    phrase_verbatim: asBoolean(obj.phrase_verbatim),
+    pain_confidence: asString(obj.pain_confidence),
   }
 }
 
