@@ -539,7 +539,7 @@ def _tenant_displacement_backfill_row(
         "from_vendor": from_vendor,
         "to_vendor": to_vendor,
         "mention_count": mention_count,
-        "primary_driver": primary_driver or "overall_dissatisfaction",
+        "primary_driver": primary_driver or "",
         "signal_strength": strength,
         "key_quote": None,
     }

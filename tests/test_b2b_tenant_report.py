@@ -38,12 +38,12 @@ def test_tenant_report_llm_model_defaults_when_missing():
     assert _tenant_report_llm_model(None) == "pipeline_deterministic"
 
 
-def test_tenant_displacement_backfill_uses_overall_dissatisfaction_fallback():
+def test_tenant_displacement_backfill_does_not_synthesize_generic_driver():
     row = _tenant_displacement_backfill_row(
         {"vendor": "Salesforce", "competitor": "HubSpot", "mention_count": 2},
         reason_lookup={},
     )
-    assert row["primary_driver"] == "overall_dissatisfaction"
+    assert row["primary_driver"] == ""
 
 
 def test_tenant_report_data_density_includes_llm_and_reasoning_counts():
