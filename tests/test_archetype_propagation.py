@@ -534,6 +534,7 @@ class TestVendorBriefingReasoningAnchorsRender:
                             "reviewer_company": "Hack Club",
                             "time_anchor": "Q2 renewal",
                             "numeric_literals": {"annual_spend_estimate": [200000]},
+                            "phrase_verbatim": True,
                         }
                     ],
                     "common_pattern": [
@@ -541,6 +542,7 @@ class TestVendorBriefingReasoningAnchorsRender:
                             "witness_id": "witness:r2:0",
                             "excerpt_text": "Pricing pressure keeps coming up in renewal reviews.",
                             "reviewer_company": "Northwind",
+                            "phrase_verbatim": True,
                         }
                     ],
                     "counterevidence": [
@@ -548,6 +550,7 @@ class TestVendorBriefingReasoningAnchorsRender:
                             "witness_id": "witness:r3:0",
                             "excerpt_text": "Teams still stay for the integration depth.",
                             "competitor": "Freshdesk",
+                            "phrase_verbatim": True,
                         }
                     ],
                 }
@@ -575,6 +578,7 @@ class TestVendorBriefingReasoningAnchorsRender:
                         "excerpt_text": "The team is evaluating alternatives before the April renewal.",
                         "reviewer_company": "Acme Corp",
                         "time_anchor": "April renewal",
+                        "phrase_verbatim": True,
                     }
                 ]
             }
@@ -613,6 +617,7 @@ class TestVendorBriefingReasoningAnchorsRender:
                             "excerpt_text": "Hack Club said the renewal jumped to $200k/year.",
                             "reviewer_company": "Hack Club",
                             "time_anchor": "Q2 renewal",
+                            "phrase_verbatim": True,
                         }
                     ]
                 },

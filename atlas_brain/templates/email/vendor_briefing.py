@@ -129,6 +129,14 @@ def _reasoning_witness_highlights(briefing: dict[str, Any]) -> list[dict[str, An
     return [dict(row) for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
 
 
+def _is_verbatim_witness(witness: dict[str, Any]) -> bool:
+    # Phase 2.3 4c-A: customer-facing blockquote/italic excerpt rendering
+    # requires phrase_verbatim is True. Rows with the marker missing or
+    # set to False are dropped at the selector. Marker is preserved on
+    # every witness row by _sanitize_witness_row in _b2b_specificity.py.
+    return witness.get("phrase_verbatim") is True
+
+
 def _reasoning_witness_key(witness: dict[str, Any]) -> str:
     return str(
         witness.get("witness_id")
@@ -158,6 +166,8 @@ def _selected_reasoning_anchors(
     seen: set[str] = set()
 
     def _add(label: str | None, witness: dict[str, Any]) -> None:
+        if not _is_verbatim_witness(witness):
+            return
         key = _reasoning_witness_key(witness)
         if not key or key in seen:
             return
@@ -435,13 +445,21 @@ def render_vendor_briefing_html(briefing: dict) -> str:
         </tr>"""
 
     # Section 6: quotes
-    evidence = briefing.get("evidence") or []
-    evidence = evidence[:3]
-
+    # Phase 2.3 4c-A: customer-facing quote blocks require phrase_verbatim
+    # is True on the evidence row. String evidence and dict rows missing
+    # the marker are dropped (fail-closed). Producers will be migrated in
+    # 4c-B to stamp the marker on quote-grade SQL output; vault rows stay
+    # unmarked until a separate vault-verbatim follow-up.
     quote_blocks = ""
-    for q in evidence:
-        quote_text = _safe(q) if isinstance(q, str) else _safe(q.get("quote", q.get("text", "")) if isinstance(q, dict) else str(q))
+    quote_count = 0
+    for q in briefing.get("evidence") or []:
+        if quote_count >= 3:
+            break
+        if not (isinstance(q, dict) and q.get("phrase_verbatim") is True):
+            continue
+        quote_text = _safe(q.get("quote", q.get("text", "")))
         if quote_text:
+            quote_count += 1
             quote_blocks += f"""
             <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:12px;">
               <tr>
