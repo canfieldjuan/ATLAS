@@ -20,6 +20,7 @@ from ...services.apollo_company_overrides import fetch_company_override_map
 from ...services.b2b.corrections import suppress_predicate
 from ...services.b2b.enrichment_contract import (
     pain_category_for_bucket,
+    quote_grade_phrases,
     resolve_pain_confidence,
 )
 from ...services.company_normalization import normalize_company_name
@@ -1293,6 +1294,57 @@ def _safe_json(value: Any, default: Any = None) -> Any:
             logger.warning("Malformed JSON in aggregation data: %.100r", value)
             return default
     return default
+
+
+def _parse_enrichment_dict(value: Any) -> dict[str, Any] | None:
+    """Parse a JSONB enrichment payload without turning missing data into {}."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _quote_grade_rows_from_enrichment(
+    enrichment: dict[str, Any] | None,
+    *,
+    urgency: float | None = None,
+    review_id: Any = None,
+    source: Any = None,
+    company: Any = None,
+    title: Any = None,
+    company_size: Any = None,
+    industry: Any = None,
+) -> list[dict[str, Any]]:
+    """Build quote rows that are safe for customer-facing quote rendering."""
+    rows: list[dict[str, Any]] = []
+    for phrase in quote_grade_phrases(enrichment):
+        text = str(phrase.get("text") or "").strip()
+        if not text:
+            continue
+        row: dict[str, Any] = {
+            "quote": text[:500],
+            "urgency": urgency,
+            "review_id": str(review_id) if review_id else None,
+            "source_site": source,
+            "phrase_verbatim": True,
+            "quote_origin": "review",
+            "field": phrase.get("field"),
+        }
+        if company:
+            row["company"] = company
+        if title:
+            row["title"] = title
+        if company_size:
+            row["company_size"] = company_size
+        if industry:
+            row["industry"] = industry
+        rows.append(row)
+    return rows
 
 
 def _battle_card_iter_text(value: Any, path: str = ""):
@@ -6298,7 +6350,6 @@ async def _fetch_high_intent_companies(
             r.enrichment->>'pain_category' AS pain,
             r.enrichment AS enrichment_raw,
             r.enrichment->'competitors_mentioned' AS alternatives,
-            r.enrichment->'quotable_phrases' AS quotes,
             r.enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
             r.enrichment->'budget_signals'->>'seat_count' AS seat_count,
             r.enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
@@ -6399,21 +6450,21 @@ async def _fetch_high_intent_companies(
         # must propagate as None so the contract resolver returns 'unknown'
         # for the malformed/missing case -- {} would incorrectly recompute to
         # 'none' via the empty-signals path.
-        raw_enrichment = r["enrichment_raw"]
-        if isinstance(raw_enrichment, dict):
-            enrichment_dict = raw_enrichment
-        elif isinstance(raw_enrichment, str) and raw_enrichment:
-            try:
-                parsed = json.loads(raw_enrichment)
-                enrichment_dict = parsed if isinstance(parsed, dict) else None
-            except (json.JSONDecodeError, TypeError):
-                enrichment_dict = None
-        else:
-            enrichment_dict = None
+        enrichment_dict = _parse_enrichment_dict(r["enrichment_raw"])
         gated_pain = pain_category_for_bucket(
             enrichment_dict, min_confidence="weak",
         )
         pain_conf = resolve_pain_confidence(enrichment_dict)
+        quote_rows = _quote_grade_rows_from_enrichment(
+            enrichment_dict,
+            urgency=urgency,
+            review_id=r["review_id"],
+            source=r["source"],
+            company=r["reviewer_company"],
+            title=r["reviewer_title"],
+            company_size=r["company_size_raw"],
+            industry=r["industry"],
+        )
         results.append({
             "company": r["reviewer_company"],
             "raw_company": r["raw_reviewer_company"],
@@ -6442,7 +6493,7 @@ async def _fetch_high_intent_companies(
             "pain": gated_pain,
             "pain_confidence": pain_conf,
             "alternatives": alternatives,
-            "quotes": _safe_json(r["quotes"]),
+            "quotes": quote_rows,
             "contract_signal": r["value_signal"],
             "review_id": str(r["review_id"]) if r["review_id"] else None,
             "source": r["source"],
@@ -7650,9 +7701,10 @@ async def _fetch_churning_companies(pool, window_days: int) -> list[dict[str, An
 
 
 async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float = 4.5) -> list[dict[str, Any]]:
-    """Top quotable phrases per vendor (highest urgency, deduplicated).
+    """Top quote-grade phrases per vendor (highest urgency, deduplicated).
 
-    Each quote is a dict with 'quote', 'urgency', and 'review_id' for provenance.
+    Each quote is a dict with quote text, traceability, and
+    ``phrase_verbatim=True``. Legacy v3 phrases are intentionally excluded.
     """
     sources = _executive_source_list()
     filters = _eligible_review_filters(
@@ -7663,69 +7715,71 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
     )
     rows = await pool.fetch(
         f"""
-        WITH review_best AS (
-            SELECT DISTINCT ON (vm.vendor_name, r.id)
-                vm.vendor_name AS vendor_name,
-                r.id AS review_id,
-                phrase.value AS quote,
-                (r.enrichment->>'urgency_score')::numeric AS urgency,
-                r.source,
-                r.reviewed_at,
-                r.rating,
-                r.rating_max,
-                r.reviewer_company,
-                r.reviewer_title,
-                r.company_size_raw,
-                COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
-                r.enrichment->'churn_signals' AS churn_signals,
-                r.enrichment->'salience_flags' AS salience_flags
-            FROM b2b_reviews r
-            {_review_vendor_association_join(review_alias='r', output_alias='vm')}
-            CROSS JOIN LATERAL jsonb_array_elements_text(
-                COALESCE(r.enrichment->'quotable_phrases', '[]'::jsonb)
-            ) AS phrase(value)
-            WHERE {filters}
-              AND (r.enrichment->>'urgency_score')::numeric >= $2
-            ORDER BY vm.vendor_name, r.id, length(phrase.value) DESC
-        ),
-        ranked_quotes AS (
-            SELECT *,
-                ROW_NUMBER() OVER (
-                    PARTITION BY vendor_name
-                    ORDER BY
-                        CASE WHEN (churn_signals->>'intent_to_leave')::boolean IS TRUE THEN 0 ELSE 1 END,
-                        jsonb_array_length(COALESCE(salience_flags, '[]'::jsonb)) DESC,
-                        urgency DESC
-                ) AS rn
-            FROM review_best
-        )
-        SELECT vendor_name,
-            jsonb_agg(
-                jsonb_build_object(
-                    'quote', quote,
-                    'urgency', urgency,
-                    'review_id', review_id,
-                    'source_site', source,
-                    'reviewed_at', reviewed_at,
-                    'rating', rating,
-                    'rating_max', rating_max,
-                    'company', reviewer_company,
-                    'title', reviewer_title,
-                    'company_size', company_size_raw,
-                    'industry', industry
-                ) ORDER BY rn
-            ) AS quotes
-        FROM ranked_quotes WHERE rn <= 15
-        GROUP BY vendor_name
+        SELECT DISTINCT ON (vm.vendor_name, r.id)
+            vm.vendor_name AS vendor_name,
+            r.id AS review_id,
+            r.enrichment AS enrichment_raw,
+            (r.enrichment->>'urgency_score')::numeric AS urgency,
+            r.source,
+            r.reviewed_at,
+            r.rating,
+            r.rating_max,
+            r.reviewer_company,
+            r.reviewer_title,
+            r.company_size_raw,
+            COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
+            r.enrichment->'churn_signals' AS churn_signals,
+            r.enrichment->'salience_flags' AS salience_flags
+        FROM b2b_reviews r
+        {_review_vendor_association_join(review_alias='r', output_alias='vm')}
+        WHERE {filters}
+          AND (r.enrichment->>'urgency_score')::numeric >= $2
+        ORDER BY vm.vendor_name, r.id, (r.enrichment->>'urgency_score')::numeric DESC
         """,
         window_days,
         min_urgency,
         sources,
     )
-    results = []
+    ranked_by_vendor: dict[str, list[tuple[tuple[int, int, float, int], dict[str, Any]]]] = {}
     for r in rows:
-        quotes = _safe_json(r["quotes"])
-        results.append({"vendor": r["vendor_name"], "quotes": quotes})
+        enrichment = _parse_enrichment_dict(r["enrichment_raw"])
+        urgency = float(r["urgency"]) if r["urgency"] is not None else 0.0
+        quotes = _quote_grade_rows_from_enrichment(
+            enrichment,
+            urgency=urgency,
+            review_id=r["review_id"],
+            source=r["source"],
+            company=r["reviewer_company"],
+            title=r["reviewer_title"],
+            company_size=r["company_size_raw"],
+            industry=r["industry"],
+        )
+        if not quotes:
+            continue
+        reviewed_at = r["reviewed_at"]
+        reviewed_at_text = reviewed_at.isoformat() if hasattr(reviewed_at, "isoformat") else reviewed_at
+        churn_signals = _safe_json(r["churn_signals"], {})
+        salience_flags = _safe_json(r["salience_flags"])
+        salience_count = len(salience_flags) if isinstance(salience_flags, list) else 0
+        intent_order = 0 if isinstance(churn_signals, dict) and churn_signals.get("intent_to_leave") is True else 1
+        vendor_quotes = ranked_by_vendor.setdefault(r["vendor_name"], [])
+        for idx, quote in enumerate(quotes):
+            quote["reviewed_at"] = reviewed_at_text
+            if r["rating"] is not None:
+                quote["rating"] = float(r["rating"])
+            if r["rating_max"] is not None:
+                quote["rating_max"] = float(r["rating_max"])
+            vendor_quotes.append((
+                (intent_order, -salience_count, -urgency, idx),
+                quote,
+            ))
+    results: list[dict[str, Any]] = []
+    for vendor, ranked_quotes in ranked_by_vendor.items():
+        ranked_quotes.sort(key=lambda item: item[0])
+        results.append({
+            "vendor": vendor,
+            "quotes": [quote for _, quote in ranked_quotes[:15]],
+        })
     return results
 
 

@@ -40,6 +40,7 @@ from atlas_brain.autonomous.tasks.b2b_accounts_in_motion import (
     _build_fallback_intent_rows,
     _build_signal_metadata_fallback_rows,
     _compute_account_opportunity_score,
+    _extract_account_quote,
     _merge_company_profiles,
     _normalize_company_key,
     _summarize_vendor_evidence,
@@ -155,6 +156,24 @@ class TestNormalizeCompanyKey:
 
     def test_none(self):
         assert _normalize_company_key(None) == ""
+
+
+class TestExtractAccountQuote:
+    def test_requires_explicit_verbatim_marker(self):
+        quote = _extract_account_quote([
+            "legacy string quote",
+            {"quote": "unmarked dict quote"},
+            {"quote": "false dict quote", "phrase_verbatim": False},
+            {"quote": "safe quote", "phrase_verbatim": True},
+        ])
+
+        assert quote == "safe quote"
+
+    def test_returns_none_when_only_legacy_or_unmarked_quotes_exist(self):
+        assert _extract_account_quote([
+            "legacy string quote",
+            {"quote": "unmarked dict quote"},
+        ]) is None
 
 
 class TestFallbackIntentRows:
@@ -319,7 +338,7 @@ class TestMergeCompanyProfiles:
             "alternatives": [{"name": "Freshdesk"}],
             "review_id": kw.pop("review_id", "uuid-1"),
             "source": kw.pop("source", "g2"),
-            "quotes": kw.pop("quotes", ["We need to switch ASAP"]),
+            "quotes": kw.pop("quotes", [{"quote": "We need to switch ASAP", "phrase_verbatim": True}]),
             "seat_count": kw.pop("seat_count", 100),
             "contract_end": kw.pop("contract_end", None),
             "buying_stage": kw.pop("buying_stage", "evaluation"),
@@ -452,13 +471,27 @@ class TestMergeCompanyProfiles:
         quotes = [{
             "vendor": "Zendesk",
             "quotes": [
-                {"quote": "We need to switch ASAP", "urgency": 9, "company": "Acme Corp"},
-                {"quote": "Pricing is bad", "urgency": 7, "company": "Other Inc"},
+                {"quote": "We need to switch ASAP", "urgency": 9, "company": "Acme Corp", "phrase_verbatim": True},
+                {"quote": "Pricing is bad", "urgency": 7, "company": "Other Inc", "phrase_verbatim": True},
             ],
         }]
         merged = _merge_company_profiles([r], [], [], quotes, [])
         prof = list(merged.values())[0]
         assert prof["top_quote"] == "We need to switch ASAP"
+
+    def test_quote_attachment_drops_unmarked_matching_company_quote(self):
+        """Customer-facing top_quote requires phrase_verbatim=True."""
+        r = self._make_intent(quotes=[])
+        quotes = [{
+            "vendor": "Zendesk",
+            "quotes": [
+                {"quote": "Legacy quote should not render", "urgency": 9, "company": "Acme Corp"},
+            ],
+        }]
+        merged = _merge_company_profiles([r], [], [], quotes, [])
+        prof = list(merged.values())[0]
+        assert prof["top_quote"] is None
+        assert prof["quote_match_type"] is None
 
     def test_vendor_level_quote_does_not_leak_to_other_company(self):
         """Vendor-level fallback quotes should not be attached to the wrong company."""
@@ -539,7 +572,7 @@ class TestMergeCompanyProfiles:
             "decision_maker": False,
             "buying_stage": "evaluation",
             "alternatives": [{"name": "Freshdesk"}],
-            "quotes": [{"quote": "We need to switch ASAP"}],
+            "quotes": [{"quote": "We need to switch ASAP", "phrase_verbatim": True}],
             "review_id": "uuid-1",
             "source": "g2",
         }]
@@ -552,6 +585,28 @@ class TestMergeCompanyProfiles:
         assert prof["top_quote"] == "We need to switch ASAP"
         assert prof["quote_match_type"] == "review"
         assert prof["source_distribution"] == {"g2": 1}
+
+    def test_seed_rows_drop_unmarked_quotes(self):
+        seed_rows = [{
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "category": "Helpdesk",
+            "urgency": 7.0,
+            "pain": "pricing",
+            "role_level": "champion",
+            "decision_maker": False,
+            "buying_stage": "evaluation",
+            "alternatives": [{"name": "Freshdesk"}],
+            "quotes": [{"quote": "Legacy quote should not render"}],
+            "review_id": "uuid-1",
+            "source": "g2",
+        }]
+
+        merged = _merge_company_profiles([], [], [], [], [], seed_rows=seed_rows)
+        prof = list(merged.values())[0]
+
+        assert prof["top_quote"] is None
+        assert prof["quote_match_type"] is None
 
     def test_apollo_fills_industry_when_none(self):
         """Apollo industry fills when review data has no industry."""

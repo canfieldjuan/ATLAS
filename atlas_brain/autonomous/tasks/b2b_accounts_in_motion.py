@@ -126,13 +126,13 @@ def _normalize_accounts_in_motion_confidence(value: Any) -> float | None:
 
 
 def _extract_account_quote(quotes: Any) -> str | None:
-    """Extract the first usable quote from account-scoped quote data."""
+    """Extract the first customer-safe quote from account-scoped quote data."""
     if not isinstance(quotes, list):
         return None
     for item in quotes:
-        if isinstance(item, str) and item.strip():
-            return item.strip()[:500]
         if isinstance(item, dict):
+            if item.get("phrase_verbatim") is not True:
+                continue
             quote = str(item.get("quote") or item.get("text") or "").strip()
             if quote:
                 return quote[:500]
@@ -740,12 +740,14 @@ def _merge_company_profiles(
         best_quote = None
         best_urgency = -1
         for q in quotes:
+            if not isinstance(q, dict) or q.get("phrase_verbatim") is not True:
+                continue
             qc = _normalize_company_key(q.get("company") or "")
             if qc == company_key:
                 qu = float(q.get("urgency") or 0)
                 if qu > best_urgency:
                     best_urgency = qu
-                    best_quote = q.get("quote")
+                    best_quote = str(q.get("quote") or q.get("text") or "").strip()
         if best_quote:
             prof["top_quote"] = best_quote
             prof["quote_match_type"] = "company_match"

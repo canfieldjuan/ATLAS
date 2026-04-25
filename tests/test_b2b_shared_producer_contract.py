@@ -105,6 +105,32 @@ def _row(
     }
 
 
+def _v4_quote_enrichment(
+    *,
+    text: str = "We need to switch before renewal.",
+    verbatim: bool = True,
+    subject: str = "subject_vendor",
+    polarity: str = "negative",
+) -> dict[str, Any]:
+    return {
+        "enrichment_schema_version": 4,
+        "pain_category": "pricing",
+        "pain_confidence": "strong",
+        "urgency_score": 8.5,
+        "churn_signals": {"intent_to_leave": True},
+        "quotable_phrases": [text],
+        "phrase_metadata": [{
+            "field": "quotable_phrases",
+            "index": 0,
+            "text": text,
+            "subject": subject,
+            "polarity": polarity,
+            "role": "primary_driver",
+            "verbatim": verbatim,
+        }],
+    }
+
+
 class _FakePool:
     def __init__(self, rows: list[dict[str, Any]]):
         self._rows = rows
@@ -311,6 +337,90 @@ async def test_result_row_preserves_existing_keys():
     }
     missing = expected_keys - keys
     assert not missing, f"migration dropped keys: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_high_intent_quotes_are_quote_grade_marked():
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_high_intent_companies
+
+    pool = _FakePool([_row(enrichment=_v4_quote_enrichment())])
+    out = await _fetch_high_intent_companies(pool, urgency_threshold=5.0, window_days=30)
+
+    quote = out[0]["quotes"][0]
+    assert quote["quote"] == "We need to switch before renewal."
+    assert quote["phrase_verbatim"] is True
+    assert quote["quote_origin"] == "review"
+    assert quote["review_id"] == "00000000-0000-0000-0000-000000000001"
+    assert quote["source_site"] == "reddit"
+    assert quote["field"] == "quotable_phrases"
+
+
+@pytest.mark.asyncio
+async def test_high_intent_legacy_quotes_are_not_quote_grade():
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_high_intent_companies
+
+    pool = _FakePool([_row(
+        enrichment={
+            "pain_category": "pricing",
+            "quotable_phrases": ["Legacy quote should not render"],
+            "churn_signals": {"intent_to_leave": True},
+        },
+    )])
+    out = await _fetch_high_intent_companies(pool, urgency_threshold=5.0, window_days=30)
+
+    assert out[0]["quotes"] == []
+
+
+def _quotable_row(
+    *,
+    vendor: str = "Shopify",
+    review_id: str = "00000000-0000-0000-0000-000000000001",
+    source: str = "g2",
+    reviewer_company: str = "Acme Corp",
+    urgency: float = 8.5,
+    enrichment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "vendor_name": vendor,
+        "review_id": review_id,
+        "enrichment_raw": json.dumps(enrichment or _v4_quote_enrichment()),
+        "urgency": urgency,
+        "source": source,
+        "reviewed_at": None,
+        "rating": 2.0,
+        "rating_max": 5.0,
+        "reviewer_company": reviewer_company,
+        "reviewer_title": "Ops Lead",
+        "company_size_raw": "Mid-Market",
+        "industry": "Retail",
+        "churn_signals": {"intent_to_leave": True},
+        "salience_flags": ["pricing"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_quotable_evidence_returns_only_quote_grade_rows():
+    from atlas_brain.autonomous.tasks._b2b_shared import _fetch_quotable_evidence
+
+    pool = _FakePool([
+        _quotable_row(enrichment=_v4_quote_enrichment()),
+        _quotable_row(
+            review_id="00000000-0000-0000-0000-000000000002",
+            enrichment=_v4_quote_enrichment(text="Non-verbatim should drop.", verbatim=False),
+        ),
+    ])
+
+    out = await _fetch_quotable_evidence(pool, window_days=30, min_urgency=5.0)
+
+    assert len(out) == 1
+    assert out[0]["vendor"] == "Shopify"
+    assert len(out[0]["quotes"]) == 1
+    quote = out[0]["quotes"][0]
+    assert quote["quote"] == "We need to switch before renewal."
+    assert quote["phrase_verbatim"] is True
+    assert quote["quote_origin"] == "review"
+    assert quote["company"] == "Acme Corp"
+    assert quote["field"] == "quotable_phrases"
 
 
 # ---------------------------------------------------------------------------
