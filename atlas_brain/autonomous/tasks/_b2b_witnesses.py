@@ -15,10 +15,13 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from ._b2b_grounding import check_phrase_grounded
+
 logger = logging.getLogger("atlas.witnesses")
 
 _CURRENCY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?(?:\s*/\s*(?:mo|month|yr|year|seat))?", re.I)
 _NUMBER_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\b")
+_GROUNDED_SALIENCE_BONUS = 0.75
 _TIMING_PATTERNS = (
     "renewal", "deadline", "quarter", "q1", "q2", "q3", "q4",
     "30 days", "60 days", "90 days", "this month", "this week", "next quarter",
@@ -899,9 +902,7 @@ def _witness_salience(review: dict[str, Any], enrichment: dict[str, Any], span: 
     # negative/mixed polarity, plus per-review pain_confidence. This makes
     # v4 (phrase-tagged) evidence outscore stale v3 evidence in selection
     # WITHOUT us biasing on schema_version directly. v3 spans carry None
-    # on these tags and fall through to the legacy scoring above. We do
-    # not add a bonus for grounded -- that's gated post-selection in the
-    # quote-grade rendering path so the selector does not need to know.
+    # on these tags and fall through to the legacy scoring above.
     if (
         span.get("subject") == "subject_vendor"
         and span.get("polarity") in ("negative", "mixed")
@@ -917,6 +918,12 @@ def _witness_salience(review: dict[str, Any], enrichment: dict[str, Any], span: 
         score += 2.0
     elif pain_confidence == "weak":
         score += 0.5
+    # F5: prefer quote-grade candidates when the selector already has the
+    # source text needed to run the same deterministic grounding check used
+    # at write time. This is deliberately small: grounding should break ties
+    # and favor cleaner quotes, not override stronger corroboration.
+    if span.get("grounding_status") == "grounded":
+        score += _GROUNDED_SALIENCE_BONUS
     return round(score, 2)
 
 
@@ -1075,6 +1082,7 @@ def compute_witness_hash(witness: dict[str, Any]) -> str:
         "phrase_role": str(witness.get("phrase_role") or "").strip().lower(),
         "phrase_verbatim": "true" if verbatim is True else ("false" if verbatim is False else ""),
         "pain_confidence": str(witness.get("pain_confidence") or "").strip().lower(),
+        "grounding_status": str(witness.get("grounding_status") or "").strip().lower(),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
@@ -1127,6 +1135,17 @@ def build_vendor_witness_artifacts(
             excerpt_text = str(span.get("text") or "").strip()
             if not excerpt_text:
                 continue
+            persisted_excerpt = excerpt_text[:320]
+            grounding_status = (
+                "grounded"
+                if check_phrase_grounded(
+                    persisted_excerpt,
+                    summary=review.get("summary"),
+                    review_text=review.get("review_text"),
+                )
+                else "not_grounded"
+            )
+            span["grounding_status"] = grounding_status
             review_id = str(review.get("id") or span.get("_review_id") or "unknown")
             types = _candidate_types(review, enrichment, span, primary_pains)
             witness_id = f"witness:{review_id}:{idx}"
@@ -1135,7 +1154,7 @@ def build_vendor_witness_artifacts(
                 "_sid": witness_id,
                 "vendor_name": vendor_name,
                 "review_id": review_id,
-                "excerpt_text": excerpt_text[:320],
+                "excerpt_text": persisted_excerpt,
                 "source": str(review.get("source") or "").strip(),
                 "reviewed_at": review.get("reviewed_at"),
                 "reviewer_company": review.get("reviewer_company"),
@@ -1152,6 +1171,7 @@ def build_vendor_witness_artifacts(
                 "candidate_types": sorted(types),
                 "selection_reason": "",
                 "source_span_id": span.get("span_id"),
+                "grounding_status": grounding_status,
                 # Phase 5: source-phrase tags + per-review pain confidence
                 # carried through so the API and UI can surface why a
                 # witness is graded the way it is. v1 / synthesized spans

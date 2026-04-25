@@ -139,6 +139,18 @@ def test_build_vendor_witness_artifacts_carries_phrase_tags_and_pain_confidence(
     assert candidate.get("pain_confidence") == "weak"
 
 
+def test_build_vendor_witness_artifacts_carries_selection_time_grounding_status():
+    enrichment = _v2_enrichment()
+    review = {**_source_row(), "summary": "", "enrichment": enrichment}
+    selected, _ = build_vendor_witness_artifacts(
+        "Acme",
+        [review],
+        max_witnesses=4,
+    )
+    assert selected, "expected at least one witness"
+    assert selected[0].get("grounding_status") == "grounded"
+
+
 # ---------------------------------------------------------------------------
 # _candidate_types role gate
 # ---------------------------------------------------------------------------
@@ -258,6 +270,26 @@ def test_compute_witness_hash_changes_when_pain_confidence_changes():
     }
     h1 = compute_witness_hash({**base, "pain_confidence": "weak"})
     h2 = compute_witness_hash({**base, "pain_confidence": "strong"})
+    assert h1 != h2
+
+
+def test_compute_witness_hash_changes_when_grounding_status_changes():
+    base = {
+        "witness_id": "w1",
+        "review_id": "r1",
+        "excerpt_text": "pricing keeps going up",
+        "source": "g2",
+        "signal_type": "complaint",
+        "pain_category": "pricing",
+        "competitor": None,
+        "time_anchor": None,
+        "replacement_mode": None,
+        "operating_model_shift": None,
+        "productivity_delta_claim": None,
+        "signal_tags": [],
+    }
+    h1 = compute_witness_hash({**base, "grounding_status": "grounded"})
+    h2 = compute_witness_hash({**base, "grounding_status": "not_grounded"})
     assert h1 != h2
 
 

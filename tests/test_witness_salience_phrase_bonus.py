@@ -9,6 +9,7 @@ These tests lock the new bonus contract:
   - subject == 'subject_vendor' AND polarity in (negative, mixed): +2.0
   - role == 'primary_driver': +1.5
   - pain_confidence == 'strong': +2.0; 'weak': +0.5
+  - grounding_status == 'grounded': +0.75
 
 v3 spans carry None on these tags and stay at the legacy baseline,
 so existing v3 ranking behavior is preserved.
@@ -191,6 +192,30 @@ def test_pain_confidence_none_no_bonus():
         review, _baseline_enrichment(pain_confidence="none"), span,
     )
     assert none_conf == base
+
+
+def test_grounded_status_gets_small_quote_quality_bonus():
+    review = _baseline_review()
+    enrichment = _baseline_enrichment()
+    base = _witness_salience(review, enrichment, _baseline_span())
+    grounded = _witness_salience(
+        review,
+        enrichment,
+        _baseline_span(grounding_status="grounded"),
+    )
+    assert round(grounded - base, 2) == 0.75
+
+
+def test_not_grounded_status_gets_no_quote_quality_bonus():
+    review = _baseline_review()
+    enrichment = _baseline_enrichment()
+    base = _witness_salience(review, enrichment, _baseline_span())
+    not_grounded = _witness_salience(
+        review,
+        enrichment,
+        _baseline_span(grounding_status="not_grounded"),
+    )
+    assert not_grounded == base
 
 
 def test_full_v4_combo_outscores_strong_v3_baseline():
