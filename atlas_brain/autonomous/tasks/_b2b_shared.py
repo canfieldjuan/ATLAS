@@ -16516,12 +16516,14 @@ async def read_vendor_quote_evidence(
 
     rows = await pool.fetch(
         f"""
-        SELECT matched_vm.vendor_name AS vendor_name, r.source, r.reviewer_company, r.reviewer_title,
+        SELECT r.id AS review_id, matched_vm.vendor_name AS vendor_name,
+               r.source, r.reviewer_company, r.reviewer_title,
                COALESCE(r.reviewer_title, r.enrichment->'reviewer_context'->>'role_level') AS role_level,
                r.enrichment->>'pain_category' AS pain_category,
                (r.enrichment->>'urgency_score')::numeric AS urgency,
                r.review_text, r.rating,
-               r.enrichment->'quotable_phrases' AS quotable_raw
+               r.enrichment->'quotable_phrases' AS quotable_raw,
+               r.enrichment AS enrichment_raw
         FROM b2b_reviews r
         {vendor_join}
         WHERE {where}
@@ -16533,6 +16535,7 @@ async def read_vendor_quote_evidence(
 
     return [
         {
+            "review_id": str(r["review_id"]) if r["review_id"] is not None else None,
             "vendor_name": r["vendor_name"],
             "source": r["source"],
             "reviewer_company": r["reviewer_company"],
@@ -16543,6 +16546,7 @@ async def read_vendor_quote_evidence(
             "review_text": r["review_text"],
             "rating": float(r["rating"]) if r["rating"] is not None else None,
             "quotable_phrases": _safe_json(r["quotable_raw"]),
+            "enrichment_raw": r["enrichment_raw"],
         }
         for r in rows
     ]
@@ -16601,12 +16605,14 @@ async def read_category_quote_evidence(
 
     rows = await pool.fetch(
         f"""
-        SELECT matched_vm.vendor_name AS vendor_name, r.source, r.reviewer_company, r.reviewer_title,
+        SELECT r.id AS review_id, matched_vm.vendor_name AS vendor_name,
+               r.source, r.reviewer_company, r.reviewer_title,
                COALESCE(r.reviewer_title, r.enrichment->'reviewer_context'->>'role_level') AS role_level,
                r.enrichment->>'pain_category' AS pain_category,
                (r.enrichment->>'urgency_score')::numeric AS urgency,
                r.review_text, r.rating,
-               r.enrichment->'quotable_phrases' AS quotable_raw
+               r.enrichment->'quotable_phrases' AS quotable_raw,
+               r.enrichment AS enrichment_raw
         FROM b2b_reviews r
         {vendor_join}
         WHERE {where}
@@ -16618,6 +16624,7 @@ async def read_category_quote_evidence(
 
     return [
         {
+            "review_id": str(r["review_id"]) if r["review_id"] is not None else None,
             "vendor_name": r["vendor_name"],
             "source": r["source"],
             "reviewer_company": r["reviewer_company"],
@@ -16628,6 +16635,7 @@ async def read_category_quote_evidence(
             "review_text": r["review_text"],
             "rating": float(r["rating"]) if r["rating"] is not None else None,
             "quotable_phrases": _safe_json(r["quotable_raw"]),
+            "enrichment_raw": r["enrichment_raw"],
         }
         for r in rows
     ]

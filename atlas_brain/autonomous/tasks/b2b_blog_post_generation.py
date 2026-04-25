@@ -1306,6 +1306,67 @@ def _extract_blockquote_quotes(markdown: str) -> list[str]:
     return quotes
 
 
+def _quote_grade_blueprint_phrases(
+    rows: list[dict[str, Any]],
+    *,
+    field: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Build blueprint-shaped quote dicts from review rows.
+
+    Returns ONLY quote-grade phrases (subject_vendor + negative/mixed +
+    verbatim=True) per services.b2b.enrichment_contract.quote_grade_phrases.
+    Legacy v3 rows without phrase_metadata contribute nothing -- this
+    function is the gate that prevents non-verbatim text from reaching
+    the customer-facing quote pool.
+
+    Accepts either ``enrichment`` or ``enrichment_raw`` as the JSONB key
+    on each row -- recent producer migrations have used both names.
+
+    Output dicts include traceability so downstream consumers can audit
+    which review + source each phrase came from:
+        {
+            "phrase": <verbatim text>,
+            "vendor": <vendor_name or vendor>,
+            "urgency": <urgency_score>,
+            "role": <reviewer_title or role>,
+            "review_id": <id from row>,
+            "source": <source from row>,
+            "field": <phrase_metadata.field, e.g. 'pricing_phrases'>,
+        }
+    """
+    from ...services.b2b.enrichment_contract import quote_grade_phrases
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        enrichment_val = r.get("enrichment")
+        if enrichment_val is None:
+            enrichment_val = r.get("enrichment_raw")
+        if isinstance(enrichment_val, str) and enrichment_val:
+            try:
+                enrichment_val = json.loads(enrichment_val)
+            except (json.JSONDecodeError, TypeError):
+                enrichment_val = None
+        if not isinstance(enrichment_val, dict):
+            continue
+        phrases = quote_grade_phrases(enrichment_val, field=field)
+        for phrase in phrases:
+            text = str(phrase.get("text") or "").strip()
+            if not text:
+                continue
+            out.append({
+                "phrase": text,
+                "vendor": r.get("vendor_name") or r.get("vendor"),
+                "urgency": r.get("urgency"),
+                "role": r.get("reviewer_title") or r.get("role", ""),
+                "review_id": r.get("review_id") or r.get("id"),
+                "source": r.get("source"),
+                "field": phrase.get("field"),
+            })
+            if limit and len(out) >= limit:
+                return out
+    return out
+
+
 def _source_quote_texts(blueprint: PostBlueprint) -> list[str]:
     phrases = blueprint.quotable_phrases or []
     expected_vendors = _expected_quote_vendors(blueprint)
@@ -1399,14 +1460,24 @@ def _quote_matches_source(quote_text: str, source_quotes: list[str]) -> bool:
 
 
 def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tuple[str, int]:
-    if not source_quotes:
-        return markdown, 0
+    """Strip LLM-generated blockquote lines that do not ground in a
+    quote-grade source pool.
+
+    Fails closed: when ``source_quotes`` is empty, ALL blockquote lines
+    are removed. The absence of a source pool is treated as 'no quote
+    material is grounded', not as 'everything passes' -- the latter was
+    the prior backdoor that allowed paraphrased LLM quotes to ship when
+    the producer hadn't supplied verbatim phrases.
+    """
     removed = 0
     output: list[str] = []
     for line in str(markdown or "").splitlines():
         match = _BLOCKQUOTE_RE.match(line)
         if not match:
             output.append(line)
+            continue
+        if not source_quotes:
+            removed += 1
             continue
         quote = _extract_quote_body(match.group(1))
         if quote and not _quote_matches_source(quote, source_quotes):
@@ -5413,6 +5484,16 @@ async def _gather_data(
                 "rating": r["rating"],
                 "urgency": r["urgency"] or 0,
                 "source_name": r["source"],
+                # Phase 2.3 quote-grade migration: carry the v4 enrichment +
+                # review_id forward so _quote_grade_blueprint_phrases can
+                # produce verbatim-only quote pools downstream. Vault rows
+                # below do not have these fields and stay on legacy path
+                # until vault is migrated separately.
+                "review_id": r.get("review_id"),
+                "source": r.get("source"),
+                "reviewer_title": r.get("reviewer_title"),
+                "vendor_name": r.get("vendor_name"),
+                "enrichment_raw": r.get("enrichment_raw"),
             }
             for r in pricing_rows
         ]
@@ -8058,11 +8139,35 @@ def _blueprint_pricing_reality_check(ctx: dict, data: dict) -> PostBlueprint:
         key_stats=bl_stats,
     ))
 
-    # Quotable phrases from pricing reviews
-    quotes = [
-        {"phrase": r["text"][:200], "vendor": r["vendor"], "urgency": r["urgency"], "role": r.get("role", "")}
-        for r in pricing_reviews[:5]
+    # Quotable phrases from pricing reviews.
+    # Phase 2.3 quote-grade migration: SQL-fetched rows that carry v4
+    # enrichment go through the contract gate (verbatim-only). Vault rows
+    # do not yet carry enrichment and stay on the legacy truncation path
+    # until the vault producer is migrated separately. Per-row split
+    # avoids erasing the vault-sourced quote pool while we prove the
+    # quote-grade pattern on the SQL path.
+    sql_pricing_rows = [
+        r for r in pricing_reviews
+        if isinstance(r, dict) and (r.get("enrichment") or r.get("enrichment_raw"))
     ]
+    vault_pricing_rows = [
+        r for r in pricing_reviews
+        if isinstance(r, dict) and not (r.get("enrichment") or r.get("enrichment_raw"))
+    ]
+    quotes_verbatim = _quote_grade_blueprint_phrases(
+        sql_pricing_rows, field="pricing_phrases", limit=5,
+    )
+    quotes_vault_legacy = [
+        {
+            "phrase": r["text"][:200],
+            "vendor": r.get("vendor"),
+            "urgency": r.get("urgency"),
+            "role": r.get("role", ""),
+        }
+        for r in vault_pricing_rows
+        if r.get("text")
+    ]
+    quotes = (quotes_verbatim + quotes_vault_legacy)[:5]
 
     return PostBlueprint(
         topic_type="pricing_reality_check",
