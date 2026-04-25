@@ -1047,3 +1047,298 @@ def test_repair_existing_review_by_id_sql_updates_when_only_parser_version_is_mi
     from atlas_brain.autonomous.tasks.b2b_scrape_intake import _REPAIR_EXISTING_REVIEW_BY_ID_SQL
 
     assert "(r.parser_version IS NULL AND $12::text IS NOT NULL)" in _REPAIR_EXISTING_REVIEW_BY_ID_SQL
+
+
+# ---------------------------------------------------------------------------
+# Pre-scrape coverage gate (migration 304 + b2b_scrape_intake helpers)
+# ---------------------------------------------------------------------------
+
+
+class _FakeFetchrowPool:
+    """Pool that returns a fixed dict from fetchrow and records execute calls."""
+
+    def __init__(self, fetchrow_result=None):
+        self._fetchrow_result = fetchrow_result
+        self.execute_calls: list[tuple] = []
+        self.fetchrow_calls: list[tuple] = []
+
+    async def fetchrow(self, sql, *args):
+        self.fetchrow_calls.append((sql, args))
+        return self._fetchrow_result
+
+    async def execute(self, sql, *args):
+        self.execute_calls.append((sql, args))
+        return None
+
+
+def _skip_cfg(**overrides):
+    base = {
+        "pre_scrape_skip_enabled": True,
+        "pre_scrape_skip_lookback_runs": 5,
+        "pre_scrape_skip_dup_ratio": 0.90,
+        "pre_scrape_skip_min_reviews_found_total": 20,
+        "pre_scrape_skip_min_dup_rows": 10,
+        "pre_scrape_skip_max_age_days": 14,
+        "pre_scrape_skip_paid_sources_override": "",
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.asyncio
+async def test_pre_scrape_skip_returns_none_when_disabled():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _evaluate_pre_scrape_skip
+
+    pool = _FakeFetchrowPool({"real_runs": 99, "total_found": 999, "total_dupes": 999, "last_real_scrape_at": None})
+    cfg = _skip_cfg(pre_scrape_skip_enabled=False)
+
+    result = await _evaluate_pre_scrape_skip(
+        pool, target_id="t-1", source="g2", vendor_name="HubSpot", cfg=cfg,
+    )
+
+    assert result is None
+    assert pool.fetchrow_calls == []  # disabled gate never queries
+
+
+@pytest.mark.asyncio
+async def test_pre_scrape_skip_returns_none_for_non_paid_source():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _evaluate_pre_scrape_skip
+
+    pool = _FakeFetchrowPool({"real_runs": 99, "total_found": 999, "total_dupes": 999, "last_real_scrape_at": None})
+
+    result = await _evaluate_pre_scrape_skip(
+        pool, target_id="t-1", source="reddit", vendor_name="HubSpot", cfg=_skip_cfg(),
+    )
+
+    assert result is None
+    assert pool.fetchrow_calls == []  # non-paid sources never query
+
+
+@pytest.mark.asyncio
+async def test_pre_scrape_skip_returns_none_when_real_runs_below_lookback():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _evaluate_pre_scrape_skip
+
+    pool = _FakeFetchrowPool({
+        "real_runs": 4,
+        "total_found": 200,
+        "total_dupes": 195,
+        "last_real_scrape_at": datetime.now(timezone.utc),
+    })
+
+    result = await _evaluate_pre_scrape_skip(
+        pool, target_id="t-1", source="capterra", vendor_name="HubSpot", cfg=_skip_cfg(),
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pre_scrape_skip_returns_none_when_dup_count_below_floor():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _evaluate_pre_scrape_skip
+
+    pool = _FakeFetchrowPool({
+        "real_runs": 5,
+        "total_found": 25,
+        "total_dupes": 8,  # ratio 0.32 below threshold AND below min_dup_rows=10
+        "last_real_scrape_at": datetime.now(timezone.utc),
+    })
+
+    result = await _evaluate_pre_scrape_skip(
+        pool, target_id="t-1", source="g2", vendor_name="HubSpot", cfg=_skip_cfg(),
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pre_scrape_skip_returns_none_when_total_found_below_floor():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _evaluate_pre_scrape_skip
+
+    pool = _FakeFetchrowPool({
+        "real_runs": 5,
+        "total_found": 12,  # below min_reviews_found_total=20
+        "total_dupes": 11,  # ratio would be 0.92 if computed
+        "last_real_scrape_at": datetime.now(timezone.utc),
+    })
+
+    result = await _evaluate_pre_scrape_skip(
+        pool, target_id="t-1", source="g2", vendor_name="HubSpot", cfg=_skip_cfg(),
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pre_scrape_skip_uses_real_dup_column_not_found_minus_inserted():
+    """Verify the helper queries cross_source_duplicates and uses it as the
+    ratio numerator (not reviews_found - reviews_inserted, which would also
+    count same-source dedup)."""
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _evaluate_pre_scrape_skip
+
+    pool = _FakeFetchrowPool({
+        "real_runs": 5,
+        "total_found": 100,
+        "total_dupes": 95,  # ratio 0.95
+        "last_real_scrape_at": datetime.now(timezone.utc),
+    })
+
+    result = await _evaluate_pre_scrape_skip(
+        pool, target_id="t-1", source="g2", vendor_name="HubSpot", cfg=_skip_cfg(),
+    )
+
+    assert result is not None
+    assert result["reason"] == "pre_scrape_cross_source_coverage"
+    assert result["source"] == "g2"
+    assert result["vendor_name"] == "HubSpot"
+    assert result["real_runs"] == 5
+    assert result["total_found"] == 100
+    assert result["total_dupes"] == 95
+    assert result["duplicate_ratio"] == 0.95
+    # SQL must reference the real column, not subtract anything
+    assert len(pool.fetchrow_calls) == 1
+    sql_text = pool.fetchrow_calls[0][0]
+    assert "cross_source_duplicates" in sql_text
+    assert "reviews_found - reviews_inserted" not in sql_text
+
+
+@pytest.mark.asyncio
+async def test_pre_scrape_skip_escape_hatch_uses_last_real_scrape_age():
+    """Escape hatch must fire when last NON-SKIP scrape is older than max_age,
+    even with a perfect duplicate ratio. The lookback CTE already excludes
+    skip rows, so last_real_scrape_at is the right reference point."""
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _evaluate_pre_scrape_skip
+
+    twenty_days_ago = datetime.now(timezone.utc).replace(microsecond=0)
+    twenty_days_ago = twenty_days_ago.fromtimestamp(
+        twenty_days_ago.timestamp() - 20 * 24 * 3600,
+        tz=timezone.utc,
+    )
+    pool = _FakeFetchrowPool({
+        "real_runs": 5,
+        "total_found": 100,
+        "total_dupes": 95,
+        "last_real_scrape_at": twenty_days_ago,
+    })
+
+    result = await _evaluate_pre_scrape_skip(
+        pool, target_id="t-1", source="g2", vendor_name="HubSpot",
+        cfg=_skip_cfg(pre_scrape_skip_max_age_days=14),
+    )
+
+    assert result is None  # escape hatch fires, scrape proceeds
+
+
+@pytest.mark.asyncio
+async def test_log_pre_scrape_skip_writes_proxy_none_and_correct_stop_reason():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _log_pre_scrape_skip
+
+    pool = _FakeFetchrowPool()
+    decision = {
+        "reason": "pre_scrape_cross_source_coverage",
+        "source": "g2",
+        "vendor_name": "HubSpot",
+        "duplicate_ratio": 0.95,
+    }
+
+    await _log_pre_scrape_skip(
+        pool,
+        target_id="00000000-0000-0000-0000-000000000001",
+        source="g2",
+        parser_version="g2:test",
+        decision=decision,
+    )
+
+    assert len(pool.execute_calls) == 1
+    sql, args = pool.execute_calls[0]
+    assert "INSERT INTO b2b_scrape_log" in sql
+    assert "cross_source_duplicates" in sql
+    # Positional args order matches the INSERT column order
+    assert args[2] == "skipped_redundant"  # status
+    assert args[3] == 0                     # reviews_found
+    assert args[4] == 0                     # reviews_inserted
+    assert args[5] == 0                     # pages_scraped
+    assert args[8] == "none"                # proxy_type
+    assert args[14] == "pre_scrape_cross_source_coverage"  # stop_reason
+    assert args[20] == 0                    # cross_source_duplicates
+    # errors must be JSON-encoded list-of-decision (not double-encoded)
+    import json as _json
+    decoded = _json.loads(args[6])
+    assert isinstance(decoded, list)
+    assert decoded[0]["reason"] == "pre_scrape_cross_source_coverage"
+
+
+@pytest.mark.asyncio
+async def test_update_target_cooldown_only_preserves_last_scrape_telemetry():
+    """The cooldown-only update must not touch last_scrape_status or
+    last_scrape_reviews. Verify by inspecting the SQL string."""
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _update_target_cooldown_only
+
+    pool = _FakeFetchrowPool()
+
+    await _update_target_cooldown_only(pool, "00000000-0000-0000-0000-000000000001")
+
+    assert len(pool.execute_calls) == 1
+    sql, _args = pool.execute_calls[0]
+    assert "UPDATE b2b_scrape_targets" in sql
+    assert "last_scraped_at = NOW()" in sql
+    assert "last_scrape_status" not in sql
+    assert "last_scrape_reviews" not in sql
+
+
+def test_low_yield_pruner_join_excludes_skip_rows():
+    """Pruner safety: select_low_yield_targets must filter skip rows out of
+    the LEFT JOIN so they cannot deflate inserted_sum and trigger disable."""
+    import inspect
+    from atlas_brain.services.scraping import source_yield
+
+    src = inspect.getsource(source_yield.select_low_yield_targets)
+    assert "LEFT JOIN b2b_scrape_log l" in src
+    assert "COALESCE(l.status, '') NOT LIKE 'skipped%'" in src
+
+
+def test_manual_trigger_endpoint_does_not_import_pre_scrape_skip_helper():
+    """Regression guard: manual trigger_scrape lives in api/b2b_scrape.py and
+    must NOT consult the pre-scrape gate. Verifying the helper is not
+    imported there is the cheapest property test."""
+    import inspect
+    from atlas_brain.api import b2b_scrape as b2b_scrape_api
+
+    src = inspect.getsource(b2b_scrape_api)
+    assert "_evaluate_pre_scrape_skip" not in src
+
+
+@pytest.mark.asyncio
+async def test_log_scrape_exhaustive_persists_cross_source_duplicates():
+    """Bonus from review feedback: exhaustive runs also call _insert_reviews
+    so the new column must be populated for them too, not just incremental."""
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _log_scrape_exhaustive
+
+    pool = AsyncMock()
+    pool.fetchval = AsyncMock(return_value="run-789")
+    parser = MagicMock(prefer_residential=True, version="capterra:test")
+    target = MagicMock(id="00000000-0000-0000-0000-000000000002", source="capterra")
+    result = MagicMock(pages_scraped=3, errors=[], page_logs=[])
+    stats = {
+        "found": 50,
+        "inserted": 50,
+        "date_dropped": 0,
+        "stop_reason": "page_cap",
+        "oldest_review": "2026-01-01",
+        "newest_review": "2026-03-01",
+        "status": "success",
+    }
+
+    await _log_scrape_exhaustive(
+        pool, target, "success", stats, result, parser, 12345,
+        cross_source_duplicates=37,
+    )
+
+    sql_args = pool.fetchval.await_args.args
+    sql_text = sql_args[0]
+    assert "cross_source_duplicates" in sql_text
+    # cross_source_duplicates is the 18th positional value (index 17 after sql)
+    # SELECT order: target_id, source, status, found, inserted, pages, errors,
+    #               duration, proxy, parser_version, block_type, stop_reason,
+    #               oldest, newest, date_dropped, duplicate_pages, has_page_logs,
+    #               cross_source_duplicates
+    assert sql_args[18] == 37

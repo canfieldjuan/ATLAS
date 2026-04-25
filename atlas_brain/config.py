@@ -4275,6 +4275,49 @@ class B2BScrapeConfig(BaseSettings):
         description="Reviewer-name prefix length used for loose cross-source duplicate candidate matching",
     )
 
+    # Pre-scrape coverage gate: skip a paid scrape when recent runs of this
+    # target produced enough cross-source duplicates that another fetch is
+    # almost certainly redundant. Defaults are conservative -- see
+    # b2b_scrape_intake._evaluate_pre_scrape_skip for the decision rule.
+    pre_scrape_skip_enabled: bool = Field(
+        default=True,
+        description="Gate paid scrapes on recent cross-source duplicate ratios",
+    )
+    pre_scrape_skip_lookback_runs: int = Field(
+        default=5,
+        ge=2,
+        le=20,
+        description="Number of most recent non-skipped scrape runs to evaluate per target",
+    )
+    pre_scrape_skip_dup_ratio: float = Field(
+        default=0.90,
+        ge=0.5,
+        le=1.0,
+        description="Minimum cross-source duplicate ratio over the lookback window required to skip",
+    )
+    pre_scrape_skip_min_reviews_found_total: int = Field(
+        default=20,
+        ge=1,
+        le=10000,
+        description="Statistical floor: lookback window must have at least this many reviews_found before skip can fire",
+    )
+    pre_scrape_skip_min_dup_rows: int = Field(
+        default=10,
+        ge=1,
+        le=10000,
+        description="Absolute floor: lookback window must contain at least this many cross-source duplicate rows before skip can fire",
+    )
+    pre_scrape_skip_max_age_days: int = Field(
+        default=14,
+        ge=1,
+        le=180,
+        description="Force a real scrape if the most recent non-skipped run is older than this many days (escape hatch)",
+    )
+    pre_scrape_skip_paid_sources_override: str = Field(
+        default="",
+        description="Comma-separated source allowlist override; empty value derives the paid-source set from services.scraping.capabilities (verified data quality + web_unlocker access pattern or residential proxy class)",
+    )
+
     # Exhaustive scrape mode
     exhaustive_lookback_days: int = Field(default=365, description="Date cutoff for exhaustive mode (days)")
     exhaustive_max_pages_default: int = Field(default=100, description="Safety cap for exhaustive pagination")

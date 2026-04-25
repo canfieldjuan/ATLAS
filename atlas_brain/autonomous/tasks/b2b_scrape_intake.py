@@ -898,6 +898,7 @@ async def _persist_page_logs(pool, run_id, page_logs: list) -> None:
 
 async def _log_scrape_exhaustive(
     pool, target, status: str, stats: dict, result, parser, duration_ms: int,
+    *, cross_source_duplicates: int = 0,
 ) -> _uuid.UUID | None:
     """Enriched scrape log for exhaustive mode. Returns run_id or None."""
     proxy_type = "residential" if parser.prefer_residential else "none"
@@ -926,9 +927,11 @@ async def _log_scrape_exhaustive(
                 (target_id, source, status, reviews_found, reviews_inserted,
                  pages_scraped, errors, duration_ms, proxy_type, parser_version,
                  block_type, stop_reason, oldest_review, newest_review,
-                 date_dropped, duplicate_pages, has_page_logs)
+                 date_dropped, duplicate_pages, has_page_logs,
+                 cross_source_duplicates)
             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10,
-                    $11, $12, $13, $14, $15, $16, $17)
+                    $11, $12, $13, $14, $15, $16, $17,
+                    $18)
             RETURNING id
             """,
             _uuid.UUID(target.id),
@@ -948,6 +951,7 @@ async def _log_scrape_exhaustive(
             stats.get("date_dropped", 0),
             duplicate_pages,
             should_persist,
+            int(cross_source_duplicates or 0),
         )
     except Exception:
         logger.warning("Failed to log exhaustive scrape result", exc_info=True)
@@ -1577,6 +1581,224 @@ async def _update_target_after_scrape(
     )
 
 
+# ---------------------------------------------------------------------------
+# Pre-scrape coverage gate
+# ---------------------------------------------------------------------------
+#
+# Cost-saving check that runs BEFORE parser.scrape() is called for paid
+# sources. If the most recent runs of this target produced enough cross-source
+# duplicates that another fetch is almost certainly redundant, we skip the
+# scrape entirely. The gate uses the cross_source_duplicates column on
+# b2b_scrape_log (migration 304) as its source of truth -- not (found -
+# inserted), which would conflate same-source dedup.
+
+# Cached static default derived from capability metadata. The override knob
+# (cfg.pre_scrape_skip_paid_sources_override) is read per-call, not cached.
+_PRE_SCRAPE_SKIP_PAID_SOURCES_DEFAULT: frozenset[str] | None = None
+
+
+def _derive_pre_scrape_skip_paid_sources_default() -> frozenset[str]:
+    """Return the paid-source set derived from services.scraping.capabilities.
+
+    Includes a source iff data_quality == verified AND
+    (web_unlocker in access_patterns OR proxy_class == residential).
+
+    Computed once and memoized -- capability profiles are immutable code.
+    """
+    global _PRE_SCRAPE_SKIP_PAID_SOURCES_DEFAULT
+    if _PRE_SCRAPE_SKIP_PAID_SOURCES_DEFAULT is not None:
+        return _PRE_SCRAPE_SKIP_PAID_SOURCES_DEFAULT
+    from ...services.scraping.capabilities import (
+        AccessPattern,
+        DataQuality,
+        ProxyClass,
+        get_all_capabilities,
+    )
+    paid: set[str] = set()
+    for source, profile in get_all_capabilities().items():
+        if profile.data_quality is not DataQuality.verified:
+            continue
+        uses_web_unlocker = AccessPattern.web_unlocker in profile.access_patterns
+        uses_residential = profile.proxy_class is ProxyClass.residential
+        if uses_web_unlocker or uses_residential:
+            paid.add(str(source).strip().lower())
+    _PRE_SCRAPE_SKIP_PAID_SOURCES_DEFAULT = frozenset(paid)
+    return _PRE_SCRAPE_SKIP_PAID_SOURCES_DEFAULT
+
+
+def _resolve_pre_scrape_skip_paid_sources(cfg) -> frozenset[str]:
+    """Resolve the paid-source allowlist for the current call.
+
+    Per-call read of cfg.pre_scrape_skip_paid_sources_override; empty/blank
+    falls back to the capability-derived default.
+    """
+    raw_override = str(getattr(cfg, "pre_scrape_skip_paid_sources_override", "") or "").strip()
+    if not raw_override:
+        return _derive_pre_scrape_skip_paid_sources_default()
+    items = {part.strip().lower() for part in raw_override.split(",") if part.strip()}
+    if not items:
+        return _derive_pre_scrape_skip_paid_sources_default()
+    return frozenset(items)
+
+
+async def _evaluate_pre_scrape_skip(
+    pool,
+    *,
+    target_id: Any,
+    source: str,
+    vendor_name: str,
+    cfg,
+) -> dict[str, Any] | None:
+    """Decide whether this target's next scrape can be skipped.
+
+    Returns None to scrape normally, or a decision dict describing why the
+    skip is safe. The decision is governed by six conditions that must ALL
+    hold (see plan v2). Reads only b2b_scrape_log -- a single index-only
+    scan over <= lookback_runs rows.
+    """
+    if not getattr(cfg, "pre_scrape_skip_enabled", False):
+        return None
+    source_key = str(source or "").strip().lower()
+    if not source_key:
+        return None
+    paid_sources = _resolve_pre_scrape_skip_paid_sources(cfg)
+    if source_key not in paid_sources:
+        return None
+    lookback = max(2, int(getattr(cfg, "pre_scrape_skip_lookback_runs", 5) or 5))
+    row = await pool.fetchrow(
+        """
+        WITH recent AS (
+            SELECT status, reviews_found, cross_source_duplicates, started_at
+            FROM b2b_scrape_log
+            WHERE target_id = $1
+              AND COALESCE(status, '') NOT LIKE 'skipped%'
+            ORDER BY started_at DESC
+            LIMIT $2
+        )
+        SELECT
+            COUNT(*)                                AS real_runs,
+            COALESCE(SUM(reviews_found), 0)         AS total_found,
+            COALESCE(SUM(cross_source_duplicates), 0) AS total_dupes,
+            MAX(started_at)                         AS last_real_scrape_at
+        FROM recent
+        """,
+        target_id,
+        lookback,
+    )
+    if row is None:
+        return None
+    real_runs = int(row["real_runs"] or 0)
+    total_found = int(row["total_found"] or 0)
+    total_dupes = int(row["total_dupes"] or 0)
+    last_real_scrape_at = row["last_real_scrape_at"]
+    if real_runs < lookback:
+        return None
+    min_found = int(getattr(cfg, "pre_scrape_skip_min_reviews_found_total", 20) or 20)
+    if total_found < min_found:
+        return None
+    min_dups = int(getattr(cfg, "pre_scrape_skip_min_dup_rows", 10) or 10)
+    if total_dupes < min_dups:
+        return None
+    if total_found <= 0:
+        return None
+    ratio = total_dupes / total_found
+    threshold = float(getattr(cfg, "pre_scrape_skip_dup_ratio", 0.90) or 0.90)
+    if ratio < threshold:
+        return None
+    max_age_days = int(getattr(cfg, "pre_scrape_skip_max_age_days", 14) or 14)
+    if last_real_scrape_at is not None:
+        age = datetime.now(timezone.utc) - last_real_scrape_at
+        if age.days > max_age_days:
+            return None
+    return {
+        "reason": "pre_scrape_cross_source_coverage",
+        "source": source_key,
+        "vendor_name": vendor_name,
+        "real_runs": real_runs,
+        "total_found": total_found,
+        "total_dupes": total_dupes,
+        "duplicate_ratio": round(ratio, 4),
+        "ratio_threshold": threshold,
+        "lookback_runs": lookback,
+        "min_reviews_found_total": min_found,
+        "min_dup_rows": min_dups,
+        "max_age_days": max_age_days,
+        "last_real_scrape_at": (
+            last_real_scrape_at.isoformat() if last_real_scrape_at is not None else None
+        ),
+    }
+
+
+async def _log_pre_scrape_skip(
+    pool,
+    *,
+    target_id: Any,
+    source: str,
+    parser_version: str | None,
+    decision: dict[str, Any],
+) -> None:
+    """Write a b2b_scrape_log row recording the skip decision.
+
+    Distinct from _log_scrape: no captcha telemetry, no page logs, proxy_type
+    is hard-coded 'none' (no proxy was used), stop_reason names the gate.
+    """
+    try:
+        await pool.execute(
+            """
+            INSERT INTO b2b_scrape_log
+                (target_id, source, status, reviews_found, reviews_inserted,
+                 pages_scraped, errors, duration_ms, proxy_type, parser_version,
+                 captcha_attempts, captcha_types, captcha_solve_ms, block_type,
+                 stop_reason, oldest_review, newest_review,
+                 date_dropped, duplicate_pages, has_page_logs,
+                 cross_source_duplicates)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10,
+                    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                    $21)
+            """,
+            _uuid.UUID(str(target_id)),
+            str(source or "").strip().lower(),
+            "skipped_redundant",
+            0,
+            0,
+            0,
+            json.dumps([decision]),
+            0,
+            "none",
+            parser_version,
+            0,
+            [],
+            None,
+            None,
+            "pre_scrape_cross_source_coverage",
+            None,
+            None,
+            0,
+            0,
+            False,
+            0,
+        )
+    except Exception:
+        logger.warning("Failed to log pre-scrape skip", exc_info=True)
+
+
+async def _update_target_cooldown_only(pool, target_id: Any) -> None:
+    """Tick the cooldown clock without touching last_scrape_* telemetry.
+
+    Preserves last_scrape_status and every last_scrape_* checkpoint field
+    from the prior real scrape so dashboards keep showing the actual last
+    scrape outcome instead of a misleading 'skipped_redundant' line.
+    """
+    await pool.execute(
+        """
+        UPDATE b2b_scrape_targets
+        SET last_scraped_at = NOW(), updated_at = NOW()
+        WHERE id = $1
+        """,
+        target_id,
+    )
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: scrape B2B review sites per configured targets."""
     cfg = settings.b2b_scrape
@@ -1691,6 +1913,63 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         sem = source_sems.get(target.source, asyncio.Semaphore(2))
         async with sem:
+            # Pre-scrape coverage gate: skip paid scrapes when recent runs
+            # produced enough cross-source duplicates to make this fetch
+            # almost certainly redundant. See _evaluate_pre_scrape_skip.
+            if cfg.pre_scrape_skip_enabled:
+                skip_decision = None
+                try:
+                    skip_decision = await _evaluate_pre_scrape_skip(
+                        pool,
+                        target_id=row["id"],
+                        source=target.source,
+                        vendor_name=target.vendor_name,
+                        cfg=cfg,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Pre-scrape skip evaluation failed for %s/%s; proceeding with scrape",
+                        target.source, target.vendor_name,
+                        exc_info=True,
+                    )
+                if skip_decision:
+                    await _log_pre_scrape_skip(
+                        pool,
+                        target_id=row["id"],
+                        source=target.source,
+                        parser_version=getattr(parser, "version", None),
+                        decision=skip_decision,
+                    )
+                    await _update_target_cooldown_only(pool, row["id"])
+                    try:
+                        await record_dedup(
+                            pool,
+                            stage="b2b_scrape_pre_skip",
+                            entity_type="scrape_target",
+                            entity_id=str(row["id"]),
+                            reason=skip_decision["reason"],
+                            detail=skip_decision,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "record_dedup failed for pre-scrape skip on %s/%s",
+                            target.source, target.vendor_name,
+                            exc_info=True,
+                        )
+                    async with results_lock:
+                        results_summary.append({
+                            "source": target.source,
+                            "vendor": target.vendor_name,
+                            "status": "skipped_redundant",
+                            "skip_decision": skip_decision,
+                        })
+                    logger.info(
+                        "Pre-scrape skip for %s/%s: ratio=%.2f over %d runs (saved 1 paid call)",
+                        target.source, target.vendor_name,
+                        skip_decision["duplicate_ratio"], skip_decision["real_runs"],
+                    )
+                    return
+
             started_at = time.monotonic()
             batch_id = f"scrape_{target.source}_{target.product_slug}_{int(time.time())}"
             client.reset_captcha_stats()
@@ -1853,6 +2132,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             duration_ms = int((time.monotonic() - started_at) * 1000)
 
             # Log + update target
+            cross_source_dupes_for_log = int(insert_stats.get("cross_source_duplicates", 0) or 0)
             if scrape_mode == "exhaustive":
                 date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
                 stop_reason = _determine_stop_reason(result, target, date_dropped)
@@ -1868,6 +2148,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         "status": result.status,
                     },
                     result, parser, duration_ms,
+                    cross_source_duplicates=cross_source_dupes_for_log,
                 )
             else:
                 date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
@@ -1887,6 +2168,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     oldest_review=date_info["oldest"],
                     newest_review=date_info["newest"],
                     date_dropped=date_dropped,
+                    cross_source_duplicates=cross_source_dupes_for_log,
                 )
             scrape_state = _build_scrape_state(
                 metadata,
@@ -2734,6 +3016,7 @@ async def _log_scrape(
     oldest_review: str | None = None,
     newest_review: str | None = None,
     date_dropped: int = 0,
+    cross_source_duplicates: int = 0,
 ) -> None:
     """Insert a record into b2b_scrape_log."""
     proxy_type = "residential" if parser.prefer_residential else "none"
@@ -2761,9 +3044,11 @@ async def _log_scrape(
                  pages_scraped, errors, duration_ms, proxy_type, parser_version,
                  captcha_attempts, captcha_types, captcha_solve_ms, block_type,
                  stop_reason, oldest_review, newest_review,
-                 date_dropped, duplicate_pages, has_page_logs)
+                 date_dropped, duplicate_pages, has_page_logs,
+                 cross_source_duplicates)
             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10,
-                    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                    $21)
             RETURNING id
             """,
             _uuid.UUID(target.id),
@@ -2786,6 +3071,7 @@ async def _log_scrape(
             date_dropped,
             duplicate_pages,
             has_page_logs,
+            int(cross_source_duplicates or 0),
         )
         if page_logs and run_id:
             await _persist_page_logs(pool, run_id, page_logs)

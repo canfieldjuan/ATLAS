@@ -143,7 +143,9 @@ async def select_low_yield_targets(
                     ORDER BY l.started_at DESC, l.id DESC
                 ) AS rn
             FROM b2b_scrape_targets t
-            LEFT JOIN b2b_scrape_log l ON l.target_id = t.id
+            LEFT JOIN b2b_scrape_log l
+                   ON l.target_id = t.id
+                  AND COALESCE(l.status, '') NOT LIKE 'skipped%'
             WHERE t.source = $1
               AND ($2::boolean = false OR t.enabled = true)
         ),

@@ -3616,6 +3616,9 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # -- Throughput per source x vendor --
+    # Excludes pre-scrape skip rows so they do not deflate insert rates
+    # or blocked counts. See migration 304 for the cross_source_duplicates
+    # column and b2b_scrape_intake._evaluate_pre_scrape_skip for the gate.
     throughput_rows = await pool.fetch(
         """
         SELECT
@@ -3634,6 +3637,7 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
         FROM b2b_scrape_log l
         JOIN b2b_scrape_targets t ON t.id = l.target_id
         WHERE l.started_at >= $1
+          AND COALESCE(l.status, '') NOT LIKE 'skipped%'
         GROUP BY l.source, t.vendor_name
         ORDER BY reviews_inserted DESC
         """,
@@ -3670,6 +3674,7 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
             COALESCE(MAX(pages_scraped), 0)       AS max_pages_2d
         FROM b2b_scrape_log
         WHERE started_at >= $1
+          AND COALESCE(status, '') NOT LIKE 'skipped%'
         GROUP BY source
         """,
         datetime.now(timezone.utc) - timedelta(days=2),
@@ -3708,13 +3713,18 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
     )
 
     # -- Today totals (quick headline numbers) --
+    # runs_today / inserted_today / errors_today report real scrape activity
+    # only -- pre-scrape skip rows are reported separately as saved_calls_today.
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_row = await pool.fetchrow(
         """
         SELECT
-            COUNT(*)                                              AS runs_today,
-            COALESCE(SUM(reviews_inserted), 0)                   AS inserted_today,
-            COUNT(*) FILTER (WHERE status IN ('failed','blocked')) AS errors_today
+            COUNT(*) FILTER (WHERE COALESCE(status, '') NOT LIKE 'skipped%')   AS runs_today,
+            COALESCE(SUM(reviews_inserted) FILTER (
+                WHERE COALESCE(status, '') NOT LIKE 'skipped%'
+            ), 0)                                                              AS inserted_today,
+            COUNT(*) FILTER (WHERE status IN ('failed','blocked'))             AS errors_today,
+            COUNT(*) FILTER (WHERE COALESCE(status, '') LIKE 'skipped%')       AS saved_calls_today
         FROM b2b_scrape_log
         WHERE started_at >= $1
         """,
@@ -3882,6 +3892,7 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
             "runs": int(today_row["runs_today"]),
             "reviews_inserted": int(today_row["inserted_today"]),
             "errors": int(today_row["errors_today"]),
+            "saved_calls": int(today_row["saved_calls_today"] or 0),
         },
         "throughput": [_throughput(dict(r)) for r in throughput_rows],
         "quality": [_quality(dict(r)) for r in quality_rows],

@@ -1385,6 +1385,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
     duration_ms = int((_time.monotonic() - started_at) * 1000)
 
     # Log to scrape log
+    cross_source_dupes_for_log = int(insert_stats.get("cross_source_duplicates", 0) or 0)
     if scrape_mode == "exhaustive":
         from ..autonomous.tasks.b2b_scrape_intake import _log_scrape_exhaustive
         date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
@@ -1401,6 +1402,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
                 "status": result.status,
             },
             result, parser, duration_ms,
+            cross_source_duplicates=cross_source_dupes_for_log,
         )
     else:
         date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
@@ -1414,6 +1416,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
             oldest_review=date_info["oldest"],
             newest_review=date_info["newest"],
             date_dropped=date_dropped,
+            cross_source_duplicates=cross_source_dupes_for_log,
         )
 
     scrape_state = _build_scrape_state(
@@ -1669,6 +1672,7 @@ async def trigger_scrape_all(
 
         duration_ms = int((_time.monotonic() - started_at) * 1000)
 
+        cross_source_dupes_for_log = int(insert_stats.get("cross_source_duplicates", 0) or 0)
         if row_mode == "exhaustive":
             date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
             stop_reason = _determine_stop_reason(result, target, date_dropped)
@@ -1684,6 +1688,7 @@ async def trigger_scrape_all(
                     "status": result.status,
                 },
                 result, parser, duration_ms,
+                cross_source_duplicates=cross_source_dupes_for_log,
             )
         else:
             date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
@@ -1700,6 +1705,7 @@ async def trigger_scrape_all(
                 oldest_review=date_info["oldest"],
                 newest_review=date_info["newest"],
                 date_dropped=date_dropped,
+                cross_source_duplicates=cross_source_dupes_for_log,
             )
 
         scrape_state = _build_scrape_state(
@@ -1769,6 +1775,7 @@ async def _write_scrape_log(
     oldest_review: str | None = None,
     newest_review: str | None = None,
     date_dropped: int = 0,
+    cross_source_duplicates: int = 0,
 ) -> UUID | None:
     """Write a record to b2b_scrape_log for observability."""
     proxy_type = "residential" if parser.prefer_residential else "none"
@@ -1808,9 +1815,11 @@ async def _write_scrape_log(
                  pages_scraped, errors, duration_ms, proxy_type, parser_version,
                  captcha_attempts, captcha_types, captcha_solve_ms, block_type,
                  stop_reason, oldest_review, newest_review,
-                 date_dropped, duplicate_pages, has_page_logs)
+                 date_dropped, duplicate_pages, has_page_logs,
+                 cross_source_duplicates)
             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10,
-                    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                    $21)
             RETURNING id
             """,
             target_id, source, status, reviews_found, reviews_inserted,
@@ -1825,6 +1834,7 @@ async def _write_scrape_log(
             date_dropped,
             duplicate_pages,
             has_page_logs,
+            int(cross_source_duplicates or 0),
         )
         if page_logs and run_id:
             from ..autonomous.tasks.b2b_scrape_intake import _persist_page_logs
