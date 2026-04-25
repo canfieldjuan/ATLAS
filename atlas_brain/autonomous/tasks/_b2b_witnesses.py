@@ -822,38 +822,21 @@ def _recency_bonus(reviewed_at: Any) -> float:
 
 
 def _ensure_pain_confidence(enrichment: dict[str, Any]) -> str | None:
-    """Return pain_confidence for a witness, recomputing if absent.
+    """Witness-side wrapper around services.b2b.enrichment_contract.
 
-    F2 (Phase 7 follow-up): v3 enrichments persisted before Phase 4 have
-    no pain_confidence stamped on the JSONB, so witness rows built from
-    them inherit None for the field and the UI can never render the
-    confidence banner. _validate_enrichment's recompute path only fires
-    when older "primitives" (replacement_mode etc.) are missing, so a
-    v3 enrichment that has those primitives will never get
-    pain_confidence stamped.
+    The canonical resolver now lives in the contract module. Witness
+    storage prefers None over the resolver's 'unknown' tier so previously
+    written JSONB rows do not gain a new value -- if recompute cannot
+    judge the row, leave the field as null.
 
-    Witness assembly is the right place to lazily fill it: we already
-    have the enrichment dict in memory, the rubric is deterministic
-    (no LLM), and we can do it without mutating the JSONB or forcing
-    a full _compute_derived_fields recompute.
-
-    Returns None only when the existing value is set to an unrecognised
-    string AND the recompute fails -- normal cases produce 'strong' /
-    'weak' / 'none'. The lazy import avoids a circular dependency with
-    b2b_enrichment.py (which imports symbols from this module).
+    F2 (Phase 7 follow-up) original behavior preserved: v3 enrichments
+    that were persisted before Phase 4 still get a deterministic
+    'strong' / 'weak' / 'none' via the resolver's lazy recompute path.
     """
-    existing = enrichment.get("pain_confidence")
-    if isinstance(existing, str) and existing in ("strong", "weak", "none"):
-        return existing
-    try:
-        from .b2b_enrichment import (
-            _compute_pain_confidence,
-            _normalize_pain_category,
-        )
-    except Exception:  # pragma: no cover -- defensive
-        return None
-    pain = _normalize_pain_category(enrichment.get("pain_category"))
-    return _compute_pain_confidence(enrichment, pain)
+    from ...services.b2b.enrichment_contract import resolve_pain_confidence
+
+    resolved = resolve_pain_confidence(enrichment)
+    return None if resolved == "unknown" else resolved
 
 
 def _witness_salience(review: dict[str, Any], enrichment: dict[str, Any], span: dict[str, Any]) -> float:
