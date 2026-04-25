@@ -2171,6 +2171,27 @@ export interface EvidenceWitnessDetail extends EvidenceWitness {
   // alone (a substring match can succeed against a non-grounded excerpt).
   quote_grade: boolean
   grounding_status: 'grounded' | 'not_grounded' | 'pending' | null
+  // Phase 5/6: phrase-level provenance + per-review pain confidence.
+  // Populated when the source enrichment was tagged under v2 phrase
+  // metadata (enrichment_schema_version >= 4); null on legacy v1 rows
+  // and synthesized spans (event, competitor_pressure). The drawer
+  // uses pain_confidence to decide whether to show a confidence banner.
+  phrase_polarity: 'negative' | 'mixed' | 'positive' | 'unclear' | null
+  phrase_subject:
+    | 'subject_vendor'
+    | 'self'
+    | 'alternative'
+    | 'third_party'
+    | 'unclear'
+    | null
+  phrase_role:
+    | 'primary_driver'
+    | 'supporting_context'
+    | 'passing_mention'
+    | 'unclear'
+    | null
+  phrase_verbatim: boolean | null
+  pain_confidence: 'strong' | 'weak' | 'none' | null
   evidence_spans: Array<{
     signal_type: string
     text: string

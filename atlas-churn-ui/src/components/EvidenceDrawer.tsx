@@ -931,6 +931,29 @@ export default function EvidenceDrawer({
                     Grounding check has not yet run for this witness. Quote-grade rendering is suppressed until verification completes.
                   </div>
                 )}
+                {/* Phase 6: pain-confidence banner. Shown only when the
+                    backend graded the review and the verdict is weak or
+                    none. Strong / null / undefined produce no banner. */}
+                {witness.pain_confidence === 'weak' && (
+                  <div className="mb-2 text-xs text-amber-400/80">
+                    Pain category is weakly corroborated -- one matching
+                    phrase plus a churn or sentiment signal. Treat the
+                    category as suggestive rather than authoritative.
+                  </div>
+                )}
+                {witness.pain_confidence === 'none' && (
+                  <div className="mb-2 text-xs text-amber-400/80">
+                    Pain category was demoted to overall_dissatisfaction:
+                    no corroborating churn or sentiment signal supports
+                    the original keyword match.
+                  </div>
+                )}
+                {witness.phrase_role === 'passing_mention' && (
+                  <div className="mb-2 text-xs text-amber-400/80">
+                    Source phrase tagged as a passing mention rather than
+                    a primary driver of the pain.
+                  </div>
+                )}
                 {witness.quote_grade !== false && witness.highlight_source === 'match_summary' && (
                   <div className="mb-2 text-xs text-amber-400/80">
                     Excerpt is drawn from the review title or summary, not the body shown below.
