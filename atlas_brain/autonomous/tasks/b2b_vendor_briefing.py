@@ -511,19 +511,38 @@ def _tone_band(score: float, urgency: float) -> str:
     return "watchlist"
 
 
-def _default_pain_label(category: Any) -> str:
-    """Return a readable pain label without relying on LLM enrichment."""
-    raw = str(category or "overall_dissatisfaction").strip().lower()
+def _default_pain_label(category: Any) -> str | None:
+    """Return a readable pain label, or None if the category is missing.
+
+    No synthetic 'Overall Dissatisfaction' default. Empty / whitespace /
+    None inputs return None so callers can decide whether to suppress
+    the surface or render an explicit no-pain fallback. A real category
+    of 'overall_dissatisfaction' still maps to its display label via
+    _PAIN_LABEL_FALLBACKS -- the helper only refuses to invent one.
+    """
+    if category is None:
+        return None
+    raw = str(category).strip().lower()
+    if not raw:
+        return None
     return _PAIN_LABEL_FALLBACKS.get(raw, raw.replace("_", " ").title())
 
 
 def _build_default_cta_hook(briefing: dict[str, Any]) -> str:
-    """Build a specific CTA hook from the strongest measured signal."""
+    """Build a specific CTA hook from the strongest measured signal.
+
+    Branches on ``pain_label`` rather than the raw ``top_pain`` category
+    string. This catches whitespace-only categories (which were truthy
+    enough to enter a pain branch under the old code) and avoids
+    rendering an empty or synthetic 'overall dissatisfaction' phrase
+    when no real pain signal is present.
+    """
     challenger_mode = briefing.get("challenger_mode", False)
     vendor = briefing.get("vendor_name", "the vendor")
     pains = briefing.get("pain_breakdown") or []
     top_pain = pains[0].get("category") if pains and isinstance(pains[0], dict) else ""
-    pain_label = _default_pain_label(top_pain).lower()
+    pain_label_raw = _default_pain_label(top_pain) if top_pain else None
+    pain_label = pain_label_raw.lower() if pain_label_raw else None
 
     targets = briefing.get("top_displacement_targets") or []
     top_target = ""
@@ -531,23 +550,23 @@ def _build_default_cta_hook(briefing: dict[str, Any]) -> str:
         top_target = str(targets[0].get("competitor") or "").strip()
 
     if challenger_mode:
-        if top_target and top_pain:
+        if top_target and pain_label:
             return (
                 f"See which accounts are leaving {top_target} due to "
                 f"{pain_label} and how to position your outreach."
             )
-        if top_pain:
+        if pain_label:
             return f"Review the {pain_label} signals driving accounts to evaluate alternatives like {vendor}."
         if top_target:
             return f"See the accounts in motion from {top_target} that your team can engage now."
         return f"Review this week's account movement signals relevant to {vendor}."
 
-    if top_target and top_pain:
+    if top_target and pain_label:
         return (
             f"Review the {pain_label} signals behind the shift toward "
             f"{top_target} before the next renewal cycle."
         )
-    if top_pain:
+    if pain_label:
         return f"Review the {pain_label} cluster behind this alert to prioritize retention plays."
     if top_target:
         return f"Review the accounts trending toward {top_target} to focus retention outreach early."
@@ -555,14 +574,31 @@ def _build_default_cta_hook(briefing: dict[str, Any]) -> str:
 
 
 def _finalize_briefing_presentation(briefing: dict[str, Any]) -> None:
-    """Fill presentation fields deterministically after enrichment."""
-    pain_labels = briefing.get("pain_labels") or {}
+    """Fill presentation fields deterministically after enrichment.
+
+    Sanitizes any pre-existing ``pain_labels`` dict so blank-key entries
+    (e.g. ``{"": "Overall Dissatisfaction"}`` produced by upstream
+    synthesis when the category was missing) do not survive into the
+    rendered briefing. Real categories from ``pain_breakdown`` still get
+    formatted via ``_default_pain_label`` and added when missing.
+    """
+    raw_pain_labels = briefing.get("pain_labels") or {}
+    if not isinstance(raw_pain_labels, dict):
+        raw_pain_labels = {}
+    pain_labels: dict[str, str] = {
+        k: v
+        for k, v in raw_pain_labels.items()
+        if isinstance(k, str) and k.strip()
+    }
     for pain in briefing.get("pain_breakdown") or []:
         if not isinstance(pain, dict):
             continue
         raw_category = str(pain.get("category") or "").strip()
-        if raw_category and raw_category not in pain_labels:
-            pain_labels[raw_category] = _default_pain_label(raw_category)
+        if not raw_category or raw_category in pain_labels:
+            continue
+        label = _default_pain_label(raw_category)
+        if label:
+            pain_labels[raw_category] = label
     briefing["pain_labels"] = pain_labels
 
     if not briefing.get("executive_summary"):
