@@ -360,14 +360,20 @@ def _extract_pain_quotes_from_reviews(
             quote = str(phrase or "").strip()
             if not quote:
                 continue
-            candidates.append({
+            candidate: dict[str, Any] = {
                 "quote": quote,
                 "urgency": urgency,
                 "pain_category": row.get("pain_category") or "",
                 "company": row.get("company") or "",
                 "role": row.get("role") or "",
                 "source_site": row.get("source") or "",
-            })
+            }
+            # Phase 2.3 4d-A: pass producer-stamped traceability through.
+            # Unmarked rows continue to work for legacy callers.
+            for key in ("review_id", "field", "phrase_verbatim", "quote_origin"):
+                if key in row and row[key] is not None:
+                    candidate[key] = row[key]
+            candidates.append(candidate)
     candidates.sort(key=lambda item: (float(item.get("urgency") or 0), len(str(item.get("quote") or ""))), reverse=True)
     deduped: list[dict[str, Any]] = []
     for quote in candidates:
@@ -389,12 +395,18 @@ async def _fetch_review_pain_quotes(
     min_urgency: float = 6.0,
     similarity_threshold: float = 0.7,
 ) -> list[dict]:
-    """Fetch top pain quotes directly from enriched reviews for a vendor.
+    """Fetch top quote-grade pain quotes from enriched reviews.
 
-    Uses shared adapter for enrichment reads. Post-processing (dedup,
-    similarity filtering) stays local.
+    Phase 2.3 4d-A: routes the SQL evidence path through the
+    enrichment contract (``quote_grade_phrases``) so output rows
+    carry ``phrase_verbatim=True``. v3-era enrichments produce
+    nothing -- legacy phrases have no verbatim guarantee. Output
+    rows are stamped with traceability fields (review_id, source,
+    field) and ``quote_origin='review'`` for downstream audit,
+    matching the vendor-briefing producer convention from 4c-B.
     """
     from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_quote_evidence
+    from atlas_brain.services.b2b.enrichment_contract import quote_grade_phrases
 
     rows = await read_vendor_quote_evidence(
         pool,
@@ -405,15 +417,35 @@ async def _fetch_review_pain_quotes(
         require_quotes=True,
         recency_column="imported_at",
     )
-    normalized_rows = [{
-        "vendor_name": r["vendor_name"],
-        "source": r["source"],
-        "company": r["reviewer_company"],
-        "role": r["role_level"],
-        "pain_category": r["pain_category"],
-        "phrases": r["quotable_phrases"],
-        "urgency": r["urgency"],
-    } for r in rows]
+    normalized_rows: list[dict[str, Any]] = []
+    for r in rows:
+        enrichment_raw = r.get("enrichment_raw")
+        if isinstance(enrichment_raw, str):
+            try:
+                enrichment = json.loads(enrichment_raw)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        elif isinstance(enrichment_raw, dict):
+            enrichment = enrichment_raw
+        else:
+            continue
+        for phrase in quote_grade_phrases(enrichment):
+            text = str(phrase.get("text") or "").strip()
+            if not text:
+                continue
+            normalized_rows.append({
+                "vendor_name": r["vendor_name"],
+                "source": r["source"],
+                "company": r["reviewer_company"],
+                "role": r["role_level"],
+                "pain_category": r["pain_category"],
+                "phrases": [text],
+                "urgency": r["urgency"],
+                "review_id": r.get("review_id"),
+                "field": phrase.get("field"),
+                "phrase_verbatim": True,
+                "quote_origin": "review",
+            })
     return _extract_pain_quotes_from_reviews(
         normalized_rows,
         vendor=vendor,
@@ -1339,16 +1371,16 @@ def _build_challenger_brief(
 
     # Fallback chain for pain quotes:
     # 1. Battle card quotes (already handled above)
-    # 2. Canonical evidence vault quotes
-    # 3. Direct review quotes (from b2b_reviews)
-    # 4. Displacement key_quote (single quote, last resort)
+    # 2. Canonical evidence vault quotes (already handled above)
+    # 3. Direct review quotes (from b2b_reviews) -- now contract-gated
+    #    via _fetch_review_pain_quotes, output stamped phrase_verbatim=True.
+    # Phase 2.3 4d-A: the prior 4th fallback injected
+    # b2b_displacement_edges.key_quote when no other source had quotes.
+    # That column has no verbatim guarantee, and the brief's pain quotes
+    # surface in the delivery email's "Witness Highlights" block. We drop
+    # the fallback rather than ship an unmarked quote -- empty stays empty.
     if not inc_pain_quotes and review_pain_quotes:
         inc_pain_quotes = review_pain_quotes
-    if not inc_pain_quotes and displacement_detail.get("key_quote"):
-        inc_pain_quotes = [{
-            "quote": displacement_detail["key_quote"],
-            "source_site": "displacement_evidence",
-        }]
 
     # --- incumbent strengths (from evidence vault) ---
     inc_strengths: list[dict[str, Any]] = []

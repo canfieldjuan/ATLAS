@@ -4,6 +4,7 @@ Covers weakness coverage, target account filtering, integration comparison,
 brief assembly, executive summary format, and self-flow skip.
 """
 
+import json
 import sys
 from datetime import date
 from typing import Any
@@ -37,6 +38,7 @@ from atlas_brain.autonomous.tasks.b2b_challenger_brief import (
     _check_freshness,
     _compute_weakness_coverage,
     _extract_pain_quotes_from_reviews,
+    _fetch_review_pain_quotes,
     _resolve_cross_vendor_battle,
     _fetch_persisted_report_record,
     _filter_target_accounts,
@@ -2116,3 +2118,434 @@ class TestResolveCrossVendorBattle:
         assert len(result["key_insights"]) == 2
         assert result["key_insights"][0] == {"insight": "Plain string", "evidence": "Plain string"}
         assert result["key_insights"][1] == {"insight": "Dict", "evidence": "m: 42"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.3 4d-A -- _fetch_review_pain_quotes contract gate
+#
+# After 4d-A, the SQL pain-quote producer routes enrichment through
+# quote_grade_phrases() and stamps phrase_verbatim=True / quote_origin
+# / review_id / source / field on every output row. v3-era enrichments
+# produce nothing -- there is no verbatim guarantee. This mirrors the
+# 4c-B vendor-briefing pattern.
+#
+# Plus: regression test that the displacement key_quote last-resort
+# fallback (which injected an unmarked legacy quote into top_pain_quotes
+# when no other source had any) is gone.
+# ---------------------------------------------------------------------------
+
+
+def _v4_pain_enrichment(
+    *,
+    text: str = "Pricing jumped 40% at the Q2 renewal.",
+    field: str = "pricing_phrases",
+    subject: str = "subject_vendor",
+    polarity: str = "negative",
+    role: str = "primary_driver",
+    verbatim: bool = True,
+) -> dict[str, Any]:
+    return {
+        "enrichment_schema_version": 4,
+        field: [text],
+        "phrase_metadata": [
+            {
+                "field": field,
+                "index": 0,
+                "text": text,
+                "subject": subject,
+                "polarity": polarity,
+                "role": role,
+                "verbatim": verbatim,
+            }
+        ],
+    }
+
+
+def _read_evidence_row(
+    *,
+    enrichment: dict[str, Any] | str | None,
+    review_id: str = "rev-1",
+    source: str = "g2",
+    reviewer_company: str = "Acme Corp",
+    reviewer_title: str = "Director of Operations",
+    role_level: str = "Director of Operations",
+    pain_category: str = "pricing",
+    urgency: float = 8.4,
+    vendor_name: str = "Zendesk",
+) -> dict[str, Any]:
+    """Mirror the row shape returned by read_vendor_quote_evidence."""
+    return {
+        "review_id": review_id,
+        "vendor_name": vendor_name,
+        "source": source,
+        "reviewer_company": reviewer_company,
+        "reviewer_title": reviewer_title,
+        "role_level": role_level,
+        "pain_category": pain_category,
+        "urgency": urgency,
+        "review_text": "...",
+        "rating": 2.0,
+        "quotable_phrases": ["legacy quotable string -- ignored after 4d-A"],
+        "enrichment_raw": enrichment,
+    }
+
+
+class TestFetchReviewPainQuotesQuoteGrade:
+    """Phase 2.3 4d-A: _fetch_review_pain_quotes contract migration."""
+
+    @pytest.mark.asyncio
+    async def test_v4_row_produces_quote_grade_row(self, monkeypatch):
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        enrichment = _v4_pain_enrichment(
+            text="Renewal jumped to $200k/year with no warning.",
+            field="pricing_phrases",
+        )
+        sql_rows = [
+            _read_evidence_row(
+                enrichment=enrichment,
+                review_id="rev-200k",
+                source="capterra",
+                reviewer_company="Hack Club",
+                vendor_name="Zendesk",
+            ),
+        ]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(),
+            vendor="Zendesk",
+            limit=5,
+            min_urgency=6.0,
+            similarity_threshold=0.7,
+        )
+        assert len(out) == 1
+        row = out[0]
+        assert row["quote"] == "Renewal jumped to $200k/year with no warning."
+        assert row["phrase_verbatim"] is True
+        assert row["quote_origin"] == "review"
+        assert row["review_id"] == "rev-200k"
+        assert row["source_site"] == "capterra"
+        assert row["field"] == "pricing_phrases"
+        assert row["company"] == "Hack Club"
+
+    @pytest.mark.asyncio
+    async def test_v3_rows_produce_nothing(self, monkeypatch):
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        legacy = {
+            "enrichment_schema_version": 3,
+            "pricing_phrases": ["renewal price way too high"],
+            "quotable_phrases": ["renewal price way too high"],
+        }
+        sql_rows = [_read_evidence_row(enrichment=legacy)]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(), vendor="Zendesk", limit=5,
+        )
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_non_verbatim_v4_row_drops(self, monkeypatch):
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        sql_rows = [
+            _read_evidence_row(enrichment=_v4_pain_enrichment(verbatim=False)),
+        ]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(), vendor="Zendesk", limit=5,
+        )
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_competitor_subject_drops(self, monkeypatch):
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        sql_rows = [
+            _read_evidence_row(enrichment=_v4_pain_enrichment(subject="competitor")),
+        ]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(), vendor="Zendesk", limit=5,
+        )
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_positive_polarity_drops(self, monkeypatch):
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        sql_rows = [
+            _read_evidence_row(enrichment=_v4_pain_enrichment(polarity="positive")),
+        ]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(), vendor="Zendesk", limit=5,
+        )
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_json_string_enrichment_accepted(self, monkeypatch):
+        """Defensive: a raw-JSON-string enrichment value still works."""
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        enrichment = _v4_pain_enrichment(text="JSON string path quote.")
+        sql_rows = [_read_evidence_row(enrichment=json.dumps(enrichment))]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(), vendor="Zendesk", limit=5,
+        )
+        assert len(out) == 1
+        assert out[0]["quote"] == "JSON string path quote."
+        assert out[0]["phrase_verbatim"] is True
+
+    @pytest.mark.asyncio
+    async def test_malformed_enrichment_skipped(self, monkeypatch):
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        sql_rows = [
+            _read_evidence_row(enrichment="{not valid json"),
+            _read_evidence_row(enrichment=None),
+            _read_evidence_row(enrichment=12345),
+        ]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(), vendor="Zendesk", limit=5,
+        )
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_dedup_still_applies_to_quote_grade_rows(self, monkeypatch):
+        """Two reviews carrying near-identical verbatim phrases must
+        dedupe down to one. Confirms the contract-gated rows still flow
+        through _extract_pain_quotes_from_reviews's similarity filter."""
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        text_a = "Support disappeared during onboarding"
+        text_b = "Support disappeared during onboarding for our new team"
+        sql_rows = [
+            _read_evidence_row(
+                enrichment=_v4_pain_enrichment(
+                    text=text_a, field="specific_complaints",
+                ),
+                review_id="rev-a",
+                urgency=9.0,
+            ),
+            _read_evidence_row(
+                enrichment=_v4_pain_enrichment(
+                    text=text_b, field="specific_complaints",
+                ),
+                review_id="rev-b",
+                urgency=8.5,
+            ),
+        ]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(),
+            vendor="Zendesk",
+            limit=5,
+            min_urgency=6.0,
+            similarity_threshold=0.5,
+        )
+        assert len(out) == 1
+        # Highest-urgency row wins after dedup.
+        assert out[0]["review_id"] == "rev-a"
+        assert out[0]["phrase_verbatim"] is True
+
+    @pytest.mark.asyncio
+    async def test_min_urgency_still_filters(self, monkeypatch):
+        """Urgency filter applied after the contract gate -- a v4
+        verbatim phrase from a low-urgency review must drop."""
+        from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+        sql_rows = [
+            _read_evidence_row(
+                enrichment=_v4_pain_enrichment(text="low urgency verbatim quote"),
+                urgency=4.0,
+            ),
+        ]
+        monkeypatch.setattr(
+            shared_mod, "read_vendor_quote_evidence",
+            AsyncMock(return_value=sql_rows),
+        )
+
+        out = await _fetch_review_pain_quotes(
+            pool=MagicMock(),
+            vendor="Zendesk",
+            limit=5,
+            min_urgency=6.0,
+        )
+        assert out == []
+
+
+class TestExtractPainQuotesPassesTraceability:
+    """The helper passes producer-stamped traceability fields through.
+    Legacy callers that don't stamp keep working unchanged."""
+
+    def test_passes_through_review_id_and_field_when_present(self):
+        rows = [
+            {
+                "vendor_name": "Zendesk",
+                "source": "capterra",
+                "company": "Hack Club",
+                "role": "VP Eng",
+                "pain_category": "pricing",
+                "phrases": ["Renewal jumped to $200k/year."],
+                "urgency": 8.4,
+                "review_id": "rev-200k",
+                "field": "pricing_phrases",
+                "phrase_verbatim": True,
+                "quote_origin": "review",
+            },
+        ]
+        out = _extract_pain_quotes_from_reviews(
+            rows,
+            vendor="Zendesk",
+            max_quotes=5,
+            min_urgency=6.0,
+            similarity_threshold=0.7,
+        )
+        assert len(out) == 1
+        item = out[0]
+        assert item["review_id"] == "rev-200k"
+        assert item["field"] == "pricing_phrases"
+        assert item["phrase_verbatim"] is True
+        assert item["quote_origin"] == "review"
+
+    def test_legacy_rows_without_traceability_keep_working(self):
+        """Existing test fixture shape (no review_id/field/marker) must
+        still produce candidates -- no breakage for callers that haven't
+        migrated yet."""
+        rows = [
+            {
+                "vendor_name": "Zendesk",
+                "source": "g2",
+                "company": "Acme",
+                "role": "Director",
+                "pain_category": "support",
+                "phrases": ["Support disappeared during onboarding"],
+                "urgency": 9.0,
+            },
+        ]
+        out = _extract_pain_quotes_from_reviews(
+            rows,
+            vendor="Zendesk",
+            max_quotes=5,
+            min_urgency=6.0,
+            similarity_threshold=0.7,
+        )
+        assert len(out) == 1
+        # No traceability fields stamped -- only the legacy keys present.
+        assert "phrase_verbatim" not in out[0]
+        assert "review_id" not in out[0]
+
+
+class TestKeyQuoteFallbackRemoved:
+    """Phase 2.3 4d-A: the displacement key_quote last-resort fallback
+    is gone. When no battle-card / vault / review pain quotes are
+    available, top_pain_quotes stays empty -- we no longer inject an
+    unmarked legacy quote sourced from b2b_displacement_edges.key_quote.
+    """
+
+    def test_top_pain_quotes_empty_when_only_key_quote_available(self):
+        displacement_detail = {
+            "total_mentions": 4,
+            "signal_strength": "moderate",
+            "confidence_score": 0.6,
+            "primary_driver": "pricing",
+            # The unmarked legacy fallback row -- previously this would
+            # have been injected into top_pain_quotes; now it must not.
+            "key_quote": "Pricing got out of hand last quarter.",
+            "source_distribution": {},
+        }
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=displacement_detail,
+            battle_card=None,
+            cross_vendor_battle=None,
+            churn_signal=None,
+            incumbent_profile={"category": "helpdesk"},
+            challenger_profile=None,
+            review_pain_quotes=None,
+            accounts_in_motion=None,
+            quote_similarity_threshold=0.7,
+            max_target_accounts=15,
+        )
+        assert brief["incumbent_profile"]["top_pain_quotes"] == []
+
+    def test_review_pain_quotes_still_used_when_present(self):
+        """Sanity: dropping the key_quote fallback didn't disturb the
+        review-quote fallback that comes one step earlier."""
+        displacement_detail = {
+            "total_mentions": 4,
+            "signal_strength": "moderate",
+            "confidence_score": 0.6,
+            "primary_driver": "pricing",
+            "key_quote": "Pricing got out of hand last quarter.",
+            "source_distribution": {},
+        }
+        review_quotes = [
+            {
+                "quote": "Renewal jumped to $200k/year.",
+                "urgency": 8.4,
+                "pain_category": "pricing",
+                "company": "Hack Club",
+                "role": "VP Eng",
+                "source_site": "capterra",
+                "review_id": "rev-200k",
+                "field": "pricing_phrases",
+                "phrase_verbatim": True,
+                "quote_origin": "review",
+            },
+        ]
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=displacement_detail,
+            battle_card=None,
+            cross_vendor_battle=None,
+            churn_signal=None,
+            incumbent_profile={"category": "helpdesk"},
+            challenger_profile=None,
+            review_pain_quotes=review_quotes,
+            accounts_in_motion=None,
+            quote_similarity_threshold=0.7,
+            max_target_accounts=15,
+        )
+        assert len(brief["incumbent_profile"]["top_pain_quotes"]) == 1
+        item = brief["incumbent_profile"]["top_pain_quotes"][0]
+        assert item["quote"] == "Renewal jumped to $200k/year."
+        assert item["phrase_verbatim"] is True
