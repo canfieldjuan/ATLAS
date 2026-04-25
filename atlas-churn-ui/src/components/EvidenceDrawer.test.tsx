@@ -14,28 +14,41 @@ const api = vi.hoisted(() => ({
 
 vi.mock('../api/client', () => api)
 
+function makeWitness(overrides = {}) {
+  return {
+    witness_id: 'w1',
+    excerpt_text: 'Pricing spiked after renewal.',
+    source: 'g2',
+    reviewed_at: '2026-04-07T18:00:00Z',
+    reviewer_company: 'Acme Corp',
+    reviewer_title: 'VP IT',
+    pain_category: 'pricing',
+    competitor: 'Zendesk',
+    salience_score: 0.92,
+    specificity_score: 0.76,
+    selection_reason: 'named_account',
+    signal_tags: ['pricing_backlash'],
+    review_text: 'Pricing spiked after renewal and support dropped.',
+    evidence_spans: [],
+    all_evidence_span_count: 0,
+    quote_grade: true,
+    grounding_status: 'grounded',
+    highlight_source: 'none',
+    phrase_polarity: null,
+    phrase_subject: null,
+    phrase_role: null,
+    phrase_verbatim: null,
+    pain_confidence: null,
+    ...overrides,
+  }
+}
+
 describe('EvidenceDrawer', () => {
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
     api.fetchWitness.mockResolvedValue({
-      witness: {
-        witness_id: 'w1',
-        excerpt_text: 'Pricing spiked after renewal.',
-        source: 'g2',
-        reviewed_at: '2026-04-07T18:00:00Z',
-        reviewer_company: 'Acme Corp',
-        reviewer_title: 'VP IT',
-        pain_category: 'pricing',
-        competitor: 'Zendesk',
-        salience_score: 0.92,
-        specificity_score: 0.76,
-        selection_reason: 'named_account',
-        signal_tags: ['pricing_backlash'],
-        review_text: 'Pricing spiked after renewal and support dropped.',
-        evidence_spans: [],
-        all_evidence_span_count: 0,
-      },
+      witness: makeWitness(),
     })
     api.fetchAnnotations.mockResolvedValue({ annotations: [] })
     api.setAnnotation.mockResolvedValue({
@@ -551,5 +564,74 @@ describe('EvidenceDrawer', () => {
     expect(await screen.findByText(/Excerpt could not be verified verbatim/i)).toBeInTheDocument()
     expect(screen.getByText('Pricing spiked after renewal and support dropped.')).toBeInTheDocument()
     expect(container.querySelector('mark')).toBeNull()
+  })
+
+  it('shows Phase 6 weak-confidence and passing-mention notes', async () => {
+    api.fetchWitness.mockResolvedValueOnce({
+      witness: makeWitness({
+        pain_confidence: 'weak',
+        phrase_role: 'passing_mention',
+      }),
+    })
+
+    render(
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/Pain category is weakly corroborated/i)).toBeInTheDocument()
+    expect(screen.getByText(/Source phrase tagged as a passing mention/i)).toBeInTheDocument()
+  })
+
+  it('shows Phase 6 demotion note when pain confidence is none', async () => {
+    api.fetchWitness.mockResolvedValueOnce({
+      witness: makeWitness({
+        pain_confidence: 'none',
+      }),
+    })
+
+    render(
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/Pain category was demoted to overall_dissatisfaction/i)).toBeInTheDocument()
+  })
+
+  it('does not show Phase 6 confidence notes for strong confidence', async () => {
+    api.fetchWitness.mockResolvedValueOnce({
+      witness: makeWitness({
+        pain_confidence: 'strong',
+        phrase_role: 'primary_driver',
+      }),
+    })
+
+    render(
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
+    expect(screen.queryByText(/Pain category is weakly corroborated/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Pain category was demoted/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Source phrase tagged as a passing mention/i)).not.toBeInTheDocument()
   })
 })
