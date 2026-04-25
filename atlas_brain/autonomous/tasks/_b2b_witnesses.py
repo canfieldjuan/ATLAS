@@ -818,6 +818,41 @@ def _recency_bonus(reviewed_at: Any) -> float:
     return 0.2
 
 
+def _ensure_pain_confidence(enrichment: dict[str, Any]) -> str | None:
+    """Return pain_confidence for a witness, recomputing if absent.
+
+    F2 (Phase 7 follow-up): v3 enrichments persisted before Phase 4 have
+    no pain_confidence stamped on the JSONB, so witness rows built from
+    them inherit None for the field and the UI can never render the
+    confidence banner. _validate_enrichment's recompute path only fires
+    when older "primitives" (replacement_mode etc.) are missing, so a
+    v3 enrichment that has those primitives will never get
+    pain_confidence stamped.
+
+    Witness assembly is the right place to lazily fill it: we already
+    have the enrichment dict in memory, the rubric is deterministic
+    (no LLM), and we can do it without mutating the JSONB or forcing
+    a full _compute_derived_fields recompute.
+
+    Returns None only when the existing value is set to an unrecognised
+    string AND the recompute fails -- normal cases produce 'strong' /
+    'weak' / 'none'. The lazy import avoids a circular dependency with
+    b2b_enrichment.py (which imports symbols from this module).
+    """
+    existing = enrichment.get("pain_confidence")
+    if isinstance(existing, str) and existing in ("strong", "weak", "none"):
+        return existing
+    try:
+        from .b2b_enrichment import (
+            _compute_pain_confidence,
+            _normalize_pain_category,
+        )
+    except Exception:  # pragma: no cover -- defensive
+        return None
+    pain = _normalize_pain_category(enrichment.get("pain_category"))
+    return _compute_pain_confidence(enrichment, pain)
+
+
 def _witness_salience(review: dict[str, Any], enrichment: dict[str, Any], span: dict[str, Any]) -> float:
     churn = _coerce_json_dict(enrichment.get("churn_signals"))
     reviewer = _coerce_json_dict(enrichment.get("reviewer_context"))
@@ -874,7 +909,10 @@ def _witness_salience(review: dict[str, Any], enrichment: dict[str, Any], span: 
         score += 2.0
     if span.get("role") == "primary_driver":
         score += 1.5
-    pain_confidence = enrichment.get("pain_confidence")
+    # F2: lazily recompute pain_confidence for v3 enrichments that don't
+    # have it stamped on the JSONB. F1 salience bonus would otherwise
+    # silently drop to 0 for the entire v3 corpus.
+    pain_confidence = _ensure_pain_confidence(enrichment)
     if pain_confidence == "strong":
         score += 2.0
     elif pain_confidence == "weak":
@@ -1122,7 +1160,7 @@ def build_vendor_witness_artifacts(
                 "phrase_subject": span.get("subject"),
                 "phrase_role": span.get("role"),
                 "phrase_verbatim": span.get("verbatim"),
-                "pain_confidence": enrichment.get("pain_confidence"),
+                "pain_confidence": _ensure_pain_confidence(enrichment),
             }
             specificity_score, generic_reasons = _witness_specificity_signals(
                 candidate,
