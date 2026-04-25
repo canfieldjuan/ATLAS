@@ -389,10 +389,22 @@ of these full patterns:
 ```
 
 `\[COMPETITOR\]` matches any vendor name from the canonical-aliases table
-that is NOT the subject vendor. The patterns require BOTH `\[VENDOR\]`
-and `\[COMPETITOR\]` to appear within the same source window for the trap
-to fire — the failure mode is specifically *another vendor's* trait being
-attributed to the subject vendor.
+that is NOT the subject vendor. Each pattern fires when the source window
+contains `\[VENDOR\]` AND ONE OF:
+
+- a self-transition phrase (`we used`, `we had`, `our team`, `our company`,
+  `our stack`) — the negative trait may belong to the reviewer's prior
+  setup or a homegrown system, not necessarily a named competitor.
+  Patterns 1-2 cover this case.
+- a `\[COMPETITOR\]` token — the negative trait belongs to a named
+  competitor. Patterns 3-6 cover this case.
+
+The trap fires only when these markers co-occur with `\[VENDOR\]` inside
+the same source window. A bare `before [VENDOR]` is not a trap on its
+own; "Before Monday introduced this feature, our team struggled" matches
+no pattern (no transition or competitor marker after the temporal
+marker) and falls through to the per-phrase gates as a legitimate
+temporal statement about the subject vendor.
 
 When the phrase target is a competitor (used by the displacement claim
 validator), the patterns swap roles: the trap fires when the negative
@@ -908,7 +920,9 @@ Risks:
 
 - false negatives if deterministic source-window attribution is too strict
 - high `cannot_validate` rate while old v3 rows remain active
-- new table growth if claims are append-only without retention
+- audit-row retention growth: even with upsert idempotency, rows for
+  invalid/cannot_validate claims accumulate over time as new witnesses
+  arrive. Need a retention policy decision (Open Decisions #1).
 - consumer confusion if `invalid` and `cannot_validate` are conflated
 
 Mitigations:
@@ -957,9 +971,9 @@ Mitigations:
 15. Migrate `b2b_churn_reports.py` (scorecard + deep dive evidence).
 16. Migrate Tier 3 content generators (campaign, blog) when
     `select_best_claim()` is stable across all migrated reports.
-17. Tier 4 passthrough surfaces (other intelligence_data report types):
-    add claim-aware fallback path; legacy passthrough otherwise.
-18. Tier 5: MCP server tools.
+17. Migrate the remaining `b2b_intelligence` report-type surfaces per the
+    Tier 4 enumeration (passthrough fallback for legacy persisted rows).
+18. Migrate the MCP server tools per the Tier 5 enumeration.
 
 ### Canary Vendor Set
 
@@ -1026,8 +1040,8 @@ Do not remove legacy evidence paths until all are true:
 Decisions resolved by this revision (no longer open):
 
 - ~~Append-only vs upsert~~: resolved via the unique index on
-  `(synthesis_id, witness_id, claim_type, target_entity, secondary_target)` —
-  upsert.
+  `(artifact_type, artifact_id, witness_id, claim_type, target_entity, secondary_target)` —
+  upsert. Covers both synthesis-tied and intelligence-tied rows uniformly.
 - ~~Claims directly vs `best_evidence_for_claim` helper~~: resolved via
   the `select_best_claim()` API in the Best-Evidence Selection section.
   Consumers use the helper, never raw claim rows.
@@ -1041,9 +1055,16 @@ Still open:
    all candidate spans? Lean: selected packs only in v1 (cardinality
    reason); revisit if canary surfaces high `cannot_validate` rate
    suggesting we're dropping good candidates pre-validation.
-3. What feature flag should control the first consumer migration? Suggest:
-   `ATLAS_B2B_BATTLE_CARDS_USE_CLAIMS=true`, defaulting off, with a
-   per-vendor allowlist override during canary. Naming TBD with operator.
+3. What feature flags should gate the migration? The first migrating
+   consumer is the API + UI (Tier 1), not battle cards. Suggested two-flag
+   structure:
+     - `ATLAS_B2B_EVIDENCE_API_USE_CLAIMS=true` (Tier 1 — API exposes
+       `claim_type` filter and `claim_validations` field; UI consumes them)
+     - `ATLAS_B2B_BATTLE_CARDS_USE_CLAIMS=true` (Tier 2 — server-side
+       battle-card rendering switches to `select_best_claim()`)
+   Both default off. Per-vendor allowlist overrides during canary. Adding
+   a flag per migrating consumer is fine; one flag covering everything
+   would force lockstep migration.
 4. Does the audit need a per-tenant breakdown for B2B SaaS multi-tenant
    reports (P5/P6 tiers), or is per-vendor sufficient? Defer to first
    tenant-tier report migration.
@@ -1053,10 +1074,19 @@ Still open:
 Proceed in this order:
 
 1. Tier 1 prompt example update
-2. contract fixtures
-3. shadow-mode claim validator
-4. semantic audit
-5. battle-card migration
+2. Contract fixtures
+3. `evidence_claim.py` validator + `evidence_claim_repository.py` (split
+   per the Best-Evidence Selection API section)
+4. Shadow table migration
+5. Synthesis hook (shadow mode capture)
+6. Semantic audit
+7. API migration (`b2b_evidence.py` — claim_type filter and
+   claim_validations field, behind feature flag)
+8. UI migration (`atlas-churn-ui` — client.ts types, EvidenceDrawer
+   banners, reportViewModels)
+9. Browser canary on the named vendor set
+10. Battle-card migration (Tier 2; gated on browser-canary acceptance)
 
 Do not start broad consumer migration until the claim enum and validation
-status semantics are fixed in tests.
+status semantics are fixed in tests, and do not start Tier 2 (server-side
+reports) until the browser canary at step 9 passes the 5-of-7 threshold.
