@@ -2337,6 +2337,17 @@ class B2BChurnConfig(BaseSettings):
         default="",
         description="OpenRouter model for Tier 2 extraction (empty = reuse enrichment_openrouter_model)",
     )
+    enrichment_tier2_force_openrouter: bool = Field(
+        default=False,
+        description=(
+            "Route Tier 2 enrichment to OpenRouter even when "
+            "enrichment_local_only is True. Tier 2 (pain_categories, "
+            "competitor classification, buyer_authority, "
+            "sentiment_trajectory) is a nuance-classification step that "
+            "typically benefits from a frontier model; Tier 1 verbatim "
+            "extraction can stay local on vLLM."
+        ),
+    )
     enrichment_tier2_max_tokens: int = Field(
         default=1536,
         description="Max output tokens for Tier 2 extraction",

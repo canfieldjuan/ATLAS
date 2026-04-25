@@ -134,6 +134,38 @@ def _tier2_system_prompt_for_content_type(prompt: str, content_type: str | None)
 _ANTHROPIC_CACHE_MIN_CHARS = 1024
 
 
+def _resolve_tier_routing(cfg, *, local_only_override: bool | None = None) -> tuple[bool, bool]:
+    """Return ``(use_openrouter_tier1, use_openrouter_tier2)`` for routing.
+
+    Tier 1 honors ``enrichment_local_only`` directly -- when True, Tier 1
+    extraction (verbatim phrase pulls + phrase_metadata) stays on local
+    vLLM. Tier 2 (pain_categories, competitor classification,
+    buyer_authority, sentiment_trajectory) is a nuance-classification step
+    that typically benefits from a frontier model, so it can escape
+    local_only when ``enrichment_tier2_force_openrouter`` is set. Both
+    tiers also require the OpenRouter credentials/model to actually be
+    configured before they can route there.
+
+    ``local_only_override`` lets the single-row code path pass the
+    already-computed local_only flag (which may include task-level
+    overrides) instead of re-reading cfg.
+    """
+    local_only = (
+        local_only_override
+        if local_only_override is not None
+        else bool(getattr(cfg, "enrichment_local_only", False))
+    )
+    has_openrouter = bool(getattr(cfg, "enrichment_openrouter_model", "")) and bool(
+        getattr(cfg, "openrouter_api_key", "")
+    )
+    use_openrouter_tier1 = (not local_only) and has_openrouter
+    use_openrouter_tier2 = use_openrouter_tier1 or (
+        bool(getattr(cfg, "enrichment_tier2_force_openrouter", False))
+        and has_openrouter
+    )
+    return use_openrouter_tier1, use_openrouter_tier2
+
+
 def _maybe_anthropic_cache(
     model_id: str,
     messages: list[dict],
@@ -3231,11 +3263,7 @@ async def _enrich_rows(
             return parsed
         return None
 
-    use_openrouter = (
-        not cfg.enrichment_local_only
-        and bool(getattr(cfg, "enrichment_openrouter_model", ""))
-        and bool(getattr(cfg, "openrouter_api_key", ""))
-    )
+    use_openrouter_tier1, use_openrouter_tier2 = _resolve_tier_routing(cfg)
     batch_requested = anthropic_batch_requested(
         task,
         global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
@@ -3250,7 +3278,7 @@ async def _enrich_rows(
             ),
             target_model_candidates=(getattr(cfg, "enrichment_openrouter_model", ""),),
         )
-        if use_openrouter and batch_requested
+        if use_openrouter_tier1 and batch_requested
         else None
     )
     tier2_model_id = (
@@ -3263,7 +3291,7 @@ async def _enrich_rows(
             current_llm=SimpleNamespace(name="openrouter", model=str(tier2_model_id)),
             target_model_candidates=(tier2_model_id,),
         )
-        if use_openrouter and batch_requested
+        if use_openrouter_tier2 and batch_requested
         else None
     )
 
@@ -3325,7 +3353,7 @@ async def _enrich_rows(
             "batch_fallback_reason": "tier2_batch_unavailable",
         }
 
-        if use_openrouter:
+        if use_openrouter_tier2:
             tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
                 _call_openrouter_tier2(
                     tier1,
@@ -4303,14 +4331,14 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         }
         client = _get_tier1_client(cfg)
 
-        # Tier 1: deterministic extraction (base fields)
-        # Use OpenRouter if configured and not forced local-only, otherwise local vLLM
-        use_openrouter = (
-            not local_only
-            and bool(cfg.enrichment_openrouter_model)
-            and bool(cfg.openrouter_api_key)
+        # Tier 1: deterministic extraction (base fields). Tier 2: nuance
+        # classification. Each tier has its own routing flag so a deployment
+        # can keep Tier 1 on local vLLM (cheap, large pool) while routing
+        # Tier 2 to a frontier OpenRouter model (better at the nuance work).
+        use_openrouter_tier1, use_openrouter_tier2 = _resolve_tier_routing(
+            cfg, local_only_override=local_only,
         )
-        if use_openrouter:
+        if use_openrouter_tier1:
             tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
                 _call_openrouter_tier1(
                     payload_json,
@@ -4348,7 +4376,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         tier2_cache_hit = False
         if _tier1_has_extraction_gaps(tier1, source=row.get("source")):
             try:
-                if use_openrouter:
+                if use_openrouter_tier2:
                     tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
                         _call_openrouter_tier2(
                             tier1,
