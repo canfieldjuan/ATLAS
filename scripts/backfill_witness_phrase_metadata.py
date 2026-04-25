@@ -81,39 +81,68 @@ async def _fetch_null_batch(
     conn,
     *,
     batch_size: int,
-    offset: int,
-    use_offset: bool,
+    last_key: tuple[str, Any, int, str, str] | None,
 ) -> list[dict[str, Any]]:
-    if use_offset:
+    """Fetch one deterministic batch of witnesses missing pain_confidence.
+
+    Keyset pagination is used for both dry-run and write mode. In write mode
+    we intentionally skip UPDATEs for rows whose enrichment cannot be graded,
+    so repeatedly selecting the first NULL page could count the same rows as
+    progress and starve later rows. Advancing by the composite row key avoids
+    duplicate processing while still making the script safe to re-run.
+    """
+    order_clause = """
+            ORDER BY w.vendor_name, w.as_of_date, w.analysis_window_days,
+                     w.schema_version, w.witness_id
+    """
+    if last_key is None:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT w.vendor_name, w.as_of_date, w.analysis_window_days,
                    w.schema_version, w.witness_id, w.pain_category,
                    r.enrichment
             FROM b2b_vendor_witnesses w
             LEFT JOIN b2b_reviews r ON r.id = w.review_id::uuid
             WHERE w.pain_confidence IS NULL
-            ORDER BY w.witness_id
-            LIMIT $1 OFFSET $2
-            """,
-            batch_size,
-            offset,
-        )
-    else:
-        rows = await conn.fetch(
-            """
-            SELECT w.vendor_name, w.as_of_date, w.analysis_window_days,
-                   w.schema_version, w.witness_id, w.pain_category,
-                   r.enrichment
-            FROM b2b_vendor_witnesses w
-            LEFT JOIN b2b_reviews r ON r.id = w.review_id::uuid
-            WHERE w.pain_confidence IS NULL
-            ORDER BY w.witness_id
+            {order_clause}
             LIMIT $1
             """,
             batch_size,
         )
+    else:
+        rows = await conn.fetch(
+            f"""
+            SELECT w.vendor_name, w.as_of_date, w.analysis_window_days,
+                   w.schema_version, w.witness_id, w.pain_category,
+                   r.enrichment
+            FROM b2b_vendor_witnesses w
+            LEFT JOIN b2b_reviews r ON r.id = w.review_id::uuid
+            WHERE w.pain_confidence IS NULL
+              AND (
+                    w.vendor_name,
+                    w.as_of_date,
+                    w.analysis_window_days,
+                    w.schema_version,
+                    w.witness_id
+                  ) > ($2, $3, $4, $5, $6)
+            {order_clause}
+            LIMIT $1
+            """,
+            batch_size,
+            *last_key,
+        )
     return [dict(r) for r in rows]
+
+
+def _row_key(row: dict[str, Any]) -> tuple[str, Any, int, str, str]:
+    """Return the composite key used by _fetch_null_batch ordering."""
+    return (
+        str(row["vendor_name"]),
+        row["as_of_date"],
+        int(row["analysis_window_days"]),
+        str(row["schema_version"]),
+        str(row["witness_id"]),
+    )
 
 
 def _classify_row(row: dict[str, Any]) -> str | None:
@@ -183,6 +212,7 @@ async def _main_async(args: argparse.Namespace) -> int:
 
         processed = 0
         graded_counts = {"strong": 0, "weak": 0, "none": 0, "null": 0}
+        last_key: tuple[str, Any, int, str, str] | None = None
 
         while processed < cap:
             batch_n = min(args.batch_size, cap - processed)
@@ -191,11 +221,11 @@ async def _main_async(args: argparse.Namespace) -> int:
                 rows = await _fetch_null_batch(
                     conn,
                     batch_size=batch_n,
-                    offset=processed if args.dry_run else 0,
-                    use_offset=args.dry_run,
+                    last_key=last_key,
                 )
                 if not rows:
                     break
+                last_key = _row_key(rows[-1])
 
                 classified: list[tuple[str | None, str, Any, int, str, str]] = []
                 batch_counts = {"strong": 0, "weak": 0, "none": 0, "null": 0}
