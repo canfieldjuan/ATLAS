@@ -3,7 +3,7 @@ name: digest/b2b_churn_extraction_tier1
 domain: digest
 description: Single-pass deterministic extraction via local vLLM
 tags: [digest, b2b, churn, saas, autonomous, tier1]
-version: 4
+version: 5
 ---
 
 # B2B Churn Signal Extraction -- Single Pass
@@ -149,6 +149,30 @@ The target of this review is `subject_vendor`. Everything else is something else
 - "switched to [competitor]" / "considering [competitor]" / "[competitor] is cheaper" -- the phrase is about the competitor; `subject=alternative`.
 - "Salesforce and HubSpot users both..." (general industry observation) -- `subject=third_party`.
 
+#### Antecedent traps (critical)
+
+When a sentence describes a TRANSITION from one vendor or setup to another,
+the negative trait belongs to whatever the reviewer LEFT, not what they
+moved TO. Subject vendor is what the review is about, but a transition
+sentence can name the subject vendor while still attributing a negative
+trait to a competitor or to the reviewer's prior setup.
+
+- "Before [subject vendor], we used [competitor], which had [bad trait]"
+  -- the bad trait is about [competitor] (`subject=alternative`), NOT
+  about the subject vendor. The "Before [subject vendor]" phrasing names
+  the subject vendor only as a temporal landmark.
+- "Unlike [subject vendor], [competitor] is [bad trait]" -- bad trait
+  is about [competitor] (`subject=alternative`). The "Unlike [subject
+  vendor]" phrase names the subject vendor only as a contrast point.
+- "We switched from [competitor] to [subject vendor]; [bad trait]" --
+  resolve which entity has the bad trait by reading the rest of the
+  sentence. If "[bad trait]" follows a separate subject like "their
+  support" or "the previous product," tag accordingly.
+- "Before [subject vendor] released this feature, we struggled" -- here
+  the temporal antecedent describes the subject vendor's product
+  history; the trait is `subject=subject_vendor`. Distinguish from the
+  competitor-transition cases above.
+
 ### Polarity -- what the phrase expresses
 
 - Reviewer voicing dissatisfaction or a complaint -- `negative`.
@@ -193,6 +217,27 @@ The target of this review is `subject_vendor`. Everything else is something else
    `positive_aspects`: `["Support was helpful"]`
    `phrase_metadata`:
    - `{field: "positive_aspects", index: 0, text: "Support was helpful", subject: "subject_vendor", polarity: "positive", role: "passing_mention", verbatim: true}`
+
+5. Review target is Monday.com. Text says "Before monday.com, we used HubSpot, which did not provide a good UI for non-sales users. Monday gave tutors a simpler front end."
+
+   The "did not provide a good UI" phrase is a complaint about HubSpot,
+   not Monday. Monday is named only as the temporal landmark ("Before
+   monday.com..."). Tag the negative phrase as `subject=alternative`,
+   not `subject=subject_vendor`. Tag the positive Monday phrase
+   ("simpler front end") as `subject=subject_vendor`. This is the
+   antecedent trap from the Subject rules above.
+
+   `specific_complaints`: `["did not provide a good UI for non-sales users"]`
+   `quotable_phrases`: `["Monday gave tutors a simpler front end"]`
+   `phrase_metadata`:
+   - `{field: "specific_complaints", index: 0, text: "did not provide a good UI for non-sales users", subject: "alternative", polarity: "negative", role: "supporting_context", verbatim: true}`
+   - `{field: "quotable_phrases", index: 0, text: "Monday gave tutors a simpler front end", subject: "subject_vendor", polarity: "positive", role: "primary_driver", verbatim: true}`
+
+   Critical: do NOT tag the HubSpot UI complaint as `subject_vendor`
+   even though the review target is Monday. The bad UI is HubSpot's,
+   and any pain claim "Monday has bad UI" derived from this review
+   would be wrong. Downstream validators reject pain claims about the
+   subject vendor whose source phrase has `subject=alternative`.
 
 ## Output
 
