@@ -222,12 +222,18 @@ async def select_best_claim(
 ) -> list[ClaimSelection]:
     """Return the highest-quality validated claims for the given query.
 
-    Reads only `b2b_evidence_claims` rows where status = VALID. Ranks by
-    top-level columns so the partial index covers the ORDER BY:
+    Filters `b2b_evidence_claims` on the partial index
+    (status='valid', vendor_name, claim_type, target_entity, as_of_date,
+    analysis_window_days). Ranks by top-level / generated columns so the
+    index covers the ORDER BY end-to-end (no JSONB materialization, no
+    CASE-in-ORDER-BY):
       1. salience_score DESC
-      2. grounding_status = 'grounded' first (boolean lift)
-      3. pain_confidence priority: strong > weak > none/null
+      2. grounding_rank ASC (0 = grounded, 1 = not_grounded/null)
+      3. pain_confidence_rank ASC (0 = strong, 1 = weak, 2 = none/null)
       4. witness_id ASC for stable tie-break
+
+    `secondary_target` is matched if non-NULL; ignored otherwise (so the
+    same call shape works for single-target and dual-target claim types).
 
     Dedups across multi-claim-per-witness rows by
     source_excerpt_fingerprint so a single phrase that validated for
@@ -326,9 +332,15 @@ Consumer-side deduplication is the responsibility of `select_best_claim()`:
 - when querying a SINGLE claim_type, the claim row is the natural unit
 - when a consumer assembles a mixed-claim list (e.g. a battle card showing
   both `pain_claim_about_vendor` and `support_failure_claim` quotes),
-  dedup by `(source_review_id, excerpt_text_fingerprint)` so a single phrase
-  isn't shown twice under different claim labels
-- the witness_hash field provides a stable fingerprint for this purpose
+  dedup by `source_excerpt_fingerprint` so a single phrase isn't shown
+  twice under different claim labels
+- `source_excerpt_fingerprint` is computed at write time as a normalized
+  hash of `source_review_id + excerpt_text` and stored as a top-level
+  column on `b2b_evidence_claims`. Use this column name end-to-end. Note
+  that `witness_hash` (a separate column on `b2b_vendor_witnesses` and
+  copied here for traceability) hashes the witness *selection* including
+  witness_type and signal_tags, so it varies across witness_types for the
+  same source phrase — wrong key for dedup.
 
 Validation never collapses claim types — a phrase that legitimately
 supports three claim types should produce three claim rows with three
@@ -460,11 +472,28 @@ CREATE TABLE IF NOT EXISTS b2b_evidence_claims (
     salience_score numeric NOT NULL DEFAULT 0,
     grounding_status text NULL,
     pain_confidence text NULL,
+    -- Generated ranking columns. The select_best_claim query orders by
+    -- "grounded first" and "strong > weak > none/null" -- both of which
+    -- are CASE expressions over the text columns. Index expressions on
+    -- CASE / boolean don't compose well with ORDER BY in Postgres, so
+    -- materialize the rank as integer columns at write time. Lower is
+    -- better for both: 0 = best, higher = worse.
+    grounding_rank smallint GENERATED ALWAYS AS (
+        CASE WHEN grounding_status = 'grounded' THEN 0 ELSE 1 END
+    ) STORED,
+    pain_confidence_rank smallint GENERATED ALWAYS AS (
+        CASE pain_confidence
+            WHEN 'strong' THEN 0
+            WHEN 'weak'   THEN 1
+            ELSE 2
+        END
+    ) STORED,
     -- Stable fingerprint for cross-claim-type dedup in select_best_claim.
     -- Computed at write time as a normalized hash of source_review_id +
     -- excerpt_text. Lets a phrase that legitimately validates for three
     -- claim types be deduped to one row when a consumer assembles a mixed
-    -- list.
+    -- list. Always use this column name end-to-end (not excerpt_text_fingerprint
+    -- or witness_hash -- those mean different things).
     source_excerpt_fingerprint text NULL,
     status text NOT NULL,
     rejection_reason text NULL,
@@ -505,17 +534,23 @@ CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_intelligence
 CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_status
     ON b2b_evidence_claims (status, claim_type);
 
--- Partial index covering the select_best_claim hot path. Includes the
--- ranking columns so Postgres can use an index-only scan for the
--- "valid claims for this vendor + claim_type, ordered by salience" query.
+-- Partial index covering the select_best_claim hot path. The function
+-- signature filters by (vendor_name, claim_type, target_entity, as_of_date,
+-- analysis_window_days) and orders by (salience_score DESC, grounding_rank,
+-- pain_confidence_rank, witness_id). All filter and order columns are in
+-- the index, so Postgres can satisfy the query with an index-only scan
+-- (status='valid' is the partial WHERE clause; row_id columns join after).
 CREATE INDEX IF NOT EXISTS idx_b2b_evidence_claims_select_best
     ON b2b_evidence_claims (
         vendor_name,
         claim_type,
         target_entity,
+        as_of_date,
+        analysis_window_days,
         salience_score DESC,
-        grounding_status,
-        pain_confidence
+        grounding_rank,
+        pain_confidence_rank,
+        witness_id
     )
     WHERE status = 'valid';
 
