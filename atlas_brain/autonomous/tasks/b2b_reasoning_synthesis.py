@@ -1061,10 +1061,13 @@ async def _persist_packet_artifacts(
                  pain_category, competitor, salience_score, selection_reason,
                  signal_tags, source_id, specificity_score, generic_reason,
                  witness_hash, source_span_id,
-                 grounding_status, grounding_checked_at)
+                 grounding_status, grounding_checked_at,
+                 phrase_polarity, phrase_subject, phrase_role, phrase_verbatim,
+                 pain_confidence)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
                     $14, $15, $16, $17, $18::jsonb, $19, $20, $21, $22, $23,
-                    $24, NOW())
+                    $24, NOW(),
+                    $25, $26, $27, $28, $29)
             ON CONFLICT (
                 vendor_name, as_of_date, analysis_window_days, schema_version, witness_id
             )
@@ -1088,7 +1091,12 @@ async def _persist_packet_artifacts(
                 witness_hash = EXCLUDED.witness_hash,
                 source_span_id = EXCLUDED.source_span_id,
                 grounding_status = EXCLUDED.grounding_status,
-                grounding_checked_at = EXCLUDED.grounding_checked_at
+                grounding_checked_at = EXCLUDED.grounding_checked_at,
+                phrase_polarity = EXCLUDED.phrase_polarity,
+                phrase_subject = EXCLUDED.phrase_subject,
+                phrase_role = EXCLUDED.phrase_role,
+                phrase_verbatim = EXCLUDED.phrase_verbatim,
+                pain_confidence = EXCLUDED.pain_confidence
             """,
             vendor_name,
             as_of_date,
@@ -1114,6 +1122,11 @@ async def _persist_packet_artifacts(
             witness["witness_hash"],
             witness.get("source_span_id"),
             witness["grounding_status"],
+            witness.get("phrase_polarity"),
+            witness.get("phrase_subject"),
+            witness.get("phrase_role"),
+            witness.get("phrase_verbatim"),
+            witness.get("pain_confidence"),
         )
 
     if incoming_rows:

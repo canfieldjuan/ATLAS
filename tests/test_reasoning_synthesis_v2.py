@@ -4497,10 +4497,14 @@ class TestReasoningSynthesisTask:
         for query, args in upsert_ops:
             assert "grounding_status" in query
             assert "grounding_checked_at" in query
-            # Last positional arg is the grounding_status value; must be
-            # a valid enum member (not 'pending' since classifier ran).
-            assert args[-1] in ("grounded", "not_grounded"), \
-                f"invalid grounding_status value: {args[-1]!r}"
+            # grounding_status is bound at $24 (NOW() is inlined for
+            # grounding_checked_at). Phase 5b appended phrase_polarity,
+            # phrase_subject, phrase_role, phrase_verbatim, pain_confidence
+            # after grounding_status, so assert at the 0-indexed
+            # position rather than args[-1].
+            grounding_value = args[23]
+            assert grounding_value in ("grounded", "not_grounded"), \
+                f"invalid grounding_status value: {grounding_value!r}"
 
     @pytest.mark.asyncio
     async def test_persist_packet_emits_grounding_and_persist_telemetry(self, caplog):
