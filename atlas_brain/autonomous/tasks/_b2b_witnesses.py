@@ -858,6 +858,27 @@ def _witness_salience(review: dict[str, Any], enrichment: dict[str, Any], span: 
         score += 1.0
     score += _recency_bonus(review.get("reviewed_at")) * 1.5
     score += max(min(source_weight, 1.5), 0.0)
+
+    # Phase 6 follow-up F1: phrase-tag salience bonus. Reward spans whose
+    # source phrase is genuinely about the subject vendor and carries
+    # negative/mixed polarity, plus per-review pain_confidence. This makes
+    # v4 (phrase-tagged) evidence outscore stale v3 evidence in selection
+    # WITHOUT us biasing on schema_version directly. v3 spans carry None
+    # on these tags and fall through to the legacy scoring above. We do
+    # not add a bonus for grounded -- that's gated post-selection in the
+    # quote-grade rendering path so the selector does not need to know.
+    if (
+        span.get("subject") == "subject_vendor"
+        and span.get("polarity") in ("negative", "mixed")
+    ):
+        score += 2.0
+    if span.get("role") == "primary_driver":
+        score += 1.5
+    pain_confidence = enrichment.get("pain_confidence")
+    if pain_confidence == "strong":
+        score += 2.0
+    elif pain_confidence == "weak":
+        score += 0.5
     return round(score, 2)
 
 
