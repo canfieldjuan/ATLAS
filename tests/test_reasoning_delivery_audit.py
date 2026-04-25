@@ -168,6 +168,28 @@ class _PropagationPool:
         }
 
     async def fetch(self, query, *args):
+        if "FROM b2b_vendor_witnesses" in query:
+            assert args == (["w1", "w2"],)
+            return [
+                {
+                    "witness_id": "w1",
+                    "grounding_status": "grounded",
+                    "phrase_polarity": "negative",
+                    "phrase_subject": "subject_vendor",
+                    "phrase_role": "primary_driver",
+                    "phrase_verbatim": False,
+                    "pain_confidence": "strong",
+                },
+                {
+                    "witness_id": "w2",
+                    "grounding_status": "grounded",
+                    "phrase_polarity": "negative",
+                    "phrase_subject": "subject_vendor",
+                    "phrase_role": "primary_driver",
+                    "phrase_verbatim": True,
+                    "pain_confidence": "weak",
+                },
+            ]
         assert args == (7, 50)
         if "FROM b2b_reasoning_synthesis" in query:
             return [
@@ -228,11 +250,16 @@ async def test_summarize_witness_field_propagation_counts_surface_drops():
 
     synthesis = by_surface["b2b_reasoning_synthesis"]
     assert synthesis["witness_objects"] == 1
+    assert synthesis["source_matched_objects"] == 1
     assert synthesis["full_quality_objects"] == 1
     assert synthesis["field_counts"]["phrase_verbatim"]["present"] == 1
 
     battle_card = by_surface["b2b_intelligence:battle_card"]
     assert battle_card["witness_objects"] == 1
+    assert battle_card["source_matched_objects"] == 1
     assert battle_card["full_quality_objects"] == 0
     assert battle_card["field_counts"]["grounding_status"]["missing"] == 1
+    assert battle_card["fillable_missing_fields"] == len(result["quality_fields"])
+    assert battle_card["source_unavailable_missing_fields"] == 0
     assert battle_card["drop_examples"][0]["missing_fields"] == result["quality_fields"]
+    assert battle_card["fillable_drop_examples"][0]["missing_fields"] == result["quality_fields"]

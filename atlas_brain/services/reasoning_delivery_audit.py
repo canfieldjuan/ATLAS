@@ -25,6 +25,10 @@ _WITNESS_CONTEXT_KEYS: tuple[str, ...] = (
 )
 
 
+def _witness_id(value: dict[str, Any]) -> str:
+    return str(value.get("witness_id") or value.get("_sid") or value.get("source_id") or "").strip()
+
+
 def _field_present(value: Any) -> bool:
     if value is None:
         return False
@@ -77,9 +81,13 @@ def _empty_surface_stats(surface: str) -> dict[str, Any]:
         "surface": surface,
         "artifacts_scanned": 0,
         "witness_objects": 0,
+        "source_matched_objects": 0,
         "full_quality_objects": 0,
         "field_counts": _empty_field_counts(),
+        "fillable_missing_fields": 0,
+        "source_unavailable_missing_fields": 0,
         "drop_examples": [],
+        "fillable_drop_examples": [],
     }
 
 
@@ -89,15 +97,26 @@ def _record_witness_object(
     *,
     artifact_key: str,
     path: str,
+    source_quality_by_witness_id: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     stats["witness_objects"] += 1
+    witness_id = _witness_id(witness)
+    source_quality = (source_quality_by_witness_id or {}).get(witness_id) or {}
+    if source_quality:
+        stats["source_matched_objects"] += 1
     missing: list[str] = []
+    fillable_missing: list[str] = []
     for field in WITNESS_QUALITY_FIELDS:
         present = _field_present(witness.get(field))
         bucket = "present" if present else "missing"
         stats["field_counts"][field][bucket] += 1
         if not present:
             missing.append(field)
+            if _field_present(source_quality.get(field)):
+                fillable_missing.append(field)
+                stats["fillable_missing_fields"] += 1
+            else:
+                stats["source_unavailable_missing_fields"] += 1
     if not missing:
         stats["full_quality_objects"] += 1
     elif len(stats["drop_examples"]) < 10:
@@ -106,7 +125,17 @@ def _record_witness_object(
                 "artifact_key": artifact_key,
                 "path": path,
                 "missing_fields": missing,
-                "witness_id": witness.get("witness_id") or witness.get("_sid"),
+                "witness_id": witness_id or None,
+                "excerpt_preview": str(witness.get("excerpt_text") or "")[:120],
+            }
+        )
+    if fillable_missing and len(stats["fillable_drop_examples"]) < 10:
+        stats["fillable_drop_examples"].append(
+            {
+                "artifact_key": artifact_key,
+                "path": path,
+                "missing_fields": fillable_missing,
+                "witness_id": witness_id or None,
                 "excerpt_preview": str(witness.get("excerpt_text") or "")[:120],
             }
         )
@@ -124,10 +153,51 @@ def _source_witness_stats(row: dict[str, Any] | None) -> dict[str, Any]:
         "surface": "b2b_vendor_witnesses",
         "artifacts_scanned": total,
         "witness_objects": total,
+        "source_matched_objects": total,
         "full_quality_objects": int(row.get("full_quality_objects", 0) or 0),
         "field_counts": field_counts,
+        "fillable_missing_fields": 0,
+        "source_unavailable_missing_fields": sum(
+            counts["missing"] for counts in field_counts.values()
+        ),
         "drop_examples": [],
+        "fillable_drop_examples": [],
     }
+
+
+async def _source_quality_lookup(pool, witness_ids: set[str]) -> dict[str, dict[str, Any]]:
+    if not witness_ids:
+        return {}
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (witness_id)
+            witness_id,
+            grounding_status,
+            phrase_polarity,
+            phrase_subject,
+            phrase_role,
+            phrase_verbatim,
+            pain_confidence
+        FROM b2b_vendor_witnesses
+        WHERE witness_id = ANY($1::text[])
+        ORDER BY witness_id, as_of_date DESC, created_at DESC
+        """,
+        sorted(witness_ids),
+    )
+    lookup: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        row = dict(raw)
+        witness_id = str(row.get("witness_id") or "").strip()
+        if not witness_id:
+            continue
+        quality = {
+            field: row.get(field)
+            for field in WITNESS_QUALITY_FIELDS
+            if _field_present(row.get(field))
+        }
+        if quality:
+            lookup[witness_id] = quality
+    return lookup
 
 
 async def summarize_reasoning_delivery_health(
@@ -375,21 +445,36 @@ async def summarize_witness_field_propagation(
         row_limit,
     )
 
+    artifact_rows = [
+        {
+            "surface": str(dict(raw_row).get("surface") or "unknown"),
+            "artifact_key": str(dict(raw_row).get("artifact_key") or ""),
+            "payload": _decode_json_payload(dict(raw_row).get("payload")),
+        }
+        for raw_row in [*vendor_rows, *cross_vendor_rows, *intelligence_rows]
+    ]
+    witness_ids: set[str] = set()
+    for artifact_row in artifact_rows:
+        for _path, witness in iter_witness_objects(artifact_row["payload"]):
+            witness_id = _witness_id(witness)
+            if witness_id:
+                witness_ids.add(witness_id)
+    source_quality_by_witness_id = await _source_quality_lookup(pool, witness_ids)
+
     surfaces: dict[str, dict[str, Any]] = {
         "b2b_vendor_witnesses": _source_witness_stats(dict(source_row or {})),
     }
-    for raw_row in [*vendor_rows, *cross_vendor_rows, *intelligence_rows]:
-        row = dict(raw_row)
-        surface = str(row.get("surface") or "unknown")
+    for row in artifact_rows:
+        surface = row["surface"]
         stats = surfaces.setdefault(surface, _empty_surface_stats(surface))
         stats["artifacts_scanned"] += 1
-        artifact_key = str(row.get("artifact_key") or "")
-        for path, witness in iter_witness_objects(_decode_json_payload(row.get("payload"))):
+        for path, witness in iter_witness_objects(row["payload"]):
             _record_witness_object(
                 stats,
                 witness,
-                artifact_key=artifact_key,
+                artifact_key=row["artifact_key"],
                 path=path,
+                source_quality_by_witness_id=source_quality_by_witness_id,
             )
 
     return {
