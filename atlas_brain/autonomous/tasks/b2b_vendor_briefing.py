@@ -2577,8 +2577,18 @@ async def _fetch_product_profile(pool: Any, vendor_name: str) -> dict | None:
 async def _fetch_high_urgency_quotes(
     pool: Any, vendor_name: str, limit: int = 5
 ) -> list[dict[str, Any]]:
-    """Fetch quotable phrases with reviewer context from high-urgency reviews."""
+    """Fetch quote-grade phrases from high-urgency reviews.
+
+    Phase 2.3 4c-B: routes the SQL evidence path through the enrichment
+    contract (``quote_grade_phrases``) so output rows carry the
+    ``phrase_verbatim=True`` marker that the email template requires
+    after 4c-A. v3-era enrichments produce nothing because we have no
+    verbatim guarantee. Output rows are stamped with traceability
+    fields (review_id, source, field) and ``quote_origin='review'``
+    for downstream audit -- matches the blog producer convention.
+    """
     from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_quote_evidence
+    from atlas_brain.services.b2b.enrichment_contract import quote_grade_phrases
 
     rows = await read_vendor_quote_evidence(
         pool,
@@ -2589,18 +2599,34 @@ async def _fetch_high_urgency_quotes(
     )
     quotes: list[dict[str, Any]] = []
     for row in rows:
-        phrases = row.get("quotable_phrases")
-        if isinstance(phrases, list):
-            for p in phrases:
-                text = p.strip() if isinstance(p, str) else ""
-                if text:
-                    quotes.append({
-                        "text": text,
-                        "company": row.get("reviewer_company"),
-                        "title": row.get("reviewer_title"),
-                        "company_size": row.get("company_size"),
-                        "industry": row.get("industry"),
-                    })
+        enrichment_raw = row.get("enrichment_raw")
+        if isinstance(enrichment_raw, str):
+            try:
+                enrichment = json.loads(enrichment_raw)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        elif isinstance(enrichment_raw, dict):
+            enrichment = enrichment_raw
+        else:
+            continue
+        for phrase in quote_grade_phrases(enrichment):
+            text = str(phrase.get("text") or "").strip()
+            if not text:
+                continue
+            quotes.append({
+                "quote": text,
+                "text": text,
+                "company": row.get("reviewer_company"),
+                "title": row.get("reviewer_title"),
+                "industry": row.get("industry"),
+                "review_id": row.get("review_id"),
+                "source": row.get("source"),
+                "field": phrase.get("field"),
+                "phrase_verbatim": True,
+                "quote_origin": "review",
+            })
+            if len(quotes) >= limit:
+                return quotes
     return quotes
 
 

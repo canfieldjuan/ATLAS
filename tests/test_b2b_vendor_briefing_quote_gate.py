@@ -17,7 +17,17 @@ explicit phrase_verbatim is True marker. Anything else fails closed.
 
 from __future__ import annotations
 
+import json
+import sys
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+_asyncpg_mock = MagicMock()
+_asyncpg_exceptions = MagicMock()
+_asyncpg_exceptions.UndefinedTableError = type("UndefinedTableError", (Exception,), {})
+_asyncpg_mock.exceptions = _asyncpg_exceptions
+sys.modules.setdefault("asyncpg", _asyncpg_mock)
+sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
 from atlas_brain.templates.email.vendor_briefing import (  # noqa: E402
     _is_verbatim_witness,
@@ -211,6 +221,315 @@ def test_evidence_section_drops_string_evidence():
     assert "What Customers Are Saying" not in html
     assert "Pricing keeps climbing" not in html
     assert "Support response time" not in html
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.3 4c-B -- _fetch_high_urgency_quotes producer migration
+#
+# These tests cover the SQL-evidence producer that feeds Site 1 in the
+# email template. After 4c-B, the producer routes enrichment through
+# the contract (quote_grade_phrases) and stamps phrase_verbatim=True
+# plus traceability fields onto every output row. v3 rows produce
+# nothing (no verbatim guarantee).
+# ---------------------------------------------------------------------------
+
+
+def _v4_enrichment(
+    *,
+    text: str = "Pricing jumped 40% at the Q2 renewal.",
+    field: str = "pricing_phrases",
+    subject: str = "subject_vendor",
+    polarity: str = "negative",
+    role: str = "primary_driver",
+    verbatim: bool = True,
+) -> dict[str, Any]:
+    return {
+        "enrichment_schema_version": 4,
+        field: [text],
+        "phrase_metadata": [
+            {
+                "field": field,
+                "index": 0,
+                "text": text,
+                "subject": subject,
+                "polarity": polarity,
+                "role": role,
+                "verbatim": verbatim,
+            }
+        ],
+    }
+
+
+def _read_evidence_row(
+    *,
+    enrichment: dict[str, Any] | str | None,
+    review_id: str = "rev-1",
+    source: str = "g2",
+    reviewer_company: str = "Acme Corp",
+    reviewer_title: str = "Director of Operations",
+    industry: str = "SaaS",
+    urgency: float = 8.4,
+) -> dict[str, Any]:
+    """Mirror the row shape returned by read_vendor_quote_evidence."""
+    return {
+        "review_id": review_id,
+        "vendor_name": "Acme",
+        "source": source,
+        "reviewer_company": reviewer_company,
+        "reviewer_title": reviewer_title,
+        "role_level": reviewer_title,
+        "pain_category": "pricing",
+        "urgency": urgency,
+        "review_text": "...",
+        "rating": 2.0,
+        "quotable_phrases": ["legacy quotable string -- ignored after 4c-B"],
+        "enrichment_raw": enrichment,
+        "industry": industry,
+    }
+
+
+async def test_fetch_high_urgency_quotes_extracts_quote_grade_phrase(monkeypatch):
+    """v4 row with verbatim subject_vendor negative phrase produces a
+    quote-grade output row stamped with phrase_verbatim=True, the
+    phrase field, review_id, source, and quote_origin='review'."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    enrichment = _v4_enrichment(
+        text="Renewal jumped to $200k/year with no warning.",
+        field="pricing_phrases",
+    )
+    sql_rows = [
+        _read_evidence_row(
+            enrichment=enrichment,
+            review_id="rev-200k",
+            source="capterra",
+            reviewer_company="Hack Club",
+        ),
+    ]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    out = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=5,
+    )
+    assert len(out) == 1
+    row = out[0]
+    assert row["text"] == "Renewal jumped to $200k/year with no warning."
+    assert row["quote"] == "Renewal jumped to $200k/year with no warning."
+    assert row["phrase_verbatim"] is True
+    assert row["quote_origin"] == "review"
+    assert row["review_id"] == "rev-200k"
+    assert row["source"] == "capterra"
+    assert row["field"] == "pricing_phrases"
+    assert row["company"] == "Hack Club"
+
+
+async def test_fetch_high_urgency_quotes_drops_v3_rows(monkeypatch):
+    """v3 enrichments have no verbatim guarantee -- produce nothing."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    legacy_enrichment = {
+        "enrichment_schema_version": 3,
+        "pricing_phrases": ["renewal price way too high"],
+        "quotable_phrases": ["renewal price way too high"],
+    }
+    sql_rows = [_read_evidence_row(enrichment=legacy_enrichment)]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    out = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=5,
+    )
+    assert out == []
+
+
+async def test_fetch_high_urgency_quotes_drops_non_verbatim_v4(monkeypatch):
+    """v4 row with verbatim=False fails the contract gate."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    enrichment = _v4_enrichment(verbatim=False)
+    sql_rows = [_read_evidence_row(enrichment=enrichment)]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    out = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=5,
+    )
+    assert out == []
+
+
+async def test_fetch_high_urgency_quotes_drops_non_subject_vendor(monkeypatch):
+    """A phrase about a competitor is not quote-grade for THIS vendor's
+    briefing -- the contract drops subject!=subject_vendor rows."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    enrichment = _v4_enrichment(subject="competitor")
+    sql_rows = [_read_evidence_row(enrichment=enrichment)]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    out = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=5,
+    )
+    assert out == []
+
+
+async def test_fetch_high_urgency_quotes_drops_positive_polarity(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    enrichment = _v4_enrichment(polarity="positive")
+    sql_rows = [_read_evidence_row(enrichment=enrichment)]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    out = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=5,
+    )
+    assert out == []
+
+
+async def test_fetch_high_urgency_quotes_accepts_json_string_enrichment(monkeypatch):
+    """asyncpg normally returns JSONB as a Python dict, but defensive
+    handling for any raw-string code path: a JSON string also works."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    enrichment = _v4_enrichment(text="JSON string path verbatim quote.")
+    sql_rows = [_read_evidence_row(enrichment=json.dumps(enrichment))]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    out = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=5,
+    )
+    assert len(out) == 1
+    assert out[0]["text"] == "JSON string path verbatim quote."
+    assert out[0]["phrase_verbatim"] is True
+
+
+async def test_fetch_high_urgency_quotes_skips_malformed_enrichment(monkeypatch):
+    """Bad JSON or unexpected types are skipped, not raised."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    sql_rows = [
+        _read_evidence_row(enrichment="{not valid json"),
+        _read_evidence_row(enrichment=None),
+        _read_evidence_row(enrichment=12345),
+    ]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    out = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=5,
+    )
+    assert out == []
+
+
+async def test_fetch_high_urgency_quotes_respects_limit_at_phrase_level(monkeypatch):
+    """When several rows yield more than `limit` quote-grade phrases,
+    output stops at `limit`. Different from the legacy producer, which
+    counted SQL rows -- 4c-B counts emitted phrases."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    sql_rows = [
+        _read_evidence_row(
+            enrichment=_v4_enrichment(text=f"verbatim phrase {i}"),
+            review_id=f"rev-{i}",
+        )
+        for i in range(10)
+    ]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    out = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=3,
+    )
+    assert len(out) == 3
+    assert out[0]["text"] == "verbatim phrase 0"
+    assert out[2]["text"] == "verbatim phrase 2"
+
+
+async def test_fetch_high_urgency_quotes_output_renders_through_template(monkeypatch):
+    """End-to-end: producer output, mounted on briefing['evidence'],
+    survives the 4c-A template gate and renders as a blockquote with
+    smart-quote styling. Closes the loop on Site 1 restoration."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    enrichment = _v4_enrichment(
+        text="Quoted $200k/year at our Q2 renewal -- no warning.",
+    )
+    sql_rows = [_read_evidence_row(enrichment=enrichment)]
+    monkeypatch.setattr(
+        shared_mod, "read_vendor_quote_evidence",
+        AsyncMock(return_value=sql_rows),
+    )
+
+    quotes = await briefing_mod._fetch_high_urgency_quotes(
+        pool=MagicMock(), vendor_name="Acme", limit=5,
+    )
+    assert len(quotes) == 1
+
+    briefing = _briefing_skeleton(evidence=quotes)
+    html = render_vendor_briefing_html(briefing)
+    assert "What Customers Are Saying" in html
+    assert "Quoted $200k/year at our Q2 renewal -- no warning." in html
+    assert "&ldquo;" in html and "&rdquo;" in html
+
+
+async def test_fetch_high_urgency_quotes_vault_path_unchanged(monkeypatch):
+    """4c-B only migrates the SQL producer. Vault rows still come
+    through _briefing_quotes_from_evidence_vault and stay UNMARKED;
+    they will keep failing the 4c-A template gate until the vault-
+    verbatim follow-up. This test locks in that the vault helper does
+    NOT stamp phrase_verbatim on its output."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+
+    vault = {
+        "weakness_evidence": [
+            {
+                "key": "pricing",
+                "best_quote": "Vault quote text -- still unmarked after 4c-B.",
+                "quote_source": {
+                    "company": "Hack Club",
+                    "reviewer_title": "VP Eng",
+                    "source": "g2",
+                    "review_id": "vault-1",
+                },
+                "supporting_metrics": {"avg_urgency_when_mentioned": 7.5},
+                "mention_count_total": 4,
+            },
+        ],
+    }
+    out = briefing_mod._briefing_quotes_from_evidence_vault(vault)
+    assert len(out) == 1
+    # Vault path remains unmarked -- regression-locked here so the
+    # follow-up vault-verbatim migration can't accidentally regress.
+    assert "phrase_verbatim" not in out[0]
+    assert out[0].get("quote_origin") in (None, "vault", "")
 
 
 def test_evidence_section_drops_unmarked_dict_evidence():
