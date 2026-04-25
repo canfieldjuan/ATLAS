@@ -120,3 +120,102 @@ def test_empty_model_id_passes_through():
     assert isinstance(out[0]["content"], str)
     out = _maybe_anthropic_cache(None, messages)  # type: ignore[arg-type]
     assert isinstance(out[0]["content"], str)
+
+
+# ---------------------------------------------------------------------------
+# Trace cache-field plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_trace_enrichment_llm_call_extracts_openrouter_prompt_token_details(monkeypatch):
+    """OpenRouter nests cache hits under prompt_tokens_details. The trace
+    function must surface them so llm_usage.cached_tokens is populated."""
+    from atlas_brain.autonomous.tasks import b2b_enrichment
+
+    captured: dict = {}
+
+    def _fake_trace(span_name, **kwargs):
+        captured["span"] = span_name
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("atlas_brain.pipelines.llm.trace_llm_call", _fake_trace)
+
+    b2b_enrichment._trace_enrichment_llm_call(
+        "task.b2b_enrichment.tier1",
+        provider="openrouter",
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "system", "content": "x"}, {"role": "user", "content": "y"}],
+        usage={
+            "prompt_tokens": 13000,
+            "completion_tokens": 800,
+            "prompt_tokens_details": {"cached_tokens": 11500},
+            "cache_creation_input_tokens": 1200,
+        },
+        metadata={},
+        duration_ms=42.0,
+    )
+
+    kwargs = captured["kwargs"]
+    assert kwargs["cached_tokens"] == 11500
+    assert kwargs["cache_write_tokens"] == 1200
+    assert kwargs["input_tokens"] == 13000
+
+
+def test_trace_enrichment_llm_call_handles_anthropic_direct_shape(monkeypatch):
+    """Anthropic's native API (or providers that mirror it) puts cache reads
+    at usage.cache_read_input_tokens. Same trace function must handle it."""
+    from atlas_brain.autonomous.tasks import b2b_enrichment
+
+    captured: dict = {}
+
+    def _fake_trace(span_name, **kwargs):
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("atlas_brain.pipelines.llm.trace_llm_call", _fake_trace)
+
+    b2b_enrichment._trace_enrichment_llm_call(
+        "task.b2b_enrichment.tier1",
+        provider="anthropic",
+        model="claude-haiku-4-5",
+        messages=[{"role": "system", "content": "x"}, {"role": "user", "content": "y"}],
+        usage={
+            "input_tokens": 13000,
+            "output_tokens": 800,
+            "cache_read_input_tokens": 11500,
+            "cache_creation_input_tokens": 1200,
+        },
+        metadata={},
+        duration_ms=42.0,
+    )
+
+    kwargs = captured["kwargs"]
+    assert kwargs["cached_tokens"] == 11500
+    assert kwargs["cache_write_tokens"] == 1200
+
+
+def test_trace_enrichment_llm_call_zero_cache_when_provider_silent(monkeypatch):
+    """Local vLLM doesn't surface cache fields. Trace must record 0/0
+    rather than rejecting the usage dict or crashing."""
+    from atlas_brain.autonomous.tasks import b2b_enrichment
+
+    captured: dict = {}
+
+    def _fake_trace(span_name, **kwargs):
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("atlas_brain.pipelines.llm.trace_llm_call", _fake_trace)
+
+    b2b_enrichment._trace_enrichment_llm_call(
+        "task.b2b_enrichment.tier1",
+        provider="vllm",
+        model="stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ",
+        messages=[{"role": "system", "content": "x"}, {"role": "user", "content": "y"}],
+        usage={"prompt_tokens": 13000, "completion_tokens": 800},
+        metadata={},
+        duration_ms=42.0,
+    )
+
+    kwargs = captured["kwargs"]
+    assert kwargs["cached_tokens"] == 0
+    assert kwargs["cache_write_tokens"] == 0
+    assert kwargs["input_tokens"] == 13000

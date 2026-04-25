@@ -315,10 +315,31 @@ def _trace_enrichment_llm_call(
     from ...pipelines.llm import _trace_cache_metrics, trace_llm_call
 
     usage_dict = usage if isinstance(usage, dict) else {}
+    # OpenRouter responses nest cache hits under prompt_tokens_details and put
+    # cache writes at the top level. Anthropic-direct responses use
+    # cache_read_input_tokens / cache_creation_input_tokens. Pull both shapes
+    # so _trace_cache_metrics actually sees a value -- the previous version
+    # only forwarded input/output/billable, so cached_tokens was always 0
+    # in llm_usage even when caching genuinely fired.
+    prompt_details = usage_dict.get("prompt_tokens_details") or {}
+    cached_from_provider = (
+        usage_dict.get("cached_tokens")
+        or prompt_details.get("cached_tokens")
+        or usage_dict.get("cache_read_input_tokens")
+        or 0
+    )
+    cache_write_from_provider = (
+        usage_dict.get("cache_write_tokens")
+        or prompt_details.get("cache_write_tokens")
+        or usage_dict.get("cache_creation_input_tokens")
+        or 0
+    )
     normalized_usage = {
         "input_tokens": usage_dict.get("input_tokens", usage_dict.get("prompt_tokens", 0)),
         "output_tokens": usage_dict.get("output_tokens", usage_dict.get("completion_tokens", 0)),
         "billable_input_tokens": usage_dict.get("billable_input_tokens", usage_dict.get("prompt_tokens")),
+        "cached_tokens": cached_from_provider,
+        "cache_write_tokens": cache_write_from_provider,
     }
     cached_tokens, cache_write_tokens, billable_input_tokens = _trace_cache_metrics(normalized_usage, {})
     trace_llm_call(
