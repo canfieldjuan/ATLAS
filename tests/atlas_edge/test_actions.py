@@ -263,6 +263,16 @@ class TestActionIntent:
         data = intent.get_service_data()
         assert data["brightness_step_pct"] == -15
 
+    def test_service_data_brighten_negative_amount_is_sanitized(self):
+        """Test brighten amount is absolute and clamped."""
+        intent = ActionIntent(
+            action="brighten",
+            target_type="light",
+            parameters={"amount": -250},
+        )
+        data = intent.get_service_data()
+        assert data["brightness_step_pct"] == 100
+
     def test_service_data_volume(self):
         """Test service data for set_volume."""
         intent = ActionIntent(
@@ -282,6 +292,16 @@ class TestActionIntent:
         )
         data = intent.get_service_data()
         assert data["volume_level"] == 1.0
+
+    def test_service_data_volume_invalid_input_uses_default(self):
+        """Test invalid volume values gracefully fall back to default."""
+        intent = ActionIntent(
+            action="set_volume",
+            target_type="media_player",
+            parameters={"volume": "loud"},
+        )
+        data = intent.get_service_data()
+        assert data["volume_level"] == 0.5
 
     def test_service_data_mute(self):
         """Test service data for mute."""

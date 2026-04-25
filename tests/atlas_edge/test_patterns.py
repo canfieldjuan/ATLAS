@@ -247,6 +247,13 @@ class TestDevicePatternParser:
         assert result is not None
         assert result.action == "volume_down"
 
+    def test_volume_down_with_target(self, parser):
+        """Test volume down command with explicit target."""
+        result = parser.parse("volume down on the office speaker")
+        assert result is not None
+        assert result.action == "volume_down"
+        assert result.target_name == "office speaker"
+
     # --- Fallback generic pattern ---
 
     def test_generic_turn_on(self, parser):
@@ -277,6 +284,11 @@ class TestDevicePatternParser:
     def test_partial_match_fails(self, parser):
         """Test partial command doesn't match."""
         result = parser.parse("turn the light")  # missing on/off
+        assert result is None
+
+    def test_direction_only_does_not_match_volume(self, parser):
+        """Test plain direction words do not trigger media volume intent."""
+        result = parser.parse("up")
         assert result is None
 
     # --- can_parse method ---

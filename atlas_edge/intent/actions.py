@@ -31,6 +31,18 @@ class ActionIntent:
     raw_query: str = ""
     source: str = "pattern"  # "pattern", "classifier", "brain"
 
+    @staticmethod
+    def _clamp_percent(value: Any, default: int, *, absolute: bool = False) -> int:
+        """Coerce value to int percent in [0, 100], fallback to default."""
+        try:
+            numeric_float = float(value)
+            if absolute:
+                numeric_float = abs(numeric_float)
+            numeric = int(round(numeric_float))
+        except (TypeError, ValueError):
+            numeric = default
+        return min(100, max(0, numeric))
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -132,22 +144,36 @@ class ActionIntent:
 
         # Add action-specific parameters
         if self.action == "set_brightness":
-            brightness = self.parameters.get("brightness", 100)
-            data["brightness_pct"] = min(100, max(0, brightness))
+            brightness = self._clamp_percent(
+                self.parameters.get("brightness", 100),
+                default=100,
+            )
+            data["brightness_pct"] = brightness
 
         elif self.action == "brighten":
             # Relative brightness increase
-            amount = self.parameters.get("amount", 10)
+            amount = self._clamp_percent(
+                self.parameters.get("amount", 10),
+                default=10,
+                absolute=True,
+            )
             data["brightness_step_pct"] = amount
 
         elif self.action == "dim":
             # Relative brightness decrease
-            amount = self.parameters.get("amount", 10)
+            amount = self._clamp_percent(
+                self.parameters.get("amount", 10),
+                default=10,
+                absolute=True,
+            )
             data["brightness_step_pct"] = -amount
 
         elif self.action == "set_volume":
-            volume = self.parameters.get("volume", 50)
-            data["volume_level"] = min(1.0, max(0.0, volume / 100.0))
+            volume = self._clamp_percent(
+                self.parameters.get("volume", 50),
+                default=50,
+            )
+            data["volume_level"] = volume / 100.0
 
         elif self.action in ("mute", "unmute"):
             data["is_volume_muted"] = self.action == "mute"
