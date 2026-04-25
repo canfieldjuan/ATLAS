@@ -1088,6 +1088,139 @@ def _derive_pain_categories(result: dict) -> list[dict[str, str]]:
     return categories
 
 
+def _count_corroborating_signals(result: dict) -> int:
+    """Count universal churn / sentiment signals that support a pain claim.
+
+    These are independent of any specific pain category -- they indicate
+    the reviewer is genuinely unhappy / leaving / dissatisfied, which
+    corroborates that a single pain phrase is more than a passing mention.
+
+    Signals considered:
+      - churn_signals.intent_to_leave is True
+      - churn_signals.actively_evaluating is True
+      - churn_signals.migration_in_progress is True
+      - would_recommend is False
+      - sentiment_trajectory.direction in (consistently_negative, declining)
+    """
+    count = 0
+    churn = result.get("churn_signals")
+    if isinstance(churn, dict):
+        for key in ("intent_to_leave", "actively_evaluating", "migration_in_progress"):
+            if churn.get(key) is True:
+                count += 1
+    if result.get("would_recommend") is False:
+        count += 1
+    sentiment = result.get("sentiment_trajectory")
+    if isinstance(sentiment, dict):
+        direction = str(sentiment.get("direction") or "").strip().lower()
+        if direction in ("consistently_negative", "declining"):
+            count += 1
+    return count
+
+
+def _count_pain_phrase_matches(result: dict, pain_category: str) -> int:
+    """Count vendor-subject negative/mixed phrases that match a pain category.
+
+    For v2 results, applies the subject + polarity gates so only phrases
+    that actually describe the subject vendor's negative experience count.
+    For v1 results, falls back to keyword scan across raw phrases.
+    """
+    pattern = _PAIN_PATTERNS.get(pain_category)
+    if pattern is None:
+        return 0
+
+    from ._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
+
+    count = 0
+    if is_v2_tagged(result):
+        meta = phrase_metadata_map(result)
+        for field in _PAIN_DERIVATION_FIELDS:
+            for index, value in enumerate(result.get(field) or []):
+                phrase = str(value or "").strip()
+                if not phrase:
+                    continue
+                row = meta.get((field, index)) or {}
+                if row.get("subject") != "subject_vendor":
+                    continue
+                if row.get("polarity") not in ("negative", "mixed"):
+                    continue
+                if pattern.search(phrase):
+                    count += 1
+    else:
+        texts: list[str] = []
+        for field in _PAIN_DERIVATION_FIELDS:
+            texts.extend(_normalize_text_list(result.get(field)))
+        for text in texts:
+            if pattern.search(text):
+                count += 1
+    return count
+
+
+def _compute_pain_confidence(result: dict, pain_category: str) -> str:
+    """Layer 3 (causality gate): grade evidence for the primary pain.
+
+    Returns one of:
+      "strong" -- 2+ matching phrases (multiple independent textual evidence)
+                  OR (overall_dissatisfaction with 2+ universal signals)
+      "weak"   -- 1 matching phrase + at least 1 universal signal
+                  OR (overall_dissatisfaction with 1 universal signal)
+      "none"   -- everything weaker; caller should demote a non-fallback
+                  pain_category to overall_dissatisfaction
+    """
+    normalized = _normalize_pain_category(pain_category)
+    signal_count = _count_corroborating_signals(result)
+
+    if normalized == "overall_dissatisfaction":
+        if signal_count >= 2:
+            return "strong"
+        if signal_count >= 1:
+            return "weak"
+        return "none"
+
+    phrase_count = _count_pain_phrase_matches(result, normalized)
+    if phrase_count >= 2:
+        return "strong"
+    if phrase_count >= 1 and signal_count >= 1:
+        return "weak"
+    return "none"
+
+
+def _demote_primary_pain(result: dict, demoted_category: str) -> None:
+    """Demote a Layer-3-rejected primary pain to a secondary entry.
+
+    Replaces the primary in pain_categories with overall_dissatisfaction and
+    re-attaches the original primary as secondary so the keyword evidence is
+    not lost (downstream reports may still want to mention it as context).
+    """
+    if demoted_category == "overall_dissatisfaction":
+        return
+    existing = result.get("pain_categories")
+    if not isinstance(existing, list):
+        existing = []
+    new_list: list[dict[str, str]] = [
+        {"category": "overall_dissatisfaction", "severity": "primary"}
+    ]
+    appended_demoted = False
+    for entry in existing:
+        if not isinstance(entry, dict):
+            continue
+        category = str(entry.get("category") or "").strip().lower()
+        if not category:
+            continue
+        if category == "overall_dissatisfaction":
+            continue
+        if category == demoted_category and not appended_demoted:
+            new_list.append({"category": demoted_category, "severity": "secondary"})
+            appended_demoted = True
+        elif category != demoted_category:
+            new_list.append(
+                {"category": category, "severity": entry.get("severity", "secondary")}
+            )
+    if not appended_demoted:
+        new_list.append({"category": demoted_category, "severity": "secondary"})
+    result["pain_categories"] = new_list
+
+
 _COMPETITOR_RECOVERY_PATTERNS = (
     r"\b(?:switched to|moved to|replaced with|migrating to|migration to)\s+([A-Z][A-Za-z0-9.&+/\-]*(?:\s+[A-Z][A-Za-z0-9.&+/\-]*){0,3})",
     r"\b(?:evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)\s+([A-Z][A-Za-z0-9.&+/\-]*(?:\s+[A-Z][A-Za-z0-9.&+/\-]*){0,3})",
@@ -2414,6 +2547,21 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
         _subject_vendor_phrase_texts(result, "feature_gaps"),
         _subject_vendor_phrase_texts(result, "recommendation_language"),
     )
+
+    # 2b. Phase 4 (Layer 3 -- causality gate): grade the primary pain. A
+    # pain category backed by a single keyword match with no churn /
+    # sentiment corroboration is an unreliable classification (passing
+    # mention, not a real pain), so we demote it to overall_dissatisfaction
+    # and keep the original as a secondary entry for visibility.
+    final_pain = _normalize_pain_category(result.get("pain_category"))
+    confidence = _compute_pain_confidence(result, final_pain)
+    if confidence == "none" and final_pain != "overall_dissatisfaction":
+        _demote_primary_pain(result, final_pain)
+        result["pain_category"] = "overall_dissatisfaction"
+        # Re-grade against the new (fallback) primary so pain_confidence
+        # reflects the surviving classification, not the demoted one.
+        confidence = _compute_pain_confidence(result, "overall_dissatisfaction")
+    result["pain_confidence"] = confidence
 
     # 3. would_recommend
     result["would_recommend"] = engine.derive_recommend(rec_lang, rating, rating_max)
