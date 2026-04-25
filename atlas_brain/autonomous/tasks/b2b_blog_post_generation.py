@@ -1367,6 +1367,67 @@ def _quote_grade_blueprint_phrases(
     return out
 
 
+def _split_and_gate_blog_quotes(
+    rows: list[dict[str, Any]],
+    *,
+    field: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Split a mixed quote pool by explicit origin and route each path
+    through the appropriate quote-grade or legacy treatment.
+
+    Discriminator: every row MUST carry ``quote_origin`` to be kept.
+
+      - ``quote_origin == "review"`` -> route through
+        ``_quote_grade_blueprint_phrases`` (verbatim subject_vendor +
+        negative phrases). A row marked 'review' but missing
+        ``enrichment``/``enrichment_raw`` produces no quote-grade output
+        and is therefore dropped from the pool.
+      - ``quote_origin == "vault"`` -> keep on the legacy truncation
+        path until the vault producer is migrated separately. Vault rows
+        already pre-curate their text via the vault producer.
+      - Anything else (no marker, unknown value) -> dropped.
+
+    The drop-by-default policy closes the prior 'no enrichment means
+    vault' loophole that would have let an unmarked SQL row sneak
+    through under a previous implementation.
+    """
+    review_rows: list[dict[str, Any]] = []
+    vault_rows: list[dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        origin = str(r.get("quote_origin") or "").strip().lower()
+        if origin == "review":
+            review_rows.append(r)
+        elif origin == "vault":
+            vault_rows.append(r)
+        # Unmarked / unknown origin: dropped on purpose.
+    review_quotes = _quote_grade_blueprint_phrases(
+        review_rows, field=field, limit=limit,
+    )
+    vault_quotes: list[dict[str, Any]] = []
+    for r in vault_rows:
+        # Vault rows arrive in two shapes depending on the merger that
+        # produced them: ``phrase`` (from _merge_blog_quotes_with_evidence_vault)
+        # or ``text`` (from _build_specialized_blog_review_rows_from_evidence_vault).
+        # Either is acceptable for the legacy path -- the producer has
+        # already curated the surface text.
+        text = str(r.get("phrase") or r.get("text") or "").strip()
+        if not text:
+            continue
+        vault_quotes.append({
+            "phrase": text[:200],
+            "vendor": r.get("vendor"),
+            "urgency": r.get("urgency"),
+            "role": r.get("role", ""),
+        })
+    combined = review_quotes + vault_quotes
+    if limit is not None:
+        return combined[:limit]
+    return combined
+
+
 def _source_quote_texts(blueprint: PostBlueprint) -> list[str]:
     phrases = blueprint.quotable_phrases or []
     expected_vendors = _expected_quote_vendors(blueprint)
@@ -5000,6 +5061,8 @@ def _merge_blog_quotes_with_evidence_vault(
                 "industry": source.get("industry") or "",
                 "source_name": source.get("source") or "",
                 "sentiment": sentiment,
+                # Phase 2.3 origin marker (vault portion of merger).
+                "quote_origin": "vault",
                 "_priority": int(item.get("mention_count_total") or 0),
             })
     ordered = sorted(candidates, key=lambda item: (item["_priority"], len(str(item.get("phrase") or ""))), reverse=True)
@@ -5078,6 +5141,12 @@ def _build_specialized_blog_review_rows_from_evidence_vault(
             "urgency": metrics.get("avg_urgency_when_mentioned") or 0,
             "source_name": source.get("source") or "",
             "company": source.get("company") or "",
+            # Phase 2.3 quote-grade migration: explicit origin marker so
+            # _split_and_gate_blog_quotes can route vault rows to the
+            # legacy truncation path while SQL/review rows go through
+            # the contract gate. Unmarked rows are dropped, not
+            # silently preserved.
+            "quote_origin": "vault",
             "_priority": (
                 int(item.get("mention_count_total") or 0),
                 int(item.get("mention_count_recent") or 0),
@@ -5484,16 +5553,19 @@ async def _gather_data(
                 "rating": r["rating"],
                 "urgency": r["urgency"] or 0,
                 "source_name": r["source"],
-                # Phase 2.3 quote-grade migration: carry the v4 enrichment +
-                # review_id forward so _quote_grade_blueprint_phrases can
-                # produce verbatim-only quote pools downstream. Vault rows
-                # below do not have these fields and stay on legacy path
-                # until vault is migrated separately.
+                # Phase 2.3 quote-grade migration: carry v4 enrichment +
+                # review_id forward and stamp explicit origin so
+                # _split_and_gate_blog_quotes can route this row through
+                # the contract gate (verbatim-only). Vault rows below
+                # carry quote_origin="vault" from their builder and stay
+                # on the legacy truncation path. Unmarked rows are
+                # dropped at the wrapper, never silently preserved.
                 "review_id": r.get("review_id"),
                 "source": r.get("source"),
                 "reviewer_title": r.get("reviewer_title"),
                 "vendor_name": r.get("vendor_name"),
                 "enrichment_raw": r.get("enrichment_raw"),
+                "quote_origin": "review",
             }
             for r in pricing_rows
         ]
@@ -5566,12 +5638,14 @@ async def _gather_data(
         switch_reviews = await pool.fetch(
             """
             SELECT
+                r.id AS review_id,
                 r.review_text,
                 vm.vendor_name AS vendor_name,
                 r.reviewer_title,
                 r.rating,
                 r.source,
-                r.enrichment->>'urgency_score' AS urgency
+                r.enrichment->>'urgency_score' AS urgency,
+                r.enrichment AS enrichment_raw
             FROM b2b_reviews r
             JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
             WHERE vm.vendor_name = $1 AND r.enrichment_status = 'enriched'
@@ -5593,6 +5667,13 @@ async def _gather_data(
                 "rating": float(r["rating"]) if r["rating"] else None,
                 "urgency": float(r["urgency"]) if r["urgency"] else 0,
                 "source_name": r["source"],
+                # Phase 2.3 quote-grade migration markers (mirror pricing path).
+                "review_id": str(r["review_id"]) if r["review_id"] is not None else None,
+                "source": r["source"],
+                "reviewer_title": r["reviewer_title"],
+                "vendor_name": r["vendor_name"],
+                "enrichment_raw": r["enrichment_raw"],
+                "quote_origin": "review",
             }
             for r in switch_reviews
         ]
@@ -6177,9 +6258,11 @@ async def _fetch_negative_quotes(
         else _blog_primary_vendor_join("r", "primary_vm")
     )
     _quote_cols = f"""
+        r.id AS review_id,
         r.review_text, {vendor_projection}, r.reviewer_title, r.rating,
         r.enrichment->>'urgency_score' AS urgency,
         r.source,
+        r.enrichment AS enrichment_raw,
         COALESCE(
             CASE
                 WHEN ar.confidence_label IN ('high', 'medium')
@@ -6254,6 +6337,13 @@ async def _fetch_negative_quotes(
             "company_country": r["company_country"],
             "source_name": r["source"],
             "sentiment": "negative",
+            # Phase 2.3 quote-grade migration markers. quote_origin lets
+            # _split_and_gate_blog_quotes route this row through the
+            # contract gate (verbatim-only) rather than legacy truncation.
+            "review_id": str(r["review_id"]) if r["review_id"] is not None else None,
+            "source": r["source"],
+            "enrichment_raw": r["enrichment_raw"],
+            "quote_origin": "review",
         })
     return results
 
@@ -6274,8 +6364,10 @@ async def _fetch_positive_quotes(
         else _blog_primary_vendor_join("r", "primary_vm")
     )
     _pos_cols = f"""
+        r.id AS review_id,
         COALESCE(r.pros, r.review_text) AS text, {vendor_projection},
         r.reviewer_title, r.rating, r.source,
+        r.enrichment AS enrichment_raw,
         COALESCE(
             CASE
                 WHEN ar.confidence_label IN ('high', 'medium')
@@ -6349,6 +6441,11 @@ async def _fetch_positive_quotes(
             "company_country": r["company_country"],
             "source_name": r["source"],
             "sentiment": "positive",
+            # Phase 2.3 quote-grade migration markers (mirror negative path).
+            "review_id": str(r["review_id"]) if r["review_id"] is not None else None,
+            "source": r["source"],
+            "enrichment_raw": r["enrichment_raw"],
+            "quote_origin": "review",
         })
     return results
 
@@ -6874,7 +6971,7 @@ def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
         data_context=data_context,
         sections=sections,
         charts=charts,
-        quotable_phrases=data.get("quotes", []),
+        quotable_phrases=_split_and_gate_blog_quotes(data.get("quotes", []), limit=15),
     )
 
 
@@ -7346,7 +7443,7 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
         data_context=data["data_context"],
         sections=sections,
         charts=charts,
-        quotable_phrases=data.get("quotes", []),
+        quotable_phrases=_split_and_gate_blog_quotes(data.get("quotes", []), limit=15),
     )
 
 
@@ -7522,7 +7619,7 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
         data_context=data["data_context"],
         sections=sections,
         charts=charts,
-        quotable_phrases=data.get("quotes", []),
+        quotable_phrases=_split_and_gate_blog_quotes(data.get("quotes", []), limit=15),
     )
 
 
@@ -7835,7 +7932,7 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
         data_context=data["data_context"],
         sections=sections,
         charts=charts,
-        quotable_phrases=data.get("quotes", []),
+        quotable_phrases=_split_and_gate_blog_quotes(data.get("quotes", []), limit=15),
     )
 
 
@@ -8139,35 +8236,15 @@ def _blueprint_pricing_reality_check(ctx: dict, data: dict) -> PostBlueprint:
         key_stats=bl_stats,
     ))
 
-    # Quotable phrases from pricing reviews.
-    # Phase 2.3 quote-grade migration: SQL-fetched rows that carry v4
-    # enrichment go through the contract gate (verbatim-only). Vault rows
-    # do not yet carry enrichment and stay on the legacy truncation path
-    # until the vault producer is migrated separately. Per-row split
-    # avoids erasing the vault-sourced quote pool while we prove the
-    # quote-grade pattern on the SQL path.
-    sql_pricing_rows = [
-        r for r in pricing_reviews
-        if isinstance(r, dict) and (r.get("enrichment") or r.get("enrichment_raw"))
-    ]
-    vault_pricing_rows = [
-        r for r in pricing_reviews
-        if isinstance(r, dict) and not (r.get("enrichment") or r.get("enrichment_raw"))
-    ]
-    quotes_verbatim = _quote_grade_blueprint_phrases(
-        sql_pricing_rows, field="pricing_phrases", limit=5,
+    # Quotable phrases from pricing reviews. Routes SQL-fetched rows
+    # (quote_origin="review") through the contract gate (verbatim-only)
+    # and vault rows (quote_origin="vault") through the legacy
+    # truncation path. Unmarked rows are dropped at the wrapper, never
+    # silently preserved -- closes the prior 'no enrichment means
+    # vault' loophole.
+    quotes = _split_and_gate_blog_quotes(
+        pricing_reviews, field="pricing_phrases", limit=5,
     )
-    quotes_vault_legacy = [
-        {
-            "phrase": r["text"][:200],
-            "vendor": r.get("vendor"),
-            "urgency": r.get("urgency"),
-            "role": r.get("role", ""),
-        }
-        for r in vault_pricing_rows
-        if r.get("text")
-    ]
-    quotes = (quotes_verbatim + quotes_vault_legacy)[:5]
 
     return PostBlueprint(
         topic_type="pricing_reality_check",
@@ -8276,10 +8353,13 @@ def _blueprint_switching_story(ctx: dict, data: dict) -> PostBlueprint:
         key_stats=sv_stats,
     ))
 
-    quotes = [
-        {"phrase": r["text"][:200], "vendor": r["vendor"], "urgency": r["urgency"], "role": r.get("role", "")}
-        for r in switch_reviews[:5]
-    ]
+    # Phase 2.3 quote-grade migration: route SQL switch reviews
+    # (quote_origin="review") through the contract gate; vault switch
+    # rows (quote_origin="vault") stay on the legacy truncation path.
+    # Unmarked rows dropped at the wrapper.
+    quotes = _split_and_gate_blog_quotes(
+        switch_reviews, field=None, limit=5,
+    )
 
     return PostBlueprint(
         topic_type="switching_story",

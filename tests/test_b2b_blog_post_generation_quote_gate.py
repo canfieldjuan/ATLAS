@@ -31,6 +31,7 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E40
     _blueprint_pricing_reality_check,
     _quote_grade_blueprint_phrases,
     _remove_unmatched_quote_lines,
+    _split_and_gate_blog_quotes,
 )
 
 
@@ -74,6 +75,11 @@ def _v4_row(
         "source": source,
         "urgency": urgency,
         "reviewer_title": "Director of Operations",
+        # Phase 2.3 wrapper marker: SQL/review rows must carry this so
+        # _split_and_gate_blog_quotes routes them to the contract gate.
+        # Unmarked rows are dropped at the wrapper -- closes the prior
+        # 'no enrichment means vault' loophole.
+        "quote_origin": "review",
         # Either key name should work
         enrichment_key: json.dumps(enrichment),
     }
@@ -350,6 +356,10 @@ def test_pricing_blueprint_preserves_legacy_vault_rows_until_vault_migration():
         "urgency": 6.0,
         "role": "Finance",
         "text": "Vault-sourced quote text is still handled by the legacy path.",
+        # Phase 2.3 wrapper marker: vault rows must carry this so they
+        # are routed to the legacy truncation path while we wait on a
+        # separate vault producer migration. Unmarked rows are dropped.
+        "quote_origin": "vault",
     }
     blueprint = _blueprint_pricing_reality_check(
         _pricing_ctx(),
@@ -361,3 +371,128 @@ def test_pricing_blueprint_preserves_legacy_vault_rows_until_vault_migration():
         "urgency": 6.0,
         "role": "Finance",
     }]
+
+
+# ---------------------------------------------------------------------------
+# _split_and_gate_blog_quotes wrapper -- discriminator policy
+# ---------------------------------------------------------------------------
+
+
+def test_wrapper_drops_unmarked_row():
+    """No quote_origin -> dropped. Closes the 'no enrichment means
+    vault' loophole."""
+    row = {"vendor": "X", "text": "no marker"}
+    assert _split_and_gate_blog_quotes([row]) == []
+
+
+def test_wrapper_drops_unknown_origin():
+    row = {"vendor": "X", "text": "junk", "quote_origin": "weather_forecast"}
+    assert _split_and_gate_blog_quotes([row]) == []
+
+
+def test_wrapper_routes_review_origin_through_contract_gate():
+    row = _v4_row()  # already stamped quote_origin="review"
+    out = _split_and_gate_blog_quotes([row], field="pricing_phrases")
+    assert len(out) == 1
+    assert out[0]["phrase"] == "it costs too much money"
+    assert out[0]["review_id"] == "00000000-0000-0000-0000-000000000001"
+
+
+def test_wrapper_drops_review_origin_with_missing_enrichment():
+    """A row marked 'review' but lacking enrichment data still drops --
+    the contract gate must produce a verbatim phrase or nothing."""
+    row = {
+        "vendor": "X",
+        "review_id": "no-enrichment",
+        "source": "g2",
+        "quote_origin": "review",
+        # NO enrichment / enrichment_raw
+    }
+    assert _split_and_gate_blog_quotes([row]) == []
+
+
+def test_wrapper_routes_vault_origin_through_legacy_path():
+    row = {
+        "vendor": "Shopify",
+        "urgency": 5.0,
+        "role": "Director",
+        "text": "Vault-curated text passes through legacy truncation.",
+        "quote_origin": "vault",
+    }
+    out = _split_and_gate_blog_quotes([row])
+    assert len(out) == 1
+    assert out[0]["phrase"] == "Vault-curated text passes through legacy truncation."
+    assert out[0]["vendor"] == "Shopify"
+
+
+def test_wrapper_handles_vault_phrase_field_too():
+    """Vault rows from _merge_blog_quotes_with_evidence_vault carry
+    'phrase' rather than 'text' -- both shapes accepted."""
+    row = {
+        "phrase": "Curated phrase from vault.",
+        "vendor": "Shopify",
+        "urgency": 4.0,
+        "role": "VP",
+        "quote_origin": "vault",
+    }
+    out = _split_and_gate_blog_quotes([row])
+    assert len(out) == 1
+    assert out[0]["phrase"] == "Curated phrase from vault."
+
+
+def test_wrapper_combines_review_and_vault_rows():
+    review_row = _v4_row(text="Real verbatim review quote.")
+    vault_row = {
+        "phrase": "Curated vault phrase.",
+        "vendor": "Shopify",
+        "urgency": 5.0,
+        "role": "PM",
+        "quote_origin": "vault",
+    }
+    out = _split_and_gate_blog_quotes([review_row, vault_row])
+    assert len(out) == 2
+    phrases = [q["phrase"] for q in out]
+    assert "Real verbatim review quote." in phrases
+    assert "Curated vault phrase." in phrases
+
+
+def test_wrapper_respects_limit():
+    rows = [
+        _v4_row(text=f"verbatim {i}", review_id=f"id-{i}")
+        for i in range(10)
+    ]
+    out = _split_and_gate_blog_quotes(rows, limit=3)
+    assert len(out) == 3
+
+
+# ---------------------------------------------------------------------------
+# _blueprint_pricing_reality_check pilot integration (loophole closure)
+# ---------------------------------------------------------------------------
+
+
+def test_pricing_blueprint_drops_unmarked_rows_closing_loophole():
+    """A row missing quote_origin must be dropped, NOT preserved as
+    'vault by absence of enrichment'. This closes the discriminator
+    loophole the policy correction was designed to fix."""
+    unmarked_sql_row = {
+        "vendor": "Shopify",
+        "urgency": 8.0,
+        "review_id": "looks-like-sql",
+        "source": "g2",
+        "text": "Real review text but no origin marker.",
+        "enrichment_raw": json.dumps({
+            "enrichment_schema_version": 4,
+            "pricing_phrases": ["should not surface"],
+            "phrase_metadata": [{
+                "field": "pricing_phrases", "index": 0,
+                "text": "should not surface",
+                "subject": "subject_vendor", "polarity": "negative",
+                "role": "primary_driver", "verbatim": True,
+            }],
+        }),
+    }
+    blueprint = _blueprint_pricing_reality_check(
+        _pricing_ctx(),
+        {"pricing_reviews": [unmarked_sql_row]},
+    )
+    assert blueprint.quotable_phrases == []
