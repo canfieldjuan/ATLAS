@@ -877,6 +877,29 @@ class TaskScheduler:
             "timeout_seconds": 600,
             "metadata": {"builtin_handler": "ecosystem_analysis"},
         },
+        # Phase 8 maintenance: drain newly-introduced gaps in witness-quality
+        # field propagation and alert when the invariant breaks. Runs after
+        # the daily intelligence/synthesis cron (02:00 UTC -> 02:50 UTC) so
+        # the previous day's reports are decorated before any human reads
+        # them. Lightweight: deterministic SQL only, no LLM.
+        {
+            "name": "b2b_witness_quality_maintenance",
+            "description": "Daily backfill + audit of witness-quality fields on persisted reasoning/intelligence JSON",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "15 4 * * *",
+            "timeout_seconds": 600,
+            "metadata": {
+                "builtin_handler": "b2b_witness_quality_maintenance",
+                "days": 30,
+                "apply": True,
+                "audit_row_limit": 500,
+                # Default ntfy is silent on success; alert path runs on
+                # invariant breach. Tag any pings so they route correctly.
+                "notify_tags": "warning,b2b,witness",
+                "notify_priority": 4,
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:

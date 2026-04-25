@@ -58,6 +58,7 @@ _BUILTIN_TASKS = [
     ("knowledge_graph_sync", "run", "knowledge_graph_sync"),
     ("ecosystem_analysis", "run", "ecosystem_analysis"),
     ("b2b_account_resolution", "run", "b2b_account_resolution"),
+    ("b2b_witness_quality_maintenance", "run", "b2b_witness_quality_maintenance"),
     ("provider_cost_sync", "run", "llm_provider_cost_sync"),
     ("cleaning_sms_reminder", "run", "cleaning_sms_reminder"),
 ]
