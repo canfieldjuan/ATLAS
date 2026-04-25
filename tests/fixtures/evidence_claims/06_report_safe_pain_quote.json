@@ -1,0 +1,42 @@
+{
+  "name": "report_safe_pain_quote",
+  "description": "Acceptance fixture #6. Grounded witness sourced from a v4 enrichment with subject_vendor + negative + primary_driver + pain_confidence=strong. This is the canonical happy path: a pain_claim_about_vendor for the subject vendor must validate. A pricing_urgency_claim covering the same pain category must also validate.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000006",
+    "vendor_name": "Asana",
+    "summary": "Pricing keeps creeping up at every renewal",
+    "review_text": "Asana pricing has gone up at every renewal for the last three years and we are now paying nearly double what we started with for the same seat count. Finance flagged it as our fastest-growing SaaS line item.",
+    "rating": 2,
+    "rating_max": 5,
+    "source": "g2"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000006:0",
+    "review_id": "00000000-0000-0000-0000-000000000006",
+    "vendor_name": "Asana",
+    "excerpt_text": "Asana pricing has gone up at every renewal for the last three years",
+    "pain_category": "pricing",
+    "phrase_subject": "subject_vendor",
+    "phrase_polarity": "negative",
+    "phrase_role": "primary_driver",
+    "phrase_verbatim": true,
+    "pain_confidence": "strong",
+    "grounding_status": "grounded",
+    "salience_score": 7.5,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000006:span:0-67"
+  },
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "valid",
+      "rejection_reason": null
+    },
+    "pricing_urgency_claim": {
+      "status": "valid",
+      "rejection_reason": null
+    },
+    "counterevidence_about_vendor": {
+      "status": "invalid",
+      "rejection_reason": "polarity_not_positive"
+    }
+  }
+}

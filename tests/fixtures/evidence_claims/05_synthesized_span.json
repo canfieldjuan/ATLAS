@@ -1,0 +1,40 @@
+{
+  "name": "synthesized_span",
+  "description": "Acceptance fixture #5. Witness produced from a synthesized span (event / competitor_pressure / category_shift / review_context) that has no source phrase. signal_type identifies the synthesis. Validators must return cannot_validate, not invalid.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000005",
+    "vendor_name": "Slack",
+    "summary": "Heavy users; evaluating Microsoft Teams",
+    "review_text": "We're a longtime customer but the budget review forced us to compare. Microsoft Teams comes bundled with our existing Office licenses.",
+    "rating": 3,
+    "rating_max": 5,
+    "source": "g2"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000005:1",
+    "review_id": "00000000-0000-0000-0000-000000000005",
+    "vendor_name": "Slack",
+    "excerpt_text": "evaluating Microsoft Teams",
+    "signal_type": "competitor_pressure",
+    "pain_category": null,
+    "competitor": "Microsoft Teams",
+    "phrase_subject": null,
+    "phrase_polarity": null,
+    "phrase_role": null,
+    "phrase_verbatim": null,
+    "pain_confidence": null,
+    "grounding_status": "grounded",
+    "salience_score": 5.0,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000005:span:synthesized:0"
+  },
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "cannot_validate",
+      "rejection_reason": "phrase_subject_unavailable"
+    },
+    "displacement_proof_to_competitor": {
+      "status": "cannot_validate",
+      "rejection_reason": "phrase_subject_unavailable"
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "antecedent_trap_monday_hubspot",
+  "description": "Acceptance fixture #1 from EvidenceClaim plan. The phrase 'did not provide a good UI for non-sales users' is in a Monday.com review but attributes to HubSpot (the prior vendor). subject=alternative on the source phrase. A pain_claim_about_vendor for Monday must reject this witness with rejection_reason='antecedent_trap'.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "vendor_name": "Monday.com",
+    "summary": "Switched from HubSpot to Monday for tutoring scheduling",
+    "review_text": "Before monday.com, we used HubSpot, which did not provide a good UI for non-sales users. Monday.com gave tutors a simpler front end and the team picked it up faster.",
+    "rating": 4,
+    "rating_max": 5,
+    "source": "g2"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000001:0",
+    "review_id": "00000000-0000-0000-0000-000000000001",
+    "vendor_name": "Monday.com",
+    "excerpt_text": "did not provide a good UI for non-sales users",
+    "pain_category": "ux",
+    "phrase_subject": "alternative",
+    "phrase_polarity": "negative",
+    "phrase_role": "supporting_context",
+    "phrase_verbatim": true,
+    "pain_confidence": "weak",
+    "grounding_status": "grounded",
+    "salience_score": 6.5,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000001:span:42-88"
+  },
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "invalid",
+      "rejection_reason": "subject_not_subject_vendor"
+    },
+    "displacement_proof_to_competitor": {
+      "status": "cannot_validate",
+      "rejection_reason": "secondary_target_not_provided"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "passing_mention_named_account",
+  "description": "Acceptance fixture #3. Phrase tagged role=passing_mention. A named_account_anchor claim must reject this witness because passing mentions are not anchor-quality, even when the rest of the metadata is correct (subject_vendor, negative). The pain_claim_about_vendor branch also rejects via the role gate.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000003",
+    "vendor_name": "Salesforce",
+    "summary": "Heavyweight CRM, getting pushback from finance",
+    "review_text": "I'm a VP at Globex Corp; we use Salesforce across all customer-facing teams. The contract renewal is coming up next quarter and finance wants concessions on price.",
+    "rating": 3,
+    "rating_max": 5,
+    "source": "g2",
+    "reviewer_company": "Globex Corp",
+    "reviewer_title": "VP of Revenue Operations"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000003:0",
+    "review_id": "00000000-0000-0000-0000-000000000003",
+    "vendor_name": "Salesforce",
+    "excerpt_text": "we use Salesforce across all customer-facing teams",
+    "pain_category": "pricing",
+    "phrase_subject": "subject_vendor",
+    "phrase_polarity": "negative",
+    "phrase_role": "passing_mention",
+    "phrase_verbatim": true,
+    "pain_confidence": "none",
+    "grounding_status": "grounded",
+    "salience_score": 4.0,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000003:span:30-80",
+    "reviewer_company": "Globex Corp"
+  },
+  "expected": {
+    "named_account_anchor": {
+      "status": "invalid",
+      "rejection_reason": "role_passing_mention"
+    },
+    "pain_claim_about_vendor": {
+      "status": "invalid",
+      "rejection_reason": "role_passing_mention"
+    }
+  }
+}

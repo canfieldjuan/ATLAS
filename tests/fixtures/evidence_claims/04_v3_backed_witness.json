@@ -1,0 +1,42 @@
+{
+  "name": "v3_backed_witness",
+  "description": "Acceptance fixture #4. Witness sourced from a v3 enrichment with no phrase_metadata. Validators must return cannot_validate (NOT invalid) because the required tags are absent rather than violated.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000004",
+    "vendor_name": "ClickUp",
+    "summary": "Decent project management tool",
+    "review_text": "We've used it for two years and the team is generally happy. Some features feel half-finished.",
+    "rating": 4,
+    "rating_max": 5,
+    "source": "capterra"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000004:0",
+    "review_id": "00000000-0000-0000-0000-000000000004",
+    "vendor_name": "ClickUp",
+    "excerpt_text": "Some features feel half-finished",
+    "pain_category": "features",
+    "phrase_subject": null,
+    "phrase_polarity": null,
+    "phrase_role": null,
+    "phrase_verbatim": null,
+    "pain_confidence": "weak",
+    "grounding_status": "grounded",
+    "salience_score": 3.5,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000004:span:60-92"
+  },
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "cannot_validate",
+      "rejection_reason": "phrase_subject_unavailable"
+    },
+    "feature_gap_claim": {
+      "status": "cannot_validate",
+      "rejection_reason": "phrase_subject_unavailable"
+    },
+    "named_account_anchor": {
+      "status": "cannot_validate",
+      "rejection_reason": "phrase_role_unavailable"
+    }
+  }
+}

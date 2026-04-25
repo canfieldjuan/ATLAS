@@ -1,0 +1,49 @@
+{
+  "name": "shadow_mode_non_regression",
+  "description": "Acceptance fixture #7. In shadow mode, validate_claim runs and writes a row to b2b_evidence_claims, but the rendered report output (battle card, vendor briefing, scorecard) must be byte-identical to the pre-contract baseline. Uses the same canonical happy-path witness as fixture #6 so the pain_claim_about_vendor validates; the test harness then asserts that (a) a claim row is persisted and (b) the rendered artifact diff against the captured baseline is empty.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000007",
+    "vendor_name": "HubSpot",
+    "summary": "Support quality has dropped since the platform expansion",
+    "review_text": "Support response time has gotten significantly worse over the past 18 months. We used to get a real engineer on a ticket within an hour and now we get a tier-1 script-reader who escalates after two days. The product is fine but the support is the reason we are looking around.",
+    "rating": 2,
+    "rating_max": 5,
+    "source": "g2"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000007:0",
+    "review_id": "00000000-0000-0000-0000-000000000007",
+    "vendor_name": "HubSpot",
+    "excerpt_text": "Support response time has gotten significantly worse over the past 18 months",
+    "pain_category": "support",
+    "phrase_subject": "subject_vendor",
+    "phrase_polarity": "negative",
+    "phrase_role": "primary_driver",
+    "phrase_verbatim": true,
+    "pain_confidence": "strong",
+    "grounding_status": "grounded",
+    "salience_score": 6.0,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000007:span:0-76"
+  },
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "valid",
+      "rejection_reason": null
+    },
+    "support_failure_claim": {
+      "status": "valid",
+      "rejection_reason": null
+    }
+  },
+  "shadow_mode_assertions": {
+    "claim_row_persisted": true,
+    "claim_row_table": "b2b_evidence_claims",
+    "claim_row_artifact_type": "synthesis",
+    "rendered_artifact_diff_against_baseline": "empty",
+    "rendered_artifacts_checked": [
+      "battle_card",
+      "vendor_briefing",
+      "vendor_scorecard"
+    ]
+  }
+}

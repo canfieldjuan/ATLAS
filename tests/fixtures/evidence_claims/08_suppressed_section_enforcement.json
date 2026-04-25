@@ -1,0 +1,51 @@
+{
+  "name": "suppressed_section_enforcement",
+  "description": "Acceptance fixture #8. When evidence_conclusions.suppressed_sections includes 'executive_summary', the claim-aware battle card renderer must not persist a live executive_summary block, even if a valid pain_claim_about_vendor exists for the vendor. The pain claim itself still validates; the suppression check is enforced downstream of validate_claim, in the report renderer. The fixture asserts both halves: claim is valid AND rendered battle card has no executive_summary.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000008",
+    "vendor_name": "Zendesk",
+    "summary": "Pricing model is hard to predict",
+    "review_text": "The seat-based pricing keeps surprising us at renewal because of the agent count drift. We will probably stay because the migration cost is too high but it is a constant friction.",
+    "rating": 3,
+    "rating_max": 5,
+    "source": "trustradius"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000008:0",
+    "review_id": "00000000-0000-0000-0000-000000000008",
+    "vendor_name": "Zendesk",
+    "excerpt_text": "seat-based pricing keeps surprising us at renewal",
+    "pain_category": "pricing",
+    "phrase_subject": "subject_vendor",
+    "phrase_polarity": "negative",
+    "phrase_role": "primary_driver",
+    "phrase_verbatim": true,
+    "pain_confidence": "weak",
+    "grounding_status": "grounded",
+    "salience_score": 5.0,
+    "source_span_id": "review:00000000-0000-0000-0000-000000000008:span:4-53"
+  },
+  "evidence_conclusions": {
+    "vendor_name": "Zendesk",
+    "suppressed_sections": ["executive_summary"],
+    "suppression_reasons": {
+      "executive_summary": "insufficient_distinct_reviewers"
+    }
+  },
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "valid",
+      "rejection_reason": null
+    },
+    "pricing_urgency_claim": {
+      "status": "valid",
+      "rejection_reason": null
+    }
+  },
+  "renderer_assertions": {
+    "artifact_type": "battle_card",
+    "section_must_be_absent": "executive_summary",
+    "other_sections_render_normally": true,
+    "live_persistence_required": false
+  }
+}
