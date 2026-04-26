@@ -1383,9 +1383,12 @@ def _split_and_gate_blog_quotes(
         negative phrases). A row marked 'review' but missing
         ``enrichment``/``enrichment_raw`` produces no quote-grade output
         and is therefore dropped from the pool.
-      - ``quote_origin == "vault"`` -> keep on the legacy truncation
-        path until the vault producer is migrated separately. Vault rows
-        already pre-curate their text via the vault producer.
+      - ``quote_origin == "vault"`` -> route through the legacy
+        truncation path, but only when the row carries
+        ``phrase_verbatim=True`` (stamped by 4e-A's vault writer and
+        propagated through the blog vault mergers in 4i). Vault rows
+        without the marker are dropped, matching the policy that every
+        customer-rendered quote must trace back to a verbatim phrase.
       - Anything else (no marker, unknown value) -> dropped.
 
     The drop-by-default policy closes the prior 'no enrichment means
@@ -1408,6 +1411,11 @@ def _split_and_gate_blog_quotes(
     )
     vault_quotes: list[dict[str, Any]] = []
     for r in vault_rows:
+        # Phase 2.3 4i: vault rows must also carry phrase_verbatim=True.
+        # The blog vault mergers stamp it after 4e-A's writer
+        # propagation; missing markers fail closed here.
+        if r.get("phrase_verbatim") is not True:
+            continue
         # Vault rows arrive in two shapes depending on the merger that
         # produced them: ``phrase`` (from _merge_blog_quotes_with_evidence_vault)
         # or ``text`` (from _build_specialized_blog_review_rows_from_evidence_vault).
@@ -1421,6 +1429,7 @@ def _split_and_gate_blog_quotes(
             "vendor": r.get("vendor"),
             "urgency": r.get("urgency"),
             "role": r.get("role", ""),
+            "phrase_verbatim": True,
         })
     combined = review_quotes + vault_quotes
     if limit is not None:
@@ -5046,6 +5055,12 @@ def _merge_blog_quotes_with_evidence_vault(
         for item in vault.get(section) or []:
             if not isinstance(item, dict):
                 continue
+            # Phase 2.3 4i: vault rows must carry phrase_verbatim=True
+            # (stamped by 4e-A's _rollup_quote_metadata). Unmarked vault
+            # rows are dropped at the merger so the downstream blog
+            # gate can require the marker on every emitted vault row.
+            if item.get("phrase_verbatim") is not True:
+                continue
             phrase = str(item.get("best_quote") or "").strip()
             if not phrase:
                 continue
@@ -5061,8 +5076,11 @@ def _merge_blog_quotes_with_evidence_vault(
                 "industry": source.get("industry") or "",
                 "source_name": source.get("source") or "",
                 "sentiment": sentiment,
-                # Phase 2.3 origin marker (vault portion of merger).
+                # Phase 2.3 origin marker (vault portion of merger) +
+                # phrase_verbatim propagation so downstream consumers
+                # can enforce the policy uniformly.
                 "quote_origin": "vault",
+                "phrase_verbatim": True,
                 "_priority": int(item.get("mention_count_total") or 0),
             })
     ordered = sorted(candidates, key=lambda item: (item["_priority"], len(str(item.get("phrase") or ""))), reverse=True)
@@ -5128,6 +5146,11 @@ def _build_specialized_blog_review_rows_from_evidence_vault(
             continue
         if mode == "pricing" and not _matches_pricing(item):
             continue
+        # Phase 2.3 4i: same fail-closed gate as the merger. Vault rows
+        # must carry phrase_verbatim=True (stamped by 4e-A) before their
+        # best_quote is allowed onto a customer-visible blog surface.
+        if item.get("phrase_verbatim") is not True:
+            continue
         quote = str(item.get("best_quote") or "").strip()
         if not quote:
             continue
@@ -5147,6 +5170,7 @@ def _build_specialized_blog_review_rows_from_evidence_vault(
             # the contract gate. Unmarked rows are dropped, not
             # silently preserved.
             "quote_origin": "vault",
+            "phrase_verbatim": True,
             "_priority": (
                 int(item.get("mention_count_total") or 0),
                 int(item.get("mention_count_recent") or 0),

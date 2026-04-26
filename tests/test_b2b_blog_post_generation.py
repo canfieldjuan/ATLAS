@@ -172,6 +172,7 @@ def test_merge_blog_quotes_with_evidence_vault_prefers_canonical_quotes():
                 "mention_count_total": 11,
                 "quote_source": {"source": "reddit", "reviewer_title": "VP Ops", "company": "Acme"},
                 "supporting_metrics": {"avg_urgency_when_mentioned": 7.4},
+                "phrase_verbatim": True,
             },
         ],
         "strength_evidence": [
@@ -180,6 +181,7 @@ def test_merge_blog_quotes_with_evidence_vault_prefers_canonical_quotes():
                 "mention_count_total": 6,
                 "quote_source": {"source": "capterra", "reviewer_title": "RevOps", "company": "Acme"},
                 "supporting_metrics": {},
+                "phrase_verbatim": True,
             },
         ],
     }
@@ -202,6 +204,7 @@ def test_build_specialized_blog_review_rows_from_evidence_vault_filters_pricing(
                 "quote_source": {"source": "reddit", "reviewer_title": "VP Ops", "rating": 2.0},
                 "supporting_metrics": {"avg_urgency_when_mentioned": 8.1},
                 "mention_count_total": 9,
+                "phrase_verbatim": True,
             },
             {
                 "key": "support",
@@ -211,6 +214,7 @@ def test_build_specialized_blog_review_rows_from_evidence_vault_filters_pricing(
                 "quote_source": {"source": "g2", "reviewer_title": "Director"},
                 "supporting_metrics": {"avg_urgency_when_mentioned": 7.0},
                 "mention_count_total": 12,
+                "phrase_verbatim": True,
             },
         ],
     }
@@ -222,6 +226,75 @@ def test_build_specialized_blog_review_rows_from_evidence_vault_filters_pricing(
     assert len(rows) == 1
     assert rows[0]["text"] == "The contract cost kept climbing after the add-ons"
     assert rows[0]["source_name"] == "reddit"
+
+
+def test_merge_blog_quotes_drops_vault_rows_missing_phrase_verbatim():
+    """Phase 2.3 4i: vault rows lacking phrase_verbatim must NOT
+    surface in the merged blog quote pool. Closes the 'safe by
+    construction' gap so the policy is enforced, not just expected."""
+    vault = {
+        "vendor_name": "Zendesk",
+        "weakness_evidence": [
+            {
+                "best_quote": "Unmarked vault quote that must not surface.",
+                "mention_count_total": 9,
+                "quote_source": {"source": "reddit", "company": "Acme"},
+                "supporting_metrics": {"avg_urgency_when_mentioned": 7.0},
+                # phrase_verbatim missing
+            },
+        ],
+        "strength_evidence": [
+            {
+                "best_quote": "Verbatim strength quote that should surface.",
+                "mention_count_total": 4,
+                "quote_source": {"source": "capterra", "company": "Acme"},
+                "supporting_metrics": {"avg_urgency_when_mentioned": 5.0},
+                "phrase_verbatim": True,
+            },
+        ],
+    }
+    merged = _merge_blog_quotes_with_evidence_vault([], vault)
+    phrases = [item["phrase"] for item in merged]
+    assert "Unmarked vault quote that must not surface." not in phrases
+    assert "Verbatim strength quote that should surface." in phrases
+    assert all(item.get("phrase_verbatim") is True for item in merged)
+
+
+def test_specialized_blog_review_rows_drops_vault_rows_missing_phrase_verbatim():
+    """Phase 2.3 4i: same gate at the specialized vault row builder."""
+    vault = {
+        "vendor_name": "Zendesk",
+        "weakness_evidence": [
+            {
+                "key": "pricing",
+                "label": "Pricing opacity",
+                "evidence_type": "pain_category",
+                "best_quote": "Unmarked pricing quote must not surface.",
+                "quote_source": {"source": "reddit", "reviewer_title": "VP Ops"},
+                "supporting_metrics": {"avg_urgency_when_mentioned": 8.0},
+                "mention_count_total": 9,
+                # phrase_verbatim missing
+            },
+            {
+                "key": "pricing",
+                "label": "Pricing opacity",
+                "evidence_type": "pain_category",
+                "best_quote": "Verbatim pricing quote should surface.",
+                "quote_source": {"source": "g2", "reviewer_title": "Director"},
+                "supporting_metrics": {"avg_urgency_when_mentioned": 7.5},
+                "mention_count_total": 7,
+                "phrase_verbatim": True,
+            },
+        ],
+    }
+    rows = _build_specialized_blog_review_rows_from_evidence_vault(
+        vault,
+        mode="pricing",
+        limit=5,
+    )
+    assert len(rows) == 1
+    assert rows[0]["text"] == "Verbatim pricing quote should surface."
+    assert rows[0]["phrase_verbatim"] is True
 
 
 def test_ensure_methodology_context_injects_review_period_and_disclaimer():
@@ -1081,6 +1154,7 @@ def test_blueprint_vendor_deep_dive_promotes_reasoning_sections():
                     "phrase": "Renewal pricing became a flashpoint for the ops team.",
                     "sentiment": "negative",
                     "quote_origin": "vault",
+                    "phrase_verbatim": True,
                 },
             ],
             "competitor_profiles": [
@@ -1226,12 +1300,14 @@ def test_blueprint_best_fit_guide_adds_tradeoff_and_voice_sections():
                     "phrase": "Setup is quick, but pricing gets steep as you scale.",
                     "sentiment": "negative",
                     "quote_origin": "vault",
+                    "phrase_verbatim": True,
                 },
                 {
                     "vendor": "Salesforce",
                     "phrase": "The workflow power is real, but complexity slows smaller teams down.",
                     "sentiment": "negative",
                     "quote_origin": "vault",
+                    "phrase_verbatim": True,
                 },
             ],
             "pool_category": {},
@@ -2394,6 +2470,7 @@ async def test_gather_data_vendor_alternative_uses_evidence_vault_overlay(monkey
                 "supporting_metrics": {"avg_urgency_when_mentioned": 7.8},
                 "best_quote": "Pricing opacity kept surprising us",
                 "quote_source": {"source": "reddit", "reviewer_title": "VP Ops", "company": "Acme"},
+                "phrase_verbatim": True,
             },
         ],
     }
@@ -2478,6 +2555,7 @@ async def test_gather_data_vendor_alternative_suppresses_stale_evidence_vault_ov
                 "supporting_metrics": {"avg_urgency_when_mentioned": 7.8},
                 "best_quote": "Pricing opacity kept surprising us",
                 "quote_source": {"source": "reddit", "reviewer_title": "VP Ops", "company": "Acme"},
+                "phrase_verbatim": True,
             },
         ],
     }
@@ -2557,6 +2635,7 @@ async def test_gather_data_pricing_reality_check_uses_evidence_vault_review_fall
                 "supporting_metrics": {"avg_urgency_when_mentioned": 7.8},
                 "best_quote": "Pricing kept increasing after the initial contract",
                 "quote_source": {"source": "reddit", "reviewer_title": "VP Ops", "rating": 2.0},
+                "phrase_verbatim": True,
             },
         ],
         "strength_evidence": [
@@ -2566,6 +2645,7 @@ async def test_gather_data_pricing_reality_check_uses_evidence_vault_review_fall
                 "best_quote": "The integrations still save us a lot of time",
                 "quote_source": {"source": "capterra", "reviewer_title": "RevOps", "rating": 4.0},
                 "mention_count_total": 6,
+                "phrase_verbatim": True,
             },
         ],
     }
@@ -2635,6 +2715,7 @@ async def test_gather_data_switching_story_uses_evidence_vault_review_fallback(m
                 "supporting_metrics": {"avg_urgency_when_mentioned": 7.5},
                 "best_quote": "We moved away after support stopped responding during renewal",
                 "quote_source": {"source": "g2", "reviewer_title": "Director", "rating": 2.0},
+                "phrase_verbatim": True,
             },
         ],
     }

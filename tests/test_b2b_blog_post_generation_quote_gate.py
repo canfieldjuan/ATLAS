@@ -355,27 +355,50 @@ def test_pricing_blueprint_drops_v3_sql_rows_from_quote_pool():
     assert blueprint.quotable_phrases == []
 
 
-def test_pricing_blueprint_preserves_legacy_vault_rows_until_vault_migration():
+def test_pricing_blueprint_renders_verbatim_vault_rows():
+    """Phase 2.3 4i: vault rows must carry phrase_verbatim=True (stamped
+    by the vault writer post-4e-A and propagated through the blog
+    vault mergers). The legacy truncation path then re-emits the row
+    with the marker preserved, so downstream consumers can also
+    enforce the policy."""
     vault_row = {
         "vendor": "Shopify",
         "urgency": 6.0,
         "role": "Finance",
-        "text": "Vault-sourced quote text is still handled by the legacy path.",
-        # Phase 2.3 wrapper marker: vault rows must carry this so they
-        # are routed to the legacy truncation path while we wait on a
-        # separate vault producer migration. Unmarked rows are dropped.
+        "text": "Vault-sourced quote text passes the verbatim gate.",
         "quote_origin": "vault",
+        "phrase_verbatim": True,
     }
     blueprint = _blueprint_pricing_reality_check(
         _pricing_ctx(),
         {"pricing_reviews": [vault_row]},
     )
     assert blueprint.quotable_phrases == [{
-        "phrase": "Vault-sourced quote text is still handled by the legacy path.",
+        "phrase": "Vault-sourced quote text passes the verbatim gate.",
         "vendor": "Shopify",
         "urgency": 6.0,
         "role": "Finance",
+        "phrase_verbatim": True,
     }]
+
+
+def test_pricing_blueprint_drops_vault_row_missing_phrase_verbatim():
+    """Phase 2.3 4i regression: a vault-origin row without the marker
+    must drop, NOT render. Closes the policy gap where 'safe by
+    construction' isn't the same as 'enforced'."""
+    vault_row = {
+        "vendor": "Shopify",
+        "urgency": 6.0,
+        "role": "Finance",
+        "text": "Unmarked vault quote must not surface.",
+        "quote_origin": "vault",
+        # phrase_verbatim missing
+    }
+    blueprint = _blueprint_pricing_reality_check(
+        _pricing_ctx(),
+        {"pricing_reviews": [vault_row]},
+    )
+    assert blueprint.quotable_phrases == []
 
 
 # ---------------------------------------------------------------------------
@@ -423,11 +446,27 @@ def test_wrapper_routes_vault_origin_through_legacy_path():
         "role": "Director",
         "text": "Vault-curated text passes through legacy truncation.",
         "quote_origin": "vault",
+        "phrase_verbatim": True,
     }
     out = _split_and_gate_blog_quotes([row])
     assert len(out) == 1
     assert out[0]["phrase"] == "Vault-curated text passes through legacy truncation."
     assert out[0]["vendor"] == "Shopify"
+    assert out[0]["phrase_verbatim"] is True
+
+
+def test_wrapper_drops_vault_origin_without_phrase_verbatim():
+    """Phase 2.3 4i: vault rows are no longer accepted by origin alone.
+    They must carry phrase_verbatim=True (stamped by the blog vault
+    mergers post-4i). Unmarked vault rows fail closed."""
+    row = {
+        "vendor": "Shopify",
+        "urgency": 5.0,
+        "role": "Director",
+        "text": "Vault row missing the marker must not surface.",
+        "quote_origin": "vault",
+    }
+    assert _split_and_gate_blog_quotes([row]) == []
 
 
 def test_wrapper_handles_vault_phrase_field_too():
@@ -439,6 +478,7 @@ def test_wrapper_handles_vault_phrase_field_too():
         "urgency": 4.0,
         "role": "VP",
         "quote_origin": "vault",
+        "phrase_verbatim": True,
     }
     out = _split_and_gate_blog_quotes([row])
     assert len(out) == 1
@@ -453,6 +493,7 @@ def test_wrapper_combines_review_and_vault_rows():
         "urgency": 5.0,
         "role": "PM",
         "quote_origin": "vault",
+        "phrase_verbatim": True,
     }
     out = _split_and_gate_blog_quotes([review_row, vault_row])
     assert len(out) == 2
@@ -511,12 +552,16 @@ def test_blog_quote_highlights_drops_non_verbatim_review_rows():
     assert _blog_quote_highlights([row], vendors=["Shopify"]) == []
 
 
-def test_blog_quote_highlights_preserves_explicit_vault_rows():
+def test_blog_quote_highlights_preserves_verbatim_vault_rows():
+    """Phase 2.3 4i: vault rows must carry phrase_verbatim=True after
+    the blog vault mergers stamp it. Pre-4i fixtures used origin-only
+    marking; the gate now requires both."""
     row = {
         "vendor": "Shopify",
         "phrase": "Vault-curated quote text.",
         "role": "Finance",
         "quote_origin": "vault",
+        "phrase_verbatim": True,
     }
     highlights = _blog_quote_highlights([row], vendors=["Shopify"])
     assert highlights == [
@@ -527,6 +572,18 @@ def test_blog_quote_highlights_preserves_explicit_vault_rows():
             "role": "Finance",
         }
     ]
+
+
+def test_blog_quote_highlights_drops_vault_row_missing_phrase_verbatim():
+    """Phase 2.3 4i regression: vault-origin rows missing the marker
+    must not surface in customer-visible reviewer_voice section stats."""
+    row = {
+        "vendor": "Shopify",
+        "phrase": "Vault row without marker must not surface.",
+        "role": "Finance",
+        "quote_origin": "vault",
+    }
+    assert _blog_quote_highlights([row], vendors=["Shopify"]) == []
 
 
 # ---------------------------------------------------------------------------
