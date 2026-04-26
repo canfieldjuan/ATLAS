@@ -16,6 +16,7 @@ import {
 import UrgencyBadge from '../components/UrgencyBadge'
 import ArchetypeBadge from '../components/ArchetypeBadge'
 import DataTable, { type Column } from '../components/DataTable'
+import RateCardValue from '../components/RateCardValue'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import {
@@ -536,10 +537,13 @@ export default function VendorDetail() {
   //   4. Claim absent (data.claims is a healthy response with no row
   //      of this claim_type). Legacy signal.decision_maker_churn_rate
   //      renders unchanged.
-  const validationUnavailable = data?.claims === null
   const dmChurnClaim: VendorClaim | undefined = findVendorClaim(
     data?.claims,
     'decision_maker_churn_rate',
+  )
+  const priceComplaintClaim: VendorClaim | undefined = findVendorClaim(
+    data?.claims,
+    'price_complaint_rate',
   )
   const stateBackTo = typeof location.state === 'object' && location.state && 'backTo' in location.state
     ? normalizeBackTo((location.state as { backTo?: string | null }).backTo)
@@ -1192,51 +1196,28 @@ export default function VendorDetail() {
                     <dt className="text-slate-400">NPS Proxy</dt>
                     <dd className="text-white">{signal.nps_proxy?.toFixed(1) ?? '--'}</dd>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between" data-testid="price-complaint-rate-card">
                     <dt className="text-slate-400">Price Complaint Rate</dt>
                     <dd className="text-white">
-                      {signal.price_complaint_rate !== null
-                        ? `${(signal.price_complaint_rate * 100).toFixed(0)}%`
-                        : '--'}
+                      <RateCardValue
+                        claimsResponse={data?.claims}
+                        claim={priceComplaintClaim}
+                        legacyRate={signal.price_complaint_rate}
+                        testIdPrefix="price-complaint-rate"
+                        unitLabel="reviews"
+                      />
                     </dd>
                   </div>
                   <div className="flex justify-between" data-testid="dm-churn-rate-card">
                     <dt className="text-slate-400">DM Churn Rate</dt>
                     <dd className="text-white">
-                      {validationUnavailable ? (
-                        <span
-                          className="text-slate-500 italic"
-                          title="Claim validation API unavailable; rate not shown"
-                          data-testid="dm-churn-rate-validation-unavailable"
-                        >
-                          Validation unavailable
-                        </span>
-                      ) : dmChurnClaim ? (
-                        dmChurnClaim.render_allowed &&
-                        dmChurnClaim.denominator !== null &&
-                        dmChurnClaim.denominator > 0 ? (
-                          `${Math.round((dmChurnClaim.supporting_count / dmChurnClaim.denominator) * 100)}%`
-                        ) : (
-                          <span
-                            className="text-slate-500 italic"
-                            title={
-                              dmChurnClaim.suppression_reason
-                                ? `Suppressed: ${dmChurnClaim.suppression_reason}` +
-                                  (dmChurnClaim.denominator !== null
-                                    ? ` (${dmChurnClaim.supporting_count} of ${dmChurnClaim.denominator} DMs)`
-                                    : '')
-                                : 'Suppressed: missing denominator'
-                            }
-                            data-testid="dm-churn-rate-suppressed"
-                          >
-                            Insufficient evidence
-                          </span>
-                        )
-                      ) : signal.decision_maker_churn_rate !== null ? (
-                        `${(signal.decision_maker_churn_rate * 100).toFixed(0)}%`
-                      ) : (
-                        '--'
-                      )}
+                      <RateCardValue
+                        claimsResponse={data?.claims}
+                        claim={dmChurnClaim}
+                        legacyRate={signal.decision_maker_churn_rate}
+                        testIdPrefix="dm-churn-rate"
+                        unitLabel="DMs"
+                      />
                     </dd>
                   </div>
                   <div className="flex justify-between">

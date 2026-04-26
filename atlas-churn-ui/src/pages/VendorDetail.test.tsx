@@ -1295,6 +1295,152 @@ describe('VendorDetail', () => {
     expect(card).not.toHaveTextContent('Insufficient')
   })
 
+  // ---------------------------------------------------------------
+  // Patch 2 (price_complaint_rate slice): Price Complaint Rate card
+  // gated on render_allowed. Same five states as DM churn; the
+  // RateCardValue component is shared between the two cards so the
+  // tests below are the parallel coverage that pins it.
+  // ---------------------------------------------------------------
+
+  function _priceClaim(overrides: Partial<VendorClaim> = {}): VendorClaim {
+    return {
+      claim_id: 'b'.repeat(64),
+      claim_key: 'price_complaint',
+      claim_scope: 'vendor',
+      claim_type: 'price_complaint_rate',
+      claim_text: '21% of reviews contain a price complaint',
+      target_entity: 'Zendesk',
+      secondary_target: null,
+      supporting_count: 117,
+      direct_evidence_count: 0,
+      witness_count: 95,
+      contradiction_count: 0,
+      denominator: 557,
+      sample_size: 557,
+      has_grounded_evidence: false,
+      confidence: 'high',
+      evidence_posture: 'unverified',
+      render_allowed: false,
+      report_allowed: false,
+      suppression_reason: 'unverified_evidence',
+      evidence_links: [],
+      contradicting_links: [],
+      as_of_date: '2026-04-26',
+      analysis_window_days: 30,
+      schema_version: 'v1',
+      ...overrides,
+    }
+  }
+
+  function _stubProfileWithPriceRate(rate: number | null) {
+    api.fetchVendorProfile.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      churn_signal: { ..._signalWithDmChurn(0.5), price_complaint_rate: rate },
+      review_counts: { total: 12, pending_enrichment: 1, enriched: 11 },
+      high_intent_companies: [],
+      pain_distribution: [],
+    })
+  }
+
+  it('shows Insufficient evidence when the price-complaint ProductClaim is suppressed', async () => {
+    _stubProfileWithPriceRate(0.21)
+    api.fetchVendorClaims.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-26',
+      analysis_window_days: 30,
+      claims: [_priceClaim({ render_allowed: false })],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('price-complaint-rate-card')
+    expect(card).toHaveTextContent('Insufficient evidence')
+    expect(card).not.toHaveTextContent('21%')
+    const suppressed = within(card).getByTestId('price-complaint-rate-suppressed')
+    expect(suppressed).toHaveAttribute(
+      'title',
+      'Suppressed: unverified_evidence (117 of 557 reviews)',
+    )
+  })
+
+  it('renders the price-complaint rate from the ProductClaim when render_allowed is true', async () => {
+    _stubProfileWithPriceRate(0.99)
+    api.fetchVendorClaims.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-26',
+      analysis_window_days: 30,
+      claims: [
+        _priceClaim({
+          render_allowed: true,
+          report_allowed: true,
+          supporting_count: 117,
+          denominator: 557,
+          evidence_posture: 'usable',
+          suppression_reason: null,
+        }),
+      ],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('price-complaint-rate-card')
+    expect(card).toHaveTextContent('21%') // 117 / 557 = 21%
+    expect(card).not.toHaveTextContent('99%')
+  })
+
+  it('shows Validation unavailable on the price-complaint card when the claims API failed', async () => {
+    _stubProfileWithPriceRate(0.21)
+    api.fetchVendorClaims.mockRejectedValue(new Error('API 503: claims unavailable'))
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('price-complaint-rate-card')
+    expect(within(card).getByTestId('price-complaint-rate-validation-unavailable')).toHaveTextContent(
+      'Validation unavailable',
+    )
+    expect(card).not.toHaveTextContent('21%')
+  })
+
+  it('falls back to the legacy price_complaint_rate when the price claim is absent', async () => {
+    _stubProfileWithPriceRate(0.42)
+    api.fetchVendorClaims.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-26',
+      analysis_window_days: 30,
+      claims: [], // no price_complaint_rate row of any kind
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('price-complaint-rate-card')
+    expect(card).toHaveTextContent('42%')
+    expect(card).not.toHaveTextContent('Insufficient')
+  })
+
   it('preserves watchlist account review evidence context from the vendor workspace', async () => {
     const user = userEvent.setup()
 
