@@ -79,19 +79,35 @@ _WITNESS_FIELD_VENDOR_NAME = "vendor_name"
 
 def eligible_claim_types_for(witness: dict[str, Any]) -> list[ClaimType]:
     """Decide which claim_types the validator should be run against for a
-    given witness. We always test the universal frames (plain pain claim
-    + counterevidence) and conditionally test typed claims when the
-    witness's signal data could plausibly support them. Without this
-    filter the audit table fills with pain_category_mismatch rows for
-    every typed pain claim against every off-category witness.
+    given witness. The selector is structural eligibility, not semantic
+    validation: we attempt a claim_type only when the witness's tags
+    could plausibly support it. The validator still rejects bad
+    candidates -- this just stops emitting predictable rejection rows
+    that bloat the audit without surfacing a real signal.
 
-    The validator will still reject ineligible witnesses; this just keeps
-    the audit volume bounded by what the rollout sequence cares about.
+    Eligibility rules:
+
+      - pain_claim_about_vendor: always (universal frame).
+      - counterevidence_about_vendor: only when phrase_polarity ==
+        'positive'. A counterevidence claim on a negative or unclear
+        phrase is structurally impossible -- the validator would always
+        reject with polarity_not_positive. Tagless witnesses (None
+        polarity) still skip; the cannot_validate audit signal lives on
+        the pain_claim row instead, where it is not duplicated.
+      - typed pain claims: only when pain_category matches the type's
+        required set (so a UX phrase doesn't get tested as a pricing
+        claim and rejected with pain_category_mismatch).
+      - displacement (both directions): only when a competitor field
+        exists.
+      - named_account_anchor: only when reviewer_company exists.
     """
     types: list[ClaimType] = [
         ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
-        ClaimType.COUNTEREVIDENCE_ABOUT_VENDOR,
     ]
+
+    polarity = str(witness.get("phrase_polarity") or "").strip().lower()
+    if polarity == "positive":
+        types.append(ClaimType.COUNTEREVIDENCE_ABOUT_VENDOR)
 
     pain_category = (
         str(witness.get("pain_category") or "").strip().lower()
@@ -267,8 +283,27 @@ async def write_evidence_claims_for_synthesis(
         "cannot_validate": 0,
         "skipped": 0,
         "errors": 0,
+        "purged_stale": 0,
     }
     source_reviews = source_reviews or {}
+
+    # Per-artifact rewrite. The replay-key upsert preserves rows the
+    # current run still emits, but it cannot remove rows for attempts
+    # the eligibility selector no longer makes (e.g. tightening
+    # counterevidence to polarity=positive only). Without this purge,
+    # tightening eligibility leaves stale invalid rows that taint the
+    # audit. Delete first, then re-emit; idempotent and free under the
+    # partial uniqueness index.
+    purged = await pool.execute(
+        "DELETE FROM b2b_evidence_claims WHERE artifact_type = $1 AND artifact_id = $2",
+        "synthesis",
+        artifact_id,
+    )
+    # asyncpg returns 'DELETE N' as the status string; parse the count.
+    try:
+        counts["purged_stale"] = int(str(purged).split()[-1])
+    except (ValueError, IndexError):
+        counts["purged_stale"] = 0
 
     for witness in witnesses:
         target_entity = (

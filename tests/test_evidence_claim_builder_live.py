@@ -145,10 +145,13 @@ def test_synthesis_artifact_id_is_deterministic():
 
 
 def test_eligibility_includes_universal_and_filters_typed():
+    # Default _witness() is phrase_polarity='negative' -- counterevidence
+    # is structurally ineligible and must NOT be emitted (would always
+    # reject as polarity_not_positive, audit noise).
     base = _witness(review_id=uuid4(), excerpt="x", pain_category="pricing")
     types = eligible_claim_types_for(base)
     assert ClaimType.PAIN_CLAIM_ABOUT_VENDOR in types
-    assert ClaimType.COUNTEREVIDENCE_ABOUT_VENDOR in types
+    assert ClaimType.COUNTEREVIDENCE_ABOUT_VENDOR not in types  # negative polarity
     assert ClaimType.PRICING_URGENCY_CLAIM in types
     # Off-category: not present.
     assert ClaimType.SUPPORT_FAILURE_CLAIM not in types
@@ -156,6 +159,22 @@ def test_eligibility_includes_universal_and_filters_typed():
     # No competitor or reviewer_company on this witness.
     assert ClaimType.DISPLACEMENT_PROOF_TO_COMPETITOR not in types
     assert ClaimType.NAMED_ACCOUNT_ANCHOR not in types
+
+    # Positive-polarity witness DOES emit counterevidence.
+    positive = _witness(
+        review_id=uuid4(), excerpt="great", pain_category="pricing",
+        phrase_polarity="positive",
+    )
+    types = eligible_claim_types_for(positive)
+    assert ClaimType.COUNTEREVIDENCE_ABOUT_VENDOR in types
+
+    # Tagless witness (None polarity) still skips counterevidence.
+    tagless = _witness(
+        review_id=uuid4(), excerpt="x", pain_category="pricing",
+        phrase_polarity=None,
+    )
+    types = eligible_claim_types_for(tagless)
+    assert ClaimType.COUNTEREVIDENCE_ABOUT_VENDOR not in types
 
     with_competitor = _witness(
         review_id=uuid4(), excerpt="x", competitor="HubSpot"
@@ -173,18 +192,17 @@ def test_eligibility_includes_universal_and_filters_typed():
 
 @pytest.mark.asyncio
 async def test_orchestrator_writes_one_row_per_eligible_claim_type(pool, clean_artifact):
-    """Single witness with pain_category=pricing should produce 3 rows:
-    pain_claim_about_vendor, counterevidence_about_vendor,
-    pricing_urgency_claim. The first two will validate per the gates;
-    the counter will reject (polarity_not_positive)."""
+    """Negative-polarity pain witness with pain_category=pricing emits
+    pain_claim_about_vendor + pricing_urgency_claim only. Counterevidence
+    is no longer attempted because phrase_polarity != 'positive' makes it
+    structurally ineligible -- the rejection would always be
+    polarity_not_positive and is audit noise."""
     rid = uuid4()
     witness = _witness(
         review_id=rid,
         excerpt="pricing keeps creeping up at every renewal",
         pain_category="pricing",
     )
-    # Provide the source_review so the antecedent regex can scan -- no
-    # known_vendor_names because there's only one vendor in scope here.
     source_reviews = {
         str(rid): {
             "id": str(rid),
@@ -207,22 +225,98 @@ async def test_orchestrator_writes_one_row_per_eligible_claim_type(pool, clean_a
         "FROM b2b_evidence_claims WHERE artifact_id = $1 ORDER BY claim_type",
         clean_artifact,
     )
-    assert len(rows) == 3
+    assert len(rows) == 2
     by_type = {r["claim_type"]: (r["status"], r["rejection_reason"]) for r in rows}
     assert by_type["pain_claim_about_vendor"] == ("valid", None)
     assert by_type["pricing_urgency_claim"] == ("valid", None)
-    assert by_type["counterevidence_about_vendor"][0] == "invalid"
-    assert by_type["counterevidence_about_vendor"][1] == "polarity_not_positive"
+    assert "counterevidence_about_vendor" not in by_type, (
+        "negative-polarity witness must not emit a counterevidence row"
+    )
 
     assert counts["valid"] == 2
-    assert counts["invalid"] == 1
+    assert counts["invalid"] == 0
     assert counts["cannot_validate"] == 0
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_purges_stale_rows_when_eligibility_shrinks(pool, clean_artifact):
+    """Per-artifact rewrite invariant: tightening eligibility (or any
+    other change that REMOVES an attempt) must not leave orphan rows
+    behind. The replay-key upsert preserves rows the current run still
+    emits; the per-artifact purge removes rows the current run no
+    longer emits.
+
+    Simulate by manually inserting a 'stale' row under the canary
+    artifact_id with a claim_type the current eligibility selector
+    won't emit, then run the orchestrator. The stale row must be gone.
+    """
+    rid = uuid4()
+    witness = _witness(
+        review_id=rid,
+        excerpt="pricing keeps creeping up",
+        pain_category="pricing",
+    )
+    # Plant a stale row under the canary artifact_id. Use a claim_type
+    # that the orchestrator would NOT emit for this witness (e.g. a
+    # support_failure_claim on a pricing pain witness).
+    await pool.execute(
+        """
+        INSERT INTO b2b_evidence_claims (
+            artifact_type, artifact_id, vendor_name, claim_type,
+            target_entity, status, rejection_reason, salience_score,
+            grounding_status, witness_id
+        ) VALUES (
+            'synthesis', $1, 'ShadowTestVendor', 'support_failure_claim',
+            'ShadowTestVendor', 'invalid', 'pain_category_mismatch', 0,
+            'grounded', 'witness:test:stale'
+        )
+        """,
+        clean_artifact,
+    )
+    pre_count = await pool.fetchval(
+        "SELECT count(*) FROM b2b_evidence_claims WHERE artifact_id = $1",
+        clean_artifact,
+    )
+    assert pre_count == 1
+
+    counts = await write_evidence_claims_for_synthesis(
+        pool,
+        vendor_name="ShadowTestVendor",
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+        schema_version="v2",
+        witnesses=[witness],
+        source_reviews={},
+    )
+    assert counts["purged_stale"] == 1, (
+        f"orchestrator must report 1 purged row; got {counts['purged_stale']}"
+    )
+
+    rows = await pool.fetch(
+        "SELECT claim_type FROM b2b_evidence_claims WHERE artifact_id = $1",
+        clean_artifact,
+    )
+    by_type = {r["claim_type"] for r in rows}
+    assert "support_failure_claim" not in by_type, (
+        "stale row must be purged before re-emit"
+    )
+    # The current run still wrote its own rows.
+    assert "pain_claim_about_vendor" in by_type
+    assert "pricing_urgency_claim" in by_type
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_idempotent_on_replay(pool, clean_artifact):
-    """Same synthesis composite + same witnesses should produce the same
-    row set on replay. validated_at advances; row count holds."""
+    """Set-level idempotency: same synthesis composite + same witnesses
+    produces the same set of (claim_type, status, rejection_reason)
+    tuples on replay. Row count holds.
+
+    Row IDENTITY does NOT hold across replays under the purge model:
+    the per-artifact pre-write DELETE means the second run inserts
+    fresh rows. created_at and validated_at both advance, and id is
+    a new UUID. This is the right semantics for shadow capture --
+    each synthesis cycle is a fresh decision snapshot, not a
+    accreting first-seen log."""
     rid = uuid4()
     witness = _witness(
         review_id=rid,
@@ -239,30 +333,30 @@ async def test_orchestrator_idempotent_on_replay(pool, clean_artifact):
     )
     await write_evidence_claims_for_synthesis(pool, **args)
     first = await pool.fetch(
-        "SELECT claim_type, status, validated_at, created_at "
+        "SELECT claim_type, status, rejection_reason "
         "FROM b2b_evidence_claims WHERE artifact_id = $1 ORDER BY claim_type",
         clean_artifact,
     )
-    first_validated_at = {r["claim_type"]: r["validated_at"] for r in first}
-    first_created_at = {r["claim_type"]: r["created_at"] for r in first}
+    first_set = {(r["claim_type"], r["status"], r["rejection_reason"]) for r in first}
 
-    await write_evidence_claims_for_synthesis(pool, **args)
+    counts = await write_evidence_claims_for_synthesis(pool, **args)
     second = await pool.fetch(
-        "SELECT claim_type, status, validated_at, created_at "
+        "SELECT claim_type, status, rejection_reason "
         "FROM b2b_evidence_claims WHERE artifact_id = $1 ORDER BY claim_type",
         clean_artifact,
     )
+    second_set = {(r["claim_type"], r["status"], r["rejection_reason"]) for r in second}
+
     assert len(first) == len(second), (
         f"replay changed row count: {len(first)} -> {len(second)}"
     )
-    for row in second:
-        ct = row["claim_type"]
-        assert row["created_at"] == first_created_at[ct], (
-            f"created_at must be preserved on replay for {ct}"
-        )
-        assert row["validated_at"] >= first_validated_at[ct], (
-            f"validated_at must advance or hold for {ct}"
-        )
+    assert first_set == second_set, (
+        "replay must produce the same (claim_type, status, rejection_reason) set"
+    )
+    # The replay should have purged the first run's rows.
+    assert counts["purged_stale"] == len(first), (
+        f"replay should purge {len(first)} prior rows; got {counts['purged_stale']}"
+    )
 
 
 @pytest.mark.asyncio
