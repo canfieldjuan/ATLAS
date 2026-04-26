@@ -54,6 +54,7 @@ from .universal_scrape import router as universal_scrape_router
 from .pipeline_visibility import router as pipeline_visibility_router
 from .b2b_win_loss import router as b2b_win_loss_router
 from .b2b_evidence import router as b2b_evidence_router
+from .b2b_vendor_claims import router as b2b_vendor_claims_router
 
 logger = logging.getLogger("atlas.api")
 
@@ -122,3 +123,4 @@ router.include_router(universal_scrape_router)
 router.include_router(pipeline_visibility_router)
 router.include_router(b2b_win_loss_router)
 router.include_router(b2b_evidence_router)
+router.include_router(b2b_vendor_claims_router)
