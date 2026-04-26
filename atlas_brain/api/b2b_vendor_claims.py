@@ -24,7 +24,10 @@ from pydantic import BaseModel, Field
 from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..config import settings
 from ..services.b2b.product_claim import ProductClaim
-from ..services.b2b.vendor_dashboard_claims import aggregate_dm_churn_rate_claim
+from ..services.b2b.vendor_dashboard_claims import (
+    aggregate_dm_churn_rate_claim,
+    aggregate_price_complaint_rate_claim,
+)
 from ..storage.database import get_db_pool
 
 
@@ -205,6 +208,15 @@ async def get_vendor_claims(
     )
     if dm_claim is not None:
         claims.append(dm_claim)
+
+    price_claim = await aggregate_price_complaint_rate_claim(
+        pool,
+        vendor_name=vendor,
+        as_of_date=target_date,
+        analysis_window_days=window_days,
+    )
+    if price_claim is not None:
+        claims.append(price_claim)
 
     return VendorClaimsResponse(
         vendor_name=vendor,

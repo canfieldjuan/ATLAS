@@ -321,6 +321,37 @@ async def test_route_resolves_under_production_api_v1_prefix(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_clickup_returns_both_dm_churn_and_price_complaint_claims(monkeypatch):
+    """Both rate cards (DM churn + price complaint) come through the
+    same /b2b/vendor-claims endpoint. The API loops aggregators and
+    appends each non-None ProductClaim; the React side filters by
+    claim_type. ClickUp returns both claims, both UNVERIFIED in the
+    current v3-heavy dataset."""
+    pool = await _new_pool()
+    try:
+        app = _make_app(pool, monkeypatch)
+        async with _async_client(app) as client:
+            response = await client.get(
+                "/b2b/vendor-claims/ClickUp?analysis_window_days=365"
+            )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        types_present = {c["claim_type"] for c in body["claims"]}
+        assert "decision_maker_churn_rate" in types_present
+        assert "price_complaint_rate" in types_present
+        for claim_type in ("decision_maker_churn_rate", "price_complaint_rate"):
+            claim = next(c for c in body["claims"] if c["claim_type"] == claim_type)
+            # Same hero pin for both: tagless evidence -> suppression.
+            assert claim["render_allowed"] is False, (
+                f"{claim_type}: render_allowed should be False on v3 dataset"
+            )
+            assert claim["suppression_reason"] == "unverified_evidence"
+            assert claim["denominator"] is not None and claim["denominator"] > 0
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_invalid_window_returns_422(monkeypatch):
     pool = await _new_pool()
     try:

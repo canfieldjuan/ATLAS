@@ -51,6 +51,7 @@ from atlas_brain.services.b2b.product_claim import (
 )
 from atlas_brain.services.b2b.vendor_dashboard_claims import (
     aggregate_dm_churn_rate_claim,
+    aggregate_price_complaint_rate_claim,
 )
 
 
@@ -74,17 +75,20 @@ async def pool():
 @pytest.fixture(autouse=True)
 def _reset_registry_after_each_test():
     """Tests that override the registered policy must not pollute
-    later tests. Reset, then re-register the module's default at
-    teardown so subsequent module imports stay consistent."""
+    later tests. Reset, then re-register every module-default the
+    aggregator would install at import time so subsequent tests see
+    the production policies."""
     yield
     reset_policy_registry()
-    # Re-register the production default the module would install at
-    # import time. (importlib.reload is heavier than necessary here.)
     from atlas_brain.services.b2b.vendor_dashboard_claims import (
         _DM_CHURN_RATE_POLICY,
+        _PRICE_COMPLAINT_RATE_POLICY,
     )
     register_policy(
         ClaimScope.VENDOR, "decision_maker_churn_rate", _DM_CHURN_RATE_POLICY
+    )
+    register_policy(
+        ClaimScope.VENDOR, "price_complaint_rate", _PRICE_COMPLAINT_RATE_POLICY
     )
 
 
@@ -255,6 +259,141 @@ async def test_envelope_denominator_matches_eligible_review_population(pool):
     )
     if claim is None:
         pytest.skip("ClickUp has no DM data in this dataset")
+    assert claim.denominator == ground_truth, (
+        f"aggregator denominator {claim.denominator} != ground truth "
+        f"{ground_truth} -- eligibility filter set has drifted"
+    )
+
+
+# ----------------------------------------------------------------------------
+# Price complaint rate -- same vertical-slice pattern as DM churn.
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clickup_price_complaint_envelope_populated(pool):
+    """Aggregator produces a real ProductClaim envelope for ClickUp's
+    price-complaint rate. Structural checks: denominator and
+    supporting_count populated, claim_text carries the rate, claim_id
+    deterministic."""
+    claim = await aggregate_price_complaint_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is not None
+    assert claim.target_entity == "ClickUp"
+    assert claim.claim_type == "price_complaint_rate"
+    assert claim.claim_scope == ClaimScope.VENDOR
+    assert claim.denominator is not None and claim.denominator >= 1
+    assert claim.supporting_count >= 0
+    assert claim.supporting_count <= claim.denominator
+    assert "%" in claim.claim_text
+    assert claim.claim_id and len(claim.claim_id) == 64
+
+
+@pytest.mark.asyncio
+async def test_clickup_price_complaint_unverified_in_v3_dataset(pool):
+    """Same trust signal as DM churn: ClickUp's price-complaint rows
+    are 0/N grounded in the live dataset, so the contract derives
+    UNVERIFIED posture and suppresses the rate. The legacy dashboard
+    renders ~21% on this same data; the contract correctly blocks it
+    until v4 re-enrichment grounds the rows.
+
+    If this assertion ever flips to USABLE, either the underlying
+    enrichment grounded the rows OR the has_grounded_evidence
+    derivation regressed -- worth investigating before any consumer
+    trusts the change."""
+    claim = await aggregate_price_complaint_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is not None
+    assert claim.evidence_posture == EvidencePosture.UNVERIFIED
+    assert claim.render_allowed is False
+    assert claim.report_allowed is False
+    assert claim.suppression_reason == SuppressionReason.UNVERIFIED_EVIDENCE
+
+
+@pytest.mark.asyncio
+async def test_price_complaint_contradiction_count_is_zero(pool):
+    """Rate-claim contradictions stay 0 by design (see DM-churn
+    docstring). Reviews without price complaints are denominator
+    context, not refutation."""
+    claim = await aggregate_price_complaint_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is not None
+    assert claim.contradiction_count == 0
+
+
+@pytest.mark.asyncio
+async def test_price_complaint_direct_evidence_subset_of_supporting(pool):
+    claim = await aggregate_price_complaint_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is not None
+    assert claim.direct_evidence_count <= claim.supporting_count
+    assert claim.supporting_count <= (claim.denominator or 0)
+
+
+@pytest.mark.asyncio
+async def test_price_complaint_unknown_vendor_returns_none(pool):
+    claim = await aggregate_price_complaint_rate_claim(
+        pool,
+        vendor_name="NonexistentVendor_xyz_456",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is None
+
+
+@pytest.mark.asyncio
+async def test_price_complaint_denominator_matches_eligible_review_population(pool):
+    """The aggregator's denominator must match the eligibility-filtered
+    review count for the vendor. Catches drift if the filter set
+    diverges from _eligible_review_filters()."""
+    from atlas_brain.autonomous.tasks._b2b_shared import (
+        _eligible_review_filters,
+        _intelligence_source_allowlist,
+    )
+
+    sources = _intelligence_source_allowlist()
+    eligible = _eligible_review_filters(
+        window_param=2,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
+    ground_truth = await pool.fetchval(
+        f"""
+        SELECT count(*)
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name = $1
+          AND {eligible}
+        """,
+        "ClickUp",
+        3650,
+        sources,
+    )
+    claim = await aggregate_price_complaint_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    if claim is None:
+        pytest.skip("ClickUp has no eligible reviews in this dataset")
     assert claim.denominator == ground_truth, (
         f"aggregator denominator {claim.denominator} != ground truth "
         f"{ground_truth} -- eligibility filter set has drifted"
