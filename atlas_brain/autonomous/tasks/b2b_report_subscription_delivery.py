@@ -536,8 +536,9 @@ def _shorten(value: str, limit: int = 180) -> str:
 
 def _evidence_highlight_from_item(item: Any) -> str | None:
     if not isinstance(item, dict):
-        text = str(item or "").strip()
-        return _shorten(text) if text else None
+        return None
+    if item.get("phrase_verbatim") is not True:
+        return None
 
     excerpt = str(item.get("excerpt_text") or item.get("quote") or item.get("text") or "").strip()
     if not excerpt:
@@ -579,6 +580,8 @@ def _extract_evidence_highlights(intelligence_data: dict[str, Any], *, limit: in
             highlights.append(line)
             if len(highlights) >= limit:
                 return highlights
+        if highlights:
+            return highlights
 
     values = intelligence_data.get("customer_pain_quotes")
     if isinstance(values, list):
@@ -590,6 +593,8 @@ def _extract_evidence_highlights(intelligence_data: dict[str, Any], *, limit: in
             highlights.append(line)
             if len(highlights) >= limit:
                 return highlights
+        if highlights:
+            return highlights
     return []
 
 

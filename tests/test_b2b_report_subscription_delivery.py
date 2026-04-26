@@ -173,6 +173,70 @@ def test_delivery_eligibility_reason_blocks_competitive_quality_and_reviews(monk
     assert review_reason == "unresolved_issue_count=2 exceeds max_open_review_count=0"
 
 
+def test_evidence_highlight_requires_verbatim_dict():
+    assert mod._evidence_highlight_from_item("plain string quote") is None
+    assert mod._evidence_highlight_from_item({"quote": "Unmarked quote"}) is None
+    assert mod._evidence_highlight_from_item({
+        "quote": "Truthy marker quote",
+        "phrase_verbatim": "true",
+    }) is None
+
+
+def test_evidence_highlight_renders_marked_quote_with_metadata():
+    line = mod._evidence_highlight_from_item({
+        "quote": "Pricing jumped 40 percent at renewal.",
+        "phrase_verbatim": True,
+        "reviewer_company": "Acme",
+        "reviewer_title": "VP Ops",
+        "competitor": "Freshdesk",
+        "pain_category": "pricing",
+        "time_anchor": "Q2 renewal",
+    })
+
+    assert line == (
+        "Pricing jumped 40 percent at renewal. "
+        "(Acme; VP Ops; vs Freshdesk; pain: pricing; Q2 renewal)"
+    )
+
+
+def test_extract_evidence_highlights_filters_before_limit():
+    highlights = mod._extract_evidence_highlights(
+        {
+            "witness_highlights": [
+                "plain string",
+                {"quote": "unmarked"},
+                {"quote": "false marker", "phrase_verbatim": False},
+                {"quote": "first marked", "phrase_verbatim": True},
+                {"quote": "second marked", "phrase_verbatim": True},
+            ],
+        },
+        limit=2,
+    )
+
+    assert highlights == ["first marked", "second marked"]
+
+
+def test_extract_evidence_highlights_returns_partial_verbatim_bucket():
+    highlights = mod._extract_evidence_highlights({
+        "witness_highlights": [
+            {"quote": "only marked witness", "phrase_verbatim": True},
+        ],
+    })
+
+    assert highlights == ["only marked witness"]
+
+
+def test_extract_evidence_highlights_falls_back_when_witnesses_have_no_verbatim():
+    highlights = mod._extract_evidence_highlights({
+        "witness_highlights": [{"quote": "unmarked witness"}],
+        "customer_pain_quotes": [
+            {"quote": "marked customer pain", "phrase_verbatim": True},
+        ],
+    })
+
+    assert highlights == ["marked customer pain"]
+
+
 def test_artifact_ready_accepts_published_and_sales_ready():
     assert mod._artifact_ready(
         {"report_type": "vendor_scorecard", "status": "published", "quality_status": None},
