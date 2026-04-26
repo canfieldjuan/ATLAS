@@ -19289,6 +19289,8 @@ def _build_deterministic_battle_cards(
             if len(pain_quotes) >= 5:
                 break
             if isinstance(q, dict):
+                if q.get("phrase_verbatim") is not True:
+                    continue
                 quote_text = str(q.get("quote") or "")
                 urgency = float(q.get("urgency") or 0)
                 if not _quote_has_pain_signal(
@@ -19316,17 +19318,18 @@ def _build_deterministic_battle_cards(
                 pain_quotes.append({
                     "quote": quote_text,
                     "urgency": urgency,
-                    "source_site": q.get("source_site", ""),
+                    "source_site": q.get("source_site") or q.get("source") or "",
                     "company": q.get("company", ""),
                     "title": q.get("title", ""),
                     "company_size": q.get("company_size", ""),
                     "industry": q.get("industry", ""),
                     "rating": q.get("rating"),
                     "rating_max": q.get("rating_max"),
+                    "review_id": q.get("review_id"),
+                    "field": q.get("field"),
+                    "phrase_verbatim": True,
+                    "quote_origin": str(q.get("quote_origin") or "review").strip() or "review",
                 })
-            elif isinstance(q, str):
-                if _quote_has_pain_signal(q):
-                    pain_quotes.append({"quote": q, "urgency": 0})
 
         # -- Section 3: Competitor Differentiators --
         differentiators: list[dict[str, Any]] = []

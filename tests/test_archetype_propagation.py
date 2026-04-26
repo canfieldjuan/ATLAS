@@ -939,11 +939,11 @@ class TestBattleCardQuoteDedupe:
 
         quotes = [
             {"quote": "Pricing keeps rising and support is slow.", "urgency": 8, "review_id": "r1",
-             "company": "X", "title": "VP"},
+             "company": "X", "title": "VP", "phrase_verbatim": True, "quote_origin": "review"},
             {"quote": "Pricing keeps rising and support is slow again.", "urgency": 7, "review_id": "r1",
-             "company": "X", "title": "VP"},
+             "company": "X", "title": "VP", "phrase_verbatim": True, "quote_origin": "review"},
             {"quote": "Bugs and support delays are hurting rollout.", "urgency": 6, "review_id": "r2",
-             "company": "Y", "title": "CTO"},
+             "company": "Y", "title": "CTO", "phrase_verbatim": True, "quote_origin": "review"},
         ]
         cards = _build_deterministic_battle_cards(
             [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
@@ -967,11 +967,11 @@ class TestBattleCardQuoteDedupe:
 
         quotes = [
             {"quote": "Pricing pressure is forcing extra approval cycles.", "urgency": 8, "review_id": "r1",
-             "company": "Acme Corp", "title": "Head of Marketing"},
+             "company": "Acme Corp", "title": "Head of Marketing", "phrase_verbatim": True, "quote_origin": "review"},
             {"quote": "Pricing pressure is still an issue for our team.", "urgency": 7, "review_id": "r2",
-             "company": "Acme Corp", "title": "Head of Marketing"},
+             "company": "Acme Corp", "title": "Head of Marketing", "phrase_verbatim": True, "quote_origin": "review"},
             {"quote": "Support remains slow and onboarding is clunky.", "urgency": 6, "review_id": "r3",
-             "company": "Other Inc", "title": "CTO"},
+             "company": "Other Inc", "title": "CTO", "phrase_verbatim": True, "quote_origin": "review"},
         ]
         cards = _build_deterministic_battle_cards(
             [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
@@ -987,6 +987,60 @@ class TestBattleCardQuoteDedupe:
         assert len(cards[0]["customer_pain_quotes"]) == 2
         assert cards[0]["customer_pain_quotes"][0]["quote"] == "Pricing pressure is forcing extra approval cycles."
         assert cards[0]["customer_pain_quotes"][1]["quote"] == "Support remains slow and onboarding is clunky."
+
+    def test_quote_grade_metadata_preserved_for_delivery_gate(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            _build_deterministic_battle_cards,
+        )
+
+        quotes = [
+            {
+                "quote": "Pricing keeps rising and support is slow.",
+                "urgency": 8,
+                "review_id": "r1",
+                "source": "g2",
+                "field": "pricing_phrases",
+                "company": "X",
+                "title": "VP",
+                "phrase_verbatim": True,
+                "quote_origin": "review",
+            },
+        ]
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={"V": quotes}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        quote = cards[0]["customer_pain_quotes"][0]
+        assert quote["phrase_verbatim"] is True
+        assert quote["quote_origin"] == "review"
+        assert quote["review_id"] == "r1"
+        assert quote["source_site"] == "g2"
+        assert quote["field"] == "pricing_phrases"
+
+    def test_unmarked_and_string_quotes_do_not_surface(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            _build_deterministic_battle_cards,
+        )
+
+        quotes = [
+            {"quote": "Pricing keeps rising and support is slow.", "urgency": 8, "review_id": "r1"},
+            "Support remains slow and onboarding is clunky.",
+        ]
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={"V": quotes}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert cards[0]["customer_pain_quotes"] == []
 
 
 class TestBattleCardSentimentDirection:
