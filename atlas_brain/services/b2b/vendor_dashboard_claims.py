@@ -84,8 +84,15 @@ WITH dm_rows AS (
         -- Direct evidence test for THIS row: does the row carry at
         -- least one phrase tagged as grounded? Stricter than just
         -- "v4 existence" because v4 rows can still have all phrases
-        -- ungrounded. Tighter direct-evidence definition aligns with
-        -- the contract's "validated witness lineage" requirement.
+        -- ungrounded. v2 of this check (Patch 3+) joins to
+        -- b2b_evidence_claims (Phase 9 shadow table) so direct
+        -- evidence requires that the GROUNDED PHRASE specifically
+        -- supports a churn-relevant claim_type for this vendor, not
+        -- just that the row has any grounded phrase. The current row-
+        -- level grounding test is a v1 approximation that overcounts
+        -- when a row has grounded phrases unrelated to DM churn (e.g.
+        -- a positive UX phrase grounding next to a v3-tagged churn
+        -- signal). Replace once Phase 9 capture is steady-state.
         EXISTS (
             SELECT 1
             FROM jsonb_array_elements(

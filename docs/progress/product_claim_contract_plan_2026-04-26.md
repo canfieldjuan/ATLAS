@@ -343,6 +343,23 @@ Workspace -> Evidence UI -> Opportunities -> Challenger -> Alerts).
    see `report_allowed=false` instead of needing to re-implement the
    generic-pain check.
 
+6. **Claim-level directness vs row-level grounding.** Patch 2a's
+   `direct_evidence_count` for the DM-churn rate is "the row has at
+   least one grounded phrase," which is stricter than "v4 row
+   exists" but still NOT proof that the grounded phrase supports
+   the DM-churn claim specifically. A v4 row with an ungrounded
+   churn signal but a grounded UX phrase would still count as
+   direct evidence today.
+   Recommend: Patch 3+ replaces the row-level check with a join to
+   `b2b_evidence_claims` (Phase 9 shadow table). Direct evidence
+   then requires `status='valid'` on a churn-relevant claim_type
+   (`pain_claim_about_vendor` with pain_category in the churn /
+   timing bucket, or a future dedicated `churn_intent_claim`)
+   tied to the same review row. Blocked on Phase 9 shadow capture
+   reaching steady state -- joining today against an empty
+   `b2b_evidence_claims` would collapse `direct_evidence_count`
+   to 0 for every vendor.
+
 ## Patch sequence
 
 Operator's order (tracked here for the implementation log):
