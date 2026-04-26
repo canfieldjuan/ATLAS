@@ -19,25 +19,50 @@ renderable. Fix it there.
 ## Decision
 
 Introduce a single shared envelope, `ProductClaim`, that every UI card
-and every report section consumes. The envelope carries the fields the
-operator listed in the framing change, plus the gate fields that
-distinguish "render in UI detail view" from "publish in customer-facing
-report":
+and every report section consumes. Audit-driven contract design:
+
+  - The caller provides OBJECTIVE FACTS only (counts, witness_count,
+    contradiction_count, denominator, evidence_links, claim_key,
+    has_grounded_evidence). The builder DERIVES posture, confidence,
+    and the render / report gates from those facts via a single
+    ClaimGatePolicy. The caller never sets posture / confidence /
+    gate fields; that is the only way a report can be guaranteed
+    inheriting the UI's gating.
+
+  - `claim_id` includes a required `claim_key` dimension so two
+    claims of the same `(scope, type, target)` can coexist (e.g.
+    weakness on pricing AND weakness on support for the same vendor;
+    or active_evaluation of Asana vs Pipedrive on the same account).
+
+  - Per-`(claim_scope, claim_type)` policies live in a registry. A
+    claim type that needs stricter thresholds (e.g.
+    `decision_maker_churn_rate` requires `is_rate_claim=True` plus a
+    higher minimum denominator) registers its own `ClaimGatePolicy`
+    without changing global defaults.
+
+  - `ProductClaim.__post_init__` re-derives posture, confidence, and
+    gates from the stored fields and asserts equality. Direct
+    dataclass construction with hand-set gate fields is rejected.
+    `build_product_claim()` is the only safe construction path.
+
+The envelope shape:
 
 ```
-claim_id, claim_type, claim_scope, claim_text, target_entity,
+claim_id, claim_key, claim_type, claim_scope, claim_text,
+target_entity, secondary_target,
 supporting_count, direct_evidence_count, witness_count,
 contradiction_count, denominator, sample_size,
-confidence, evidence_posture,
-render_allowed, report_allowed, suppression_reason,
+has_grounded_evidence,           # objective: was the evidence grounded?
+confidence, evidence_posture,    # DERIVED, not caller-set
+render_allowed, report_allowed, suppression_reason,  # DERIVED
 evidence_links, contradicting_links,
-as_of_date, analysis_window_days, schema_version
+as_of_date, analysis_window_days,
+policy, schema_version
 ```
 
 UI consumers read `render_allowed`. Report consumers read
-`report_allowed`, which is strictly tighter. The two gates are derived
-deterministically from the underlying counts + posture, NOT set
-independently per consumer -- so a report can never accidentally
+`report_allowed`. The two gates are derived deterministically from
+the same counts + posture + policy, so a report can never accidentally
 publish a claim the UI suppressed.
 
 ## Codebase validation
@@ -317,15 +342,26 @@ No report-side changes until step 6.
 ## Acceptance criteria for Patch 1
 
 - [x] Envelope dataclass with all fields the operator named, plus
-      `claim_scope` discriminator and the gate helpers.
+      `claim_scope`, `claim_key`, `has_grounded_evidence`, and the
+      stored `policy` for __post_init__ re-derivation.
 - [x] Enums for `ClaimScope`, `EvidencePosture`, `ConfidenceLabel`,
       `SuppressionReason` (closed sets, no free-form strings).
-- [x] `decide_render_gates()` pure function that derives
-      `render_allowed`, `report_allowed`, `suppression_reason` from
-      the envelope inputs. No I/O.
-- [x] Tests pinning gate semantics for every (posture, confidence)
-      combination so a future patch can't loosen the report gate by
-      accident.
+- [x] `derive_evidence_posture()` and `derive_confidence()` pure
+      functions; the caller cannot bypass them.
+- [x] `decide_render_gates()` pure function that takes a
+      `ClaimGatePolicy` for per-claim threshold tuning.
+- [x] `compute_claim_id()` requires `claim_key` and rejects empty
+      values so two claims of the same (scope, type, target) cannot
+      collide.
+- [x] `ProductClaim.__post_init__` re-derives posture / confidence /
+      gates and rejects direct construction with hand-set fields.
+- [x] `ClaimGatePolicy` + `register_policy()` / `get_policy()` /
+      `reset_policy_registry()` registry; explicit policy argument
+      to `build_product_claim()` overrides the registry.
+- [x] Tests pin: every (posture, confidence) combination, every
+      derivation rule, claim_id disambiguation via claim_key,
+      __post_init__ rejection of bad construction, registry
+      override, rate-claim denominator gating.
 
 Out of scope for Patch 1:
 
