@@ -97,6 +97,31 @@ def _async_client(app: FastAPI) -> httpx.AsyncClient:
     )
 
 
+def _make_mounted_app(pool: asyncpg.Pool, monkeypatch) -> FastAPI:
+    """Build a FastAPI app that mounts the aggregate /api router under
+    /api/v1 exactly like atlas_brain/main.py does in production.
+
+    The other helper (_make_app) mounts the vendor-claims router
+    directly at /b2b/vendor-claims, which validates router-level
+    behavior but misses two production drift cases:
+      1. The router is no longer registered in api/__init__.py.
+      2. The aggregate /api/v1 prefix moves or changes.
+    The mounted-path test below covers both."""
+
+    def _live_pool_stub():
+        return pool
+
+    monkeypatch.setattr(api_module, "_pool_or_503", _live_pool_stub)
+    monkeypatch.setattr(api_module, "get_db_pool", _live_pool_stub)
+
+    from atlas_brain.api import router as api_router
+
+    app = FastAPI()
+    app.include_router(api_router, prefix="/api/v1")
+    app.dependency_overrides[require_auth] = _auth_user
+    return app
+
+
 # ----------------------------------------------------------------------------
 # Auth.
 # ----------------------------------------------------------------------------
@@ -260,6 +285,39 @@ async def test_response_preserves_every_product_claim_field(monkeypatch):
 # ----------------------------------------------------------------------------
 # Window param validation.
 # ----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_route_resolves_under_production_api_v1_prefix(monkeypatch):
+    """The frontend will hit /api/v1/b2b/vendor-claims/{vendor_name}
+    because main.py mounts the aggregate api_router with prefix
+    '/api/v1'. The other tests mount the vendor-claims router
+    directly, which catches router-level regressions but not the
+    case where the registration in api/__init__.py is removed or
+    the aggregate prefix moves. This test mirrors main.py's mount
+    path exactly so production drift gets caught here."""
+    pool = await _new_pool()
+    try:
+        app = _make_mounted_app(pool, monkeypatch)
+        async with _async_client(app) as client:
+            # Hitting the production-effective path.
+            mounted = await client.get(
+                "/api/v1/b2b/vendor-claims/ClickUp?analysis_window_days=365"
+            )
+            # Same path WITHOUT the prefix should NOT resolve, so the
+            # test pins both directions of the wiring.
+            unmounted = await client.get(
+                "/b2b/vendor-claims/ClickUp?analysis_window_days=365"
+            )
+        assert mounted.status_code == 200, mounted.text
+        body = mounted.json()
+        assert body["vendor_name"] == "ClickUp"
+        assert body["claims"], "expected at least one claim for ClickUp"
+        assert unmounted.status_code == 404, (
+            "router must NOT resolve at the unprefixed path under main.py's mount"
+        )
+    finally:
+        await pool.close()
 
 
 @pytest.mark.asyncio
