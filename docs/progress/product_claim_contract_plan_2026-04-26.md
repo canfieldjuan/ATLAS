@@ -360,6 +360,58 @@ Workspace -> Evidence UI -> Opportunities -> Challenger -> Alerts).
    `b2b_evidence_claims` would collapse `direct_evidence_count`
    to 0 for every vendor.
 
+   Implementation status: Patch 2d added the join path behind
+   `ClaimGatePolicy.use_claim_lineage_for_direct_evidence` with the
+   default set to false. The rate aggregators can now read
+   `b2b_evidence_claims` by `(vendor, target, source_review_id,
+   claim_type, pain_category)` once the Phase 9 soak is clean; until
+   the policy flag flips, production behavior remains the row-level
+   grounding approximation above.
+
+   Canary 2026-04-26 (`scripts/canary_lineage_direct_evidence.py`):
+   ran the comparison for ClickUp, Pipedrive, Monday.com against the
+   currently-seeded `b2b_evidence_claims` rows (window=30). All three
+   vendors: row-level and lineage produce IDENTICAL gate fields for
+   both DM-churn and price-complaint claims. Both paths suppress at
+   floor because the seeded valid claims (mostly `named_account_anchor`
+   / `pain_claim_about_vendor` / `counterevidence_about_vendor`) do
+   NOT intersect the churning-DM or price-complaint source reviews
+   surfaced by the rate aggregators -- so the lineage join yields
+   `direct_evidence_count=0` just like row-level grounding does.
+
+   Operational implication: the flag is mechanically safe to flip
+   in production for these vendors today (no claim newly escalates
+   to renderable, no claim newly suppresses). Lineage only starts
+   measurably tightening the gate once Phase 9 capture has broader
+   coverage that intersects the rate aggregators' source review
+   sets. Re-run the canary after the Phase 9 Monday-batch soak
+   completes; the flag-flip rollout decision should be informed by
+   that second run, not this one.
+
+   Important asymmetry in Patch 2d:
+   - `price_complaint_rate` uses claim types
+     (`pain_claim_about_vendor`, `pricing_urgency_claim`) AND
+     `pain_categories=("pricing",)`. A grounded UX/support phrase on
+     the same review cannot make a price complaint look directly
+     evidenced.
+   - `decision_maker_churn_rate` uses claim types
+     (`pain_claim_about_vendor`, `timing_pressure_claim`) with no
+     `pain_categories` filter. This still allows a valid non-churn
+     pain claim on a churning-DM review (for example a grounded UX
+     phrase) to count as direct evidence for the churn-rate card.
+
+   Follow-up options:
+   - v2.5 cheap tightening: add a DM-churn pain-category allowlist
+     such as `("pricing", "timing", "renewal", "deadline",
+     "support", "contract_lock_in")` to reduce the broad
+     `pain_claim_about_vendor` match. This is better than row-level
+     grounding but still heuristic.
+   - v3 clean fix: add a dedicated `churn_intent_claim` ClaimType to
+     Phase 9, emit it only from witnesses that directly support
+     intent-to-leave / switching / renewal-risk semantics, then shrink
+     `_DM_CHURN_LINEAGE_CLAIM_TYPES` to that dedicated type. This is
+     the correct long-term lineage contract.
+
 ## Patch sequence
 
 Operator's order (tracked here for the implementation log):
