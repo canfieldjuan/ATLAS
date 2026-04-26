@@ -662,6 +662,85 @@ async def test_vendor_snapshot_from_pools_uses_shared_scorecard_metrics(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_vendor_snapshot_from_pools_gates_vault_quote_highlights_on_verbatim(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_fetch_vendor_vault_row",
+        AsyncMock(
+            return_value=(
+                {
+                    "metric_snapshot": {
+                        "total_reviews": 40,
+                        "churn_density": 20.0,
+                        "avg_urgency": 6.5,
+                        "positive_review_pct": 45.0,
+                        "recommend_ratio": 12.5,
+                    },
+                    "weakness_evidence": [
+                        {
+                            "evidence_type": "pain_category",
+                            "label": "pricing",
+                            "mention_count_total": 3,
+                            "best_quote": "unmarked vault quote",
+                        },
+                        {
+                            "evidence_type": "pain_category",
+                            "label": "support",
+                            "mention_count_total": 2,
+                            "best_quote": "false marker vault quote",
+                            "phrase_verbatim": False,
+                        },
+                        {
+                            "evidence_type": "feature_gap",
+                            "label": "automation",
+                            "mention_count_total": 4,
+                            "best_quote": "marked feature quote",
+                            "phrase_verbatim": True,
+                        },
+                        {
+                            "evidence_type": "pain_category",
+                            "label": "ux",
+                            "mention_count_total": 1,
+                            "best_quote": "marked pain quote",
+                            "phrase_verbatim": True,
+                        },
+                    ],
+                    "company_signals": [{"company_name": "Acme", "urgency_score": 8.0}],
+                },
+                30,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_read_vendor_scorecard_metrics",
+        AsyncMock(
+            return_value={
+                "total_reviews": 40,
+                "churn_intent_count": 8,
+                "avg_urgency_score": 6.5,
+                "avg_rating_normalized": 0.81,
+            },
+        ),
+    )
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_product_profiles": {
+                "commonly_compared_to": [],
+                "product_category": "Support",
+            },
+        },
+    )
+
+    snapshot = await mod._vendor_snapshot_from_pools(pool, "Zendesk", 90)
+
+    assert snapshot is not None
+    assert snapshot["quote_highlights"] == ["marked feature quote", "marked pain quote"]
+    assert snapshot["top_pain_categories"][0] == {"category": "pricing", "count": 3}
+    assert snapshot["top_feature_gaps"] == [{"feature": "automation", "count": 4}]
+
+
+@pytest.mark.asyncio
 async def test_generate_vendor_comparison_report_dispatches_report_generated_webhook(monkeypatch):
     primary_snapshot = {
         "vendor_name": "Zendesk",
@@ -1128,18 +1207,39 @@ async def test_fetch_churning_companies_reads_vendor_mentions():
 
 @pytest.mark.asyncio
 async def test_fetch_quotable_evidence_reads_vendor_mentions():
+    review_id = uuid4()
+    quote_text = "Pricing got out of hand"
+    enrichment = {
+        "enrichment_schema_version": 4,
+        "quotable_phrases": [quote_text],
+        "phrase_metadata": [{
+            "field": "quotable_phrases",
+            "index": 0,
+            "text": quote_text,
+            "subject": "subject_vendor",
+            "polarity": "negative",
+            "role": "primary_driver",
+            "verbatim": True,
+        }],
+    }
     pool = FakePool(
         fetch_map={
-            "WITH review_best AS": [
+            "SELECT DISTINCT ON (vm.vendor_name, r.id)": [
                 {
                     "vendor_name": "Salesforce",
-                    "quotes": json.dumps([
-                        {
-                            "quote": "Pricing got out of hand",
-                            "urgency": 7.1,
-                            "review_id": str(uuid4()),
-                        },
-                    ]),
+                    "review_id": review_id,
+                    "enrichment_raw": json.dumps(enrichment),
+                    "urgency": 7.1,
+                    "source": "g2",
+                    "reviewed_at": None,
+                    "rating": 2.0,
+                    "rating_max": 5.0,
+                    "reviewer_company": "Acme",
+                    "reviewer_title": "VP Ops",
+                    "company_size_raw": "Mid-Market",
+                    "industry": "Software",
+                    "churn_signals": {"intent_to_leave": True},
+                    "salience_flags": ["pricing"],
                 },
             ],
         },
@@ -1147,11 +1247,13 @@ async def test_fetch_quotable_evidence_reads_vendor_mentions():
 
     rows = await shared_mod._fetch_quotable_evidence(pool, 90, min_urgency=4.5)
 
-    fetch_call = next(call for call in pool.calls if "WITH review_best AS" in call[0])
+    fetch_call = next(call for call in pool.calls if "SELECT DISTINCT ON (vm.vendor_name, r.id)" in call[0])
     assert "JOIN b2b_review_vendor_mentions vm" in fetch_call[0]
-    assert "PARTITION BY vendor_name" in fetch_call[0]
+    assert "r.enrichment AS enrichment_raw" in fetch_call[0]
     assert rows[0]["vendor"] == "Salesforce"
-    assert rows[0]["quotes"][0]["quote"] == "Pricing got out of hand"
+    assert rows[0]["quotes"][0]["quote"] == quote_text
+    assert rows[0]["quotes"][0]["phrase_verbatim"] is True
+    assert rows[0]["quotes"][0]["review_id"] == str(review_id)
 
 
 @pytest.mark.asyncio
@@ -3162,3 +3264,77 @@ async def test_company_snapshot_uses_review_context_for_company_specific_fields(
     ]
     assert snapshot["timeline_signals"][0]["evaluation_deadline"] == "2026-04-15"
     assert snapshot["timeline_signals"][0]["title"] == "VP Operations"
+
+
+@pytest.mark.asyncio
+async def test_company_snapshot_gates_vault_quote_highlights_on_verbatim(monkeypatch):
+    review_id = uuid4()
+    monkeypatch.setattr(
+        mod,
+        "_fetch_company_signal_review_context",
+        AsyncMock(
+            return_value={
+                str(review_id): {
+                    "product_category": "Support",
+                    "competitors_json": [],
+                    "quotable_phrases": [],
+                    "feature_gaps": [],
+                },
+            },
+        ),
+    )
+    vault_reader = AsyncMock(
+        return_value=[
+            {
+                "vendor_name": "Zendesk",
+                "vault": {
+                    "weakness_evidence": [
+                        {
+                            "evidence_type": "pain_category",
+                            "label": "pricing",
+                            "best_quote": "unmarked vault quote",
+                        },
+                        {
+                            "evidence_type": "feature_gap",
+                            "label": "reporting",
+                            "best_quote": "false marker vault quote",
+                            "phrase_verbatim": False,
+                        },
+                        {
+                            "evidence_type": "pain_category",
+                            "label": "support",
+                            "best_quote": "marked vault quote",
+                            "phrase_verbatim": True,
+                        },
+                    ],
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(mod, "_read_vendor_intelligence_records_latest", vault_reader)
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_company_signals": [
+                {
+                    "vendor_name": "Zendesk",
+                    "urgency_score": 8.0,
+                    "pain_category": "pricing",
+                    "buyer_role": "VP Ops",
+                    "decision_maker": True,
+                    "seat_count": 220,
+                    "contract_end": None,
+                    "buying_stage": "evaluation",
+                    "source": "g2",
+                    "review_id": review_id,
+                },
+            ],
+            "FROM b2b_product_profiles": [],
+        },
+    )
+
+    snapshot = await mod._company_snapshot_from_signals(pool, "Acme Corp", 30)
+
+    vault_reader.assert_awaited_once_with(pool, ["Zendesk"])
+    assert snapshot is not None
+    assert snapshot["quote_highlights"] == ["marked vault quote"]
+    assert snapshot["top_feature_gaps"] == [{"feature": "reporting", "count": 1}]

@@ -4535,7 +4535,12 @@ async def _vendor_snapshot_from_pools(
                 category = _normalize_report_pain_category(cat)
                 pain_counts[category] = pain_counts.get(category, 0) + count
         best_quote = ev.get("best_quote")
-        if best_quote and best_quote not in quote_highlights and len(quote_highlights) < 5:
+        if (
+            ev.get("phrase_verbatim") is True
+            and best_quote
+            and best_quote not in quote_highlights
+            and len(quote_highlights) < 5
+        ):
             quote_highlights.append(str(best_quote))
 
     # Company examples from vault company_signals
@@ -4998,7 +5003,12 @@ async def _company_snapshot_from_signals(
                     if label:
                         gaps[label] = gaps.get(label, 0) + int(ev.get("mention_count_total", 1))
                 bq = ev.get("best_quote") if len(quote_highlights) < 5 else None
-                if bq and bq not in quote_highlights and len(quote_highlights) < 5:
+                if (
+                    ev.get("phrase_verbatim") is True
+                    and bq
+                    and bq not in quote_highlights
+                    and len(quote_highlights) < 5
+                ):
                     quote_highlights.append(str(bq))
 
     return {
