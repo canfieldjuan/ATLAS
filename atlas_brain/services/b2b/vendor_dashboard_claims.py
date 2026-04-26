@@ -234,13 +234,37 @@ def _build_price_complaint_query() -> str:
     legacy churn-signal aggregator. Vendor name is $1, window days is
     $2, source allowlist is $3.
 
-    Numerator semantic: a 'price complaint' is a row where the
-    enrichment tagged pain_category='pricing' OR set the explicit
-    contract_context.price_complaint flag. The legacy
-    _fetch_price_complaint_rates uses max(pricing_rate,
-    explicit_complaint_rate); we count the UNION exactly once via
-    SQL OR, which is closer to the underlying claim ('this review
-    contains a price complaint') than an overlapping max."""
+    INTENTIONAL METRIC CORRECTION vs the legacy aggregator.
+
+    Legacy _fetch_price_complaint_rates in
+    atlas_brain/autonomous/tasks/_b2b_shared.py uses
+        max(pricing_count / total, price_complaint_count / total)
+    which is the larger of two overlapping rates. A row counted in
+    both the pricing-pain set and the explicit-complaint set
+    contributes once to each numerator and the max() picks one,
+    losing the other dimension; rows that are unique to one set
+    behave normally. The product claim ('this review contains a
+    price complaint') is a single boolean, not two rates, so the
+    correct metric is a UNION COUNT.
+
+    This aggregator counts the UNION exactly once via SQL OR:
+        is_price_complaint = pain_category='pricing'
+                             OR contract_context.price_complaint=true
+        supporting_count = count(rows where is_price_complaint=true)
+        denominator      = count(eligible review rows for vendor)
+        rate             = supporting_count / denominator
+
+    Differences from legacy can flow either way:
+      - Where the two legacy rates overlap, the UNION is smaller
+        (less double-counting).
+      - Where one set has rows the other doesn't, the UNION is
+        larger than max() of either rate.
+
+    Treat this as a deliberate correction at consumer migration
+    time, not a silent drift. The downstream dashboard rate may
+    shift slightly when a vendor's row is enriched with mixed
+    signals; the contract metric is the one that should be
+    trusted."""
     eligible = _eligible_review_filters(
         window_param=2,
         source_param=3,

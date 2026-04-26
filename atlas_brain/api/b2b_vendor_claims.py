@@ -186,9 +186,10 @@ async def get_vendor_claims(
     Both come from the same ProductClaim, so the report can never
     publish a claim the UI suppressed.
 
-    Patch 2b ships only one claim_type (decision_maker_churn_rate);
-    subsequent patches extend the endpoint with price_complaint_rate,
-    weakness_theme, strength_theme, etc.
+    Currently emits decision_maker_churn_rate and price_complaint_rate.
+    Subsequent patches extend the same endpoint with weakness_theme,
+    strength_theme, recommend_ratio, and the remaining VENDOR-scope
+    claim_types -- the response shape stays.
     """
     vendor = (vendor_name or "").strip()
     if not vendor:

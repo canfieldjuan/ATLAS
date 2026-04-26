@@ -46,11 +46,17 @@ interface VendorData {
   history: VendorHistoryResponse
   comparison: VendorPeriodComparisonResponse
   /**
-   * Phase 10 Patch 2c. ProductClaims for the vendor. Currently
-   * carries only the decision_maker_churn_rate claim; subsequent
-   * patches add the remaining VENDOR-scope claim types. null when
-   * the API request failed, in which case the UI falls back to the
-   * legacy signal values.
+   * Phase 10 Patch 2. ProductClaims for the vendor. Currently
+   * carries decision_maker_churn_rate and price_complaint_rate;
+   * subsequent patches add the remaining VENDOR-scope claim types
+   * to the same response.
+   *
+   * null when the API request failed. The UI does NOT fall back to
+   * legacy signal values in that case -- RateCardValue renders
+   * 'Validation unavailable' instead, because we cannot prove the
+   * legacy value is safe when the contract endpoint is down.
+   * Legacy fallback applies ONLY when claims is a healthy response
+   * with no row of the requested claim_type.
    */
   claims: VendorClaimsResponse | null
   loadWarnings: string[]
