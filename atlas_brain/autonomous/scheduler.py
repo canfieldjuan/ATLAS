@@ -900,6 +900,32 @@ class TaskScheduler:
                 "notify_priority": 4,
             },
         },
+        # Phase 9 step 6: daily audit of the EvidenceClaim shadow capture.
+        # Reads back yesterday's b2b_evidence_claims rows and emits a
+        # per-claim_type / per-vendor / per-source summary. Silent on the
+        # success path; ntfy fires only when capture looks broken (zero
+        # rows, high cannot_validate share, dominant rejection reason).
+        # Disabled by default: enabling before
+        # ATLAS_B2B_CHURN_EVIDENCE_CLAIM_SHADOW_ENABLED=true would alert
+        # on zero rows every day. The operator flips both together.
+        {
+            "name": "b2b_evidence_claim_audit",
+            "description": "Daily audit of EvidenceClaim contract shadow capture in b2b_evidence_claims",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            # 30 minutes after witness_quality_maintenance so the daily
+            # synthesis cycle has fully drained before the audit reads.
+            "cron_expression": "45 4 * * *",
+            "timeout_seconds": 300,
+            "enabled": False,  # opt-in: pair with ATLAS_B2B_CHURN_EVIDENCE_CLAIM_SHADOW_ENABLED
+            "metadata": {
+                "builtin_handler": "b2b_evidence_claim_audit",
+                "invalid_examples_per_reason": 3,
+                "rejection_reasons_per_claim_type": 10,
+                "notify_tags": "warning,b2b,evidence_claim",
+                "notify_priority": 3,
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
