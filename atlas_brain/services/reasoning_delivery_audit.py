@@ -483,3 +483,288 @@ async def summarize_witness_field_propagation(
         "quality_fields": list(WITNESS_QUALITY_FIELDS),
         "surfaces": list(surfaces.values()),
     }
+
+
+# ----------------------------------------------------------------------------
+# EvidenceClaim contract audit (Phase 9 step 6)
+# ----------------------------------------------------------------------------
+
+
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    return dict(row) if row is not None else {}
+
+
+async def summarize_claim_validation(
+    pool,
+    *,
+    as_of_date: Any,
+    invalid_examples_per_reason: int = 3,
+    rejection_reasons_per_claim_type: int = 10,
+) -> dict[str, Any]:
+    """Audit summary over rows in b2b_evidence_claims for one as_of_date.
+
+    Used by:
+
+      - the daily autonomous task (b2b_evidence_claim_audit) so the
+        operator gets a digest after every nightly synthesis cycle.
+      - the CLI script (scripts/audit_evidence_claims.py) for ad-hoc
+        canary triage.
+
+    Returns a dict with these keys:
+
+      as_of_date                       (echoed back)
+      scope                            total_rows + distinct vendors / artifacts
+      totals                           valid / invalid / cannot_validate counts
+      by_claim_type                    same totals broken out per claim_type
+      rejection_reasons_by_claim_type  top-N reasons per claim_type for invalid
+      cannot_validate_reasons_by_claim_type
+                                       same for cannot_validate (so v3 / synthesized
+                                       short-circuits don't get hidden)
+      by_vendor                        per-vendor counts (canary single-vendor view)
+      by_source                        joined to b2b_reviews.source platform
+      by_pain_category                 derived from claim_payload.pain_category
+      by_schema_version                joined to b2b_reviews.enrichment schema version
+      invalid_examples                 small sample of invalid rows for hand audit
+
+    Per-source / per-schema-version breakdowns LEFT JOIN b2b_reviews on
+    source_review_id and gracefully bucket missing joins (synthesized
+    spans, deleted reviews) under a 'unknown' / 'unjoined' label.
+    """
+    if as_of_date is None:
+        raise ValueError("as_of_date is required")
+
+    scope_row = await pool.fetchrow(
+        """
+        SELECT
+            count(*) AS total_rows,
+            count(DISTINCT vendor_name) AS distinct_vendors,
+            count(DISTINCT artifact_id) AS distinct_artifacts
+        FROM b2b_evidence_claims
+        WHERE as_of_date = $1
+        """,
+        as_of_date,
+    )
+
+    totals_rows = await pool.fetch(
+        """
+        SELECT status, count(*) AS n
+        FROM b2b_evidence_claims
+        WHERE as_of_date = $1
+        GROUP BY status
+        """,
+        as_of_date,
+    )
+    totals = {"valid": 0, "invalid": 0, "cannot_validate": 0}
+    for row in totals_rows:
+        if row["status"] in totals:
+            totals[row["status"]] = int(row["n"] or 0)
+
+    by_claim_type_rows = await pool.fetch(
+        """
+        SELECT claim_type, status, count(*) AS n
+        FROM b2b_evidence_claims
+        WHERE as_of_date = $1
+        GROUP BY claim_type, status
+        ORDER BY claim_type
+        """,
+        as_of_date,
+    )
+    by_claim_type: dict[str, dict[str, int]] = {}
+    for row in by_claim_type_rows:
+        bucket = by_claim_type.setdefault(
+            row["claim_type"],
+            {"total": 0, "valid": 0, "invalid": 0, "cannot_validate": 0},
+        )
+        n = int(row["n"] or 0)
+        bucket["total"] += n
+        if row["status"] in bucket:
+            bucket[row["status"]] += n
+
+    reason_rows = await pool.fetch(
+        """
+        SELECT * FROM (
+            SELECT
+                claim_type,
+                status,
+                rejection_reason,
+                count(*) AS n,
+                ROW_NUMBER() OVER (
+                    PARTITION BY claim_type, status
+                    ORDER BY count(*) DESC, rejection_reason
+                ) AS rn
+            FROM b2b_evidence_claims
+            WHERE as_of_date = $1
+              AND status IN ('invalid', 'cannot_validate')
+              AND rejection_reason IS NOT NULL
+            GROUP BY claim_type, status, rejection_reason
+        ) t
+        WHERE rn <= $2
+        ORDER BY claim_type, status, rn
+        """,
+        as_of_date,
+        int(rejection_reasons_per_claim_type),
+    )
+    rejection_reasons_by_claim_type: dict[str, list[dict[str, Any]]] = {}
+    cannot_validate_reasons_by_claim_type: dict[str, list[dict[str, Any]]] = {}
+    for row in reason_rows:
+        entry = {
+            "rejection_reason": row["rejection_reason"],
+            "count": int(row["n"] or 0),
+        }
+        if row["status"] == "invalid":
+            rejection_reasons_by_claim_type.setdefault(row["claim_type"], []).append(entry)
+        else:
+            cannot_validate_reasons_by_claim_type.setdefault(row["claim_type"], []).append(entry)
+
+    by_vendor_rows = await pool.fetch(
+        """
+        SELECT
+            vendor_name,
+            count(*) FILTER (WHERE status = 'valid') AS valid_count,
+            count(*) FILTER (WHERE status = 'invalid') AS invalid_count,
+            count(*) FILTER (WHERE status = 'cannot_validate') AS cannot_validate_count,
+            count(*) AS total
+        FROM b2b_evidence_claims
+        WHERE as_of_date = $1
+        GROUP BY vendor_name
+        ORDER BY total DESC, vendor_name
+        """,
+        as_of_date,
+    )
+    by_vendor = [
+        {
+            "vendor_name": row["vendor_name"],
+            "valid": int(row["valid_count"] or 0),
+            "invalid": int(row["invalid_count"] or 0),
+            "cannot_validate": int(row["cannot_validate_count"] or 0),
+            "total": int(row["total"] or 0),
+        }
+        for row in by_vendor_rows
+    ]
+
+    by_source_rows = await pool.fetch(
+        """
+        SELECT
+            COALESCE(r.source, 'unjoined') AS source,
+            ec.status,
+            count(*) AS n
+        FROM b2b_evidence_claims ec
+        LEFT JOIN b2b_reviews r ON r.id = ec.source_review_id
+        WHERE ec.as_of_date = $1
+        GROUP BY 1, 2
+        ORDER BY 1, 2
+        """,
+        as_of_date,
+    )
+    by_source: dict[str, dict[str, int]] = {}
+    for row in by_source_rows:
+        bucket = by_source.setdefault(
+            row["source"],
+            {"total": 0, "valid": 0, "invalid": 0, "cannot_validate": 0},
+        )
+        n = int(row["n"] or 0)
+        bucket["total"] += n
+        if row["status"] in bucket:
+            bucket[row["status"]] += n
+
+    by_pain_category_rows = await pool.fetch(
+        """
+        SELECT
+            COALESCE(NULLIF(claim_payload->>'pain_category', ''), 'unknown') AS pain_category,
+            status,
+            count(*) AS n
+        FROM b2b_evidence_claims
+        WHERE as_of_date = $1
+        GROUP BY 1, 2
+        ORDER BY 1, 2
+        """,
+        as_of_date,
+    )
+    by_pain_category: dict[str, dict[str, int]] = {}
+    for row in by_pain_category_rows:
+        bucket = by_pain_category.setdefault(
+            row["pain_category"],
+            {"total": 0, "valid": 0, "invalid": 0, "cannot_validate": 0},
+        )
+        n = int(row["n"] or 0)
+        bucket["total"] += n
+        if row["status"] in bucket:
+            bucket[row["status"]] += n
+
+    by_schema_version_rows = await pool.fetch(
+        """
+        SELECT
+            COALESCE(r.enrichment->>'enrichment_schema_version', 'unknown') AS schema_version,
+            ec.status,
+            count(*) AS n
+        FROM b2b_evidence_claims ec
+        LEFT JOIN b2b_reviews r ON r.id = ec.source_review_id
+        WHERE ec.as_of_date = $1
+        GROUP BY 1, 2
+        ORDER BY 1, 2
+        """,
+        as_of_date,
+    )
+    by_schema_version: dict[str, dict[str, int]] = {}
+    for row in by_schema_version_rows:
+        bucket = by_schema_version.setdefault(
+            row["schema_version"],
+            {"total": 0, "valid": 0, "invalid": 0, "cannot_validate": 0},
+        )
+        n = int(row["n"] or 0)
+        bucket["total"] += n
+        if row["status"] in bucket:
+            bucket[row["status"]] += n
+
+    invalid_examples_rows = await pool.fetch(
+        """
+        SELECT * FROM (
+            SELECT
+                claim_type,
+                rejection_reason,
+                witness_id,
+                vendor_name,
+                claim_payload->>'excerpt_text' AS excerpt_preview,
+                ROW_NUMBER() OVER (
+                    PARTITION BY claim_type, rejection_reason
+                    ORDER BY validated_at DESC
+                ) AS rn
+            FROM b2b_evidence_claims
+            WHERE as_of_date = $1
+              AND status = 'invalid'
+              AND rejection_reason IS NOT NULL
+        ) t
+        WHERE rn <= $2
+        ORDER BY claim_type, rejection_reason, rn
+        """,
+        as_of_date,
+        int(invalid_examples_per_reason),
+    )
+    invalid_examples = [
+        {
+            "claim_type": row["claim_type"],
+            "rejection_reason": row["rejection_reason"],
+            "witness_id": row["witness_id"],
+            "vendor_name": row["vendor_name"],
+            "excerpt_preview": (row["excerpt_preview"] or "")[:200],
+        }
+        for row in invalid_examples_rows
+    ]
+
+    return {
+        "as_of_date": str(as_of_date),
+        "scope": {
+            "total_rows": int((scope_row or {}).get("total_rows", 0) or 0),
+            "distinct_vendors": int((scope_row or {}).get("distinct_vendors", 0) or 0),
+            "distinct_artifacts": int((scope_row or {}).get("distinct_artifacts", 0) or 0),
+        },
+        "totals": totals,
+        "by_claim_type": by_claim_type,
+        "rejection_reasons_by_claim_type": rejection_reasons_by_claim_type,
+        "cannot_validate_reasons_by_claim_type": cannot_validate_reasons_by_claim_type,
+        "by_vendor": by_vendor,
+        "by_source": by_source,
+        "by_pain_category": by_pain_category,
+        "by_schema_version": by_schema_version,
+        "invalid_examples": invalid_examples,
+    }
