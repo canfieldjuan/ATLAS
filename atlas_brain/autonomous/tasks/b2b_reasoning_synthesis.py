@@ -2574,6 +2574,71 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "Reasoning synthesis v2: %s (%d tokens, %d warnings)",
             vendor_name, vendor_tokens, len(vresult.warnings),
         )
+
+        # Phase 9 step 5: shadow-mode capture into b2b_evidence_claims.
+        # Off by default; flip on via ATLAS_B2B_CHURN_EVIDENCE_CLAIM_SHADOW_ENABLED
+        # once migration 305 is applied. Failures are logged but do not
+        # break the synthesis success path -- shadow capture is audit-only.
+        if settings.b2b_churn.evidence_claim_shadow_enabled:
+            try:
+                from ...services.b2b.evidence_claim_builder import (
+                    load_known_vendor_names,
+                    write_evidence_claims_for_synthesis,
+                )
+                witness_pack = list(getattr(packet, "witness_pack", None) or [])
+                review_id_set: set[str] = set()
+                for _w in witness_pack:
+                    rid = _w.get("review_id")
+                    if rid:
+                        review_id_set.add(str(rid))
+                source_reviews: dict[str, dict[str, Any]] = {}
+                if review_id_set:
+                    rid_uuids: list[UUID] = []
+                    for _rid in review_id_set:
+                        try:
+                            rid_uuids.append(UUID(_rid))
+                        except (TypeError, ValueError):
+                            continue
+                    if rid_uuids:
+                        review_rows = await pool.fetch(
+                            "SELECT id, vendor_name, review_text, summary "
+                            "FROM b2b_reviews WHERE id = ANY($1::uuid[])",
+                            rid_uuids,
+                        )
+                        for row in review_rows:
+                            source_reviews[str(row["id"])] = {
+                                "id": str(row["id"]),
+                                "vendor_name": row["vendor_name"],
+                                "review_text": row["review_text"],
+                                "summary": row["summary"],
+                            }
+                known_vendor_names = await load_known_vendor_names(pool)
+                shadow_counts = await write_evidence_claims_for_synthesis(
+                    pool,
+                    vendor_name=vendor_name,
+                    as_of_date=today,
+                    analysis_window_days=window_days,
+                    schema_version=_SCHEMA_VERSION,
+                    witnesses=witness_pack,
+                    source_reviews=source_reviews,
+                    known_vendor_names=known_vendor_names,
+                )
+                logger.info(
+                    "Evidence claim shadow capture: %s valid=%d invalid=%d "
+                    "cannot_validate=%d skipped=%d errors=%d",
+                    vendor_name,
+                    shadow_counts["valid"],
+                    shadow_counts["invalid"],
+                    shadow_counts["cannot_validate"],
+                    shadow_counts["skipped"],
+                    shadow_counts["errors"],
+                )
+            except Exception:
+                logger.warning(
+                    "Evidence claim shadow capture failed for %s; continuing",
+                    vendor_name, exc_info=True,
+                )
+
         return {
             "succeeded": True,
             "used_fallback_single_call": used_fallback_single_call,

@@ -1,0 +1,37 @@
+{
+  "name": "source_provenance_unavailable",
+  "description": "Acceptance fixture #11. The witness passes every per-phrase gate (subject_vendor + negative + primary_driver + grounded + pain_confidence=strong + pain_category) but lacks the excerpt_text and review_id needed for the repository to compute source_excerpt_fingerprint at write time. The validator must surface this as cannot_validate(source_provenance_unavailable) rather than VALID, otherwise the writer's contract guard would raise at upsert time. This is the operational invariant: a 'valid' claim must come with the source provenance Step 5 needs to persist it.",
+  "review": {
+    "id": "00000000-0000-0000-0000-000000000011",
+    "vendor_name": "Asana",
+    "summary": "Pricing complaint without preserved excerpt",
+    "review_text": "Asana pricing keeps going up at every renewal cycle.",
+    "rating": 2,
+    "rating_max": 5,
+    "source": "g2"
+  },
+  "witness": {
+    "witness_id": "witness:00000000-0000-0000-0000-000000000011:0",
+    "vendor_name": "Asana",
+    "excerpt_text": null,
+    "pain_category": "pricing",
+    "phrase_subject": "subject_vendor",
+    "phrase_polarity": "negative",
+    "phrase_role": "primary_driver",
+    "phrase_verbatim": true,
+    "pain_confidence": "strong",
+    "grounding_status": "grounded",
+    "salience_score": 7.0,
+    "source_span_id": null
+  },
+  "expected": {
+    "pain_claim_about_vendor": {
+      "status": "cannot_validate",
+      "rejection_reason": "source_provenance_unavailable"
+    },
+    "pricing_urgency_claim": {
+      "status": "cannot_validate",
+      "rejection_reason": "source_provenance_unavailable"
+    }
+  }
+}

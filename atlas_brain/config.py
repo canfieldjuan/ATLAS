@@ -2291,6 +2291,21 @@ class B2BChurnConfig(BaseSettings):
     )
     enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens")
     enrichment_local_only: bool = Field(default=False, description="Force local LLM only")
+
+    # Phase 9: shadow capture for the EvidenceClaim contract. When true,
+    # synthesis writes one row per (witness x eligible claim_type) into
+    # b2b_evidence_claims via validate_claim() + upsert_claim(). Consumers
+    # do not yet read from this table; rendering is unchanged. The shadow
+    # capture is the audit input for the canary hand-audit (rollout step
+    # 7) before any consumer migrates onto select_best_claim().
+    evidence_claim_shadow_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable shadow-mode capture of EvidenceClaim validations into "
+            "b2b_evidence_claims. Off by default; flip on after migration "
+            "305 is applied."
+        ),
+    )
     enrichment_openrouter_model: str = Field(
         default="anthropic/claude-haiku-4-5",
         description=(

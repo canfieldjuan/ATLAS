@@ -248,6 +248,19 @@ def _check_required_phrase_field(
     return None
 
 
+def _has_source_provenance(witness: dict[str, Any]) -> bool:
+    """A witness has source provenance when it carries enough data for the
+    repository to compute source_excerpt_fingerprint at write time:
+    excerpt_text AND review_id. Without this, a 'valid' result cannot be
+    persisted -- the repository's writer guard would raise. The validator
+    catches it earlier as cannot_validate(source_provenance_unavailable)
+    so report-safe claims and audit rows stay deterministic.
+    """
+    return bool(_normalize(witness.get("excerpt_text"))) and bool(
+        witness.get("review_id")
+    )
+
+
 def _build_supporting_fields(witness: dict[str, Any], names: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(name for name in names if witness.get(name) not in (None, ""))
 
@@ -428,6 +441,12 @@ def _validate_pain_like(
     if attribution is not None:
         return result(attribution[0], attribution[1])
 
+    if not _has_source_provenance(witness):
+        return result(
+            ClaimValidationStatus.CANNOT_VALIDATE,
+            "source_provenance_unavailable",
+        )
+
     supporting = _build_supporting_fields(
         witness,
         (
@@ -476,6 +495,12 @@ def _validate_counterevidence(
     if role == "passing_mention":
         return result(ClaimValidationStatus.INVALID, "role_passing_mention")
 
+    if not _has_source_provenance(witness):
+        return result(
+            ClaimValidationStatus.CANNOT_VALIDATE,
+            "source_provenance_unavailable",
+        )
+
     supporting = _build_supporting_fields(
         witness,
         ("phrase_subject", "phrase_polarity", "phrase_role", "grounding_status", "salience_score"),
@@ -508,6 +533,12 @@ def _validate_named_account_anchor(
     company = _normalize(witness.get("reviewer_company"))
     if not company:
         return result(ClaimValidationStatus.CANNOT_VALIDATE, "reviewer_company_unavailable")
+
+    if not _has_source_provenance(witness):
+        return result(
+            ClaimValidationStatus.CANNOT_VALIDATE,
+            "source_provenance_unavailable",
+        )
 
     supporting = _build_supporting_fields(
         witness, ("phrase_role", "grounding_status", "reviewer_company", "salience_score")
@@ -568,6 +599,12 @@ def _validate_displacement(
     )
     if attribution is not None:
         return result(attribution[0], attribution[1])
+
+    if not _has_source_provenance(witness):
+        return result(
+            ClaimValidationStatus.CANNOT_VALIDATE,
+            "source_provenance_unavailable",
+        )
 
     supporting = _build_supporting_fields(
         witness,
