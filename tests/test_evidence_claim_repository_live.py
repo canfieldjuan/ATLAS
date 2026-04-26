@@ -38,7 +38,7 @@ if _env_file.exists():
 from atlas_brain.services.b2b.evidence_claim import (
     ClaimType,
     ClaimValidationStatus,
-    source_excerpt_fingerprint,
+    source_excerpt_fingerprint as _compute_fingerprint,
 )
 from atlas_brain.services.b2b.evidence_claim_repository import (
     ClaimSelection,
@@ -97,10 +97,10 @@ def _make_claim(
     payload: dict | None = None,
     target_entity: str | None = None,
 ) -> PersistedClaim:
+    """Build a PersistedClaim with excerpt_text + source_review_id and let
+    upsert_claim() compute the fingerprint at write time. This proves the
+    production write path -- not the test helper -- owns the computation."""
     review_id = source_review_id or uuid4()
-    fp = source_excerpt_fingerprint(
-        source_review_id=review_id, excerpt_text=excerpt_text
-    )
     return PersistedClaim(
         artifact_type="synthesis",
         artifact_id=artifact_id,
@@ -118,7 +118,7 @@ def _make_claim(
         salience_score=salience_score,
         grounding_status=grounding_status,
         pain_confidence=pain_confidence,
-        source_excerpt_fingerprint=fp,
+        excerpt_text=excerpt_text,
         supporting_fields=("phrase_subject", "phrase_polarity"),
         claim_payload=payload or {"excerpt_text": excerpt_text},
     )
@@ -337,9 +337,19 @@ async def test_select_best_claim_dedups_by_fingerprint(pool, artifact_id):
         claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
         salience_score=4.0,
     )
-    assert a.source_excerpt_fingerprint == b.source_excerpt_fingerprint
     await upsert_claim(pool, a)
     await upsert_claim(pool, b)
+    # Sanity: writer must have computed identical fingerprints from the
+    # shared (review_id, excerpt_text). If the writer didn't compute,
+    # both rows would have NULL fingerprints and dedup would no-op.
+    fps = await pool.fetch(
+        "SELECT source_excerpt_fingerprint FROM b2b_evidence_claims "
+        "WHERE artifact_id = $1",
+        artifact_id,
+    )
+    assert {row["source_excerpt_fingerprint"] for row in fps} == {
+        _compute_fingerprint(source_review_id=review_id, excerpt_text="same phrase")
+    }
 
     results = await select_best_claim(
         pool,
@@ -402,6 +412,167 @@ async def test_select_best_claim_secondary_target_filter(pool, artifact_id):
         limit=10,
     )
     assert sorted(r.secondary_target for r in both) == ["HubSpot", "Salesforce"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_computes_fingerprint_from_excerpt(pool, artifact_id):
+    """The writer (not the caller) must compute source_excerpt_fingerprint
+    from (source_review_id, excerpt_text). This is the contract guard
+    against production callers forgetting to set the field."""
+    review_id = uuid4()
+    excerpt = "specific phrase to fingerprint"
+    claim = PersistedClaim(
+        artifact_type="synthesis",
+        artifact_id=artifact_id,
+        vendor_name="TestVendor",
+        claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+        target_entity="TestVendor",
+        status=ClaimValidationStatus.VALID,
+        synthesis_id=artifact_id,
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+        witness_id="witness:test:fp",
+        source_review_id=review_id,
+        excerpt_text=excerpt,
+        salience_score=5.0,
+        grounding_status="grounded",
+        pain_confidence="strong",
+        # Note: source_excerpt_fingerprint NOT pre-set on the claim.
+    )
+    await upsert_claim(pool, claim)
+    stored = await pool.fetchval(
+        "SELECT source_excerpt_fingerprint FROM b2b_evidence_claims "
+        "WHERE artifact_id = $1",
+        artifact_id,
+    )
+    expected = _compute_fingerprint(source_review_id=review_id, excerpt_text=excerpt)
+    assert stored is not None
+    assert stored == expected
+
+
+@pytest.mark.asyncio
+async def test_upsert_rejects_valid_without_fingerprint_inputs(pool, artifact_id):
+    """A valid row with no excerpt_text AND no precomputed fingerprint
+    must raise ValueError. Otherwise dedup would silently break for any
+    consumer that calls select_best_claim with limit > 1."""
+    bad = PersistedClaim(
+        artifact_type="synthesis",
+        artifact_id=artifact_id,
+        vendor_name="TestVendor",
+        claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+        target_entity="TestVendor",
+        status=ClaimValidationStatus.VALID,
+        synthesis_id=artifact_id,
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+        witness_id="witness:test:no_fp",
+        source_review_id=uuid4(),  # have review_id but no excerpt_text
+        salience_score=5.0,
+        grounding_status="grounded",
+        pain_confidence="strong",
+    )
+    with pytest.raises(ValueError, match="source_excerpt_fingerprint"):
+        await upsert_claim(pool, bad)
+    # And: nothing was written.
+    count = await pool.fetchval(
+        "SELECT count(*) FROM b2b_evidence_claims WHERE artifact_id = $1",
+        artifact_id,
+    )
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_upsert_allows_invalid_without_fingerprint(pool, artifact_id):
+    """Invalid / cannot_validate rows do not need a fingerprint -- they
+    never surface in select_best_claim, so dedup does not apply. This
+    keeps the contract guard from blocking the audit-row write path."""
+    claim = PersistedClaim(
+        artifact_type="synthesis",
+        artifact_id=artifact_id,
+        vendor_name="TestVendor",
+        claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+        target_entity="TestVendor",
+        status=ClaimValidationStatus.INVALID,
+        rejection_reason="polarity_not_negative_or_mixed",
+        synthesis_id=artifact_id,
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+        witness_id="witness:test:invalid_no_fp",
+        salience_score=0.0,
+    )
+    await upsert_claim(pool, claim)
+    row = await pool.fetchrow(
+        "SELECT status, source_excerpt_fingerprint FROM b2b_evidence_claims "
+        "WHERE artifact_id = $1",
+        artifact_id,
+    )
+    assert row["status"] == "invalid"
+    assert row["source_excerpt_fingerprint"] is None
+
+
+@pytest.mark.asyncio
+async def test_select_best_claim_no_underfill_under_fingerprint_saturation(pool, artifact_id):
+    """Pathological case: the leading rows by salience all share one
+    fingerprint, then a second fingerprint, then a third. The old
+    over-fetch heuristic could under-fill if the share band exceeded
+    limit*3. The SQL ROW_NUMBER() dedup must always return up to N
+    unique fingerprint groups."""
+    # 10 rows sharing fingerprint A (high salience), then 1 row with
+    # fingerprint B, then 1 row with fingerprint C. limit=3 must return
+    # exactly 3 (one per fingerprint group), not under-fill.
+    review_a = uuid4()
+    review_b = uuid4()
+    review_c = uuid4()
+
+    for i in range(10):
+        await upsert_claim(
+            pool,
+            _make_claim(
+                artifact_id=artifact_id,
+                witness_id=f"witness:test:saturate_a_{i:02d}",
+                excerpt_text="phrase A",
+                source_review_id=review_a,
+                salience_score=9.0 - i * 0.01,  # all higher than B/C
+            ),
+        )
+    await upsert_claim(
+        pool,
+        _make_claim(
+            artifact_id=artifact_id,
+            witness_id="witness:test:saturate_b",
+            excerpt_text="phrase B",
+            source_review_id=review_b,
+            salience_score=4.0,
+        ),
+    )
+    await upsert_claim(
+        pool,
+        _make_claim(
+            artifact_id=artifact_id,
+            witness_id="witness:test:saturate_c",
+            excerpt_text="phrase C",
+            source_review_id=review_c,
+            salience_score=3.0,
+        ),
+    )
+
+    results = await select_best_claim(
+        pool,
+        claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+        target_entity="TestVendor",
+        vendor_name="TestVendor",
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+        limit=3,
+    )
+    assert len(results) == 3, (
+        f"expected 3 unique fingerprint groups; got {len(results)} "
+        f"(witnesses: {[r.witness_id for r in results]})"
+    )
+    # Highest salience per group wins; group A's top row is saturate_a_00.
+    assert results[0].witness_id == "witness:test:saturate_a_00"
+    assert results[1].witness_id == "witness:test:saturate_b"
+    assert results[2].witness_id == "witness:test:saturate_c"
 
 
 def test_dedup_selections_helper_preserves_first():

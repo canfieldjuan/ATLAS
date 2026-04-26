@@ -35,6 +35,7 @@ from .evidence_claim import (
     ClaimType,
     ClaimValidation,
     ClaimValidationStatus,
+    source_excerpt_fingerprint,
 )
 
 
@@ -49,6 +50,15 @@ class PersistedClaim:
     surrounding artifact context (vendor, as_of_date, analysis window,
     witness anchor data). The repository does the json-encoding and
     fingerprint computation.
+
+    excerpt_text is the input from which source_excerpt_fingerprint is
+    derived at write time. Pass excerpt_text and source_review_id and
+    upsert_claim() will compute the fingerprint via the canonical
+    helper. Passing source_excerpt_fingerprint directly is supported
+    only for replay scenarios where a precomputed value already exists.
+    For status='valid' rows without enough inputs to compute or supply
+    a fingerprint, upsert_claim() raises ValueError -- this is the
+    contract guard against silently writing un-deduppable rows.
     """
 
     artifact_type: ArtifactType
@@ -71,6 +81,7 @@ class PersistedClaim:
     salience_score: float = 0.0
     grounding_status: str | None = None
     pain_confidence: str | None = None
+    excerpt_text: str | None = None
     source_excerpt_fingerprint: str | None = None
     supporting_fields: tuple[str, ...] = field(default_factory=tuple)
     claim_payload: dict[str, Any] = field(default_factory=dict)
@@ -160,6 +171,45 @@ ON CONFLICT (
 
 
 _SELECT_BEST_SQL = """
+WITH ranked AS (
+    SELECT
+        id,
+        artifact_type,
+        artifact_id,
+        vendor_name,
+        claim_type,
+        target_entity,
+        secondary_target,
+        witness_id,
+        source_review_id,
+        source_span_id,
+        salience_score,
+        grounding_status,
+        pain_confidence,
+        grounding_rank,
+        pain_confidence_rank,
+        source_excerpt_fingerprint,
+        supporting_fields,
+        claim_payload,
+        ROW_NUMBER() OVER (
+            -- COALESCE so NULL-fingerprint rows partition by their own id
+            -- (each one becomes rn=1) instead of being collapsed together.
+            PARTITION BY COALESCE(source_excerpt_fingerprint, id::text)
+            ORDER BY
+                salience_score DESC,
+                grounding_rank ASC,
+                pain_confidence_rank ASC,
+                witness_id ASC
+        ) AS dedup_rn
+    FROM b2b_evidence_claims
+    WHERE status = 'valid'
+      AND vendor_name = $1
+      AND claim_type = $2
+      AND target_entity = $3
+      AND as_of_date = $4
+      AND analysis_window_days = $5
+      AND ($6::text IS NULL OR secondary_target = $6)
+)
 SELECT
     id,
     artifact_type,
@@ -177,14 +227,8 @@ SELECT
     source_excerpt_fingerprint,
     supporting_fields,
     claim_payload
-FROM b2b_evidence_claims
-WHERE status = 'valid'
-  AND vendor_name = $1
-  AND claim_type = $2
-  AND target_entity = $3
-  AND as_of_date = $4
-  AND analysis_window_days = $5
-  AND ($6::text IS NULL OR secondary_target = $6)
+FROM ranked
+WHERE dedup_rn = 1
 ORDER BY
     salience_score DESC,
     grounding_rank ASC,
@@ -230,12 +274,48 @@ def _coerce_claim_payload(raw: Any) -> dict[str, Any]:
     return {}
 
 
+def _resolve_fingerprint(claim: PersistedClaim) -> str | None:
+    """Compute source_excerpt_fingerprint at write time when the caller
+    supplied excerpt_text + source_review_id. A precomputed
+    source_excerpt_fingerprint on the claim wins for replay scenarios.
+
+    For status='valid' rows the fingerprint is required: a missing
+    fingerprint would silently break dedup in select_best_claim. The
+    caller MUST pass either the fingerprint or excerpt_text +
+    source_review_id; otherwise upsert_claim raises.
+    """
+    if claim.source_excerpt_fingerprint:
+        return claim.source_excerpt_fingerprint
+    if claim.excerpt_text and claim.source_review_id:
+        return source_excerpt_fingerprint(
+            source_review_id=claim.source_review_id,
+            excerpt_text=claim.excerpt_text,
+        )
+    return None
+
+
 async def upsert_claim(pool, claim: PersistedClaim) -> None:
     """Write or replay-update a single claim row on the
     (artifact_type, artifact_id, witness_id, claim_type, target_entity,
-    secondary_target) replay key. Idempotent across reprocessing."""
+    secondary_target) replay key. Idempotent across reprocessing.
+
+    The writer owns source_excerpt_fingerprint computation so production
+    callers cannot accidentally write un-deduppable rows. status='valid'
+    rows without enough inputs to derive a fingerprint raise ValueError.
+    """
     if claim.artifact_type not in ("synthesis", "intelligence"):
         raise ValueError(f"invalid artifact_type: {claim.artifact_type!r}")
+
+    fingerprint = _resolve_fingerprint(claim)
+    if (
+        str(claim.status) == ClaimValidationStatus.VALID.value
+        and not fingerprint
+    ):
+        raise ValueError(
+            "valid claims require source_excerpt_fingerprint or "
+            "(excerpt_text + source_review_id) so select_best_claim "
+            "dedup cannot silently break"
+        )
 
     await pool.execute(
         _INSERT_SQL,
@@ -257,7 +337,7 @@ async def upsert_claim(pool, claim: PersistedClaim) -> None:
         float(claim.salience_score or 0.0),
         claim.grounding_status,
         claim.pain_confidence,
-        claim.source_excerpt_fingerprint,
+        fingerprint,
         str(claim.status),
         claim.rejection_reason,
         _supporting_fields_to_jsonb(claim.supporting_fields),
@@ -288,9 +368,12 @@ async def select_best_claim(
 
     Dedups across multi-claim-per-witness rows by
     source_excerpt_fingerprint so a single phrase that validated for
-    several claim types is not returned twice for the same call. The
-    dedup happens AFTER the ORDER BY so the highest-ranked row wins
-    when duplicates exist.
+    several claim types is not returned twice for the same call. Dedup
+    is enforced in SQL via ROW_NUMBER() PARTITION BY fingerprint, so
+    `limit` truly means "up to N unique claims" -- no app-side
+    over-fetch heuristic that could under-fill when the leading rows
+    share fingerprints. NULL-fingerprint rows partition by id and never
+    collapse with each other.
 
     secondary_target is matched if non-NULL; passing None matches any
     secondary_target value (including NULL). Returns empty list when no
@@ -298,9 +381,6 @@ async def select_best_claim(
     """
     if limit <= 0:
         return []
-    # Over-fetch to give us room for fingerprint dedup. 3x is a cheap
-    # heuristic; the partial index makes the extra rows free.
-    fetch_limit = max(limit * 3, limit)
     rows = await pool.fetch(
         _SELECT_BEST_SQL,
         vendor_name,
@@ -309,21 +389,9 @@ async def select_best_claim(
         as_of_date,
         analysis_window_days,
         secondary_target,
-        fetch_limit,
+        limit,
     )
-
-    seen_fingerprints: set[str] = set()
-    out: list[ClaimSelection] = []
-    for row in rows:
-        fp = row["source_excerpt_fingerprint"]
-        if fp:
-            if fp in seen_fingerprints:
-                continue
-            seen_fingerprints.add(fp)
-        out.append(_row_to_selection(row))
-        if len(out) >= limit:
-            break
-    return out
+    return [_row_to_selection(row) for row in rows]
 
 
 def _row_to_selection(row: Any) -> ClaimSelection:
