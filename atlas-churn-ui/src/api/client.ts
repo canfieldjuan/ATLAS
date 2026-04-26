@@ -73,6 +73,7 @@ const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
 const B2B_DASHBOARD_BASE = `${API_BASE}/api/v1/b2b/dashboard`
+const VENDOR_CLAIMS_BASE = `${API_BASE}/api/v1/b2b/vendor-claims`
 const WEBHOOKS_BASE = B2B_DASHBOARD_BASE
 const AUTONOMOUS_BASE = `${API_BASE}/api/v1/autonomous`
 const CACHE_BUSTER_PARAM = '_ts'
@@ -2460,4 +2461,99 @@ export async function upsertReportSubscription(scopeType: ReportSubscriptionScop
   return put<{ subscription: ReportSubscription }>(
     TENANT_BASE, `/report-subscriptions/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeKey)}`, body,
   )
+}
+
+
+// ----------------------------------------------------------------------------
+// Vendor ProductClaims (Phase 10 Patch 2b)
+//
+// One-to-one mirror of the Python ProductClaim envelope. The dashboard
+// reads render_allowed to decide whether each rate card displays a
+// value or a suppression label; reports read report_allowed (strictly
+// tighter). The two gates are derived in the backend from the same
+// ProductClaim, so the UI cannot loosen what the server suppressed.
+// ----------------------------------------------------------------------------
+
+export type ClaimScope = 'witness' | 'vendor' | 'account' | 'competitor_pair' | 'alert'
+
+export type EvidencePosture =
+  | 'usable'
+  | 'weak'
+  | 'contradictory'
+  | 'unverified'
+  | 'insufficient'
+
+export type ConfidenceLabel = 'high' | 'medium' | 'low'
+
+export type SuppressionReason =
+  | 'insufficient_supporting_count'
+  | 'contradictory_evidence'
+  | 'unverified_evidence'
+  | 'denominator_unknown'
+  | 'sample_size_below_threshold'
+  | 'weak_evidence_only'
+  | 'passing_mention_only'
+  | 'low_confidence'
+  | 'consumer_filter_applied'
+
+export interface VendorClaim {
+  claim_id: string
+  claim_key: string
+  claim_scope: ClaimScope
+  claim_type: string
+  claim_text: string
+  target_entity: string
+  secondary_target: string | null
+  supporting_count: number
+  direct_evidence_count: number
+  witness_count: number
+  contradiction_count: number
+  denominator: number | null
+  sample_size: number | null
+  has_grounded_evidence: boolean
+  confidence: ConfidenceLabel
+  evidence_posture: EvidencePosture
+  render_allowed: boolean
+  report_allowed: boolean
+  suppression_reason: SuppressionReason | null
+  evidence_links: string[]
+  contradicting_links: string[]
+  as_of_date: string
+  analysis_window_days: number
+  schema_version: string
+}
+
+export interface VendorClaimsResponse {
+  vendor_name: string
+  as_of_date: string
+  analysis_window_days: number
+  claims: VendorClaim[]
+}
+
+export async function fetchVendorClaims(
+  vendorName: string,
+  params?: { as_of_date?: string; analysis_window_days?: number },
+): Promise<VendorClaimsResponse> {
+  return get<VendorClaimsResponse>(
+    VENDOR_CLAIMS_BASE,
+    `/${encodeURIComponent(vendorName)}`,
+    params,
+  )
+}
+
+/**
+ * Find a single VendorClaim by claim_type. Returns undefined when the
+ * claim is absent (i.e. the aggregator returned no row for that type),
+ * which the caller distinguishes from `present-but-suppressed`.
+ *
+ * The legacy fallback rule is: render the legacy value ONLY when the
+ * claim is undefined; if the claim exists and render_allowed=false,
+ * the suppression wins over the legacy display.
+ */
+export function findVendorClaim(
+  response: VendorClaimsResponse | null | undefined,
+  claimType: string,
+): VendorClaim | undefined {
+  if (!response) return undefined
+  return response.claims.find((c) => c.claim_type === claimType)
 }

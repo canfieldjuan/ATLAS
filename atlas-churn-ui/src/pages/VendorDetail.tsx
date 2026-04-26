@@ -24,6 +24,10 @@ import {
   fetchVendorHistory,
   fetchVendorProfile,
   fetchReviews,
+  fetchVendorClaims,
+  findVendorClaim,
+  type VendorClaim,
+  type VendorClaimsResponse,
 } from '../api/client'
 import type {
   HighIntentCompany,
@@ -40,6 +44,14 @@ interface VendorData {
   recentReports: Report[]
   history: VendorHistoryResponse
   comparison: VendorPeriodComparisonResponse
+  /**
+   * Phase 10 Patch 2c. ProductClaims for the vendor. Currently
+   * carries only the decision_maker_churn_rate claim; subsequent
+   * patches add the remaining VENDOR-scope claim types. null when
+   * the API request failed, in which case the UI falls back to the
+   * legacy signal values.
+   */
+  claims: VendorClaimsResponse | null
   loadWarnings: string[]
 }
 
@@ -461,7 +473,7 @@ export default function VendorDetail() {
     async () => {
       if (!name) throw new Error('Missing vendor name')
       const profile = await fetchVendorProfile(name)
-      const [reviewsResult, historyResult, comparisonResult, reportsResult] = await Promise.all([
+      const [reviewsResult, historyResult, comparisonResult, reportsResult, claimsResult] = await Promise.all([
         fetchReviews({ vendor_name: name, limit: 50, window_days: 365 })
           .then((result) => ({ ok: true as const, data: result.reviews }))
           .catch((err: unknown) => ({ ok: false as const, error: err })),
@@ -473,6 +485,9 @@ export default function VendorDetail() {
           .catch((err: unknown) => ({ ok: false as const, error: err })),
         fetchReports({ vendor_filter: name, limit: 3, include_stale: true })
           .then((result) => ({ ok: true as const, data: result.reports }))
+          .catch((err: unknown) => ({ ok: false as const, error: err })),
+        fetchVendorClaims(name, { analysis_window_days: 90 })
+          .then((result) => ({ ok: true as const, data: result }))
           .catch((err: unknown) => ({ ok: false as const, error: err })),
       ])
 
@@ -489,8 +504,11 @@ export default function VendorDetail() {
       const recentReports = reportsResult.ok
         ? reportsResult.data
         : (loadWarnings.push(toLoadWarning('Recent reports', reportsResult.error)), [])
+      const claims = claimsResult.ok
+        ? claimsResult.data
+        : (loadWarnings.push(toLoadWarning('Vendor claims', claimsResult.error)), null)
 
-      return { profile, reviews, recentReports, history, comparison, loadWarnings }
+      return { profile, reviews, recentReports, history, comparison, claims, loadWarnings }
     },
     [name],
   )
@@ -500,6 +518,14 @@ export default function VendorDetail() {
 
   const profile = data?.profile
   if (!profile) return <PageError error={new Error('Vendor not found')} />
+  // Phase 10 Patch 2c. Look up the DM-churn ProductClaim if the API
+  // call succeeded. Absent claim -> legacy fallback path. Present
+  // claim with render_allowed=false -> suppression UI (legacy value
+  // is NOT shown; the contract says suppression wins).
+  const dmChurnClaim: VendorClaim | undefined = findVendorClaim(
+    data?.claims,
+    'decision_maker_churn_rate',
+  )
   const stateBackTo = typeof location.state === 'object' && location.state && 'backTo' in location.state
     ? normalizeBackTo((location.state as { backTo?: string | null }).backTo)
     : null
@@ -1159,12 +1185,31 @@ export default function VendorDetail() {
                         : '--'}
                     </dd>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between" data-testid="dm-churn-rate-card">
                     <dt className="text-slate-400">DM Churn Rate</dt>
                     <dd className="text-white">
-                      {signal.decision_maker_churn_rate !== null
-                        ? `${(signal.decision_maker_churn_rate * 100).toFixed(0)}%`
-                        : '--'}
+                      {dmChurnClaim
+                        ? dmChurnClaim.render_allowed
+                          ? `${Math.round(((dmChurnClaim.supporting_count) / Math.max(dmChurnClaim.denominator ?? 1, 1)) * 100)}%`
+                          : (
+                              <span
+                                className="text-slate-500 italic"
+                                title={
+                                  dmChurnClaim.suppression_reason
+                                    ? `Suppressed: ${dmChurnClaim.suppression_reason}` +
+                                      (dmChurnClaim.denominator !== null
+                                        ? ` (${dmChurnClaim.supporting_count} of ${dmChurnClaim.denominator} DMs)`
+                                        : '')
+                                    : 'Suppressed'
+                                }
+                                data-testid="dm-churn-rate-suppressed"
+                              >
+                                Insufficient evidence
+                              </span>
+                            )
+                        : signal.decision_maker_churn_rate !== null
+                          ? `${(signal.decision_maker_churn_rate * 100).toFixed(0)}%`
+                          : '--'}
                     </dd>
                   </div>
                   <div className="flex justify-between">

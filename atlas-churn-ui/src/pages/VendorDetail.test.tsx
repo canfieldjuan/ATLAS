@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,6 +12,11 @@ const api = vi.hoisted(() => ({
   fetchReviews: vi.fn(),
   fetchVendorHistory: vi.fn(),
   fetchVendorProfile: vi.fn(),
+  fetchVendorClaims: vi.fn(),
+  // findVendorClaim is a pure helper; mirror production behavior so the
+  // VendorDetail consumer code under test gets the real lookup.
+  findVendorClaim: (response: { claims?: Array<{ claim_type: string }> } | null | undefined, claimType: string) =>
+    response?.claims?.find((c) => c.claim_type === claimType),
 }))
 
 vi.mock('../api/client', () => api)
@@ -69,6 +74,12 @@ describe('VendorDetail', () => {
       period_a: null,
       period_b: null,
       deltas: {},
+    })
+    api.fetchVendorClaims.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-26',
+      analysis_window_days: 90,
+      claims: [],
     })
   })
 
@@ -1058,6 +1069,167 @@ describe('VendorDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith(
       '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp',
     )
+  })
+
+  // ---------------------------------------------------------------
+  // Phase 10 Patch 2c: DM Churn Rate card gated on render_allowed.
+  // ---------------------------------------------------------------
+
+  function _signalWithDmChurn(legacyRate: number | null = 0.5) {
+    return {
+      vendor_name: 'Zendesk',
+      pressure_score: 0,
+      pressure_change_30d: 0,
+      review_velocity_change: 0,
+      avg_urgency_score: 5.0,
+      contributing_signals: [],
+      slow_burn_signals: [],
+      slow_burn_review_volume_drift: null,
+      churn_intent_count: 5,
+      total_reviews: 10,
+      nps_proxy: 4.0,
+      price_complaint_rate: 0.1,
+      decision_maker_churn_rate: legacyRate,
+      top_pain_categories: null,
+      top_competitors: null,
+      top_feature_gaps: null,
+      quotable_evidence: null,
+      top_use_cases: null,
+      top_integration_stacks: null,
+      budget_signal_summary: null,
+      sentiment_distribution: null,
+      buyer_authority_summary: null,
+      timeline_summary: null,
+      archetype: null,
+      archetype_confidence: null,
+      reasoning_mode: null,
+      falsification_conditions: null,
+      last_computed_at: null,
+    }
+  }
+
+  function _stubProfileWithChurnSignal(rate: number | null) {
+    api.fetchVendorProfile.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      churn_signal: _signalWithDmChurn(rate),
+      review_counts: { total: 12, pending_enrichment: 1, enriched: 11 },
+      high_intent_companies: [],
+      pain_distribution: [],
+    })
+  }
+
+  function _claim(overrides: Partial<{ render_allowed: boolean; supporting_count: number; denominator: number; suppression_reason: string | null; evidence_posture: string }> = {}) {
+    return {
+      claim_id: 'a'.repeat(64),
+      claim_key: 'decision_maker_churn',
+      claim_scope: 'vendor',
+      claim_type: 'decision_maker_churn_rate',
+      claim_text: '12% of decision-makers signaled intent to leave',
+      target_entity: 'Zendesk',
+      secondary_target: null,
+      supporting_count: 6,
+      direct_evidence_count: 0,
+      witness_count: 6,
+      contradiction_count: 0,
+      denominator: 47,
+      sample_size: 47,
+      has_grounded_evidence: false,
+      confidence: 'medium',
+      evidence_posture: 'unverified',
+      render_allowed: false,
+      report_allowed: false,
+      suppression_reason: 'unverified_evidence',
+      evidence_links: [],
+      contradicting_links: [],
+      as_of_date: '2026-04-26',
+      analysis_window_days: 90,
+      schema_version: 'v1',
+      ...overrides,
+    }
+  }
+
+  it('shows Insufficient evidence when the DM-churn ProductClaim is suppressed', async () => {
+    _stubProfileWithChurnSignal(0.5)
+    api.fetchVendorClaims.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-26',
+      analysis_window_days: 90,
+      claims: [_claim({ render_allowed: false })],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('dm-churn-rate-card')
+    expect(card).toHaveTextContent('Insufficient evidence')
+    // Legacy 50% must NOT leak through when the claim is suppressed --
+    // suppression beats the legacy fallback.
+    expect(card).not.toHaveTextContent('50%')
+    const suppressed = within(card).getByTestId('dm-churn-rate-suppressed')
+    expect(suppressed).toHaveAttribute(
+      'title',
+      'Suppressed: unverified_evidence (6 of 47 DMs)',
+    )
+  })
+
+  it('renders the rate from the ProductClaim when render_allowed is true', async () => {
+    _stubProfileWithChurnSignal(0.99) // legacy value diverges; ensure UI uses claim
+    api.fetchVendorClaims.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-26',
+      analysis_window_days: 90,
+      claims: [
+        _claim({
+          render_allowed: true,
+          report_allowed: true,
+          supporting_count: 6,
+          denominator: 47,
+          evidence_posture: 'usable',
+          suppression_reason: null,
+        }),
+      ],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('dm-churn-rate-card')
+    // 6 / 47 = 13% (rounded) -- comes from the claim, not the legacy 99%.
+    expect(card).toHaveTextContent('13%')
+    expect(card).not.toHaveTextContent('99%')
+  })
+
+  it('falls back to the legacy decision_maker_churn_rate when the claim is absent', async () => {
+    _stubProfileWithChurnSignal(0.42)
+    api.fetchVendorClaims.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-26',
+      analysis_window_days: 90,
+      claims: [],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('dm-churn-rate-card')
+    // Legacy 42% renders because no ProductClaim is present.
+    expect(card).toHaveTextContent('42%')
+    expect(card).not.toHaveTextContent('Insufficient')
   })
 
   it('preserves watchlist account review evidence context from the vendor workspace', async () => {
