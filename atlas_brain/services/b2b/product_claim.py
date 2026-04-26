@@ -329,8 +329,22 @@ class ProductClaim:
 
     def __post_init__(self) -> None:
         # Re-derive everything and assert equality. Catches direct
-        # constructor abuse: a caller cannot hand-set posture or gate
-        # fields past what the inputs would have produced.
+        # constructor abuse: a caller cannot hand-set posture, gate, or
+        # claim_id fields past what the inputs would have produced.
+        expected_id = compute_claim_id(
+            claim_scope=self.claim_scope,
+            claim_type=self.claim_type,
+            claim_key=self.claim_key,
+            target_entity=self.target_entity,
+            secondary_target=self.secondary_target,
+            as_of_date=self.as_of_date,
+            analysis_window_days=self.analysis_window_days,
+        )
+        if self.claim_id != expected_id:
+            raise ValueError(
+                f"claim_id={self.claim_id!r} inconsistent with derived="
+                f"{expected_id!r}. Use build_product_claim()."
+            )
         expected_posture = derive_evidence_posture(
             supporting_count=self.supporting_count,
             direct_evidence_count=self.direct_evidence_count,

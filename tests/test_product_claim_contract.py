@@ -517,15 +517,35 @@ def test_product_claim_dataclass_is_frozen():
 
 
 def _direct_construct_kwargs(**overrides):
-    """Default kwargs that match a USABLE / HIGH path."""
-    base = dict(
-        claim_id="x" * 64,
-        claim_key="pricing",
+    """Default kwargs that match a USABLE / HIGH path.
+
+    The default claim_id is computed from the identity fields so that
+    __post_init__'s claim_id check passes; tests that want to exercise
+    a posture / confidence / gate mismatch can override the OFFENDING
+    field while the identity stays consistent. Tests that want to
+    exercise the claim_id check explicitly override claim_id directly.
+    """
+    base_identity = dict(
         claim_scope=ClaimScope.VENDOR,
         claim_type="weakness_theme",
-        claim_text="x",
+        claim_key="pricing",
         target_entity="V",
         secondary_target=None,
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+    )
+    # Honor identity-field overrides when computing the default id so
+    # tests that change e.g. target_entity get a matching claim_id by
+    # default and only need to override claim_id when testing identity.
+    identity_for_id = {**base_identity}
+    for k in list(base_identity.keys()):
+        if k in overrides:
+            identity_for_id[k] = overrides[k]
+    default_id = compute_claim_id(**identity_for_id)
+    base = dict(
+        claim_id=default_id,
+        **base_identity,
+        claim_text="x",
         supporting_count=20,
         direct_evidence_count=8,
         witness_count=12,
@@ -540,8 +560,6 @@ def _direct_construct_kwargs(**overrides):
         suppression_reason=None,
         evidence_links=(),
         contradicting_links=(),
-        as_of_date=date(2026, 4, 26),
-        analysis_window_days=90,
     )
     base.update(overrides)
     return base
@@ -584,6 +602,33 @@ def test_post_init_rejects_caller_setting_contradictory_to_render_only():
                 # claim USABLE + publishable, which is now wrong
             )
         )
+
+
+def test_post_init_rejects_wrong_claim_id():
+    """Audit follow-up: __post_init__ must re-compute claim_id from
+    (scope, type, claim_key, target, secondary, date, window) and
+    reject mismatches. Otherwise direct construction can still create
+    a valid-looking claim with an arbitrary claim_id, which would
+    silently break dedup / caching at the persistence layer."""
+    with pytest.raises(ValueError, match="claim_id"):
+        ProductClaim(**_direct_construct_kwargs(claim_id="0" * 64))
+
+
+def test_post_init_rejects_claim_id_from_different_inputs():
+    """Same kwargs except claim_id derived from a different
+    target_entity. __post_init__ recomputes from the stored
+    target_entity and rejects the stale id."""
+    other_id = compute_claim_id(
+        claim_scope=ClaimScope.VENDOR,
+        claim_type="weakness_theme",
+        claim_key="pricing",
+        target_entity="Different Vendor",  # not what's on the row
+        secondary_target=None,
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+    )
+    with pytest.raises(ValueError, match="claim_id"):
+        ProductClaim(**_direct_construct_kwargs(claim_id=other_id))
 
 
 def test_post_init_passes_when_constructed_via_builder():

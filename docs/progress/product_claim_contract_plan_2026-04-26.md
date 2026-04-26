@@ -153,42 +153,61 @@ later patches.
 ```python
 @dataclass(frozen=True)
 class ProductClaim:
-    claim_id: str               # stable hash of (scope, type, target, secondary, as_of)
+    # Identity (verified by __post_init__; mismatches raise).
+    claim_id: str               # sha256 of (scope || type || claim_key ||
+                                #   target || secondary || as_of || window)
+    claim_key: str               # required: dimension that disambiguates
+                                #   within (scope, type, target). Examples:
+                                #   pain_category for VENDOR weakness,
+                                #   evaluated vendor for ACCOUNT evaluation,
+                                #   witness_id for WITNESS scope.
     claim_scope: ClaimScope
-    claim_type: str             # see taxonomy
-    claim_text: str             # short human-readable headline
-    target_entity: str          # vendor_name | company_name | vendor_name (for pair)
-    secondary_target: str | None  # competitor name for pair scope; None elsewhere
+    claim_type: str
+    claim_text: str
+    target_entity: str
+    secondary_target: str | None
 
-    # Numerator / denominator / context
-    supporting_count: int       # rows that back this claim (numerator)
-    direct_evidence_count: int  # subset of supporting_count that is verbatim quote-grade
-    witness_count: int          # distinct witnesses (de-duped reviewers)
-    contradiction_count: int    # rows pointing the OPPOSITE direction
-    denominator: int | None     # population for rate-based claims
-    sample_size: int | None     # total rows considered for selection (incl. discards)
+    # Numerator / denominator / context (objective facts).
+    supporting_count: int
+    direct_evidence_count: int
+    witness_count: int
+    contradiction_count: int
+    denominator: int | None
+    sample_size: int | None
+    has_grounded_evidence: bool  # False = caller signals UNVERIFIED
+                                  #   (e.g. cannot_validate witness, synthesized span)
 
-    # Quality flags
-    confidence: ConfidenceLabel       # high | medium | low
-    evidence_posture: EvidencePosture # usable | weak | unverified | contradictory | insufficient
+    # Quality (DERIVED from objective inputs via the active policy;
+    # __post_init__ rejects construction if these don't match what
+    # the derivation would have produced).
+    confidence: ConfidenceLabel
+    evidence_posture: EvidencePosture
 
-    # Render gates (computed; never set independently)
+    # Render gates (DERIVED from posture + confidence + counts +
+    # policy; __post_init__ rejects mismatches).
     render_allowed: bool
     report_allowed: bool
-    suppression_reason: str | None
+    suppression_reason: SuppressionReason | None
 
-    # Provenance
-    evidence_links: tuple[str, ...]      # backing witness_ids / claim_ids
-    contradicting_links: tuple[str, ...] # contradiction witness_ids / claim_ids
+    # Provenance.
+    evidence_links: tuple[str, ...]
+    contradicting_links: tuple[str, ...]
 
     as_of_date: date
     analysis_window_days: int
+
+    # Stored on the row so __post_init__ re-derivation uses the same
+    # thresholds the builder did.
+    policy: ClaimGatePolicy
     schema_version: str = "v1"
 ```
 
-`claim_id` is a deterministic hash so the same logical claim across
-re-runs produces the same id, which lets the React side cache and
-diff cleanly.
+`claim_id` is a deterministic hash; the same logical claim across
+re-runs produces the same id (so the React side caches and diffs
+cleanly), and `claim_key` ensures two legitimate claims of the same
+`(scope, type, target)` don't collide. `__post_init__` recomputes
+`claim_id` from the identity fields and rejects mismatches, so direct
+construction cannot store an arbitrary id.
 
 ## Render vs report gate semantics
 
@@ -300,11 +319,16 @@ Workspace -> Evidence UI -> Opportunities -> Challenger -> Alerts).
    Recommend: keep `b2b_evidence_claims` separate. Wrapping risks
    destabilizing Phase 9's mid-soak. The aggregation layer joins.
 
-3. **claim_id generation.** Hash of what?
-   Recommend: `sha256(claim_scope || claim_type || target_entity ||
-   secondary_target || as_of_date || analysis_window_days)`. Stable
-   across re-runs of the same claim; varies on different days /
-   windows / vendors.
+3. **claim_id generation.** RESOLVED in Patch 1 (post-audit hardening).
+   `sha256(claim_scope || claim_type || claim_key || target_entity ||
+   secondary_target || as_of_date || analysis_window_days)`.
+   `claim_key` is required and disambiguates within
+   `(scope, type, target)` so multiple legitimate claims of the same
+   tuple do not collide (e.g. weakness on pricing AND weakness on
+   support for the same vendor). `compute_claim_id()` rejects empty
+   claim_key, and `__post_init__` recomputes claim_id from the
+   identity fields and rejects mismatches -- direct construction
+   cannot store an arbitrary id.
 
 4. **Where does aggregation run?** Inside the existing synthesis cycle
    (after `b2b_reasoning_synthesis` row is persisted), or as a separate
