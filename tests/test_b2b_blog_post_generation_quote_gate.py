@@ -28,6 +28,7 @@ sys.modules.setdefault("asyncpg", _asyncpg_mock)
 sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
 from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E402
+    _blog_quote_highlights,
     _blueprint_best_fit_guide,
     _blueprint_market_landscape,
     _blueprint_pain_point_roundup,
@@ -470,6 +471,65 @@ def test_wrapper_respects_limit():
 
 
 # ---------------------------------------------------------------------------
+# _blog_quote_highlights reviewer_voice section stats
+# ---------------------------------------------------------------------------
+
+
+def test_blog_quote_highlights_drops_unmarked_rows():
+    """Reviewer_voice key_stats are customer-visible and must use the
+    same explicit-origin gate as PostBlueprint.quotable_phrases."""
+    rows = [
+        {"vendor": "Shopify", "phrase": "Unmarked quote must not surface."},
+    ]
+    assert _blog_quote_highlights(rows) == []
+
+
+def test_blog_quote_highlights_routes_review_rows_through_contract_gate():
+    row = _v4_row(
+        text="Pricing keeps rising every renewal cycle",
+        review_id="highlight-review-1",
+        source="g2",
+        vendor_name="Shopify",
+    )
+    highlights = _blog_quote_highlights([row], vendors=["Shopify"])
+    assert highlights == [
+        {
+            "vendor": "Shopify",
+            "phrase": "Pricing keeps rising every renewal cycle",
+            "sentiment": "",
+            "role": "Director of Operations",
+        }
+    ]
+
+
+def test_blog_quote_highlights_drops_non_verbatim_review_rows():
+    row = _v4_row(
+        text="Pricing keeps rising every renewal cycle",
+        verbatim=False,
+        vendor_name="Shopify",
+    )
+    assert _blog_quote_highlights([row], vendors=["Shopify"]) == []
+
+
+def test_blog_quote_highlights_preserves_explicit_vault_rows():
+    row = {
+        "vendor": "Shopify",
+        "phrase": "Vault-curated quote text.",
+        "role": "Finance",
+        "quote_origin": "vault",
+    }
+    highlights = _blog_quote_highlights([row], vendors=["Shopify"])
+    assert highlights == [
+        {
+            "vendor": "Shopify",
+            "phrase": "Vault-curated quote text.",
+            "sentiment": "",
+            "role": "Finance",
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
 # _blueprint_pricing_reality_check pilot integration (loophole closure)
 # ---------------------------------------------------------------------------
 
@@ -542,6 +602,68 @@ def test_vendor_showdown_blueprint_routes_quotes_through_contract_gate():
     assert quote["review_id"] == "vs-review-1"
     assert quote["source"] == "g2"
     assert quote["field"] == "pricing_phrases"
+
+
+def test_vendor_showdown_reviewer_voice_drops_unmarked_quote_highlights():
+    ctx = {
+        "slug": "shopify-vs-bigcommerce",
+        "vendor_a": "Shopify",
+        "vendor_b": "BigCommerce",
+        "category": "ecommerce",
+        "total_reviews": 240,
+        "reviews_a": 130,
+        "reviews_b": 110,
+        "urgency_a": 7.4,
+        "urgency_b": 6.8,
+        "pain_diff": 0.6,
+    }
+    data = {
+        "data_context": {"category": "ecommerce"},
+        "quotes": [
+            {
+                "vendor": "Shopify",
+                "phrase": "Unmarked section-stat text must not surface.",
+            },
+        ],
+    }
+    blueprint = _blueprint_vendor_showdown(ctx, data)
+    assert blueprint.quotable_phrases == []
+    assert "reviewer_voice" not in {section.id for section in blueprint.sections}
+
+
+def test_vendor_showdown_reviewer_voice_uses_quote_grade_highlights():
+    row = _v4_row(
+        text="Shopify pricing keeps rising every renewal cycle",
+        review_id="vs-review-voice-1",
+        source="g2",
+        vendor_name="Shopify",
+        urgency=8.4,
+        field="pricing_phrases",
+    )
+    ctx = {
+        "slug": "shopify-vs-bigcommerce",
+        "vendor_a": "Shopify",
+        "vendor_b": "BigCommerce",
+        "category": "ecommerce",
+        "total_reviews": 240,
+        "reviews_a": 130,
+        "reviews_b": 110,
+        "urgency_a": 7.4,
+        "urgency_b": 6.8,
+        "pain_diff": 0.6,
+    }
+    data = {"data_context": {"category": "ecommerce"}, "quotes": [row]}
+    blueprint = _blueprint_vendor_showdown(ctx, data)
+    reviewer_voice = next(section for section in blueprint.sections if section.id == "reviewer_voice")
+    highlights = reviewer_voice.key_stats["quote_highlights"]
+    assert highlights == [
+        {
+            "vendor": "Shopify",
+            "phrase": "Shopify pricing keeps rising every renewal cycle",
+            "sentiment": "",
+            "role": "Director of Operations",
+        }
+    ]
 
 
 def test_market_landscape_blueprint_routes_quotes_through_contract_gate():

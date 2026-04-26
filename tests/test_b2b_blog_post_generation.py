@@ -1076,7 +1076,12 @@ def test_blueprint_vendor_deep_dive_promotes_reasoning_sections():
                 {"pain_category": "support", "avg_urgency": 6.4, "signal_count": 5, "feature_gaps": []},
             ],
             "quotes": [
-                {"vendor": "Jira", "phrase": "Renewal pricing became a flashpoint for the ops team.", "sentiment": "negative"},
+                {
+                    "vendor": "Jira",
+                    "phrase": "Renewal pricing became a flashpoint for the ops team.",
+                    "sentiment": "negative",
+                    "quote_origin": "vault",
+                },
             ],
             "competitor_profiles": [
                 {"vendor_name": "Asana", "strengths": [{"area": "ease of use"}], "weaknesses": [{"area": "enterprise controls"}]},
@@ -1216,8 +1221,18 @@ def test_blueprint_best_fit_guide_adds_tradeoff_and_voice_sections():
                 {"vendor": "Freshsales", "signals": [{"pain_category": "ecosystem", "signal_count": 3, "avg_urgency": 5.4}]},
             ],
             "quotes": [
-                {"vendor": "HubSpot", "phrase": "Setup is quick, but pricing gets steep as you scale.", "sentiment": "negative"},
-                {"vendor": "Salesforce", "phrase": "The workflow power is real, but complexity slows smaller teams down.", "sentiment": "negative"},
+                {
+                    "vendor": "HubSpot",
+                    "phrase": "Setup is quick, but pricing gets steep as you scale.",
+                    "sentiment": "negative",
+                    "quote_origin": "vault",
+                },
+                {
+                    "vendor": "Salesforce",
+                    "phrase": "The workflow power is real, but complexity slows smaller teams down.",
+                    "sentiment": "negative",
+                    "quote_origin": "vault",
+                },
             ],
             "pool_category": {},
             "xv_synthesis_lookup": {},

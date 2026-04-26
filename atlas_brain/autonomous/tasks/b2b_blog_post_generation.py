@@ -6664,7 +6664,8 @@ def _blog_quote_highlights(
     }
     seen: set[str] = set()
     highlights: list[dict[str, Any]] = []
-    for item in quotes or []:
+    gated_quotes = _split_and_gate_blog_quotes(list(quotes or []), limit=None)
+    for item in gated_quotes:
         if not isinstance(item, dict):
             continue
         vendor = str(item.get("vendor") or "").strip()
