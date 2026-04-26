@@ -668,6 +668,8 @@ def _briefing_quotes_from_evidence_vault(
     """Build quotable briefing evidence rows from canonical weakness evidence."""
     quotes: list[dict[str, Any]] = []
     for item in (vault.get("weakness_evidence") or []):
+        if item.get("phrase_verbatim") is not True:
+            continue
         text = str(item.get("best_quote") or "").strip()
         if not text:
             continue
@@ -687,6 +689,8 @@ def _briefing_quotes_from_evidence_vault(
             "urgency": metrics.get("avg_urgency_when_mentioned") or metrics.get("avg_urgency"),
             "pain_category": item.get("key"),
             "mention_count": int(item.get("mention_count_total") or 0),
+            "phrase_verbatim": True,
+            "quote_origin": "vault",
         })
     quotes.sort(
         key=lambda q: (

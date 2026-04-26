@@ -10326,6 +10326,8 @@ def _build_evidence_vault_pass2_rollups(
             "_supporting_seen": set(),
             "best_quote": None,
             "quote_source": None,
+            "phrase_verbatim": None,
+            "quote_origin": None,
             "_best_quote_key": None,
         })
 
@@ -10368,6 +10370,12 @@ def _build_evidence_vault_pass2_rollups(
             if item["_best_quote_key"] is None or quote_key > item["_best_quote_key"]:
                 item["_best_quote_key"] = quote_key
                 item["best_quote"] = quote_item.get("quote")
+                if quote_item.get("phrase_verbatim") is True:
+                    item["phrase_verbatim"] = True
+                    item["quote_origin"] = str(quote_item.get("quote_origin") or "review").strip() or "review"
+                else:
+                    item["phrase_verbatim"] = None
+                    item["quote_origin"] = None
                 item["quote_source"] = {
                     "review_id": str(quote_item.get("review_id") or "") or None,
                     "source": quote_item.get("source"),
@@ -10494,6 +10502,8 @@ def _build_evidence_vault_pass2_rollups(
                 finalized[section_key] = {
                     "best_quote": item["best_quote"],
                     "quote_source": item["quote_source"],
+                    "phrase_verbatim": item["phrase_verbatim"],
+                    "quote_origin": item["quote_origin"],
                     "mention_count_recent": item["mention_count_recent"],
                     "trend": _build_evidence_vault_trend(
                         item["mention_count_recent"],
@@ -10897,6 +10907,18 @@ def build_evidence_vault(
     weakness_evidence: list[dict] = []
     _seen_keys: set[str] = set()
 
+    def _rollup_quote_metadata(rollup: dict[str, Any]) -> dict[str, Any]:
+        if rollup.get("phrase_verbatim") is not True:
+            return {"phrase_verbatim": None, "quote_origin": None}
+        origin = str(rollup.get("quote_origin") or "review").strip() or "review"
+        return {"phrase_verbatim": True, "quote_origin": origin}
+
+    def _apply_quote_metadata(target: dict[str, Any], quote: dict[str, Any]) -> None:
+        if quote.get("phrase_verbatim") is not True:
+            return
+        target["phrase_verbatim"] = True
+        target["quote_origin"] = str(quote.get("quote_origin") or "review").strip() or "review"
+
     # 1. Pain categories
     for p in pain_entries:
         key = str(p.get("category") or p.get("pain") or "").lower().strip()
@@ -10913,6 +10935,7 @@ def build_evidence_vault(
             "evidence_type": "pain_category",
             "best_quote": rollup.get("best_quote"),
             "quote_source": rollup.get("quote_source"),
+            **_rollup_quote_metadata(rollup),
             "mention_count_total": p.get("complaint_count") or p.get("count") or 0,
             "mention_count_recent": rollup.get("mention_count_recent"),
             "trend": rollup.get("trend"),
@@ -10939,6 +10962,7 @@ def build_evidence_vault(
             "evidence_type": "feature_gap",
             "best_quote": rollup.get("best_quote"),
             "quote_source": rollup.get("quote_source"),
+            **_rollup_quote_metadata(rollup),
             "mention_count_total": fg.get("mentions") or 0,
             "mention_count_recent": rollup.get("mention_count_recent"),
             "trend": rollup.get("trend"),
@@ -10975,6 +10999,7 @@ def build_evidence_vault(
                 "evidence_type": "satisfaction_area",
                 "best_quote": rollup.get("best_quote"),
                 "quote_source": rollup.get("quote_source"),
+                **_rollup_quote_metadata(rollup),
                 "mention_count_total": evidence_count,
                 "mention_count_recent": rollup.get("mention_count_recent"),
                 "trend": rollup.get("trend"),
@@ -11052,6 +11077,7 @@ def build_evidence_vault(
                 if best_match and best_overlap > 0:
                     used_quote_ids.add(best_match_id)
                     w["best_quote"] = best_match.get("quote")
+                    _apply_quote_metadata(w, best_match)
                     w["quote_source"] = {
                         "review_id": str(best_match.get("review_id") or ""),
                         "source": best_match.get("source"),
@@ -11069,6 +11095,7 @@ def build_evidence_vault(
                     qid = str(q.get("review_id") or id(q))
                     if qid not in used_quote_ids:
                         weakness_evidence[0]["best_quote"] = q.get("quote")
+                        _apply_quote_metadata(weakness_evidence[0], q)
                         weakness_evidence[0]["quote_source"] = {
                             "review_id": str(q.get("review_id") or ""),
                             "source": q.get("source"),
@@ -11098,6 +11125,7 @@ def build_evidence_vault(
             "evidence_type": "retention_signal",
             "best_quote": rollup.get("best_quote"),
             "quote_source": rollup.get("quote_source"),
+            **_rollup_quote_metadata(rollup),
             "mention_count_total": pa.get("mentions") or 0,
             "mention_count_recent": rollup.get("mention_count_recent"),
             "trend": rollup.get("trend"),
@@ -11134,6 +11162,7 @@ def build_evidence_vault(
                 "evidence_type": "satisfaction_area",
                 "best_quote": rollup.get("best_quote"),
                 "quote_source": rollup.get("quote_source"),
+                **_rollup_quote_metadata(rollup),
                 "mention_count_total": evidence_count,
                 "mention_count_recent": rollup.get("mention_count_recent"),
                 "trend": rollup.get("trend"),

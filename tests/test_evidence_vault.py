@@ -271,6 +271,8 @@ def test_build_evidence_vault_pass2_rollups_populates_recent_trend_and_quote_pro
                     "quote": "Pricing got confusing fast.",
                     "review_id": "r1",
                     "source": "g2",
+                    "phrase_verbatim": True,
+                    "quote_origin": "review",
                     "reviewed_at": date(2026, 3, 18),
                     "rating": 2.0,
                     "company": "Acme Corp",
@@ -300,9 +302,13 @@ def test_build_evidence_vault_pass2_rollups_populates_recent_trend_and_quote_pro
     assert pricing["quote_source"]["source"] == "g2"
     assert pricing["quote_source"]["reviewed_at"] == "2026-03-18"
     assert pricing["quote_source"]["rating"] == 2.0
+    assert pricing["phrase_verbatim"] is True
+    assert pricing["quote_origin"] == "review"
     assert pricing["supporting_review_ids"] == ["r1", "r2", "r3"]
     assert integrations["mention_count_recent"] == 2
     assert integrations["trend"]["direction"] == "new"
+    assert integrations["phrase_verbatim"] is True
+    assert integrations["quote_origin"] == "review"
 
 
 def test_build_evidence_vault_merges_pass2_rollups_into_output():
@@ -321,6 +327,8 @@ def test_build_evidence_vault_merges_pass2_rollups_into_output():
                     "reviewed_at": "2026-03-18",
                     "rating": 2.0,
                 },
+                "phrase_verbatim": True,
+                "quote_origin": "review",
                 "mention_count_recent": 2,
                 "trend": {
                     "direction": "accelerating",
@@ -348,6 +356,8 @@ def test_build_evidence_vault_merges_pass2_rollups_into_output():
                     "reviewed_at": "2026-03-10",
                     "rating": 1.0,
                 },
+                "phrase_verbatim": True,
+                "quote_origin": "review",
                 "mention_count_recent": 2,
                 "trend": {
                     "direction": "new",
@@ -394,12 +404,55 @@ def test_build_evidence_vault_merges_pass2_rollups_into_output():
     assert pricing["mention_count_recent"] == 2
     assert pricing["trend"]["direction"] == "accelerating"
     assert pricing["quote_source"]["source"] == "g2"
+    assert pricing["phrase_verbatim"] is True
+    assert pricing["quote_origin"] == "review"
     assert pricing["supporting_review_ids"] == ["r1", "r2", "r3"]
     assert pricing["supporting_metrics"]["avg_urgency"] == 6.7
     assert pricing["supporting_metrics"]["avg_rating_when_mentioned"] == 1.67
     assert integrations["mention_count_recent"] == 2
     assert integrations["trend"]["direction"] == "new"
+    assert integrations["phrase_verbatim"] is True
+    assert integrations["quote_origin"] == "review"
     assert vault["metric_snapshot"]["reviews_in_recent_window"] == 2
+
+
+def test_build_evidence_vault_fallback_quotes_preserve_verbatim_marker():
+    """Pass-1 quote fallback must keep the quote-grade marker for readers."""
+    vault = build_evidence_vault(
+        vendor_name="Acme",
+        vs={
+            "total_reviews": 20,
+            "recommend_yes": 12,
+            "recommend_no": 8,
+            "avg_urgency": 5.5,
+        },
+        pain_entries=[{"category": "pricing", "complaint_count": 3, "avg_urgency": 6.7}],
+        feature_gap_entries=[],
+        quotes=[{
+            "quote": "Pricing got confusing fast.",
+            "review_id": "r1",
+            "source": "g2",
+            "company": "Acme Corp",
+            "title": "VP Ops",
+            "phrase_verbatim": True,
+            "quote_origin": "review",
+        }],
+        positive_entries=[],
+        product_profile=None,
+        keyword_spikes=None,
+        company_signals=[],
+        provenance=None,
+        data_context=None,
+        dm_rate=0.2,
+        price_rate=0.3,
+        analysis_window_days=30,
+        recent_window_days=30,
+    )
+
+    pricing = vault["weakness_evidence"][0]
+    assert pricing["best_quote"] == "Pricing got confusing fast."
+    assert pricing["phrase_verbatim"] is True
+    assert pricing["quote_origin"] == "review"
 
 
 def test_build_evidence_vault_filters_deprecated_and_low_trust_company_signals():

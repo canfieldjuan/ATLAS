@@ -690,17 +690,21 @@ def _build_challenger_vault_weaknesses(
         direction = str(trend.get("direction") or "").strip()
         if direction:
             evidence_parts.append("trend %s" % direction)
-        normalized.append({
+        row = {
             "weakness": area,
             "area": area,
             "evidence": ", ".join(evidence_parts) or "Canonical weakness evidence from evidence vault",
             "mention_count": total,
             "count": total,
             "evidence_count": total,
-            "customer_quote": item.get("best_quote") or "",
             "source": "evidence_vault",
             "evidence_type": item.get("evidence_type") or "",
-        })
+        }
+        if item.get("phrase_verbatim") is True and item.get("best_quote"):
+            row["customer_quote"] = item.get("best_quote") or ""
+            row["phrase_verbatim"] = True
+            row["quote_origin"] = "vault"
+        normalized.append(row)
     normalized.sort(key=lambda row: int(row.get("count") or 0), reverse=True)
     return normalized[:limit]
 
@@ -735,16 +739,20 @@ def _build_challenger_vault_strengths(
         direction = str(trend.get("direction") or "").strip()
         if direction:
             evidence_parts.append("trend %s" % direction)
-        normalized.append({
+        row = {
             "strength": area,
             "area": area,
             "evidence": ", ".join(evidence_parts) or "Canonical strength evidence from evidence vault",
             "mention_count": total,
             "count": total,
-            "customer_quote": item.get("best_quote") or "",
             "source": "evidence_vault",
             "evidence_type": item.get("evidence_type") or "",
-        })
+        }
+        if item.get("phrase_verbatim") is True and item.get("best_quote"):
+            row["customer_quote"] = item.get("best_quote") or ""
+            row["phrase_verbatim"] = True
+            row["quote_origin"] = "vault"
+        normalized.append(row)
     normalized.sort(key=lambda row: int(row.get("count") or 0), reverse=True)
     return normalized[:limit]
 
@@ -762,6 +770,8 @@ def _build_challenger_vault_pain_quotes(
     for item in vault.get("weakness_evidence") or []:
         if not isinstance(item, dict):
             continue
+        if item.get("phrase_verbatim") is not True:
+            continue
         quote = str(item.get("best_quote") or "").strip()
         if not quote:
             continue
@@ -776,6 +786,8 @@ def _build_challenger_vault_pain_quotes(
             "source_site": source.get("source") or "",
             "reviewed_at": source.get("reviewed_at"),
             "rating": source.get("rating"),
+            "phrase_verbatim": True,
+            "quote_origin": "vault",
             "_total": int(item.get("mention_count_total") or 0),
             "_recent": int(item.get("mention_count_recent") or 0),
         })

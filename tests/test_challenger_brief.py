@@ -595,6 +595,8 @@ class TestBuildChallengerBrief:
                     "label": "Pricing opacity",
                     "evidence_type": "pain_category",
                     "best_quote": "Our actual bill was much higher than promised",
+                    "phrase_verbatim": True,
+                    "quote_origin": "review",
                     "quote_source": {
                         "company": "Acme",
                         "reviewer_title": "VP Ops",
@@ -627,10 +629,15 @@ class TestBuildChallengerBrief:
         assert weakness["area"] == "Pricing opacity"
         assert weakness["count"] == 18
         assert "7 in last 30 days" in weakness["evidence"]
+        assert weakness["customer_quote"] == "Our actual bill was much higher than promised"
+        assert weakness["phrase_verbatim"] is True
+        assert weakness["quote_origin"] == "vault"
         assert quote["quote"] == "Our actual bill was much higher than promised"
         assert quote["company"] == "Acme"
         assert quote["role"] == "VP Ops"
         assert quote["source_site"] == "g2"
+        assert quote["phrase_verbatim"] is True
+        assert quote["quote_origin"] == "vault"
         assert brief["data_sources"]["evidence_vault"] is True
 
     def test_evidence_vault_quotes_fill_battle_card_quote_gap(self):
@@ -646,6 +653,8 @@ class TestBuildChallengerBrief:
                     "label": "Pricing opacity",
                     "evidence_type": "pain_category",
                     "best_quote": "The add-ons made the contract much more expensive",
+                    "phrase_verbatim": True,
+                    "quote_origin": "review",
                     "quote_source": {"company": "Beta", "reviewer_title": "Director", "source": "reddit"},
                     "mention_count_total": 12,
                     "mention_count_recent": 4,
@@ -668,7 +677,45 @@ class TestBuildChallengerBrief:
         )
         assert brief["incumbent_profile"]["top_weaknesses"][0]["area"] == "pricing"
         assert brief["incumbent_profile"]["top_pain_quotes"][0]["company"] == "Beta"
-        assert brief["data_sources"]["battle_card"] is True
+        assert brief["incumbent_profile"]["top_pain_quotes"][0]["phrase_verbatim"] is True
+        assert brief["incumbent_profile"]["top_pain_quotes"][0]["quote_origin"] == "vault"
+
+    def test_evidence_vault_unmarked_quotes_do_not_fill_quote_fields(self):
+        """Vault evidence still contributes counts, but unmarked quotes
+        fail closed before customer-facing quote fields."""
+        vault = {
+            "recent_window_days": 30,
+            "weakness_evidence": [
+                {
+                    "key": "pricing",
+                    "label": "Pricing opacity",
+                    "evidence_type": "pain_category",
+                    "best_quote": "This unmarked vault quote must not surface",
+                    "quote_source": {"company": "Beta", "reviewer_title": "Director", "source": "reddit"},
+                    "mention_count_total": 12,
+                    "mention_count_recent": 4,
+                    "supporting_metrics": {"avg_urgency_when_mentioned": 6.8},
+                },
+            ],
+        }
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=vault,
+            churn_signal=None,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+        weakness = brief["incumbent_profile"]["top_weaknesses"][0]
+        assert weakness["area"] == "Pricing opacity"
+        assert "customer_quote" not in weakness
+        assert brief["incumbent_profile"]["top_pain_quotes"] == []
+        assert brief["data_sources"]["battle_card"] is False
         assert brief["data_sources"]["evidence_vault"] is True
 
     def test_synthesis_view_attaches_reasoning_contracts(self):

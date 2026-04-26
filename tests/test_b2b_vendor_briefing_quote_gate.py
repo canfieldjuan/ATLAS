@@ -7,9 +7,8 @@ Coverage:
     excerpt_text for non-verbatim rows (Sites 2 and 3).
   - Section 6 "What Customers Are Saying" gates briefing["evidence"]
     on phrase_verbatim is True; string evidence and unmarked dicts are
-    dropped (Site 1). Producers will be migrated to stamp the marker
-    in 4c-B; vault-sourced rows stay unmarked until a separate
-    follow-up.
+    dropped (Site 1). SQL and vault producers stamp the marker before
+    customer-facing quote rendering.
 
 Policy: customer-facing blockquote / italic excerpt text requires an
 explicit phrase_verbatim is True marker. Anything else fails closed.
@@ -500,19 +499,41 @@ async def test_fetch_high_urgency_quotes_output_renders_through_template(monkeyp
     assert "&ldquo;" in html and "&rdquo;" in html
 
 
-async def test_fetch_high_urgency_quotes_vault_path_unchanged(monkeypatch):
-    """4c-B only migrates the SQL producer. Vault rows still come
-    through _briefing_quotes_from_evidence_vault and stay UNMARKED;
-    they will keep failing the 4c-A template gate until the vault-
-    verbatim follow-up. This test locks in that the vault helper does
-    NOT stamp phrase_verbatim on its output."""
+async def test_evidence_vault_quotes_require_verbatim_marker():
+    """Vault rows without phrase_verbatim stay closed at the producer edge."""
     from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
 
     vault = {
         "weakness_evidence": [
             {
                 "key": "pricing",
-                "best_quote": "Vault quote text -- still unmarked after 4c-B.",
+                "best_quote": "Vault quote text -- still unmarked.",
+                "quote_source": {
+                    "company": "Hack Club",
+                    "reviewer_title": "VP Eng",
+                    "source": "g2",
+                    "review_id": "vault-1",
+                },
+                "supporting_metrics": {"avg_urgency_when_mentioned": 7.5},
+                "mention_count_total": 4,
+            },
+        ],
+    }
+    out = briefing_mod._briefing_quotes_from_evidence_vault(vault)
+    assert out == []
+
+
+async def test_evidence_vault_quotes_stamp_verbatim_for_email_render():
+    """Marked vault rows are re-emitted as vault-origin verbatim evidence."""
+    from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+
+    vault = {
+        "weakness_evidence": [
+            {
+                "key": "pricing",
+                "best_quote": "Vault quote text -- now marked verbatim.",
+                "phrase_verbatim": True,
+                "quote_origin": "review",
                 "quote_source": {
                     "company": "Hack Club",
                     "reviewer_title": "VP Eng",
@@ -526,10 +547,13 @@ async def test_fetch_high_urgency_quotes_vault_path_unchanged(monkeypatch):
     }
     out = briefing_mod._briefing_quotes_from_evidence_vault(vault)
     assert len(out) == 1
-    # Vault path remains unmarked -- regression-locked here so the
-    # follow-up vault-verbatim migration can't accidentally regress.
-    assert "phrase_verbatim" not in out[0]
-    assert out[0].get("quote_origin") in (None, "vault", "")
+    assert out[0]["phrase_verbatim"] is True
+    assert out[0]["quote_origin"] == "vault"
+
+    briefing = _briefing_skeleton(evidence=out)
+    html = render_vendor_briefing_html(briefing)
+    assert "What Customers Are Saying" in html
+    assert "Vault quote text -- now marked verbatim." in html
 
 
 def test_evidence_section_drops_unmarked_dict_evidence():
