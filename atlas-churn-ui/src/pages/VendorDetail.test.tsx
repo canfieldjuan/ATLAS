@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VendorDetail from './VendorDetail'
+import type { VendorClaim } from '../api/client'
 
 const mockNavigate = vi.hoisted(() => vi.fn())
 
@@ -1118,7 +1119,7 @@ describe('VendorDetail', () => {
     })
   }
 
-  function _claim(overrides: Partial<{ render_allowed: boolean; supporting_count: number; denominator: number; suppression_reason: string | null; evidence_posture: string }> = {}) {
+  function _claim(overrides: Partial<VendorClaim> = {}): VendorClaim {
     return {
       claim_id: 'a'.repeat(64),
       claim_key: 'decision_maker_churn',
@@ -1142,7 +1143,7 @@ describe('VendorDetail', () => {
       evidence_links: [],
       contradicting_links: [],
       as_of_date: '2026-04-26',
-      analysis_window_days: 90,
+      analysis_window_days: 30,
       schema_version: 'v1',
       ...overrides,
     }
@@ -1207,6 +1208,68 @@ describe('VendorDetail', () => {
     // 6 / 47 = 13% (rounded) -- comes from the claim, not the legacy 99%.
     expect(card).toHaveTextContent('13%')
     expect(card).not.toHaveTextContent('99%')
+  })
+
+  it('shows Validation unavailable when the claims API request failed', async () => {
+    // Audit High: 'claim absent' and 'claim validation unavailable' must
+    // be distinct. If the claims endpoint failed, we cannot prove the
+    // legacy rate is safe to render -- show validation-unavailable
+    // instead of the legacy percentage.
+    _stubProfileWithChurnSignal(0.5)
+    api.fetchVendorClaims.mockRejectedValue(new Error('API 503: claims unavailable'))
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('dm-churn-rate-card')
+    expect(within(card).getByTestId('dm-churn-rate-validation-unavailable')).toHaveTextContent(
+      'Validation unavailable',
+    )
+    expect(card).not.toHaveTextContent('50%')
+    expect(card).not.toHaveTextContent('Insufficient evidence')
+  })
+
+  it('fails closed to Insufficient evidence when render_allowed=true but denominator is missing', async () => {
+    // Audit Low (defensive): the backend is supposed to enforce that
+    // a rate claim with render_allowed=true has a valid denominator,
+    // but the UI must not render supporting_count*100% garbage if
+    // the contract ever drifts. Fail closed.
+    _stubProfileWithChurnSignal(0.5)
+    api.fetchVendorClaims.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-26',
+      analysis_window_days: 30,
+      claims: [
+        _claim({
+          render_allowed: true,
+          report_allowed: true,
+          supporting_count: 6,
+          denominator: null,
+          evidence_posture: 'usable',
+          suppression_reason: null,
+        }),
+      ],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('dm-churn-rate-card')
+    expect(within(card).getByTestId('dm-churn-rate-suppressed')).toHaveTextContent(
+      'Insufficient evidence',
+    )
+    expect(card).not.toHaveTextContent('600%')
+    expect(card).not.toHaveTextContent('50%')
   })
 
   it('falls back to the legacy decision_maker_churn_rate when the claim is absent', async () => {

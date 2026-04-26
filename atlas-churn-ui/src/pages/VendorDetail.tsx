@@ -486,7 +486,7 @@ export default function VendorDetail() {
         fetchReports({ vendor_filter: name, limit: 3, include_stale: true })
           .then((result) => ({ ok: true as const, data: result.reports }))
           .catch((err: unknown) => ({ ok: false as const, error: err })),
-        fetchVendorClaims(name, { analysis_window_days: 90 })
+        fetchVendorClaims(name)
           .then((result) => ({ ok: true as const, data: result }))
           .catch((err: unknown) => ({ ok: false as const, error: err })),
       ])
@@ -518,10 +518,25 @@ export default function VendorDetail() {
 
   const profile = data?.profile
   if (!profile) return <PageError error={new Error('Vendor not found')} />
-  // Phase 10 Patch 2c. Look up the DM-churn ProductClaim if the API
-  // call succeeded. Absent claim -> legacy fallback path. Present
-  // claim with render_allowed=false -> suppression UI (legacy value
-  // is NOT shown; the contract says suppression wins).
+  // Phase 10 Patch 2c. The DM-churn rate card has FOUR distinct states
+  // and the legacy fallback applies to only one of them:
+  //
+  //   1. Validation unavailable (data.claims === null because the API
+  //      call failed). Show "Validation unavailable" -- legacy is
+  //      NOT shown because we cannot prove it is safe to render.
+  //   2. Claim present + render_allowed=false. Show
+  //      "Insufficient evidence" with reason. Legacy NOT shown;
+  //      suppression beats the legacy fallback by design.
+  //   3. Claim present + render_allowed=true. Show the rate computed
+  //      from claim.supporting_count / claim.denominator. Fail closed
+  //      to "Insufficient evidence" if denominator is missing or zero
+  //      (defensive: backend gates rate claims on denominator, but the
+  //      UI must not render a divide-by-zero or supporting_count*100%
+  //      garbage if the contract ever drifts).
+  //   4. Claim absent (data.claims is a healthy response with no row
+  //      of this claim_type). Legacy signal.decision_maker_churn_rate
+  //      renders unchanged.
+  const validationUnavailable = data?.claims === null
   const dmChurnClaim: VendorClaim | undefined = findVendorClaim(
     data?.claims,
     'decision_maker_churn_rate',
@@ -1188,28 +1203,40 @@ export default function VendorDetail() {
                   <div className="flex justify-between" data-testid="dm-churn-rate-card">
                     <dt className="text-slate-400">DM Churn Rate</dt>
                     <dd className="text-white">
-                      {dmChurnClaim
-                        ? dmChurnClaim.render_allowed
-                          ? `${Math.round(((dmChurnClaim.supporting_count) / Math.max(dmChurnClaim.denominator ?? 1, 1)) * 100)}%`
-                          : (
-                              <span
-                                className="text-slate-500 italic"
-                                title={
-                                  dmChurnClaim.suppression_reason
-                                    ? `Suppressed: ${dmChurnClaim.suppression_reason}` +
-                                      (dmChurnClaim.denominator !== null
-                                        ? ` (${dmChurnClaim.supporting_count} of ${dmChurnClaim.denominator} DMs)`
-                                        : '')
-                                    : 'Suppressed'
-                                }
-                                data-testid="dm-churn-rate-suppressed"
-                              >
-                                Insufficient evidence
-                              </span>
-                            )
-                        : signal.decision_maker_churn_rate !== null
-                          ? `${(signal.decision_maker_churn_rate * 100).toFixed(0)}%`
-                          : '--'}
+                      {validationUnavailable ? (
+                        <span
+                          className="text-slate-500 italic"
+                          title="Claim validation API unavailable; rate not shown"
+                          data-testid="dm-churn-rate-validation-unavailable"
+                        >
+                          Validation unavailable
+                        </span>
+                      ) : dmChurnClaim ? (
+                        dmChurnClaim.render_allowed &&
+                        dmChurnClaim.denominator !== null &&
+                        dmChurnClaim.denominator > 0 ? (
+                          `${Math.round((dmChurnClaim.supporting_count / dmChurnClaim.denominator) * 100)}%`
+                        ) : (
+                          <span
+                            className="text-slate-500 italic"
+                            title={
+                              dmChurnClaim.suppression_reason
+                                ? `Suppressed: ${dmChurnClaim.suppression_reason}` +
+                                  (dmChurnClaim.denominator !== null
+                                    ? ` (${dmChurnClaim.supporting_count} of ${dmChurnClaim.denominator} DMs)`
+                                    : '')
+                                : 'Suppressed: missing denominator'
+                            }
+                            data-testid="dm-churn-rate-suppressed"
+                          >
+                            Insufficient evidence
+                          </span>
+                        )
+                      ) : signal.decision_maker_churn_rate !== null ? (
+                        `${(signal.decision_maker_churn_rate * 100).toFixed(0)}%`
+                      ) : (
+                        '--'
+                      )}
                     </dd>
                   </div>
                   <div className="flex justify-between">
