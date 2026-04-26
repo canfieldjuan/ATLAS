@@ -17,14 +17,23 @@ time from existing tables (b2b_reviews + b2b_review_vendor_mentions);
 no migration, no persistence layer in Patch 2a. The persistence
 decision (open decision #1 in the design doc) waits on the canary
 review.
+
+Eligibility parity: the query reuses _eligible_review_filters from
+the legacy intelligence pipeline so the new ProductClaim envelope
+sees the same row population the existing dashboard rate computation
+sees -- duplicate suppression, source allowlist, jsonld_aggregate
+exclusion, applied data-correction filters all included.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any
 
+from ...autonomous.tasks._b2b_shared import (
+    _eligible_review_filters,
+    _intelligence_source_allowlist,
+)
 from .product_claim import (
     ClaimGatePolicy,
     ClaimScope,
@@ -54,50 +63,63 @@ register_policy(
 )
 
 
-_DM_CHURN_QUERY = """
+def _build_dm_churn_query() -> str:
+    """Build the DM-churn aggregation query using the shared eligible-
+    review filter so the ProductClaim denominator matches what the
+    legacy dashboard rate would compute. Vendor name is $1, window
+    days is $2, source allowlist is $3."""
+    eligible = _eligible_review_filters(
+        window_param=2,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
+    return f"""
 WITH dm_rows AS (
     SELECT
         r.id AS review_id,
         r.reviewer_name,
         (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
         (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
-        COALESCE(NULLIF(r.enrichment->>'enrichment_schema_version', ''), '0')::int AS schema_version,
-        r.enrichment ? 'phrase_metadata' AS has_phrase_metadata
+        -- Direct evidence test for THIS row: does the row carry at
+        -- least one phrase tagged as grounded? Stricter than just
+        -- "v4 existence" because v4 rows can still have all phrases
+        -- ungrounded. Tighter direct-evidence definition aligns with
+        -- the contract's "validated witness lineage" requirement.
+        EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(
+                COALESCE(r.enrichment->'phrase_metadata', '[]'::jsonb)
+            ) p
+            WHERE p->>'grounding_status' = 'grounded'
+        ) AS has_grounded_phrase
     FROM b2b_reviews r
     JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
     WHERE vm.vendor_name = $1
-      AND r.enrichment_status = 'enriched'
-      AND COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)
-          > NOW() - make_interval(days => $2::int)
+      AND {eligible}
 )
 SELECT
     -- Numerator: DMs signaling intent_to_leave.
     count(*) FILTER (WHERE decision_maker = true AND intent_to_leave = true) AS dm_churning,
     -- Denominator: total DMs in the window for this vendor.
     count(*) FILTER (WHERE decision_maker = true) AS dm_total,
-    -- Direct evidence: DM-churn rows backed by grounded phrase metadata.
+    -- Direct evidence: churning DM rows with at least one grounded
+    -- phrase. Tighter than the prior "any phrase_metadata exists"
+    -- check; ties direct evidence to the row's actual grounding,
+    -- not just to v4 existence.
     count(*) FILTER (
         WHERE decision_maker = true
           AND intent_to_leave = true
-          AND has_phrase_metadata = true
+          AND has_grounded_phrase = true
     ) AS dm_churning_direct,
     -- Distinct reviewers among the churning DMs (witness diversity).
     count(DISTINCT reviewer_name) FILTER (
         WHERE decision_maker = true AND intent_to_leave = true
     ) AS dm_churning_witnesses,
-    -- Contradictions: DMs explicitly NOT churning (intent_to_leave=false)
-    -- in the same window. Higher counts indicate split sentiment.
-    count(*) FILTER (
-        WHERE decision_maker = true AND intent_to_leave = false
-    ) AS dm_not_churning,
     -- Backing review_ids for evidence_links provenance.
     array_agg(review_id) FILTER (
         WHERE decision_maker = true AND intent_to_leave = true
-    ) AS churning_review_ids,
-    -- Whether ANY backing churn-DM row has phrase metadata. False -> UNVERIFIED.
-    bool_or(has_phrase_metadata) FILTER (
-        WHERE decision_maker = true AND intent_to_leave = true
-    ) AS has_grounded_evidence
+    ) AS churning_review_ids
 FROM dm_rows
 """
 
@@ -117,8 +139,22 @@ async def aggregate_dm_churn_rate_claim(
     renderable; the dashboard should show 'Insufficient evidence'
     instead of a percentage. Reports never publish unless the rate
     also passes the (usable + high/medium confidence) gate.
+
+    For rate claims, contradiction_count is 0 by design. The legacy
+    "DMs NOT signaling intent_to_leave" measure conflates denominator
+    context with contradicting evidence: those rows are exactly what
+    the rate is computed against, not a refutation of it. A meaningful
+    contradiction would be evidence that the rate computation itself
+    is wrong (sample skew, signal-flip from a prior period, etc.).
+    Defining that precisely waits on a real product need.
     """
-    row = await pool.fetchrow(_DM_CHURN_QUERY, vendor_name, int(analysis_window_days))
+    sources = _intelligence_source_allowlist()
+    row = await pool.fetchrow(
+        _build_dm_churn_query(),
+        vendor_name,
+        int(analysis_window_days),
+        sources,
+    )
     if row is None:
         return None
     dm_total = int(row["dm_total"] or 0)
@@ -130,13 +166,7 @@ async def aggregate_dm_churn_rate_claim(
     dm_churning = int(row["dm_churning"] or 0)
     dm_churning_direct = int(row["dm_churning_direct"] or 0)
     dm_churning_witnesses = int(row["dm_churning_witnesses"] or 0)
-    dm_not_churning = int(row["dm_not_churning"] or 0)
     churning_review_ids = list(row["churning_review_ids"] or [])
-    has_grounded = bool(row["has_grounded_evidence"]) if row["has_grounded_evidence"] is not None else False
-
-    # If there are zero churning DMs, supporting_count=0 means
-    # INSUFFICIENT posture -- the dashboard correctly shows "no
-    # churn signal" rather than implying a 0% rate is meaningful.
     rate = dm_churning / dm_total if dm_total > 0 else 0.0
 
     return build_product_claim(
@@ -155,10 +185,18 @@ async def aggregate_dm_churn_rate_claim(
         supporting_count=dm_churning,
         direct_evidence_count=dm_churning_direct,
         witness_count=dm_churning_witnesses,
-        contradiction_count=dm_not_churning,
+        # See docstring: rate-claim contradictions are not non-numerator
+        # rows. Set to 0 until a defensible rate-specific definition
+        # is in place.
+        contradiction_count=0,
         denominator=dm_total,
         sample_size=dm_total,
-        has_grounded_evidence=has_grounded if dm_churning > 0 else True,
+        # Grounded iff at least one churning-DM row has a grounded
+        # phrase. False -> UNVERIFIED via the validator's path. When
+        # the numerator is 0 we have nothing to ground in either
+        # direction; default True so the claim renders the "0%"
+        # rate honestly with no false UNVERIFIED label.
+        has_grounded_evidence=(dm_churning_direct > 0) if dm_churning > 0 else True,
         evidence_links=tuple(str(rid) for rid in churning_review_ids),
         contradicting_links=(),
         as_of_date=as_of_date,

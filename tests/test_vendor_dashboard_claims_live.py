@@ -173,25 +173,79 @@ async def test_vendor_without_dm_data_returns_none(pool):
 
 
 @pytest.mark.asyncio
-async def test_envelope_denominator_matches_ground_truth(pool):
-    """Sanity-check: the claim's denominator must match a direct
-    count from b2b_reviews. If the aggregator's CTE drifts (e.g.
-    different filter logic than _fetch_dm_churn_rates), this test
-    catches the divergence before VendorDetail.tsx starts trusting
-    the new envelope."""
+async def test_contradiction_count_is_zero_for_rate_claim(pool):
+    """Rate-claim contradictions are NOT 'rows that fall outside the
+    numerator' -- those are denominator context, not refutation. The
+    aggregator must return contradiction_count=0 until a defensible
+    rate-specific contradiction definition exists. Otherwise a healthy
+    rate (e.g. '12% intent-to-leave') would always look 'highly
+    contradicted' once it starts grounding, because 88% of DMs are
+    not in the numerator."""
+    claim = await aggregate_dm_churn_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is not None
+    assert claim.contradiction_count == 0
+
+
+@pytest.mark.asyncio
+async def test_direct_evidence_count_subset_of_supporting(pool):
+    """Direct evidence is a subset of supporting rows (the numerator):
+    every grounded churning DM is also a churning DM. The aggregator
+    must never report more direct than supporting, and never more
+    supporting than denominator."""
+    claim = await aggregate_dm_churn_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is not None
+    assert claim.direct_evidence_count <= claim.supporting_count
+    assert claim.supporting_count <= (claim.denominator or 0)
+
+
+@pytest.mark.asyncio
+async def test_envelope_denominator_matches_eligible_review_population(pool):
+    """The aggregator must use the same eligibility filters the
+    legacy intelligence pipeline uses (duplicate suppression, source
+    allowlist, jsonld_aggregate exclusion, applied data-corrections)
+    so the new ProductClaim envelope sees the same row population
+    the existing dashboard rate would see. This pin catches drift
+    if the aggregator forgets a filter and inflates the denominator
+    by including suppressed / duplicate / corrected rows.
+
+    Compares against a hand-rolled query that mirrors the exact
+    filter set in _eligible_review_filters() rather than a naive
+    'enrichment_status = enriched' count, which would diverge by
+    the suppressed-and-duplicate rows."""
+    from atlas_brain.autonomous.tasks._b2b_shared import (
+        _eligible_review_filters,
+        _intelligence_source_allowlist,
+    )
+
+    sources = _intelligence_source_allowlist()
+    eligible = _eligible_review_filters(
+        window_param=2,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
     ground_truth = await pool.fetchval(
-        """
+        f"""
         SELECT count(*)
         FROM b2b_reviews r
         JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
         WHERE vm.vendor_name = $1
-          AND r.enrichment_status = 'enriched'
-          AND COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)
-              > NOW() - make_interval(days => $2::int)
+          AND {eligible}
           AND (r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true
         """,
         "ClickUp",
         3650,
+        sources,
     )
     claim = await aggregate_dm_churn_rate_claim(
         pool,
@@ -203,5 +257,5 @@ async def test_envelope_denominator_matches_ground_truth(pool):
         pytest.skip("ClickUp has no DM data in this dataset")
     assert claim.denominator == ground_truth, (
         f"aggregator denominator {claim.denominator} != ground truth "
-        f"{ground_truth} -- the aggregator's CTE has drifted"
+        f"{ground_truth} -- eligibility filter set has drifted"
     )
