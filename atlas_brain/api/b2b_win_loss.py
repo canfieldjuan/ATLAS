@@ -227,62 +227,98 @@ async def _load_calibrated_weights(pool) -> tuple[dict[str, float], str, Optiona
     """Load calibrated weights from score_calibration_weights table.
 
     Returns (weights_dict, source_label, model_version).
-    Falls back to static WEIGHTS if no calibration data.
+    Calibration is an enhancement: any DB or row-cast failure must fall back
+    to static weights so prediction never fails because of a calibration
+    pipeline issue.
     """
-    latest_version = await pool.fetchval(
-        "SELECT MAX(model_version) FROM score_calibration_weights"
-    )
-    if latest_version is None:
+    try:
+        latest_version = await pool.fetchval(
+            "SELECT MAX(model_version) FROM score_calibration_weights"
+        )
+        if latest_version is None:
+            return dict(WEIGHTS), "static", None
+
+        rows = await pool.fetch(
+            """
+            SELECT dimension, dimension_value, lift, total_sequences
+            FROM score_calibration_weights
+            WHERE model_version = $1
+            """,
+            latest_version,
+        )
+        if not rows:
+            return dict(WEIGHTS), "static", None
+
+        # Group lifts by dimension
+        dim_lifts: dict[str, list[float]] = {}
+        total_sequences = 0
+        for r in rows:
+            dim = r["dimension"]
+            lift = float(r["lift"] or 1.0)
+            seqs = int(r["total_sequences"] or 0)
+            dim_lifts.setdefault(dim, []).append(lift)
+            total_sequences += seqs
+
+        # Compute adjusted weights per factor
+        adjusted = dict(WEIGHTS)
+        for factor_key, dimensions in _FACTOR_DIMENSION_MAP.items():
+            if not dimensions:
+                continue
+            # Average lift across mapped dimensions
+            lifts = []
+            for dim in dimensions:
+                if dim in dim_lifts:
+                    lifts.extend(dim_lifts[dim])
+            if not lifts:
+                continue
+            avg_lift = sum(lifts) / len(lifts)
+            # Blend: static * (1 + (avg_lift - 1.0) * alpha)
+            # lift=1.0 means neutral, >1 means outperforms, <1 underperforms
+            delta = (avg_lift - 1.0) * CALIBRATION_BLEND_ALPHA
+            adjusted[factor_key] = max(0.0, WEIGHTS[factor_key] * (1.0 + delta))
+
+        # Re-normalize to sum to 1.0
+        total = sum(adjusted.values())
+        if total > 0:
+            adjusted = {k: v / total for k, v in adjusted.items()}
+
+        return adjusted, "calibrated", int(latest_version)
+    except Exception as exc:
+        logger.warning(
+            "Calibrated weights unavailable, falling back to static: %s", exc
+        )
         return dict(WEIGHTS), "static", None
-
-    rows = await pool.fetch(
-        """
-        SELECT dimension, dimension_value, lift, total_sequences
-        FROM score_calibration_weights
-        WHERE model_version = $1
-        """,
-        latest_version,
-    )
-    if not rows:
-        return dict(WEIGHTS), "static", None
-
-    # Group lifts by dimension
-    dim_lifts: dict[str, list[float]] = {}
-    total_sequences = 0
-    for r in rows:
-        dim = r["dimension"]
-        lift = float(r["lift"] or 1.0)
-        seqs = int(r["total_sequences"] or 0)
-        dim_lifts.setdefault(dim, []).append(lift)
-        total_sequences += seqs
-
-    # Compute adjusted weights per factor
-    adjusted = dict(WEIGHTS)
-    for factor_key, dimensions in _FACTOR_DIMENSION_MAP.items():
-        if not dimensions:
-            continue
-        # Average lift across mapped dimensions
-        lifts = []
-        for dim in dimensions:
-            if dim in dim_lifts:
-                lifts.extend(dim_lifts[dim])
-        if not lifts:
-            continue
-        avg_lift = sum(lifts) / len(lifts)
-        # Blend: static * (1 + (avg_lift - 1.0) * alpha)
-        # lift=1.0 means neutral, >1 means outperforms, <1 underperforms
-        delta = (avg_lift - 1.0) * CALIBRATION_BLEND_ALPHA
-        adjusted[factor_key] = max(0.0, WEIGHTS[factor_key] * (1.0 + delta))
-
-    # Re-normalize to sum to 1.0
-    total = sum(adjusted.values())
-    if total > 0:
-        adjusted = {k: v / total for k, v in adjusted.items()}
-
-    return adjusted, "calibrated", int(latest_version)
 
 
 # -- Helpers ------------------------------------------------------------------
+
+
+_STRATEGY_STRING_FIELDS = ("recommended_approach", "timing_advice")
+_STRATEGY_LIST_FIELDS = ("lead_with", "talking_points", "risk_factors")
+
+
+def _coerce_strategy_output(parsed: dict) -> dict:
+    """Filter LLM strategy output to typed fields the response model accepts.
+
+    The optional strategy layer cannot crash an otherwise-valid prediction.
+    If a string field returned a list/dict, drop it; if a list field returned
+    a string/dict, drop it. Keeps only items that pass strict type checks.
+    """
+    coerced: dict = {}
+    for key in _STRATEGY_STRING_FIELDS:
+        value = parsed.get(key)
+        if isinstance(value, str):
+            coerced[key] = value
+        else:
+            coerced[key] = None
+    for key in _STRATEGY_LIST_FIELDS:
+        value = parsed.get(key)
+        if isinstance(value, list):
+            coerced[key] = [item for item in value if isinstance(item, str)]
+        else:
+            coerced[key] = []
+    return coerced
+
 
 def _safe_json(value) -> list | dict | None:
     """Parse a JSONB field that may be a dict, list, or JSON string."""
@@ -897,11 +933,12 @@ async def _compute_prediction(
             if cached is not None:
                 parsed = parse_json_response(cached["response_text"], recover_truncated=True)
                 if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-                    recommended_approach = parsed.get("recommended_approach")
-                    lead_with = parsed.get("lead_with") or []
-                    talking_points = parsed.get("talking_points") or []
-                    timing_advice = parsed.get("timing_advice")
-                    risk_factors = parsed.get("risk_factors") or []
+                    coerced = _coerce_strategy_output(parsed)
+                    recommended_approach = coerced["recommended_approach"]
+                    lead_with = coerced["lead_with"]
+                    talking_points = coerced["talking_points"]
+                    timing_advice = coerced["timing_advice"]
+                    risk_factors = coerced["risk_factors"]
                     raise _CacheHit()
         except CacheUnavailable:
             cache_request = None
@@ -923,11 +960,12 @@ async def _compute_prediction(
             if raw:
                 parsed = parse_json_response(raw, recover_truncated=True)
                 if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-                    recommended_approach = parsed.get("recommended_approach")
-                    lead_with = parsed.get("lead_with") or []
-                    talking_points = parsed.get("talking_points") or []
-                    timing_advice = parsed.get("timing_advice")
-                    risk_factors = parsed.get("risk_factors") or []
+                    coerced = _coerce_strategy_output(parsed)
+                    recommended_approach = coerced["recommended_approach"]
+                    lead_with = coerced["lead_with"]
+                    talking_points = coerced["talking_points"]
+                    timing_advice = coerced["timing_advice"]
+                    risk_factors = coerced["risk_factors"]
 
                     if cache_request is not None:
                         await store_b2b_exact_stage_text(
@@ -1088,7 +1126,7 @@ async def compare_win_loss(
         ))
 
     # If either side cannot honestly assert a probability, suppress the
-    # headline comparison. We treat is_gated AND win_probability is None as
+    # headline comparison. We treat is_gated OR win_probability is None as
     # equivalent gating signals, so a malformed payload (gate flag false but
     # probability missing) fails closed instead of crashing the subtraction.
     a_gated = resp_a.is_gated or resp_a.win_probability is None

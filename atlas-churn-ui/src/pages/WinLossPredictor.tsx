@@ -625,23 +625,10 @@ export default function WinLossPredictor() {
       {/* Comparison results */}
       {comparison && (
         <div className="space-y-6">
-          {/* Headline banner — gated when either side has insufficient data */}
-          {comparison.is_gated ? (
-            <div
-              className="bg-slate-800/60 rounded-xl border border-amber-700/40 p-4 flex items-center gap-3"
-              data-testid="compare-gated-banner"
-            >
-              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
-              <div>
-                <span className="text-lg font-semibold text-amber-200">
-                  Insufficient data for reliable comparison
-                </span>
-                {comparison.gated_reason && (
-                  <p className="text-sm text-slate-400 mt-1">{comparison.gated_reason}</p>
-                )}
-              </div>
-            </div>
-          ) : (
+          {/* Headline banner — gated when either side has insufficient data.
+              Branch on explicit === false so a malformed/older response that
+              omits is_gated falls into the gated banner (fail-closed). */}
+          {comparison.is_gated === false ? (
             <div className="bg-slate-800/60 rounded-xl border border-cyan-700/40 p-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Target className="w-5 h-5 text-cyan-400" />
@@ -662,6 +649,21 @@ export default function WinLossPredictor() {
                   <span className="block text-xs text-slate-500">probability advantage</span>
                 </div>
               )}
+            </div>
+          ) : (
+            <div
+              className="bg-slate-800/60 rounded-xl border border-amber-700/40 p-4 flex items-center gap-3"
+              data-testid="compare-gated-banner"
+            >
+              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
+              <div>
+                <span className="text-lg font-semibold text-amber-200">
+                  Insufficient data for reliable comparison
+                </span>
+                {comparison.gated_reason && (
+                  <p className="text-sm text-slate-400 mt-1">{comparison.gated_reason}</p>
+                )}
+              </div>
             </div>
           )}
 

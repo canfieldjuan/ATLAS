@@ -71,6 +71,87 @@ describe('WinLossPredictor', () => {
     expect(screen.getByDisplayValue('fintech')).toBeInTheDocument()
   })
 
+  it('falls into the gated banner when is_gated is missing from the response (fail-closed)', async () => {
+    const user = userEvent.setup()
+
+    // Simulate an older / malformed server response without the new is_gated
+    // field. The UI must NOT render the easier-target headline; it should
+    // fall through to the gated banner.
+    const malformedResponse = {
+      vendor_a: {
+        vendor_name: 'Zendesk',
+        win_probability: 0.62,
+        confidence: 'medium',
+        verdict: 'Moderate.',
+        is_gated: false,
+        data_gates: [],
+        factors: [],
+        switching_triggers: [],
+        proof_quotes: [],
+        objections: [],
+        displacement_targets: [],
+        segment_match: null,
+        data_coverage: { reviews: 12 },
+        weights_source: 'default',
+        calibration_version: null,
+        recommended_approach: null,
+        lead_with: [],
+        talking_points: [],
+        timing_advice: null,
+        risk_factors: [],
+        prediction_id: 'pred-a',
+      },
+      vendor_b: {
+        vendor_name: 'Freshdesk',
+        win_probability: 0.55,
+        confidence: 'medium',
+        verdict: 'Moderate.',
+        is_gated: false,
+        data_gates: [],
+        factors: [],
+        switching_triggers: [],
+        proof_quotes: [],
+        objections: [],
+        displacement_targets: [],
+        segment_match: null,
+        data_coverage: { reviews: 8 },
+        weights_source: 'default',
+        calibration_version: null,
+        recommended_approach: null,
+        lead_with: [],
+        talking_points: [],
+        timing_advice: null,
+        risk_factors: [],
+        prediction_id: 'pred-b',
+      },
+      easier_target: 'Zendesk',
+      probability_delta: 0.07,
+      factor_comparison: [],
+      // is_gated intentionally omitted
+    } as unknown as Awaited<ReturnType<typeof api.compareWinLoss>>
+
+    api.compareWinLoss.mockResolvedValueOnce(malformedResponse)
+
+    render(
+      <MemoryRouter
+        initialEntries={['/predictor?vendor=Zendesk&compare=1&vendor_b=Freshdesk']}
+      >
+        <WinLossPredictor />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Win/Loss Predictor' })
+    await user.click(screen.getByRole('button', { name: 'Predict Win Probability' }))
+
+    await waitFor(() => {
+      expect(api.compareWinLoss).toHaveBeenCalled()
+    })
+
+    expect(await screen.findByTestId('compare-gated-banner')).toBeInTheDocument()
+    expect(screen.queryByText('Easier target:')).not.toBeInTheDocument()
+    expect(screen.queryByText('probability advantage')).not.toBeInTheDocument()
+  })
+
   it('renders the gated banner and suppresses easier-target claim when comparison.is_gated', async () => {
     const user = userEvent.setup()
 

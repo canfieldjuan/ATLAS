@@ -2117,7 +2117,7 @@ export interface WinLossCompareResponse {
   easier_target: string
   probability_delta: number
   factor_comparison: FactorComparison[]
-  is_gated?: boolean
+  is_gated: boolean
   gated_reason?: string | null
 }
 

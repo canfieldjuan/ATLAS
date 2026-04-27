@@ -251,6 +251,72 @@ async def test_prediction_routes_validate_ids_before_db_touch(monkeypatch, route
     assert exc.value.detail == "Invalid prediction ID"
 
 
+# -- Step 1+2 hardening: drift defenses across LLM strategy and calibration --
+
+
+def test_coerce_strategy_output_keeps_only_typed_fields():
+    from atlas_brain.api import b2b_win_loss as mod
+
+    parsed = {
+        "recommended_approach": "Lead with support pain.",
+        "lead_with": "should be a list",  # malformed
+        "talking_points": ["valid", 42, None, "another"],  # mixed
+        "timing_advice": ["should be a string"],  # malformed
+        "risk_factors": {"not": "a list"},  # malformed
+    }
+
+    coerced = mod._coerce_strategy_output(parsed)
+
+    assert coerced["recommended_approach"] == "Lead with support pain."
+    assert coerced["lead_with"] == []
+    assert coerced["talking_points"] == ["valid", "another"]
+    assert coerced["timing_advice"] is None
+    assert coerced["risk_factors"] == []
+
+
+def test_coerce_strategy_output_passes_through_well_typed_payload():
+    from atlas_brain.api import b2b_win_loss as mod
+
+    parsed = {
+        "recommended_approach": "Lead.",
+        "lead_with": ["pricing", "support"],
+        "talking_points": ["point a", "point b"],
+        "timing_advice": "Soon.",
+        "risk_factors": ["risk a"],
+    }
+
+    coerced = mod._coerce_strategy_output(parsed)
+
+    assert coerced["recommended_approach"] == "Lead."
+    assert coerced["lead_with"] == ["pricing", "support"]
+    assert coerced["talking_points"] == ["point a", "point b"]
+    assert coerced["timing_advice"] == "Soon."
+    assert coerced["risk_factors"] == ["risk a"]
+
+
+@pytest.mark.asyncio
+async def test_load_calibrated_weights_falls_back_to_static_on_db_error(monkeypatch, caplog):
+    import logging
+    from atlas_brain.api import b2b_win_loss as mod
+
+    class _ExplodingPool:
+        async def fetchval(self, *args, **kwargs):
+            raise RuntimeError("simulated calibration table outage")
+
+        async def fetch(self, *args, **kwargs):
+            raise AssertionError("fetch should not be reached")
+
+    with caplog.at_level(logging.WARNING):
+        weights, source, version = await mod._load_calibrated_weights(_ExplodingPool())
+
+    assert weights == dict(mod.WEIGHTS)
+    assert source == "static"
+    assert version is None
+    assert any(
+        "Calibrated weights unavailable" in record.message for record in caplog.records
+    )
+
+
 # -- Step 1 hardening: nullable win_probability across persistence/compare/export --
 
 
