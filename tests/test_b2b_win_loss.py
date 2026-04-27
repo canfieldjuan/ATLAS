@@ -249,3 +249,314 @@ async def test_prediction_routes_validate_ids_before_db_touch(monkeypatch, route
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "Invalid prediction ID"
+
+
+# -- Step 1 hardening: nullable win_probability across persistence/compare/export --
+
+
+@pytest.mark.asyncio
+async def test_persist_prediction_stores_null_win_probability_when_gated():
+    from atlas_brain.api import b2b_win_loss as mod
+
+    captured = {}
+
+    class _Pool:
+        async def fetchrow(self, query, *params):
+            captured["query"] = " ".join(str(query).split())
+            captured["params"] = params
+            return {"id": "pred-1"}
+
+    gated = mod.WinLossResponse(
+        vendor_name="Zendesk",
+        win_probability=None,
+        confidence="insufficient",
+        verdict="Insufficient data.",
+        is_gated=True,
+    )
+    req = mod.WinLossRequest(vendor_name="Zendesk")
+
+    pid = await mod._persist_prediction(_Pool(), "acct-1", req, gated)
+
+    assert pid == "pred-1"
+    # win_probability is param index 4 (0-indexed) per the INSERT column order
+    # (account_id, vendor_name, company_size, industry, win_probability, ...).
+    assert captured["params"][4] is None
+
+
+@pytest.mark.asyncio
+async def test_compare_win_loss_suppresses_easier_target_when_one_side_gated(monkeypatch):
+    from atlas_brain.api import b2b_win_loss as mod
+
+    pool = object()
+    monkeypatch.setattr(mod, "get_db_pool", MagicMock(return_value=pool))
+    monkeypatch.setattr(
+        mod,
+        "resolve_vendor_name",
+        AsyncMock(side_effect=["Zendesk", "Freshdesk"]),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_compute_prediction",
+        AsyncMock(side_effect=[
+            mod.WinLossResponse(
+                vendor_name="Zendesk",
+                win_probability=0.62,
+                confidence="medium",
+                verdict="moderate",
+                is_gated=False,
+            ),
+            mod.WinLossResponse(
+                vendor_name="Freshdesk",
+                win_probability=None,
+                confidence="insufficient",
+                verdict="Insufficient data.",
+                is_gated=True,
+            ),
+        ]),
+    )
+    monkeypatch.setattr(mod, "_persist_prediction", AsyncMock(return_value=None))
+
+    response = await mod.compare_win_loss(
+        _request(),
+        mod.WinLossCompareRequest(vendor_a="Zendesk", vendor_b="Freshdesk"),
+        user=SimpleNamespace(account_id="acct-1"),
+    )
+
+    assert response.is_gated is True
+    assert response.easier_target == "insufficient_data"
+    assert response.probability_delta == 0
+    assert response.gated_reason is not None
+    assert "Freshdesk" in response.gated_reason
+
+
+@pytest.mark.asyncio
+async def test_compare_win_loss_suppresses_easier_target_when_both_sides_gated(monkeypatch):
+    from atlas_brain.api import b2b_win_loss as mod
+
+    pool = object()
+    monkeypatch.setattr(mod, "get_db_pool", MagicMock(return_value=pool))
+    monkeypatch.setattr(
+        mod,
+        "resolve_vendor_name",
+        AsyncMock(side_effect=["Zendesk", "Freshdesk"]),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_compute_prediction",
+        AsyncMock(side_effect=[
+            mod.WinLossResponse(
+                vendor_name="Zendesk",
+                win_probability=None,
+                confidence="insufficient",
+                verdict="Insufficient data.",
+                is_gated=True,
+            ),
+            mod.WinLossResponse(
+                vendor_name="Freshdesk",
+                win_probability=None,
+                confidence="insufficient",
+                verdict="Insufficient data.",
+                is_gated=True,
+            ),
+        ]),
+    )
+    monkeypatch.setattr(mod, "_persist_prediction", AsyncMock(return_value=None))
+
+    response = await mod.compare_win_loss(
+        _request(),
+        mod.WinLossCompareRequest(vendor_a="Zendesk", vendor_b="Freshdesk"),
+        user=SimpleNamespace(account_id="acct-1"),
+    )
+
+    assert response.is_gated is True
+    assert response.easier_target == "insufficient_data"
+    assert response.probability_delta == 0
+    assert "Zendesk" in (response.gated_reason or "")
+    assert "Freshdesk" in (response.gated_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_compare_win_loss_treats_null_probability_as_gated_even_if_flag_false(monkeypatch):
+    # Defense in depth: a malformed response (is_gated=False but
+    # win_probability=None) must not reach the subtraction step. Treat the
+    # probability contract as authoritative, not just the gate flag.
+    from atlas_brain.api import b2b_win_loss as mod
+
+    pool = object()
+    monkeypatch.setattr(mod, "get_db_pool", MagicMock(return_value=pool))
+    monkeypatch.setattr(
+        mod,
+        "resolve_vendor_name",
+        AsyncMock(side_effect=["Zendesk", "Freshdesk"]),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_compute_prediction",
+        AsyncMock(side_effect=[
+            mod.WinLossResponse(
+                vendor_name="Zendesk",
+                win_probability=0.62,
+                confidence="medium",
+                verdict="moderate",
+                is_gated=False,
+            ),
+            mod.WinLossResponse(
+                vendor_name="Freshdesk",
+                win_probability=None,
+                confidence="medium",
+                verdict="claims sufficient but probability missing",
+                is_gated=False,
+            ),
+        ]),
+    )
+    monkeypatch.setattr(mod, "_persist_prediction", AsyncMock(return_value=None))
+
+    response = await mod.compare_win_loss(
+        _request(),
+        mod.WinLossCompareRequest(vendor_a="Zendesk", vendor_b="Freshdesk"),
+        user=SimpleNamespace(account_id="acct-1"),
+    )
+
+    assert response.is_gated is True
+    assert response.easier_target == "insufficient_data"
+    assert response.probability_delta == 0
+    assert "Freshdesk" in (response.gated_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_list_recent_predictions_handles_null_win_probability(monkeypatch):
+    from datetime import datetime, timezone
+    from atlas_brain.api import b2b_win_loss as mod
+
+    rows = [
+        {
+            "id": "pred-1",
+            "vendor_name": "Zendesk",
+            "win_probability": 0.62,
+            "confidence": "medium",
+            "is_gated": False,
+            "created_at": datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc),
+        },
+        {
+            "id": "pred-2",
+            "vendor_name": "Freshdesk",
+            "win_probability": None,
+            "confidence": "insufficient",
+            "is_gated": True,
+            "created_at": datetime(2026, 4, 27, 12, 5, tzinfo=timezone.utc),
+        },
+    ]
+
+    class _Pool:
+        async def fetch(self, query, *params):
+            return rows
+
+    monkeypatch.setattr(mod, "get_db_pool", MagicMock(return_value=_Pool()))
+
+    result = await mod.list_recent_predictions(
+        limit=10, user=SimpleNamespace(account_id="acct-1")
+    )
+
+    assert result["count"] == 2
+    assert result["predictions"][0].win_probability == 0.62
+    assert result["predictions"][1].win_probability is None
+    assert result["predictions"][1].is_gated is True
+
+
+@pytest.mark.asyncio
+async def test_get_prediction_handles_null_win_probability(monkeypatch):
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from atlas_brain.api import b2b_win_loss as mod
+
+    pid = uuid4()
+    row = {
+        "id": pid,
+        "vendor_name": "Freshdesk",
+        "win_probability": None,
+        "confidence": "insufficient",
+        "verdict": "Insufficient data.",
+        "is_gated": True,
+        "data_gates": "[]",
+        "factors": "[]",
+        "switching_triggers": "[]",
+        "proof_quotes": "[]",
+        "objections": "[]",
+        "displacement_targets": "[]",
+        "segment_match": None,
+        "data_coverage": "{}",
+        "weights_source": "static",
+        "calibration_version": None,
+        "recommended_approach": None,
+        "lead_with": "[]",
+        "talking_points": "[]",
+        "timing_advice": None,
+        "risk_factors": "[]",
+        "created_at": datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc),
+    }
+
+    class _Pool:
+        async def fetchrow(self, query, *params):
+            return row
+
+    monkeypatch.setattr(mod, "get_db_pool", MagicMock(return_value=_Pool()))
+
+    response = await mod.get_prediction(
+        str(pid), user=SimpleNamespace(account_id="acct-1")
+    )
+
+    assert response.win_probability is None
+    assert response.is_gated is True
+    assert response.confidence == "insufficient"
+
+
+@pytest.mark.asyncio
+async def test_export_prediction_csv_renders_unavailable_for_null_win_probability(monkeypatch):
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from atlas_brain.api import b2b_win_loss as mod
+
+    pid = uuid4()
+    row = {
+        "id": pid,
+        "vendor_name": "Freshdesk",
+        "win_probability": None,
+        "confidence": "insufficient",
+        "verdict": "Insufficient data.",
+        "is_gated": True,
+        "weights_source": "static",
+        "calibration_version": None,
+        "company_size": None,
+        "industry": None,
+        "factors": "[]",
+        "data_gates": "[]",
+        "switching_triggers": "[]",
+        "proof_quotes": "[]",
+        "objections": "[]",
+        "displacement_targets": "[]",
+        "segment_match": None,
+        "data_coverage": "{}",
+        "recommended_approach": None,
+        "lead_with": "[]",
+        "talking_points": "[]",
+        "timing_advice": None,
+        "risk_factors": "[]",
+        "created_at": datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc),
+    }
+
+    class _Pool:
+        async def fetchrow(self, query, *params):
+            return row
+
+    monkeypatch.setattr(mod, "get_db_pool", MagicMock(return_value=_Pool()))
+
+    response = await mod.export_prediction_csv(
+        str(pid), user=SimpleNamespace(account_id="acct-1")
+    )
+
+    chunks: list[str] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk if isinstance(chunk, str) else chunk.decode())
+    body = "".join(chunks)
+    assert "Win Probability" in body
+    assert "Unavailable" in body

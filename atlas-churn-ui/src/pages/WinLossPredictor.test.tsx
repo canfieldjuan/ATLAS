@@ -71,6 +71,90 @@ describe('WinLossPredictor', () => {
     expect(screen.getByDisplayValue('fintech')).toBeInTheDocument()
   })
 
+  it('renders the gated banner and suppresses easier-target claim when comparison.is_gated', async () => {
+    const user = userEvent.setup()
+
+    api.compareWinLoss.mockResolvedValueOnce({
+      vendor_a: {
+        vendor_name: 'Zendesk',
+        win_probability: 0.62,
+        confidence: 'medium',
+        verdict: 'Moderate.',
+        is_gated: false,
+        data_gates: [],
+        factors: [],
+        switching_triggers: [],
+        proof_quotes: [],
+        objections: [],
+        displacement_targets: [],
+        segment_match: null,
+        data_coverage: { reviews: 12 },
+        weights_source: 'default',
+        calibration_version: null,
+        recommended_approach: null,
+        lead_with: [],
+        talking_points: [],
+        timing_advice: null,
+        risk_factors: [],
+        prediction_id: 'pred-a',
+      },
+      vendor_b: {
+        vendor_name: 'Freshdesk',
+        win_probability: null,
+        confidence: 'insufficient',
+        verdict: 'Insufficient data.',
+        is_gated: true,
+        data_gates: [],
+        factors: [],
+        switching_triggers: [],
+        proof_quotes: [],
+        objections: [],
+        displacement_targets: [],
+        segment_match: null,
+        data_coverage: {},
+        weights_source: 'default',
+        calibration_version: null,
+        recommended_approach: null,
+        lead_with: [],
+        talking_points: [],
+        timing_advice: null,
+        risk_factors: [],
+        prediction_id: 'pred-b',
+      },
+      easier_target: 'insufficient_data',
+      probability_delta: 0,
+      factor_comparison: [],
+      is_gated: true,
+      gated_reason: 'Insufficient data for Freshdesk; comparison cannot be drawn.',
+    })
+
+    render(
+      <MemoryRouter
+        initialEntries={['/predictor?vendor=Zendesk&compare=1&vendor_b=Freshdesk']}
+      >
+        <WinLossPredictor />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Win/Loss Predictor' })
+    await user.click(screen.getByRole('button', { name: 'Predict Win Probability' }))
+
+    await waitFor(() => {
+      expect(api.compareWinLoss).toHaveBeenCalled()
+    })
+
+    const banner = await screen.findByTestId('compare-gated-banner')
+    expect(banner).toHaveTextContent('Insufficient data for reliable comparison')
+    expect(banner).toHaveTextContent(
+      'Insufficient data for Freshdesk; comparison cannot be drawn.',
+    )
+    expect(screen.queryByText('Easier target:')).not.toBeInTheDocument()
+    expect(screen.queryByText('probability advantage')).not.toBeInTheDocument()
+    // Per-vendor "Easier" badge in the side-by-side gauges should not appear
+    // because no vendor_name matches the literal "insufficient_data" target.
+    expect(screen.queryByText('Easier')).not.toBeInTheDocument()
+  })
+
   it('links single-vendor results back into the primary workflows', async () => {
     const user = userEvent.setup()
 

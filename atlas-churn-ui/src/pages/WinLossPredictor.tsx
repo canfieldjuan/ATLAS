@@ -625,28 +625,45 @@ export default function WinLossPredictor() {
       {/* Comparison results */}
       {comparison && (
         <div className="space-y-6">
-          {/* Easier target banner */}
-          <div className="bg-slate-800/60 rounded-xl border border-cyan-700/40 p-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Target className="w-5 h-5 text-cyan-400" />
+          {/* Headline banner — gated when either side has insufficient data */}
+          {comparison.is_gated ? (
+            <div
+              className="bg-slate-800/60 rounded-xl border border-amber-700/40 p-4 flex items-center gap-3"
+              data-testid="compare-gated-banner"
+            >
+              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
               <div>
-                {comparison.easier_target === 'tie' ? (
-                  <span className="text-lg font-semibold text-slate-300">Both vendors scored equally</span>
-                ) : (
-                  <>
-                    <span className="text-sm text-slate-400">Easier target: </span>
-                    <span className="text-lg font-semibold text-white">{comparison.easier_target}</span>
-                  </>
+                <span className="text-lg font-semibold text-amber-200">
+                  Insufficient data for reliable comparison
+                </span>
+                {comparison.gated_reason && (
+                  <p className="text-sm text-slate-400 mt-1">{comparison.gated_reason}</p>
                 )}
               </div>
             </div>
-            {comparison.easier_target !== 'tie' && (
-              <div className="text-right">
-                <span className="text-2xl font-bold text-cyan-400">+{Math.round(comparison.probability_delta * 100)}%</span>
-                <span className="block text-xs text-slate-500">probability advantage</span>
+          ) : (
+            <div className="bg-slate-800/60 rounded-xl border border-cyan-700/40 p-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Target className="w-5 h-5 text-cyan-400" />
+                <div>
+                  {comparison.easier_target === 'tie' ? (
+                    <span className="text-lg font-semibold text-slate-300">Both vendors scored equally</span>
+                  ) : (
+                    <>
+                      <span className="text-sm text-slate-400">Easier target: </span>
+                      <span className="text-lg font-semibold text-white">{comparison.easier_target}</span>
+                    </>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+              {comparison.easier_target !== 'tie' && (
+                <div className="text-right">
+                  <span className="text-2xl font-bold text-cyan-400">+{Math.round(comparison.probability_delta * 100)}%</span>
+                  <span className="block text-xs text-slate-500">probability advantage</span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Side-by-side gauges */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

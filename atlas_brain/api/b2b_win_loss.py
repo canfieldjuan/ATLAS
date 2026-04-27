@@ -128,7 +128,7 @@ class Objection(BaseModel):
 class RecentPrediction(BaseModel):
     prediction_id: str
     vendor_name: str
-    win_probability: float
+    win_probability: float | None = None
     confidence: str
     is_gated: bool = False
     created_at: str
@@ -322,7 +322,7 @@ async def _persist_prediction(pool, account_id: str, req: WinLossRequest, resp: 
             resp.vendor_name,
             req.company_size,
             req.industry,
-            float(resp.win_probability),
+            float(resp.win_probability) if resp.win_probability is not None else None,
             resp.confidence,
             resp.verdict,
             resp.is_gated,
@@ -809,7 +809,7 @@ async def _compute_prediction(
     if len(active_factors) < MIN_FACTORS_FOR_PREDICTION:
         return WinLossResponse(
             vendor_name=vendor,
-            win_probability=0,
+            win_probability=None,
             confidence="insufficient",
             verdict=(
                 f"Insufficient data to predict win probability against {vendor}. "
@@ -1025,6 +1025,8 @@ class WinLossCompareResponse(BaseModel):
     easier_target: str
     probability_delta: float
     factor_comparison: list[FactorComparison] = []
+    is_gated: bool = False
+    gated_reason: Optional[str] = None
 
 
 @router.post("/win-loss/compare", response_model=WinLossCompareResponse)
@@ -1085,6 +1087,33 @@ async def compare_win_loss(
             advantage=adv,
         ))
 
+    # If either side cannot honestly assert a probability, suppress the
+    # headline comparison. We treat is_gated AND win_probability is None as
+    # equivalent gating signals, so a malformed payload (gate flag false but
+    # probability missing) fails closed instead of crashing the subtraction.
+    a_gated = resp_a.is_gated or resp_a.win_probability is None
+    b_gated = resp_b.is_gated or resp_b.win_probability is None
+    if a_gated or b_gated:
+        if a_gated and b_gated:
+            gated_reason = (
+                f"Insufficient data for both {vendor_a} and {vendor_b}; "
+                "comparison cannot be drawn."
+            )
+        else:
+            gated_side = vendor_a if a_gated else vendor_b
+            gated_reason = (
+                f"Insufficient data for {gated_side}; comparison cannot be drawn."
+            )
+        return WinLossCompareResponse(
+            vendor_a=resp_a,
+            vendor_b=resp_b,
+            easier_target="insufficient_data",
+            probability_delta=0,
+            factor_comparison=factor_comparison,
+            is_gated=True,
+            gated_reason=gated_reason,
+        )
+
     delta = round(resp_a.win_probability - resp_b.win_probability, 3)
     if resp_a.win_probability > resp_b.win_probability:
         easier = vendor_a
@@ -1129,7 +1158,9 @@ async def list_recent_predictions(
             RecentPrediction(
                 prediction_id=str(r["id"]),
                 vendor_name=r["vendor_name"],
-                win_probability=float(r["win_probability"]),
+                win_probability=(
+                    float(r["win_probability"]) if r["win_probability"] is not None else None
+                ),
                 confidence=r["confidence"],
                 is_gated=r["is_gated"],
                 created_at=r["created_at"].isoformat(),
@@ -1182,7 +1213,9 @@ async def get_prediction(
 
     return WinLossResponse(
         vendor_name=row["vendor_name"],
-        win_probability=float(row["win_probability"]),
+        win_probability=(
+            float(row["win_probability"]) if row["win_probability"] is not None else None
+        ),
         confidence=row["confidence"],
         verdict=row["verdict"] or "",
         is_gated=row["is_gated"],
@@ -1230,7 +1263,14 @@ async def export_prediction_csv(
     # Summary section
     writer.writerow(["Win/Loss Prediction Report"])
     writer.writerow(["Vendor", row["vendor_name"]])
-    writer.writerow(["Win Probability", f"{float(row['win_probability']) * 100:.1f}%"])
+    writer.writerow([
+        "Win Probability",
+        (
+            f"{float(row['win_probability']) * 100:.1f}%"
+            if row["win_probability"] is not None
+            else "Unavailable"
+        ),
+    ])
     writer.writerow(["Confidence", row["confidence"]])
     writer.writerow(["Gated", "Yes" if row["is_gated"] else "No"])
     writer.writerow(["Weights", row["weights_source"] or "static"])
