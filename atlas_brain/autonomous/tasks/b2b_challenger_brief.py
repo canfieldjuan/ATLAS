@@ -651,6 +651,9 @@ def _apply_head_to_head_product_claim_gate(
     if direct_displacement_claim is None:
         gated["winner"] = ""
         gated["loser"] = ""
+        gated["durability"] = ""
+        gated["confidence"] = None
+        gated["synthesized"] = False
         gated["report_allowed"] = False
         gated["render_allowed"] = False
         gated["claim_validation_unavailable"] = True
@@ -684,6 +687,9 @@ def _apply_head_to_head_product_claim_gate(
     state = "monitor_only" if claim.render_allowed else "suppressed"
     gated["winner"] = ""
     gated["loser"] = ""
+    gated["durability"] = ""
+    gated["confidence"] = None
+    gated["synthesized"] = False
     gated["monitor_only"] = claim.render_allowed
     gated["readiness_state"] = state
     if claim.render_allowed:

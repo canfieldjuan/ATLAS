@@ -80,7 +80,7 @@ def _direct_displacement_product_claim(
         contradiction_count=contradiction_count,
         denominator=None,
         sample_size=supporting_count,
-        has_grounded_evidence=direct_count > 0,
+        has_grounded_evidence=direct_count > 0 if supporting_count > 0 else True,
         evidence_links=tuple(f"review-{idx}" for idx in range(1, direct_count + 1)),
         contradicting_links=tuple(f"inverse-{idx}" for idx in range(1, contradiction_count + 1)),
         as_of_date=date(2026, 3, 18),
@@ -633,6 +633,8 @@ class TestBuildChallengerBrief:
         assert head_to_head["suppression_reason"] == "low_confidence"
         assert head_to_head["product_claim"]["report_allowed"] is False
         assert "Monitor only" in head_to_head["conclusion"]
+        assert head_to_head["durability"] == ""
+        assert head_to_head["confidence"] is None
 
     def test_head_to_head_product_claim_preserves_report_safe_winner_call(self):
         brief = _build_challenger_brief(
@@ -674,6 +676,45 @@ class TestBuildChallengerBrief:
         assert head_to_head["readiness_state"] == "report_safe"
         assert head_to_head["product_claim"]["report_allowed"] is True
 
+    def test_head_to_head_product_claim_blocks_suppressed_winner_call(self):
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail={
+                "total_mentions": 3,
+                "signal_strength": "emerging",
+                "confidence_score": 0.52,
+                "primary_driver": "support",
+                "source_distribution": {"g2": 3},
+            },
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=None,
+            cross_vendor_battle=None,
+            direct_displacement_claim=_direct_displacement_product_claim(
+                incumbent="Zendesk",
+                challenger="Freshdesk",
+                supporting_count=0,
+                direct_evidence_count=0,
+                witness_count=0,
+            ),
+            max_target_accounts=10,
+        )
+
+        head_to_head = brief["head_to_head"]
+        assert head_to_head["winner"] == ""
+        assert head_to_head["loser"] == ""
+        assert head_to_head["render_allowed"] is False
+        assert head_to_head["report_allowed"] is False
+        assert head_to_head["readiness_state"] == "suppressed"
+        assert head_to_head["suppression_reason"] == "insufficient_supporting_count"
+        assert head_to_head["durability"] == ""
+        assert head_to_head["confidence"] is None
+        assert head_to_head["synthesized"] is False
+        assert "not render-safe" in head_to_head["conclusion"]
+
     def test_head_to_head_product_claim_validation_unavailable_blocks_winner_call(self):
         brief = _build_challenger_brief(
             incumbent="Zendesk",
@@ -709,6 +750,9 @@ class TestBuildChallengerBrief:
         assert head_to_head["report_allowed"] is False
         assert head_to_head["claim_validation_unavailable"] is True
         assert head_to_head["readiness_state"] == "validation_unavailable"
+        assert head_to_head["durability"] == ""
+        assert head_to_head["confidence"] is None
+        assert head_to_head["synthesized"] is False
         assert "validation is unavailable" in head_to_head["conclusion"]
 
     def test_cross_vendor_battle_without_refs_uses_displacement_review_ids(self):
