@@ -525,8 +525,8 @@ export default function VendorDetail() {
 
   const profile = data?.profile
   if (!profile) return <PageError error={new Error('Vendor not found')} />
-  // Phase 10 Patch 2c. The DM-churn rate card has FOUR distinct states
-  // and the legacy fallback applies to only one of them:
+  // Phase 10 Patch 2. ProductClaim-backed rate cards have four
+  // distinct states, and the legacy fallback applies to only one:
   //
   //   1. Validation unavailable (data.claims === null because the API
   //      call failed). Show "Validation unavailable" -- legacy is
@@ -541,8 +541,7 @@ export default function VendorDetail() {
   //      UI must not render a divide-by-zero or supporting_count*100%
   //      garbage if the contract ever drifts).
   //   4. Claim absent (data.claims is a healthy response with no row
-  //      of this claim_type). Legacy signal.decision_maker_churn_rate
-  //      renders unchanged.
+  //      of this claim_type). The legacy signal value renders unchanged.
   const dmChurnClaim: VendorClaim | undefined = findVendorClaim(
     data?.claims,
     'decision_maker_churn_rate',

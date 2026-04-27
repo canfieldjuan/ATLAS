@@ -37,6 +37,12 @@ import UrgencyBadge from '../components/UrgencyBadge'
 import { PageError } from '../components/ErrorBoundary'
 import CampaignFailureExplanation from '../components/CampaignFailureExplanation'
 import CampaignQualityTrends from '../components/CampaignQualityTrends'
+import {
+  ProductClaimGate,
+  ProductClaimStatusBadge,
+  isProductClaimAllowed,
+  productClaimGateTitle,
+} from '../components/ProductClaimGate'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import {
@@ -59,6 +65,22 @@ import type { OpportunityDisposition } from '../api/client'
 
 function rowKey(r: HighIntentCompany): string {
   return r.review_id ?? `${r.company}::${r.vendor}`
+}
+
+function opportunityValidationUnavailable(claim: HighIntentCompany['opportunity_claim']): boolean {
+  return claim === null
+}
+
+function canPublishOpportunity(row: HighIntentCompany): boolean {
+  return isProductClaimAllowed(
+    row.opportunity_claim,
+    'report',
+    opportunityValidationUnavailable(row.opportunity_claim),
+  )
+}
+
+function opportunityGateTitle(claim: HighIntentCompany['opportunity_claim']): string {
+  return productClaimGateTitle(claim, opportunityValidationUnavailable(claim))
 }
 
 const STAGE_COLORS: Record<string, string> = {
@@ -538,6 +560,16 @@ export default function Opportunities() {
     return rows
   }, [opportunities, stageFilter, intentFilter, dispositionMap, dispositionTab])
 
+  const selectedRows = useMemo(
+    () => filtered.filter((r) => selectedIds.has(rowKey(r))),
+    [filtered, selectedIds],
+  )
+  const selectedPublishBlockedCount = selectedRows.filter((r) => !canPublishOpportunity(r)).length
+  const selectedCanPublish = selectedRows.length > 0 && selectedPublishBlockedCount === 0
+  const selectedPublishTitle = selectedPublishBlockedCount > 0
+    ? `${selectedPublishBlockedCount} selected opportunit${selectedPublishBlockedCount === 1 ? 'y is' : 'ies are'} monitor-only`
+    : undefined
+
   // -- Stats --
   const stats = useMemo(() => {
     const total = filtered.length
@@ -568,6 +600,10 @@ export default function Opportunities() {
 
   // -- Generate single --
   const handleGenerate = useCallback(async (row: HighIntentCompany) => {
+    if (!canPublishOpportunity(row)) {
+      setGenResult(`Monitor only: ${opportunityGateTitle(row.opportunity_claim)}`)
+      return
+    }
     const key = rowKey(row)
     setGenerating(key)
     setGenResult(null)
@@ -593,6 +629,10 @@ export default function Opportunities() {
   // -- Bulk generate --
   async function handleBulkGenerate() {
     if (selectedIds.size === 0) return
+    if (!selectedCanPublish) {
+      setGenResult(`Monitor only: ${selectedPublishBlockedCount} selected opportunit${selectedPublishBlockedCount === 1 ? 'y is' : 'ies are'} not campaign-ready`)
+      return
+    }
     setBulkGenerating(true)
     setGenResult(null)
     const selected = filtered.filter((r) => selectedIds.has(rowKey(r)))
@@ -628,6 +668,10 @@ export default function Opportunities() {
   const [pushing, setPushing] = useState(false)
   async function handlePushToCrm() {
     if (selectedIds.size === 0) return
+    if (!selectedCanPublish) {
+      setGenResult(`Monitor only: ${selectedPublishBlockedCount} selected opportunit${selectedPublishBlockedCount === 1 ? 'y is' : 'ies are'} not CRM-ready`)
+      return
+    }
     setPushing(true)
     setGenResult(null)
     const selected = filtered.filter((r) => selectedIds.has(rowKey(r)))
@@ -766,6 +810,10 @@ export default function Opportunities() {
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="text-white font-medium">{r.company || '--'}</span>
+            <ProductClaimStatusBadge
+              claim={r.opportunity_claim}
+              validationUnavailable={opportunityValidationUnavailable(r.opportunity_claim)}
+            />
             {cs && (
               cs.sent > 0
                 ? <Link to={`/campaign-review?company=${encodeURIComponent(r.company)}`} onClick={(e) => e.stopPropagation()} className="shrink-0"><span className="px-1 py-0.5 rounded text-[9px] font-medium bg-cyan-500/15 text-cyan-400 hover:ring-1 hover:ring-cyan-400/50">{cs.sent} sent</span></Link>
@@ -791,7 +839,16 @@ export default function Opportunities() {
     {
       key: 'urgency',
       header: 'Urgency',
-      render: (r) => <UrgencyBadge score={r.urgency} />,
+      render: (r) => (
+        <ProductClaimGate
+          claim={r.opportunity_claim}
+          mode="render"
+          testId={`opportunity-${rowKey(r)}-urgency-gate`}
+          validationUnavailable={opportunityValidationUnavailable(r.opportunity_claim)}
+        >
+          <UrgencyBadge score={r.urgency} />
+        </ProductClaimGate>
+      ),
       sortable: true,
       sortValue: (r) => r.urgency,
     },
@@ -799,12 +856,21 @@ export default function Opportunities() {
       key: 'stage',
       header: 'Stage',
       render: (r) => {
-        if (!r.buying_stage || r.buying_stage === 'unknown')
-          return <span className="text-slate-500 text-xs">--</span>
         return (
-          <span className={`text-xs font-medium ${STAGE_COLORS[r.buying_stage] ?? 'text-slate-400'}`}>
-            {r.buying_stage.replace(/_/g, ' ')}
-          </span>
+          <ProductClaimGate
+            claim={r.opportunity_claim}
+            mode="render"
+            testId={`opportunity-${rowKey(r)}-stage-gate`}
+            validationUnavailable={opportunityValidationUnavailable(r.opportunity_claim)}
+          >
+            {!r.buying_stage || r.buying_stage === 'unknown'
+              ? <span className="text-slate-500 text-xs">--</span>
+              : (
+                <span className={`text-xs font-medium ${STAGE_COLORS[r.buying_stage] ?? 'text-slate-400'}`}>
+                  {r.buying_stage.replace(/_/g, ' ')}
+                </span>
+              )}
+          </ProductClaimGate>
         )
       },
     },
@@ -912,14 +978,29 @@ export default function Opportunities() {
         return (
           <div className="flex items-center gap-0.5">
             {canAccessCampaigns && (
-              <button
-                onClick={(e) => { e.stopPropagation(); handleGenerate(r) }}
-                disabled={generating === key}
-                className="p-1 text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
-                title="Generate Campaign"
+              <ProductClaimGate
+                claim={r.opportunity_claim}
+                mode="report"
+                validationUnavailable={opportunityValidationUnavailable(r.opportunity_claim)}
+                fallback={(
+                  <button
+                    disabled
+                    className="p-1 text-cyan-400 transition-colors opacity-50"
+                    title={opportunityGateTitle(r.opportunity_claim)}
+                  >
+                    <Zap className="h-3.5 w-3.5" />
+                  </button>
+                )}
               >
-                <Zap className={clsx('h-3.5 w-3.5', generating === key && 'animate-pulse')} />
-              </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleGenerate(r) }}
+                  disabled={generating === key}
+                  className="p-1 text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
+                  title="Generate Campaign"
+                >
+                  <Zap className={clsx('h-3.5 w-3.5', generating === key && 'animate-pulse')} />
+                </button>
+              </ProductClaimGate>
             )}
             <button
               onClick={(e) => { e.stopPropagation(); handleDisposition(r, 'saved') }}
@@ -1394,7 +1475,8 @@ export default function Opportunities() {
             {canAccessCampaigns && (
               <button
                 onClick={handleBulkGenerate}
-                disabled={bulkGenerating}
+                disabled={bulkGenerating || !selectedCanPublish}
+                title={selectedPublishTitle ?? 'Generate campaigns for selected opportunities'}
                 className="px-3 py-1.5 text-xs font-medium bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg disabled:opacity-50"
               >
                 {bulkGenerating ? 'Generating...' : 'Generate Campaigns'}
@@ -1402,7 +1484,8 @@ export default function Opportunities() {
             )}
             <button
               onClick={handlePushToCrm}
-              disabled={pushing || bulkGenerating}
+              disabled={pushing || bulkGenerating || !selectedCanPublish}
+              title={selectedPublishTitle ?? 'Push selected opportunities to CRM'}
               className="px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg disabled:opacity-50"
             >
               {pushing ? 'Pushing...' : 'Push to CRM'}
@@ -1866,7 +1949,17 @@ function EvidencePanel({
           <h3 className="text-lg font-semibold text-white truncate">{row.company}</h3>
           <span className="text-xs text-slate-500 shrink-0">churning from</span>
           <span className="text-sm text-slate-300 font-medium shrink-0">{row.vendor}</span>
-          <UrgencyBadge score={row.urgency} />
+          <ProductClaimGate
+            claim={row.opportunity_claim}
+            mode="render"
+            validationUnavailable={opportunityValidationUnavailable(row.opportunity_claim)}
+          >
+            <UrgencyBadge score={row.urgency} />
+          </ProductClaimGate>
+          <ProductClaimStatusBadge
+            claim={row.opportunity_claim}
+            validationUnavailable={opportunityValidationUnavailable(row.opportunity_claim)}
+          />
           {row.resolution_confidence && row.resolution_confidence !== 'high' && (
             <span className="text-xs text-amber-500 shrink-0">resolution: {row.resolution_confidence}</span>
           )}
@@ -2106,14 +2199,31 @@ function EvidencePanel({
       {/* Actions */}
       <div className="flex items-center gap-3 pt-2 border-t border-slate-700/40">
         {onGenerate && (
-          <button
-            onClick={() => onGenerate(row)}
-            disabled={generating}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
+          <ProductClaimGate
+            claim={row.opportunity_claim}
+            mode="report"
+            validationUnavailable={opportunityValidationUnavailable(row.opportunity_claim)}
+            fallback={(
+              <button
+                disabled
+                title={opportunityGateTitle(row.opportunity_claim)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cyan-600 text-white transition-colors opacity-50"
+              >
+                <Zap className="h-4 w-4" />
+                Generate Campaign
+              </button>
+            )}
           >
-            <Zap className={clsx('h-4 w-4', generating && 'animate-pulse')} />
-            {generating ? 'Generating...' : 'Generate Campaign'}
-          </button>
+            <button
+              onClick={() => onGenerate(row)}
+              disabled={generating}
+              title="Generate Campaign"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
+            >
+              <Zap className={clsx('h-4 w-4', generating && 'animate-pulse')} />
+              {generating ? 'Generating...' : 'Generate Campaign'}
+            </button>
+          </ProductClaimGate>
         )}
         {onDisposition && !disposition && (
           <>

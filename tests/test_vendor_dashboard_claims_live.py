@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from uuid import uuid4
 
 import asyncpg
 import pytest
@@ -49,7 +51,17 @@ from atlas_brain.services.b2b.product_claim import (
     register_policy,
     reset_policy_registry,
 )
+from atlas_brain.services.b2b.evidence_claim import (
+    ClaimType,
+    ClaimValidationStatus,
+)
+from atlas_brain.services.b2b.evidence_claim_repository import (
+    PersistedClaim,
+    upsert_claim,
+)
 from atlas_brain.services.b2b.vendor_dashboard_claims import (
+    _DM_CHURN_RATE_POLICY,
+    _PRICE_COMPLAINT_RATE_POLICY,
     aggregate_dm_churn_rate_claim,
     aggregate_price_complaint_rate_claim,
 )
@@ -72,6 +84,18 @@ async def pool():
     await p.close()
 
 
+@pytest.fixture
+async def evidence_artifact_id(pool):
+    aid = uuid4()
+    await pool.execute(
+        "DELETE FROM b2b_evidence_claims WHERE artifact_id = $1", aid
+    )
+    yield aid
+    await pool.execute(
+        "DELETE FROM b2b_evidence_claims WHERE artifact_id = $1", aid
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_registry_after_each_test():
     """Tests that override the registered policy must not pollute
@@ -89,6 +113,67 @@ def _reset_registry_after_each_test():
     )
     register_policy(
         ClaimScope.VENDOR, "price_complaint_rate", _PRICE_COMPLAINT_RATE_POLICY
+    )
+
+
+async def _first_clickup_review_id(pool, *, predicate_sql: str):
+    from atlas_brain.autonomous.tasks._b2b_shared import (
+        _eligible_review_filters,
+        _intelligence_source_allowlist,
+    )
+
+    sources = _intelligence_source_allowlist()
+    eligible = _eligible_review_filters(
+        window_param=2,
+        source_param=3,
+        alias="r",
+        vendor_expr="vm.vendor_name",
+    )
+    return await pool.fetchval(
+        f"""
+        SELECT r.id
+        FROM b2b_reviews r
+        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+        WHERE vm.vendor_name = $1
+          AND {eligible}
+          AND ({predicate_sql})
+        LIMIT 1
+        """,
+        "ClickUp",
+        3650,
+        sources,
+    )
+
+
+async def _seed_valid_lineage_claim(
+    pool,
+    *,
+    artifact_id,
+    review_id,
+    claim_type: ClaimType,
+    pain_category: str,
+) -> None:
+    await upsert_claim(
+        pool,
+        PersistedClaim(
+            artifact_type="synthesis",
+            artifact_id=artifact_id,
+            synthesis_id=artifact_id,
+            vendor_name="ClickUp",
+            as_of_date=date.today(),
+            analysis_window_days=3650,
+            claim_type=claim_type,
+            target_entity="ClickUp",
+            status=ClaimValidationStatus.VALID,
+            witness_id=f"witness:test:lineage:{uuid4()}",
+            source_review_id=review_id,
+            salience_score=9.0,
+            grounding_status="grounded",
+            pain_confidence="strong",
+            excerpt_text=f"seeded {pain_category} lineage",
+            supporting_fields=("phrase_subject", "phrase_polarity"),
+            claim_payload={"pain_category": pain_category},
+        ),
     )
 
 
@@ -140,6 +225,52 @@ async def test_clickup_dm_churn_claim_unverified_in_v3_dataset(pool):
     assert claim.render_allowed is False
     assert claim.report_allowed is False
     assert claim.suppression_reason == SuppressionReason.UNVERIFIED_EVIDENCE
+
+
+@pytest.mark.asyncio
+async def test_dm_churn_lineage_policy_counts_valid_evidence_claims(
+    pool, evidence_artifact_id
+):
+    """When the policy opts into claim-lineage v2, direct_evidence_count
+    comes from b2b_evidence_claims instead of row-level phrase grounding.
+    This ships the join path now while keeping default production
+    behavior unchanged until the Phase 9 soak is steady-state."""
+    review_id = await _first_clickup_review_id(
+        pool,
+        predicate_sql=(
+            "(r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true "
+            "AND (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true"
+        ),
+    )
+    if review_id is None:
+        pytest.skip("ClickUp has no churning DM review in this dataset")
+
+    await _seed_valid_lineage_claim(
+        pool,
+        artifact_id=evidence_artifact_id,
+        review_id=review_id,
+        claim_type=ClaimType.TIMING_PRESSURE_CLAIM,
+        pain_category="timing",
+    )
+    register_policy(
+        ClaimScope.VENDOR,
+        "decision_maker_churn_rate",
+        replace(
+            _DM_CHURN_RATE_POLICY,
+            use_claim_lineage_for_direct_evidence=True,
+        ),
+    )
+
+    claim = await aggregate_dm_churn_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is not None
+    assert claim.policy.use_claim_lineage_for_direct_evidence is True
+    assert claim.direct_evidence_count >= 1
+    assert claim.evidence_posture != EvidencePosture.UNVERIFIED
 
 
 @pytest.mark.asyncio
@@ -316,6 +447,51 @@ async def test_clickup_price_complaint_unverified_in_v3_dataset(pool):
     assert claim.render_allowed is False
     assert claim.report_allowed is False
     assert claim.suppression_reason == SuppressionReason.UNVERIFIED_EVIDENCE
+
+
+@pytest.mark.asyncio
+async def test_price_complaint_lineage_policy_counts_valid_evidence_claims(
+    pool, evidence_artifact_id
+):
+    """Price direct evidence can be upgraded from row-level grounding to
+    claim-level lineage by policy. The seeded EvidenceClaim must make the
+    direct count non-zero without changing the default policy."""
+    review_id = await _first_clickup_review_id(
+        pool,
+        predicate_sql=(
+            "r.enrichment->>'pain_category' = 'pricing' "
+            "OR (r.enrichment->'contract_context'->>'price_complaint')::boolean = true"
+        ),
+    )
+    if review_id is None:
+        pytest.skip("ClickUp has no price complaint review in this dataset")
+
+    await _seed_valid_lineage_claim(
+        pool,
+        artifact_id=evidence_artifact_id,
+        review_id=review_id,
+        claim_type=ClaimType.PRICING_URGENCY_CLAIM,
+        pain_category="pricing",
+    )
+    register_policy(
+        ClaimScope.VENDOR,
+        "price_complaint_rate",
+        replace(
+            _PRICE_COMPLAINT_RATE_POLICY,
+            use_claim_lineage_for_direct_evidence=True,
+        ),
+    )
+
+    claim = await aggregate_price_complaint_rate_claim(
+        pool,
+        vendor_name="ClickUp",
+        as_of_date=date.today(),
+        analysis_window_days=3650,
+    )
+    assert claim is not None
+    assert claim.policy.use_claim_lineage_for_direct_evidence is True
+    assert claim.direct_evidence_count >= 1
+    assert claim.evidence_posture != EvidencePosture.UNVERIFIED
 
 
 @pytest.mark.asyncio

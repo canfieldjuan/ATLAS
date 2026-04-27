@@ -29,16 +29,20 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from uuid import UUID
 
 from ...autonomous.tasks._b2b_shared import (
     _eligible_review_filters,
     _intelligence_source_allowlist,
 )
+from .evidence_claim import ClaimType
+from .evidence_claim_repository import count_valid_source_review_lineage_claims
 from .product_claim import (
     ClaimGatePolicy,
     ClaimScope,
     ProductClaim,
     build_product_claim,
+    get_policy,
     register_policy,
 )
 
@@ -78,6 +82,44 @@ _PRICE_COMPLAINT_RATE_POLICY = ClaimGatePolicy(
 register_policy(
     ClaimScope.VENDOR, "price_complaint_rate", _PRICE_COMPLAINT_RATE_POLICY
 )
+
+
+_DM_CHURN_LINEAGE_CLAIM_TYPES: tuple[ClaimType, ...] = (
+    ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+    ClaimType.TIMING_PRESSURE_CLAIM,
+)
+_PRICE_COMPLAINT_LINEAGE_CLAIM_TYPES: tuple[ClaimType, ...] = (
+    ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+    ClaimType.PRICING_URGENCY_CLAIM,
+)
+
+
+async def _count_lineage_direct_evidence(
+    pool,
+    *,
+    vendor_name: str,
+    review_ids: list[UUID],
+    claim_types: tuple[ClaimType, ...],
+    as_of_date: date,
+    analysis_window_days: int,
+    pain_categories: tuple[str, ...] | None = None,
+) -> int:
+    """Count numerator reviews backed by valid EvidenceClaim lineage.
+
+    Default policies keep using row-level grounding. This helper is the
+    v2 directness path for rate claims once their ClaimGatePolicy opts
+    in via use_claim_lineage_for_direct_evidence.
+    """
+    return await count_valid_source_review_lineage_claims(
+        pool,
+        vendor_name=vendor_name,
+        target_entity=vendor_name,
+        source_review_ids=review_ids,
+        claim_types=claim_types,
+        as_of_date=as_of_date,
+        analysis_window_days=analysis_window_days,
+        pain_categories=pain_categories,
+    )
 
 
 def _build_dm_churn_query() -> str:
@@ -191,6 +233,16 @@ async def aggregate_dm_churn_rate_claim(
     dm_churning_direct = int(row["dm_churning_direct"] or 0)
     dm_churning_witnesses = int(row["dm_churning_witnesses"] or 0)
     churning_review_ids = list(row["churning_review_ids"] or [])
+    policy = get_policy(ClaimScope.VENDOR, "decision_maker_churn_rate")
+    if policy.use_claim_lineage_for_direct_evidence:
+        dm_churning_direct = await _count_lineage_direct_evidence(
+            pool,
+            vendor_name=vendor_name,
+            review_ids=churning_review_ids,
+            claim_types=_DM_CHURN_LINEAGE_CLAIM_TYPES,
+            as_of_date=as_of_date,
+            analysis_window_days=analysis_window_days,
+        )
     rate = dm_churning / dm_total if dm_total > 0 else 0.0
 
     return build_product_claim(
@@ -225,6 +277,7 @@ async def aggregate_dm_churn_rate_claim(
         contradicting_links=(),
         as_of_date=as_of_date,
         analysis_window_days=analysis_window_days,
+        policy=policy,
     )
 
 
@@ -355,6 +408,17 @@ async def aggregate_price_complaint_rate_claim(
     complaint_direct = int(row["complaint_direct"] or 0)
     complaint_witnesses = int(row["complaint_witnesses"] or 0)
     complaint_review_ids = list(row["complaint_review_ids"] or [])
+    policy = get_policy(ClaimScope.VENDOR, "price_complaint_rate")
+    if policy.use_claim_lineage_for_direct_evidence:
+        complaint_direct = await _count_lineage_direct_evidence(
+            pool,
+            vendor_name=vendor_name,
+            review_ids=complaint_review_ids,
+            claim_types=_PRICE_COMPLAINT_LINEAGE_CLAIM_TYPES,
+            as_of_date=as_of_date,
+            analysis_window_days=analysis_window_days,
+            pain_categories=("pricing",),
+        )
     rate = complaint_count / reviews_total if reviews_total > 0 else 0.0
 
     return build_product_claim(
@@ -380,6 +444,7 @@ async def aggregate_price_complaint_rate_claim(
         contradicting_links=(),
         as_of_date=as_of_date,
         analysis_window_days=analysis_window_days,
+        policy=policy,
     )
 
 

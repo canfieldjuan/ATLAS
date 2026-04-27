@@ -50,6 +50,42 @@ from atlas_brain.autonomous.tasks.b2b_challenger_brief import (
 from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
     load_synthesis_view,
 )
+from atlas_brain.services.b2b.product_claim import ClaimScope, build_product_claim
+
+for _mod_name in ("asyncpg", "asyncpg.exceptions"):
+    if sys.modules.get(_mod_name) is _asyncpg_mock or sys.modules.get(_mod_name) is _asyncpg_exceptions:
+        sys.modules.pop(_mod_name, None)
+
+
+def _direct_displacement_product_claim(
+    *,
+    incumbent: str = "Zendesk",
+    challenger: str = "Freshdesk",
+    supporting_count: int = 1,
+    direct_evidence_count: int | None = None,
+    witness_count: int = 1,
+    contradiction_count: int = 0,
+):
+    direct_count = supporting_count if direct_evidence_count is None else direct_evidence_count
+    return build_product_claim(
+        claim_scope=ClaimScope.COMPETITOR_PAIR,
+        claim_type="direct_displacement",
+        claim_key=f"incumbent:{incumbent}",
+        claim_text=f"{incumbent} shows direct displacement pressure toward {challenger}",
+        target_entity=challenger,
+        secondary_target=incumbent,
+        supporting_count=supporting_count,
+        direct_evidence_count=direct_count,
+        witness_count=witness_count,
+        contradiction_count=contradiction_count,
+        denominator=None,
+        sample_size=supporting_count,
+        has_grounded_evidence=direct_count > 0,
+        evidence_links=tuple(f"review-{idx}" for idx in range(1, direct_count + 1)),
+        contradicting_links=tuple(f"inverse-{idx}" for idx in range(1, contradiction_count + 1)),
+        as_of_date=date(2026, 3, 18),
+        analysis_window_days=30,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +589,127 @@ class TestBuildChallengerBrief:
         assert brief["sales_playbook"]["landmine_questions"]
         assert brief["sales_playbook"]["objection_handlers"]
         assert brief["sales_playbook"]["talk_track"]["opening"]
+
+    def test_head_to_head_product_claim_blocks_monitor_only_winner_call(self):
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail={
+                "total_mentions": 3,
+                "signal_strength": "emerging",
+                "confidence_score": 0.52,
+                "primary_driver": "support",
+                "source_distribution": {"g2": 3},
+            },
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=None,
+            cross_vendor_battle={
+                "winner": "Freshdesk",
+                "loser": "Zendesk",
+                "conclusion": "Freshdesk is winning support-led displacements.",
+                "durability": "emerging",
+                "key_insights": [{"insight": "Support friction", "evidence": "support"}],
+                "confidence": 0.62,
+            },
+            direct_displacement_claim=_direct_displacement_product_claim(
+                incumbent="Zendesk",
+                challenger="Freshdesk",
+                supporting_count=1,
+                witness_count=1,
+            ),
+            max_target_accounts=10,
+        )
+
+        head_to_head = brief["head_to_head"]
+        assert head_to_head["winner"] == ""
+        assert head_to_head["loser"] == ""
+        assert head_to_head["render_allowed"] is True
+        assert head_to_head["report_allowed"] is False
+        assert head_to_head["monitor_only"] is True
+        assert head_to_head["readiness_state"] == "monitor_only"
+        assert head_to_head["suppression_reason"] == "low_confidence"
+        assert head_to_head["product_claim"]["report_allowed"] is False
+        assert "Monitor only" in head_to_head["conclusion"]
+
+    def test_head_to_head_product_claim_preserves_report_safe_winner_call(self):
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail={
+                "total_mentions": 3,
+                "signal_strength": "emerging",
+                "confidence_score": 0.52,
+                "primary_driver": "support",
+                "source_distribution": {"g2": 3},
+            },
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=None,
+            cross_vendor_battle={
+                "winner": "Freshdesk",
+                "loser": "Zendesk",
+                "conclusion": "Freshdesk is winning support-led displacements.",
+                "durability": "emerging",
+                "key_insights": [{"insight": "Support friction", "evidence": "support"}],
+                "confidence": 0.62,
+            },
+            direct_displacement_claim=_direct_displacement_product_claim(
+                incumbent="Zendesk",
+                challenger="Freshdesk",
+                supporting_count=3,
+                witness_count=2,
+            ),
+            max_target_accounts=10,
+        )
+
+        head_to_head = brief["head_to_head"]
+        assert head_to_head["winner"] == "Freshdesk"
+        assert head_to_head["loser"] == "Zendesk"
+        assert head_to_head["report_allowed"] is True
+        assert head_to_head["readiness_state"] == "report_safe"
+        assert head_to_head["product_claim"]["report_allowed"] is True
+
+    def test_head_to_head_product_claim_validation_unavailable_blocks_winner_call(self):
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail={
+                "total_mentions": 3,
+                "signal_strength": "emerging",
+                "confidence_score": 0.52,
+                "primary_driver": "support",
+                "source_distribution": {"g2": 3},
+            },
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=None,
+            cross_vendor_battle={
+                "winner": "Freshdesk",
+                "loser": "Zendesk",
+                "conclusion": "Freshdesk is winning support-led displacements.",
+                "durability": "emerging",
+                "key_insights": [{"insight": "Support friction", "evidence": "support"}],
+                "confidence": 0.62,
+            },
+            direct_displacement_claim=None,
+            max_target_accounts=10,
+        )
+
+        head_to_head = brief["head_to_head"]
+        assert head_to_head["winner"] == ""
+        assert head_to_head["loser"] == ""
+        assert head_to_head["render_allowed"] is False
+        assert head_to_head["report_allowed"] is False
+        assert head_to_head["claim_validation_unavailable"] is True
+        assert head_to_head["readiness_state"] == "validation_unavailable"
+        assert "validation is unavailable" in head_to_head["conclusion"]
 
     def test_cross_vendor_battle_without_refs_uses_displacement_review_ids(self):
         brief = _build_challenger_brief(

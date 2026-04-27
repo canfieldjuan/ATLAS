@@ -313,6 +313,28 @@ def test_non_rate_default_policy_does_not_require_denominator():
     assert (render, report) == (True, True)
 
 
+def test_claim_lineage_policy_flag_is_stored_not_gate_logic():
+    """The lineage flag is consumed by aggregators before they call the
+    ProductClaim builder. It must not loosen or tighten render gates by
+    itself; only the objective counts passed to the builder do that."""
+    policy = ClaimGatePolicy(
+        is_rate_claim=True,
+        use_claim_lineage_for_direct_evidence=True,
+    )
+    render, report, reason = decide_render_gates(
+        evidence_posture=EvidencePosture.USABLE,
+        confidence=ConfidenceLabel.HIGH,
+        supporting_count=10,
+        direct_evidence_count=5,
+        contradiction_count=0,
+        denominator=100,
+        sample_size=100,
+        policy=policy,
+    )
+    assert policy.use_claim_lineage_for_direct_evidence is True
+    assert (render, report, reason) == (True, True, None)
+
+
 # ----------------------------------------------------------------------------
 # Truth-table invariant: report ⊆ render across all combos.
 # ----------------------------------------------------------------------------

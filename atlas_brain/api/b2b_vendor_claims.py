@@ -5,11 +5,11 @@ React side will consume to gate dashboard renders. Read-only; preserves
 every field of ProductClaim verbatim so the React side cannot drift
 from the contract.
 
-Initial scope is intentionally narrow: ONE claim_type
-(decision_maker_churn_rate) so the API contract proves itself end to
-end before the surface fan-out. Subsequent patches add price
-complaint rate, weakness theme, strength theme, and the remaining
-VENDOR-scope claims to the same endpoint shape.
+Initial scope is intentionally narrow: VENDOR-scope rate claims
+(decision_maker_churn_rate and price_complaint_rate) so the API
+contract proves itself end to end before the surface fan-out.
+Subsequent patches add weakness theme, strength theme, and the
+remaining VENDOR-scope claims to the same endpoint shape.
 """
 
 from __future__ import annotations

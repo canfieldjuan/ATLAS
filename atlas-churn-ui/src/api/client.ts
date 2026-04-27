@@ -74,6 +74,7 @@ const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
 const B2B_DASHBOARD_BASE = `${API_BASE}/api/v1/b2b/dashboard`
 const VENDOR_CLAIMS_BASE = `${API_BASE}/api/v1/b2b/vendor-claims`
+const CHALLENGER_CLAIMS_BASE = `${API_BASE}/api/v1/b2b/challenger-claims`
 const WEBHOOKS_BASE = B2B_DASHBOARD_BASE
 const AUTONOMOUS_BASE = `${API_BASE}/api/v1/autonomous`
 const CACHE_BUSTER_PARAM = '_ts'
@@ -2172,6 +2173,11 @@ export interface EvidenceWitness {
     | null
   phrase_verbatim: boolean | null
   pain_confidence: 'strong' | 'weak' | 'none' | null
+  evidence_posture: EvidencePosture | null
+  confidence: ConfidenceLabel | null
+  render_allowed: boolean
+  report_allowed: boolean
+  suppression_reason: SuppressionReason | null
 }
 
 export interface EvidenceWitnessDetail extends EvidenceWitness {
@@ -2493,6 +2499,9 @@ export type SuppressionReason =
   | 'sample_size_below_threshold'
   | 'weak_evidence_only'
   | 'passing_mention_only'
+  | 'subject_not_subject_vendor'
+  | 'polarity_not_renderable'
+  | 'role_not_renderable'
   | 'low_confidence'
   | 'consumer_filter_applied'
 
@@ -2530,6 +2539,19 @@ export interface VendorClaimsResponse {
   claims: VendorClaim[]
 }
 
+export interface ChallengerClaimRow {
+  challenger: string
+  incumbent: string
+  claim: VendorClaim
+}
+
+export interface ChallengerClaimsResponse {
+  challenger: string
+  as_of_date: string
+  analysis_window_days: number
+  rows: ChallengerClaimRow[]
+}
+
 export async function fetchVendorClaims(
   vendorName: string,
   params?: { as_of_date?: string; analysis_window_days?: number },
@@ -2537,6 +2559,17 @@ export async function fetchVendorClaims(
   return get<VendorClaimsResponse>(
     VENDOR_CLAIMS_BASE,
     `/${encodeURIComponent(vendorName)}`,
+    params,
+  )
+}
+
+export async function fetchChallengerClaims(
+  challenger: string,
+  params?: { as_of_date?: string; analysis_window_days?: number; limit?: number },
+): Promise<ChallengerClaimsResponse> {
+  return get<ChallengerClaimsResponse>(
+    CHALLENGER_CLAIMS_BASE,
+    `/${encodeURIComponent(challenger)}`,
     params,
   )
 }

@@ -33,7 +33,9 @@ import argparse
 import asyncio
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
+from uuid import UUID
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -67,7 +69,7 @@ SELECT id, vendor_name, enrichment_status, enriched_at,
   FROM b2b_reviews
  WHERE requeue_reason = 'phase_7_v2_phrase_metadata'
    AND enrichment_status IN ('enriched', 'no_signal')
-   AND enriched_at >= $1::timestamptz
+   AND enriched_at >= $1
 """
 
 _REQUEUE_QUERY = """
@@ -88,7 +90,7 @@ UPDATE b2b_reviews
 """
 
 
-async def _audit(pool, since: str) -> dict:
+async def _audit(pool, since: datetime) -> dict:
     rows = await pool.fetch(_SCOPE_QUERY, since)
     by_status: dict[str, int] = {}
     by_vendor: dict[str, int] = {}
@@ -101,16 +103,17 @@ async def _audit(pool, since: str) -> dict:
         "total": len(rows),
         "by_status": by_status,
         "by_vendor_top10": sorted(by_vendor.items(), key=lambda x: -x[1])[:10],
-        "row_ids": [str(row["id"]) for row in rows],
+        "row_ids": [row["id"] if isinstance(row["id"], UUID) else UUID(str(row["id"])) for row in rows],
     }
 
 
 async def _main_async(args: argparse.Namespace) -> int:
+    since_dt = datetime.fromisoformat(args.since)
     await init_database()
     pool = get_db_pool()
     try:
-        audit = await _audit(pool, args.since)
-        logger.info("scope: enriched_at >= %s, requeue_reason='phase_7_v2_phrase_metadata'", args.since)
+        audit = await _audit(pool, since_dt)
+        logger.info("scope: enriched_at >= %s, requeue_reason='phase_7_v2_phrase_metadata'", since_dt.isoformat())
         logger.info("rows in scope: %d", audit["total"])
         logger.info("by status: %s", audit["by_status"])
         logger.info("top vendors:")

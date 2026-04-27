@@ -32,6 +32,163 @@ async def test_list_witnesses_normalizes_query_defaults_on_direct_call(monkeypat
     assert result["as_of_date"] is None
 
 
+def _list_witness_row(**overrides):
+    base = {
+        "witness_id": "w-list-1",
+        "review_id": "rev-1",
+        "witness_type": "pricing",
+        "excerpt_text": "too expensive",
+        "source": "g2",
+        "reviewed_at": datetime(2026, 4, 1, tzinfo=timezone.utc),
+        "reviewer_company": "Acme Corp",
+        "reviewer_title": "VP Support",
+        "pain_category": "pricing",
+        "competitor": None,
+        "salience_score": 0.9,
+        "specificity_score": 0.7,
+        "selection_reason": "named_account",
+        "signal_tags": ["pricing_backlash"],
+        "as_of_date": date(2026, 4, 1),
+        "grounding_status": "grounded",
+        "phrase_polarity": "negative",
+        "phrase_subject": "subject_vendor",
+        "phrase_role": "primary_driver",
+        "phrase_verbatim": True,
+        "pain_confidence": "strong",
+        "quote_grade": True,
+    }
+    base.update(overrides)
+    return base
+
+
+@pytest.mark.asyncio
+async def test_list_witnesses_adds_render_gate_fields(monkeypatch):
+    rows = [
+        _list_witness_row(witness_id="w-good"),
+        _list_witness_row(
+            witness_id="w-unsafe",
+            grounding_status="not_grounded",
+            quote_grade=False,
+        ),
+    ]
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(return_value={"total": 2}),
+        fetch=AsyncMock(side_effect=[rows, []]),
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "resolve_vendor_name", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        mod,
+        "_latest_witness_snapshot_date",
+        AsyncMock(return_value=date(2026, 4, 1)),
+    )
+
+    result = await mod.list_witnesses(
+        "Salesforce",
+        user=SimpleNamespace(account_id="not-a-uuid"),
+    )
+
+    by_id = {w["witness_id"]: w for w in result["witnesses"]}
+    assert by_id["w-good"]["render_allowed"] is True
+    assert by_id["w-good"]["report_allowed"] is True
+    assert by_id["w-good"]["evidence_posture"] == "usable"
+    assert by_id["w-good"]["suppression_reason"] is None
+    assert by_id["w-unsafe"]["render_allowed"] is False
+    assert by_id["w-unsafe"]["report_allowed"] is False
+    assert by_id["w-unsafe"]["evidence_posture"] == "unverified"
+    assert by_id["w-unsafe"]["suppression_reason"] == "unverified_evidence"
+
+
+@pytest.mark.asyncio
+async def test_list_witnesses_blocks_tagless_grounded_rows(monkeypatch):
+    """A grounded quote with no phrase tags is still not safe as a claim:
+    it may be v3-backed or synthesized, so list view must render it as
+    monitor-only until semantic tags exist."""
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(return_value={"total": 1}),
+        fetch=AsyncMock(side_effect=[
+            [
+                _list_witness_row(
+                    phrase_subject=None,
+                    phrase_polarity=None,
+                    phrase_role=None,
+                )
+            ],
+            [],
+        ]),
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "resolve_vendor_name", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        mod,
+        "_latest_witness_snapshot_date",
+        AsyncMock(return_value=date(2026, 4, 1)),
+    )
+
+    result = await mod.list_witnesses(
+        "Salesforce",
+        user=SimpleNamespace(account_id="not-a-uuid"),
+    )
+    witness = result["witnesses"][0]
+
+    assert witness["quote_grade"] is True
+    assert witness["render_allowed"] is False
+    assert witness["suppression_reason"] == "unverified_evidence"
+
+
+@pytest.mark.asyncio
+async def test_list_witnesses_blocks_unclear_semantic_tags(monkeypatch):
+    """Grounding alone is not enough. Unclear semantic tags still mean the
+    row cannot be rendered as a customer-facing evidence claim."""
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(return_value={"total": 3}),
+        fetch=AsyncMock(side_effect=[
+            [
+                _list_witness_row(
+                    witness_id="w-unclear-subject",
+                    phrase_subject="unclear",
+                ),
+                _list_witness_row(
+                    witness_id="w-unclear-polarity",
+                    phrase_polarity="unclear",
+                ),
+                _list_witness_row(
+                    witness_id="w-unclear-role",
+                    phrase_role="unclear",
+                ),
+            ],
+            [],
+        ]),
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "resolve_vendor_name", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        mod,
+        "_latest_witness_snapshot_date",
+        AsyncMock(return_value=date(2026, 4, 1)),
+    )
+
+    result = await mod.list_witnesses(
+        "Salesforce",
+        user=SimpleNamespace(account_id="not-a-uuid"),
+    )
+
+    by_id = {w["witness_id"]: w for w in result["witnesses"]}
+    expected_reasons = {
+        "w-unclear-subject": "subject_not_subject_vendor",
+        "w-unclear-polarity": "polarity_not_renderable",
+        "w-unclear-role": "role_not_renderable",
+    }
+    for witness_id, witness in by_id.items():
+        assert witness["quote_grade"] is True
+        assert witness["render_allowed"] is False
+        assert witness["report_allowed"] is False
+        assert witness["suppression_reason"] == expected_reasons[witness_id]
+
+
 @pytest.mark.asyncio
 async def test_get_witness_normalizes_query_default_window_days(monkeypatch):
     captured = {}
@@ -100,6 +257,11 @@ def _lazy_grounding_witness_row(**overrides):
         "enrichment": {},
         "grounding_status": "pending",
         "grounding_checked_at": None,
+        "phrase_polarity": "negative",
+        "phrase_subject": "subject_vendor",
+        "phrase_role": "primary_driver",
+        "phrase_verbatim": True,
+        "pain_confidence": "strong",
     }
     base.update(overrides)
     return base
@@ -298,6 +460,44 @@ async def test_get_witness_quote_grade_false_when_not_grounded(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_witness_applies_render_gate_and_strips_unsafe_highlight(monkeypatch):
+    """Detail endpoint must not be a bypass around the list-view render gate."""
+    witness_row = _lazy_grounding_witness_row(
+        grounding_status="grounded",
+        grounding_checked_at=datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc),
+        phrase_subject="alternative",
+        excerpt_text="too expensive",
+        review_text="It was too expensive for what we got.",
+        enrichment={"specific_complaints": ["too expensive"]},
+    )
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(return_value=witness_row),
+        execute=AsyncMock(),
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "resolve_vendor_name", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        mod, "_latest_witness_snapshot_date",
+        AsyncMock(return_value=date(2026, 4, 1)),
+    )
+
+    result = await mod.get_witness(
+        "w-lazy-1", "Salesforce",
+        user=SimpleNamespace(account_id=str(uuid4())),
+    )
+    witness = result["witness"]
+
+    assert witness["quote_grade"] is True
+    assert witness["render_allowed"] is False
+    assert witness["report_allowed"] is False
+    assert witness["suppression_reason"] == "subject_not_subject_vendor"
+    assert "highlight_start" not in witness
+    assert "highlight_end" not in witness
+
+
+@pytest.mark.asyncio
 async def test_get_witness_lazy_grounding_returns_fresh_status_even_when_update_fails(monkeypatch):
     """If the persist UPDATE raises (transient DB issue), the caller still
     gets the fresh classification in the response."""
@@ -381,6 +581,13 @@ async def test_get_witness_prefers_current_derived_spans_for_highlights(monkeypa
         "reviewer_title": None,
         "enrichment_status": "enriched",
         "enrichment": enrichment,
+        "grounding_status": "grounded",
+        "grounding_checked_at": datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc),
+        "phrase_polarity": "negative",
+        "phrase_subject": "subject_vendor",
+        "phrase_role": "primary_driver",
+        "phrase_verbatim": True,
+        "pain_confidence": "strong",
     }
 
     async def _latest_snapshot(_pool, _vendor_name, _window_days, _target_date):
@@ -398,6 +605,41 @@ async def test_get_witness_prefers_current_derived_spans_for_highlights(monkeypa
     assert witness["evidence_spans"][0]["pain_category"] == "support"
     assert witness["highlight_start"] >= 0
     assert witness["highlight_end"] > witness["highlight_start"]
+
+
+@pytest.mark.asyncio
+async def test_get_trace_applies_witness_render_gates(monkeypatch):
+    witness_rows = [
+        _list_witness_row(
+            witness_id="w-trace-good",
+            review_id="not-a-uuid",
+        ),
+        _list_witness_row(
+            witness_id="w-trace-unsafe",
+            review_id="not-a-uuid",
+            phrase_polarity="positive",
+        ),
+    ]
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(side_effect=[None, None, None]),
+        fetch=AsyncMock(return_value=witness_rows),
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "resolve_vendor_name", AsyncMock(return_value=None))
+
+    result = await mod.get_trace(
+        "Salesforce",
+        user=SimpleNamespace(account_id=str(uuid4())),
+    )
+
+    by_id = {w["witness_id"]: w for w in result["trace"]["witnesses"]}
+    assert by_id["w-trace-good"]["render_allowed"] is True
+    assert by_id["w-trace-good"]["report_allowed"] is True
+    assert by_id["w-trace-good"]["suppression_reason"] is None
+    assert by_id["w-trace-unsafe"]["render_allowed"] is False
+    assert by_id["w-trace-unsafe"]["report_allowed"] is False
+    assert by_id["w-trace-unsafe"]["suppression_reason"] == "polarity_not_renderable"
 
 
 @pytest.mark.asyncio

@@ -424,6 +424,11 @@ Operator's order (tracked here for the implementation log):
    confidence / posture as the drawer.
 4. Opportunities readiness/suppression: `ACCOUNT` scope claims with
    suppression on missing fields.
+   - UI compatibility note: `opportunity_claim` may remain optional in
+     TypeScript only to tolerate cached pre-Patch-4a rows during rollout.
+     The backend contract is stricter: every fresh high-intent row should
+     carry a nested `opportunity_claim`. A missing claim in fresh API data is
+     a backend regression, not a report-safe legacy path.
 5. Challenger displacement claims: replace client-side inference with
    `COMPETITOR_PAIR` scope claims sourced from validated
    `displacement_proof_to/from_competitor` evidence.

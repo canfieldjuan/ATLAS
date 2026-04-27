@@ -26,6 +26,7 @@ from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..config import settings
 from ..autonomous.tasks._b2b_grounding import check_phrase_grounded
 from ..autonomous.tasks._b2b_witnesses import resolve_evidence_spans, sentence_bounds
+from ..services.b2b.witness_render_gate import apply_witness_render_gate
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
@@ -311,11 +312,16 @@ async def list_witnesses(
     sources = sorted({r["source"] for r in facets_rows if r["source"]})
     types = sorted({r["witness_type"] for r in facets_rows if r["witness_type"]})
 
+    witness_rows = [
+        apply_witness_render_gate(_row_to_dict(r))
+        for r in rows
+    ]
+
     return {
         "vendor_name": vendor_name,
         "as_of_date": snapshot_date.isoformat(),
         "analysis_window_days": window_days,
-        "witnesses": [_row_to_dict(r) for r in rows],
+        "witnesses": witness_rows,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -513,17 +519,13 @@ async def get_witness(
 
         result["highlight_source"] = highlight_source
 
-    # Phase 1b step 9: quote-grade gate.
-    # The witness is quote-grade iff its excerpt has been validated against
-    # source text via normalized grounding (grounding_status='grounded').
-    # 'pending' (lazy-on-read missed it for some reason) and 'not_grounded'
-    # (excerpt is not verbatim) both fall back to signal-grade, and the API
-    # actively suppresses highlight bounds so the UI cannot render a quote
-    # cards even if a stale client tries to.
-    grounding_status = str(result.get("grounding_status") or "pending").strip()
-    quote_grade = grounding_status == "grounded"
-    result["quote_grade"] = quote_grade
-    if not quote_grade:
+    # Phase 10 Patch 3: apply the same witness-scope render gate as the list
+    # endpoint. quote_grade only says "the excerpt grounded"; render_allowed
+    # says "this row is safe to render as evidence for a claim." Suppress
+    # highlight bounds for either failure so stale clients cannot quote unsafe
+    # detail rows.
+    result = apply_witness_render_gate(result)
+    if not result["quote_grade"] or not result["render_allowed"]:
         result.pop("highlight_start", None)
         result.pop("highlight_end", None)
 
@@ -690,7 +692,10 @@ async def get_trace(
         f"""
         SELECT witness_id, review_id, witness_type, excerpt_text, source,
                reviewer_company, reviewer_title, pain_category, competitor,
-               salience_score, specificity_score, signal_tags, reviewed_at
+               salience_score, specificity_score, selection_reason,
+               signal_tags, reviewed_at, as_of_date, grounding_status,
+               phrase_polarity, phrase_subject, phrase_role,
+               phrase_verbatim, pain_confidence
         FROM b2b_vendor_witnesses
         WHERE vendor_name = $1
           AND analysis_window_days = $2
@@ -701,7 +706,10 @@ async def get_trace(
         vendor_name, window_days, target_date,
     )
 
-    witnesses = [_row_to_dict(r) for r in witness_rows]
+    witnesses = [
+        apply_witness_render_gate(_row_to_dict(r))
+        for r in witness_rows
+    ]
 
     # Layer 4: Source reviews (unique review_ids from witnesses)
     review_ids = []

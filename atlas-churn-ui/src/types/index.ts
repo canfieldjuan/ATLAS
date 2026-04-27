@@ -130,6 +130,65 @@ export interface HighIntentCompany {
   founded_year?: number | null
   company_description?: string | null
   account_review_focus?: AccountReviewFocus | null
+  opportunity_claim?: AccountOpportunityClaim | null
+}
+
+export type ClaimScope = 'witness' | 'vendor' | 'account' | 'competitor_pair' | 'alert'
+
+export type EvidencePosture =
+  | 'usable'
+  | 'weak'
+  | 'contradictory'
+  | 'unverified'
+  | 'insufficient'
+
+export type ConfidenceLabel = 'high' | 'medium' | 'low'
+
+export type SuppressionReason =
+  | 'insufficient_supporting_count'
+  | 'contradictory_evidence'
+  | 'unverified_evidence'
+  | 'denominator_unknown'
+  | 'sample_size_below_threshold'
+  | 'weak_evidence_only'
+  | 'passing_mention_only'
+  | 'subject_not_subject_vendor'
+  | 'polarity_not_renderable'
+  | 'role_not_renderable'
+  | 'low_confidence'
+  | 'consumer_filter_applied'
+
+export interface ProductClaimEnvelope {
+  claim_id: string
+  claim_key: string
+  claim_scope: ClaimScope
+  claim_type: string
+  claim_text: string
+  target_entity: string
+  secondary_target: string | null
+  supporting_count: number
+  direct_evidence_count: number
+  witness_count: number
+  contradiction_count: number
+  denominator: number | null
+  sample_size: number | null
+  has_grounded_evidence: boolean
+  confidence: ConfidenceLabel
+  evidence_posture: EvidencePosture
+  render_allowed: boolean
+  report_allowed: boolean
+  suppression_reason: SuppressionReason | null
+  evidence_links: string[]
+  contradicting_links: string[]
+  as_of_date: string
+  analysis_window_days: number
+  schema_version: string
+}
+
+export interface AccountOpportunityClaim extends ProductClaimEnvelope {
+  claim_scope: 'account'
+  claim_type: 'account_opportunity_readiness'
+  source_review_count?: number | null
 }
 
 export interface VendorProfile {

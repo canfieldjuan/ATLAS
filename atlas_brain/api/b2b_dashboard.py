@@ -30,6 +30,7 @@ from ..services.b2b.source_impact import (
     summarize_source_field_baseline,
 )
 from ..services.b2b.report_trust import report_section_evidence_payload, report_trust_payload
+from ..services.b2b.account_opportunity_claims import attach_account_opportunity_claim
 from ..services.tracing import (
     build_business_trace_context,
     build_reasoning_trace_context,
@@ -1727,8 +1728,10 @@ def _shape_high_intent_company_payload(
     row: dict[str, Any],
     *,
     account_review_focus: dict[str, str] | None = None,
+    as_of_date: date | None = None,
+    analysis_window_days: int = 30,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "company": row.get("company"),
         "vendor": row.get("vendor"),
         "category": row.get("category"),
@@ -1746,6 +1749,7 @@ def _shape_high_intent_company_payload(
         "company_size": row.get("company_size"),
         "industry": row.get("industry"),
         "review_id": row.get("review_id"),
+        "source_review_ids": row.get("source_review_ids"),
         "source": row.get("source"),
         "quotes": _safe_json(row.get("quotes")),
         "intent_signals": row.get("intent_signals"),
@@ -1760,6 +1764,11 @@ def _shape_high_intent_company_payload(
         "company_description": row.get("company_description"),
         "account_review_focus": account_review_focus,
     }
+    return attach_account_opportunity_claim(
+        payload,
+        as_of_date=as_of_date or date.today(),
+        analysis_window_days=analysis_window_days,
+    )
 
 
 async def _resolve_high_intent_account_review_focuses(
@@ -1835,7 +1844,12 @@ async def list_high_intent(
     account_review_focuses = await _resolve_high_intent_account_review_focuses(pool, user, rows)
 
     companies = [
-        _shape_high_intent_company_payload(row, account_review_focus=focus)
+        _shape_high_intent_company_payload(
+            row,
+            account_review_focus=focus,
+            as_of_date=date.today(),
+            analysis_window_days=window_days,
+        )
         for row, focus in zip(rows, account_review_focuses)
     ]
 
@@ -1969,7 +1983,12 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
     }
 
     profile["high_intent_companies"] = [
-        _shape_high_intent_company_payload(row, account_review_focus=focus)
+        _shape_high_intent_company_payload(
+            row,
+            account_review_focus=focus,
+            as_of_date=date.today(),
+            analysis_window_days=30,
+        )
         for row, focus in zip(hi_rows, hi_account_review_focuses)
     ]
 

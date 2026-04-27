@@ -238,6 +238,23 @@ LIMIT $7
 """
 
 
+_COUNT_VALID_SOURCE_REVIEW_LINEAGE_SQL = """
+SELECT count(DISTINCT source_review_id)
+FROM b2b_evidence_claims
+WHERE status = 'valid'
+  AND vendor_name = $1
+  AND target_entity = $2
+  AND as_of_date = $3
+  AND analysis_window_days = $4
+  AND source_review_id = ANY($5::uuid[])
+  AND claim_type = ANY($6::text[])
+  AND (
+      $7::text[] IS NULL
+      OR lower(claim_payload->>'pain_category') = ANY($7::text[])
+  )
+"""
+
+
 def _supporting_fields_to_jsonb(fields: tuple[str, ...] | list[str] | None) -> str:
     return json.dumps(list(fields or []), separators=(",", ":"))
 
@@ -394,6 +411,58 @@ async def select_best_claim(
     return [_row_to_selection(row) for row in rows]
 
 
+async def count_valid_source_review_lineage_claims(
+    pool,
+    *,
+    vendor_name: str,
+    target_entity: str,
+    source_review_ids: Iterable[UUID],
+    claim_types: Iterable[ClaimType],
+    as_of_date: date,
+    analysis_window_days: int,
+    pain_categories: Iterable[str] | None = None,
+) -> int:
+    """Count source reviews backed by at least one valid EvidenceClaim.
+
+    This is the aggregate-rate counterpart to select_best_claim(): rate
+    cards need a denominator-aware count of numerator rows that have
+    claim-level lineage, not a ranked top-N quote list. Counts are
+    distinct by source_review_id so multiple valid claim rows from the
+    same review do not inflate direct_evidence_count.
+
+    Optional pain_categories narrows generic pain_claim_about_vendor rows
+    using claim_payload->>'pain_category'. Typed claim rows can pass the
+    same category filter safely because the builder stores pain_category
+    for every persisted claim attempt.
+    """
+    review_ids = tuple(rid for rid in source_review_ids if rid)
+    type_values = tuple(str(claim_type) for claim_type in claim_types)
+    if not review_ids or not type_values:
+        return 0
+
+    category_values: tuple[str, ...] | None = None
+    if pain_categories is not None:
+        category_values = tuple(
+            str(category).strip().lower()
+            for category in pain_categories
+            if str(category).strip()
+        )
+        if not category_values:
+            return 0
+
+    value = await pool.fetchval(
+        _COUNT_VALID_SOURCE_REVIEW_LINEAGE_SQL,
+        vendor_name,
+        target_entity,
+        as_of_date,
+        int(analysis_window_days),
+        list(review_ids),
+        list(type_values),
+        list(category_values) if category_values is not None else None,
+    )
+    return int(value or 0)
+
+
 def _row_to_selection(row: Any) -> ClaimSelection:
     return ClaimSelection(
         id=row["id"],
@@ -442,5 +511,6 @@ __all__ = [
     "ClaimSelection",
     "upsert_claim",
     "select_best_claim",
+    "count_valid_source_review_lineage_claims",
     "dedup_selections",
 ]

@@ -7,6 +7,7 @@ import {
   fetchCompanySignalCandidateGroupSummary,
   fetchCompanySignalCandidateGroups,
   fetchCompanySignalReviewImpactSummary,
+  fetchChallengerClaims,
   fetchWebhookDeliverySummary,
   listWebhooks,
   listWebhookCrmPushLog,
@@ -82,6 +83,30 @@ describe('api client helpers', () => {
     expect(requestedUrl).toContain('/api/v1/b2b/dashboard/webhooks')
     expect(requestedUrl).toContain('vendor_name=Acme+Rival')
     expect(requestedUrl).toContain('company_name=Acme+Bank')
+  })
+
+  it('uses the mounted challenger claims route with encoded challenger names', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        challenger: 'Microsoft 365',
+        as_of_date: '2026-04-26',
+        analysis_window_days: 30,
+        rows: [],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchChallengerClaims('Microsoft 365', {
+      analysis_window_days: 30,
+      limit: 5,
+    })
+
+    const requestedUrl = String(fetchMock.mock.calls[0]?.[0] ?? '')
+    expect(requestedUrl).toContain('/api/v1/b2b/challenger-claims/Microsoft%20365')
+    expect(requestedUrl).toContain('analysis_window_days=30')
+    expect(requestedUrl).toContain('limit=5')
   })
 
   it('uses dashboard webhook activity routes with explicit vendor and company filters', async () => {

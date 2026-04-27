@@ -3,7 +3,7 @@
 import importlib
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
@@ -2544,6 +2544,95 @@ async def test_list_high_intent_includes_account_review_focus():
 
     focus_mock.assert_awaited_once_with(pool, user, rows)
     assert result["companies"][0]["account_review_focus"] == focus
+
+
+def test_shape_high_intent_payload_adds_account_opportunity_claim():
+    review_id = str(uuid4())
+    payload = b2b_dashboard._shape_high_intent_company_payload(
+        {
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "urgency": 8.4,
+            "buying_stage": "evaluation",
+            "review_id": review_id,
+            "quotes": [{"text": "We are evaluating alternatives."}],
+            "intent_signals": {"evaluation": True},
+        },
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+    )
+
+    claim = payload["opportunity_claim"]
+    assert claim["claim_scope"] == "account"
+    assert claim["claim_type"] == "account_opportunity_readiness"
+    assert claim["target_entity"] == "Acme Corp"
+    assert claim["secondary_target"] == "Zendesk"
+    assert claim["supporting_count"] == 1
+    assert claim["direct_evidence_count"] == 1
+    assert claim["witness_count"] == 1
+    assert claim["denominator"] == 1
+    assert claim["source_review_count"] == 1
+    assert claim["evidence_links"] == [review_id]
+    assert claim["analysis_window_days"] == 90
+    assert claim["render_allowed"] is True
+    assert claim["report_allowed"] is False
+    assert claim["suppression_reason"] == "low_confidence"
+    assert claim["confidence"] == "low"
+    assert claim["evidence_posture"] == "usable"
+    assert "render_allowed" not in payload
+    assert "suppression_reason" not in payload
+
+
+def test_shape_high_intent_payload_suppresses_when_source_evidence_missing():
+    payload = b2b_dashboard._shape_high_intent_company_payload(
+        {
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "urgency": 8.4,
+            "buying_stage": "evaluation",
+            "intent_signals": {"evaluation": True},
+        },
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+    )
+
+    claim = payload["opportunity_claim"]
+    assert claim["claim_scope"] == "account"
+    assert claim["supporting_count"] == 0
+    assert claim["direct_evidence_count"] == 0
+    assert claim["witness_count"] == 0
+    assert claim["source_review_count"] == 0
+    assert claim["evidence_posture"] == "unverified"
+    assert claim["render_allowed"] is False
+    assert claim["report_allowed"] is False
+    assert claim["suppression_reason"] == "unverified_evidence"
+    assert "render_allowed" not in payload
+    assert "suppression_reason" not in payload
+
+
+def test_shape_high_intent_payload_keeps_witness_count_conservative_for_multi_source_v1():
+    review_ids = [str(uuid4()), str(uuid4()), str(uuid4())]
+    payload = b2b_dashboard._shape_high_intent_company_payload(
+        {
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "urgency": 8.4,
+            "buying_stage": "evaluation",
+            "source_review_ids": review_ids,
+            "intent_signals": {"evaluation": True},
+        },
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+    )
+
+    claim = payload["opportunity_claim"]
+    assert claim["supporting_count"] == 3
+    assert claim["source_review_count"] == 3
+    assert claim["witness_count"] == 1
+    assert claim["confidence"] == "low"
+    assert claim["render_allowed"] is True
+    assert claim["report_allowed"] is False
+    assert claim["suppression_reason"] == "low_confidence"
 
 
 @pytest.mark.asyncio

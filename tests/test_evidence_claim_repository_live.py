@@ -43,6 +43,7 @@ from atlas_brain.services.b2b.evidence_claim import (
 from atlas_brain.services.b2b.evidence_claim_repository import (
     ClaimSelection,
     PersistedClaim,
+    count_valid_source_review_lineage_claims,
     dedup_selections,
     select_best_claim,
     upsert_claim,
@@ -412,6 +413,136 @@ async def test_select_best_claim_secondary_target_filter(pool, artifact_id):
         limit=10,
     )
     assert sorted(r.secondary_target for r in both) == ["HubSpot", "Salesforce"]
+
+
+@pytest.mark.asyncio
+async def test_count_valid_source_review_lineage_claims_counts_distinct_reviews(
+    pool, artifact_id
+):
+    """Aggregate rate cards need direct_evidence_count by source review,
+    not by claim row. Multiple valid claims from the same review count
+    once; invalid rows and non-requested claim types do not count."""
+    review_a = uuid4()
+    review_b = uuid4()
+    review_c = uuid4()
+    rows = [
+        _make_claim(
+            artifact_id=artifact_id,
+            witness_id="witness:test:lineage:a1",
+            source_review_id=review_a,
+            excerpt_text="same review first claim",
+            claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+            payload={"pain_category": "pricing"},
+        ),
+        _make_claim(
+            artifact_id=artifact_id,
+            witness_id="witness:test:lineage:a2",
+            source_review_id=review_a,
+            excerpt_text="same review second claim",
+            claim_type=ClaimType.PRICING_URGENCY_CLAIM,
+            payload={"pain_category": "pricing"},
+        ),
+        _make_claim(
+            artifact_id=artifact_id,
+            witness_id="witness:test:lineage:b",
+            source_review_id=review_b,
+            excerpt_text="second review",
+            claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+            payload={"pain_category": "pricing"},
+        ),
+        _make_claim(
+            artifact_id=artifact_id,
+            witness_id="witness:test:lineage:c_invalid",
+            source_review_id=review_c,
+            excerpt_text="invalid review",
+            claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+            status=ClaimValidationStatus.INVALID,
+            rejection_reason="subject_not_subject_vendor",
+            payload={"pain_category": "pricing"},
+        ),
+    ]
+    for row in rows:
+        await upsert_claim(pool, row)
+
+    count = await count_valid_source_review_lineage_claims(
+        pool,
+        vendor_name="TestVendor",
+        target_entity="TestVendor",
+        source_review_ids=(review_a, review_b, review_c),
+        claim_types=(
+            ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+            ClaimType.PRICING_URGENCY_CLAIM,
+        ),
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+    )
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_count_valid_source_review_lineage_claims_filters_pain_category(
+    pool, artifact_id
+):
+    pricing_review = uuid4()
+    ux_review = uuid4()
+    await upsert_claim(
+        pool,
+        _make_claim(
+            artifact_id=artifact_id,
+            witness_id="witness:test:pricing",
+            source_review_id=pricing_review,
+            excerpt_text="pricing pain",
+            claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+            payload={"pain_category": "pricing"},
+        ),
+    )
+    await upsert_claim(
+        pool,
+        _make_claim(
+            artifact_id=artifact_id,
+            witness_id="witness:test:ux",
+            source_review_id=ux_review,
+            excerpt_text="ux pain",
+            claim_type=ClaimType.PAIN_CLAIM_ABOUT_VENDOR,
+            payload={"pain_category": "ux"},
+        ),
+    )
+
+    count = await count_valid_source_review_lineage_claims(
+        pool,
+        vendor_name="TestVendor",
+        target_entity="TestVendor",
+        source_review_ids=(pricing_review, ux_review),
+        claim_types=(ClaimType.PAIN_CLAIM_ABOUT_VENDOR,),
+        pain_categories=("pricing",),
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+    )
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_count_valid_source_review_lineage_claims_empty_inputs_return_zero(
+    pool,
+):
+    assert await count_valid_source_review_lineage_claims(
+        pool,
+        vendor_name="TestVendor",
+        target_entity="TestVendor",
+        source_review_ids=(),
+        claim_types=(ClaimType.PAIN_CLAIM_ABOUT_VENDOR,),
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+    ) == 0
+    assert await count_valid_source_review_lineage_claims(
+        pool,
+        vendor_name="TestVendor",
+        target_entity="TestVendor",
+        source_review_ids=(uuid4(),),
+        claim_types=(),
+        as_of_date=date(2026, 4, 25),
+        analysis_window_days=90,
+    ) == 0
 
 
 @pytest.mark.asyncio

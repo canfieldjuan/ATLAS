@@ -19,6 +19,8 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ...services.b2b.challenger_dashboard_claims import aggregate_direct_displacement_claim
+from ...services.b2b.product_claim import ProductClaim
 from ._b2b_shared import (
     read_vendor_intelligence_map as _read_vendor_intelligence_map,
     _segment_targeting_summary,
@@ -27,6 +29,8 @@ from ._b2b_shared import (
 from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_challenger_brief")
+
+_DIRECT_DISPLACEMENT_CLAIM_NOT_SUPPLIED = object()
 
 
 async def _fetch_latest_evidence_vault(
@@ -589,6 +593,118 @@ async def _resolve_cross_vendor_battle(
             return result
 
     return None
+
+
+def _enum_value(value: Any) -> Any:
+    return getattr(value, "value", value)
+
+
+def _product_claim_report_payload(claim: ProductClaim) -> dict[str, Any]:
+    """Minimal ProductClaim mirror persisted with report sections.
+
+    Reports only need the gate fields and counts, not the full policy object.
+    Keeping this payload beside the gated field makes report/UI parity
+    auditable without coupling report JSON to the dataclass internals.
+    """
+    return {
+        "claim_id": claim.claim_id,
+        "claim_key": claim.claim_key,
+        "claim_scope": _enum_value(claim.claim_scope),
+        "claim_type": claim.claim_type,
+        "claim_text": claim.claim_text,
+        "target_entity": claim.target_entity,
+        "secondary_target": claim.secondary_target,
+        "supporting_count": claim.supporting_count,
+        "direct_evidence_count": claim.direct_evidence_count,
+        "witness_count": claim.witness_count,
+        "contradiction_count": claim.contradiction_count,
+        "confidence": _enum_value(claim.confidence),
+        "evidence_posture": _enum_value(claim.evidence_posture),
+        "render_allowed": claim.render_allowed,
+        "report_allowed": claim.report_allowed,
+        "suppression_reason": _enum_value(claim.suppression_reason) if claim.suppression_reason else None,
+        "evidence_links": list(claim.evidence_links),
+        "contradicting_links": list(claim.contradicting_links),
+        "as_of_date": claim.as_of_date.isoformat(),
+        "analysis_window_days": claim.analysis_window_days,
+        "schema_version": claim.schema_version,
+    }
+
+
+def _apply_head_to_head_product_claim_gate(
+    head_to_head: dict[str, Any],
+    *,
+    incumbent: str,
+    challenger: str,
+    direct_displacement_claim: ProductClaim | None | object,
+) -> dict[str, Any]:
+    """Apply ProductClaim report gates to head-to-head winner calls.
+
+    The production task always supplies a claim object (or explicit None when
+    validation is unavailable). Tests and legacy helpers that omit the argument
+    keep pre-Phase-10 behavior through the sentinel.
+    """
+    if direct_displacement_claim is _DIRECT_DISPLACEMENT_CLAIM_NOT_SUPPLIED:
+        return head_to_head
+
+    gated = dict(head_to_head)
+    if direct_displacement_claim is None:
+        gated["winner"] = ""
+        gated["loser"] = ""
+        gated["report_allowed"] = False
+        gated["render_allowed"] = False
+        gated["claim_validation_unavailable"] = True
+        gated["readiness_state"] = "validation_unavailable"
+        gated["suppression_reason"] = "validation_unavailable"
+        gated["conclusion"] = (
+            f"Winner call suppressed: displacement claim validation is unavailable "
+            f"for {challenger} versus {incumbent}."
+        )
+        gated["key_insights"] = [{
+            "insight": "Winner call suppressed until ProductClaim validation is available.",
+            "evidence": "validation_unavailable",
+        }]
+        return gated
+
+    claim = direct_displacement_claim
+    payload = _product_claim_report_payload(claim)
+    gated["product_claim"] = payload
+    gated["render_allowed"] = claim.render_allowed
+    gated["report_allowed"] = claim.report_allowed
+    gated["suppression_reason"] = payload["suppression_reason"]
+    gated["evidence_posture"] = payload["evidence_posture"]
+    gated["confidence_label"] = payload["confidence"]
+    gated["claim_validation_unavailable"] = False
+
+    if claim.report_allowed:
+        gated["readiness_state"] = "report_safe"
+        return gated
+
+    reason = payload["suppression_reason"] or "not_report_safe"
+    state = "monitor_only" if claim.render_allowed else "suppressed"
+    gated["winner"] = ""
+    gated["loser"] = ""
+    gated["monitor_only"] = claim.render_allowed
+    gated["readiness_state"] = state
+    if claim.render_allowed:
+        gated["conclusion"] = (
+            f"Monitor only: direct displacement evidence for {challenger} versus "
+            f"{incumbent} is visible in the UI but is not report-safe ({reason})."
+        )
+        gated["key_insights"] = [{
+            "insight": "Direct displacement evidence exists, but the ProductClaim gate blocks report publication.",
+            "evidence": reason,
+        }]
+    else:
+        gated["conclusion"] = (
+            f"Winner call suppressed: direct displacement evidence for {challenger} "
+            f"versus {incumbent} is not render-safe ({reason})."
+        )
+        gated["key_insights"] = [{
+            "insight": "Winner call suppressed by the ProductClaim gate.",
+            "evidence": reason,
+        }]
+    return gated
 
 
 async def _retire_unselected_challenger_briefs(
@@ -1309,6 +1425,7 @@ def _build_challenger_brief(
     churn_signal: dict | None,
     incumbent_synthesis_view: Any | None = None,
     cross_vendor_battle: dict | None,
+    direct_displacement_claim: ProductClaim | None | object = _DIRECT_DISPLACEMENT_CLAIM_NOT_SUPPLIED,
     review_pain_quotes: list[dict] | None = None,
     battle_card_metadata: dict[str, Any] | None = None,
     quote_similarity_threshold: float | None = None,
@@ -1728,6 +1845,12 @@ def _build_challenger_brief(
             "key_insights": insights,
             "synthesized": True,
         }
+    head_to_head = _apply_head_to_head_product_claim_gate(
+        head_to_head,
+        incumbent=incumbent,
+        challenger=challenger,
+        direct_displacement_claim=direct_displacement_claim,
+    )
     if not (
         isinstance(head_to_head.get("reference_ids"), dict)
         and head_to_head.get("reference_ids")
@@ -2124,6 +2247,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "battle_card_date": str(battle_card_record["report_date"]) if battle_card_record else "",
                 "battle_card_stale": bool(battle_card_record["stale"]) if battle_card_record else False,
             }
+            try:
+                direct_displacement_claim = await aggregate_direct_displacement_claim(
+                    pool,
+                    challenger=challenger,
+                    incumbent=incumbent,
+                    as_of_date=today,
+                    analysis_window_days=window_days,
+                )
+            except Exception as exc:  # pragma: no cover - defensive operational path
+                logger.warning(
+                    "challenger_brief_direct_displacement_claim_unavailable "
+                    "incumbent=%s challenger=%s error=%s",
+                    incumbent,
+                    challenger,
+                    exc,
+                )
+                direct_displacement_claim = None
 
             brief = _build_challenger_brief(
                 incumbent=incumbent,
@@ -2137,6 +2277,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 churn_signal=churn_signal,
                 incumbent_synthesis_view=incumbent_synthesis_view,
                 cross_vendor_battle=cross_vendor_battle,
+                direct_displacement_claim=direct_displacement_claim,
                 review_pain_quotes=review_pain_quotes,
                 battle_card_metadata=battle_card_metadata if battle_card_record else None,
                 quote_similarity_threshold=quote_similarity_threshold,

@@ -39,6 +39,11 @@ function makeWitness(overrides = {}) {
     phrase_role: null,
     phrase_verbatim: null,
     pain_confidence: null,
+    evidence_posture: 'usable',
+    confidence: 'high',
+    render_allowed: true,
+    report_allowed: true,
+    suppression_reason: null,
     ...overrides,
   }
 }
@@ -545,6 +550,11 @@ describe('EvidenceDrawer', () => {
         all_evidence_span_count: 0,
         quote_grade: false,
         grounding_status: 'not_grounded',
+        evidence_posture: 'unverified',
+        confidence: 'medium',
+        render_allowed: false,
+        report_allowed: false,
+        suppression_reason: 'unverified_evidence',
         highlight_start: 0,
         highlight_end: 'Pricing spiked after renewal.'.length,
       },
@@ -563,6 +573,34 @@ describe('EvidenceDrawer', () => {
 
     expect(await screen.findByText(/Excerpt could not be verified verbatim/i)).toBeInTheDocument()
     expect(screen.getByText('Pricing spiked after renewal and support dropped.')).toBeInTheDocument()
+    expect(container.querySelector('mark')).toBeNull()
+  })
+
+  it('renders monitor-only detail and suppresses highlighting when render gate rejects', async () => {
+    api.fetchWitness.mockResolvedValueOnce({
+      witness: makeWitness({
+        render_allowed: false,
+        report_allowed: false,
+        suppression_reason: 'subject_not_subject_vendor',
+        phrase_subject: 'alternative',
+        highlight_start: 0,
+        highlight_end: 'Pricing spiked after renewal.'.length,
+      }),
+    })
+
+    const { container } = render(
+      <MemoryRouter>
+        <EvidenceDrawer
+          vendorName="Salesforce"
+          witnessId="w1"
+          open
+          onClose={() => {}}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText(/Monitor only:/i)).toBeInTheDocument()
+    expect(screen.getByText(/Wrong subject/i)).toBeInTheDocument()
     expect(container.querySelector('mark')).toBeNull()
   })
 

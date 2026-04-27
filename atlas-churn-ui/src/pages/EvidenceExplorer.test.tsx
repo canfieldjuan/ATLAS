@@ -37,6 +37,21 @@ function activeVendorShortcuts(vendorName = 'Zendesk') {
   return within(headerScope)
 }
 
+const SAFE_WITNESS_GATE = {
+  quote_grade: true,
+  grounding_status: 'grounded',
+  phrase_polarity: 'negative',
+  phrase_subject: 'subject_vendor',
+  phrase_role: 'primary_driver',
+  phrase_verbatim: true,
+  pain_confidence: 'strong',
+  evidence_posture: 'usable',
+  confidence: 'high',
+  render_allowed: true,
+  report_allowed: true,
+  suppression_reason: null,
+}
+
 describe('EvidenceExplorer', () => {
   beforeEach(() => {
     cleanup()
@@ -98,6 +113,7 @@ describe('EvidenceExplorer', () => {
         selection_reason: 'named_account',
         signal_tags: ['pricing_backlash'],
         as_of_date: '2026-04-09',
+        ...SAFE_WITNESS_GATE,
       }],
     })
     api.fetchEvidenceVault.mockResolvedValue({
@@ -213,6 +229,207 @@ describe('EvidenceExplorer', () => {
         '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26as_of_date%3D2026-04-08%26window_days%3D45%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
       )
     }
+  })
+
+  it('renders suppressed witness rows as monitor-only instead of quoted evidence', async () => {
+    api.fetchWitnesses.mockResolvedValueOnce({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-09',
+      analysis_window_days: 30,
+      total: 1,
+      limit: 30,
+      offset: 0,
+      facets: {
+        pain_categories: ['pricing'],
+        sources: ['reddit'],
+        witness_types: ['pricing'],
+      },
+      witnesses: [{
+        witness_id: 'witness:zendesk:unsafe',
+        review_id: 'review-unsafe',
+        witness_type: 'pricing',
+        excerpt_text: 'This raw excerpt should not render as a quote.',
+        source: 'reddit',
+        reviewed_at: '2026-04-03T00:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP Support',
+        pain_category: 'pricing',
+        competitor: 'Freshdesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        as_of_date: '2026-04-09',
+        quote_grade: false,
+        grounding_status: 'not_grounded',
+        phrase_polarity: 'negative',
+        phrase_subject: 'subject_vendor',
+        phrase_role: 'primary_driver',
+        phrase_verbatim: false,
+        pain_confidence: 'weak',
+        evidence_posture: 'unverified',
+        confidence: 'medium',
+        render_allowed: false,
+        report_allowed: false,
+        suppression_reason: 'unverified_evidence',
+      }],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('witness-card-witness:zendesk:unsafe')
+    expect(within(card).getByTestId('witness-monitor-only-witness:zendesk:unsafe')).toHaveTextContent('Monitor only')
+    expect(card).toHaveTextContent('Unverified evidence')
+    expect(card).not.toHaveTextContent('This raw excerpt should not render as a quote.')
+  })
+
+  it('fails closed when a witness row is missing render_allowed', async () => {
+    api.fetchWitnesses.mockResolvedValueOnce({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-09',
+      analysis_window_days: 30,
+      total: 1,
+      limit: 30,
+      offset: 0,
+      facets: {
+        pain_categories: ['pricing'],
+        sources: ['reddit'],
+        witness_types: ['pricing'],
+      },
+      witnesses: [{
+        witness_id: 'witness:zendesk:missing-gate',
+        review_id: 'review-missing-gate',
+        witness_type: 'pricing',
+        excerpt_text: 'This missing-gate excerpt should not render as a quote.',
+        source: 'reddit',
+        reviewed_at: '2026-04-03T00:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP Support',
+        pain_category: 'pricing',
+        competitor: 'Freshdesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        as_of_date: '2026-04-09',
+        quote_grade: true,
+        grounding_status: 'grounded',
+        phrase_polarity: 'negative',
+        phrase_subject: 'subject_vendor',
+        phrase_role: 'primary_driver',
+        phrase_verbatim: true,
+        pain_confidence: 'strong',
+        evidence_posture: 'usable',
+        confidence: 'high',
+        report_allowed: true,
+        suppression_reason: null,
+      } as never],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const card = await screen.findByTestId('witness-card-witness:zendesk:missing-gate')
+    expect(within(card).getByTestId('witness-monitor-only-witness:zendesk:missing-gate')).toHaveTextContent('Monitor only')
+    expect(card).toHaveTextContent('Not report-safe')
+    expect(card).not.toHaveTextContent('This missing-gate excerpt should not render as a quote.')
+  })
+
+  it('fails closed for vault quotes without explicit render permission', async () => {
+    api.fetchEvidenceVault.mockResolvedValueOnce({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-09',
+      analysis_window_days: 30,
+      schema_version: 'v1',
+      created_at: '2026-04-09T00:00:00Z',
+      weakness_evidence: [{
+        label: 'Pricing pressure',
+        best_quote: 'This vault quote should not render.',
+        mention_count: 3,
+        confidence_score: 0.8,
+      }],
+      strength_evidence: [],
+      company_signals: [],
+      metric_snapshot: {},
+      provenance: {},
+      witness_count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=vault']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Pricing pressure')).toBeInTheDocument()
+    expect(screen.getByText('Monitor only: quote validation unavailable')).toBeInTheDocument()
+    expect(screen.queryByText(/This vault quote should not render/)).not.toBeInTheDocument()
+  })
+
+  it('fails closed for unsafe trace witnesses', async () => {
+    api.fetchEvidenceTrace.mockResolvedValueOnce({
+      vendor_name: 'Zendesk',
+      trace: {
+        synthesis: null,
+        reasoning_packet: null,
+        witnesses: [{
+          witness_id: 'witness:zendesk:trace-unsafe',
+          review_id: 'review-trace-unsafe',
+          witness_type: 'pricing',
+          excerpt_text: 'This trace excerpt should not render as a quote.',
+          source: 'reddit',
+          reviewed_at: '2026-04-03T00:00:00Z',
+          reviewer_company: 'Acme Corp',
+          reviewer_title: 'VP Support',
+          pain_category: 'pricing',
+          competitor: 'Freshdesk',
+          salience_score: 0.92,
+          specificity_score: 0.76,
+          selection_reason: 'named_account',
+          signal_tags: ['pricing_backlash'],
+          as_of_date: '2026-04-09',
+          quote_grade: true,
+          grounding_status: 'grounded',
+          phrase_polarity: 'positive',
+          phrase_subject: 'subject_vendor',
+          phrase_role: 'primary_driver',
+          phrase_verbatim: true,
+          pain_confidence: 'strong',
+          evidence_posture: 'insufficient',
+          confidence: 'high',
+          render_allowed: false,
+          report_allowed: false,
+          suppression_reason: 'polarity_not_renderable',
+        }],
+        source_reviews: [],
+        evidence_diff: null,
+      },
+      stats: {
+        witness_count: 1,
+        unique_reviews: 0,
+        has_synthesis: false,
+        has_packet: false,
+        has_diff: false,
+      },
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=trace']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Top Witnesses (by salience)')).toBeInTheDocument()
+    expect(screen.getByText('Monitor only')).toBeInTheDocument()
+    expect(screen.getByText('Wrong sentiment')).toBeInTheDocument()
+    expect(screen.queryByText(/This trace excerpt should not render/)).not.toBeInTheDocument()
   })
 
   it('wires exact explorer shortcuts into the witness drawer', async () => {
@@ -637,7 +854,7 @@ describe('EvidenceExplorer', () => {
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
     const headerShortcuts = activeVendorShortcuts()
-    expect(headerShortcuts.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+    expect(await headerShortcuts.findByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?view=view-zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
@@ -931,7 +1148,7 @@ describe('EvidenceExplorer', () => {
     )
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
-    expect(activeVendorShortcuts().getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+    expect(await activeVendorShortcuts().findByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?view=view-zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses',
     )

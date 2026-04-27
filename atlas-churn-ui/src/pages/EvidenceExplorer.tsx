@@ -118,6 +118,33 @@ function reviewDetailPath(searchParams: URLSearchParams, reviewId: string) {
   return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
 }
 
+function witnessSuppressionLabel(reason?: string | null) {
+  switch (reason) {
+    case 'unverified_evidence':
+      return 'Unverified evidence'
+    case 'passing_mention_only':
+      return 'Passing mention'
+    case 'subject_not_subject_vendor':
+      return 'Wrong subject'
+    case 'polarity_not_renderable':
+      return 'Wrong sentiment'
+    case 'role_not_renderable':
+      return 'Role not claim-safe'
+    case 'consumer_filter_applied':
+      return 'Filtered by claim rules'
+    case 'low_confidence':
+      return 'Low confidence'
+    case 'weak_evidence_only':
+      return 'Weak evidence'
+    case 'insufficient_supporting_count':
+      return 'Insufficient support'
+    case 'contradictory_evidence':
+      return 'Contradictory evidence'
+    default:
+      return 'Not report-safe'
+  }
+}
+
 
 function accountReviewPath(row: AccountsInMotionFeedItem, backToPath: string) {
   const params = new URLSearchParams()
@@ -1141,13 +1168,17 @@ export default function EvidenceExplorer() {
                 ) : (
                   <>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                      {witnesses.map(w => (
+                      {witnesses.map(w => {
+                        const witnessRenderAllowed = w.render_allowed === true
+                        return (
                         <div
                           key={`${w.witness_id}-${w.as_of_date}`}
+                          data-testid={`witness-card-${w.witness_id}`}
                           className={clsx(
                             'bg-slate-800/50 rounded-lg border border-slate-700/40',
                             'hover:border-cyan-500/40 hover:bg-slate-800/70 transition-colors',
                             'border-l-2',
+                            !witnessRenderAllowed && 'border-amber-500/30 bg-amber-950/10',
                             WITNESS_TYPE_COLORS[w.witness_type || ''] || 'border-l-slate-600',
                           )}
                         >
@@ -1155,9 +1186,24 @@ export default function EvidenceExplorer() {
                             onClick={() => openDrawer(w)}
                             className="w-full text-left p-4"
                           >
-                            <p className="text-sm text-slate-200 line-clamp-3 italic mb-3">
-                              &ldquo;{w.excerpt_text}&rdquo;
-                            </p>
+                            {witnessRenderAllowed ? (
+                              <p className="text-sm text-slate-200 line-clamp-3 italic mb-3">
+                                &ldquo;{w.excerpt_text}&rdquo;
+                              </p>
+                            ) : (
+                              <div
+                                className="mb-3 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2"
+                                title={`Suppressed: ${w.suppression_reason || 'unknown'}`}
+                                data-testid={`witness-monitor-only-${w.witness_id}`}
+                              >
+                                <div className="text-xs font-medium uppercase tracking-wide text-amber-200">
+                                  Monitor only
+                                </div>
+                                <div className="mt-1 text-xs text-amber-100/80">
+                                  {witnessSuppressionLabel(w.suppression_reason)}
+                                </div>
+                              </div>
+                            )}
                             <div className="flex items-center gap-2 flex-wrap">
                               <SourceBadge source={w.source || 'unknown'} />
                               {w.reviewer_company && (
@@ -1284,7 +1330,8 @@ export default function EvidenceExplorer() {
                             })() : null}
                           </div>
                         </div>
-                      ))}
+                        )
+                      })}
                     </div>
 
                     {/* Pagination */}
@@ -1356,6 +1403,7 @@ export default function EvidenceExplorer() {
                           const e = ev as Record<string, unknown>
                           const label = String(e.label || e.key || e.claim || e.text || '')
                           const quote = String(e.best_quote || '')
+                          const quoteRenderAllowed = e.render_allowed === true
                           const mentions = Number(e.mention_count_total ?? e.mention_count ?? 0)
                           const confidence = Number(e.confidence_score ?? 0)
                           const trend = e.trend as Record<string, unknown> | undefined
@@ -1368,7 +1416,12 @@ export default function EvidenceExplorer() {
                                   {confidence > 0 && <span className="text-[10px] text-slate-500">{Math.round(confidence * 100)}% conf</span>}
                                 </div>
                               </div>
-                              {quote && <p className="text-xs text-slate-400 italic line-clamp-2 break-words">\"{quote}\"</p>}
+                              {quote && quoteRenderAllowed && <p className="text-xs text-slate-400 italic line-clamp-2 break-words">\"{quote}\"</p>}
+                              {quote && !quoteRenderAllowed && (
+                                <div className="mt-2 rounded border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
+                                  Monitor only: quote validation unavailable
+                                </div>
+                              )}
                               {trend && (
                                 <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-500">
                                   {trend.direction ? <span>{String(trend.direction)}</span> : null}
@@ -1393,6 +1446,7 @@ export default function EvidenceExplorer() {
                           const e = ev as Record<string, unknown>
                           const label = String(e.label || e.key || e.claim || e.text || '')
                           const quote = String(e.best_quote || '')
+                          const quoteRenderAllowed = e.render_allowed === true
                           const mentions = Number(e.mention_count_total ?? e.mention_count ?? 0)
                           const confidence = Number(e.confidence_score ?? 0)
                           const trend = e.trend as Record<string, unknown> | undefined
@@ -1405,7 +1459,12 @@ export default function EvidenceExplorer() {
                                   {confidence > 0 && <span className="text-[10px] text-slate-500">{Math.round(confidence * 100)}% conf</span>}
                                 </div>
                               </div>
-                              {quote && <p className="text-xs text-slate-400 italic line-clamp-2 break-words">\"{quote}\"</p>}
+                              {quote && quoteRenderAllowed && <p className="text-xs text-slate-400 italic line-clamp-2 break-words">\"{quote}\"</p>}
+                              {quote && !quoteRenderAllowed && (
+                                <div className="mt-2 rounded border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
+                                  Monitor only: quote validation unavailable
+                                </div>
+                              )}
                               {trend && (
                                 <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-500">
                                   {trend.direction ? <span>{String(trend.direction)}</span> : null}
@@ -1533,29 +1592,49 @@ export default function EvidenceExplorer() {
                     <div>
                       <h3 className="text-sm font-medium text-slate-300 mb-3">Top Witnesses (by salience)</h3>
                       <div className="space-y-2">
-                        {trace.trace.witnesses.slice(0, 10).map(w => (
-                          <button
-                            key={w.witness_id}
-                            onClick={() => openDrawer(w)}
-                            className="w-full text-left bg-slate-800/40 rounded-lg p-3 border border-slate-700/30 hover:border-cyan-500/30 transition-colors flex items-start gap-3"
-                          >
-                            <span className={clsx(
-                              'shrink-0 w-1 h-full min-h-[40px] rounded-full',
-                              w.witness_type === 'strength' ? 'bg-emerald-500' :
-                              w.witness_type === 'displacement' ? 'bg-violet-500' :
-                              'bg-red-500',
-                            )} />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm text-slate-200 line-clamp-2 italic">&ldquo;{w.excerpt_text}&rdquo;</p>
-                              <div className="flex items-center gap-2 mt-1.5">
-                                <SourceBadge source={w.source || 'unknown'} />
-                                {w.reviewer_company && <span className="text-xs text-slate-500">{w.reviewer_company}</span>}
-                                {w.salience_score != null && <span className="text-xs text-slate-500 font-mono ml-auto">{w.salience_score.toFixed(2)}</span>}
+                        {trace.trace.witnesses.slice(0, 10).map(w => {
+                          const witnessRenderAllowed = w.render_allowed === true
+                          return (
+                            <button
+                              key={w.witness_id}
+                              onClick={() => openDrawer(w)}
+                              className={clsx(
+                                'w-full text-left rounded-lg p-3 border transition-colors flex items-start gap-3',
+                                witnessRenderAllowed
+                                  ? 'bg-slate-800/40 border-slate-700/30 hover:border-cyan-500/30'
+                                  : 'bg-amber-950/10 border-amber-500/20 hover:border-amber-400/30',
+                              )}
+                            >
+                              <span className={clsx(
+                                'shrink-0 w-1 h-full min-h-[40px] rounded-full',
+                                !witnessRenderAllowed ? 'bg-amber-500' :
+                                w.witness_type === 'strength' ? 'bg-emerald-500' :
+                                w.witness_type === 'displacement' ? 'bg-violet-500' :
+                                'bg-red-500',
+                              )} />
+                              <div className="flex-1 min-w-0">
+                                {witnessRenderAllowed ? (
+                                  <p className="text-sm text-slate-200 line-clamp-2 italic">&ldquo;{w.excerpt_text}&rdquo;</p>
+                                ) : (
+                                  <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2">
+                                    <div className="text-xs font-medium uppercase tracking-wide text-amber-200">
+                                      Monitor only
+                                    </div>
+                                    <div className="mt-1 text-xs text-amber-100/80">
+                                      {witnessSuppressionLabel(w.suppression_reason)}
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="flex items-center gap-2 mt-1.5">
+                                  <SourceBadge source={w.source || 'unknown'} />
+                                  {w.reviewer_company && <span className="text-xs text-slate-500">{w.reviewer_company}</span>}
+                                  {w.salience_score != null && <span className="text-xs text-slate-500 font-mono ml-auto">{w.salience_score.toFixed(2)}</span>}
+                                </div>
                               </div>
-                            </div>
-                            <ChevronRight className="w-4 h-4 text-slate-600 shrink-0 mt-1" />
-                          </button>
-                        ))}
+                              <ChevronRight className="w-4 h-4 text-slate-600 shrink-0 mt-1" />
+                            </button>
+                          )
+                        })}
                       </div>
                     </div>
                   )}

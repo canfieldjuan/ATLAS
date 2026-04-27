@@ -60,6 +60,33 @@ function SourceBadge({ source }: { source: string }) {
   )
 }
 
+function witnessSuppressionLabel(reason?: string | null) {
+  switch (reason) {
+    case 'unverified_evidence':
+      return 'Unverified evidence'
+    case 'passing_mention_only':
+      return 'Passing mention'
+    case 'subject_not_subject_vendor':
+      return 'Wrong subject'
+    case 'polarity_not_renderable':
+      return 'Wrong sentiment'
+    case 'role_not_renderable':
+      return 'Role not claim-safe'
+    case 'consumer_filter_applied':
+      return 'Filtered by claim rules'
+    case 'low_confidence':
+      return 'Low confidence'
+    case 'weak_evidence_only':
+      return 'Weak evidence'
+    case 'insufficient_supporting_count':
+      return 'Insufficient support'
+    case 'contradictory_evidence':
+      return 'Contradictory evidence'
+    default:
+      return 'Not report-safe'
+  }
+}
+
 function highlightExcerpt(
   fullText: string,
   excerptText: string,
@@ -931,6 +958,12 @@ export default function EvidenceDrawer({
                     Grounding check has not yet run for this witness. Quote-grade rendering is suppressed until verification completes.
                   </div>
                 )}
+                {witness.render_allowed !== true && (
+                  <div className="mb-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100/85">
+                    <span className="font-medium text-amber-200">Monitor only:</span>{' '}
+                    {witnessSuppressionLabel(witness.suppression_reason)}
+                  </div>
+                )}
                 {/* Phase 6: pain-confidence banner. Shown only when the
                     backend graded the review and the verdict is weak or
                     none. Strong / null / undefined produce no banner. */}
@@ -970,7 +1003,7 @@ export default function EvidenceDrawer({
                     witness.excerpt_text,
                     witness.highlight_start,
                     witness.highlight_end,
-                    witness.quote_grade !== false,
+                    witness.quote_grade !== false && witness.render_allowed === true,
                   )}
                 </div>
               </div>

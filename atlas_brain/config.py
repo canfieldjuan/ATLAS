@@ -2392,7 +2392,7 @@ class B2BChurnConfig(BaseSettings):
         description="HTTP timeout for Tier 2 extraction requests",
     )
     enrichment_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow B2B enrichment extraction to use Anthropic Message Batches when available",
     )
     enrichment_anthropic_batch_min_items: int = Field(
@@ -2550,7 +2550,7 @@ class B2BChurnConfig(BaseSettings):
         description="Max completion tokens for the narrow field-repair extraction pass",
     )
     enrichment_repair_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow B2B enrichment repair extraction to use Anthropic Message Batches when available",
     )
     enrichment_repair_anthropic_batch_min_items: int = Field(
@@ -2785,7 +2785,7 @@ class B2BChurnConfig(BaseSettings):
         description="OpenRouter model for product profile synthesis",
     )
     product_profile_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow B2B product profile synthesis to use Anthropic Message Batches when available",
     )
     product_profile_anthropic_batch_min_items: int = Field(
@@ -2815,7 +2815,7 @@ class B2BChurnConfig(BaseSettings):
         description="Sampling temperature for B2B blog post generation",
     )
     blog_post_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow first-pass B2B blog generation to use Anthropic Message Batches when Anthropic is available",
     )
     blog_post_anthropic_batch_min_items: int = Field(
@@ -3038,7 +3038,7 @@ class B2BChurnConfig(BaseSettings):
         description="Max time to wait for an Anthropic Message Batch before falling back",
     )
     scorecard_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow vendor scorecard narratives to use Anthropic Message Batches when available",
     )
     scorecard_anthropic_batch_min_items: int = Field(
@@ -3048,7 +3048,7 @@ class B2BChurnConfig(BaseSettings):
         description="Minimum uncached scorecard narratives required before using Anthropic batching",
     )
     reasoning_synthesis_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow vendor reasoning synthesis to use Anthropic Message Batches when available",
     )
     reasoning_synthesis_anthropic_batch_min_items: int = Field(
@@ -3058,7 +3058,7 @@ class B2BChurnConfig(BaseSettings):
         description="Minimum vendor reasoning items required before using Anthropic batching",
     )
     cross_vendor_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow cross-vendor reasoning synthesis to use Anthropic Message Batches when available",
     )
     cross_vendor_anthropic_batch_min_items: int = Field(
@@ -3068,7 +3068,7 @@ class B2BChurnConfig(BaseSettings):
         description="Minimum cross-vendor reasoning items required before using Anthropic batching",
     )
     tenant_report_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow tenant report synthesis chunks to use Anthropic Message Batches when available",
     )
     tenant_report_anthropic_batch_min_items: int = Field(
@@ -3404,7 +3404,7 @@ class B2BChurnConfig(BaseSettings):
     battle_card_llm_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0, description="Delay between battle card LLM attempts")
     battle_card_llm_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back into battle card repair attempts")
     battle_card_anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow battle-card sales copy to use Anthropic Message Batches when the battle-card backend is set to anthropic",
     )
     battle_card_anthropic_batch_min_items: int = Field(
@@ -4459,7 +4459,7 @@ class B2BCampaignConfig(BaseSettings):
         description="Timeout for a single campaign LLM generation call",
     )
     anthropic_batch_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Allow campaign generation to use Anthropic Message Batches when eligible",
     )
     anthropic_batch_detached_enabled: bool = Field(

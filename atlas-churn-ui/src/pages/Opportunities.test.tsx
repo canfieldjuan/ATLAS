@@ -44,6 +44,55 @@ function LocationProbe() {
   return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>
 }
 
+function opportunityClaim(overrides = {}) {
+  return {
+    claim_id: 'claim-1',
+    claim_key: 'opportunity_readiness',
+    claim_scope: 'account',
+    claim_type: 'account_opportunity_readiness',
+    claim_text: 'Acme Corp shows evaluation pressure away from Zendesk',
+    target_entity: 'Acme Corp',
+    secondary_target: 'Zendesk',
+    supporting_count: 1,
+    direct_evidence_count: 1,
+    witness_count: 1,
+    contradiction_count: 0,
+    denominator: 1,
+    sample_size: 1,
+    source_review_count: 1,
+    has_grounded_evidence: true,
+    confidence: 'low',
+    evidence_posture: 'usable',
+    render_allowed: true,
+    report_allowed: false,
+    suppression_reason: 'low_confidence',
+    evidence_links: ['review-1'],
+    contradicting_links: [],
+    as_of_date: '2026-04-26',
+    analysis_window_days: 90,
+    schema_version: 'v1',
+    ...overrides,
+  }
+}
+
+function opportunityRow(overrides = {}) {
+  return {
+    company: 'Acme Corp',
+    vendor: 'Zendesk',
+    urgency: 8.6,
+    buying_stage: 'evaluation',
+    category: 'helpdesk',
+    review_id: 'review-1',
+    source: 'g2',
+    quotes: ['Support has regressed since renewal.'],
+    intent_signals: { cancel: true, migration: true, evaluation: false, completed_switch: false },
+    alternatives: [{ name: 'Freshdesk' }],
+    company_size: '201-1000',
+    reviewer_title: 'VP Support',
+    ...overrides,
+  }
+}
+
 describe('Opportunities', () => {
   beforeEach(() => {
     cleanup()
@@ -212,6 +261,124 @@ describe('Opportunities', () => {
       vendor_name: 'Zendesk',
       window_days: 30,
     })
+  })
+
+  it('shows a list-level validation unavailable message when the opportunity feed fails', async () => {
+    api.fetchHighIntent.mockRejectedValue(new Error('validation unavailable'))
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Something went wrong')).toBeInTheDocument()
+    expect(screen.getByText('validation unavailable')).toBeInTheDocument()
+  })
+
+  it('renders insufficient opportunity claims as insufficient stubs', async () => {
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [
+        opportunityRow({
+          opportunity_claim: opportunityClaim({
+            render_allowed: false,
+            report_allowed: false,
+            evidence_posture: 'unverified',
+            suppression_reason: 'unverified_evidence',
+            supporting_count: 0,
+            direct_evidence_count: 0,
+            witness_count: 0,
+          }),
+        }),
+      ],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByTestId('opportunity-review-1-urgency-gate')).toHaveTextContent('Insufficient')
+    expect(screen.getByTestId('opportunity-review-1-stage-gate')).toHaveTextContent('Insufficient')
+    expect(screen.getAllByText('Insufficient').length).toBeGreaterThan(0)
+  })
+
+  it('keeps monitor-only opportunities visible but disables publish actions', async () => {
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [opportunityRow({ opportunity_claim: opportunityClaim() })],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getAllByText('8.6').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('evaluation').length).toBeGreaterThan(0)
+    const blockedPublishButtons = screen
+      .getAllByTitle('Low confidence (1 supporting / 1 direct / 1 witnesses)')
+      .filter((el): el is HTMLButtonElement => el.tagName === 'BUTTON')
+    expect(blockedPublishButtons[0]).toBeDisabled()
+  })
+
+  it('enables publish actions for report-safe opportunities', async () => {
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [
+        opportunityRow({
+          opportunity_claim: opportunityClaim({
+            confidence: 'medium',
+            supporting_count: 3,
+            direct_evidence_count: 2,
+            witness_count: 2,
+            report_allowed: true,
+            suppression_reason: null,
+          }),
+        }),
+      ],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    const publishButtons = screen
+      .getAllByTitle('Generate Campaign')
+      .filter((el): el is HTMLButtonElement => el.tagName === 'BUTTON')
+    expect(publishButtons[0]).toBeEnabled()
+    expect(screen.getByText('Report-safe')).toBeInTheDocument()
+  })
+
+  it('fails closed when opportunity_claim is absent', async () => {
+    api.fetchHighIntent.mockResolvedValue({
+      companies: [opportunityRow()],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByTestId('opportunity-review-1-urgency-gate')).toHaveTextContent('Legacy fallback')
+    expect(screen.getByTestId('opportunity-review-1-stage-gate')).toHaveTextContent('Legacy fallback')
+    expect(screen.getByText('Legacy')).toBeInTheDocument()
+    const blockedPublishButtons = screen
+      .getAllByTitle('Legacy row: validation claim unavailable')
+      .filter((el): el is HTMLButtonElement => el.tagName === 'BUTTON')
+    expect(blockedPublishButtons[0]).toBeDisabled()
   })
 
   it('copies the current workbench view link', async () => {

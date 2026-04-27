@@ -76,6 +76,9 @@ class SuppressionReason(StrEnum):
     SAMPLE_SIZE_BELOW_THRESHOLD = "sample_size_below_threshold"
     WEAK_EVIDENCE_ONLY = "weak_evidence_only"
     PASSING_MENTION_ONLY = "passing_mention_only"
+    SUBJECT_NOT_SUBJECT_VENDOR = "subject_not_subject_vendor"
+    POLARITY_NOT_RENDERABLE = "polarity_not_renderable"
+    ROLE_NOT_RENDERABLE = "role_not_renderable"
     LOW_CONFIDENCE = "low_confidence"
     CONSUMER_FILTER_APPLIED = "consumer_filter_applied"
 
@@ -109,6 +112,11 @@ class ClaimGatePolicy:
     # Rate-claim denominator gate (applied only when is_rate_claim=True)
     is_rate_claim: bool = False
     min_denominator_for_rate: int = 10
+
+    # Direct-evidence source. False keeps the v1 row-level grounding
+    # approximation. True tells aggregators to derive direct evidence
+    # from validated b2b_evidence_claims lineage when available.
+    use_claim_lineage_for_direct_evidence: bool = False
 
 
 _DEFAULT_POLICY = ClaimGatePolicy()

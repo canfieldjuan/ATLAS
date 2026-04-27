@@ -18,9 +18,19 @@ import useApiData from '../hooks/useApiData'
 import {
   fetchVendorTargets,
   fetchHighIntent,
+  fetchChallengerClaims,
   generateCampaigns,
   downloadCsv,
+  type ChallengerClaimRow,
+  type ChallengerClaimsResponse,
+  type VendorClaim,
 } from '../api/client'
+import {
+  ProductClaimGate,
+  ProductClaimStatusBadge,
+  productClaimGateTitle,
+  isProductClaimAllowed,
+} from '../components/ProductClaimGate'
 
 interface ChallengerSummary {
   name: string
@@ -31,6 +41,10 @@ interface ChallengerSummary {
   topIncumbents: string[]
   topPainCategories: string[]
   avgUrgency: number
+  claimsResponse: ChallengerClaimsResponse | null | undefined
+  directDisplacementRows: ChallengerClaimRow[]
+  directDisplacementClaim: VendorClaim | undefined
+  claimsValidationUnavailable: boolean
 }
 
 function challengersPath(search: string) {
@@ -68,6 +82,23 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   next.set('vendor', vendorName)
   next.set('back_to', backTo)
   return `/opportunities?${next.toString()}`
+}
+
+function challengerLookupKey(name: string) {
+  return name.trim().toLowerCase()
+}
+
+function directDisplacementRows(response: ChallengerClaimsResponse | null | undefined): ChallengerClaimRow[] {
+  if (!response) return []
+  return response.rows.filter((row) => row.claim.claim_type === 'direct_displacement')
+}
+
+function primaryDirectDisplacementClaim(rows: ChallengerClaimRow[]): VendorClaim | undefined {
+  return (
+    rows.find((row) => row.claim.report_allowed === true)?.claim ??
+    rows.find((row) => row.claim.render_allowed === true)?.claim ??
+    rows[0]?.claim
+  )
 }
 
 export default function Challengers() {
@@ -126,9 +157,20 @@ export default function Challengers() {
         fetchVendorTargets({ target_mode: 'challenger_intel', limit: 100 }),
         fetchHighIntent({ min_urgency: 3, limit: 100 }),
       ])
+      const claimEntries = await Promise.all(
+        targetsRes.targets.map(async (target) => {
+          const name = target.company_name
+          try {
+            return [challengerLookupKey(name), await fetchChallengerClaims(name)] as const
+          } catch {
+            return [challengerLookupKey(name), null] as const
+          }
+        }),
+      )
       return {
         targets: targetsRes.targets,
         companies: hiRes.companies,
+        challengerClaimsByName: Object.fromEntries(claimEntries) as Record<string, ChallengerClaimsResponse | null>,
       }
     },
     [],
@@ -136,22 +178,32 @@ export default function Challengers() {
 
   const targets = data?.targets ?? []
   const companies = data?.companies ?? []
+  const challengerClaimsByName = data?.challengerClaimsByName ?? {}
 
   // Build challenger summaries by aggregating high-intent signals where competitor matches a target
   const challengerSummaries: ChallengerSummary[] = targets.map(target => {
     const name = target.company_name.toLowerCase()
-    const competitorsTracked = (target.competitors_tracked ?? []).map(c => c.toLowerCase())
+    const claimsResponse = challengerClaimsByName[challengerLookupKey(target.company_name)]
+    const displacementRows = directDisplacementRows(claimsResponse)
+    const primaryClaim = primaryDirectDisplacementClaim(displacementRows)
+    const validatedIncumbents = new Set(
+      displacementRows
+        .filter((row) => row.claim.render_allowed === true)
+        .map((row) => row.incumbent.toLowerCase()),
+    )
 
-    // Find high-intent companies mentioning this challenger in alternatives
+    // Only explicit challenger mentions are counted. The old
+    // competitors_tracked fallback counted every high-intent row for a tracked
+    // incumbent even when the challenger was never mentioned, inflating
+    // "challenger lead" metrics beyond what the direct-displacement claim can
+    // validate.
     const relevantCompanies = companies.filter(c => {
-      // Check if challenger is listed in alternatives (competitors being considered)
       const mentionsChallenger = (c.alternatives ?? []).some(
         alt => alt.name?.toLowerCase() === name,
       )
-      if (mentionsChallenger) return true
-      // Also match if the incumbent vendor is one the challenger tracks
-      if (competitorsTracked.includes(c.vendor?.toLowerCase())) return true
-      return false
+      if (!mentionsChallenger) return false
+      const vendor = c.vendor?.toLowerCase()
+      return Boolean(vendor && validatedIncumbents.has(vendor))
     })
 
     const stages = relevantCompanies.reduce(
@@ -165,11 +217,15 @@ export default function Challengers() {
       { active: 0, eval: 0, renewal: 0 },
     )
 
-    // Top incumbents (vendors losing to this challenger)
+    // Top incumbents must be backed by validated direct-displacement rows.
+    // High-intent rows can provide stage/urgency context, but they cannot
+    // create a "Losing From" winner call without a ProductClaim.
     const incumbentCounts: Record<string, number> = {}
     for (const c of relevantCompanies) {
       const v = c.vendor
-      if (v) incumbentCounts[v] = (incumbentCounts[v] ?? 0) + 1
+      if (v && validatedIncumbents.has(v.toLowerCase())) {
+        incumbentCounts[v] = (incumbentCounts[v] ?? 0) + 1
+      }
     }
     const topIncumbents = Object.entries(incumbentCounts)
       .sort((a, b) => b[1] - a[1])
@@ -199,6 +255,10 @@ export default function Challengers() {
       topIncumbents,
       topPainCategories,
       avgUrgency: Math.round(avgUrg * 10) / 10,
+      claimsResponse,
+      directDisplacementRows: displacementRows,
+      directDisplacementClaim: primaryClaim,
+      claimsValidationUnavailable: claimsResponse === null,
     }
   })
 
@@ -211,19 +271,31 @@ export default function Challengers() {
   const totalLeads = filtered.reduce((s, c) => s + c.totalLeads, 0)
   const totalActive = filtered.reduce((s, c) => s + c.activePurchase, 0)
   const totalEval = filtered.reduce((s, c) => s + c.evaluation, 0)
+  const validationUnavailableCount = filtered.filter((c) => c.claimsValidationUnavailable).length
 
-  async function handleGenerate(name: string) {
-    setGeneratingFor(name)
+  async function handleGenerate(summary: ChallengerSummary) {
+    if (!isProductClaimAllowed(
+      summary.directDisplacementClaim,
+      'report',
+      summary.claimsValidationUnavailable,
+    )) {
+      setActionResult(`Campaign generation blocked for ${summary.name}: ${productClaimGateTitle(
+        summary.directDisplacementClaim,
+        summary.claimsValidationUnavailable,
+      )}`)
+      return
+    }
+    setGeneratingFor(summary.name)
     setActionResult(null)
     try {
       const result = await generateCampaigns({
-        vendor_name: name,
+        vendor_name: summary.name,
         target_mode: 'challenger_intel',
         min_score: 50,
         limit: 5,
       })
-      setActionResult(`Generated ${result.generated ?? 0} campaign(s) for ${name}`)
-      setLastGenVendor(name)
+      setActionResult(`Generated ${result.generated ?? 0} campaign(s) for ${summary.name}`)
+      setLastGenVendor(summary.name)
       refresh()
     } catch (err) {
       setActionResult(err instanceof Error ? err.message : 'Generation failed')
@@ -236,18 +308,32 @@ export default function Challengers() {
     {
       key: 'name',
       header: 'Challenger',
-      render: (r) => <span className="text-white font-medium">{r.name}</span>,
+      render: (r) => (
+        <div className="flex flex-col gap-1">
+          <span className="text-white font-medium">{r.name}</span>
+          <ProductClaimStatusBadge
+            claim={r.directDisplacementClaim}
+            validationUnavailable={r.claimsValidationUnavailable}
+          />
+        </div>
+      ),
     },
     {
       key: 'leads',
       header: 'Total Leads',
       render: (r) => (
-        <span className={clsx(
-          'text-sm font-medium',
-          r.totalLeads > 0 ? 'text-cyan-400' : 'text-slate-500',
-        )}>
-          {r.totalLeads}
-        </span>
+        <ProductClaimGate
+          claim={r.directDisplacementClaim}
+          mode="render"
+          validationUnavailable={r.claimsValidationUnavailable}
+        >
+          <span className={clsx(
+            'text-sm font-medium',
+            r.totalLeads > 0 ? 'text-cyan-400' : 'text-slate-500',
+          )}>
+            {r.totalLeads}
+          </span>
+        </ProductClaimGate>
       ),
       sortable: true,
       sortValue: (r) => r.totalLeads,
@@ -256,9 +342,15 @@ export default function Challengers() {
       key: 'active',
       header: 'Active Purchase',
       render: (r) => (
-        <span className={clsx('text-xs font-medium', r.activePurchase > 0 ? 'text-red-400' : 'text-slate-500')}>
-          {r.activePurchase}
-        </span>
+        <ProductClaimGate
+          claim={r.directDisplacementClaim}
+          mode="render"
+          validationUnavailable={r.claimsValidationUnavailable}
+        >
+          <span className={clsx('text-xs font-medium', r.activePurchase > 0 ? 'text-red-400' : 'text-slate-500')}>
+            {r.activePurchase}
+          </span>
+        </ProductClaimGate>
       ),
       sortable: true,
       sortValue: (r) => r.activePurchase,
@@ -267,30 +359,48 @@ export default function Challengers() {
       key: 'eval',
       header: 'Evaluation',
       render: (r) => (
-        <span className={clsx('text-xs font-medium', r.evaluation > 0 ? 'text-cyan-400' : 'text-slate-500')}>
-          {r.evaluation}
-        </span>
+        <ProductClaimGate
+          claim={r.directDisplacementClaim}
+          mode="render"
+          validationUnavailable={r.claimsValidationUnavailable}
+        >
+          <span className={clsx('text-xs font-medium', r.evaluation > 0 ? 'text-cyan-400' : 'text-slate-500')}>
+            {r.evaluation}
+          </span>
+        </ProductClaimGate>
       ),
     },
     {
       key: 'renewal',
       header: 'Renewal',
       render: (r) => (
-        <span className={clsx('text-xs font-medium', r.renewal > 0 ? 'text-amber-400' : 'text-slate-500')}>
-          {r.renewal}
-        </span>
+        <ProductClaimGate
+          claim={r.directDisplacementClaim}
+          mode="render"
+          validationUnavailable={r.claimsValidationUnavailable}
+        >
+          <span className={clsx('text-xs font-medium', r.renewal > 0 ? 'text-amber-400' : 'text-slate-500')}>
+            {r.renewal}
+          </span>
+        </ProductClaimGate>
       ),
     },
     {
       key: 'urgency',
       header: 'Avg Urgency',
       render: (r) => (
-        <span className={clsx(
-          'text-xs font-medium',
-          r.avgUrgency >= 7 ? 'text-red-400' : r.avgUrgency >= 5 ? 'text-amber-400' : 'text-slate-400',
-        )}>
-          {r.avgUrgency}
-        </span>
+        <ProductClaimGate
+          claim={r.directDisplacementClaim}
+          mode="render"
+          validationUnavailable={r.claimsValidationUnavailable}
+        >
+          <span className={clsx(
+            'text-xs font-medium',
+            r.avgUrgency >= 7 ? 'text-red-400' : r.avgUrgency >= 5 ? 'text-amber-400' : 'text-slate-400',
+          )}>
+            {r.avgUrgency}
+          </span>
+        </ProductClaimGate>
       ),
       sortable: true,
       sortValue: (r) => r.avgUrgency,
@@ -298,11 +408,41 @@ export default function Challengers() {
     {
       key: 'incumbents',
       header: 'Losing From',
-      render: (r) => (
-        <span className="text-slate-400 text-xs">
-          {r.topIncumbents.join(', ') || '--'}
-        </span>
-      ),
+      render: (r) => {
+        const claimRows = r.directDisplacementRows.slice(0, 3)
+        return (
+          <span className="flex flex-wrap items-center gap-1.5 text-xs">
+            {r.claimsValidationUnavailable ? (
+              <ProductClaimGate
+                claim={r.directDisplacementClaim}
+                mode="render"
+                validationUnavailable
+              >
+                <span />
+              </ProductClaimGate>
+            ) : claimRows.length > 0 ? (
+              claimRows.map((row) => (
+                <ProductClaimGate
+                  key={`${row.incumbent}:${row.claim.claim_id}`}
+                  claim={row.claim}
+                  mode="render"
+                  fallback="Insufficient"
+                >
+                  <span className="text-slate-400">{row.incumbent}</span>
+                </ProductClaimGate>
+              ))
+            ) : (
+              <ProductClaimGate
+                claim={r.directDisplacementClaim}
+                mode="render"
+                fallback="Insufficient"
+              >
+                <span />
+              </ProductClaimGate>
+            )}
+          </span>
+        )
+      },
     },
     {
       key: 'actions',
@@ -330,14 +470,29 @@ export default function Challengers() {
           >
             Opportunities
           </Link>
-          <button
-            onClick={(e) => { e.stopPropagation(); handleGenerate(r.name) }}
-            disabled={generatingFor === r.name}
-            className="p-1 text-slate-400 hover:text-green-400 transition-colors disabled:opacity-50"
-            title="Generate Campaign"
+          <ProductClaimGate
+            claim={r.directDisplacementClaim}
+            mode="report"
+            validationUnavailable={r.claimsValidationUnavailable}
+            fallback={
+              <button
+                disabled
+                className="p-1 text-slate-600 cursor-not-allowed"
+                title={productClaimGateTitle(r.directDisplacementClaim, r.claimsValidationUnavailable)}
+              >
+                <Send className="h-3.5 w-3.5" />
+              </button>
+            }
           >
-            <Send className={clsx('h-3.5 w-3.5', generatingFor === r.name && 'animate-pulse')} />
-          </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleGenerate(r) }}
+              disabled={generatingFor === r.name}
+              className="p-1 text-slate-400 hover:text-green-400 transition-colors disabled:opacity-50"
+              title="Generate Campaign"
+            >
+              <Send className={clsx('h-3.5 w-3.5', generatingFor === r.name && 'animate-pulse')} />
+            </button>
+          </ProductClaimGate>
         </div>
       ),
     },
@@ -422,6 +577,13 @@ export default function Challengers() {
       </div>
 
       {/* Search */}
+      {validationUnavailableCount > 0 && (
+        <div className="rounded-lg border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-xs text-slate-300">
+          Validation unavailable for {validationUnavailableCount} challenger row{validationUnavailableCount === 1 ? '' : 's'}.
+          Unsafe winner-call fields and campaign actions are suppressed until the claim service responds.
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-3">
         <input
           type="text"
