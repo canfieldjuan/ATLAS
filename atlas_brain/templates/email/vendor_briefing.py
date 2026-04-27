@@ -90,6 +90,14 @@ def _fmt_score(val: Any) -> str:
         return "N/A"
 
 
+def _fmt_confidence_pct(val: Any) -> str:
+    """Format a 0-1 confidence value as a percentage string."""
+    try:
+        return f"{float(val) * 100:.0f}%"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
 _ARCHETYPE_LABELS: dict[str, str] = {
     "pricing_shock": "Pricing Shock",
     "feature_gap": "Feature Gap",
@@ -260,7 +268,7 @@ def _render_reasoning_anchor_section(briefing: dict[str, Any]) -> str:
 
 def _render_archetype_section(
     archetype: str | None,
-    confidence: float | None,
+    confidence: Any,
     archetype_was: str | None,
     archetype_changed: bool,
     falsification: list,
@@ -270,7 +278,7 @@ def _render_archetype_section(
         return ""
 
     label = escape(_ARCHETYPE_LABELS.get(archetype, archetype.replace("_", " ").title()))
-    conf_pct = f"{confidence * 100:.0f}%" if confidence is not None else "N/A"
+    conf_pct = _fmt_confidence_pct(confidence)
 
     # "What changed" line
     change_html = ""

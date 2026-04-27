@@ -388,6 +388,30 @@ Workspace -> Evidence UI -> Opportunities -> Challenger -> Alerts).
    completes; the flag-flip rollout decision should be informed by
    that second run, not this one.
 
+   Canary 2026-04-27 after Monday batch check:
+   the scheduled full soak did NOT populate new shadow rows by itself.
+   `b2b_evidence_claim_audit` ran at 04:45 and saw zero rows for
+   2026-04-27 because `b2b_reasoning_synthesis` skipped with
+   "No due competitive sets." Diagnostic query showed 9 competitive
+   sets total, 2 active, 0 active scheduled; the only active sets are
+   duplicate "Salesforce Core Competitors" rows in `refresh_mode='manual'`,
+   while all scheduled category sets are inactive. This is an ops/data
+   eligibility issue, not a synthesis code bug.
+
+   Manual scoped seed for ClickUp, Pipedrive, and Monday.com completed:
+   64 claim rows across 3 vendors/artifacts (`valid=10`, `invalid=33`,
+   `cannot_validate=21`). The April 27 lineage canary again produced
+   identical row-level and lineage gate fields for all 6
+   `(vendor x claim)` comparisons. Every comparison remained suppressed
+   because `direct_evidence_count=0`.
+
+   April 27 rollout decision: keep the global lineage flag OFF. The join
+   path remains mechanically safe for the three canary vendors, but the
+   Monday full-cycle coverage condition was not met. Before global rollout,
+   re-enable at least one representative scheduled competitive set (active
+   + `refresh_mode='scheduled'` + interval), let `b2b_reasoning_synthesis`
+   populate broad shadow rows naturally, then re-run this canary.
+
    Important asymmetry in Patch 2d:
    - `price_complaint_rate` uses claim types
      (`pain_claim_about_vendor`, `pricing_urgency_claim`) AND
@@ -432,8 +456,26 @@ Operator's order (tracked here for the implementation log):
 5. Challenger displacement claims: replace client-side inference with
    `COMPETITOR_PAIR` scope claims sourced from validated
    `displacement_proof_to/from_competitor` evidence.
+   - Complete for direct-displacement winner-call surfaces. Patch 5a1
+     added reviewer-deduped, contradiction-aware
+     `aggregate_direct_displacement_claim*` helpers. Patch 5a2 exposed
+     challenger claims through the API. Patch 5a3 migrated the Challenger
+     UI so lead counts, "Losing From", and campaign affordances derive
+     from validated `ProductClaim` rows instead of client-side inference.
 6. Reports inherit: each report module reads `report_allowed=true`
    ProductClaims for its scope.
+   - Complete for the scoped Phase 10 report surfaces. Patch 6a1 gates
+     `b2b_challenger_brief` `head_to_head.winner` and strips strength
+     fields whenever the direct-displacement claim is not report-safe.
+     Patch 6a2a adds incumbent-centric direct-displacement aggregation.
+     Patch 6a2b gates battle-card `displacement_reasoning.migration_proof`
+     and `customer_winning_pattern` before persistence/PDF rendering.
+     Patch 6a3a renders ChallengerBriefDetail head-to-head strength
+     through the ProductClaim gate. Patch 6a3b introduces the gated
+     battle-card displacement-reasoning React section.
+   - Deferred: 6a2c `incumbent_strengths` remains blocked until a
+     VENDOR-scope `strength_theme` substrate exists. Do not gate it by
+     displacement evidence; it needs its own validated strength claim.
 
 No report-side changes until step 6.
 

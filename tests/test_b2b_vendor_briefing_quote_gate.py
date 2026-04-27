@@ -659,3 +659,20 @@ def test_evidence_section_omits_block_entirely_when_no_verbatim_rows():
     )
     html = render_vendor_briefing_html(briefing)
     assert "What Customers Are Saying" not in html
+
+
+def test_archetype_confidence_accepts_string_numeric_payload():
+    """DB/JSON payloads can carry archetype_confidence as a string.
+
+    The renderer must coerce it before applying numeric format specs, otherwise
+    scheduled vendor briefings fail with "Unknown format code 'f'".
+    """
+    briefing = _briefing_skeleton(
+        archetype="pricing_shock",
+        archetype_confidence="0.62",
+    )
+
+    html = render_vendor_briefing_html(briefing)
+
+    assert "Pricing Shock" in html
+    assert "Confidence: 62%" in html
