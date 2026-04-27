@@ -10,6 +10,35 @@ import CitationBar from './CitationBar'
 import { createCitationRegistry } from './useCitationRegistry'
 import type { CitationEntry } from './useCitationRegistry'
 import { ProductClaimGate, ProductClaimStatusBadge } from '../ProductClaimGate'
+import type { BattleCardDisplacementReadinessState } from '../../types/reportViewModels'
+
+const BATTLE_CARD_DISPLACEMENT_STATE_BADGE: Record<
+  BattleCardDisplacementReadinessState,
+  { label: string; className: string }
+> = {
+  validation_unavailable: {
+    label: 'Validation unavailable',
+    className: 'bg-slate-700/30 text-slate-400',
+  },
+  suppressed: { label: 'Insufficient', className: 'bg-rose-500/15 text-rose-300' },
+  monitor_only: { label: 'Monitor only', className: 'bg-amber-500/15 text-amber-300' },
+  report_safe: { label: 'Report-safe', className: 'bg-green-500/15 text-green-300' },
+}
+
+function BattleCardDisplacementStateBadge({
+  state,
+}: {
+  state: BattleCardDisplacementReadinessState
+}) {
+  const meta = BATTLE_CARD_DISPLACEMENT_STATE_BADGE[state]
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${meta.className}`}
+    >
+      {meta.label}
+    </span>
+  )
+}
 import {
   toBattleCardViewModel,
   toAccountsInMotionViewModel,
@@ -22,6 +51,7 @@ import {
 import type {
   AccountsInMotionAccountViewModel,
   AccountsInMotionViewModel,
+  BattleCardDisplacementReasoningViewModel,
   BattleCardViewModel,
   ChallengerBriefViewModel,
   ChallengerTargetAccountViewModel,
@@ -941,6 +971,87 @@ function normalizeLabel(label: string | undefined, context: 'pain' | 'satisfacti
   return label
 }
 
+function BattleCardDisplacementReasoningSection({
+  data,
+}: {
+  data: BattleCardDisplacementReasoningViewModel
+}) {
+  // Section state is an aggregate; drive the badge from gate.readiness_state directly.
+  // Using ProductClaimStatusBadge here would mis-render `suppressed` + empty
+  // product_claims as the `legacy` state.
+  return (
+    <SectionCard title="Displacement Reasoning" icon={<Crosshair className="h-4 w-4 text-cyan-400" />}>
+      <div className="mb-3 flex items-center gap-2">
+        <BattleCardDisplacementStateBadge state={data.product_claim_gate.readiness_state} />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+        {data.migration_proof && (
+          <div>
+            <p className="text-xs font-medium text-slate-400 mb-2">Migration Proof</p>
+            {data.migration_proof.readiness_state === 'report_safe'
+              && data.migration_proof.report_allowed === true ? (
+              <div className="space-y-1">
+                {data.migration_proof.confidence && (
+                  <MetricRow label="Confidence" value={data.migration_proof.confidence} />
+                )}
+                {data.migration_proof.switching_is_real != null && (
+                  <MetricRow
+                    label="Switching Real"
+                    value={data.migration_proof.switching_is_real ? 'yes' : 'no'}
+                  />
+                )}
+                {data.migration_proof.top_destination && (
+                  <MetricRow label="Top Destination" value={data.migration_proof.top_destination} />
+                )}
+                {data.migration_proof.switch_volume?.value != null && (
+                  <MetricRow label="Switch Volume" value={data.migration_proof.switch_volume.value} />
+                )}
+              </div>
+            ) : (
+              <div
+                className="text-xs text-slate-500 italic"
+                data-testid="battle-card-migration-proof-gate"
+              >
+                {data.migration_proof.gate_message
+                  ?? 'Migration proof suppressed by ProductClaim gate.'}
+              </div>
+            )}
+          </div>
+        )}
+        {data.customer_winning_pattern && (
+          <div>
+            <p className="text-xs font-medium text-slate-400 mb-2">Customer Winning Pattern</p>
+            {data.customer_winning_pattern.readiness_state === 'report_safe'
+              && data.customer_winning_pattern.report_allowed === true ? (
+              <div className="space-y-2">
+                {data.customer_winning_pattern.confidence && (
+                  <MetricRow
+                    label="Confidence"
+                    value={data.customer_winning_pattern.confidence}
+                  />
+                )}
+                {data.customer_winning_pattern.summary && (
+                  <p className="text-sm text-slate-300 break-words">
+                    {data.customer_winning_pattern.summary}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div
+                className="text-xs text-slate-500 italic"
+                data-testid="battle-card-customer-winning-pattern-gate"
+              >
+                {data.customer_winning_pattern.gate_message
+                  ?? 'Customer winning pattern suppressed by ProductClaim gate.'}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
 function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }: { data: BattleCardViewModel; onOpenWitness?: (witnessId: string, vendorName: string) => void; backTo?: string | null; asOfDate?: string | null; windowDays?: number | null }) {
   const registry = createCitationRegistry()
   const weaknesses = data.weakness_analysis.length > 0 ? data.weakness_analysis : data.vendor_weaknesses
@@ -1126,6 +1237,10 @@ function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }:
             )}
           </div>
         </SectionCard>
+      )}
+
+      {data.displacement_reasoning && (
+        <BattleCardDisplacementReasoningSection data={data.displacement_reasoning} />
       )}
 
       {(data.customer_pain_quotes.length > 0 || data.competitor_differentiators.length > 0) && (

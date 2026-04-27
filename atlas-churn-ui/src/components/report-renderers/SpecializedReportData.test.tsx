@@ -441,4 +441,539 @@ describe('SpecializedReportData', () => {
       expect(screen.queryByText('Winner')).not.toBeInTheDocument()
     })
   })
+
+  describe('BattleCardDetail displacement reasoning section', () => {
+    afterEach(cleanup)
+
+    function reportSafeBattleCardClaim() {
+      return {
+        claim_id: 'claim-bc-report-safe',
+        claim_key: 'incumbent:Zendesk',
+        claim_scope: 'competitor_pair',
+        claim_type: 'direct_displacement',
+        claim_text: 'Zendesk shows direct displacement pressure toward Freshdesk',
+        target_entity: 'Freshdesk',
+        secondary_target: 'Zendesk',
+        supporting_count: 8,
+        direct_evidence_count: 8,
+        witness_count: 5,
+        contradiction_count: 0,
+        confidence: 'high',
+        evidence_posture: 'usable',
+        render_allowed: true,
+        report_allowed: true,
+        suppression_reason: null,
+        evidence_links: ['review-1', 'review-2'],
+        contradicting_links: [],
+        as_of_date: '2026-04-26',
+        analysis_window_days: 90,
+        schema_version: '1',
+      }
+    }
+
+    function battleCardData(displacementReasoning: Record<string, unknown> | null) {
+      const card: Record<string, unknown> = {
+        vendor: 'Zendesk',
+        category: 'Helpdesk',
+        churn_pressure_score: 72,
+        executive_summary: 'Zendesk customers under pressure.',
+      }
+      if (displacementReasoning !== null) {
+        card.reasoning_contracts = { displacement_reasoning: displacementReasoning }
+      }
+      return card
+    }
+
+    it('renders migration_proof and customer_winning_pattern when both fields are report-safe', () => {
+      const claim = reportSafeBattleCardClaim()
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              product_claim_gate: {
+                readiness_state: 'report_safe',
+                render_allowed: true,
+                report_allowed: true,
+                suppression_reason: null,
+                product_claims: [claim],
+              },
+              migration_proof: {
+                readiness_state: 'report_safe',
+                render_allowed: true,
+                report_allowed: true,
+                suppression_reason: null,
+                confidence: 'high',
+                switching_is_real: true,
+                top_destination: 'Freshdesk',
+                switch_volume: { value: 4 },
+                product_claims: [claim],
+              },
+              customer_winning_pattern: {
+                readiness_state: 'report_safe',
+                render_allowed: true,
+                report_allowed: true,
+                suppression_reason: null,
+                confidence: 'high',
+                summary: 'Freshdesk is winning named evaluations against Zendesk.',
+                product_claims: [claim],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Displacement Reasoning')).toBeInTheDocument()
+      expect(screen.getByText('Migration Proof')).toBeInTheDocument()
+      expect(screen.getByText('Customer Winning Pattern')).toBeInTheDocument()
+      expect(screen.getByText('Switching Real')).toBeInTheDocument()
+      expect(screen.getByText('Top Destination')).toBeInTheDocument()
+      expect(screen.getByText('Freshdesk')).toBeInTheDocument()
+      expect(screen.getByText('Switch Volume')).toBeInTheDocument()
+      expect(
+        screen.getByText('Freshdesk is winning named evaluations against Zendesk.'),
+      ).toBeInTheDocument()
+      expect(screen.getByText('Report-safe')).toBeInTheDocument()
+      expect(screen.queryByTestId('battle-card-migration-proof-gate')).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('battle-card-customer-winning-pattern-gate'),
+      ).not.toBeInTheDocument()
+    })
+
+    it('strips migration_proof and customer_winning_pattern content when monitor-only, surfacing gate_message', () => {
+      const claim = {
+        ...reportSafeBattleCardClaim(),
+        claim_id: 'claim-bc-monitor',
+        supporting_count: 1,
+        direct_evidence_count: 1,
+        witness_count: 1,
+        confidence: 'low',
+        render_allowed: true,
+        report_allowed: false,
+        suppression_reason: 'low_confidence',
+      }
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              product_claim_gate: {
+                readiness_state: 'monitor_only',
+                render_allowed: true,
+                report_allowed: false,
+                suppression_reason: 'low_confidence',
+                product_claims: [claim],
+              },
+              migration_proof: {
+                readiness_state: 'monitor_only',
+                render_allowed: true,
+                report_allowed: false,
+                suppression_reason: 'low_confidence',
+                gate_message:
+                  'Battle-card displacement proof is monitor-only: direct displacement evidence is visible in the UI but not report-safe (low_confidence).',
+                product_claims: [claim],
+              },
+              customer_winning_pattern: {
+                readiness_state: 'monitor_only',
+                render_allowed: true,
+                report_allowed: false,
+                suppression_reason: 'low_confidence',
+                gate_message:
+                  'Battle-card displacement proof is monitor-only: direct displacement evidence is visible in the UI but not report-safe (low_confidence).',
+                product_claims: [claim],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Displacement Reasoning')).toBeInTheDocument()
+      expect(screen.queryByText('Switching Real')).not.toBeInTheDocument()
+      expect(screen.queryByText('Top Destination')).not.toBeInTheDocument()
+      expect(screen.queryByText('Switch Volume')).not.toBeInTheDocument()
+      expect(screen.getByText('Monitor only')).toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-migration-proof-gate')).toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-customer-winning-pattern-gate')).toBeInTheDocument()
+      expect(
+        screen.getAllByText(/monitor-only: direct displacement evidence/i).length,
+      ).toBeGreaterThanOrEqual(1)
+    })
+
+    it('strips content with an Insufficient badge when the displacement gate is suppressed', () => {
+      const claim = {
+        ...reportSafeBattleCardClaim(),
+        claim_id: 'claim-bc-suppressed',
+        supporting_count: 0,
+        direct_evidence_count: 0,
+        witness_count: 0,
+        evidence_posture: 'insufficient',
+        render_allowed: false,
+        report_allowed: false,
+        suppression_reason: 'insufficient_supporting_count',
+        confidence: 'low',
+      }
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              product_claim_gate: {
+                readiness_state: 'suppressed',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'insufficient_supporting_count',
+                product_claims: [claim],
+              },
+              migration_proof: {
+                readiness_state: 'suppressed',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'insufficient_supporting_count',
+                gate_message:
+                  'Battle-card displacement proof suppressed: direct displacement evidence is not report-safe (insufficient_supporting_count).',
+                product_claims: [claim],
+              },
+              customer_winning_pattern: {
+                readiness_state: 'suppressed',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'insufficient_supporting_count',
+                gate_message:
+                  'Battle-card displacement proof suppressed: direct displacement evidence is not report-safe (insufficient_supporting_count).',
+                product_claims: [claim],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Displacement Reasoning')).toBeInTheDocument()
+      expect(screen.queryByText('Switching Real')).not.toBeInTheDocument()
+      expect(screen.queryByText('Top Destination')).not.toBeInTheDocument()
+      expect(screen.getByText('Insufficient')).toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-migration-proof-gate')).toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-customer-winning-pattern-gate')).toBeInTheDocument()
+      expect(
+        screen.getAllByText(/displacement proof suppressed/i).length,
+      ).toBeGreaterThanOrEqual(1)
+    })
+
+    it('strips content with a Validation-unavailable badge when ProductClaim validation is unavailable', () => {
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              product_claim_gate: {
+                readiness_state: 'validation_unavailable',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'validation_unavailable',
+                product_claims: [],
+              },
+              migration_proof: {
+                readiness_state: 'validation_unavailable',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'validation_unavailable',
+                gate_message:
+                  'Battle-card displacement proof suppressed: ProductClaim validation is unavailable.',
+                product_claims: [],
+              },
+              customer_winning_pattern: {
+                readiness_state: 'validation_unavailable',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'validation_unavailable',
+                gate_message:
+                  'Battle-card displacement proof suppressed: ProductClaim validation is unavailable.',
+                product_claims: [],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Displacement Reasoning')).toBeInTheDocument()
+      expect(screen.queryByText('Switching Real')).not.toBeInTheDocument()
+      expect(screen.queryByText('Top Destination')).not.toBeInTheDocument()
+      expect(screen.getByText('Validation unavailable')).toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-migration-proof-gate')).toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-customer-winning-pattern-gate')).toBeInTheDocument()
+      expect(
+        screen.getAllByText(/ProductClaim validation is unavailable/i).length,
+      ).toBeGreaterThanOrEqual(1)
+    })
+
+    it('omits the entire Displacement Reasoning section when no product_claim_gate exists (legacy / fail-closed)', () => {
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData(null)}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.queryByText('Displacement Reasoning')).not.toBeInTheDocument()
+      expect(screen.queryByText('Migration Proof')).not.toBeInTheDocument()
+      expect(screen.queryByText('Customer Winning Pattern')).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('battle-card-migration-proof-gate'),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('battle-card-customer-winning-pattern-gate'),
+      ).not.toBeInTheDocument()
+    })
+
+    it('omits the section when reasoning_contracts.displacement_reasoning has fields but no product_claim_gate (defensive fail-closed)', () => {
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              migration_proof: {
+                readiness_state: 'report_safe',
+                render_allowed: true,
+                report_allowed: true,
+                suppression_reason: null,
+                confidence: 'high',
+                switching_is_real: true,
+                top_destination: 'Freshdesk',
+                product_claims: [],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.queryByText('Displacement Reasoning')).not.toBeInTheDocument()
+      expect(screen.queryByText('Migration Proof')).not.toBeInTheDocument()
+    })
+
+    it('renders the Insufficient badge when section gate is suppressed with empty product_claims', () => {
+      // Backend produces this when claim_rows=[]: aggregator returns
+      // readiness_state="suppressed" with product_claims=[]. The section badge
+      // must derive from readiness_state, not from a representative claim.
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              product_claim_gate: {
+                readiness_state: 'suppressed',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'insufficient_supporting_count',
+                product_claims: [],
+              },
+              migration_proof: {
+                readiness_state: 'suppressed',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'insufficient_supporting_count',
+                gate_message: 'Battle-card displacement proof suppressed: no validated rows.',
+                product_claims: [],
+              },
+              customer_winning_pattern: {
+                readiness_state: 'suppressed',
+                render_allowed: false,
+                report_allowed: false,
+                suppression_reason: 'insufficient_supporting_count',
+                gate_message: 'Battle-card displacement proof suppressed: no validated rows.',
+                product_claims: [],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Displacement Reasoning')).toBeInTheDocument()
+      expect(screen.getByText('Insufficient')).toBeInTheDocument()
+      expect(screen.queryByText('Legacy')).not.toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-migration-proof-gate')).toBeInTheDocument()
+    })
+
+    it('reads displacement_reasoning from the top-level card key when reasoning_contracts is absent', () => {
+      const claim = reportSafeBattleCardClaim()
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={{
+              vendor: 'Zendesk',
+              category: 'Helpdesk',
+              displacement_reasoning: {
+                product_claim_gate: {
+                  readiness_state: 'report_safe',
+                  render_allowed: true,
+                  report_allowed: true,
+                  suppression_reason: null,
+                  product_claims: [claim],
+                },
+                migration_proof: {
+                  readiness_state: 'report_safe',
+                  render_allowed: true,
+                  report_allowed: true,
+                  suppression_reason: null,
+                  confidence: 'high',
+                  top_destination: 'Freshdesk',
+                  product_claims: [claim],
+                },
+              },
+            }}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Displacement Reasoning')).toBeInTheDocument()
+      expect(screen.getByText('Migration Proof')).toBeInTheDocument()
+      expect(screen.getByText('Top Destination')).toBeInTheDocument()
+      expect(screen.getByText('Report-safe')).toBeInTheDocument()
+    })
+
+    it('honors per-field readiness independently (one report-safe, one monitor-only)', () => {
+      const reportSafe = reportSafeBattleCardClaim()
+      const monitorClaim = {
+        ...reportSafe,
+        claim_id: 'claim-bc-monitor-mixed',
+        render_allowed: true,
+        report_allowed: false,
+        suppression_reason: 'low_confidence',
+        confidence: 'low',
+      }
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              product_claim_gate: {
+                readiness_state: 'report_safe',
+                render_allowed: true,
+                report_allowed: true,
+                suppression_reason: null,
+                product_claims: [reportSafe],
+              },
+              migration_proof: {
+                readiness_state: 'report_safe',
+                render_allowed: true,
+                report_allowed: true,
+                suppression_reason: null,
+                confidence: 'high',
+                switching_is_real: true,
+                top_destination: 'Freshdesk',
+                product_claims: [reportSafe],
+              },
+              customer_winning_pattern: {
+                readiness_state: 'monitor_only',
+                render_allowed: true,
+                report_allowed: false,
+                suppression_reason: 'low_confidence',
+                gate_message:
+                  'Battle-card customer winning pattern is monitor-only (low_confidence).',
+                product_claims: [monitorClaim],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Migration Proof')).toBeInTheDocument()
+      expect(screen.getByText('Switching Real')).toBeInTheDocument()
+      expect(screen.getByText('Top Destination')).toBeInTheDocument()
+      expect(screen.queryByTestId('battle-card-migration-proof-gate')).not.toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-customer-winning-pattern-gate')).toBeInTheDocument()
+      expect(
+        screen.getByText(/customer winning pattern is monitor-only/i),
+      ).toBeInTheDocument()
+    })
+
+    it('falls through to the gate fallback when readiness_state says report_safe but report_allowed is false (malformed payload)', () => {
+      // Defense in depth: trust the boolean gate, not just the readiness label.
+      const claim = {
+        ...reportSafeBattleCardClaim(),
+        claim_id: 'claim-bc-malformed',
+        render_allowed: true,
+        report_allowed: false,
+        suppression_reason: 'low_confidence',
+      }
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              product_claim_gate: {
+                readiness_state: 'monitor_only',
+                render_allowed: true,
+                report_allowed: false,
+                suppression_reason: 'low_confidence',
+                product_claims: [claim],
+              },
+              migration_proof: {
+                readiness_state: 'report_safe',
+                render_allowed: true,
+                report_allowed: false,
+                suppression_reason: 'low_confidence',
+                gate_message: 'Migration proof gated despite report_safe label.',
+                confidence: 'high',
+                switching_is_real: true,
+                top_destination: 'Freshdesk',
+                product_claims: [claim],
+              },
+              customer_winning_pattern: {
+                readiness_state: 'report_safe',
+                render_allowed: true,
+                report_allowed: false,
+                suppression_reason: 'low_confidence',
+                gate_message: 'Customer winning pattern gated despite report_safe label.',
+                confidence: 'high',
+                summary: 'Should not render.',
+                product_claims: [claim],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.queryByText('Switching Real')).not.toBeInTheDocument()
+      expect(screen.queryByText('Top Destination')).not.toBeInTheDocument()
+      expect(screen.queryByText('Should not render.')).not.toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-migration-proof-gate')).toBeInTheDocument()
+      expect(screen.getByTestId('battle-card-customer-winning-pattern-gate')).toBeInTheDocument()
+      expect(
+        screen.getByText('Migration proof gated despite report_safe label.'),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByText('Customer winning pattern gated despite report_safe label.'),
+      ).toBeInTheDocument()
+    })
+
+    it('renders header + badge with empty grid when product_claim_gate is present but both fields are absent', () => {
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="battle_card"
+            data={battleCardData({
+              product_claim_gate: {
+                readiness_state: 'monitor_only',
+                render_allowed: true,
+                report_allowed: false,
+                suppression_reason: 'low_confidence',
+                product_claims: [],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Displacement Reasoning')).toBeInTheDocument()
+      expect(screen.getByText('Monitor only')).toBeInTheDocument()
+      expect(screen.queryByText('Migration Proof')).not.toBeInTheDocument()
+      expect(screen.queryByText('Customer Winning Pattern')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('battle-card-migration-proof-gate')).not.toBeInTheDocument()
+      expect(
+        screen.queryByTestId('battle-card-customer-winning-pattern-gate'),
+      ).not.toBeInTheDocument()
+    })
+  })
 })

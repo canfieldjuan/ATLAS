@@ -6,6 +6,63 @@ export type HeadToHeadReadinessState =
   | 'suppressed'
   | 'validation_unavailable'
 
+export type BattleCardDisplacementReadinessState =
+  | 'report_safe'
+  | 'monitor_only'
+  | 'suppressed'
+  | 'validation_unavailable'
+
+// Backend produces canonical SuppressionReason values plus two non-canonical
+// strings: 'validation_unavailable' (when claim_rows is None) and
+// 'not_report_safe' (when a render-safe claim has no canonical reason).
+// See atlas_brain/autonomous/tasks/b2b_battle_cards.py:_battle_card_displacement_gate_payload.
+export type BattleCardDisplacementSuppressionReason =
+  | SuppressionReason
+  | 'validation_unavailable'
+  | 'not_report_safe'
+
+export interface BattleCardDisplacementSwitchVolumeViewModel {
+  value?: number | null
+}
+
+export interface BattleCardDisplacementMigrationProofViewModel {
+  readiness_state: BattleCardDisplacementReadinessState
+  render_allowed: boolean
+  report_allowed: boolean
+  suppression_reason: BattleCardDisplacementSuppressionReason | null
+  gate_message?: string
+  confidence?: string
+  switching_is_real?: boolean
+  top_destination?: string
+  switch_volume?: BattleCardDisplacementSwitchVolumeViewModel | null
+  product_claims: VendorClaim[]
+}
+
+export interface BattleCardDisplacementCustomerWinningPatternViewModel {
+  readiness_state: BattleCardDisplacementReadinessState
+  render_allowed: boolean
+  report_allowed: boolean
+  suppression_reason: BattleCardDisplacementSuppressionReason | null
+  gate_message?: string
+  confidence?: string
+  summary?: string
+  product_claims: VendorClaim[]
+}
+
+export interface BattleCardDisplacementReasoningSectionGateViewModel {
+  readiness_state: BattleCardDisplacementReadinessState
+  render_allowed: boolean
+  report_allowed: boolean
+  suppression_reason: BattleCardDisplacementSuppressionReason | null
+  product_claims: VendorClaim[]
+}
+
+export interface BattleCardDisplacementReasoningViewModel {
+  product_claim_gate: BattleCardDisplacementReasoningSectionGateViewModel
+  migration_proof: BattleCardDisplacementMigrationProofViewModel | null
+  customer_winning_pattern: BattleCardDisplacementCustomerWinningPatternViewModel | null
+}
+
 export interface KeyInsightViewModel {
   insight: string
   evidence: string
@@ -343,6 +400,7 @@ export interface BattleCardViewModel {
   reasoning_source?: string
   reasoning_reference_ids?: ReasoningReferenceIdsViewModel
   reasoning_witness_highlights?: ReasoningWitnessViewModel[]
+  displacement_reasoning?: BattleCardDisplacementReasoningViewModel | null
 }
 
 export interface ComparisonMetricSnapshotViewModel {

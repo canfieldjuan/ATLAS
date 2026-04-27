@@ -6,6 +6,13 @@ import type {
   VendorClaim,
 } from '../api/client'
 import type {
+  BattleCardDisplacementReadinessState,
+  BattleCardDisplacementSuppressionReason,
+  BattleCardDisplacementCustomerWinningPatternViewModel,
+  BattleCardDisplacementMigrationProofViewModel,
+  BattleCardDisplacementReasoningSectionGateViewModel,
+  BattleCardDisplacementReasoningViewModel,
+  BattleCardDisplacementSwitchVolumeViewModel,
   AccountPressureMetricsViewModel,
   ActiveEvaluationDeadlineViewModel,
   AccountsInMotionAccountViewModel,
@@ -93,6 +100,28 @@ const VALID_HEAD_TO_HEAD_READINESS_STATES: Record<HeadToHeadReadinessState, true
   validation_unavailable: true,
 }
 
+const VALID_BATTLE_CARD_DISPLACEMENT_READINESS_STATES: Record<
+  BattleCardDisplacementReadinessState,
+  true
+> = {
+  report_safe: true,
+  monitor_only: true,
+  suppressed: true,
+  validation_unavailable: true,
+}
+
+// Reuses the canonical SuppressionReason map and adds the two non-canonical
+// strings the battle-card backend can emit. Adding a new SuppressionReason
+// member without updating this map is a TypeScript compile error.
+const VALID_BATTLE_CARD_DISPLACEMENT_SUPPRESSION_REASONS: Record<
+  BattleCardDisplacementSuppressionReason,
+  true
+> = {
+  ...VALID_SUPPRESSION_REASONS,
+  validation_unavailable: true,
+  not_report_safe: true,
+}
+
 function asEnumValue<T extends string>(value: unknown, valid: Record<T, true>): T | undefined {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(valid, value)
     ? (value as T)
@@ -129,6 +158,108 @@ export function toStringArray(value: unknown): string[] {
 function toRecordArray(value: unknown): UnknownRecord[] {
   if (!Array.isArray(value)) return []
   return value.filter(isRecord)
+}
+
+function toEmbeddedProductClaimList(value: unknown): VendorClaim[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => toEmbeddedProductClaim(item))
+    .filter((claim): claim is VendorClaim => claim !== null)
+}
+
+function toBattleCardDisplacementSwitchVolume(
+  value: unknown,
+): BattleCardDisplacementSwitchVolumeViewModel | null {
+  if (!isRecord(value)) return null
+  return { value: asNumber(value.value) ?? null }
+}
+
+function toBattleCardDisplacementMigrationProof(
+  value: unknown,
+): BattleCardDisplacementMigrationProofViewModel | null {
+  if (!isRecord(value)) return null
+  const readinessState = asEnumValue(
+    value.readiness_state,
+    VALID_BATTLE_CARD_DISPLACEMENT_READINESS_STATES,
+  )
+  if (!readinessState) return null
+  return {
+    readiness_state: readinessState,
+    render_allowed: asBoolean(value.render_allowed) ?? false,
+    report_allowed: asBoolean(value.report_allowed) ?? false,
+    suppression_reason:
+      asEnumValue(value.suppression_reason, VALID_BATTLE_CARD_DISPLACEMENT_SUPPRESSION_REASONS)
+      ?? null,
+    gate_message: asString(value.gate_message),
+    confidence: asString(value.confidence),
+    switching_is_real: asBoolean(value.switching_is_real),
+    top_destination: asString(value.top_destination),
+    switch_volume: toBattleCardDisplacementSwitchVolume(value.switch_volume),
+    product_claims: toEmbeddedProductClaimList(value.product_claims),
+  }
+}
+
+function toBattleCardDisplacementCustomerWinningPattern(
+  value: unknown,
+): BattleCardDisplacementCustomerWinningPatternViewModel | null {
+  if (!isRecord(value)) return null
+  const readinessState = asEnumValue(
+    value.readiness_state,
+    VALID_BATTLE_CARD_DISPLACEMENT_READINESS_STATES,
+  )
+  if (!readinessState) return null
+  return {
+    readiness_state: readinessState,
+    render_allowed: asBoolean(value.render_allowed) ?? false,
+    report_allowed: asBoolean(value.report_allowed) ?? false,
+    suppression_reason:
+      asEnumValue(value.suppression_reason, VALID_BATTLE_CARD_DISPLACEMENT_SUPPRESSION_REASONS)
+      ?? null,
+    gate_message: asString(value.gate_message),
+    confidence: asString(value.confidence),
+    summary: asString(value.summary),
+    product_claims: toEmbeddedProductClaimList(value.product_claims),
+  }
+}
+
+function toBattleCardDisplacementSectionGate(
+  value: unknown,
+): BattleCardDisplacementReasoningSectionGateViewModel | null {
+  if (!isRecord(value)) return null
+  const readinessState = asEnumValue(
+    value.readiness_state,
+    VALID_BATTLE_CARD_DISPLACEMENT_READINESS_STATES,
+  )
+  if (!readinessState) return null
+  return {
+    readiness_state: readinessState,
+    render_allowed: asBoolean(value.render_allowed) ?? false,
+    report_allowed: asBoolean(value.report_allowed) ?? false,
+    suppression_reason:
+      asEnumValue(value.suppression_reason, VALID_BATTLE_CARD_DISPLACEMENT_SUPPRESSION_REASONS)
+      ?? null,
+    product_claims: toEmbeddedProductClaimList(value.product_claims),
+  }
+}
+
+function toBattleCardDisplacementReasoning(
+  card: UnknownRecord,
+): BattleCardDisplacementReasoningViewModel | null {
+  const reasoningContracts = asRecord(card.reasoning_contracts)
+  const fromReasoningContracts = reasoningContracts.displacement_reasoning
+  const fromTopLevel = card.displacement_reasoning
+  const raw = isRecord(fromReasoningContracts) ? fromReasoningContracts : fromTopLevel
+  if (!isRecord(raw)) return null
+  // Fail-closed: legacy battle cards without a product_claim_gate render nothing.
+  const productClaimGate = toBattleCardDisplacementSectionGate(raw.product_claim_gate)
+  if (!productClaimGate) return null
+  return {
+    product_claim_gate: productClaimGate,
+    migration_proof: toBattleCardDisplacementMigrationProof(raw.migration_proof),
+    customer_winning_pattern: toBattleCardDisplacementCustomerWinningPattern(
+      raw.customer_winning_pattern,
+    ),
+  }
 }
 
 function toEmbeddedProductClaim(value: unknown): VendorClaim | null {
@@ -864,6 +995,7 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     reasoning_witness_highlights: toReasoningWitnesses(
       value.witness_highlights ?? value.reasoning_witness_highlights,
     ),
+    displacement_reasoning: toBattleCardDisplacementReasoning(value),
   }
 }
 
