@@ -1,3 +1,11 @@
+import type { SuppressionReason, VendorClaim } from '../api/client'
+
+export type HeadToHeadReadinessState =
+  | 'report_safe'
+  | 'monitor_only'
+  | 'suppressed'
+  | 'validation_unavailable'
+
 export interface KeyInsightViewModel {
   insight: string
   evidence: string
@@ -172,7 +180,13 @@ export interface ChallengerBriefViewModel {
   displacement_summary: ChallengerBriefDisplacementViewModel
   incumbent_profile: ChallengerIncumbentProfileViewModel
   challenger_advantage: ChallengerAdvantageViewModel
-  head_to_head: CrossVendorBattleViewModel & { synthesized?: boolean }
+  head_to_head: CrossVendorBattleViewModel & {
+    synthesized?: boolean
+    product_claim?: VendorClaim | null
+    readiness_state?: HeadToHeadReadinessState
+    claim_validation_unavailable?: boolean
+    suppression_reason?: SuppressionReason | null
+  }
   target_accounts: ChallengerTargetAccountViewModel[]
   sales_playbook: ChallengerSalesPlaybookViewModel
   integration_comparison: IntegrationComparisonViewModel

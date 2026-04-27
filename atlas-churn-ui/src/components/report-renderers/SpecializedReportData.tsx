@@ -9,6 +9,7 @@ import CitationMarker from './CitationMarker'
 import CitationBar from './CitationBar'
 import { createCitationRegistry } from './useCitationRegistry'
 import type { CitationEntry } from './useCitationRegistry'
+import { ProductClaimGate, ProductClaimStatusBadge } from '../ProductClaimGate'
 import {
   toBattleCardViewModel,
   toAccountsInMotionViewModel,
@@ -507,47 +508,69 @@ function ChallengerBriefDetail({ data, onOpenWitness, backTo, asOfDate, windowDa
         </SectionCard>
       ) : null}
 
-      {(h2h.conclusion || h2h.winner) && (
-        <SectionCard title="Head to Head" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
-          <div className="mb-3">
-            <ProvenanceStrip
-              source={h2h.synthesized ? 'displacement_fallback' : 'b2b_reasoning_synthesis'}
-              referenceIds={h2h.reference_ids}
-              vendorName={data.incumbent}
-              onOpenWitness={onOpenWitness}
-              backTo={backTo}
-            />
-          </div>
-          <div className="space-y-1">
-            {h2h.winner && <MetricRow label="Winner" value={h2h.winner} color="text-cyan-400 font-bold" />}
-            {h2h.confidence != null && <MetricRow label="Confidence" value={formatPercent(h2h.confidence)} />}
-            {h2h.durability && <MetricRow label="Durability" value={h2h.durability} />}
-            {h2h.synthesized && <span className="text-[10px] text-slate-600">(synthesized from displacement data)</span>}
-          </div>
-          {h2h.conclusion && <p className="text-sm text-slate-300 mt-2">{h2h.conclusion}</p>}
-          {Array.isArray(h2h.key_insights) && h2h.key_insights.length > 0 && (
-            <ul className="space-y-1 mt-2">
-              {h2h.key_insights.slice(0, 5).map((insight, index: number) => {
-                const text = insight.insight ?? ''
-                const evidence = insight.evidence ?? ''
-                return (
-                  <li key={index} className="text-xs text-slate-400 flex gap-2 min-w-0">
-                    <span className="text-cyan-400 shrink-0">-</span>
-                    <span className="min-w-0 break-words">{text}{evidence && <span className="text-slate-600 ml-1 break-all">({evidence})</span>}</span>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-          {onOpenWitness && data.incumbent && h2h.reference_ids?.witness_ids && h2h.reference_ids.witness_ids.length > 0 && (
-            <CitationBar
-              citations={registerWitnessIds(registry, h2h.reference_ids.witness_ids, data.reasoning_witness_highlights)}
-              vendorName={data.incumbent}
-              onOpenWitness={onOpenWitness}
-            />
-          )}
-        </SectionCard>
-      )}
+      {(() => {
+        const hasGateContext =
+          h2h.product_claim != null
+          || h2h.claim_validation_unavailable === true
+          || h2h.readiness_state != null
+        if (!h2h.conclusion && !h2h.winner && !hasGateContext) return null
+        return (
+          <SectionCard title="Head to Head" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
+            <div className="mb-3 flex items-center gap-2">
+              <ProductClaimStatusBadge
+                claim={h2h.product_claim ?? null}
+                validationUnavailable={h2h.claim_validation_unavailable ?? false}
+              />
+            </div>
+            <div className="mb-3">
+              <ProvenanceStrip
+                source={h2h.synthesized ? 'displacement_fallback' : 'b2b_reasoning_synthesis'}
+                referenceIds={h2h.reference_ids}
+                vendorName={data.incumbent}
+                onOpenWitness={onOpenWitness}
+                backTo={backTo}
+              />
+            </div>
+            <ProductClaimGate
+              claim={h2h.product_claim ?? null}
+              mode="report"
+              validationUnavailable={h2h.claim_validation_unavailable ?? false}
+              testId="head-to-head-strength-gate"
+            >
+              <div className="space-y-1">
+                {h2h.winner && <MetricRow label="Winner" value={h2h.winner} color="text-cyan-400 font-bold" />}
+                {h2h.confidence != null && <MetricRow label="Confidence" value={formatPercent(h2h.confidence)} />}
+                {h2h.durability && <MetricRow label="Durability" value={h2h.durability} />}
+                {h2h.synthesized && <span className="text-[10px] text-slate-600">(synthesized from displacement data)</span>}
+              </div>
+            </ProductClaimGate>
+            {hasGateContext && h2h.conclusion && (
+              <p className="text-sm text-slate-300 mt-2">{h2h.conclusion}</p>
+            )}
+            {hasGateContext && Array.isArray(h2h.key_insights) && h2h.key_insights.length > 0 && (
+              <ul className="space-y-1 mt-2">
+                {h2h.key_insights.slice(0, 5).map((insight, index: number) => {
+                  const text = insight.insight ?? ''
+                  const evidence = insight.evidence ?? ''
+                  return (
+                    <li key={index} className="text-xs text-slate-400 flex gap-2 min-w-0">
+                      <span className="text-cyan-400 shrink-0">-</span>
+                      <span className="min-w-0 break-words">{text}{evidence && <span className="text-slate-600 ml-1 break-all">({evidence})</span>}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            {hasGateContext && onOpenWitness && data.incumbent && h2h.reference_ids?.witness_ids && h2h.reference_ids.witness_ids.length > 0 && (
+              <CitationBar
+                citations={registerWitnessIds(registry, h2h.reference_ids.witness_ids, data.reasoning_witness_highlights)}
+                vendorName={data.incumbent}
+                onOpenWitness={onOpenWitness}
+              />
+            )}
+          </SectionCard>
+        )
+      })()}
 
       {targets.length > 0 && (
         <SectionCard title={`Target Accounts (${data.total_target_accounts ?? targets.length} total, ${data.accounts_considering_challenger ?? 0} considering ${data.challenger})`} icon={<Target className="h-4 w-4 text-amber-400" />}>

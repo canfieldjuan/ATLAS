@@ -1,4 +1,11 @@
 import type {
+  ClaimScope,
+  ConfidenceLabel,
+  EvidencePosture,
+  SuppressionReason,
+  VendorClaim,
+} from '../api/client'
+import type {
   AccountPressureMetricsViewModel,
   ActiveEvaluationDeadlineViewModel,
   AccountsInMotionAccountViewModel,
@@ -37,7 +44,60 @@ import type {
   VendorScorecardViewModel,
   WeeklyChurnFeedItemViewModel,
   WeaknessAnalysisItemViewModel,
+  HeadToHeadReadinessState,
 } from '../types/reportViewModels'
+
+// Record<EnumType, true> forces TypeScript to check exhaustiveness:
+// adding a new union member without updating this map is a compile error.
+const VALID_CLAIM_SCOPES: Record<ClaimScope, true> = {
+  witness: true,
+  vendor: true,
+  account: true,
+  competitor_pair: true,
+  alert: true,
+}
+
+const VALID_EVIDENCE_POSTURES: Record<EvidencePosture, true> = {
+  usable: true,
+  weak: true,
+  contradictory: true,
+  unverified: true,
+  insufficient: true,
+}
+
+const VALID_CONFIDENCE_LABELS: Record<ConfidenceLabel, true> = {
+  high: true,
+  medium: true,
+  low: true,
+}
+
+const VALID_SUPPRESSION_REASONS: Record<SuppressionReason, true> = {
+  insufficient_supporting_count: true,
+  contradictory_evidence: true,
+  unverified_evidence: true,
+  denominator_unknown: true,
+  sample_size_below_threshold: true,
+  weak_evidence_only: true,
+  passing_mention_only: true,
+  subject_not_subject_vendor: true,
+  polarity_not_renderable: true,
+  role_not_renderable: true,
+  low_confidence: true,
+  consumer_filter_applied: true,
+}
+
+const VALID_HEAD_TO_HEAD_READINESS_STATES: Record<HeadToHeadReadinessState, true> = {
+  report_safe: true,
+  monitor_only: true,
+  suppressed: true,
+  validation_unavailable: true,
+}
+
+function asEnumValue<T extends string>(value: unknown, valid: Record<T, true>): T | undefined {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(valid, value)
+    ? (value as T)
+    : undefined
+}
 
 type UnknownRecord = Record<string, unknown>
 
@@ -69,6 +129,44 @@ export function toStringArray(value: unknown): string[] {
 function toRecordArray(value: unknown): UnknownRecord[] {
   if (!Array.isArray(value)) return []
   return value.filter(isRecord)
+}
+
+function toEmbeddedProductClaim(value: unknown): VendorClaim | null {
+  if (!isRecord(value)) return null
+  const claimId = asString(value.claim_id)
+  const claimKey = asString(value.claim_key)
+  const claimType = asString(value.claim_type)
+  if (!claimId || !claimKey || !claimType) return null
+  const claimScope = asEnumValue(value.claim_scope, VALID_CLAIM_SCOPES)
+  const confidence = asEnumValue(value.confidence, VALID_CONFIDENCE_LABELS)
+  const evidencePosture = asEnumValue(value.evidence_posture, VALID_EVIDENCE_POSTURES)
+  if (!claimScope || !confidence || !evidencePosture) return null
+  return {
+    claim_id: claimId,
+    claim_key: claimKey,
+    claim_scope: claimScope,
+    claim_type: claimType,
+    claim_text: asString(value.claim_text) ?? '',
+    target_entity: asString(value.target_entity) ?? '',
+    secondary_target: asString(value.secondary_target) ?? null,
+    supporting_count: asNumber(value.supporting_count) ?? 0,
+    direct_evidence_count: asNumber(value.direct_evidence_count) ?? 0,
+    witness_count: asNumber(value.witness_count) ?? 0,
+    contradiction_count: asNumber(value.contradiction_count) ?? 0,
+    denominator: asNumber(value.denominator) ?? null,
+    sample_size: asNumber(value.sample_size) ?? null,
+    has_grounded_evidence: asBoolean(value.has_grounded_evidence) ?? false,
+    confidence,
+    evidence_posture: evidencePosture,
+    render_allowed: asBoolean(value.render_allowed) ?? false,
+    report_allowed: asBoolean(value.report_allowed) ?? false,
+    suppression_reason: asEnumValue(value.suppression_reason, VALID_SUPPRESSION_REASONS) ?? null,
+    evidence_links: toStringArray(value.evidence_links),
+    contradicting_links: toStringArray(value.contradicting_links),
+    as_of_date: asString(value.as_of_date) ?? '',
+    analysis_window_days: asNumber(value.analysis_window_days) ?? 0,
+    schema_version: asString(value.schema_version) ?? '',
+  }
 }
 
 export function toKeyInsights(value: unknown): KeyInsightViewModel[] {
@@ -361,6 +459,7 @@ function toIntegrationComparison(value: unknown): IntegrationComparisonViewModel
 
 export function toChallengerBriefViewModel(value: UnknownRecord): ChallengerBriefViewModel {
   const headToHead = toCrossVendorBattle(value.head_to_head)
+  const rawHeadToHead = asRecord(value.head_to_head)
   return {
     incumbent: asString(value.incumbent),
     challenger: asString(value.challenger),
@@ -371,7 +470,15 @@ export function toChallengerBriefViewModel(value: UnknownRecord): ChallengerBrie
     challenger_advantage: toChallengerAdvantage(value.challenger_advantage),
     head_to_head: {
       ...(headToHead ?? { key_insights: [] }),
-      synthesized: asBoolean(asRecord(value.head_to_head).synthesized),
+      synthesized: asBoolean(rawHeadToHead.synthesized),
+      product_claim: toEmbeddedProductClaim(rawHeadToHead.product_claim),
+      readiness_state: asEnumValue(
+        rawHeadToHead.readiness_state,
+        VALID_HEAD_TO_HEAD_READINESS_STATES,
+      ),
+      claim_validation_unavailable: asBoolean(rawHeadToHead.claim_validation_unavailable),
+      suppression_reason:
+        asEnumValue(rawHeadToHead.suppression_reason, VALID_SUPPRESSION_REASONS) ?? null,
     },
     target_accounts: toTargetAccounts(value.target_accounts),
     sales_playbook: toSalesPlaybook(value.sales_playbook),
