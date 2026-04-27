@@ -436,6 +436,110 @@ Workspace -> Evidence UI -> Opportunities -> Challenger -> Alerts).
      `_DM_CHURN_LINEAGE_CLAIM_TYPES` to that dedicated type. This is
      the correct long-term lineage contract.
 
+## Soak activation runbook (April 27 → May 5, 2026)
+
+Phase 9 Step 7 needs a Monday batch that populates broad
+`b2b_evidence_claims` shadow rows naturally, not via manual seeds, before
+the lineage flag can move from "parked globally" to a controlled rollout
+decision. The April 27 batch did not populate because there were 0 active
+scheduled competitive sets. This runbook closes that gap.
+
+### April 27, 2026 — Activation (operator-run)
+
+Pre-check first; only commit the UPDATE if the pre-check returns 7 rows,
+all `active = false`, all `refresh_mode = 'scheduled'`, and none stuck at
+`last_run_status = 'running'`:
+
+```sql
+SELECT id, name, active, refresh_mode, refresh_interval_hours, last_run_status
+FROM b2b_competitive_sets
+WHERE name IN (
+  'CRM',
+  'Helpdesk',
+  'Marketing Automation',
+  'Project Management',
+  'Communication',
+  'Cloud & Security',
+  'E-commerce, HR & Analytics'
+)
+ORDER BY name;
+```
+
+Activation:
+
+```sql
+BEGIN;
+
+UPDATE b2b_competitive_sets
+SET
+  active = TRUE,
+  refresh_mode = 'scheduled',
+  refresh_interval_hours = 168,
+  last_run_at = TIMESTAMPTZ '2026-04-27 12:00:00 America/Chicago'
+WHERE name IN (
+  'CRM',
+  'Helpdesk',
+  'Marketing Automation',
+  'Project Management',
+  'Communication',
+  'Cloud & Security',
+  'E-commerce, HR & Analytics'
+)
+AND refresh_mode = 'scheduled'
+RETURNING
+  id,
+  name,
+  active,
+  refresh_mode,
+  refresh_interval_hours,
+  last_run_status,
+  last_run_at,
+  last_run_at + make_interval(hours => refresh_interval_hours) AS next_due_at;
+
+COMMIT;
+```
+
+Anchor reasoning. `last_run_at = 2026-04-27 17:00 UTC` (noon CDT). The
+synthesis cron is `15 21 * * *` (`atlas_brain/autonomous/tasks/_pipelines.py:275`).
+Either UTC or America/Chicago daemon scheduling resolves to "due May 4 21:15
+firing, not before." `next_due_at` should land at `2026-05-04 17:00 UTC`
+(noon CDT May 4) for all 7 rows. `mark_run_started` updates `last_run_at` at
+run start, so weekly cadence holds after May 4.
+
+### Cohort
+
+The 7 categories cover the canary vendors (Project Management →
+ClickUp/Monday.com, CRM → Pipedrive) plus 4 adjacent high-traffic categories
+to widen coverage. The two duplicate `'Salesforce Core Competitors'` rows in
+`refresh_mode='manual'` are intentionally untouched and need separate dedup
+work.
+
+### May 5, 2026 — Soak verification (operator-run, morning)
+
+```bash
+python scripts/audit_evidence_claims.py --as-of 2026-05-04
+python scripts/canary_lineage_direct_evidence.py --vendors ClickUp Pipedrive Monday.com --window 30
+```
+
+Pass criteria:
+
+- New `b2b_evidence_claims` rows exist for the May 4 run (post-21:15
+  scheduler-TZ window).
+- More than the 3 manually seeded vendors are represented in the new rows.
+- Row-level and lineage paths still agree, or lineage is *stricter*, never
+  looser.
+- No unexpected direct-evidence escalation from unrelated valid claims.
+
+### Decision gate
+
+If all four pass, the lineage flag moves from "parked globally" to a
+controlled rollout decision (resolves Open Decision #6 either at v2.5
+heuristic tightening or v3 dedicated `churn_intent_claim`).
+
+If any fail, document which criterion failed in this runbook, leave the
+flag parked, and revisit the cohort / interval / synthesis-task wiring
+before the next attempt.
+
 ## Patch sequence
 
 Operator's order (tracked here for the implementation log):
