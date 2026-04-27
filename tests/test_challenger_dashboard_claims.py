@@ -11,6 +11,7 @@ from atlas_brain.services.b2b.challenger_dashboard_claims import (
     DIRECT_DISPLACEMENT_CLAIM_TYPE,
     aggregate_direct_displacement_claim,
     aggregate_direct_displacement_claims_for_challenger,
+    aggregate_direct_displacement_claims_for_incumbent,
 )
 from atlas_brain.services.b2b.product_claim import (
     ClaimScope,
@@ -35,7 +36,7 @@ class FakePool:
         return self.fetch_results
 
 
-def _row(**overrides):
+def _row_for_challenger(**overrides):
     base = {
         "incumbent": "Google Workspace",
         "supporting_count": 3,
@@ -47,6 +48,17 @@ def _row(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def _row_for_incumbent(**overrides):
+    base = _row_for_challenger(challenger="Microsoft 365")
+    base.pop("incumbent", None)
+    base.update(overrides)
+    return base
+
+
+def _row(**overrides):
+    return _row_for_challenger(**overrides)
 
 
 @pytest.mark.asyncio
@@ -135,6 +147,7 @@ async def test_direct_displacement_list_returns_challenger_centric_rows():
     assert "count(DISTINCT reviewer_key)" in sql
     assert "GROUP BY vendor_name" in sql
     assert "lower(ec.vendor_name) = lower($1)" in sql
+    assert "ORDER BY direct.supporting_count DESC, direct.incumbent ASC" in sql
 
     assert [r.incumbent for r in rows] == ["Google Workspace", "Slack"]
     assert all(r.challenger == "Microsoft 365" for r in rows)
@@ -145,6 +158,96 @@ async def test_direct_displacement_list_returns_challenger_centric_rows():
     assert rows[1].claim.secondary_target == "Slack"
     assert rows[1].claim.render_allowed is True
     assert rows[1].claim.report_allowed is False
+
+
+@pytest.mark.asyncio
+async def test_direct_displacement_list_for_incumbent_returns_challenger_rows():
+    pool = FakePool(
+        fetch_results=[
+            _row_for_incumbent(challenger="Microsoft 365", supporting_count=3, direct_evidence_count=3, witness_count=2),
+            _row_for_incumbent(challenger="Slack", supporting_count=1, direct_evidence_count=1, witness_count=1),
+        ]
+    )
+
+    rows = await aggregate_direct_displacement_claims_for_incumbent(
+        pool,
+        incumbent="Google Workspace",
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+        limit=10,
+    )
+
+    assert pool.fetch_calls
+    sql, args = pool.fetch_calls[0]
+    assert args == ("Google Workspace", date(2026, 4, 26), 90, 10)
+    assert "lower(ec.vendor_name) = lower($1)" in sql
+    assert "COALESCE(btrim(ec.secondary_target), '') <> ''" in sql
+    assert "LEFT JOIN b2b_reviews r ON r.id = ec.source_review_id" in sql
+    assert "NULLIF(lower(btrim(r.reviewer_name)), '') AS reviewer_key" in sql
+    assert "count(DISTINCT reviewer_key)" in sql
+    assert "GROUP BY secondary_target" in sql
+    assert "lower(ec.secondary_target) = lower($1)" in sql
+    assert "GROUP BY vendor_name" in sql
+    assert "ec.secondary_target," in sql
+    assert "COALESCE(ec.source_excerpt_fingerprint, ec.id::text)" in sql
+    assert "ORDER BY direct.supporting_count DESC, direct.challenger ASC" in sql
+
+    assert [r.challenger for r in rows] == ["Microsoft 365", "Slack"]
+    assert all(r.incumbent == "Google Workspace" for r in rows)
+    assert rows[0].claim.target_entity == "Microsoft 365"
+    assert rows[0].claim.secondary_target == "Google Workspace"
+    assert rows[0].claim.report_allowed is True
+    assert rows[1].claim.target_entity == "Slack"
+    assert rows[1].claim.secondary_target == "Google Workspace"
+    assert rows[1].claim.render_allowed is True
+    assert rows[1].claim.report_allowed is False
+
+
+@pytest.mark.asyncio
+async def test_direct_displacement_incumbent_list_preserves_contradictions():
+    pool = FakePool(
+        fetch_results=[
+            _row_for_incumbent(
+                challenger="Microsoft 365",
+                supporting_count=5,
+                direct_evidence_count=5,
+                witness_count=3,
+                contradiction_count=3,
+                contradicting_links=["11111111-1111-4111-8111-111111111111"],
+            ),
+        ]
+    )
+
+    rows = await aggregate_direct_displacement_claims_for_incumbent(
+        pool,
+        incumbent="Google Workspace",
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+        limit=10,
+    )
+
+    claim = rows[0].claim
+    assert claim.contradiction_count == 3
+    assert claim.contradicting_links == ("11111111-1111-4111-8111-111111111111",)
+    assert claim.render_allowed is True
+    assert claim.report_allowed is False
+    assert claim.suppression_reason == SuppressionReason.CONTRADICTORY_EVIDENCE
+
+
+@pytest.mark.asyncio
+async def test_direct_displacement_incumbent_list_without_rows_returns_empty_list():
+    pool = FakePool(fetch_results=[])
+
+    rows = await aggregate_direct_displacement_claims_for_incumbent(
+        pool,
+        incumbent="Google Workspace",
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+        limit=10,
+    )
+
+    assert rows == []
+    assert pool.fetch_calls
 
 
 @pytest.mark.asyncio

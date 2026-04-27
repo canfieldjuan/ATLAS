@@ -257,6 +257,108 @@ LIMIT $4
 """
 
 
+_SELECT_DIRECT_DISPLACEMENT_FOR_INCUMBENT_SQL = """
+WITH direct_ranked AS (
+    SELECT
+        ec.id,
+        ec.vendor_name,
+        ec.target_entity,
+        ec.secondary_target,
+        ec.witness_id,
+        ec.source_review_id,
+        ec.source_excerpt_fingerprint,
+        ec.salience_score,
+        ec.grounding_rank,
+        ec.pain_confidence_rank,
+        NULLIF(lower(btrim(r.reviewer_name)), '') AS reviewer_key,
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                ec.secondary_target,
+                COALESCE(ec.source_excerpt_fingerprint, ec.id::text)
+            ORDER BY
+                ec.salience_score DESC,
+                ec.grounding_rank ASC,
+                ec.pain_confidence_rank ASC,
+                ec.witness_id ASC
+        ) AS dedup_rn
+    FROM b2b_evidence_claims ec
+    LEFT JOIN b2b_reviews r ON r.id = ec.source_review_id
+    WHERE ec.status = 'valid'
+      AND ec.claim_type = 'displacement_proof_to_competitor'
+      AND ec.as_of_date = $2
+      AND ec.analysis_window_days = $3
+      AND lower(ec.vendor_name) = lower($1)
+      AND COALESCE(btrim(ec.secondary_target), '') <> ''
+),
+inverse_ranked AS (
+    SELECT
+        ec.id,
+        ec.vendor_name,
+        ec.secondary_target,
+        ec.witness_id,
+        ec.source_review_id,
+        ec.source_excerpt_fingerprint,
+        ec.salience_score,
+        ec.grounding_rank,
+        ec.pain_confidence_rank,
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                ec.vendor_name,
+                COALESCE(ec.source_excerpt_fingerprint, ec.id::text)
+            ORDER BY
+                ec.salience_score DESC,
+                ec.grounding_rank ASC,
+                ec.pain_confidence_rank ASC,
+                ec.witness_id ASC
+        ) AS dedup_rn
+    FROM b2b_evidence_claims ec
+    WHERE ec.status = 'valid'
+      AND ec.claim_type = 'displacement_proof_to_competitor'
+      AND ec.as_of_date = $2
+      AND ec.analysis_window_days = $3
+      AND lower(ec.secondary_target) = lower($1)
+),
+direct AS (
+    SELECT
+        secondary_target AS challenger,
+        count(*) AS supporting_count,
+        count(*) AS direct_evidence_count,
+        count(DISTINCT reviewer_key) FILTER (
+            WHERE reviewer_key IS NOT NULL
+        ) AS witness_count,
+        array_agg(DISTINCT source_review_id::text) FILTER (
+            WHERE source_review_id IS NOT NULL
+        ) AS evidence_links
+    FROM direct_ranked
+    WHERE dedup_rn = 1
+    GROUP BY secondary_target
+),
+inverse AS (
+    SELECT
+        vendor_name AS challenger,
+        count(*) AS contradiction_count,
+        array_agg(DISTINCT source_review_id::text) FILTER (
+            WHERE source_review_id IS NOT NULL
+        ) AS contradicting_links
+    FROM inverse_ranked
+    WHERE dedup_rn = 1
+    GROUP BY vendor_name
+)
+SELECT
+    direct.challenger,
+    direct.supporting_count,
+    direct.direct_evidence_count,
+    direct.witness_count,
+    direct.evidence_links,
+    COALESCE(inverse.contradiction_count, 0) AS contradiction_count,
+    inverse.contradicting_links
+FROM direct
+LEFT JOIN inverse ON lower(inverse.challenger) = lower(direct.challenger)
+ORDER BY direct.supporting_count DESC, direct.challenger ASC
+LIMIT $4
+"""
+
+
 def _clean_entity(value: str) -> str:
     return str(value or "").strip()
 
@@ -403,9 +505,53 @@ async def aggregate_direct_displacement_claims_for_challenger(
     return out
 
 
+async def aggregate_direct_displacement_claims_for_incumbent(
+    pool,
+    *,
+    incumbent: str,
+    as_of_date: date,
+    analysis_window_days: int,
+    limit: int = 25,
+) -> list[DirectDisplacementClaimRow]:
+    """Return challenger rows for one incumbent-losing-share card.
+
+    Battle cards are incumbent-centric: one card for vendor X needs the
+    competitors X is losing share to. The EvidenceClaim substrate already
+    stores that as vendor_name=incumbent and secondary_target=challenger,
+    so this is the symmetric sibling of
+    aggregate_direct_displacement_claims_for_challenger().
+    """
+    incumbent_name = _clean_entity(incumbent)
+    rows = await pool.fetch(
+        _SELECT_DIRECT_DISPLACEMENT_FOR_INCUMBENT_SQL,
+        incumbent_name,
+        as_of_date,
+        int(analysis_window_days),
+        int(limit),
+    )
+    out: list[DirectDisplacementClaimRow] = []
+    for row in rows:
+        challenger = _clean_entity(row["challenger"])
+        out.append(
+            DirectDisplacementClaimRow(
+                challenger=challenger,
+                incumbent=incumbent_name,
+                claim=_build_direct_displacement_claim(
+                    challenger=challenger,
+                    incumbent=incumbent_name,
+                    row=row,
+                    as_of_date=as_of_date,
+                    analysis_window_days=analysis_window_days,
+                ),
+            )
+        )
+    return out
+
+
 __all__ = [
     "DIRECT_DISPLACEMENT_CLAIM_TYPE",
     "DirectDisplacementClaimRow",
     "aggregate_direct_displacement_claim",
     "aggregate_direct_displacement_claims_for_challenger",
+    "aggregate_direct_displacement_claims_for_incumbent",
 ]
