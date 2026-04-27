@@ -24,7 +24,14 @@ from bs4 import BeautifulSoup
 from ..captcha import CaptchaType, detect_captcha
 from ..client import AntiDetectionClient
 from ..web_unlocker_http import get_with_web_unlocker
-from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
+from . import (
+    ScrapeResult,
+    ScrapeTarget,
+    apply_date_cutoff,
+    log_page,
+    page_has_only_known_source_reviews,
+    register_parser,
+)
 
 logger = logging.getLogger("atlas.services.scraping.parsers.getapp")
 
@@ -361,6 +368,10 @@ class GetAppParser:
                     if reviews:
                         resume_page = page
                     break
+                elif page_has_only_known_source_reviews(page_reviews, target):
+                    pl.stop_reason = "known_source_reviews"
+                    stop_reason = "known_source_reviews"
+                    break
 
                 reviews.extend(page_reviews)
 
@@ -539,6 +550,10 @@ class GetAppParser:
                                 pl.stop_reason = _BLOCKED_STOP_REASON
                                 stop_reason = _BLOCKED_STOP_REASON
                             break
+                        elif page_has_only_known_source_reviews(page_reviews, target):
+                            pl.stop_reason = "known_source_reviews"
+                            stop_reason = "known_source_reviews"
+                            break
 
                         await asyncio.sleep(random.uniform(1.5, 3.0))
 
@@ -709,6 +724,10 @@ class GetAppParser:
                             target.product_slug,
                         )
                     break  # No more reviews
+                elif page_has_only_known_source_reviews(page_reviews, target):
+                    pl.stop_reason = "known_source_reviews"
+                    stop_reason = "known_source_reviews"
+                    break
 
                 before = len(reviews)
                 reviews.extend(page_reviews)

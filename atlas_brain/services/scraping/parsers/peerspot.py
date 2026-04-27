@@ -22,7 +22,14 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup, Tag
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
+from . import (
+    ScrapeResult,
+    ScrapeTarget,
+    apply_date_cutoff,
+    log_page,
+    page_has_only_known_source_reviews,
+    register_parser,
+)
 
 logger = logging.getLogger("atlas.services.scraping.parsers.peerspot")
 
@@ -183,6 +190,10 @@ class PeerSpotParser:
                     if consecutive_empty >= 2:
                         break
                     continue
+                elif page_has_only_known_source_reviews(page_reviews, target):
+                    pl.stop_reason = "known_source_reviews"
+                    stop_reason = "known_source_reviews"
+                    break
 
                 consecutive_empty = 0
                 reviews.extend(page_reviews)
@@ -282,6 +293,10 @@ class PeerSpotParser:
                 if not page_reviews:
                     if page == 1:
                         logger.warning("PeerSpot page 1 returned 0 reviews for %s -- selectors may be stale", target.product_slug)
+                    break
+                elif page_has_only_known_source_reviews(page_reviews, target):
+                    pl.stop_reason = "known_source_reviews"
+                    stop_reason = "known_source_reviews"
                     break
 
                 before = len(reviews)

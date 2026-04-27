@@ -73,7 +73,18 @@ _TWITTER_MARKETING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:now\s+available|product\s+update|release\s+notes|hiring)\b", re.I),
 )
 _CAPTERRA_AGGREGATE_METHOD = "jsonld_aggregate"
-_KNOWN_REVIEWS_PAGE_STOP_SOURCES = frozenset({"capterra", "gartner", "trustradius", "software_advice"})
+_KNOWN_REVIEWS_PAGE_STOP_SOURCES = frozenset(
+    {
+        "capterra",
+        "g2",
+        "gartner",
+        "getapp",
+        "peerspot",
+        "software_advice",
+        "trustpilot",
+        "trustradius",
+    }
+)
 _DEFAULT_SOURCE_QUALITY_GATE_SOURCES = frozenset(
     {"quora", "twitter", "capterra", "reddit", "hackernews", "software_advice", "trustpilot"}
 )

@@ -22,7 +22,14 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
+from . import (
+    ScrapeResult,
+    ScrapeTarget,
+    apply_date_cutoff,
+    log_page,
+    page_has_only_known_source_reviews,
+    register_parser,
+)
 
 logger = logging.getLogger("atlas.services.scraping.parsers.trustpilot")
 
@@ -159,6 +166,10 @@ class TrustpilotParser:
                             "Trustpilot Web Unlocker page 1 returned 0 reviews for %s",
                             target.product_slug,
                         )
+                    break
+                elif page_has_only_known_source_reviews(page_reviews, target):
+                    pl.stop_reason = "known_source_reviews"
+                    stop_reason = "known_source_reviews"
                     break
 
                 reviews.extend(page_reviews)
@@ -299,6 +310,10 @@ class TrustpilotParser:
                             target.product_slug,
                         )
                     break  # No more reviews
+                elif page_has_only_known_source_reviews(page_reviews, target):
+                    pl.stop_reason = "known_source_reviews"
+                    stop_reason = "known_source_reviews"
+                    break
 
                 before = len(reviews)
                 reviews.extend(page_reviews)

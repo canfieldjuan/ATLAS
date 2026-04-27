@@ -1291,8 +1291,10 @@ async def trigger_scrape(target_id: UUID) -> dict:
 
     # Import and run inline
     from ..autonomous.tasks.b2b_scrape_intake import (
+        _KNOWN_REVIEWS_PAGE_STOP_SOURCES,
         _build_scrape_state,
         _determine_stop_reason,
+        _load_existing_source_review_ids,
         _prepare_scrape_target,
         _review_date_stats,
         _scrape_state_from_row,
@@ -1302,6 +1304,22 @@ async def trigger_scrape(target_id: UUID) -> dict:
     from ..services.scraping.parsers import get_parser
 
     target, scrape_mode, metadata = _prepare_scrape_target(row, settings.b2b_scrape)
+    if target.source in _KNOWN_REVIEWS_PAGE_STOP_SOURCES:
+        try:
+            known_source_review_ids = await _load_existing_source_review_ids(
+                pool,
+                target.vendor_name,
+                target.source,
+            )
+            if known_source_review_ids:
+                target.metadata["known_source_review_ids"] = sorted(known_source_review_ids)
+        except Exception:
+            logger.debug(
+                "Known review-id preload failed for %s/%s",
+                target.source,
+                target.vendor_name,
+                exc_info=True,
+            )
     previous_state = _scrape_state_from_row(dict(row), metadata)
 
     parser = get_parser(target.source)
@@ -1585,8 +1603,10 @@ async def trigger_scrape_all(
         return {"targets": 0, "message": "No enabled targets found"}
 
     from ..autonomous.tasks.b2b_scrape_intake import (
+        _KNOWN_REVIEWS_PAGE_STOP_SOURCES,
         _build_scrape_state,
         _filter_by_date, _determine_stop_reason, _insert_reviews,
+        _load_existing_source_review_ids,
         _load_existing_review_fingerprints,
         _log_scrape_exhaustive, _prepare_scrape_target, _review_date_stats,
         _scrape_state_from_row,
@@ -1605,6 +1625,22 @@ async def trigger_scrape_all(
 
     for row in rows:
         target, row_mode, metadata = _prepare_scrape_target(row, settings.b2b_scrape)
+        if target.source in _KNOWN_REVIEWS_PAGE_STOP_SOURCES:
+            try:
+                known_source_review_ids = await _load_existing_source_review_ids(
+                    pool,
+                    target.vendor_name,
+                    target.source,
+                )
+                if known_source_review_ids:
+                    target.metadata["known_source_review_ids"] = sorted(known_source_review_ids)
+            except Exception:
+                logger.debug(
+                    "Known review-id preload failed for %s/%s",
+                    target.source,
+                    target.vendor_name,
+                    exc_info=True,
+                )
         previous_state = _scrape_state_from_row(dict(row), metadata)
 
         parser = get_parser(target.source)
