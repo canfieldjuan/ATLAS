@@ -30,9 +30,52 @@ for _mod in (
 
 from atlas_brain.autonomous.tasks.b2b_battle_cards import (
     _build_battle_card_render_payload,
+    _apply_battle_card_displacement_product_claim_gate,
     _battle_card_trace_metadata,
     _evaluate_battle_card_quality,
 )
+from atlas_brain.services.b2b.product_claim import ClaimScope, build_product_claim
+
+for _mod_name in ("asyncpg", "asyncpg.exceptions"):
+    if sys.modules.get(_mod_name) is _asyncpg_mock or sys.modules.get(_mod_name) is _asyncpg_exceptions:
+        sys.modules.pop(_mod_name, None)
+
+
+def _direct_displacement_claim(
+    *,
+    supporting_count: int = 3,
+    direct_evidence_count: int | None = None,
+    witness_count: int = 2,
+    contradiction_count: int = 0,
+):
+    direct_count = supporting_count if direct_evidence_count is None else direct_evidence_count
+    return build_product_claim(
+        claim_scope=ClaimScope.COMPETITOR_PAIR,
+        claim_type="direct_displacement",
+        claim_key="incumbent:TestVendor",
+        claim_text="TestVendor shows direct displacement pressure toward CompetitorA",
+        target_entity="CompetitorA",
+        secondary_target="TestVendor",
+        supporting_count=supporting_count,
+        direct_evidence_count=direct_count,
+        witness_count=witness_count,
+        contradiction_count=contradiction_count,
+        denominator=None,
+        sample_size=supporting_count,
+        has_grounded_evidence=direct_count > 0 if supporting_count > 0 else True,
+        evidence_links=tuple(f"review-{idx}" for idx in range(1, direct_count + 1)),
+        contradicting_links=tuple(f"inverse-{idx}" for idx in range(1, contradiction_count + 1)),
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+    )
+
+
+def _claim_row(claim):
+    return SimpleNamespace(
+        challenger=claim.target_entity,
+        incumbent=claim.secondary_target,
+        claim=claim,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +306,140 @@ class TestRenderPayloadGovernance:
         assert len(payload["reference_ids"]["metric_ids"]) == 12
         assert len(payload["anchor_examples"]["outlier_or_named_account"]) == 1
         assert len(payload["witness_highlights"]) == 4
+
+
+class TestBattleCardDisplacementClaimGate:
+    def _card_with_displacement(self) -> dict[str, Any]:
+        return _base_card(
+            executive_summary="CompetitorA is steadily winning enterprise evaluations from TestVendor.",
+            vendor_weaknesses=[{"weakness": "support", "evidence_count": 4}],
+            reasoning_contracts={
+                "displacement_reasoning": {
+                    "migration_proof": {
+                        "confidence": "high",
+                        "switching_is_real": True,
+                        "top_destination": "CompetitorA",
+                        "switch_volume": {"value": 4},
+                    },
+                    "customer_winning_pattern": {
+                        "confidence": "high",
+                        "summary": "CompetitorA is winning named evaluations.",
+                    },
+                },
+            },
+        )
+
+    def test_report_safe_claim_preserves_displacement_blocks_with_gate_metadata(self):
+        card = self._card_with_displacement()
+
+        _apply_battle_card_displacement_product_claim_gate(
+            card,
+            [_claim_row(_direct_displacement_claim())],
+        )
+
+        displacement = card["reasoning_contracts"]["displacement_reasoning"]
+        migration = displacement["migration_proof"]
+        winning = displacement["customer_winning_pattern"]
+        assert migration["confidence"] == "high"
+        assert migration["switching_is_real"] is True
+        assert migration["report_allowed"] is True
+        assert migration["readiness_state"] == "report_safe"
+        assert winning["report_allowed"] is True
+        assert displacement["product_claim_gate"]["report_allowed"] is True
+        assert displacement["product_claim_gate"]["product_claims"][0]["claim_type"] == "direct_displacement"
+        assert "steadily winning" in card["executive_summary"]
+
+    def test_monitor_only_claim_strips_displacement_strength_fields(self):
+        card = self._card_with_displacement()
+
+        _apply_battle_card_displacement_product_claim_gate(
+            card,
+            [_claim_row(_direct_displacement_claim(supporting_count=1, witness_count=1))],
+        )
+
+        displacement = card["reasoning_contracts"]["displacement_reasoning"]
+        migration = displacement["migration_proof"]
+        winning = displacement["customer_winning_pattern"]
+        assert migration["readiness_state"] == "monitor_only"
+        assert migration["report_allowed"] is False
+        assert migration["suppression_reason"] == "low_confidence"
+        assert "confidence" not in migration
+        assert "switching_is_real" not in migration
+        assert "top_destination" not in migration
+        assert "gate_message" in migration
+        assert "monitor-only" in migration["gate_message"]
+        assert winning["readiness_state"] == "monitor_only"
+        assert "summary" not in winning
+        assert "gate_message" in winning
+        assert displacement["product_claim_gate"]["render_allowed"] is True
+        assert displacement["product_claim_gate"]["report_allowed"] is False
+        assert "steadily winning" not in card["executive_summary"]
+        assert "competitive winner-pattern language is withheld" in card["executive_summary"]
+
+    def test_contradictory_claim_strips_displacement_strength_fields(self):
+        card = self._card_with_displacement()
+
+        _apply_battle_card_displacement_product_claim_gate(
+            card,
+            [_claim_row(_direct_displacement_claim(supporting_count=5, witness_count=3, contradiction_count=3))],
+        )
+
+        displacement = card["reasoning_contracts"]["displacement_reasoning"]
+        migration = displacement["migration_proof"]
+        assert migration["readiness_state"] == "monitor_only"
+        assert migration["report_allowed"] is False
+        assert migration["suppression_reason"] == "contradictory_evidence"
+        assert "confidence" not in migration
+        assert "switching_is_real" not in migration
+        assert displacement["product_claim_gate"]["suppression_reason"] == "contradictory_evidence"
+
+    def test_empty_claim_rows_strip_displacement_strength_fields(self):
+        card = self._card_with_displacement()
+
+        _apply_battle_card_displacement_product_claim_gate(card, [])
+
+        displacement = card["reasoning_contracts"]["displacement_reasoning"]
+        migration = displacement["migration_proof"]
+        assert migration["readiness_state"] == "suppressed"
+        assert migration["render_allowed"] is False
+        assert migration["report_allowed"] is False
+        assert migration["suppression_reason"] == "insufficient_supporting_count"
+        assert "confidence" not in migration
+        assert "switching_is_real" not in migration
+        assert migration["gate_message"]
+        assert displacement["product_claim_gate"]["product_claims"] == []
+
+    def test_report_safe_row_takes_precedence_over_monitor_only_rows(self):
+        card = self._card_with_displacement()
+
+        _apply_battle_card_displacement_product_claim_gate(
+            card,
+            [
+                _claim_row(_direct_displacement_claim(supporting_count=1, witness_count=1)),
+                _claim_row(_direct_displacement_claim(supporting_count=3, witness_count=2)),
+            ],
+        )
+
+        displacement = card["reasoning_contracts"]["displacement_reasoning"]
+        assert displacement["migration_proof"]["report_allowed"] is True
+        assert displacement["product_claim_gate"]["report_allowed"] is True
+        assert len(displacement["product_claim_gate"]["product_claims"]) == 2
+
+    def test_validation_unavailable_strips_displacement_strength_fields(self):
+        card = self._card_with_displacement()
+
+        _apply_battle_card_displacement_product_claim_gate(card, None)
+
+        displacement = card["reasoning_contracts"]["displacement_reasoning"]
+        migration = displacement["migration_proof"]
+        assert migration["readiness_state"] == "validation_unavailable"
+        assert migration["render_allowed"] is False
+        assert migration["report_allowed"] is False
+        assert migration["suppression_reason"] == "validation_unavailable"
+        assert "confidence" not in migration
+        assert "switching_is_real" not in migration
+        assert migration["gate_message"]
+        assert displacement["product_claim_gate"]["readiness_state"] == "validation_unavailable"
 
 
 class TestTraceMetadata:

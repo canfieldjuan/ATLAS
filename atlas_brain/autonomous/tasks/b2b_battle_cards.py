@@ -14,6 +14,11 @@ from datetime import date, datetime
 from typing import Any
 
 from ...config import settings
+from ...services.b2b.challenger_dashboard_claims import (
+    DirectDisplacementClaimRow,
+    aggregate_direct_displacement_claims_for_incumbent,
+)
+from ...services.b2b.product_claim import ProductClaim, SuppressionReason
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ._execution_progress import _update_execution_progress
@@ -2202,6 +2207,218 @@ def _battle_card_source_metadata(
     return card_source_count, card_source_dist
 
 
+def _enum_value(value: Any) -> Any:
+    return getattr(value, "value", value)
+
+
+def _battle_card_product_claim_payload(claim: ProductClaim) -> dict[str, Any]:
+    """Persist enough ProductClaim state for report/UI parity audits."""
+    return {
+        "claim_id": claim.claim_id,
+        "claim_key": claim.claim_key,
+        "claim_scope": _enum_value(claim.claim_scope),
+        "claim_type": claim.claim_type,
+        "claim_text": claim.claim_text,
+        "target_entity": claim.target_entity,
+        "secondary_target": claim.secondary_target,
+        "supporting_count": claim.supporting_count,
+        "direct_evidence_count": claim.direct_evidence_count,
+        "witness_count": claim.witness_count,
+        "contradiction_count": claim.contradiction_count,
+        "confidence": _enum_value(claim.confidence),
+        "evidence_posture": _enum_value(claim.evidence_posture),
+        "render_allowed": claim.render_allowed,
+        "report_allowed": claim.report_allowed,
+        "suppression_reason": _enum_value(claim.suppression_reason) if claim.suppression_reason else None,
+        "evidence_links": list(claim.evidence_links),
+        "contradicting_links": list(claim.contradicting_links),
+        "as_of_date": claim.as_of_date.isoformat(),
+        "analysis_window_days": claim.analysis_window_days,
+        "schema_version": claim.schema_version,
+    }
+
+
+def _battle_card_displacement_contracts(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return mutable displacement reasoning contracts carried by a card."""
+    contracts: list[dict[str, Any]] = []
+    reasoning_contracts = card.get("reasoning_contracts")
+    if isinstance(reasoning_contracts, dict):
+        displacement = reasoning_contracts.get("displacement_reasoning")
+        if isinstance(displacement, dict):
+            contracts.append(displacement)
+    top_level = card.get("displacement_reasoning")
+    if isinstance(top_level, dict) and not any(top_level is item for item in contracts):
+        contracts.append(top_level)
+    return contracts
+
+
+def _battle_card_displacement_gate_payload(
+    claim_rows: list[DirectDisplacementClaimRow] | None,
+) -> dict[str, Any]:
+    """Summarize incumbent-side direct-displacement claims for report gates."""
+    if claim_rows is None:
+        return {
+            "readiness_state": "validation_unavailable",
+            "render_allowed": False,
+            "report_allowed": False,
+            "suppression_reason": "validation_unavailable",
+            "product_claims": [],
+        }
+
+    product_claims = [_battle_card_product_claim_payload(row.claim) for row in claim_rows]
+    report_safe = [row for row in claim_rows if row.claim.report_allowed]
+    render_safe = [row for row in claim_rows if row.claim.render_allowed]
+    if report_safe:
+        return {
+            "readiness_state": "report_safe",
+            "render_allowed": True,
+            "report_allowed": True,
+            "suppression_reason": None,
+            "product_claims": product_claims,
+        }
+    if render_safe:
+        reason = render_safe[0].claim.suppression_reason
+        return {
+            "readiness_state": "monitor_only",
+            "render_allowed": True,
+            "report_allowed": False,
+            "suppression_reason": _enum_value(reason) if reason else "not_report_safe",
+            "product_claims": product_claims,
+        }
+    first_reason = claim_rows[0].claim.suppression_reason if claim_rows else None
+    return {
+        "readiness_state": "suppressed",
+        "render_allowed": False,
+        "report_allowed": False,
+        "suppression_reason": (
+            _enum_value(first_reason)
+            if first_reason
+            else SuppressionReason.INSUFFICIENT_SUPPORTING_COUNT.value
+        ),
+        "product_claims": product_claims,
+    }
+
+
+def _battle_card_suppressed_displacement_block(
+    gate: dict[str, Any],
+) -> dict[str, Any]:
+    reason = str(gate.get("suppression_reason") or "not_report_safe")
+    state = str(gate.get("readiness_state") or "suppressed")
+    if state == "validation_unavailable":
+        summary = "Battle-card displacement proof suppressed: ProductClaim validation is unavailable."
+    elif state == "monitor_only":
+        summary = (
+            "Battle-card displacement proof is monitor-only: direct displacement "
+            f"evidence is visible in the UI but not report-safe ({reason})."
+        )
+    else:
+        summary = (
+            "Battle-card displacement proof suppressed: direct displacement "
+            f"evidence is not report-safe ({reason})."
+        )
+    return {
+        "readiness_state": state,
+        "render_allowed": bool(gate.get("render_allowed")),
+        "report_allowed": False,
+        "suppression_reason": reason,
+        "product_claims": list(gate.get("product_claims") or []),
+        "gate_message": summary,
+    }
+
+
+def _battle_card_gated_displacement_summary(card: dict[str, Any], gate: dict[str, Any]) -> str:
+    """Deterministic summary used when displacement claims are not report-safe."""
+    vendor = str(card.get("vendor") or "the incumbent").strip() or "the incumbent"
+    score = card.get("churn_pressure_score", 0)
+    try:
+        score_text = f"{float(score):.0f}"
+    except (TypeError, ValueError):
+        score_text = "unknown"
+    weakness_count = len(card.get("vendor_weaknesses", [])) if isinstance(card.get("vendor_weaknesses"), list) else 0
+    state = str(gate.get("readiness_state") or "suppressed").replace("_", " ")
+    reason = str(gate.get("suppression_reason") or "not_report_safe").replace("_", " ")
+    return (
+        f"Battle card for {vendor}: score {score_text}, {weakness_count} weaknesses. "
+        f"Direct displacement claims are {state} ({reason}); competitive winner-pattern "
+        "language is withheld until ProductClaim evidence is report-safe."
+    )
+
+
+def _apply_battle_card_displacement_product_claim_gate(
+    card: dict[str, Any],
+    claim_rows: list[DirectDisplacementClaimRow] | None,
+) -> None:
+    """Strip report-unsafe displacement proof blocks from battle cards."""
+    contracts = _battle_card_displacement_contracts(card)
+    if not contracts:
+        return
+    gate = _battle_card_displacement_gate_payload(claim_rows)
+    for displacement in contracts:
+        touched = False
+        for field_name in ("migration_proof", "customer_winning_pattern"):
+            if field_name not in displacement:
+                continue
+            touched = True
+            if gate["report_allowed"]:
+                value = displacement.get(field_name)
+                if isinstance(value, dict):
+                    value["readiness_state"] = "report_safe"
+                    value["render_allowed"] = True
+                    value["report_allowed"] = True
+                    value["suppression_reason"] = None
+                    value["product_claims"] = list(gate.get("product_claims") or [])
+                else:
+                    displacement[field_name] = {
+                        "value": value,
+                        "readiness_state": "report_safe",
+                        "render_allowed": True,
+                        "report_allowed": True,
+                        "suppression_reason": None,
+                        "product_claims": list(gate.get("product_claims") or []),
+                    }
+            else:
+                displacement[field_name] = _battle_card_suppressed_displacement_block(gate)
+        if touched:
+            displacement["product_claim_gate"] = {
+                key: value
+                for key, value in gate.items()
+            }
+            if not gate["report_allowed"]:
+                card["executive_summary"] = _battle_card_gated_displacement_summary(card, gate)
+
+
+async def _apply_battle_card_displacement_claim_gate(
+    pool: Any,
+    *,
+    today: date,
+    card: dict[str, Any],
+) -> None:
+    """Fetch incumbent-side ProductClaims and apply the report gate."""
+    vendor = str(card.get("vendor") or "").strip()
+    if not vendor or not _battle_card_displacement_contracts(card):
+        return
+    as_of_date = _battle_card_data_as_of_date(card) or today
+    window_days = _reasoning_int(card.get("evidence_window_days"))
+    if window_days is None:
+        window_days = int(getattr(settings.b2b_churn, "intelligence_window_days", 365) or 365)
+    try:
+        claim_rows = await aggregate_direct_displacement_claims_for_incumbent(
+            pool,
+            incumbent=vendor,
+            as_of_date=as_of_date,
+            analysis_window_days=window_days,
+            limit=25,
+        )
+    except Exception as exc:  # pragma: no cover - operational defense
+        logger.warning(
+            "battle_card_direct_displacement_claims_unavailable vendor=%s error=%s",
+            vendor,
+            exc,
+        )
+        claim_rows = None
+    _apply_battle_card_displacement_product_claim_gate(card, claim_rows)
+
+
 def _battle_card_llm_model_label(card: dict[str, Any], llm_options: dict[str, Any]) -> str:
     """Choose the persisted llm_model label for the current render state."""
     render_status = str(card.get("llm_render_status", "") or "").strip().lower()
@@ -2242,6 +2459,11 @@ async def _persist_battle_card(
     vendor = str(card.get("vendor", "") or "")
     if not vendor:
         return False
+    await _apply_battle_card_displacement_claim_gate(
+        pool,
+        today=today,
+        card=card,
+    )
     persisted_summary = _battle_card_persist_summary(card)
     card["executive_summary"] = persisted_summary
     card_source_count, card_source_dist = _battle_card_source_metadata(
