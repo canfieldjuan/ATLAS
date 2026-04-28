@@ -50,6 +50,12 @@ async def run(task: ScheduledTask) -> dict:
         getattr(cfg, "parser_upgrade_maintenance_deep_max_targets_per_batch", 0) or 0
     )
     args.recent_cooldown_hours = int(cfg.parser_upgrade_maintenance_recent_cooldown_hours)
+    args.min_target_parser_backlog_reviews = int(
+        getattr(cfg, "parser_upgrade_maintenance_min_target_parser_backlog_reviews", 0) or 0
+    )
+    args.min_source_parser_backlog_reviews = int(
+        getattr(cfg, "parser_upgrade_maintenance_min_source_parser_backlog_reviews", 0) or 0
+    )
     args.include_blocked = False
     args.apply = False
     args.base_url = "http://127.0.0.1:8000"
@@ -59,11 +65,14 @@ async def run(task: ScheduledTask) -> dict:
 
     result = await parser_upgrade_runner._run_drain(args)
     logger.info(
-        "Parser-upgrade maintenance complete sources=%s batches=%d remaining=%d deferred_blocked=%d run_started=%d",
+        "Parser-upgrade maintenance complete sources=%s batches=%d remaining=%d deferred_noop=%d deferred_blocked=%d filtered_low_backlog_targets=%d filtered_low_backlog_sources=%d run_started=%d",
         ",".join(result.get("sources") or []),
         int(result.get("batches_run") or 0),
         int(result.get("requested_targets") or 0),
+        int(result.get("deferred_noop_targets") or 0),
         int(result.get("deferred_blocked_targets") or 0),
+        int(result.get("filtered_low_backlog_targets") or 0),
+        int(result.get("filtered_low_backlog_sources") or 0),
         int(result.get("run_started") or 0),
     )
     result["_skip_synthesis"] = True

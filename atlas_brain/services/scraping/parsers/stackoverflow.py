@@ -21,7 +21,13 @@ from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
+from . import (
+    ScrapeResult,
+    ScrapeTarget,
+    apply_date_cutoff,
+    page_has_only_known_source_reviews,
+    register_parser,
+)
 
 logger = logging.getLogger("atlas.services.scraping.parsers.stackoverflow")
 
@@ -173,6 +179,7 @@ class StackOverflowParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        stop_reason = ""
 
         # Configurable via target.metadata
         include_answers = target.metadata.get("include_answers", True)
@@ -198,6 +205,7 @@ class StackOverflowParser:
 
                 consecutive_empty = 0
                 high_score_qids: list[int] = []
+                search_stop_reason = ""
 
                 for page in range(1, target.max_pages + 1):
                     cutoff_epoch = _cutoff_epoch(target.date_cutoff)
@@ -292,6 +300,10 @@ class StackOverflowParser:
                             page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
                         else:
                             cutoff_hit = False
+                        if page_has_only_known_source_reviews(page_reviews, target):
+                            search_stop_reason = "known_source_reviews"
+                            stop_reason = "known_source_reviews"
+                            break
                         reviews.extend(page_reviews)
 
                         if len(reviews) == before:
@@ -314,7 +326,7 @@ class StackOverflowParser:
                 # ----------------------------------------------------------
                 # Fetch answers for high-score questions from this search pass
                 # ----------------------------------------------------------
-                if high_score_qids:
+                if high_score_qids and search_stop_reason != "known_source_reviews":
                     try:
                         answers_map = await self._fetch_answers(client, high_score_qids, site)
                         pages_scraped += 1  # Count the answers request
@@ -381,7 +393,12 @@ class StackOverflowParser:
             target.vendor_name, len(reviews), pages_scraped,
         )
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            stop_reason=stop_reason,
+        )
 
 
 # Auto-register

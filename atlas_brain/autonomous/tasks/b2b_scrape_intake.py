@@ -80,6 +80,7 @@ _KNOWN_REVIEWS_PAGE_STOP_SOURCES = frozenset(
         "gartner",
         "getapp",
         "peerspot",
+        "stackoverflow",
         "software_advice",
         "trustpilot",
         "trustradius",
@@ -1652,6 +1653,16 @@ def _resolve_pre_scrape_skip_paid_sources(cfg) -> frozenset[str]:
     return frozenset(items)
 
 
+def _resolve_pre_scrape_recent_zero_insert_sources(cfg) -> frozenset[str]:
+    """Resolve the source allowlist for repeated zero-insert pre-scrape skips."""
+    raw_sources = str(
+        getattr(cfg, "pre_scrape_recent_zero_insert_skip_sources", "") or ""
+    ).strip()
+    if not raw_sources:
+        return frozenset()
+    return frozenset(parse_source_allowlist(raw_sources))
+
+
 async def _evaluate_pre_scrape_skip(
     pool,
     *,
@@ -1841,6 +1852,115 @@ async def _evaluate_pre_scrape_low_yield_skip(
         "ratio_threshold": threshold,
         "lookback_runs": lookback,
         "min_found_total": min_found,
+        "max_age_days": max_age_days,
+        "last_real_scrape_at": (
+            last_real_scrape_at.isoformat() if last_real_scrape_at is not None else None
+        ),
+    }
+
+
+async def _evaluate_pre_scrape_recent_zero_insert_skip(
+    pool,
+    *,
+    target_id: Any,
+    source: str,
+    vendor_name: str,
+    parser_version: str | None,
+    cfg,
+) -> dict[str, Any] | None:
+    """Skip when consecutive current-parser runs all hit page-cap with zero inserts."""
+    if not getattr(cfg, "pre_scrape_recent_zero_insert_skip_enabled", False):
+        return None
+    source_key = str(source or "").strip().lower()
+    if not source_key:
+        return None
+    allowed_sources = _resolve_pre_scrape_recent_zero_insert_sources(cfg)
+    if source_key not in allowed_sources:
+        return None
+    current_parser_version = str(parser_version or "").strip()
+    if not current_parser_version:
+        return None
+
+    consecutive_runs = max(
+        2,
+        int(getattr(cfg, "pre_scrape_recent_zero_insert_skip_consecutive_runs", 3) or 3),
+    )
+    row = await pool.fetchrow(
+        """
+        WITH recent AS (
+            SELECT
+                status,
+                reviews_found,
+                reviews_inserted,
+                pages_scraped,
+                stop_reason,
+                parser_version,
+                started_at
+            FROM b2b_scrape_log
+            WHERE target_id = $1
+              AND COALESCE(status, '') NOT LIKE 'skipped%'
+            ORDER BY started_at DESC, id DESC
+            LIMIT $2
+        )
+        SELECT
+            COUNT(*) AS real_runs,
+            COALESCE(SUM(reviews_found), 0) AS total_found,
+            COALESCE(SUM(reviews_inserted), 0) AS total_inserted,
+            COALESCE(SUM(pages_scraped), 0) AS total_pages_scraped,
+            BOOL_AND(COALESCE(status, '') IN ('success', 'partial')) AS all_successish,
+            BOOL_AND(COALESCE(reviews_inserted, 0) = 0) AS all_zero_insert,
+            BOOL_AND(COALESCE(stop_reason, '') = 'page_cap') AS all_page_cap,
+            BOOL_AND(COALESCE(parser_version, '') = $3) AS all_current_parser,
+            MAX(started_at) AS last_real_scrape_at
+        FROM recent
+        """,
+        target_id,
+        consecutive_runs,
+        current_parser_version,
+    )
+    if row is None:
+        return None
+
+    real_runs = int(row["real_runs"] or 0)
+    if real_runs < consecutive_runs:
+        return None
+    if not bool(row["all_successish"]):
+        return None
+    if not bool(row["all_zero_insert"]):
+        return None
+    if not bool(row["all_page_cap"]):
+        return None
+    if not bool(row["all_current_parser"]):
+        return None
+
+    total_pages_scraped = int(row["total_pages_scraped"] or 0)
+    min_total_pages = max(
+        1,
+        int(getattr(cfg, "pre_scrape_recent_zero_insert_skip_min_total_pages", 6) or 6),
+    )
+    if total_pages_scraped < min_total_pages:
+        return None
+
+    last_real_scrape_at = row["last_real_scrape_at"]
+    max_age_days = int(
+        getattr(cfg, "pre_scrape_recent_zero_insert_skip_max_age_days", 14) or 14
+    )
+    if last_real_scrape_at is not None:
+        age = datetime.now(timezone.utc) - last_real_scrape_at
+        if age.total_seconds() > max_age_days * 24 * 60 * 60:
+            return None
+
+    return {
+        "reason": "pre_scrape_recent_zero_insert_page_cap",
+        "source": source_key,
+        "vendor_name": vendor_name,
+        "parser_version": current_parser_version,
+        "real_runs": real_runs,
+        "total_found": int(row["total_found"] or 0),
+        "total_inserted": int(row["total_inserted"] or 0),
+        "total_pages_scraped": total_pages_scraped,
+        "consecutive_runs": consecutive_runs,
+        "min_total_pages": min_total_pages,
         "max_age_days": max_age_days,
         "last_real_scrape_at": (
             last_real_scrape_at.isoformat() if last_real_scrape_at is not None else None
@@ -2155,6 +2275,69 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         "Pre-scrape low-yield skip for %s/%s: ratio=%.3f over %d runs (saved 1 paid call)",
                         target.source, target.vendor_name,
                         low_yield_decision["unique_insert_ratio"], low_yield_decision["real_runs"],
+                    )
+                    return
+
+            # Pre-scrape repeated zero-insert gate: skip configured sources
+            # when consecutive current-parser runs all hit page-cap and
+            # inserted nothing. This catches repetitive search/API sweeps
+            # that keep walking the same already-known result window.
+            if cfg.pre_scrape_recent_zero_insert_skip_enabled:
+                recent_zero_insert_decision = None
+                try:
+                    recent_zero_insert_decision = await _evaluate_pre_scrape_recent_zero_insert_skip(
+                        pool,
+                        target_id=row["id"],
+                        source=target.source,
+                        vendor_name=target.vendor_name,
+                        parser_version=getattr(parser, "version", None),
+                        cfg=cfg,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Pre-scrape repeated zero-insert evaluation failed for %s/%s; proceeding with scrape",
+                        target.source, target.vendor_name,
+                        exc_info=True,
+                    )
+                if recent_zero_insert_decision:
+                    await _log_pre_scrape_skip(
+                        pool,
+                        target_id=row["id"],
+                        source=target.source,
+                        parser_version=getattr(parser, "version", None),
+                        decision=recent_zero_insert_decision,
+                        status="skipped_recent_zero_insert_page_cap",
+                        stop_reason="pre_scrape_recent_zero_insert_page_cap",
+                    )
+                    await _update_target_cooldown_only(pool, row["id"])
+                    try:
+                        await record_dedup(
+                            pool,
+                            stage="b2b_scrape_pre_skip_recent_zero_insert_page_cap",
+                            entity_type="scrape_target",
+                            entity_id=str(row["id"]),
+                            reason=recent_zero_insert_decision["reason"],
+                            detail=recent_zero_insert_decision,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "record_dedup failed for repeated zero-insert skip on %s/%s",
+                            target.source, target.vendor_name,
+                            exc_info=True,
+                        )
+                    async with results_lock:
+                        results_summary.append({
+                            "source": target.source,
+                            "vendor": target.vendor_name,
+                            "status": "skipped_recent_zero_insert_page_cap",
+                            "skip_decision": recent_zero_insert_decision,
+                        })
+                    logger.info(
+                        "Pre-scrape repeated zero-insert skip for %s/%s: %d runs, %d pages (saved 1 scrape)",
+                        target.source,
+                        target.vendor_name,
+                        recent_zero_insert_decision["real_runs"],
+                        recent_zero_insert_decision["total_pages_scraped"],
                     )
                     return
 

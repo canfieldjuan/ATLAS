@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,108 @@ def _target_priority_score(item: dict[str, Any]) -> tuple[int, int, int, str, st
 
 def _parser_backlog_reviews(item: dict[str, Any]) -> int:
     return int(item.get("outdated_reviews") or 0) + int(item.get("missing_parser_version_reviews") or 0)
+
+
+def _aggregate_source_backlog_reviews(items: list[dict[str, Any]]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for item in items:
+        source = str(item.get("source") or "").strip().lower()
+        if not source:
+            continue
+        totals[source] = totals.get(source, 0) + _parser_backlog_reviews(item)
+    return totals
+
+
+def _is_recent_exhaustive_zero_insert_run(
+    item: dict[str, Any],
+    *,
+    cooldown_hours: int,
+) -> bool:
+    status = str(item.get("last_scrape_status") or "").strip().lower()
+    reviews_inserted = int(item.get("last_scrape_reviews_inserted") or 0)
+    pages_scraped = int(item.get("last_scrape_pages_scraped") or 0)
+    reviews_found = int(item.get("last_scrape_reviews_found") or 0)
+    if status not in {"success", "partial"}:
+        return False
+    if reviews_inserted != 0:
+        return False
+    if not (reviews_found <= 0 or pages_scraped >= 3):
+        return False
+    return _is_in_recent_cooldown(item.get("last_scraped_at"), cooldown_hours=cooldown_hours)
+
+
+async def _load_recent_stalled_partial_target_ids(
+    conn: asyncpg.Connection,
+    *,
+    candidates: list[dict[str, Any]],
+    cooldown_hours: int,
+) -> set[str]:
+    if not candidates:
+        return set()
+    current_versions = {
+        str(item.get("target_id") or ""): str(item.get("current_parser_version") or "").strip()
+        for item in candidates
+        if str(item.get("target_id") or "").strip()
+    }
+    target_ids = [uuid.UUID(target_id) for target_id in current_versions]
+    rows = await conn.fetch(
+        """
+        WITH ranked AS (
+            SELECT
+                target_id,
+                started_at,
+                status,
+                stop_reason,
+                reviews_inserted,
+                pages_scraped,
+                parser_version,
+                ROW_NUMBER() OVER (PARTITION BY target_id ORDER BY started_at DESC) AS rn
+            FROM b2b_scrape_log
+            WHERE target_id = ANY($1::uuid[])
+              AND COALESCE(status, '') NOT LIKE 'skipped%'
+        )
+        SELECT
+            target_id,
+            started_at,
+            status,
+            stop_reason,
+            reviews_inserted,
+            pages_scraped,
+            parser_version,
+            rn
+        FROM ranked
+        WHERE rn <= 2
+        ORDER BY target_id, rn
+        """,
+        target_ids,
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        target_id = str(row["target_id"])
+        grouped.setdefault(target_id, []).append(dict(row))
+
+    stalled: set[str] = set()
+    for target_id, target_rows in grouped.items():
+        if len(target_rows) < 2:
+            continue
+        current_version = current_versions.get(target_id, "")
+        if not current_version:
+            continue
+        latest = target_rows[0]
+        if not _is_in_recent_cooldown(latest.get("started_at"), cooldown_hours=cooldown_hours):
+            continue
+        if str(latest.get("stop_reason") or "").strip().lower() != "pages_exhausted":
+            continue
+        if int(latest.get("pages_scraped") or 0) > 1:
+            continue
+        if any(str(row.get("parser_version") or "").strip() != current_version for row in target_rows):
+            continue
+        if any(str(row.get("status") or "").strip().lower() not in {"success", "partial"} for row in target_rows):
+            continue
+        if any(int(row.get("reviews_inserted") or 0) != 0 for row in target_rows):
+            continue
+        stalled.add(target_id)
+    return stalled
 
 
 def _has_stable_pagination_signal(
@@ -249,6 +352,103 @@ def _is_blocked_parser_upgrade_deferred(
     if not deferred_at:
         return False
     return _is_in_recent_cooldown(deferred_at, cooldown_hours=cooldown_hours)
+
+
+def _mark_noop_parser_upgrade_deferred(
+    metadata: Any,
+    *,
+    deferred_at: datetime,
+    parser_version: str,
+    reason: str,
+    reviews_found: int,
+    pages_scraped: int,
+) -> dict[str, Any]:
+    updated = _coerce_json_dict(metadata)
+    parser_upgrade = _coerce_json_dict(updated.get("parser_upgrade_rescrape"))
+    parser_upgrade["noop_deferred_at"] = deferred_at.astimezone(timezone.utc).isoformat()
+    parser_upgrade["noop_deferred_parser_version"] = str(parser_version or "").strip()
+    parser_upgrade["noop_deferred_reason"] = reason
+    parser_upgrade["noop_deferred_reviews_found"] = int(reviews_found)
+    parser_upgrade["noop_deferred_pages_scraped"] = int(pages_scraped)
+    updated["parser_upgrade_rescrape"] = parser_upgrade
+    return updated
+
+
+def _clear_noop_parser_upgrade_deferred(metadata: Any) -> dict[str, Any]:
+    updated = _coerce_json_dict(metadata)
+    parser_upgrade = _coerce_json_dict(updated.get("parser_upgrade_rescrape"))
+    parser_upgrade.pop("noop_deferred_at", None)
+    parser_upgrade.pop("noop_deferred_parser_version", None)
+    parser_upgrade.pop("noop_deferred_reason", None)
+    parser_upgrade.pop("noop_deferred_reviews_found", None)
+    parser_upgrade.pop("noop_deferred_pages_scraped", None)
+    if parser_upgrade:
+        updated["parser_upgrade_rescrape"] = parser_upgrade
+    else:
+        updated.pop("parser_upgrade_rescrape", None)
+    return updated
+
+
+def _is_noop_parser_upgrade_deferred(
+    metadata: Any,
+    *,
+    current_parser_version: str,
+    cooldown_hours: int,
+) -> bool:
+    parser_upgrade = _coerce_json_dict(_coerce_json_dict(metadata).get("parser_upgrade_rescrape"))
+    deferred_at = parser_upgrade.get("noop_deferred_at")
+    deferred_version = str(parser_upgrade.get("noop_deferred_parser_version") or "").strip()
+    if not deferred_at:
+        return False
+    if deferred_version and deferred_version != str(current_parser_version or "").strip():
+        return False
+    return _is_in_recent_cooldown(deferred_at, cooldown_hours=cooldown_hours)
+
+
+def _extract_scrape_result_payload(result: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(result, dict):
+        return None
+    if "reviews_inserted" in result or "reviews_found" in result:
+        return result
+    nested = result.get("result")
+    if isinstance(nested, dict):
+        payload = _extract_scrape_result_payload(nested)
+        if payload is not None:
+            return payload
+    direct_result = result.get("direct_result")
+    if isinstance(direct_result, dict):
+        payload = _extract_scrape_result_payload(direct_result)
+        if payload is not None:
+            return payload
+    api_result = result.get("api_result")
+    if isinstance(api_result, dict):
+        payload = _extract_scrape_result_payload(api_result)
+        if payload is not None:
+            return payload
+    return None
+
+
+def _classify_noop_maintenance_result(result: dict[str, Any] | None) -> tuple[str | None, dict[str, Any] | None]:
+    payload = _extract_scrape_result_payload(result)
+    if not payload:
+        return None, None
+    status = str(payload.get("status") or "").strip().lower()
+    if status not in {"success", "partial"}:
+        return None, payload
+    reviews_found = int(payload.get("reviews_found") or 0)
+    reviews_inserted = int(payload.get("reviews_inserted") or 0)
+    duplicate_or_existing = int(payload.get("duplicate_or_existing") or 0)
+    duplicate_existing = int(payload.get("duplicate_existing") or 0)
+    duplicate_same_batch = int(payload.get("duplicate_same_batch") or 0)
+    duplicate_db_conflict = int(payload.get("duplicate_db_conflict") or 0)
+    if reviews_inserted != 0:
+        return None, payload
+    if reviews_found <= 0:
+        return "empty_success_zero_insert", payload
+    duplicate_total = duplicate_existing + duplicate_same_batch + duplicate_db_conflict
+    if duplicate_or_existing >= reviews_found or duplicate_total >= reviews_found:
+        return "duplicate_only_zero_insert", payload
+    return None, payload
 
 
 def _trigger_target_run(base_url: str, target_id: str, *, timeout_s: int = 330) -> dict[str, Any]:
@@ -413,6 +613,54 @@ async def _sync_blocked_maintenance_metadata(conn: asyncpg.Connection, target_id
     )
 
 
+async def _sync_noop_maintenance_metadata(
+    conn: asyncpg.Connection,
+    target_id: str,
+    *,
+    current_parser_version: str,
+    result: dict[str, Any],
+) -> None:
+    row = await conn.fetchrow(
+        """
+        SELECT metadata
+        FROM b2b_scrape_targets
+        WHERE id = $1::uuid
+        """,
+        UUID(str(target_id)),
+    )
+    if not row:
+        return
+    metadata = row.get("metadata")
+    noop_reason, payload = _classify_noop_maintenance_result(result)
+    payload_status = str((payload or {}).get("status") or "").strip().lower()
+    payload_inserted = int((payload or {}).get("reviews_inserted") or 0)
+    if noop_reason and payload is not None:
+        updated_metadata = _mark_noop_parser_upgrade_deferred(
+            metadata,
+            deferred_at=datetime.now(timezone.utc),
+            parser_version=current_parser_version,
+            reason=noop_reason,
+            reviews_found=int(payload.get("reviews_found") or 0),
+            pages_scraped=int(payload.get("pages_scraped") or 0),
+        )
+    elif payload_status in {"success", "partial"} and payload_inserted > 0:
+        updated_metadata = _clear_noop_parser_upgrade_deferred(metadata)
+    else:
+        return
+    if updated_metadata == _coerce_json_dict(metadata):
+        return
+    await conn.execute(
+        """
+        UPDATE b2b_scrape_targets
+        SET metadata = $2::jsonb,
+            updated_at = NOW()
+        WHERE id = $1::uuid
+        """,
+        UUID(str(target_id)),
+        json.dumps(updated_metadata, default=str),
+    )
+
+
 def _should_fallback_to_direct(result: dict[str, Any]) -> bool:
     if str(result.get("status") or "").strip().lower() != "failed":
         return False
@@ -463,6 +711,8 @@ async def _collect_candidates(
                    t.scrape_mode,
                    t.last_scraped_at,
                    t.last_scrape_status,
+                   t.last_scrape_runtime_mode,
+                   t.last_scrape_reviews AS last_scrape_reviews_inserted,
                    t.last_scrape_stop_reason,
                    t.last_scrape_pages_scraped,
                    t.last_scrape_reviews_found,
@@ -575,6 +825,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip targets scraped within this recent cooldown window",
     )
     parser.add_argument(
+        "--min-target-parser-backlog-reviews",
+        type=int,
+        default=0,
+        help="Minimum missing+outdated canonical reviews required for an individual target to be eligible",
+    )
+    parser.add_argument(
+        "--min-source-parser-backlog-reviews",
+        type=int,
+        default=0,
+        help="Minimum aggregate missing+outdated canonical reviews required for a source to be eligible",
+    )
+    parser.add_argument(
         "--run-now-mode",
         choices=("auto", "api", "direct"),
         default="auto",
@@ -638,20 +900,30 @@ def _render_result(result: dict[str, Any], *, emit_json: bool) -> None:
         return
     if bool(result.get("drain")):
         logger.info(
-            "drain sources=%s batches=%d remaining=%d deferred_blocked=%d run_started=%d",
+            "drain sources=%s batches=%d remaining=%d deferred_noop=%d deferred_recent_zero_insert=%d deferred_stalled_partial=%d deferred_blocked=%d filtered_low_backlog_targets=%d filtered_low_backlog_sources=%d run_started=%d",
             ",".join(result.get("sources") or []),
             int(result.get("batches_run") or 0),
             int(result.get("requested_targets") or 0),
+            int(result.get("deferred_noop_targets") or 0),
+            int(result.get("deferred_recent_zero_insert_targets") or 0),
+            int(result.get("deferred_stalled_partial_targets") or 0),
             int(result.get("deferred_blocked_targets") or 0),
+            int(result.get("filtered_low_backlog_targets") or 0),
+            int(result.get("filtered_low_backlog_sources") or 0),
             int(result.get("run_started") or 0),
         )
         for batch in result.get("batches") or []:
             logger.info(
-                "batch=%s requested=%s run_started=%s deferred_blocked=%s",
+                "batch=%s requested=%s run_started=%s deferred_noop=%s deferred_recent_zero_insert=%s deferred_stalled_partial=%s deferred_blocked=%s filtered_low_backlog_targets=%s filtered_low_backlog_sources=%s",
                 batch.get("batch"),
                 batch.get("requested_targets"),
                 batch.get("run_started"),
+                batch.get("deferred_noop_targets"),
+                batch.get("deferred_recent_zero_insert_targets"),
+                batch.get("deferred_stalled_partial_targets"),
                 batch.get("deferred_blocked_targets"),
+                batch.get("filtered_low_backlog_targets"),
+                batch.get("filtered_low_backlog_sources"),
             )
         return
     logger.info(
@@ -686,6 +958,12 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             1,
             int(getattr(settings.b2b_scrape, "parser_upgrade_blocked_target_cooldown_hours", 168)),
         )
+        noop_cooldown_hours = max(
+            1,
+            int(getattr(settings.b2b_scrape, "parser_upgrade_noop_target_cooldown_hours", 168)),
+        )
+        min_target_backlog_reviews = max(0, int(args.min_target_parser_backlog_reviews or 0))
+        min_source_backlog_reviews = max(0, int(args.min_source_parser_backlog_reviews or 0))
         candidates = [
             item
             for item in candidates
@@ -694,6 +972,67 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 cooldown_hours=recent_cooldown_hours,
             )
         ]
+        deferred_noop_targets = [
+            item
+            for item in candidates
+            if _is_noop_parser_upgrade_deferred(
+                item.get("metadata"),
+                current_parser_version=str(item.get("current_parser_version") or ""),
+                cooldown_hours=noop_cooldown_hours,
+            )
+        ]
+        candidates = [
+            item
+            for item in candidates
+            if not _is_noop_parser_upgrade_deferred(
+                item.get("metadata"),
+                current_parser_version=str(item.get("current_parser_version") or ""),
+                cooldown_hours=noop_cooldown_hours,
+            )
+        ]
+        deferred_recent_zero_insert_targets = [
+            item
+            for item in candidates
+            if _is_recent_exhaustive_zero_insert_run(
+                item,
+                cooldown_hours=noop_cooldown_hours,
+            )
+        ]
+        candidates = [
+            item
+            for item in candidates
+            if not _is_recent_exhaustive_zero_insert_run(
+                item,
+                cooldown_hours=noop_cooldown_hours,
+            )
+        ]
+        stalled_partial_target_ids = await _load_recent_stalled_partial_target_ids(
+            conn,
+            candidates=candidates,
+            cooldown_hours=noop_cooldown_hours,
+        )
+        deferred_stalled_partial_targets = [
+            item
+            for item in candidates
+            if str(item.get("target_id") or "") in stalled_partial_target_ids
+        ]
+        candidates = [
+            item
+            for item in candidates
+            if str(item.get("target_id") or "") not in stalled_partial_target_ids
+        ]
+        filtered_low_backlog_targets = [
+            item
+            for item in candidates
+            if min_target_backlog_reviews > 0
+            and _parser_backlog_reviews(item) < min_target_backlog_reviews
+        ]
+        if min_target_backlog_reviews > 0:
+            candidates = [
+                item
+                for item in candidates
+                if _parser_backlog_reviews(item) >= min_target_backlog_reviews
+            ]
         deferred_blocked_targets = [
             item
             for item in candidates
@@ -719,6 +1058,19 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                         cooldown_hours=blocked_cooldown_hours,
                     )
                 )
+            ]
+        source_backlog_totals = _aggregate_source_backlog_reviews(candidates)
+        low_backlog_sources = {
+            source
+            for source, total_backlog in source_backlog_totals.items()
+            if min_source_backlog_reviews > 0 and total_backlog < min_source_backlog_reviews
+        }
+        filtered_low_backlog_sources = sorted(low_backlog_sources)
+        if low_backlog_sources:
+            candidates = [
+                item
+                for item in candidates
+                if str(item.get("source") or "").strip().lower() not in low_backlog_sources
             ]
         selected = candidates[: max(0, int(args.limit_targets))]
         applied = 0
@@ -808,11 +1160,22 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                         "result": result,
                     }
                 )
+                await _sync_noop_maintenance_metadata(
+                    conn,
+                    str(item["target_id"]),
+                    current_parser_version=str(item.get("current_parser_version") or ""),
+                    result=result,
+                )
                 await _sync_blocked_maintenance_metadata(conn, str(item["target_id"]))
         return {
             "sources": sources or sorted({str(item.get("source") or "") for item in candidates}),
             "requested_targets": len(candidates),
+            "deferred_noop_targets": len(deferred_noop_targets),
+            "deferred_recent_zero_insert_targets": len(deferred_recent_zero_insert_targets),
+            "deferred_stalled_partial_targets": len(deferred_stalled_partial_targets),
             "deferred_blocked_targets": len(deferred_blocked_targets),
+            "filtered_low_backlog_targets": len(filtered_low_backlog_targets),
+            "filtered_low_backlog_sources": len(filtered_low_backlog_sources),
             "applied": applied,
             "run_started": len(run_results),
             "targets": selected_targets,
@@ -832,7 +1195,12 @@ async def _run_drain(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "batch": batch_number,
                 "requested_targets": int(batch_result.get("requested_targets") or 0),
+                "deferred_noop_targets": int(batch_result.get("deferred_noop_targets") or 0),
+                "deferred_recent_zero_insert_targets": int(batch_result.get("deferred_recent_zero_insert_targets") or 0),
+                "deferred_stalled_partial_targets": int(batch_result.get("deferred_stalled_partial_targets") or 0),
                 "deferred_blocked_targets": int(batch_result.get("deferred_blocked_targets") or 0),
+                "filtered_low_backlog_targets": int(batch_result.get("filtered_low_backlog_targets") or 0),
+                "filtered_low_backlog_sources": int(batch_result.get("filtered_low_backlog_sources") or 0),
                 "applied": int(batch_result.get("applied") or 0),
                 "run_started": int(batch_result.get("run_started") or 0),
                 "targets": list(batch_result.get("targets") or []),
@@ -854,7 +1222,12 @@ async def _run_drain(args: argparse.Namespace) -> dict[str, Any]:
         "batches": batches,
         "final_state": final_state,
         "requested_targets": int(final_state.get("requested_targets") or 0),
+        "deferred_noop_targets": int(final_state.get("deferred_noop_targets") or 0),
+        "deferred_recent_zero_insert_targets": int(final_state.get("deferred_recent_zero_insert_targets") or 0),
+        "deferred_stalled_partial_targets": int(final_state.get("deferred_stalled_partial_targets") or 0),
         "deferred_blocked_targets": int(final_state.get("deferred_blocked_targets") or 0),
+        "filtered_low_backlog_targets": int(final_state.get("filtered_low_backlog_targets") or 0),
+        "filtered_low_backlog_sources": int(final_state.get("filtered_low_backlog_sources") or 0),
         "applied": sum(int(batch.get("applied") or 0) for batch in batches),
         "run_started": sum(int(batch.get("run_started") or 0) for batch in batches),
         "targets": list(final_state.get("targets") or []),

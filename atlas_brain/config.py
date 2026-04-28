@@ -4123,6 +4123,15 @@ class B2BScrapeConfig(BaseSettings):
         le=1440,
         description="Hours to defer blocked targets from parser-upgrade maintenance selection unless explicitly included.",
     )
+    parser_upgrade_noop_target_cooldown_hours: int = Field(
+        default=168,
+        ge=1,
+        le=1440,
+        description=(
+            "Hours to defer parser-upgrade maintenance for targets whose most recent "
+            "maintenance run found only already-known reviews and inserted nothing."
+        ),
+    )
     parser_upgrade_maintenance_enabled: bool = Field(
         default=True,
         description="Enable scheduled parser-upgrade maintenance for healthy structured sources.",
@@ -4157,6 +4166,24 @@ class B2BScrapeConfig(BaseSettings):
         ge=0,
         le=720,
         description="Skip parser-upgrade maintenance for targets scraped within this recent cooldown window.",
+    )
+    parser_upgrade_maintenance_min_target_parser_backlog_reviews: int = Field(
+        default=5,
+        ge=0,
+        le=10000,
+        description=(
+            "Minimum missing+outdated canonical reviews required for an individual target "
+            "to be eligible for scheduled parser-upgrade maintenance."
+        ),
+    )
+    parser_upgrade_maintenance_min_source_parser_backlog_reviews: int = Field(
+        default=25,
+        ge=0,
+        le=100000,
+        description=(
+            "Minimum aggregate missing+outdated canonical reviews across a source's eligible "
+            "targets before scheduled parser-upgrade maintenance will run for that source."
+        ),
     )
     parser_upgrade_maintenance_run_max_pages: int = Field(
         default=3,
@@ -4378,6 +4405,32 @@ class B2BScrapeConfig(BaseSettings):
         ge=1,
         le=180,
         description="Force a real scrape if the most recent same-parser-version non-skipped run is older than this many days (escape hatch)",
+    )
+    pre_scrape_recent_zero_insert_skip_enabled: bool = Field(
+        default=True,
+        description="Gate configured sources on consecutive current-parser zero-insert page-cap runs",
+    )
+    pre_scrape_recent_zero_insert_skip_sources: str = Field(
+        default="stackoverflow",
+        description="Comma-separated source allowlist for the repeated zero-insert pre-scrape gate",
+    )
+    pre_scrape_recent_zero_insert_skip_consecutive_runs: int = Field(
+        default=3,
+        ge=2,
+        le=20,
+        description="Number of consecutive same-parser non-skipped runs that must all be zero-insert before the gate can fire",
+    )
+    pre_scrape_recent_zero_insert_skip_min_total_pages: int = Field(
+        default=6,
+        ge=1,
+        le=1000,
+        description="Minimum total pages scraped across the consecutive zero-insert runs before the gate can fire",
+    )
+    pre_scrape_recent_zero_insert_skip_max_age_days: int = Field(
+        default=14,
+        ge=1,
+        le=180,
+        description="Force a real scrape if the most recent consecutive zero-insert run is older than this many days (escape hatch)",
     )
 
     # Exhaustive scrape mode
