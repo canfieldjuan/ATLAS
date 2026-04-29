@@ -36,9 +36,13 @@ load-bearing scaffold, not a permanent shim.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+
+
+logger = logging.getLogger("atlas.services.scraping.eligibility")
 
 
 # ---------------------------------------------------------------------------
@@ -194,16 +198,27 @@ class Rule(Protocol[Ctx]):
       - ``name``: canonical gate name (typically a ``GateName.value``).
         Used for telemetry and for the SourceSpec registry's gate
         enrollment lookup in Phase 2.
+      - ``dedup_stage``: ``stage`` argument passed to
+        ``record_dedup`` when this rule fires. Locating the dedup-stage
+        identifier on the rule keeps gate-specific telemetry coupled
+        to the rule, not scattered across orchestrator dispatch tables.
       - ``evaluate(ctx)``: deterministic pure-ish function of the
         context. May read from ``ctx.pool`` and ``ctx.cfg``. Must return
         Skip iff the conditions to suppress the action hold; Allow
         otherwise. Failures should propagate -- the chain does not catch
         exceptions on the rule's behalf.
+      - ``format_skip_log(ctx, decision)``: returns the operator-visible
+        log message emitted by ``apply_skip_decision`` when the rule
+        produced this Skip. Operator-format string lives here, with the
+        rule, instead of in a separate dispatch table.
     """
 
     name: str
+    dedup_stage: str
 
     async def evaluate(self, ctx: Ctx) -> Decision: ...
+
+    def format_skip_log(self, ctx: Ctx, decision: Skip) -> str: ...
 
 
 class RuleChain(Generic[Ctx]):
@@ -273,6 +288,7 @@ class _CrossSourceCoverageRule:
     """
 
     name: str = GateName.CROSS_SOURCE_COVERAGE.value
+    dedup_stage: str = "b2b_scrape_pre_skip"
 
     async def evaluate(self, ctx: ScrapeContext) -> Decision:
         # Local import: ``b2b_scrape_intake`` is large and after Turn N+3
@@ -291,6 +307,18 @@ class _CrossSourceCoverageRule:
         )
         return _decision_from_inline_raw(self.name, raw)
 
+    def format_skip_log(self, ctx: ScrapeContext, decision: Skip) -> str:
+        d = decision.detail
+        return (
+            "Pre-scrape skip for %s/%s: ratio=%.2f over %d runs (saved 1 paid call)"
+            % (
+                ctx.source,
+                ctx.vendor_name,
+                float(d.get("duplicate_ratio") or 0.0),
+                int(d.get("real_runs") or 0),
+            )
+        )
+
 
 class _LowIncrementalYieldRule:
     """Skip when recent same-parser-version runs produced almost no
@@ -301,6 +329,7 @@ class _LowIncrementalYieldRule:
     """
 
     name: str = GateName.LOW_INCREMENTAL_YIELD.value
+    dedup_stage: str = "b2b_scrape_pre_skip_low_yield"
 
     async def evaluate(self, ctx: ScrapeContext) -> Decision:
         from ...autonomous.tasks.b2b_scrape_intake import (
@@ -317,6 +346,18 @@ class _LowIncrementalYieldRule:
         )
         return _decision_from_inline_raw(self.name, raw)
 
+    def format_skip_log(self, ctx: ScrapeContext, decision: Skip) -> str:
+        d = decision.detail
+        return (
+            "Pre-scrape low-yield skip for %s/%s: ratio=%.3f over %d runs (saved 1 paid call)"
+            % (
+                ctx.source,
+                ctx.vendor_name,
+                float(d.get("unique_insert_ratio") or 0.0),
+                int(d.get("real_runs") or 0),
+            )
+        )
+
 
 class _RecentZeroInsertPageCapRule:
     """Skip when N consecutive same-parser-version runs all hit page_cap
@@ -327,6 +368,7 @@ class _RecentZeroInsertPageCapRule:
     """
 
     name: str = GateName.RECENT_ZERO_INSERT_PAGE_CAP.value
+    dedup_stage: str = "b2b_scrape_pre_skip_recent_zero_insert_page_cap"
 
     async def evaluate(self, ctx: ScrapeContext) -> Decision:
         from ...autonomous.tasks.b2b_scrape_intake import (
@@ -342,6 +384,18 @@ class _RecentZeroInsertPageCapRule:
             cfg=ctx.cfg,
         )
         return _decision_from_inline_raw(self.name, raw)
+
+    def format_skip_log(self, ctx: ScrapeContext, decision: Skip) -> str:
+        d = decision.detail
+        return (
+            "Pre-scrape repeated zero-insert skip for %s/%s: %d runs, %d pages (saved 1 scrape)"
+            % (
+                ctx.source,
+                ctx.vendor_name,
+                int(d.get("real_runs") or 0),
+                int(d.get("total_pages_scraped") or 0),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +425,15 @@ _MAINTENANCE_RULES: list[Rule[MaintenanceContext]] = []
 _MAINTENANCE_CHAIN: RuleChain[MaintenanceContext] = RuleChain(_MAINTENANCE_RULES)
 
 
+# Lookup from gate name (== Skip.reason) to the originating Rule. Used by
+# ``apply_skip_decision`` to dispatch operator-visible logging and dedup
+# stage to the rule that produced the Skip. Built once at import time
+# from the canonical pre-scrape rule list.
+_PRE_SCRAPE_RULES_BY_NAME: dict[str, Rule[ScrapeContext]] = {
+    rule.name: rule for rule in _PRE_SCRAPE_RULES
+}
+
+
 async def should_scrape_now(ctx: ScrapeContext) -> Decision:
     """Single eligibility decision used by autonomous intake and manual
     API scrape paths.
@@ -386,6 +449,83 @@ async def should_scrape_now(ctx: ScrapeContext) -> Decision:
         immediately re-attempt the same target.
     """
     return await _PRE_SCRAPE_CHAIN.evaluate(ctx)
+
+
+async def apply_skip_decision(
+    pool: Any,
+    *,
+    ctx: ScrapeContext,
+    decision: Skip,
+) -> None:
+    """Persist a Skip decision: scrape_log row, target cooldown, dedup
+    record, and operator-visible log line.
+
+    Encapsulates the persistence side that previously lived inline in
+    ``b2b_scrape_intake``'s gate orchestration block and in
+    ``api/b2b_scrape.py:_apply_manual_pre_scrape_gates``. After this
+    helper lands, both call sites share one persistence path.
+
+    Helpers (``_log_pre_scrape_skip``, ``_update_target_cooldown_only``,
+    ``record_dedup``) live in ``b2b_scrape_intake`` and ``visibility``
+    today and are imported via deferred local imports to avoid the
+    circular dependency that arises when ``b2b_scrape_intake`` imports
+    from this module.
+    """
+    from ...autonomous.tasks.b2b_scrape_intake import (
+        _log_pre_scrape_skip,
+        _update_target_cooldown_only,
+    )
+    from ...autonomous.visibility import record_dedup
+
+    raw_decision = {"reason": decision.reason, **decision.detail}
+
+    await _log_pre_scrape_skip(
+        pool,
+        target_id=ctx.target_id,
+        source=ctx.source,
+        parser_version=ctx.parser_version,
+        decision=raw_decision,
+        status=decision.status,
+        stop_reason=decision.stop_reason,
+    )
+    await _update_target_cooldown_only(pool, ctx.target_id)
+
+    rule = _PRE_SCRAPE_RULES_BY_NAME.get(decision.reason)
+    stage = rule.dedup_stage if rule is not None else "b2b_scrape_pre_skip"
+    try:
+        await record_dedup(
+            pool,
+            stage=stage,
+            entity_type="scrape_target",
+            entity_id=str(ctx.target_id),
+            reason=decision.reason,
+            detail=raw_decision,
+        )
+    except Exception:
+        logger.debug(
+            "record_dedup failed for skip on %s/%s",
+            ctx.source,
+            ctx.vendor_name,
+            exc_info=True,
+        )
+
+    if rule is not None:
+        try:
+            logger.info("%s", rule.format_skip_log(ctx, decision))
+            return
+        except Exception:
+            logger.debug(
+                "format_skip_log failed for %s; using generic format",
+                decision.reason,
+                exc_info=True,
+            )
+    logger.info(
+        "Pre-scrape skip for %s/%s: gate=%s status=%s",
+        ctx.source,
+        ctx.vendor_name,
+        decision.reason,
+        decision.status,
+    )
 
 
 async def should_run_maintenance(ctx: MaintenanceContext) -> Decision:
@@ -415,6 +555,7 @@ __all__ = [
     "RuleChain",
     "ScrapeContext",
     "Skip",
+    "apply_skip_decision",
     "should_run_maintenance",
     "should_scrape_now",
 ]

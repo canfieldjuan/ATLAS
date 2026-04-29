@@ -166,139 +166,6 @@ class PromoteProbationTargetsRequest(BaseModel):
     verticals: list[str] = Field(default_factory=list)
 
 
-async def _apply_manual_pre_scrape_gates(
-    pool,
-    *,
-    row,
-    target,
-    parser,
-    cfg,
-    evaluate_pre_scrape_skip,
-    evaluate_pre_scrape_low_yield_skip,
-    evaluate_pre_scrape_recent_zero_insert_skip,
-    log_pre_scrape_skip,
-    update_target_cooldown_only,
-) -> dict[str, Any] | None:
-    """Apply the autonomous intake pre-scrape gates to manual scrape paths."""
-    parser_version = getattr(parser, "version", None)
-    gate_specs = (
-        {
-            "enabled": bool(getattr(cfg, "pre_scrape_skip_enabled", False)),
-            "status": "skipped_redundant",
-            "stop_reason": "pre_scrape_cross_source_coverage",
-            "stage": "b2b_scrape_pre_skip",
-            "warn_message": "Manual pre-scrape coverage evaluation failed for %s/%s; proceeding with scrape",
-            "debug_message": "record_dedup failed for manual pre-scrape skip on %s/%s",
-            "log_message": "Manual pre-scrape skip for %s/%s: ratio=%.2f over %d runs (saved 1 scrape)",
-            "metric_value": lambda decision: float(decision["duplicate_ratio"]),
-            "metric_runs": lambda decision: int(decision["real_runs"]),
-            "evaluator": lambda: evaluate_pre_scrape_skip(
-                pool,
-                target_id=row["id"],
-                source=target.source,
-                vendor_name=target.vendor_name,
-                cfg=cfg,
-            ),
-        },
-        {
-            "enabled": bool(getattr(cfg, "pre_scrape_low_yield_skip_enabled", False)),
-            "status": "skipped_low_incremental_yield",
-            "stop_reason": "pre_scrape_low_incremental_yield",
-            "stage": "b2b_scrape_pre_skip_low_yield",
-            "warn_message": "Manual pre-scrape low-yield evaluation failed for %s/%s; proceeding with scrape",
-            "debug_message": "record_dedup failed for manual low-yield skip on %s/%s",
-            "log_message": "Manual pre-scrape low-yield skip for %s/%s: ratio=%.3f over %d runs (saved 1 scrape)",
-            "metric_value": lambda decision: float(decision["unique_insert_ratio"]),
-            "metric_runs": lambda decision: int(decision["real_runs"]),
-            "evaluator": lambda: evaluate_pre_scrape_low_yield_skip(
-                pool,
-                target_id=row["id"],
-                source=target.source,
-                vendor_name=target.vendor_name,
-                parser_version=parser_version,
-                cfg=cfg,
-            ),
-        },
-        {
-            "enabled": bool(getattr(cfg, "pre_scrape_recent_zero_insert_skip_enabled", False)),
-            "status": "skipped_recent_zero_insert_page_cap",
-            "stop_reason": "pre_scrape_recent_zero_insert_page_cap",
-            "stage": "b2b_scrape_pre_skip_recent_zero_insert_page_cap",
-            "warn_message": "Manual pre-scrape repeated zero-insert evaluation failed for %s/%s; proceeding with scrape",
-            "debug_message": "record_dedup failed for manual repeated zero-insert skip on %s/%s",
-            "log_message": "Manual pre-scrape repeated zero-insert skip for %s/%s: %d runs, %d pages (saved 1 scrape)",
-            "metric_value": lambda decision: int(decision["real_runs"]),
-            "metric_runs": lambda decision: int(decision["total_pages_scraped"]),
-            "evaluator": lambda: evaluate_pre_scrape_recent_zero_insert_skip(
-                pool,
-                target_id=row["id"],
-                source=target.source,
-                vendor_name=target.vendor_name,
-                parser_version=parser_version,
-                cfg=cfg,
-            ),
-        },
-    )
-
-    for spec in gate_specs:
-        if not spec["enabled"]:
-            continue
-        decision = None
-        try:
-            decision = await spec["evaluator"]()
-        except Exception:
-            logger.warning(
-                spec["warn_message"],
-                target.source,
-                target.vendor_name,
-                exc_info=True,
-            )
-        if not decision:
-            continue
-
-        await log_pre_scrape_skip(
-            pool,
-            target_id=row["id"],
-            source=target.source,
-            parser_version=parser_version,
-            decision=decision,
-            status=spec["status"],
-            stop_reason=spec["stop_reason"],
-        )
-        await update_target_cooldown_only(pool, row["id"])
-        try:
-            await record_dedup(
-                pool,
-                stage=spec["stage"],
-                entity_type="scrape_target",
-                entity_id=str(row["id"]),
-                reason=decision["reason"],
-                detail=decision,
-            )
-        except Exception:
-            logger.debug(
-                spec["debug_message"],
-                target.source,
-                target.vendor_name,
-                exc_info=True,
-            )
-
-        logger.info(
-            spec["log_message"],
-            target.source,
-            target.vendor_name,
-            spec["metric_value"](decision),
-            spec["metric_runs"](decision),
-        )
-        return {
-            "source": target.source,
-            "vendor": target.vendor_name,
-            "status": spec["status"],
-            "skip_decision": decision,
-        }
-
-    return None
-
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -1429,18 +1296,20 @@ async def trigger_scrape(target_id: UUID) -> dict:
         _KNOWN_REVIEWS_PAGE_STOP_SOURCES,
         _build_scrape_state,
         _determine_stop_reason,
-        _evaluate_pre_scrape_low_yield_skip,
-        _evaluate_pre_scrape_recent_zero_insert_skip,
-        _evaluate_pre_scrape_skip,
         _load_existing_source_review_ids,
-        _log_pre_scrape_skip,
         _prepare_scrape_target,
         _review_date_stats,
         _scrape_state_from_row,
-        _update_target_cooldown_only,
         _update_target_after_scrape,
     )
     from ..services.scraping.client import get_scrape_client
+    from ..services.scraping.eligibility import (
+        Allow,
+        ScrapeContext,
+        Skip,
+        apply_skip_decision,
+        should_scrape_now,
+    )
     from ..services.scraping.parsers import get_parser
 
     target, scrape_mode, metadata = _prepare_scrape_target(row, settings.b2b_scrape)
@@ -1466,27 +1335,40 @@ async def trigger_scrape(target_id: UUID) -> dict:
     if not parser:
         raise HTTPException(status_code=400, detail=f"No parser for source: {target.source}")
 
-    manual_skip = await _apply_manual_pre_scrape_gates(
-        pool,
-        row=row,
-        target=target,
-        parser=parser,
+    eligibility_ctx = ScrapeContext(
+        target_id=row["id"],
+        source=target.source,
+        vendor_name=target.vendor_name,
+        parser_version=getattr(parser, "version", None),
+        scrape_mode=scrape_mode,
+        target_metadata=target.metadata or {},
         cfg=settings.b2b_scrape,
-        evaluate_pre_scrape_skip=_evaluate_pre_scrape_skip,
-        evaluate_pre_scrape_low_yield_skip=_evaluate_pre_scrape_low_yield_skip,
-        evaluate_pre_scrape_recent_zero_insert_skip=_evaluate_pre_scrape_recent_zero_insert_skip,
-        log_pre_scrape_skip=_log_pre_scrape_skip,
-        update_target_cooldown_only=_update_target_cooldown_only,
+        pool=pool,
     )
-    if manual_skip:
+    try:
+        eligibility_decision = await should_scrape_now(eligibility_ctx)
+    except Exception:
+        logger.warning(
+            "Manual pre-scrape eligibility evaluation failed for %s/%s; proceeding with scrape",
+            target.source, target.vendor_name,
+            exc_info=True,
+        )
+        eligibility_decision = Allow()
+    if isinstance(eligibility_decision, Skip):
+        await apply_skip_decision(
+            pool, ctx=eligibility_ctx, decision=eligibility_decision,
+        )
         return {
             "target_id": str(target_id),
             "source": target.source,
             "vendor": target.vendor_name,
-            "status": manual_skip["status"],
+            "status": eligibility_decision.status,
             "scrape_mode": scrape_mode,
             "skipped": True,
-            "skip_decision": manual_skip["skip_decision"],
+            "skip_decision": {
+                "reason": eligibility_decision.reason,
+                **eligibility_decision.detail,
+            },
             "reviews_found": 0,
             "reviews_inserted": 0,
             "reviews_filtered": 0,
@@ -1782,19 +1664,22 @@ async def trigger_scrape_all(
     from ..autonomous.tasks.b2b_scrape_intake import (
         _KNOWN_REVIEWS_PAGE_STOP_SOURCES,
         _build_scrape_state,
-        _evaluate_pre_scrape_low_yield_skip,
-        _evaluate_pre_scrape_recent_zero_insert_skip,
-        _evaluate_pre_scrape_skip,
         _filter_by_date, _determine_stop_reason, _insert_reviews,
         _load_existing_source_review_ids,
         _load_existing_review_fingerprints,
-        _log_pre_scrape_skip, _prepare_scrape_target, _review_date_stats,
+        _prepare_scrape_target, _review_date_stats,
         _scrape_state_from_row,
-        _update_target_cooldown_only,
         _log_scrape_exhaustive,
         _update_target_after_scrape,
     )
     from ..services.scraping.client import get_scrape_client
+    from ..services.scraping.eligibility import (
+        Allow,
+        ScrapeContext,
+        Skip,
+        apply_skip_decision,
+        should_scrape_now,
+    )
     from ..services.scraping.parsers import get_parser
     from ..services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
 
@@ -1830,23 +1715,33 @@ async def trigger_scrape_all(
             results.append({"source": target.source, "vendor": target.vendor_name, "status": "no_parser"})
             continue
 
-        manual_skip = await _apply_manual_pre_scrape_gates(
-            pool,
-            row=row,
-            target=target,
-            parser=parser,
+        eligibility_ctx = ScrapeContext(
+            target_id=row["id"],
+            source=target.source,
+            vendor_name=target.vendor_name,
+            parser_version=getattr(parser, "version", None),
+            scrape_mode=row_mode,
+            target_metadata=target.metadata or {},
             cfg=settings.b2b_scrape,
-            evaluate_pre_scrape_skip=_evaluate_pre_scrape_skip,
-            evaluate_pre_scrape_low_yield_skip=_evaluate_pre_scrape_low_yield_skip,
-            evaluate_pre_scrape_recent_zero_insert_skip=_evaluate_pre_scrape_recent_zero_insert_skip,
-            log_pre_scrape_skip=_log_pre_scrape_skip,
-            update_target_cooldown_only=_update_target_cooldown_only,
+            pool=pool,
         )
-        if manual_skip:
+        try:
+            eligibility_decision = await should_scrape_now(eligibility_ctx)
+        except Exception:
+            logger.warning(
+                "Manual pre-scrape eligibility evaluation failed for %s/%s; proceeding with scrape",
+                target.source, target.vendor_name,
+                exc_info=True,
+            )
+            eligibility_decision = Allow()
+        if isinstance(eligibility_decision, Skip):
+            await apply_skip_decision(
+                pool, ctx=eligibility_ctx, decision=eligibility_decision,
+            )
             results.append({
                 "source": target.source,
                 "vendor": target.vendor_name,
-                "status": manual_skip["status"],
+                "status": eligibility_decision.status,
                 "mode": row_mode,
                 "found": 0,
                 "inserted": 0,
@@ -1859,7 +1754,10 @@ async def trigger_scrape_all(
                 "skipped_quality_gate": 0,
                 "filtered": 0,
                 "date_dropped": 0,
-                "skip_decision": manual_skip["skip_decision"],
+                "skip_decision": {
+                    "reason": eligibility_decision.reason,
+                    **eligibility_decision.detail,
+                },
             })
             continue
 

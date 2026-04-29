@@ -91,6 +91,7 @@ from atlas_brain.services.scraping.eligibility import (  # noqa: E402
     Allow,
     ScrapeContext,
     Skip,
+    apply_skip_decision,
     should_scrape_now,
 )
 
@@ -402,3 +403,134 @@ async def test_should_scrape_now_matches_fixture(
     decision = await should_scrape_now(ctx)
     actual = _normalize_dataclass_decision(decision)
     _assert_decision_matches_fixture(fixture_name, actual, fixture["expected_decision"])
+
+
+# ---------------------------------------------------------------------------
+# apply_skip_decision integration -- verifies the persistence side calls
+# _log_pre_scrape_skip / _update_target_cooldown_only / record_dedup
+# with arguments correctly derived from the Skip dataclass + ScrapeContext.
+# Single test, focused on wiring rather than per-gate combinatorics.
+# ---------------------------------------------------------------------------
+
+
+async def test_apply_skip_decision_invokes_persistence_helpers(monkeypatch):
+    """apply_skip_decision adapts a Skip dataclass back to the dict shape
+    that ``_log_pre_scrape_skip`` expects, calls
+    ``_update_target_cooldown_only`` for the target, and emits a dedup
+    record stamped with the originating rule's ``dedup_stage``.
+
+    Patches the source modules' attributes so the deferred-local-imports
+    inside apply_skip_decision pick up the mocks at call time.
+    """
+    log_skip_mock = AsyncMock(return_value=None)
+    update_cooldown_mock = AsyncMock(return_value=None)
+    record_dedup_mock = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake._log_pre_scrape_skip",
+        log_skip_mock,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake._update_target_cooldown_only",
+        update_cooldown_mock,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.visibility.record_dedup",
+        record_dedup_mock,
+    )
+
+    pool = MagicMock()
+    cfg = SimpleNamespace()
+    ctx = ScrapeContext(
+        target_id="00000000-0000-0000-0000-000000000010",
+        source="g2",
+        vendor_name="Shopify",
+        parser_version="g2.v3.2",
+        scrape_mode="default",
+        target_metadata={},
+        cfg=cfg,
+        pool=pool,
+    )
+    decision = Skip(
+        status="skipped_redundant",
+        stop_reason="pre_scrape_cross_source_coverage",
+        reason="pre_scrape_cross_source_coverage",
+        detail={"duplicate_ratio": 0.92, "real_runs": 5, "total_found": 50},
+    )
+
+    await apply_skip_decision(pool, ctx=ctx, decision=decision)
+
+    # _log_pre_scrape_skip got the raw decision dict reconstructed from
+    # the Skip dataclass + the canonical status/stop_reason kwargs.
+    log_skip_mock.assert_awaited_once()
+    log_kwargs = log_skip_mock.await_args.kwargs
+    assert log_kwargs["target_id"] == ctx.target_id
+    assert log_kwargs["source"] == ctx.source
+    assert log_kwargs["parser_version"] == ctx.parser_version
+    assert log_kwargs["status"] == decision.status
+    assert log_kwargs["stop_reason"] == decision.stop_reason
+    raw_decision = log_kwargs["decision"]
+    assert raw_decision["reason"] == decision.reason
+    assert raw_decision["duplicate_ratio"] == 0.92
+    assert raw_decision["real_runs"] == 5
+    assert raw_decision["total_found"] == 50
+
+    # Cooldown helper called with the target id only.
+    update_cooldown_mock.assert_awaited_once_with(pool, ctx.target_id)
+
+    # record_dedup gets the originating rule's dedup_stage; the mapping
+    # comes from _PRE_SCRAPE_RULES_BY_NAME[reason].dedup_stage.
+    record_dedup_mock.assert_awaited_once()
+    dedup_kwargs = record_dedup_mock.await_args.kwargs
+    assert dedup_kwargs["stage"] == "b2b_scrape_pre_skip"
+    assert dedup_kwargs["entity_type"] == "scrape_target"
+    assert dedup_kwargs["entity_id"] == str(ctx.target_id)
+    assert dedup_kwargs["reason"] == decision.reason
+    assert dedup_kwargs["detail"]["duplicate_ratio"] == 0.92
+
+
+async def test_apply_skip_decision_swallows_record_dedup_failure(monkeypatch):
+    """A record_dedup failure must NOT prevent the scrape_log row or
+    cooldown update. Telemetry failure is non-fatal; behavior preserved
+    from the inline orchestration's try/except."""
+    log_skip_mock = AsyncMock(return_value=None)
+    update_cooldown_mock = AsyncMock(return_value=None)
+    record_dedup_mock = AsyncMock(side_effect=RuntimeError("dedup table missing"))
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake._log_pre_scrape_skip",
+        log_skip_mock,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake._update_target_cooldown_only",
+        update_cooldown_mock,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.visibility.record_dedup",
+        record_dedup_mock,
+    )
+
+    pool = MagicMock()
+    ctx = ScrapeContext(
+        target_id="00000000-0000-0000-0000-000000000011",
+        source="stackoverflow",
+        vendor_name="AWS",
+        parser_version="stackoverflow.v1.0",
+        scrape_mode="default",
+        target_metadata={},
+        cfg=SimpleNamespace(),
+        pool=pool,
+    )
+    decision = Skip(
+        status="skipped_recent_zero_insert_page_cap",
+        stop_reason="pre_scrape_recent_zero_insert_page_cap",
+        reason="pre_scrape_recent_zero_insert_page_cap",
+        detail={"real_runs": 3, "total_pages_scraped": 9},
+    )
+
+    # Must not raise -- the dedup failure is logged at debug and swallowed.
+    await apply_skip_decision(pool, ctx=ctx, decision=decision)
+
+    log_skip_mock.assert_awaited_once()
+    update_cooldown_mock.assert_awaited_once()
+    record_dedup_mock.assert_awaited_once()  # fired even though it raised

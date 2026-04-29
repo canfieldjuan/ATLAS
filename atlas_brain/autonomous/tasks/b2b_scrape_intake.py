@@ -37,6 +37,13 @@ from ...services.scraping.sources import (
     with_required_sources,
 )
 from ...services.vendor_registry import resolve_vendor_name
+from ...services.scraping.eligibility import (
+    Allow,
+    ScrapeContext,
+    Skip,
+    apply_skip_decision,
+    should_scrape_now,
+)
 from ...services.scraping.source_fit import classify_source_fit, is_source_fit_allowed
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_scrape_intake")
@@ -2159,187 +2166,51 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         sem = source_sems.get(target.source, asyncio.Semaphore(2))
         async with sem:
-            # Pre-scrape coverage gate: skip paid scrapes when recent runs
-            # produced enough cross-source duplicates to make this fetch
-            # almost certainly redundant. See _evaluate_pre_scrape_skip.
-            if cfg.pre_scrape_skip_enabled:
-                skip_decision = None
-                try:
-                    skip_decision = await _evaluate_pre_scrape_skip(
-                        pool,
-                        target_id=row["id"],
-                        source=target.source,
-                        vendor_name=target.vendor_name,
-                        cfg=cfg,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Pre-scrape skip evaluation failed for %s/%s; proceeding with scrape",
-                        target.source, target.vendor_name,
-                        exc_info=True,
-                    )
-                if skip_decision:
-                    await _log_pre_scrape_skip(
-                        pool,
-                        target_id=row["id"],
-                        source=target.source,
-                        parser_version=getattr(parser, "version", None),
-                        decision=skip_decision,
-                    )
-                    await _update_target_cooldown_only(pool, row["id"])
-                    try:
-                        await record_dedup(
-                            pool,
-                            stage="b2b_scrape_pre_skip",
-                            entity_type="scrape_target",
-                            entity_id=str(row["id"]),
-                            reason=skip_decision["reason"],
-                            detail=skip_decision,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "record_dedup failed for pre-scrape skip on %s/%s",
-                            target.source, target.vendor_name,
-                            exc_info=True,
-                        )
-                    async with results_lock:
-                        results_summary.append({
-                            "source": target.source,
-                            "vendor": target.vendor_name,
-                            "status": "skipped_redundant",
-                            "skip_decision": skip_decision,
-                        })
-                    logger.info(
-                        "Pre-scrape skip for %s/%s: ratio=%.2f over %d runs (saved 1 paid call)",
-                        target.source, target.vendor_name,
-                        skip_decision["duplicate_ratio"], skip_decision["real_runs"],
-                    )
-                    return
-
-            # Pre-scrape low-incremental-yield gate: skip paid scrapes when
-            # recent same-parser-version runs produced almost no NET-NEW
-            # reviews (inserts minus cross-source dups) relative to found.
-            # Catches the dominant same-source already-known waste pattern
-            # the cross-source gate above does not address.
-            if cfg.pre_scrape_low_yield_skip_enabled:
-                low_yield_decision = None
-                try:
-                    low_yield_decision = await _evaluate_pre_scrape_low_yield_skip(
-                        pool,
-                        target_id=row["id"],
-                        source=target.source,
-                        vendor_name=target.vendor_name,
-                        parser_version=getattr(parser, "version", None),
-                        cfg=cfg,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Pre-scrape low-yield evaluation failed for %s/%s; proceeding with scrape",
-                        target.source, target.vendor_name,
-                        exc_info=True,
-                    )
-                if low_yield_decision:
-                    await _log_pre_scrape_skip(
-                        pool,
-                        target_id=row["id"],
-                        source=target.source,
-                        parser_version=getattr(parser, "version", None),
-                        decision=low_yield_decision,
-                        status="skipped_low_incremental_yield",
-                        stop_reason="pre_scrape_low_incremental_yield",
-                    )
-                    await _update_target_cooldown_only(pool, row["id"])
-                    try:
-                        await record_dedup(
-                            pool,
-                            stage="b2b_scrape_pre_skip_low_yield",
-                            entity_type="scrape_target",
-                            entity_id=str(row["id"]),
-                            reason=low_yield_decision["reason"],
-                            detail=low_yield_decision,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "record_dedup failed for low-yield skip on %s/%s",
-                            target.source, target.vendor_name,
-                            exc_info=True,
-                        )
-                    async with results_lock:
-                        results_summary.append({
-                            "source": target.source,
-                            "vendor": target.vendor_name,
-                            "status": "skipped_low_incremental_yield",
-                            "skip_decision": low_yield_decision,
-                        })
-                    logger.info(
-                        "Pre-scrape low-yield skip for %s/%s: ratio=%.3f over %d runs (saved 1 paid call)",
-                        target.source, target.vendor_name,
-                        low_yield_decision["unique_insert_ratio"], low_yield_decision["real_runs"],
-                    )
-                    return
-
-            # Pre-scrape repeated zero-insert gate: skip configured sources
-            # when consecutive current-parser runs all hit page-cap and
-            # inserted nothing. This catches repetitive search/API sweeps
-            # that keep walking the same already-known result window.
-            if cfg.pre_scrape_recent_zero_insert_skip_enabled:
-                recent_zero_insert_decision = None
-                try:
-                    recent_zero_insert_decision = await _evaluate_pre_scrape_recent_zero_insert_skip(
-                        pool,
-                        target_id=row["id"],
-                        source=target.source,
-                        vendor_name=target.vendor_name,
-                        parser_version=getattr(parser, "version", None),
-                        cfg=cfg,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Pre-scrape repeated zero-insert evaluation failed for %s/%s; proceeding with scrape",
-                        target.source, target.vendor_name,
-                        exc_info=True,
-                    )
-                if recent_zero_insert_decision:
-                    await _log_pre_scrape_skip(
-                        pool,
-                        target_id=row["id"],
-                        source=target.source,
-                        parser_version=getattr(parser, "version", None),
-                        decision=recent_zero_insert_decision,
-                        status="skipped_recent_zero_insert_page_cap",
-                        stop_reason="pre_scrape_recent_zero_insert_page_cap",
-                    )
-                    await _update_target_cooldown_only(pool, row["id"])
-                    try:
-                        await record_dedup(
-                            pool,
-                            stage="b2b_scrape_pre_skip_recent_zero_insert_page_cap",
-                            entity_type="scrape_target",
-                            entity_id=str(row["id"]),
-                            reason=recent_zero_insert_decision["reason"],
-                            detail=recent_zero_insert_decision,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "record_dedup failed for repeated zero-insert skip on %s/%s",
-                            target.source, target.vendor_name,
-                            exc_info=True,
-                        )
-                    async with results_lock:
-                        results_summary.append({
-                            "source": target.source,
-                            "vendor": target.vendor_name,
-                            "status": "skipped_recent_zero_insert_page_cap",
-                            "skip_decision": recent_zero_insert_decision,
-                        })
-                    logger.info(
-                        "Pre-scrape repeated zero-insert skip for %s/%s: %d runs, %d pages (saved 1 scrape)",
-                        target.source,
-                        target.vendor_name,
-                        recent_zero_insert_decision["real_runs"],
-                        recent_zero_insert_decision["total_pages_scraped"],
-                    )
-                    return
+            # Pre-scrape eligibility: cross-source coverage, low-yield, and
+            # repeated-zero-insert page-cap rules evaluated through the
+            # shared decision surface. See atlas_brain.services.scraping.
+            # eligibility.should_scrape_now() and the architecture refactor
+            # plan in docs/progress.
+            #
+            # Behavior preservation: rule order and gate semantics match
+            # the previous inline block; the chain returns the first
+            # gate's Skip just like the inline path's first matching
+            # gate's early-return. Decision parity is locked by
+            # tests/test_scrape_eligibility.py.
+            eligibility_ctx = ScrapeContext(
+                target_id=row["id"],
+                source=target.source,
+                vendor_name=target.vendor_name,
+                parser_version=getattr(parser, "version", None),
+                scrape_mode=scrape_mode,
+                target_metadata=metadata or {},
+                cfg=cfg,
+                pool=pool,
+            )
+            try:
+                eligibility_decision = await should_scrape_now(eligibility_ctx)
+            except Exception:
+                logger.warning(
+                    "Pre-scrape eligibility evaluation failed for %s/%s; proceeding with scrape",
+                    target.source, target.vendor_name,
+                    exc_info=True,
+                )
+                eligibility_decision = Allow()
+            if isinstance(eligibility_decision, Skip):
+                await apply_skip_decision(
+                    pool, ctx=eligibility_ctx, decision=eligibility_decision,
+                )
+                async with results_lock:
+                    results_summary.append({
+                        "source": target.source,
+                        "vendor": target.vendor_name,
+                        "status": eligibility_decision.status,
+                        "skip_decision": {
+                            "reason": eligibility_decision.reason,
+                            **eligibility_decision.detail,
+                        },
+                    })
+                return
 
             started_at = time.monotonic()
             batch_id = f"scrape_{target.source}_{target.product_slug}_{int(time.time())}"
