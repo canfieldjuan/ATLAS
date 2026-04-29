@@ -163,4 +163,14 @@ describe('AuthContext', () => {
       expect(localStorage.getItem('atlas_refresh_token')).toBe('refresh-next')
     })
   })
+
+  it('does not retry /api fallback when refresh returns 404', async () => {
+    localStorage.setItem('atlas_refresh_token', 'refresh-missing')
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(404, { detail: 'missing route' }))
+
+    await expect(tryRefreshToken()).resolves.toBeNull()
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[0] ?? '')).toContain('/api/v1/auth/refresh')
+  })
 })

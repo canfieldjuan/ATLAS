@@ -109,6 +109,23 @@ describe('api client helpers', () => {
     expect(requestedUrl).toContain('limit=5')
   })
 
+  it('does not retry /api fallback when a mounted v1 route returns 404', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => 'missing route',
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchChallengerClaims('Microsoft 365')).rejects.toThrow('API 404: missing route')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
+      '/api/v1/b2b/challenger-claims/Microsoft%20365',
+    )
+  })
+
   it('uses dashboard webhook activity routes with explicit vendor and company filters', async () => {
     const fetchMock = vi
       .fn()

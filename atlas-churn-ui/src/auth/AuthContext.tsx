@@ -7,14 +7,6 @@ const REFRESH_KEY = 'atlas_refresh_token'
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const BASE = `${API_BASE}/api/v1`
 
-async function fetchWithApiFallback(input: string, opts?: RequestInit): Promise<Response> {
-  const res = await fetch(input, opts)
-  if (res.status !== 404) return res
-  if (!input.includes('/api/v1/')) return res
-  const fallbackInput = input.replace('/api/v1/', '/api/')
-  return fetch(fallbackInput, opts)
-}
-
 export interface User {
   user_id: string
   email: string
@@ -50,7 +42,7 @@ export function useAuth(): AuthState {
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const { headers: extraHeaders, ...restOpts } = opts ?? {}
-  const res = await fetchWithApiFallback(`${BASE}${path}`, {
+  const res = await fetch(`${BASE}${path}`, {
     ...restOpts,
     headers: { 'Content-Type': 'application/json', ...(extraHeaders as Record<string, string>) },
   })
@@ -80,7 +72,7 @@ export async function tryRefreshToken(): Promise<string | null> {
     if (!refreshToken) return null
 
     try {
-      const res = await fetchWithApiFallback(`${BASE}/auth/refresh`, {
+      const res = await fetch(`${BASE}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refreshToken }),
