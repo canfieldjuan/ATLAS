@@ -120,6 +120,67 @@ describe('SpecializedReportData', () => {
     ).toBeInTheDocument()
   })
 
+  it('fails closed for battle-card category council winner language without ProductClaim context', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="battle_card"
+          data={{
+            vendor: 'Zendesk',
+            category_council: {
+              market_regime: 'replacement_heavy',
+              winner: 'Freshdesk',
+              loser: 'Zendesk',
+              durability: 'durable',
+              conclusion: 'Freshdesk is winning category attention from Zendesk.',
+              key_insights: [{ insight: 'Switching pressure is concentrated in support workflows.' }],
+            },
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Market Context')).toBeInTheDocument()
+    expect(screen.getByText('Legacy')).toBeInTheDocument()
+    expect(screen.getByTestId('battle-card-category-council-gate')).toHaveTextContent(
+      'Legacy/unvalidated category council',
+    )
+    expect(screen.queryByText('winner: Freshdesk')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Freshdesk is winning category attention from Zendesk.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders battle-card category council winner language when ProductClaim is report-safe', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="battle_card"
+          data={{
+            vendor: 'Zendesk',
+            category_council: {
+              market_regime: 'replacement_heavy',
+              winner: 'Freshdesk',
+              loser: 'Zendesk',
+              durability: 'durable',
+              conclusion: 'Freshdesk is winning category attention from Zendesk.',
+              key_insights: [{ insight: 'Switching pressure is concentrated in support workflows.' }],
+              product_claim: reportSafeCompetitorPairClaim({ claim_id: 'claim-category-council' }),
+            },
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Market Context')).toBeInTheDocument()
+    expect(screen.getByText('Report-safe')).toBeInTheDocument()
+    expect(screen.queryByTestId('battle-card-category-council-gate')).not.toBeInTheDocument()
+    expect(screen.getByText('winner: Freshdesk')).toBeInTheDocument()
+    expect(
+      screen.getByText('Freshdesk is winning category attention from Zendesk.'),
+    ).toBeInTheDocument()
+  })
+
   it('fails closed for battle-card cross-vendor battles without ProductClaim context', () => {
     render(
       <MemoryRouter>

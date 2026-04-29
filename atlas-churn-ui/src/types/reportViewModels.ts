@@ -304,6 +304,8 @@ export interface CategoryCouncilViewModel {
   durability?: string
   key_insights: KeyInsightViewModel[]
   reference_ids?: ReasoningReferenceIdsViewModel
+  product_claim?: VendorClaim | null
+  claim_validation_unavailable?: boolean
 }
 
 export interface ActiveEvaluationDeadlineViewModel {

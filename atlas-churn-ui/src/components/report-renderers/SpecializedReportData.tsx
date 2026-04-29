@@ -53,6 +53,7 @@ import type {
   AccountsInMotionViewModel,
   BattleCardDisplacementReasoningViewModel,
   BattleCardViewModel,
+  CategoryCouncilViewModel,
   ChallengerBriefViewModel,
   ChallengerTargetAccountViewModel,
   ComparisonReportViewModel,
@@ -79,6 +80,38 @@ function SectionCard({ title, icon, children }: { title: string; icon?: ReactNod
       </h3>
       {children}
     </div>
+  )
+}
+
+function CategoryCouncilProductClaimGate({
+  council,
+  children,
+  fallback,
+  testId,
+}: {
+  council: CategoryCouncilViewModel
+  children: ReactNode
+  fallback: string
+  testId: string
+}) {
+  return (
+    <>
+      <div className="mb-2">
+        <ProductClaimStatusBadge
+          claim={council.product_claim ?? null}
+          validationUnavailable={council.claim_validation_unavailable ?? false}
+        />
+      </div>
+      <ProductClaimGate
+        claim={council.product_claim ?? null}
+        mode="report"
+        validationUnavailable={council.claim_validation_unavailable ?? false}
+        fallback={fallback}
+        testId={testId}
+      >
+        {children}
+      </ProductClaimGate>
+    </>
   )
 }
 
@@ -891,13 +924,19 @@ function AccountsInMotionDetail({ data, vendorName, onOpenWitness, backTo, asOfD
               windowDays={windowDays}
             />
           </div>
-          <div className="space-y-1">
-            {data.category_council.market_regime && <MetricRow label="Market Regime" value={data.category_council.market_regime.replace(/_/g, ' ')} />}
-            {data.category_council.winner && <MetricRow label="Category Winner" value={data.category_council.winner} color="text-green-400" />}
-            {data.category_council.loser && <MetricRow label="Losing Ground" value={data.category_council.loser} color="text-red-400" />}
-          </div>
-          {data.category_council.conclusion && <p className="text-sm text-slate-300 mt-2">{data.category_council.conclusion}</p>}
-          {data.category_council.durability && <p className="text-xs text-slate-400 mt-1">Durability: {data.category_council.durability}</p>}
+          <CategoryCouncilProductClaimGate
+            council={data.category_council}
+            fallback="Legacy/unvalidated category council"
+            testId="accounts-category-council-gate"
+          >
+            <div className="space-y-1">
+              {data.category_council.market_regime && <MetricRow label="Market Regime" value={data.category_council.market_regime.replace(/_/g, ' ')} />}
+              {data.category_council.winner && <MetricRow label="Category Winner" value={data.category_council.winner} color="text-green-400" />}
+              {data.category_council.loser && <MetricRow label="Losing Ground" value={data.category_council.loser} color="text-red-400" />}
+            </div>
+            {data.category_council.conclusion && <p className="text-sm text-slate-300 mt-2">{data.category_council.conclusion}</p>}
+            {data.category_council.durability && <p className="text-xs text-slate-400 mt-1">Durability: {data.category_council.durability}</p>}
+          </CategoryCouncilProductClaimGate>
         </SectionCard>
       )}
 
@@ -1361,24 +1400,30 @@ function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }:
             )}
             {data.category_council && (
               <div>
-                <div className="flex flex-wrap gap-2 text-xs mb-2">
-                  {data.category_council.market_regime && <span className="px-2 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{data.category_council.market_regime}</span>}
-                  {data.category_council.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {data.category_council.winner}</span>}
-                  {data.category_council.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {data.category_council.loser}</span>}
-                  {data.category_council.confidence != null && data.category_council.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(data.category_council.confidence * 100)}% conf.</span>}
-                  {data.category_council.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{data.category_council.durability}</span>}
-                </div>
-                {data.category_council.conclusion && <p className="text-sm text-slate-300 mb-2">{data.category_council.conclusion}</p>}
-                {data.category_council.key_insights.length > 0 && (
-                  <ul className="space-y-1">
-                    {data.category_council.key_insights.slice(0, 4).map((insight, index) => (
-                      <li key={index} className="text-xs text-slate-400 flex gap-2 min-w-0">
-                        <span className="text-cyan-400 shrink-0">-</span>
-                        <span className="min-w-0 break-words">{insight.insight}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <CategoryCouncilProductClaimGate
+                  council={data.category_council}
+                  fallback="Legacy/unvalidated category council"
+                  testId="battle-card-category-council-gate"
+                >
+                  <div className="flex flex-wrap gap-2 text-xs mb-2">
+                    {data.category_council.market_regime && <span className="px-2 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{data.category_council.market_regime}</span>}
+                    {data.category_council.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {data.category_council.winner}</span>}
+                    {data.category_council.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {data.category_council.loser}</span>}
+                    {data.category_council.confidence != null && data.category_council.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(data.category_council.confidence * 100)}% conf.</span>}
+                    {data.category_council.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{data.category_council.durability}</span>}
+                  </div>
+                  {data.category_council.conclusion && <p className="text-sm text-slate-300 mb-2">{data.category_council.conclusion}</p>}
+                  {data.category_council.key_insights.length > 0 && (
+                    <ul className="space-y-1">
+                      {data.category_council.key_insights.slice(0, 4).map((insight, index) => (
+                        <li key={index} className="text-xs text-slate-400 flex gap-2 min-w-0">
+                          <span className="text-cyan-400 shrink-0">-</span>
+                          <span className="min-w-0 break-words">{insight.insight}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CategoryCouncilProductClaimGate>
               </div>
             )}
           </div>
@@ -2007,21 +2052,27 @@ function WeeklyChurnFeedDetail({ items, onOpenWitness, backTo, asOfDate, windowD
             {/* Category Council */}
             {item.category_council?.conclusion && (
               <div className="text-xs">
-                <div className="flex flex-wrap gap-1.5 mb-1">
-                  {item.category_council.market_regime && <span className="px-1.5 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{item.category_council.market_regime}</span>}
-                  {item.category_council.winner && <span className="px-1.5 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {item.category_council.winner}</span>}
-                  {item.category_council.loser && <span className="px-1.5 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {item.category_council.loser}</span>}
-                  {item.category_council.confidence != null && item.category_council.confidence > 0 && <span className="px-1.5 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(item.category_council.confidence * 100)}%</span>}
-                  {item.category_council.durability && <span className="px-1.5 py-0.5 bg-amber-500/15 text-amber-300 rounded">{item.category_council.durability}</span>}
-                </div>
-                <p className="text-slate-400">{item.category_council.conclusion}</p>
-                {item.category_council.key_insights.length > 0 && (
-                  <ul className="mt-1 space-y-0.5">
-                    {item.category_council.key_insights.slice(0, 2).map((insight, k) => (
-                      <li key={k} className="text-slate-500 flex gap-1.5"><span className="text-cyan-400 shrink-0">-</span><span>{insight.insight}</span></li>
-                    ))}
-                  </ul>
-                )}
+                <CategoryCouncilProductClaimGate
+                  council={item.category_council}
+                  fallback="Legacy/unvalidated category council"
+                  testId={`weekly-category-council-${index}-gate`}
+                >
+                  <div className="flex flex-wrap gap-1.5 mb-1">
+                    {item.category_council.market_regime && <span className="px-1.5 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{item.category_council.market_regime}</span>}
+                    {item.category_council.winner && <span className="px-1.5 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {item.category_council.winner}</span>}
+                    {item.category_council.loser && <span className="px-1.5 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {item.category_council.loser}</span>}
+                    {item.category_council.confidence != null && item.category_council.confidence > 0 && <span className="px-1.5 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(item.category_council.confidence * 100)}%</span>}
+                    {item.category_council.durability && <span className="px-1.5 py-0.5 bg-amber-500/15 text-amber-300 rounded">{item.category_council.durability}</span>}
+                  </div>
+                  <p className="text-slate-400">{item.category_council.conclusion}</p>
+                  {item.category_council.key_insights.length > 0 && (
+                    <ul className="mt-1 space-y-0.5">
+                      {item.category_council.key_insights.slice(0, 2).map((insight, k) => (
+                        <li key={k} className="text-slate-500 flex gap-1.5"><span className="text-cyan-400 shrink-0">-</span><span>{insight.insight}</span></li>
+                      ))}
+                    </ul>
+                  )}
+                </CategoryCouncilProductClaimGate>
               </div>
             )}
 

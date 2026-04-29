@@ -440,6 +440,8 @@ function toCategoryCouncil(value: unknown): CategoryCouncilViewModel | null {
     loser: asString(obj.loser),
     durability: asString(obj.durability),
     key_insights: toKeyInsights(obj.key_insights),
+    product_claim: toEmbeddedProductClaim(obj.product_claim),
+    claim_validation_unavailable: asBoolean(obj.claim_validation_unavailable) ?? false,
   }
 }
 
