@@ -35,6 +35,7 @@ from atlas_brain.services.b2b.product_claim import (
     ClaimScope,
     ConfidenceLabel,
     EvidencePosture,
+    MissingClaimGatePolicyError,
     ProductClaim,
     SuppressionReason,
     build_product_claim,
@@ -43,9 +44,53 @@ from atlas_brain.services.b2b.product_claim import (
     derive_confidence,
     derive_evidence_posture,
     get_policy,
+    get_registered_policy,
     register_policy,
     reset_policy_registry,
 )
+
+
+def _restore_production_policies() -> None:
+    """Restore module-default policies after registry-isolation tests.
+
+    ProductClaim contract tests intentionally start with an empty
+    registry so they can prove missing policies fail closed. Without
+    restoring these defaults afterward, later aggregator suites in the
+    same pytest process would depend on collection/test order.
+    """
+    from atlas_brain.services.b2b.account_opportunity_claims import (
+        ACCOUNT_OPPORTUNITY_CLAIM_TYPE,
+        _ACCOUNT_OPPORTUNITY_POLICY,
+    )
+    from atlas_brain.services.b2b.challenger_dashboard_claims import (
+        DIRECT_DISPLACEMENT_CLAIM_TYPE,
+        _DIRECT_DISPLACEMENT_POLICY,
+    )
+    from atlas_brain.services.b2b.vendor_dashboard_claims import (
+        _DM_CHURN_RATE_POLICY,
+        _PRICE_COMPLAINT_RATE_POLICY,
+    )
+
+    register_policy(
+        ClaimScope.VENDOR,
+        "decision_maker_churn_rate",
+        _DM_CHURN_RATE_POLICY,
+    )
+    register_policy(
+        ClaimScope.VENDOR,
+        "price_complaint_rate",
+        _PRICE_COMPLAINT_RATE_POLICY,
+    )
+    register_policy(
+        ClaimScope.ACCOUNT,
+        ACCOUNT_OPPORTUNITY_CLAIM_TYPE,
+        _ACCOUNT_OPPORTUNITY_POLICY,
+    )
+    register_policy(
+        ClaimScope.COMPETITOR_PAIR,
+        DIRECT_DISPLACEMENT_CLAIM_TYPE,
+        _DIRECT_DISPLACEMENT_POLICY,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +99,7 @@ def _reset_registry():
     reset_policy_registry()
     yield
     reset_policy_registry()
+    _restore_production_policies()
 
 
 # ----------------------------------------------------------------------------
@@ -698,6 +744,35 @@ def test_default_policy_used_when_none_registered():
     p = get_policy(ClaimScope.VENDOR, "weakness_theme")
     assert p.min_supporting_count == 3
     assert p.is_rate_claim is False
+
+
+def test_registered_policy_lookup_fails_closed_when_missing():
+    with pytest.raises(MissingClaimGatePolicyError, match="not registered"):
+        get_registered_policy(ClaimScope.VENDOR, "new_customer_facing_claim")
+
+
+def test_build_product_claim_can_require_registered_policy():
+    with pytest.raises(MissingClaimGatePolicyError, match="not registered"):
+        build_product_claim(
+            **_claim_args(claim_type="new_customer_facing_claim"),
+            require_registered_policy=True,
+        )
+
+
+def test_build_product_claim_registered_policy_requirement_passes_when_registered():
+    strict = ClaimGatePolicy(min_supporting_count=20, min_direct_evidence=10)
+    register_policy(ClaimScope.VENDOR, "registered_customer_facing_claim", strict)
+
+    claim = build_product_claim(
+        **_claim_args(
+            claim_type="registered_customer_facing_claim",
+            supporting_count=15,
+        ),
+        require_registered_policy=True,
+    )
+
+    assert claim.evidence_posture == EvidencePosture.INSUFFICIENT
+    assert claim.suppression_reason == SuppressionReason.INSUFFICIENT_SUPPORTING_COUNT
 
 
 def test_registered_policy_applied_by_builder():

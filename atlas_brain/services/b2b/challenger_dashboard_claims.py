@@ -422,7 +422,7 @@ def _build_direct_displacement_claim(
         contradicting_links=contradicting_links,
         as_of_date=as_of_date,
         analysis_window_days=analysis_window_days,
-        policy=_DIRECT_DISPLACEMENT_POLICY,
+        require_registered_policy=True,
     )
 
 

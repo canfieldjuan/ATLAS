@@ -180,7 +180,7 @@ def build_account_opportunity_claim(
         contradicting_links=(),
         as_of_date=as_of_date,
         analysis_window_days=analysis_window_days,
-        policy=_ACCOUNT_OPPORTUNITY_POLICY,
+        require_registered_policy=True,
     )
 
 

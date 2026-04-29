@@ -42,7 +42,7 @@ from .product_claim import (
     ClaimScope,
     ProductClaim,
     build_product_claim,
-    get_policy,
+    get_registered_policy,
     register_policy,
 )
 
@@ -233,7 +233,7 @@ async def aggregate_dm_churn_rate_claim(
     dm_churning_direct = int(row["dm_churning_direct"] or 0)
     dm_churning_witnesses = int(row["dm_churning_witnesses"] or 0)
     churning_review_ids = list(row["churning_review_ids"] or [])
-    policy = get_policy(ClaimScope.VENDOR, "decision_maker_churn_rate")
+    policy = get_registered_policy(ClaimScope.VENDOR, "decision_maker_churn_rate")
     if policy.use_claim_lineage_for_direct_evidence:
         dm_churning_direct = await _count_lineage_direct_evidence(
             pool,
@@ -277,7 +277,7 @@ async def aggregate_dm_churn_rate_claim(
         contradicting_links=(),
         as_of_date=as_of_date,
         analysis_window_days=analysis_window_days,
-        policy=policy,
+        require_registered_policy=True,
     )
 
 
@@ -408,7 +408,7 @@ async def aggregate_price_complaint_rate_claim(
     complaint_direct = int(row["complaint_direct"] or 0)
     complaint_witnesses = int(row["complaint_witnesses"] or 0)
     complaint_review_ids = list(row["complaint_review_ids"] or [])
-    policy = get_policy(ClaimScope.VENDOR, "price_complaint_rate")
+    policy = get_registered_policy(ClaimScope.VENDOR, "price_complaint_rate")
     if policy.use_claim_lineage_for_direct_evidence:
         complaint_direct = await _count_lineage_direct_evidence(
             pool,
@@ -444,7 +444,7 @@ async def aggregate_price_complaint_rate_claim(
         contradicting_links=(),
         as_of_date=as_of_date,
         analysis_window_days=analysis_window_days,
-        policy=policy,
+        require_registered_policy=True,
     )
 
 

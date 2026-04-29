@@ -20,7 +20,10 @@ Contract design (audit-driven):
 
   - Per-(claim_scope, claim_type) policies live in a registry so a
     claim type that needs stricter thresholds can register its own
-    policy without changing global defaults.
+    policy without changing global defaults. Production aggregators
+    should require an explicit registry entry; the permissive default
+    remains available only for tests, audit scenarios, and low-risk
+    internal construction.
 
   - ProductClaim's __post_init__ re-derives posture, confidence, and
     gates from the stored fields and asserts equality. That blocks
@@ -128,6 +131,10 @@ _DEFAULT_POLICY = ClaimGatePolicy()
 _POLICY_REGISTRY: dict[tuple[ClaimScope, str], ClaimGatePolicy] = {}
 
 
+class MissingClaimGatePolicyError(ValueError):
+    """Raised when production code tries to build an unregistered claim type."""
+
+
 def register_policy(
     claim_scope: ClaimScope, claim_type: str, policy: ClaimGatePolicy
 ) -> None:
@@ -140,6 +147,25 @@ def get_policy(claim_scope: ClaimScope, claim_type: str) -> ClaimGatePolicy:
     """Resolve the active policy for a (scope, claim_type). Falls back
     to the permissive default when none is registered."""
     return _POLICY_REGISTRY.get((claim_scope, claim_type), _DEFAULT_POLICY)
+
+
+def get_registered_policy(
+    claim_scope: ClaimScope,
+    claim_type: str,
+) -> ClaimGatePolicy:
+    """Resolve a registered policy, failing closed when none exists.
+
+    Use this from production aggregators before publishing a new
+    customer-facing ProductClaim type. get_policy() intentionally
+    keeps the historical default fallback for tests and transitional
+    internal callers.
+    """
+    try:
+        return _POLICY_REGISTRY[(claim_scope, claim_type)]
+    except KeyError as exc:
+        raise MissingClaimGatePolicyError(
+            f"ProductClaim policy is not registered for {claim_scope.value}:{claim_type}"
+        ) from exc
 
 
 def reset_policy_registry() -> None:
@@ -419,6 +445,7 @@ def build_product_claim(
     evidence_links: tuple[str, ...] = (),
     contradicting_links: tuple[str, ...] = (),
     policy: ClaimGatePolicy | None = None,
+    require_registered_policy: bool = False,
     schema_version: str = "v1",
 ) -> ProductClaim:
     """Single supported entry point. Caller passes objective facts;
@@ -428,9 +455,17 @@ def build_product_claim(
     policy resolution order:
       1. Explicit policy argument (test scenarios, audit overrides).
       2. Registered policy for (claim_scope, claim_type).
-      3. _DEFAULT_POLICY (permissive baseline).
+      3. _DEFAULT_POLICY (permissive baseline), unless
+         require_registered_policy=True.
     """
-    resolved_policy = policy or get_policy(claim_scope, claim_type)
+    resolved_policy = (
+        policy
+        or (
+            get_registered_policy(claim_scope, claim_type)
+            if require_registered_policy
+            else get_policy(claim_scope, claim_type)
+        )
+    )
     posture = derive_evidence_posture(
         supporting_count=supporting_count,
         direct_evidence_count=direct_evidence_count,
@@ -498,8 +533,10 @@ __all__ = [
     "SuppressionReason",
     "ClaimGatePolicy",
     "ProductClaim",
+    "MissingClaimGatePolicyError",
     "register_policy",
     "get_policy",
+    "get_registered_policy",
     "reset_policy_registry",
     "compute_claim_id",
     "derive_evidence_posture",
