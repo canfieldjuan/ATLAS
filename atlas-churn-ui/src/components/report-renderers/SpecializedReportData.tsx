@@ -1916,9 +1916,25 @@ function WeeklyChurnFeedDetail({ items, onOpenWitness, backTo, asOfDate, windowD
                     <p className="text-xs text-slate-500 mb-1.5">Displacement Targets</p>
                     <div className="space-y-1">
                       {item.top_displacement_targets.slice(0, 5).map((t: CompetitorDifferentiatorViewModel, j: number) => (
-                        <div key={j} className="flex items-center justify-between text-xs">
-                          <span className="text-green-400">{t.competitor ?? '—'}</span>
-                          <span className="text-slate-500">{t.mentions ?? t.count ?? '—'}</span>
+                        <div key={j} className="rounded bg-slate-800/40 p-2 text-xs">
+                          <div className="mb-1">
+                            <ProductClaimStatusBadge
+                              claim={t.product_claim ?? null}
+                              validationUnavailable={t.claim_validation_unavailable ?? false}
+                            />
+                          </div>
+                          <ProductClaimGate
+                            claim={t.product_claim ?? null}
+                            mode="report"
+                            validationUnavailable={t.claim_validation_unavailable ?? false}
+                            fallback="Legacy/unvalidated target"
+                            testId={`weekly-displacement-target-${index}-${j}-gate`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-green-400">{t.competitor ?? '—'}</span>
+                              <span className="text-slate-500">{t.mentions ?? t.count ?? '—'}</span>
+                            </div>
+                          </ProductClaimGate>
                         </div>
                       ))}
                     </div>

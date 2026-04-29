@@ -348,6 +348,8 @@ export function toCompetitorDifferentiators(value: unknown): CompetitorDifferent
     primary_driver: asString(item.primary_driver),
     solves_weakness: asString(item.solves_weakness),
     switch_count: asNumber(item.switch_count) ?? null,
+    product_claim: toEmbeddedProductClaim(item.product_claim),
+    claim_validation_unavailable: asBoolean(item.claim_validation_unavailable) ?? false,
   }))
 }
 

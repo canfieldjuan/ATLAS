@@ -291,6 +291,65 @@ describe('SpecializedReportData', () => {
     expect(screen.getByText('Mid-market teams are actively comparing alternatives.')).toBeInTheDocument()
   })
 
+  it('fails closed for weekly churn feed displacement targets without ProductClaim context', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="weekly_churn_feed"
+          data={[
+            {
+              vendor: 'Zendesk',
+              pain_breakdown: [],
+              top_displacement_targets: [
+                {
+                  competitor: 'Intercom',
+                  mentions: 12,
+                },
+              ],
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Displacement Targets')).toBeInTheDocument()
+    expect(screen.getByText('Legacy')).toBeInTheDocument()
+    expect(screen.getByTestId('weekly-displacement-target-0-0-gate')).toHaveTextContent(
+      'Legacy/unvalidated target',
+    )
+    expect(screen.queryByText('Intercom')).not.toBeInTheDocument()
+    expect(screen.queryByText('12')).not.toBeInTheDocument()
+  })
+
+  it('renders weekly churn feed displacement targets when the ProductClaim is report-safe', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="weekly_churn_feed"
+          data={[
+            {
+              vendor: 'Zendesk',
+              pain_breakdown: [],
+              top_displacement_targets: [
+                {
+                  competitor: 'Intercom',
+                  mentions: 12,
+                  product_claim: reportSafeCompetitorPairClaim({ claim_id: 'claim-weekly-target' }),
+                },
+              ],
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Displacement Targets')).toBeInTheDocument()
+    expect(screen.getByText('Report-safe')).toBeInTheDocument()
+    expect(screen.queryByTestId('weekly-displacement-target-0-0-gate')).not.toBeInTheDocument()
+    expect(screen.getByText('Intercom')).toBeInTheDocument()
+    expect(screen.getByText('12')).toBeInTheDocument()
+  })
+
   describe('ChallengerBriefDetail head-to-head gating', () => {
     afterEach(cleanup)
 

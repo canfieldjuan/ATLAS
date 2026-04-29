@@ -153,6 +153,8 @@ export interface CompetitorDifferentiatorViewModel {
   primary_driver?: string
   solves_weakness?: string
   switch_count?: number | null
+  product_claim?: VendorClaim | null
+  claim_validation_unavailable?: boolean
 }
 
 export interface CrossVendorBattleViewModel {
