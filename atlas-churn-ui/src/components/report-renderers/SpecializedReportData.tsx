@@ -10,6 +10,7 @@ import CitationBar from './CitationBar'
 import { createCitationRegistry } from './useCitationRegistry'
 import type { CitationEntry } from './useCitationRegistry'
 import { ProductClaimGate, ProductClaimStatusBadge } from '../ProductClaimGate'
+import type { VendorClaim } from '../../api/client'
 import type { BattleCardDisplacementReadinessState } from '../../types/reportViewModels'
 
 const BATTLE_CARD_DISPLACEMENT_STATE_BADGE: Record<
@@ -2505,6 +2506,8 @@ interface DisplacementVendorRow {
   top_destination?: string | null
   top_source?: string | null
   top_driver?: string | null
+  product_claim?: VendorClaim | null
+  claim_validation_unavailable?: boolean | null
 }
 
 interface DisplacementBattle {
@@ -2519,6 +2522,8 @@ interface DisplacementBattle {
   durability?: string | null
   source_archetype?: string | null
   target_archetype?: string | null
+  product_claim?: VendorClaim | null
+  claim_validation_unavailable?: boolean | null
 }
 
 interface DriverSummaryRow {
@@ -2558,6 +2563,113 @@ function DriverBadge({ driver }: { driver: string | null | undefined }) {
     <span className={clsx('px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap', cls)}>
       {driverLabel(driver)}
     </span>
+  )
+}
+
+function DisplacementVendorClaimRow({
+  row,
+  index,
+  kind,
+}: {
+  row: DisplacementVendorRow
+  index: number
+  kind: 'loser' | 'winner'
+}) {
+  const claim = row.product_claim ?? null
+  const validationUnavailable = row.claim_validation_unavailable === true
+  const netText = typeof row.net_flow === 'number'
+    ? kind === 'winner'
+      ? `+${row.net_flow}`
+      : `${row.net_flow > 0 ? '+' : ''}${row.net_flow}`
+    : '—'
+  const sourceOrDestination = kind === 'winner' ? row.top_source : row.top_destination
+  const netColor = kind === 'winner' ? 'text-green-400' : 'text-red-400'
+  const fallback = kind === 'winner'
+    ? 'Legacy/unvalidated market winner'
+    : 'Legacy/unvalidated market loser'
+  const testId = kind === 'winner'
+    ? `market-winner-${index}-gate`
+    : `market-loser-${index}-gate`
+  return (
+    <tr>
+      <td colSpan={4} className="py-1.5">
+        <div className="space-y-1">
+          <ProductClaimStatusBadge
+            claim={claim}
+            validationUnavailable={validationUnavailable}
+          />
+          <ProductClaimGate
+            claim={claim}
+            mode="report"
+            validationUnavailable={validationUnavailable}
+            fallback={fallback}
+            testId={testId}
+          >
+            <div className="grid grid-cols-[minmax(0,1fr)_4rem_minmax(0,1fr)_minmax(0,1fr)] gap-2 items-center">
+              <span className="text-slate-200 truncate pr-2">{row.vendor ?? '—'}</span>
+              <span className={clsx('text-right font-medium whitespace-nowrap', netColor)}>{netText}</span>
+              <span className="text-slate-400 truncate">{sourceOrDestination ?? '—'}</span>
+              <span><DriverBadge driver={row.top_driver} /></span>
+            </div>
+          </ProductClaimGate>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function DisplacementBattleClaimCard({ battle, index }: { battle: DisplacementBattle; index: number }) {
+  const claim = battle.product_claim ?? null
+  const validationUnavailable = battle.claim_validation_unavailable === true
+  return (
+    <div className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-2">
+      <ProductClaimStatusBadge
+        claim={claim}
+        validationUnavailable={validationUnavailable}
+      />
+      <ProductClaimGate
+        claim={claim}
+        mode="report"
+        validationUnavailable={validationUnavailable}
+        fallback="Legacy/unvalidated battle"
+        testId={`displacement-battle-${index}-gate`}
+      >
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5 text-sm font-medium flex-wrap">
+            <span className="text-red-300">{battle.from_vendor ?? '?'}</span>
+            {battle.source_archetype && <span className="text-xs text-slate-500">({battle.source_archetype})</span>}
+            <span className="text-slate-500">→</span>
+            <span className="text-green-300">{battle.to_vendor ?? '?'}</span>
+            {battle.target_archetype && <span className="text-xs text-slate-500">({battle.target_archetype})</span>}
+          </div>
+          <div className="flex flex-wrap gap-1.5 items-center">
+            {battle.mention_count != null && (
+              <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 text-xs">{battle.mention_count} mentions</span>
+            )}
+            {battle.signal_strength && (
+              <span className={clsx('px-1.5 py-0.5 rounded text-xs font-medium', signalColor(battle.signal_strength))}>
+                {battle.signal_strength.replace(/_/g, ' ')}
+              </span>
+            )}
+            <DriverBadge driver={battle.primary_driver} />
+            {battle.confidence_score != null && battle.confidence_score > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-300 text-xs">{Math.round(battle.confidence_score * 100)}% conf.</span>
+            )}
+            {battle.durability && (
+              <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 text-xs">{battle.durability}</span>
+            )}
+          </div>
+          {battle.key_quote && (
+            <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/40 pl-2 break-words whitespace-pre-wrap">
+              "{battle.key_quote}"
+            </blockquote>
+          )}
+          {battle.battle_conclusion && (
+            <p className="text-xs text-slate-300 leading-relaxed">{battle.battle_conclusion}</p>
+          )}
+        </div>
+      </ProductClaimGate>
+    </div>
   )
 }
 
@@ -2609,14 +2721,7 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
                   {losers.map((row, i) => (
-                    <tr key={i}>
-                      <td className="py-1.5 text-slate-200 max-w-[6rem] truncate pr-2">{row.vendor ?? '—'}</td>
-                      <td className="py-1.5 text-right text-red-400 font-medium whitespace-nowrap">
-                        {typeof row.net_flow === 'number' ? `${row.net_flow > 0 ? '+' : ''}${row.net_flow}` : '—'}
-                      </td>
-                      <td className="py-1.5 pl-3 text-slate-400 max-w-[5rem] truncate">{row.top_destination ?? '—'}</td>
-                      <td className="py-1.5 pl-2"><DriverBadge driver={row.top_driver} /></td>
-                    </tr>
+                    <DisplacementVendorClaimRow key={i} row={row} index={i} kind="loser" />
                   ))}
                 </tbody>
               </table>
@@ -2639,14 +2744,7 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
                   {winners.map((row, i) => (
-                    <tr key={i}>
-                      <td className="py-1.5 text-slate-200 max-w-[6rem] truncate pr-2">{row.vendor ?? '—'}</td>
-                      <td className="py-1.5 text-right text-green-400 font-medium whitespace-nowrap">
-                        {typeof row.net_flow === 'number' ? `+${row.net_flow}` : '—'}
-                      </td>
-                      <td className="py-1.5 pl-3 text-slate-400 max-w-[5rem] truncate">{row.top_source ?? '—'}</td>
-                      <td className="py-1.5 pl-2"><DriverBadge driver={row.top_driver} /></td>
-                    </tr>
+                    <DisplacementVendorClaimRow key={i} row={row} index={i} kind="winner" />
                   ))}
                 </tbody>
               </table>
@@ -2688,40 +2786,7 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {battles.map((b, i) => (
-              <div key={i} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-2">
-                <div className="flex items-center gap-1.5 text-sm font-medium flex-wrap">
-                  <span className="text-red-300">{b.from_vendor ?? '?'}</span>
-                  {b.source_archetype && <span className="text-xs text-slate-500">({b.source_archetype})</span>}
-                  <span className="text-slate-500">→</span>
-                  <span className="text-green-300">{b.to_vendor ?? '?'}</span>
-                  {b.target_archetype && <span className="text-xs text-slate-500">({b.target_archetype})</span>}
-                </div>
-                <div className="flex flex-wrap gap-1.5 items-center">
-                  {b.mention_count != null && (
-                    <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 text-xs">{b.mention_count} mentions</span>
-                  )}
-                  {b.signal_strength && (
-                    <span className={clsx('px-1.5 py-0.5 rounded text-xs font-medium', signalColor(b.signal_strength))}>
-                      {b.signal_strength.replace(/_/g, ' ')}
-                    </span>
-                  )}
-                  <DriverBadge driver={b.primary_driver} />
-                  {b.confidence_score != null && b.confidence_score > 0 && (
-                    <span className="px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-300 text-xs">{Math.round(b.confidence_score * 100)}% conf.</span>
-                  )}
-                  {b.durability && (
-                    <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 text-xs">{b.durability}</span>
-                  )}
-                </div>
-                {b.key_quote && (
-                  <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/40 pl-2 break-words whitespace-pre-wrap">
-                    "{b.key_quote}"
-                  </blockquote>
-                )}
-                {b.battle_conclusion && (
-                  <p className="text-xs text-slate-300 leading-relaxed">{b.battle_conclusion}</p>
-                )}
-              </div>
+              <DisplacementBattleClaimCard key={i} battle={b} index={i} />
             ))}
           </div>
         </div>

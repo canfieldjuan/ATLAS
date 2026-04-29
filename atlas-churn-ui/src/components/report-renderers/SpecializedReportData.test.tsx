@@ -411,6 +411,109 @@ describe('SpecializedReportData', () => {
     expect(screen.getByText('12')).toBeInTheDocument()
   })
 
+  it('fails closed for displacement report market leaderboard rows without ProductClaim context', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="displacement_report"
+          data={{
+            meta: { total_flows: 2 },
+            market_losers: [
+              {
+                vendor: 'Zendesk',
+                net_flow: -4,
+                top_destination: 'Freshdesk',
+                top_driver: 'support',
+              },
+            ],
+            market_winners: [
+              {
+                vendor: 'Freshdesk',
+                net_flow: 4,
+                top_source: 'Zendesk',
+                top_driver: 'support',
+              },
+            ],
+            top_battles: [
+              {
+                from_vendor: 'Zendesk',
+                to_vendor: 'Freshdesk',
+                mention_count: 7,
+                primary_driver: 'support',
+                battle_conclusion: 'Freshdesk is taking support-led switches from Zendesk.',
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Market Losers')).toBeInTheDocument()
+    expect(screen.getByText('Market Winners')).toBeInTheDocument()
+    expect(screen.getByText('Top Battles')).toBeInTheDocument()
+    expect(screen.getAllByText('Legacy')).toHaveLength(3)
+    expect(screen.getByTestId('market-loser-0-gate')).toHaveTextContent(
+      'Legacy/unvalidated market loser',
+    )
+    expect(screen.getByTestId('market-winner-0-gate')).toHaveTextContent(
+      'Legacy/unvalidated market winner',
+    )
+    expect(screen.getByTestId('displacement-battle-0-gate')).toHaveTextContent(
+      'Legacy/unvalidated battle',
+    )
+    expect(screen.queryByText('Freshdesk')).not.toBeInTheDocument()
+    expect(screen.queryByText('Zendesk')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Freshdesk is taking support-led switches from Zendesk.'),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('+4')).not.toBeInTheDocument()
+    expect(screen.queryByText('-4')).not.toBeInTheDocument()
+  })
+
+  it('renders displacement report market leaderboard rows when ProductClaims are report-safe', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="displacement_report"
+          data={{
+            meta: { total_flows: 2 },
+            market_winners: [
+              {
+                vendor: 'Freshdesk',
+                net_flow: 4,
+                top_source: 'Zendesk',
+                top_driver: 'support',
+                product_claim: reportSafeCompetitorPairClaim({ claim_id: 'claim-market-winner' }),
+              },
+            ],
+            top_battles: [
+              {
+                from_vendor: 'Zendesk',
+                to_vendor: 'Freshdesk',
+                mention_count: 7,
+                primary_driver: 'support',
+                battle_conclusion: 'Freshdesk is taking support-led switches from Zendesk.',
+                product_claim: reportSafeCompetitorPairClaim({ claim_id: 'claim-top-battle' }),
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Market Winners')).toBeInTheDocument()
+    expect(screen.getByText('Top Battles')).toBeInTheDocument()
+    expect(screen.getAllByText('Report-safe')).toHaveLength(2)
+    expect(screen.queryByTestId('market-winner-0-gate')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('displacement-battle-0-gate')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Freshdesk').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Zendesk').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('+4')).toBeInTheDocument()
+    expect(
+      screen.getByText('Freshdesk is taking support-led switches from Zendesk.'),
+    ).toBeInTheDocument()
+  })
+
   describe('ChallengerBriefDetail head-to-head gating', () => {
     afterEach(cleanup)
 
