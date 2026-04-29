@@ -1,6 +1,7 @@
 """Route-level tests for truthful blog/report artifact fields."""
 
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -657,6 +658,83 @@ def test_b2b_evidence_witness_detail_uses_requested_snapshot(monkeypatch):
     body = response.json()
     assert body["witness"]["witness_id"] == "w1"
     assert body["witness"]["as_of_date"] == "2026-03-30"
+
+
+def test_b2b_evidence_witness_detail_logs_lazy_grounding_fallback_hit(monkeypatch, caplog):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        def __init__(self):
+            self.execute_calls = []
+
+        async def fetchrow(self, query, *args):
+            if "SELECT MAX(as_of_date) AS as_of_date" in query:
+                return {"as_of_date": date(2026, 3, 30)}
+            if "FROM b2b_vendor_witnesses w" in query:
+                return {
+                    "witness_id": "w1",
+                    "review_id": uuid4(),
+                    "witness_type": "pain_signal",
+                    "excerpt_text": "Switching due to slow support.",
+                    "source": "g2",
+                    "reviewed_at": datetime(2026, 3, 28, tzinfo=timezone.utc),
+                    "reviewer_company": "Acme",
+                    "reviewer_title": "VP IT",
+                    "pain_category": "support",
+                    "pain_confidence": "high",
+                    "competitor": None,
+                    "salience_score": 0.9,
+                    "specificity_score": 0.8,
+                    "selection_reason": "high_signal",
+                    "signal_tags": ["support"],
+                    "phrase_subject": "subject_vendor",
+                    "phrase_polarity": "negative",
+                    "witness_role": "primary_driver",
+                    "grounding_status": "pending",
+                    "schema_version": "v1",
+                    "as_of_date": date(2026, 3, 30),
+                    "analysis_window_days": 30,
+                    "vendor_name": "Salesforce",
+                    "review_text": "Switching due to slow support. Full review text.",
+                    "summary": "Summary",
+                    "pros": None,
+                    "cons": None,
+                    "rating": 2,
+                    "review_source": "g2",
+                    "source_url": None,
+                    "enrichment": None,
+                    "reviewer_name": "Pat",
+                    "enrichment_status": "completed",
+                }
+            return None
+
+        async def execute(self, query, *args):
+            assert "UPDATE b2b_vendor_witnesses" in query
+            self.execute_calls.append(args)
+            return "UPDATE 1"
+
+    pool = Pool()
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(
+        evidence_api,
+        "resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+    caplog.set_level(logging.INFO, logger="atlas.api.b2b_evidence")
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/b2b/evidence/witnesses/w1?vendor_name=Salesforce&as_of_date=2026-03-31&window_days=30"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["witness"]["grounding_status"] == "grounded"
+    assert len(pool.execute_calls) == 1
+    assert "lazy_grounding_fallback_hit witness=w1 fresh_status=grounded" in caplog.text
 
 
 def test_b2b_evidence_router_rejects_invalid_as_of_date(monkeypatch):
