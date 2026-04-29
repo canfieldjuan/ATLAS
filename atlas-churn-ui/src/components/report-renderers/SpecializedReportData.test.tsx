@@ -181,6 +181,65 @@ describe('SpecializedReportData', () => {
     ).toBeInTheDocument()
   })
 
+  it('fails closed for battle-card weakness analysis without ProductClaim context', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="battle_card"
+          data={{
+            vendor: 'Zendesk',
+            weakness_analysis: [
+              {
+                weakness: 'Support reliability',
+                evidence: 'Escalations repeat across enterprise accounts.',
+                customer_quote: 'Support breaks weekly.',
+                winning_position: 'Lead with uptime proof.',
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Weakness Analysis')).toBeInTheDocument()
+    expect(screen.getByText('Legacy')).toBeInTheDocument()
+    expect(screen.getByTestId('battle-card-weakness-0-gate')).toHaveTextContent(
+      'Legacy/unvalidated weakness',
+    )
+    expect(screen.queryByText('Support reliability')).not.toBeInTheDocument()
+    expect(screen.queryByText('Support breaks weekly.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Lead with uptime proof.')).not.toBeInTheDocument()
+  })
+
+  it('renders battle-card weakness analysis when ProductClaim is report-safe', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="battle_card"
+          data={{
+            vendor: 'Zendesk',
+            weakness_analysis: [
+              {
+                weakness: 'Support reliability',
+                evidence: 'Escalations repeat across enterprise accounts.',
+                customer_quote: 'Support breaks weekly.',
+                winning_position: 'Lead with uptime proof.',
+                product_claim: reportSafeCompetitorPairClaim({ claim_id: 'claim-weakness' }),
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Weakness Analysis')).toBeInTheDocument()
+    expect(screen.getByText('Report-safe')).toBeInTheDocument()
+    expect(screen.queryByTestId('battle-card-weakness-0-gate')).not.toBeInTheDocument()
+    expect(screen.getByText('Support reliability')).toBeInTheDocument()
+    expect(screen.getByText('"Support breaks weekly."')).toBeInTheDocument()
+    expect(screen.getByText('Lead with uptime proof.')).toBeInTheDocument()
+  })
+
   it('fails closed for battle-card cross-vendor battles without ProductClaim context', () => {
     render(
       <MemoryRouter>
@@ -589,6 +648,134 @@ describe('SpecializedReportData', () => {
         ...Object.fromEntries(Object.entries(overrides).filter(([k]) => k !== 'head_to_head')),
       }
     }
+
+    it('fails closed for challenger playbook and weakness rows without ProductClaim context', () => {
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="challenger_brief"
+            data={challengerBriefData({
+              incumbent_profile: {
+                archetype: 'feature_gap',
+                risk_level: 'medium',
+                top_weaknesses: [
+                  {
+                    area: 'Admin outages',
+                    evidence_count: 4,
+                  },
+                ],
+              },
+              challenger_advantage: {
+                profile_summary: 'Stronger collaboration suite.',
+                strengths: [],
+                weakness_coverage: [
+                  {
+                    incumbent_weakness: 'Support reliability',
+                    match_quality: 'strong',
+                  },
+                ],
+                commonly_switched_from: [],
+              },
+              sales_playbook: {
+                discovery_questions: [],
+                landmine_questions: [],
+                objection_handlers: [],
+                talk_track: {
+                  opening: 'Lead with admin reliability.',
+                },
+                recommended_plays: [
+                  {
+                    play: 'Displace with IT-admin migration plan.',
+                    key_message: 'Push reliability proof.',
+                  },
+                ],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByText('Top Weaknesses')).toBeInTheDocument()
+      expect(screen.getByText('Recommended Plays')).toBeInTheDocument()
+      expect(screen.getByTestId('challenger-incumbent-weakness-0-gate')).toHaveTextContent(
+        'Legacy/unvalidated weakness',
+      )
+      expect(screen.getByTestId('challenger-weakness-coverage-0-gate')).toHaveTextContent(
+        'Legacy/unvalidated weakness coverage',
+      )
+      expect(screen.getByTestId('challenger-talk-track-gate')).toHaveTextContent(
+        'Legacy/unvalidated talk track',
+      )
+      expect(screen.getByTestId('challenger-recommended-play-0-gate')).toHaveTextContent(
+        'Legacy/unvalidated play',
+      )
+      expect(screen.queryByText('Admin outages')).not.toBeInTheDocument()
+      expect(screen.queryByText('Support reliability')).not.toBeInTheDocument()
+      expect(screen.queryByText('Lead with admin reliability.')).not.toBeInTheDocument()
+      expect(screen.queryByText('Displace with IT-admin migration plan.')).not.toBeInTheDocument()
+    })
+
+    it('renders challenger playbook and weakness rows when ProductClaims are report-safe', () => {
+      const claim = reportSafeClaim()
+      render(
+        <MemoryRouter>
+          <SpecializedReportData
+            reportType="challenger_brief"
+            data={challengerBriefData({
+              incumbent_profile: {
+                archetype: 'feature_gap',
+                risk_level: 'medium',
+                top_weaknesses: [
+                  {
+                    area: 'Admin outages',
+                    evidence_count: 4,
+                    product_claim: { ...claim, claim_id: 'claim-incumbent-weakness' },
+                  },
+                ],
+              },
+              challenger_advantage: {
+                profile_summary: 'Stronger collaboration suite.',
+                strengths: [],
+                weakness_coverage: [
+                  {
+                    incumbent_weakness: 'Support reliability',
+                    match_quality: 'strong',
+                    product_claim: { ...claim, claim_id: 'claim-weakness-coverage' },
+                  },
+                ],
+                commonly_switched_from: [],
+              },
+              sales_playbook: {
+                discovery_questions: [],
+                landmine_questions: [],
+                objection_handlers: [],
+                talk_track: {
+                  opening: 'Lead with admin reliability.',
+                  product_claim: { ...claim, claim_id: 'claim-challenger-talk-track' },
+                },
+                recommended_plays: [
+                  {
+                    play: 'Displace with IT-admin migration plan.',
+                    key_message: 'Push reliability proof.',
+                    product_claim: { ...claim, claim_id: 'claim-challenger-play' },
+                  },
+                ],
+              },
+            })}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getAllByText('Report-safe').length).toBeGreaterThanOrEqual(4)
+      expect(screen.queryByTestId('challenger-incumbent-weakness-0-gate')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('challenger-weakness-coverage-0-gate')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('challenger-talk-track-gate')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('challenger-recommended-play-0-gate')).not.toBeInTheDocument()
+      expect(screen.getByText('Admin outages')).toBeInTheDocument()
+      expect(screen.getByText('Support reliability')).toBeInTheDocument()
+      expect(screen.getByText('Lead with admin reliability.')).toBeInTheDocument()
+      expect(screen.getByText('Displace with IT-admin migration plan.')).toBeInTheDocument()
+    })
 
     it('renders winner / durability / confidence when the head-to-head ProductClaim is report-safe', () => {
       render(

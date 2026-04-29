@@ -337,6 +337,8 @@ export function toWeaknessAnalysis(value: unknown): WeaknessAnalysisItemViewMode
     recommendation: asString(item.recommendation),
     count: asNumber(item.count) ?? null,
     evidence_count: asNumber(item.evidence_count) ?? null,
+    product_claim: toEmbeddedProductClaim(item.product_claim),
+    claim_validation_unavailable: asBoolean(item.claim_validation_unavailable) ?? false,
   }))
 }
 
@@ -551,6 +553,8 @@ function toChallengerAdvantage(value: unknown): ChallengerAdvantageViewModel {
     weakness_coverage: toRecordArray(obj.weakness_coverage).map((item) => ({
       incumbent_weakness: asString(item.incumbent_weakness),
       match_quality: asString(item.match_quality),
+      product_claim: toEmbeddedProductClaim(item.product_claim),
+      claim_validation_unavailable: asBoolean(item.claim_validation_unavailable) ?? false,
     })),
     commonly_switched_from: toRecordArray(obj.commonly_switched_from).map((item) => asString(item.vendor)).filter((item): item is string => Boolean(item)).concat(
       toStringArray(obj.commonly_switched_from),

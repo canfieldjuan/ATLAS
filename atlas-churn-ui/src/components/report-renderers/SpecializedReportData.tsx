@@ -57,6 +57,7 @@ import type {
   CategoryCouncilViewModel,
   ChallengerBriefViewModel,
   ChallengerTargetAccountViewModel,
+  ChallengerWeaknessCoverageViewModel,
   ComparisonReportViewModel,
   CompetitorDifferentiatorViewModel,
   FeatureGapViewModel,
@@ -107,6 +108,38 @@ function CategoryCouncilProductClaimGate({
         claim={council.product_claim ?? null}
         mode="report"
         validationUnavailable={council.claim_validation_unavailable ?? false}
+        fallback={fallback}
+        testId={testId}
+      >
+        {children}
+      </ProductClaimGate>
+    </>
+  )
+}
+
+function ProductClaimContextGate({
+  claim,
+  validationUnavailable,
+  children,
+  fallback,
+  testId,
+}: {
+  claim: VendorClaim | null | undefined
+  validationUnavailable?: boolean
+  children: ReactNode
+  fallback: string
+  testId: string
+}) {
+  return (
+    <>
+      <ProductClaimStatusBadge
+        claim={claim ?? null}
+        validationUnavailable={validationUnavailable ?? false}
+      />
+      <ProductClaimGate
+        claim={claim ?? null}
+        mode="report"
+        validationUnavailable={validationUnavailable ?? false}
         fallback={fallback}
         testId={testId}
       >
@@ -437,8 +470,21 @@ function ChallengerBriefDetail({ data, onOpenWitness, backTo, asOfDate, windowDa
                 <tbody>
                   {inc.top_weaknesses.slice(0, 8).map((weakness: WeaknessAnalysisItemViewModel, index: number) => (
                     <tr key={index} className="border-b border-slate-800/50">
-                      <td className="px-2 py-1 text-slate-300 align-top break-words">{weakness.area ?? weakness.weakness ?? weakness.name ?? ''}</td>
-                      <td className="px-2 py-1 text-slate-400 text-right align-top break-words">{weakness.count ?? weakness.evidence_count ?? ''}</td>
+                      <td className="px-2 py-1 align-top break-words" colSpan={2}>
+                        <div className="space-y-1">
+                          <ProductClaimContextGate
+                            claim={weakness.product_claim ?? null}
+                            validationUnavailable={weakness.claim_validation_unavailable ?? false}
+                            fallback="Legacy/unvalidated weakness"
+                            testId={`challenger-incumbent-weakness-${index}-gate`}
+                          >
+                            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 text-sm">
+                              <span className="text-slate-300 break-words">{weakness.area ?? weakness.weakness ?? weakness.name ?? ''}</span>
+                              <span className="text-slate-400 text-right">{weakness.count ?? weakness.evidence_count ?? ''}</span>
+                            </div>
+                          </ProductClaimContextGate>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -542,13 +588,24 @@ function ChallengerBriefDetail({ data, onOpenWitness, backTo, asOfDate, windowDa
                   </tr>
                 </thead>
                 <tbody>
-                  {adv.weakness_coverage.slice(0, 8).map((coverage, index: number) => (
+                  {adv.weakness_coverage.slice(0, 8).map((coverage: ChallengerWeaknessCoverageViewModel, index: number) => (
                     <tr key={index} className="border-b border-slate-800/50">
-                      <td className="px-2 py-1 text-slate-300 align-top break-words">{coverage.incumbent_weakness ?? ''}</td>
-                      <td className="px-2 py-1">
-                        <span className={clsx('text-xs px-1.5 py-0.5 rounded', coverage.match_quality === 'strong' ? 'bg-green-500/15 text-green-300' : 'bg-amber-500/15 text-amber-300')}>
-                          {coverage.match_quality}
-                        </span>
+                      <td className="px-2 py-1 align-top break-words" colSpan={2}>
+                        <div className="space-y-1">
+                          <ProductClaimContextGate
+                            claim={coverage.product_claim ?? null}
+                            validationUnavailable={coverage.claim_validation_unavailable ?? false}
+                            fallback="Legacy/unvalidated weakness coverage"
+                            testId={`challenger-weakness-coverage-${index}-gate`}
+                          >
+                            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 text-sm">
+                              <span className="text-slate-300 break-words">{coverage.incumbent_weakness ?? ''}</span>
+                              <span className={clsx('text-xs px-1.5 py-0.5 rounded', coverage.match_quality === 'strong' ? 'bg-green-500/15 text-green-300' : 'bg-amber-500/15 text-amber-300')}>
+                                {coverage.match_quality}
+                              </span>
+                            </div>
+                          </ProductClaimContextGate>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -712,22 +769,29 @@ function ChallengerBriefDetail({ data, onOpenWitness, backTo, asOfDate, windowDa
           {playbook.talk_track && typeof playbook.talk_track === 'object' && (
             <div className="mb-4">
               <p className="text-xs font-medium text-slate-400 mb-2">Talk Track</p>
-              <div className="space-y-3">
-                {[
-                  { key: 'opening' as const, label: 'Opening', color: 'border-cyan-500/50' },
-                  { key: 'mid_call_pivot' as const, label: 'Mid-Call Pivot', color: 'border-amber-500/50' },
-                  { key: 'closing' as const, label: 'Closing', color: 'border-green-500/50' },
-                ].map(({ key, label, color }) => {
-                  const value = (playbook.talk_track as TalkTrackViewModel)[key]
-                  if (!value) return null
-                  return (
-                    <div key={key} className={`border-l-2 ${color} pl-3`}>
-                      <p className="text-xs text-slate-500 uppercase mb-1">{label}</p>
-                      <p className="text-sm text-slate-300">{String(value)}</p>
-                    </div>
-                  )
-                })}
-              </div>
+              <ProductClaimContextGate
+                claim={playbook.talk_track.product_claim ?? null}
+                validationUnavailable={playbook.talk_track.claim_validation_unavailable ?? false}
+                fallback="Legacy/unvalidated talk track"
+                testId="challenger-talk-track-gate"
+              >
+                <div className="space-y-3">
+                  {[
+                    { key: 'opening' as const, label: 'Opening', color: 'border-cyan-500/50' },
+                    { key: 'mid_call_pivot' as const, label: 'Mid-Call Pivot', color: 'border-amber-500/50' },
+                    { key: 'closing' as const, label: 'Closing', color: 'border-green-500/50' },
+                  ].map(({ key, label, color }) => {
+                    const value = (playbook.talk_track as TalkTrackViewModel)[key]
+                    if (!value) return null
+                    return (
+                      <div key={key} className={`border-l-2 ${color} pl-3`}>
+                        <p className="text-xs text-slate-500 uppercase mb-1">{label}</p>
+                        <p className="text-sm text-slate-300">{String(value)}</p>
+                      </div>
+                    )
+                  })}
+                </div>
+              </ProductClaimContextGate>
             </div>
           )}
 
@@ -737,10 +801,17 @@ function ChallengerBriefDetail({ data, onOpenWitness, backTo, asOfDate, windowDa
               <div className="space-y-2">
                 {playbook.recommended_plays.map((play: RecommendedPlayViewModel, index: number) => (
                   <div key={index} className="bg-slate-800/50 rounded-lg p-3">
-                    <p className="text-sm text-white font-medium">{play.play ?? play.name ?? play.description ?? ''}</p>
-                    {play.target_segment && <span className="text-xs text-amber-300">{play.target_segment}</span>}
-                    {play.key_message && <p className="text-xs text-slate-400 mt-1">{play.key_message}</p>}
-                    {play.timing && <p className="text-xs text-slate-500 mt-1">Timing: {play.timing}</p>}
+                    <ProductClaimContextGate
+                      claim={play.product_claim ?? null}
+                      validationUnavailable={play.claim_validation_unavailable ?? false}
+                      fallback="Legacy/unvalidated play"
+                      testId={`challenger-recommended-play-${index}-gate`}
+                    >
+                      <p className="text-sm text-white font-medium">{play.play ?? play.name ?? play.description ?? ''}</p>
+                      {play.target_segment && <span className="text-xs text-amber-300">{play.target_segment}</span>}
+                      {play.key_message && <p className="text-xs text-slate-400 mt-1">{play.key_message}</p>}
+                      {play.timing && <p className="text-xs text-slate-500 mt-1">Timing: {play.timing}</p>}
+                    </ProductClaimContextGate>
                   </div>
                 ))}
               </div>
@@ -1236,10 +1307,17 @@ function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }:
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
             {weaknesses.slice(0, 6).map((weakness: WeaknessAnalysisItemViewModel, index: number) => (
               <div key={index} className="bg-slate-800/50 rounded-lg p-3">
-                <p className="text-sm font-medium text-white">{weakness.weakness ?? normalizeLabel(weakness.area ?? weakness.name, 'pain') ?? ''}</p>
-                {weakness.evidence && <p className="text-xs text-slate-400 mt-1">{weakness.evidence}</p>}
-                {weakness.customer_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2 break-words whitespace-pre-wrap">"{weakness.customer_quote}"</blockquote>}
-                {weakness.winning_position && <p className="text-xs text-cyan-300 mt-2">{weakness.winning_position}</p>}
+                <ProductClaimContextGate
+                  claim={weakness.product_claim ?? null}
+                  validationUnavailable={weakness.claim_validation_unavailable ?? false}
+                  fallback="Legacy/unvalidated weakness"
+                  testId={`battle-card-weakness-${index}-gate`}
+                >
+                  <p className="text-sm font-medium text-white">{weakness.weakness ?? normalizeLabel(weakness.area ?? weakness.name, 'pain') ?? ''}</p>
+                  {weakness.evidence && <p className="text-xs text-slate-400 mt-1">{weakness.evidence}</p>}
+                  {weakness.customer_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2 break-words whitespace-pre-wrap">"{weakness.customer_quote}"</blockquote>}
+                  {weakness.winning_position && <p className="text-xs text-cyan-300 mt-2">{weakness.winning_position}</p>}
+                </ProductClaimContextGate>
               </div>
             ))}
           </div>

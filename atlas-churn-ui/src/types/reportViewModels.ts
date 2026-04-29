@@ -133,6 +133,8 @@ export interface WeaknessAnalysisItemViewModel {
   recommendation?: string
   count?: number | null
   evidence_count?: number | null
+  product_claim?: VendorClaim | null
+  claim_validation_unavailable?: boolean
 }
 
 export interface RecommendedPlayViewModel {
@@ -205,6 +207,8 @@ export interface ChallengerStrengthViewModel {
 export interface ChallengerWeaknessCoverageViewModel {
   incumbent_weakness?: string
   match_quality?: string
+  product_claim?: VendorClaim | null
+  claim_validation_unavailable?: boolean
 }
 
 export interface ChallengerAdvantageViewModel {
