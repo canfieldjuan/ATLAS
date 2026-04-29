@@ -19,6 +19,7 @@ from typing import Any
 
 from ...config import settings
 from ...services.b2b.account_opportunity_claims import (
+    account_opportunity_source_review_count,
     build_account_opportunity_claim,
     serialize_product_claim,
 )
@@ -3967,12 +3968,16 @@ def _attach_campaign_opportunity_claim(
     as_of_date: date,
     analysis_window_days: int,
 ):
+    claim_input = _campaign_opportunity_claim_input(row)
     claim = build_account_opportunity_claim(
-        _campaign_opportunity_claim_input(row),
+        claim_input,
         as_of_date=as_of_date,
         analysis_window_days=analysis_window_days,
     )
-    row["opportunity_claim"] = serialize_product_claim(claim)
+    row["opportunity_claim"] = serialize_product_claim(
+        claim,
+        source_review_count=account_opportunity_source_review_count(claim_input),
+    )
     return claim
 
 

@@ -94,13 +94,26 @@ def _claim_text(company: str, vendor: str, row: dict[str, Any]) -> str:
     return f"{company} shows churn pressure away from {vendor}"
 
 
-def serialize_product_claim(claim: ProductClaim) -> dict[str, Any]:
+def account_opportunity_source_review_count(row: dict[str, Any]) -> int:
+    """Return the row's source-review count independent of claim sample_size."""
+    source_review_ids = _source_review_ids(row)
+    if source_review_ids:
+        return len(source_review_ids)
+    return int(bool(_has_quote_evidence(row)))
+
+
+def serialize_product_claim(
+    claim: ProductClaim,
+    *,
+    source_review_count: int,
+) -> dict[str, Any]:
     """Dict form matching the public ProductClaim API envelope.
 
     ACCOUNT v1 adds source_review_count because reviewer-dedup lineage
     is not plumbed into high-intent rows yet. ProductClaim.witness_count
-    stays conservative (0/1 for this row), while source_review_count is
-    the count callers can display as the row's evidence denominator.
+    stays conservative (0/1 for this row), while explicit
+    source_review_count is the count callers can display as the row's
+    evidence denominator.
     """
     return {
         "claim_id": claim.claim_id,
@@ -116,7 +129,7 @@ def serialize_product_claim(claim: ProductClaim) -> dict[str, Any]:
         "contradiction_count": claim.contradiction_count,
         "denominator": claim.denominator,
         "sample_size": claim.sample_size,
-        "source_review_count": claim.sample_size,
+        "source_review_count": source_review_count,
         "has_grounded_evidence": claim.has_grounded_evidence,
         "confidence": claim.confidence.value,
         "evidence_posture": claim.evidence_posture.value,
@@ -155,7 +168,7 @@ def build_account_opportunity_claim(
     company = _clean_text(row.get("company"))
     vendor = _clean_text(row.get("vendor"))
     source_review_ids = _source_review_ids(row)
-    source_count = len(source_review_ids) if source_review_ids else int(bool(_has_quote_evidence(row)))
+    source_count = account_opportunity_source_review_count(row)
     witness_count = 1 if source_count > 0 else 0
     has_identity = bool(company and vendor)
     has_source = source_count > 0
@@ -203,12 +216,16 @@ def attach_account_opportunity_claim(
     )
     return {
         **payload,
-        "opportunity_claim": serialize_product_claim(claim),
+        "opportunity_claim": serialize_product_claim(
+            claim,
+            source_review_count=account_opportunity_source_review_count(payload),
+        ),
     }
 
 
 __all__ = [
     "ACCOUNT_OPPORTUNITY_CLAIM_TYPE",
+    "account_opportunity_source_review_count",
     "attach_account_opportunity_claim",
     "build_account_opportunity_claim",
     "serialize_product_claim",
