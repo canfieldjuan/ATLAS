@@ -1250,6 +1250,80 @@ async def test_fetch_opportunities_filters_non_report_safe_account_claims(monkey
 
 
 @pytest.mark.asyncio
+async def test_fetch_opportunities_real_adapter_rows_flow_through_product_claim_gate(monkeypatch):
+    review_id = "11111111-1111-1111-1111-111111111111"
+    adapter_row = {
+        "review_id": review_id,
+        "vendor_name": "Zendesk",
+        "reviewer_company": "Acme Corp",
+        "reviewer_name": "Jane Doe",
+        "product_category": "Customer Support",
+        "source": "g2",
+        "reviewed_at": None,
+        "urgency": 9.2,
+        "is_dm": True,
+        "role_type": "decision_maker",
+        "buying_stage": "active_purchase",
+        "seat_count": 750,
+        "contract_end": None,
+        "decision_timeline": "this quarter",
+        "competitors_json": json.dumps([
+            {"name": "Intercom", "context": "renewal evaluation"}
+        ]),
+        "pain_json": json.dumps([{"category": "pricing", "severity": "primary"}]),
+        "enrichment_raw": {
+            "urgency_score": 9.2,
+            "reviewer_context": {"decision_maker": True},
+            "buyer_authority": {
+                "role_type": "decision_maker",
+                "buying_stage": "active_purchase",
+            },
+            "competitors_mentioned": [
+                {"name": "Intercom", "context": "renewal evaluation"}
+            ],
+            "pain_categories": [{"category": "pricing", "severity": "primary"}],
+        },
+        "feature_gaps": json.dumps([]),
+        "primary_workflow": "support operations",
+        "integration_stack": json.dumps(["Slack"]),
+        "sentiment_direction": "declining",
+        "industry": "SaaS",
+        "reviewer_title": "VP Operations",
+        "company_size_raw": "501-1000",
+    }
+    pool = SimpleNamespace(fetch=AsyncMock(side_effect=[[adapter_row], []]))
+    captured_claims = []
+    original_attach = mod._attach_campaign_opportunity_claim
+
+    def _capture_claim(row, *, as_of_date, analysis_window_days):
+        claim = original_attach(
+            row,
+            as_of_date=as_of_date,
+            analysis_window_days=analysis_window_days,
+        )
+        captured_claims.append((dict(row), claim))
+        return claim
+
+    monkeypatch.setattr(mod, "_attach_campaign_opportunity_claim", _capture_claim)
+
+    result = await mod._fetch_opportunities(pool, min_score=1, limit=10)
+
+    assert result == []
+    adapter_sql = pool.fetch.await_args_list[0].args[0]
+    assert "FROM b2b_reviews r" in adapter_sql
+    assert "b2b_review_vendor_mentions" in adapter_sql
+    assert len(captured_claims) == 1
+    gated_row, claim = captured_claims[0]
+    assert gated_row["opportunity_score"] >= 1
+    assert gated_row["competitors"] == [
+        {"name": "Intercom", "context": "renewal evaluation"}
+    ]
+    assert claim.render_allowed is True
+    assert claim.report_allowed is False
+    assert gated_row["opportunity_claim"]["report_allowed"] is False
+
+
+@pytest.mark.asyncio
 async def test_fetch_opportunities_keeps_report_safe_account_claims(monkeypatch):
     from atlas_brain.autonomous.tasks import _b2b_shared
 

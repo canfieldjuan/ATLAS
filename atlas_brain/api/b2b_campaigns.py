@@ -1203,7 +1203,10 @@ async def list_suppressions(
 
 
 @router.post("/suppressions")
-async def create_suppression(body: SuppressionCreate):
+async def create_suppression(
+    body: SuppressionCreate,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Manually add an email or domain suppression."""
     if not body.email and not body.domain:
         raise HTTPException(status_code=400, detail="email or domain required")
@@ -1228,7 +1231,10 @@ async def create_suppression(body: SuppressionCreate):
 
 
 @router.delete("/suppressions/{suppression_id}")
-async def delete_suppression(suppression_id: str):
+async def delete_suppression(
+    suppression_id: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Remove a suppression (e.g., after fixing a bounce)."""
     try:
         sid = _uuid.UUID(suppression_id)
@@ -1846,7 +1852,11 @@ async def sequence_audit_log(
 
 
 @router.post("/sequences/{sequence_id}/set-recipient")
-async def set_recipient(sequence_id: UUID, body: SetRecipientBody):
+async def set_recipient(
+    sequence_id: UUID,
+    body: SetRecipientBody,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Set the recipient email for a sequence."""
     pool = _pool_or_503()
 
@@ -1875,7 +1885,10 @@ async def set_recipient(sequence_id: UUID, body: SetRecipientBody):
 
 
 @router.post("/sequences/{sequence_id}/pause")
-async def pause_sequence(sequence_id: UUID):
+async def pause_sequence(
+    sequence_id: UUID,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Pause an active sequence."""
     pool = _pool_or_503()
 
@@ -1898,7 +1911,10 @@ async def pause_sequence(sequence_id: UUID):
 
 
 @router.post("/sequences/{sequence_id}/resume")
-async def resume_sequence(sequence_id: UUID):
+async def resume_sequence(
+    sequence_id: UUID,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Resume a paused sequence."""
     pool = _pool_or_503()
 

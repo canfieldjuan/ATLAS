@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from atlas_brain.api import router as api_router
 from atlas_brain.api import admin_costs
+from atlas_brain.api import b2b_campaigns
 from atlas_brain.api import b2b_vendor_briefing
 from atlas_brain.api import seller_campaigns
 from atlas_brain.api import vendor_targets
@@ -61,6 +62,19 @@ _TARGET_ID = str(uuid4())
         ("POST", "/api/v1/b2b/briefings/bulk-reject", {"briefing_ids": [str(uuid4())]}),
         ("GET", "/api/v1/b2b/briefings/export", None),
         ("GET", "/api/v1/admin/costs/summary", None),
+        (
+            "POST",
+            "/api/v1/b2b/campaigns/suppressions",
+            {"email": "boundary@example.com", "reason": "manual"},
+        ),
+        ("DELETE", f"/api/v1/b2b/campaigns/suppressions/{_TARGET_ID}", None),
+        (
+            "POST",
+            f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/set-recipient",
+            {"recipient_email": "boundary@example.com"},
+        ),
+        ("POST", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/pause", None),
+        ("POST", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/resume", None),
         ("GET", "/api/v1/seller/targets", None),
         (
             "POST",
@@ -88,6 +102,7 @@ def test_tenant_and_operator_routes_reject_unauthenticated_requests(
 
     monkeypatch.setattr(vendor_targets, "get_db_pool", _fail_pool)
     monkeypatch.setattr(b2b_vendor_briefing, "get_db_pool", _fail_pool)
+    monkeypatch.setattr(b2b_campaigns, "get_db_pool", _fail_pool)
     monkeypatch.setattr(admin_costs, "get_db_pool", _fail_pool)
     monkeypatch.setattr(seller_campaigns, "get_db_pool", _fail_pool)
 
