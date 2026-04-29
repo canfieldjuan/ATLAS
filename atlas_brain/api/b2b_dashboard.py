@@ -6365,6 +6365,7 @@ async def export_high_intent(
     vendor_name: Optional[str] = Query(None),
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(90, ge=1, le=3650),
+    report_safe_only: bool = Query(True),
     user: AuthUser | None = Depends(optional_auth),
 ):
     vendor_name = _optional_query_text(vendor_name)
@@ -6381,27 +6382,53 @@ async def export_high_intent(
     )
 
     data = []
+    as_of_date = date.today()
     for r in rows:
-        alternatives = r.get("alternatives")
+        shaped = _shape_high_intent_company_payload(
+            dict(r),
+            as_of_date=as_of_date,
+            analysis_window_days=window_days,
+        )
+        claim = shaped.get("opportunity_claim") or {}
+        if report_safe_only and claim.get("report_allowed") is not True:
+            continue
+        alternatives = shaped.get("alternatives")
         if isinstance(alternatives, list):
             alt_str = "; ".join(str(a) for a in alternatives)
         else:
             alt_str = str(alternatives) if alternatives else ""
 
         data.append({
-            "company": r.get("company") or "",
-            "vendor": r.get("vendor") or "",
-            "category": r.get("category") or "",
-            "role_level": r.get("role_level") or "",
-            "decision_maker": r.get("decision_maker") if r.get("decision_maker") is not None else "",
-            "urgency": _safe_float(r.get("urgency"), ""),
-            "pain": r.get("pain") or "",
+            "company": shaped.get("company") or "",
+            "vendor": shaped.get("vendor") or "",
+            "category": shaped.get("category") or "",
+            "role_level": shaped.get("role_level") or "",
+            "decision_maker": shaped.get("decision_maker") if shaped.get("decision_maker") is not None else "",
+            "urgency": _safe_float(shaped.get("urgency"), ""),
+            "pain": shaped.get("pain") or "",
             "alternatives": alt_str,
-            "contract_signal": r.get("contract_signal") or "",
-            "seat_count": r.get("seat_count") if r.get("seat_count") is not None else "",
-            "lock_in_level": r.get("lock_in_level") or "",
-            "contract_end": r.get("contract_end") or "",
-            "buying_stage": r.get("buying_stage") or "",
+            "contract_signal": shaped.get("contract_signal") or "",
+            "seat_count": shaped.get("seat_count") if shaped.get("seat_count") is not None else "",
+            "lock_in_level": shaped.get("lock_in_level") or "",
+            "contract_end": shaped.get("contract_end") or "",
+            "buying_stage": shaped.get("buying_stage") or "",
+            "opportunity_claim_id": claim.get("claim_id") or "",
+            "opportunity_render_allowed": claim.get("render_allowed") if claim.get("render_allowed") is not None else "",
+            "opportunity_report_allowed": claim.get("report_allowed") if claim.get("report_allowed") is not None else "",
+            "opportunity_confidence": claim.get("confidence") or "",
+            "opportunity_evidence_posture": claim.get("evidence_posture") or "",
+            "opportunity_suppression_reason": claim.get("suppression_reason") or "",
+            "opportunity_supporting_count": claim.get("supporting_count") if claim.get("supporting_count") is not None else "",
+            "opportunity_direct_evidence_count": (
+                claim.get("direct_evidence_count")
+                if claim.get("direct_evidence_count") is not None
+                else ""
+            ),
+            "opportunity_source_review_count": (
+                claim.get("source_review_count")
+                if claim.get("source_review_count") is not None
+                else ""
+            ),
         })
 
     return _csv_response(data, "high_intent_leads.csv")

@@ -9,13 +9,26 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from atlas_brain.api import b2b_vendor_briefing as briefing_api
+from atlas_brain.auth.dependencies import AuthUser, require_auth
 from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
 
+
+def _auth_user() -> AuthUser:
+    return AuthUser(
+        user_id="00000000-0000-0000-0000-000000000001",
+        account_id="00000000-0000-0000-0000-000000000002",
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
 
 
 def _make_app():
     app = FastAPI()
     app.include_router(briefing_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
     return app
 
 

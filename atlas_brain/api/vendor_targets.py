@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..auth.dependencies import AuthUser, optional_auth, require_auth
+from ..auth.dependencies import AuthUser, require_auth
 from ..services.scraping.target_provisioning import (
     provision_vendor_onboarding_targets,
 )
@@ -175,7 +175,7 @@ async def list_vendor_targets(
     ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """List all vendor/challenger targets."""
     pool = _pool_or_503()
@@ -242,7 +242,7 @@ async def list_vendor_targets(
 @router.post("", status_code=201)
 async def create_vendor_target(
     body: VendorTargetCreate,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Add a new vendor or challenger target."""
     pool = _pool_or_503()
@@ -316,7 +316,7 @@ async def create_vendor_target(
 @router.get("/{target_id}")
 async def get_vendor_target(
     target_id: UUID,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Get a single vendor/challenger target with intelligence summary."""
     pool = _pool_or_503()
@@ -401,7 +401,7 @@ async def get_vendor_target(
 async def update_vendor_target(
     target_id: UUID,
     body: VendorTargetUpdate,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Update a vendor/challenger target."""
     pool = _pool_or_503()
@@ -568,7 +568,7 @@ async def claim_vendor_target(
 @router.delete("/{target_id}")
 async def delete_vendor_target(
     target_id: UUID,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Remove a vendor/challenger target."""
     pool = _pool_or_503()
@@ -626,7 +626,7 @@ async def delete_vendor_target(
 @router.post("/{target_id}/generate-report")
 async def generate_target_report(
     target_id: UUID,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Generate an intelligence report for this target (vendor or challenger)."""
     pool = _pool_or_503()

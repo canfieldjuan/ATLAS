@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from atlas_brain.api.admin_costs import router
+from atlas_brain.auth.dependencies import AuthUser, require_auth
 
 
 class _FakePool:
@@ -948,6 +949,15 @@ class _FakePool:
 def _client(monkeypatch):
     app = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[require_auth] = lambda: AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(uuid4()),
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
     pool = _FakePool()
     monkeypatch.setattr("atlas_brain.api.admin_costs.get_db_pool", lambda: pool)
     return TestClient(app), pool

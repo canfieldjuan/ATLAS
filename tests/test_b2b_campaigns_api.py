@@ -119,6 +119,8 @@ class _CampaignPool:
     async def fetchrow(self, query, *args):
         if "SELECT bc.*, cs.company_context" in query:
             return dict(self.campaign_row)
+        if "SELECT bc.id, bc.status" in query:
+            return dict(self.campaign_row)
         if "RETURNING id" in query:
             return {"id": self.campaign_row["id"]}
         return None
@@ -133,6 +135,55 @@ class _CampaignPool:
     async def execute(self, query, *args):
         self.execute_calls.append((query, args))
         return "UPDATE 1"
+
+
+def _report_safe_gate_metadata(extra: dict | None = None) -> dict:
+    metadata = {
+        "opportunity_claim_gate": {
+            "claim_id": "claim-1",
+            "report_allowed": True,
+            "render_allowed": True,
+        },
+    }
+    if extra:
+        metadata.update(extra)
+    return metadata
+
+
+def test_campaign_metadata_product_claim_gate_accepts_full_compact_and_aggregate_shapes():
+    assert mod._campaign_metadata_has_report_safe_product_claim({}) is False
+    assert mod._campaign_metadata_has_report_safe_product_claim({
+        "opportunity_claim": {"claim_id": "claim-1", "report_allowed": True},
+    }) is True
+    assert mod._campaign_metadata_has_report_safe_product_claim({
+        "opportunity_claim_gate": {"claim_id": "claim-1", "report_allowed": True},
+    }) is True
+    assert mod._campaign_metadata_has_report_safe_product_claim({
+        "opportunity_claims": [
+            {"claim_id": "claim-1", "report_allowed": True},
+            {"claim_id": "claim-2", "report_allowed": False},
+        ],
+    }) is False
+    assert mod._campaign_metadata_has_report_safe_product_claim({
+        "opportunity_claims": [
+            {"claim_id": "claim-1", "report_allowed": True},
+            {"claim_id": "claim-2", "report_allowed": True},
+        ],
+    }) is True
+    assert mod._campaign_metadata_has_report_safe_product_claim({
+        "opportunity_claim": {"claim_id": "claim-1", "report_allowed": True},
+        "opportunity_claims": [
+            {"claim_id": "claim-1", "report_allowed": True},
+            {"claim_id": "claim-2", "report_allowed": False},
+        ],
+    }) is False
+    assert mod._campaign_metadata_has_report_safe_product_claim({
+        "opportunity_claim": {"claim_id": "claim-1", "report_allowed": True},
+        "opportunity_claim_gate": {"claim_id": "claim-1", "report_allowed": False},
+    }) is False
+    assert mod._campaign_metadata_has_report_safe_product_claim(
+        '{"opportunity_claim": {"claim_id": "claim-1", "report_allowed": true}}'
+    ) is True
 
 
 class _FallbackReasoningView:
@@ -194,6 +245,16 @@ async def test_export_campaigns_reuses_account_scope(monkeypatch):
                     "created_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
                     "approved_at": None,
                     "sent_at": None,
+                    "metadata": {
+                        "opportunity_claim_gate": {
+                            "claim_id": "claim-1",
+                            "render_allowed": True,
+                            "report_allowed": True,
+                            "confidence": "medium",
+                            "evidence_posture": "usable",
+                            "suppression_reason": None,
+                        },
+                    },
                     "recipient_email": "owner@acme.com",
                     "current_step": 1,
                     "max_steps": 4,
@@ -225,6 +286,100 @@ async def test_export_campaigns_reuses_account_scope(monkeypatch):
     assert captured["args"][0] == user.account_id
     assert rows[0]["company_name"] == "Acme Corp"
     assert rows[0]["vendor_name"] == "Zendesk"
+    assert rows[0]["product_claim_id"] == "claim-1"
+    assert rows[0]["product_claim_report_allowed"] == "True"
+    assert rows[0]["product_claim_confidence"] == "medium"
+    assert rows[0]["product_claim_evidence_posture"] == "usable"
+
+
+@pytest.mark.asyncio
+async def test_approve_campaign_blocks_missing_product_claim_gate_before_update(monkeypatch):
+    campaign_id = uuid4()
+    pool = _CampaignPool({
+        "id": campaign_id,
+        "status": "draft",
+        "sequence_id": None,
+        "step_number": 1,
+        "recipient_email": "owner@example.com",
+        "subject": "Renewal pressure",
+        "body": "<p>Body</p>",
+        "channel": "email_cold",
+        "metadata": {},
+        "company_context": None,
+    })
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", False)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.approve_campaign(str(campaign_id))
+
+    assert exc.value.status_code == 409
+    assert "report-safe ProductClaim gate" in str(exc.value.detail)
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_queue_campaign_for_send_blocks_missing_product_claim_gate_before_update(monkeypatch):
+    campaign_id = uuid4()
+    pool = _CampaignPool({
+        "id": campaign_id,
+        "status": "draft",
+        "sequence_id": None,
+        "step_number": 1,
+        "recipient_email": "owner@example.com",
+        "subject": "Renewal pressure",
+        "body": "<p>Body</p>",
+        "channel": "email_cold",
+        "metadata": {},
+        "company_context": None,
+    })
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_queue_send", False)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.queue_campaign_for_send(str(campaign_id), body=None)
+
+    assert exc.value.status_code == 409
+    assert "report-safe ProductClaim gate" in str(exc.value.detail)
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["approve", "queue-send"])
+async def test_bulk_approve_blocks_missing_product_claim_gate_before_update(monkeypatch, action):
+    campaign_id = uuid4()
+    pool = _CampaignPool({
+        "id": campaign_id,
+        "status": "draft",
+        "sequence_id": None,
+        "step_number": 1,
+        "recipient_email": "owner@example.com",
+        "seq_recipient": None,
+        "subject": "Renewal pressure",
+        "body": "<p>Body</p>",
+        "channel": "email_cold",
+        "metadata": {},
+        "company_context": None,
+    })
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", False)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_queue_send", False)
+
+    result = await mod.bulk_approve(
+        mod.BulkApproveBody(campaign_ids=[str(campaign_id)], action=action),
+    )
+
+    assert result["processed"] == 0
+    assert result["failed"] == [
+        {
+            "id": str(campaign_id),
+            "reason": f"Campaign is missing a report-safe ProductClaim gate for {'manual_approval' if action == 'approve' else 'queue_send'}",
+        }
+    ]
+    assert pool.execute_calls == []
 
 
 @pytest.mark.asyncio
@@ -239,7 +394,7 @@ async def test_approve_campaign_blocks_generic_copy_when_revalidation_fails(monk
         "subject": "Renewal pressure",
         "body": "<p>There is broad market pressure and multiple teams are feeling it.</p>",
         "channel": "email_followup",
-        "metadata": {
+        "metadata": _report_safe_gate_metadata({
             "reasoning_anchor_examples": {
                 "outlier_or_named_account": [
                     {
@@ -263,7 +418,7 @@ async def test_approve_campaign_blocks_generic_copy_when_revalidation_fails(monk
                 },
             ],
             "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
-        },
+        }),
         "company_context": {},
     })
 
@@ -294,7 +449,7 @@ async def test_queue_campaign_for_send_blocks_generic_copy_when_revalidation_fai
         "subject": "Renewal pressure",
         "body": "<p>The market is shifting and teams should pay attention.</p>",
         "channel": "email_followup",
-        "metadata": {
+        "metadata": _report_safe_gate_metadata({
             "reasoning_anchor_examples": {
                 "outlier_or_named_account": [
                     {
@@ -318,7 +473,7 @@ async def test_queue_campaign_for_send_blocks_generic_copy_when_revalidation_fai
                 },
             ],
             "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
-        },
+        }),
         "company_context": {},
     })
 
@@ -354,9 +509,9 @@ async def test_approve_campaign_uses_synthesis_fallback_and_records_success(monk
         "subject": "Renewal pressure",
         "body": "<p>The Q2 renewal now carries a $200k/year pricing issue and Freshdesk is showing up.</p>",
         "channel": "email_followup",
-        "metadata": {
+        "metadata": _report_safe_gate_metadata({
             "generation_audit": {"status": "succeeded"},
-        },
+        }),
         "company_context": None,
     })
 
@@ -404,10 +559,10 @@ async def test_approve_campaign_blocks_report_tier_language(monkeypatch):
         "cta": "Open the dashboard",
         "channel": "email_cold",
         "target_mode": "vendor_retention",
-        "metadata": {
+        "metadata": _report_safe_gate_metadata({
             "tier": "report",
             "generation_audit": {"status": "succeeded"},
-        },
+        }),
         "company_context": None,
     })
 

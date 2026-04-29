@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -955,7 +955,16 @@ async def test_generate_churning_company_campaigns_prefers_accounts_in_motion(mo
             "topic_type": "vendor_showdown",
         }]
 
+    def _allow_claim(row, *, as_of_date, analysis_window_days):
+        row["opportunity_claim"] = {
+            "claim_id": "claim-accounts-in-motion",
+            "report_allowed": True,
+            "render_allowed": True,
+        }
+        return SimpleNamespace(report_allowed=True)
+
     monkeypatch.setattr(mod, "_fetch_opportunities", _fake_fetch_opportunities)
+    monkeypatch.setattr(mod, "_attach_campaign_opportunity_claim", _allow_claim)
     monkeypatch.setattr(mod, "_fetch_affiliate_partners", _fake_fetch_affiliate_partners)
     monkeypatch.setattr(
         "atlas_brain.services.b2b.product_matching.match_products",
@@ -1202,6 +1211,112 @@ async def test_generate_vendor_campaigns_bypass_briefing_gate(monkeypatch):
 
     assert result_default["generated"] == 0
     assert result_bypass["generated"] > 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_opportunities_filters_non_report_safe_account_claims(monkeypatch):
+    from atlas_brain.autonomous.tasks import _b2b_shared
+
+    review_id = "11111111-1111-1111-1111-111111111111"
+    rows = [{
+        "review_id": review_id,
+        "vendor_name": "Zendesk",
+        "reviewer_company": "Acme Corp",
+        "urgency": 9.2,
+        "is_dm": True,
+        "role_type": "decision_maker",
+        "buying_stage": "active_purchase",
+        "seat_count": 750,
+        "competitors": [{"name": "Intercom", "context": "renewal evaluation"}],
+        "quotable_phrases": [{"text": "We are actively evaluating Intercom."}],
+        "decision_timeline": "this quarter",
+    }]
+
+    async def _fake_read_campaign_opportunities(*args, **kwargs):
+        return rows
+
+    monkeypatch.setattr(_b2b_shared, "read_campaign_opportunities", _fake_read_campaign_opportunities)
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    result = await mod._fetch_opportunities(pool, min_score=1, limit=10)
+
+    assert result == []
+    claim = mod.build_account_opportunity_claim(
+        mod._campaign_opportunity_claim_input(rows[0]),
+        as_of_date=date.today(),
+        analysis_window_days=90,
+    )
+    assert claim.report_allowed is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_opportunities_keeps_report_safe_account_claims(monkeypatch):
+    from atlas_brain.autonomous.tasks import _b2b_shared
+
+    rows = [{
+        "review_id": "11111111-1111-1111-1111-111111111111",
+        "vendor_name": "Zendesk",
+        "reviewer_company": "Acme Corp",
+        "urgency": 9.2,
+        "is_dm": True,
+        "role_type": "decision_maker",
+        "buying_stage": "active_purchase",
+        "seat_count": 750,
+        "competitors": [{"name": "Intercom", "context": "renewal evaluation"}],
+        "quotable_phrases": [{"text": "We are actively evaluating Intercom."}],
+        "decision_timeline": "this quarter",
+    }]
+
+    async def _fake_read_campaign_opportunities(*args, **kwargs):
+        return rows
+
+    def _allow_claim(row, *, as_of_date, analysis_window_days):
+        row["opportunity_claim"] = {
+            "claim_id": "claim-1",
+            "report_allowed": True,
+            "render_allowed": True,
+        }
+        return SimpleNamespace(report_allowed=True)
+
+    monkeypatch.setattr(_b2b_shared, "read_campaign_opportunities", _fake_read_campaign_opportunities)
+    monkeypatch.setattr(mod, "_attach_campaign_opportunity_claim", _allow_claim)
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    result = await mod._fetch_opportunities(pool, min_score=1, limit=10)
+
+    assert len(result) == 1
+    assert result[0]["opportunity_claim"]["claim_id"] == "claim-1"
+    assert result[0]["opportunity_score"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_accounts_in_motion_opportunities_filter_non_report_safe_account_claims():
+    review_id = "11111111-1111-1111-1111-111111111111"
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[{
+        "vendor_filter": "Zendesk",
+        "intelligence_data": {
+            "category": "Helpdesk",
+            "accounts": [{
+                "company": "Acme Corp",
+                "opportunity_score": 91,
+                "urgency": 9,
+                "top_quote": "We are actively evaluating Intercom.",
+                "source_reviews": [review_id],
+                "alternatives_considering": ["Intercom"],
+                "buying_stage": "active_purchase",
+                "decision_timeline": "this quarter",
+                "role_level": "decision_maker",
+            }],
+        },
+    }]))
+
+    result = await mod._fetch_accounts_in_motion_opportunities(
+        pool,
+        min_score=1,
+        limit=10,
+    )
+
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -1978,6 +2093,138 @@ def test_campaign_storage_metadata_includes_specificity_context_and_audit():
     assert metadata["generation_audit"]["status"] == "succeeded"
     assert metadata["latest_specificity_audit"]["status"] == "pass"
     assert metadata["latest_specificity_audit"]["boundary"] == "generation"
+
+
+def test_campaign_storage_metadata_includes_product_claim_gate_payloads():
+    claim = {
+        "claim_id": "claim-1",
+        "render_allowed": True,
+        "report_allowed": True,
+        "confidence": "medium",
+        "evidence_posture": "usable",
+        "suppression_reason": None,
+    }
+    sibling_claim = {
+        "claim_id": "claim-2",
+        "render_allowed": True,
+        "report_allowed": True,
+    }
+
+    metadata = mod._campaign_storage_metadata({
+        "opportunity_claim": claim,
+        "opportunity_claims": [sibling_claim, "not-a-claim"],
+    })
+
+    assert metadata["opportunity_claim"] == claim
+    assert metadata["opportunity_claim_gate"] == {
+        "claim_id": "claim-1",
+        "render_allowed": True,
+        "report_allowed": True,
+        "confidence": "medium",
+        "evidence_posture": "usable",
+        "suppression_reason": None,
+    }
+    assert metadata["opportunity_claims"] == [sibling_claim]
+
+
+def test_campaign_payload_report_safe_gate_requires_product_claim_context():
+    assert mod._campaign_payload_has_report_safe_product_claim({}) is False
+    assert mod._campaign_payload_has_report_safe_product_claim({
+        "opportunity_claim": {"claim_id": "claim-1", "report_allowed": False},
+    }) is False
+    assert mod._campaign_payload_has_report_safe_product_claim({
+        "opportunity_claim": {"claim_id": "claim-1", "report_allowed": True},
+    }) is True
+    assert mod._campaign_payload_has_report_safe_product_claim({
+        "opportunity_claims": [
+            {"claim_id": "claim-1", "report_allowed": True},
+            {"claim_id": "claim-2", "report_allowed": False},
+        ],
+    }) is False
+    assert mod._campaign_payload_has_report_safe_product_claim({
+        "opportunity_claims": [
+            {"claim_id": "claim-1", "report_allowed": True},
+            {"claim_id": "claim-2", "report_allowed": True},
+        ],
+    }) is True
+    assert mod._campaign_payload_has_report_safe_product_claim({
+        "opportunity_claim": {"claim_id": "claim-1", "report_allowed": True},
+        "opportunity_claims": [
+            {"claim_id": "claim-1", "report_allowed": True},
+            {"claim_id": "claim-2", "report_allowed": False},
+        ],
+    }) is False
+    assert mod._campaign_payload_has_report_safe_product_claim({
+        "opportunity_claim": {"claim_id": "claim-1", "report_allowed": True},
+        "opportunity_claim_gate": {"claim_id": "claim-1", "report_allowed": False},
+    }) is False
+
+
+@pytest.mark.asyncio
+async def test_store_replayed_campaign_entry_blocks_missing_product_claim_before_db_touch():
+    pool = SimpleNamespace(execute=AsyncMock(side_effect=AssertionError("db touched")))
+
+    with pytest.raises(ValueError, match="missing report-safe ProductClaim gate"):
+        await mod._store_replayed_campaign_entry(
+            pool,
+            entry={
+                "payload": {"target_mode": "churning_company"},
+                "company_name": "Acme Corp",
+                "artifact_id": "artifact-1",
+            },
+            content={"subject": "Subject", "body": "<p>Body</p>", "cta": "Book time"},
+            llm_model_name="test-model",
+        )
+
+    pool.execute.assert_not_awaited()
+
+
+def test_build_company_context_carries_best_opportunity_claim():
+    claim = {
+        "claim_id": "claim-1",
+        "render_allowed": True,
+        "report_allowed": True,
+    }
+    row = {
+        "review_id": "rev-1",
+        "vendor_name": "Zendesk",
+        "reviewer_company": "Acme Corp",
+        "product_category": "Helpdesk",
+        "urgency": 9,
+        "pain_json": [{"category": "support", "severity": "primary"}],
+        "competitors": [{"name": "Intercom", "reason": "support"}],
+        "quotable_phrases": [{"text": "Support is too slow.", "phrase_verbatim": True}],
+        "opportunity_claim": claim,
+    }
+
+    context = mod._build_company_context(row, [row])
+
+    assert context["opportunity_claim"] == claim
+
+
+def test_vendor_and_challenger_contexts_carry_opportunity_claim_lists():
+    claim = {
+        "claim_id": "claim-1",
+        "render_allowed": True,
+        "report_allowed": True,
+    }
+    row = {
+        "review_id": "rev-1",
+        "vendor_name": "Zendesk",
+        "urgency": 9,
+        "buying_stage": "evaluation",
+        "role_type": "decision_maker",
+        "pain_json": [{"category": "support", "severity": "primary"}],
+        "competitors": [{"name": "Intercom", "reason": "support"}],
+        "quotable_phrases": [{"text": "Support is too slow.", "phrase_verbatim": True}],
+        "opportunity_claim": claim,
+    }
+
+    vendor_context = mod._build_vendor_context("Zendesk", [row])
+    challenger_context = mod._build_challenger_context("Intercom", [row])
+
+    assert vendor_context["opportunity_claims"] == [claim]
+    assert challenger_context["opportunity_claims"] == [claim]
 
 
 # ---------------------------------------------------------------------------

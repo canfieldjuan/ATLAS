@@ -247,6 +247,105 @@ def _campaign_failure_explanation(metadata: Any) -> dict[str, Any] | None:
     }
 
 
+def _campaign_metadata_has_report_safe_product_claim(metadata: Any) -> bool:
+    resolved = _coerce_json_dict(metadata)
+    saw_claim_context = False
+
+    claim = resolved.get("opportunity_claim")
+    if isinstance(claim, dict):
+        saw_claim_context = True
+        if claim.get("report_allowed") is not True:
+            return False
+
+    claims = [
+        item
+        for item in resolved.get("opportunity_claims") or []
+        if isinstance(item, dict)
+    ]
+    if claims:
+        saw_claim_context = True
+        if not all(item.get("report_allowed") is True for item in claims):
+            return False
+
+    gate = resolved.get("opportunity_claim_gate")
+    if isinstance(gate, dict):
+        saw_claim_context = True
+        if gate.get("report_allowed") is not True:
+            return False
+
+    return saw_claim_context
+
+
+def _campaign_product_claim_export_fields(metadata: Any) -> dict[str, Any]:
+    resolved = _coerce_json_dict(metadata)
+    claim = resolved.get("opportunity_claim")
+    if isinstance(claim, dict):
+        return {
+            "product_claim_id": claim.get("claim_id") or "",
+            "product_claim_count": 1,
+            "product_claim_render_allowed": claim.get("render_allowed") if claim.get("render_allowed") is not None else "",
+            "product_claim_report_allowed": claim.get("report_allowed") if claim.get("report_allowed") is not None else "",
+            "product_claim_confidence": claim.get("confidence") or "",
+            "product_claim_evidence_posture": claim.get("evidence_posture") or "",
+            "product_claim_suppression_reason": claim.get("suppression_reason") or "",
+        }
+
+    claims = [
+        item
+        for item in resolved.get("opportunity_claims") or []
+        if isinstance(item, dict)
+    ]
+    if claims:
+        return {
+            "product_claim_id": "; ".join(str(item.get("claim_id") or "") for item in claims if item.get("claim_id")),
+            "product_claim_count": len(claims),
+            "product_claim_render_allowed": all(item.get("render_allowed") is True for item in claims),
+            "product_claim_report_allowed": all(item.get("report_allowed") is True for item in claims),
+            "product_claim_confidence": "; ".join(str(item.get("confidence") or "") for item in claims if item.get("confidence")),
+            "product_claim_evidence_posture": "; ".join(
+                str(item.get("evidence_posture") or "")
+                for item in claims
+                if item.get("evidence_posture")
+            ),
+            "product_claim_suppression_reason": "; ".join(
+                str(item.get("suppression_reason") or "")
+                for item in claims
+                if item.get("suppression_reason")
+            ),
+        }
+
+    gate = resolved.get("opportunity_claim_gate")
+    if isinstance(gate, dict):
+        return {
+            "product_claim_id": gate.get("claim_id") or "",
+            "product_claim_count": 1,
+            "product_claim_render_allowed": gate.get("render_allowed") if gate.get("render_allowed") is not None else "",
+            "product_claim_report_allowed": gate.get("report_allowed") if gate.get("report_allowed") is not None else "",
+            "product_claim_confidence": gate.get("confidence") or "",
+            "product_claim_evidence_posture": gate.get("evidence_posture") or "",
+            "product_claim_suppression_reason": gate.get("suppression_reason") or "",
+        }
+
+    return {
+        "product_claim_id": "",
+        "product_claim_count": "",
+        "product_claim_render_allowed": "",
+        "product_claim_report_allowed": "",
+        "product_claim_confidence": "",
+        "product_claim_evidence_posture": "",
+        "product_claim_suppression_reason": "",
+    }
+
+
+def _enforce_campaign_product_claim_gate(campaign: dict[str, Any], *, action: str) -> None:
+    if _campaign_metadata_has_report_safe_product_claim(campaign.get("metadata")):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=f"Campaign is missing a report-safe ProductClaim gate for {action}",
+    )
+
+
 async def _persist_campaign_revalidation(
     pool,
     *,
@@ -1372,6 +1471,11 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
             continue
 
         if body.action == "approve":
+            try:
+                _enforce_campaign_product_claim_gate(dict(campaign), action="manual_approval")
+            except HTTPException as exc:
+                failed.append({"id": cid_str, "reason": str(exc.detail)})
+                continue
             if settings.b2b_campaign.revalidate_before_manual_approval:
                 try:
                     await _enforce_campaign_revalidation(
@@ -1400,6 +1504,11 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
             continue
 
         # queue-send: needs recipient + suppression check
+        try:
+            _enforce_campaign_product_claim_gate(dict(campaign), action="queue_send")
+        except HTTPException as exc:
+            failed.append({"id": cid_str, "reason": str(exc.detail)})
+            continue
         recipient = campaign["recipient_email"] or campaign["seq_recipient"]
         if not recipient:
             failed.append({"id": cid_str, "reason": "no recipient_email set"})
@@ -2132,6 +2241,7 @@ async def approve_campaign(
             status_code=409,
             detail=f"Campaign is '{campaign['status']}', can only approve drafts",
         )
+    _enforce_campaign_product_claim_gate(dict(campaign), action="manual_approval")
     if settings.b2b_campaign.revalidate_before_manual_approval:
         await _enforce_campaign_revalidation(
             pool,
@@ -2200,6 +2310,7 @@ async def queue_campaign_for_send(
             status_code=400,
             detail=f"Cannot queue campaign with status '{campaign['status']}'"
         )
+    _enforce_campaign_product_claim_gate(dict(campaign), action="queue_send")
 
     now = datetime.now(timezone.utc)
     sequence_id = campaign.get("sequence_id")
@@ -2414,6 +2525,7 @@ async def export_campaigns(
                bc.buying_stage, bc.role_type,
                bc.seat_count, bc.contract_end, bc.decision_timeline,
                bc.created_at, bc.approved_at, bc.sent_at,
+               bc.metadata,
                cs.recipient_email, cs.current_step, cs.max_steps,
                cs.open_count, cs.click_count, cs.outcome
         FROM b2b_campaigns bc
@@ -2450,6 +2562,7 @@ async def export_campaigns(
             "created_at": r["created_at"].isoformat() if r["created_at"] else "",
             "approved_at": r["approved_at"].isoformat() if r["approved_at"] else "",
             "sent_at": r["sent_at"].isoformat() if r["sent_at"] else "",
+            **_campaign_product_claim_export_fields(r.get("metadata")),
         })
 
     if not data:

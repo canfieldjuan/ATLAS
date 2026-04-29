@@ -4416,6 +4416,7 @@ async def export_tenant_high_intent(
     vendor_name: Optional[str] = Query(None),
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(90, ge=1, le=3650),
+    report_safe_only: bool = Query(True),
     user: AuthUser = Depends(require_auth),
 ):
     _require_b2b_product(user)
@@ -4424,6 +4425,7 @@ async def export_tenant_high_intent(
         vendor_name=vendor_name,
         min_urgency=min_urgency,
         window_days=window_days,
+        report_safe_only=report_safe_only,
         user=user,
     )
 

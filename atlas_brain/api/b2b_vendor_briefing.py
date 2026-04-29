@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from starlette.responses import StreamingResponse
 
-from ..auth.dependencies import AuthUser, optional_auth, require_auth
+from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
 from ..services.crm_provider import get_crm_provider
 from ..storage.database import get_db_pool
@@ -255,7 +255,7 @@ class BulkBriefingRejectRequest(BaseModel):
 @router.post("/preview")
 async def preview_briefing(
     body: PreviewRequest,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Build and render a briefing as HTML without sending."""
     if not settings.b2b_churn.vendor_briefing_enabled:
@@ -279,7 +279,7 @@ async def preview_briefing(
 @router.post("/generate")
 async def generate_briefing(
     body: GenerateRequest,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Build, render, send, and persist a vendor briefing."""
     if not settings.b2b_churn.vendor_briefing_enabled:
@@ -700,7 +700,7 @@ async def report_data(token: str = Query(..., min_length=10)):
 
 
 @router.post("/send-batch")
-async def send_batch(user: AuthUser | None = Depends(optional_auth)):
+async def send_batch(user: AuthUser = Depends(require_auth)):
     """Send briefings to all eligible vendor targets."""
     if not settings.b2b_churn.vendor_briefing_enabled:
         raise HTTPException(status_code=403, detail="Vendor briefings disabled")
@@ -717,7 +717,7 @@ async def send_batch(user: AuthUser | None = Depends(optional_auth)):
 async def list_briefings(
     vendor: str | None = Query(None),
     limit: int = Query(50, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """List all briefings, optionally filtered by vendor."""
     pool = _pool_or_503()

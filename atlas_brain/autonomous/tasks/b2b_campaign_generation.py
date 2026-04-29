@@ -14,10 +14,14 @@ import json
 import logging
 import re
 import uuid as _uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.b2b.account_opportunity_claims import (
+    build_account_opportunity_claim,
+    serialize_product_claim,
+)
 from ...services.campaign_reasoning_context import (
     campaign_reasoning_atom_context as _shared_campaign_reasoning_atom_context,
     campaign_reasoning_delta_summary as _shared_campaign_reasoning_delta_summary,
@@ -486,6 +490,24 @@ def _campaign_storage_metadata(payload: dict[str, Any]) -> dict[str, Any]:
                 for term in proof_terms
                 if str(term or "").strip()
             ]
+    opportunity_claim = payload.get("opportunity_claim")
+    if isinstance(opportunity_claim, dict) and opportunity_claim:
+        metadata["opportunity_claim"] = opportunity_claim
+        metadata["opportunity_claim_gate"] = {
+            "claim_id": opportunity_claim.get("claim_id"),
+            "render_allowed": opportunity_claim.get("render_allowed"),
+            "report_allowed": opportunity_claim.get("report_allowed"),
+            "confidence": opportunity_claim.get("confidence"),
+            "evidence_posture": opportunity_claim.get("evidence_posture"),
+            "suppression_reason": opportunity_claim.get("suppression_reason"),
+        }
+    opportunity_claims = [
+        claim
+        for claim in payload.get("opportunity_claims") or []
+        if isinstance(claim, dict) and claim
+    ]
+    if opportunity_claims:
+        metadata["opportunity_claims"] = opportunity_claims[:20]
     generation_audit = payload.get("_generation_audit")
     if isinstance(generation_audit, dict) and generation_audit:
         metadata["generation_audit"] = generation_audit
@@ -496,6 +518,35 @@ def _campaign_storage_metadata(payload: dict[str, Any]) -> dict[str, Any]:
                 "boundary": "generation",
             }
     return metadata
+
+
+def _campaign_payload_has_report_safe_product_claim(payload: dict[str, Any]) -> bool:
+    """Replay/persistence guard for already-fetched campaign payloads."""
+    saw_claim_context = False
+
+    claim = payload.get("opportunity_claim")
+    if isinstance(claim, dict):
+        saw_claim_context = True
+        if claim.get("report_allowed") is not True:
+            return False
+
+    claims = [
+        item
+        for item in payload.get("opportunity_claims") or []
+        if isinstance(item, dict)
+    ]
+    if claims:
+        saw_claim_context = True
+        if not all(item.get("report_allowed") is True for item in claims):
+            return False
+
+    gate = payload.get("opportunity_claim_gate")
+    if isinstance(gate, dict):
+        saw_claim_context = True
+        if gate.get("report_allowed") is not True:
+            return False
+
+    return saw_claim_context
 
 
 async def _record_campaign_generation_failure(
@@ -2260,7 +2311,13 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
     # Timeline signals
     timeline_count = sum(1 for s in signals if s.get("contract_end"))
 
-    return {
+    opportunity_claims = [
+        s["opportunity_claim"]
+        for s in ordered_signals
+        if isinstance(s.get("opportunity_claim"), dict)
+    ]
+
+    context = {
         "vendor_name": vendor_name,
         "key_quotes": quote_list[:8],
         "signal_summary": {
@@ -2282,6 +2339,9 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
             "trend_vs_last_month": None,  # overridden by caller with _compute_vendor_trend()
         },
     }
+    if opportunity_claims:
+        context["opportunity_claims"] = opportunity_claims[:20]
+    return context
 
 
 async def _compute_vendor_trend(
@@ -3073,7 +3133,13 @@ def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict
             if text not in quote_list:
                 quote_list.append(text)
 
-    return {
+    opportunity_claims = [
+        s["opportunity_claim"]
+        for s in ordered_signals
+        if isinstance(s.get("opportunity_claim"), dict)
+    ]
+
+    context = {
         "challenger_name": challenger_name,
         "key_quotes": quote_list[:8],
         "signal_summary": {
@@ -3106,6 +3172,9 @@ def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict
             "feature_mentions": feature_mentions[:10],
         },
     }
+    if opportunity_claims:
+        context["opportunity_claims"] = opportunity_claims[:20]
+    return context
 
 
 async def _generate_challenger_campaigns(
@@ -3730,6 +3799,7 @@ async def _fetch_opportunities(
             )
 
     opportunities = []
+    claim_as_of_date = date.today()
     for r in rows:
         row_dict = dict(r)
         competitors = row_dict.get("competitors", [])
@@ -3748,6 +3818,13 @@ async def _fetch_opportunities(
 
         row_dict["opportunity_score"] = opp_score
         row_dict["score_components"] = score_components
+        claim = _attach_campaign_opportunity_claim(
+            row_dict,
+            as_of_date=claim_as_of_date,
+            analysis_window_days=90,
+        )
+        if not claim.report_allowed:
+            continue
         opportunities.append(row_dict)
 
     # Sort by score, then by prior engagement speed as tie-breaker (lower open hours = better)
@@ -3779,6 +3856,7 @@ async def _fetch_accounts_in_motion_opportunities(
     results: list[dict[str, Any]] = []
     vendor_filter_lc = str(vendor_filter or "").lower()
     company_filter_lc = str(company_filter or "").lower()
+    claim_as_of_date = date.today()
 
     for row in rows:
         vendor_name = str(row.get("vendor_filter") or "").strip()
@@ -3813,8 +3891,9 @@ async def _fetch_accounts_in_motion_opportunities(
                 for name in (account.get("alternatives_considering") or [])
                 if str(name).strip()
             ]
-            results.append({
+            candidate = {
                 "review_id": review_id,
+                "source_review_ids": review_ids,
                 "vendor_name": vendor_name or str(report.get("vendor") or "").strip(),
                 "reviewer_company": company,
                 "product_category": category,
@@ -3843,7 +3922,15 @@ async def _fetch_accounts_in_motion_opportunities(
                 "company_size_raw": account.get("company_size"),
                 "score_components": account.get("score_components") or {},
                 "opportunity_source": "accounts_in_motion",
-            })
+            }
+            claim = _attach_campaign_opportunity_claim(
+                candidate,
+                as_of_date=claim_as_of_date,
+                analysis_window_days=90,
+            )
+            if not claim.report_allowed:
+                continue
+            results.append(candidate)
 
     results.sort(
         key=lambda row: (
@@ -3853,6 +3940,40 @@ async def _fetch_accounts_in_motion_opportunities(
         reverse=True,
     )
     return results[:limit]
+
+
+def _campaign_opportunity_claim_input(row: dict[str, Any]) -> dict[str, Any]:
+    """Map campaign candidate rows into the ACCOUNT ProductClaim row shape."""
+    return {
+        "company": row.get("reviewer_company") or row.get("company"),
+        "vendor": row.get("vendor_name") or row.get("vendor"),
+        "review_id": row.get("review_id"),
+        "source_review_ids": row.get("source_review_ids"),
+        "quotes": row.get("quotable_phrases") or row.get("quotes") or [],
+        "alternatives": row.get("competitors") or row.get("alternatives") or [],
+        "buying_stage": row.get("buying_stage"),
+        "contract_signal": (
+            row.get("decision_timeline")
+            or row.get("contract_signal")
+            or row.get("contract_end")
+        ),
+        "intent_signals": row.get("intent_signals"),
+    }
+
+
+def _attach_campaign_opportunity_claim(
+    row: dict[str, Any],
+    *,
+    as_of_date: date,
+    analysis_window_days: int,
+):
+    claim = build_account_opportunity_claim(
+        _campaign_opportunity_claim_input(row),
+        as_of_date=as_of_date,
+        analysis_window_days=analysis_window_days,
+    )
+    row["opportunity_claim"] = serialize_product_claim(claim)
+    return claim
 
 
 def _parse_json_field(val) -> list:
@@ -4120,6 +4241,8 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
         "integration_stack": all_integrations[:5],
         "sentiment_direction": best.get("sentiment_direction"),
     }
+    if isinstance(best.get("opportunity_claim"), dict):
+        context["opportunity_claim"] = best["opportunity_claim"]
     context.update(_build_churning_company_anchor_context(best, all_opps))
     return context
 
@@ -5366,6 +5489,9 @@ async def _store_replayed_campaign_entry(
     content: dict[str, Any],
     llm_model_name: str,
 ) -> dict[str, Any] | None:
+    payload = entry.get("payload")
+    if not isinstance(payload, dict) or not _campaign_payload_has_report_safe_product_claim(payload):
+        raise ValueError("campaign replay missing report-safe ProductClaim gate")
     target_mode = str(((entry.get("payload") or {}).get("target_mode")) or "")
     if target_mode == "churning_company":
         return await _store_churning_replayed_campaign(pool, entry=entry, content=content, llm_model_name=llm_model_name)

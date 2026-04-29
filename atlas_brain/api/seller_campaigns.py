@@ -13,16 +13,21 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Param
 from pydantic import BaseModel
 
+from ..auth.dependencies import require_auth
 from ..config import settings
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.seller_campaigns")
 
-router = APIRouter(prefix="/seller", tags=["seller-campaigns"])
+router = APIRouter(
+    prefix="/seller",
+    tags=["seller-campaigns"],
+    dependencies=[Depends(require_auth)],
+)
 
 
 def _pool_or_503():

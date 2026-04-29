@@ -18,8 +18,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import psutil
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..auth.dependencies import require_auth
 from ..config import settings
 from ..services.b2b.enrichment_repair_policy import (
     ACTIVE_REPAIR_POOL_SQL_TEMPLATE,
@@ -34,7 +35,11 @@ from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.admin_costs")
 
-router = APIRouter(prefix="/admin/costs", tags=["admin-costs"])
+router = APIRouter(
+    prefix="/admin/costs",
+    tags=["admin-costs"],
+    dependencies=[Depends(require_auth)],
+)
 
 _GENERIC_REASONING_SOURCE_EXCLUDES = {"b2b_churn_intelligence"}
 _REVIEW_BASIS_CANONICAL = "canonical_reviews"

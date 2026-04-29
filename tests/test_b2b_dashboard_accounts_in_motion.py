@@ -2693,6 +2693,7 @@ async def test_export_high_intent_normalizes_blank_vendor_filter():
                         vendor_name="  ",
                         min_urgency=7.0,
                         window_days=90,
+                        report_safe_only=True,
                         user=None,
                     )
 
@@ -2705,6 +2706,110 @@ async def test_export_high_intent_normalizes_blank_vendor_filter():
         limit=b2b_dashboard.EXPORT_ROW_LIMIT,
     )
     assert result == {"rows": [], "filename": "high_intent_leads.csv"}
+
+
+@pytest.mark.asyncio
+async def test_export_high_intent_defaults_to_report_safe_rows_only():
+    pool = MagicMock()
+    rows = [
+        {
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "urgency": 8.5,
+            "alternatives": [{"name": "Intercom"}],
+            "buying_stage": "evaluation",
+            "review_id": str(uuid4()),
+            "quotes": [{"text": "We are evaluating alternatives."}],
+            "intent_signals": {"evaluation": True},
+        },
+        {
+            "company": "Beta Corp",
+            "vendor": "Zendesk",
+            "urgency": 8.0,
+            "buying_stage": "evaluation",
+            "intent_signals": {"evaluation": True},
+        },
+    ]
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(b2b_dashboard, "_get_scoped_vendors", new=AsyncMock(return_value=None)):
+            with patch.object(b2b_dashboard, "read_high_intent_companies", new=AsyncMock(return_value=rows)):
+                with patch.object(
+                    b2b_dashboard,
+                    "_csv_response",
+                    lambda payload, filename: {"rows": payload, "filename": filename},
+                ):
+                    result = await b2b_dashboard.export_high_intent(
+                        vendor_name=None,
+                        min_urgency=7.0,
+                        window_days=90,
+                        report_safe_only=True,
+                        user=None,
+                    )
+
+    assert result == {"rows": [], "filename": "high_intent_leads.csv"}
+
+
+@pytest.mark.asyncio
+async def test_export_high_intent_can_include_monitor_and_suppressed_with_claim_columns():
+    pool = MagicMock()
+    review_id = str(uuid4())
+    rows = [
+        {
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "category": "Helpdesk",
+            "role_level": "vp",
+            "decision_maker": True,
+            "urgency": 8.5,
+            "pain": "support friction",
+            "alternatives": [{"name": "Intercom"}],
+            "buying_stage": "evaluation",
+            "review_id": review_id,
+            "quotes": [{"text": "We are evaluating alternatives."}],
+            "intent_signals": {"evaluation": True},
+        },
+        {
+            "company": "Beta Corp",
+            "vendor": "Zendesk",
+            "urgency": 8.0,
+            "buying_stage": "evaluation",
+            "intent_signals": {"evaluation": True},
+        },
+    ]
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(b2b_dashboard, "_get_scoped_vendors", new=AsyncMock(return_value=None)):
+            with patch.object(b2b_dashboard, "read_high_intent_companies", new=AsyncMock(return_value=rows)):
+                with patch.object(
+                    b2b_dashboard,
+                    "_csv_response",
+                    lambda payload, filename: {"rows": payload, "filename": filename},
+                ):
+                    result = await b2b_dashboard.export_high_intent(
+                        vendor_name=None,
+                        min_urgency=7.0,
+                        window_days=90,
+                        report_safe_only=False,
+                        user=None,
+                    )
+
+    assert result["filename"] == "high_intent_leads.csv"
+    first, second = result["rows"]
+    assert first["opportunity_claim_id"]
+    assert first["opportunity_render_allowed"] is True
+    assert first["opportunity_report_allowed"] is False
+    assert first["opportunity_confidence"] == "low"
+    assert first["opportunity_evidence_posture"] == "usable"
+    assert first["opportunity_suppression_reason"] == "low_confidence"
+    assert first["opportunity_supporting_count"] == 1
+    assert first["opportunity_direct_evidence_count"] == 1
+    assert first["opportunity_source_review_count"] == 1
+    assert second["opportunity_render_allowed"] is False
+    assert second["opportunity_report_allowed"] is False
+    assert second["opportunity_evidence_posture"] == "unverified"
+    assert second["opportunity_suppression_reason"] == "unverified_evidence"
+    assert second["opportunity_source_review_count"] == 0
 
 
 def test_create_correction_rejects_invalid_entity_id_before_db_touch(monkeypatch):
