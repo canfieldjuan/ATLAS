@@ -1305,31 +1305,45 @@ function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }:
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
             {data.cross_vendor_battles.slice(0, 6).map((battle, index) => (
               <div key={index} className="bg-slate-800/50 rounded-lg p-3">
-                <div className="flex flex-wrap gap-2 text-xs mb-2">
-                  {battle.opponent && <span className="text-white font-medium">vs {battle.opponent}</span>}
-                  {battle.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {battle.winner}</span>}
-                  {battle.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {battle.loser}</span>}
-                  {battle.confidence != null && battle.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(battle.confidence * 100)}% conf.</span>}
-                  {battle.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{battle.durability}</span>}
-                </div>
-                {battle.conclusion && <p className="text-sm text-slate-300">{battle.conclusion}</p>}
-                {battle.key_insights.length > 0 && (
-                  <ul className="mt-1.5 space-y-0.5">
-                    {battle.key_insights.slice(0, 2).map((insight, i) => (
-                      <li key={i} className="text-xs text-slate-400 flex gap-1.5">
-                        <span className="text-cyan-400 shrink-0">-</span>
-                        <span>{insight.insight}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {onOpenWitness && data.vendor && battle.reference_ids?.witness_ids && battle.reference_ids.witness_ids.length > 0 && (
-                  <CitationBar
-                    citations={registerWitnessIds(registry, battle.reference_ids.witness_ids, data.reasoning_witness_highlights)}
-                    vendorName={data.vendor}
-                    onOpenWitness={onOpenWitness}
+                <div className="mb-2">
+                  <ProductClaimStatusBadge
+                    claim={battle.product_claim ?? null}
+                    validationUnavailable={battle.claim_validation_unavailable ?? false}
                   />
-                )}
+                </div>
+                <ProductClaimGate
+                  claim={battle.product_claim ?? null}
+                  mode="report"
+                  validationUnavailable={battle.claim_validation_unavailable ?? false}
+                  fallback="Legacy/unvalidated battle"
+                  testId={`cross-vendor-battle-${index}-gate`}
+                >
+                  <div className="flex flex-wrap gap-2 text-xs mb-2">
+                    {battle.opponent && <span className="text-white font-medium">vs {battle.opponent}</span>}
+                    {battle.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {battle.winner}</span>}
+                    {battle.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {battle.loser}</span>}
+                    {battle.confidence != null && battle.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(battle.confidence * 100)}% conf.</span>}
+                    {battle.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{battle.durability}</span>}
+                  </div>
+                  {battle.conclusion && <p className="text-sm text-slate-300">{battle.conclusion}</p>}
+                  {battle.key_insights.length > 0 && (
+                    <ul className="mt-1.5 space-y-0.5">
+                      {battle.key_insights.slice(0, 2).map((insight, i) => (
+                        <li key={i} className="text-xs text-slate-400 flex gap-1.5">
+                          <span className="text-cyan-400 shrink-0">-</span>
+                          <span>{insight.insight}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {onOpenWitness && data.vendor && battle.reference_ids?.witness_ids && battle.reference_ids.witness_ids.length > 0 && (
+                    <CitationBar
+                      citations={registerWitnessIds(registry, battle.reference_ids.witness_ids, data.reasoning_witness_highlights)}
+                      vendorName={data.vendor}
+                      onOpenWitness={onOpenWitness}
+                    />
+                  )}
+                </ProductClaimGate>
               </div>
             ))}
           </div>

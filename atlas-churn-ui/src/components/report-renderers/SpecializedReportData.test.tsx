@@ -5,6 +5,38 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SpecializedReportData } from './SpecializedReportData'
 
 describe('SpecializedReportData', () => {
+  afterEach(cleanup)
+
+  function reportSafeCompetitorPairClaim(overrides: Record<string, unknown> = {}) {
+    return {
+      claim_id: 'claim-cross-vendor-report-safe',
+      claim_key: 'incumbent:Zendesk',
+      claim_scope: 'competitor_pair',
+      claim_type: 'direct_displacement',
+      claim_text: 'Zendesk shows direct displacement pressure toward Freshdesk',
+      target_entity: 'Freshdesk',
+      secondary_target: 'Zendesk',
+      supporting_count: 4,
+      direct_evidence_count: 4,
+      witness_count: 3,
+      contradiction_count: 0,
+      denominator: 4,
+      sample_size: 4,
+      has_grounded_evidence: true,
+      confidence: 'medium',
+      evidence_posture: 'usable',
+      render_allowed: true,
+      report_allowed: true,
+      suppression_reason: null,
+      evidence_links: ['review-1', 'review-2'],
+      contradicting_links: [],
+      as_of_date: '2026-04-26',
+      analysis_window_days: 90,
+      schema_version: '1',
+      ...overrides,
+    }
+  }
+
   it('renders thin-evidence battle cards without a headline using executive summary, talk track, and plays', () => {
     render(
       <MemoryRouter>
@@ -43,6 +75,72 @@ describe('SpecializedReportData', () => {
     ).toBeInTheDocument()
     expect(
       screen.getByText(/Target evaluators with a side-by-side evaluation/i),
+    ).toBeInTheDocument()
+  })
+
+  it('fails closed for battle-card cross-vendor battles without ProductClaim context', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="battle_card"
+          data={{
+            vendor: 'Zendesk',
+            cross_vendor_battles: [
+              {
+                opponent: 'Freshdesk',
+                winner: 'Freshdesk',
+                loser: 'Zendesk',
+                confidence: 0.72,
+                durability: 'durable',
+                conclusion: 'Freshdesk is winning enterprise evaluations from Zendesk.',
+                key_insights: [{ insight: 'Buyers are switching for support quality.' }],
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Cross-Vendor Battles')).toBeInTheDocument()
+    expect(screen.getByText('Legacy')).toBeInTheDocument()
+    expect(screen.getByTestId('cross-vendor-battle-0-gate')).toHaveTextContent(
+      'Legacy/unvalidated battle',
+    )
+    expect(screen.queryByText('winner: Freshdesk')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Freshdesk is winning enterprise evaluations from Zendesk.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders battle-card cross-vendor battles when the ProductClaim is report-safe', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="battle_card"
+          data={{
+            vendor: 'Zendesk',
+            cross_vendor_battles: [
+              {
+                opponent: 'Freshdesk',
+                winner: 'Freshdesk',
+                loser: 'Zendesk',
+                confidence: 0.72,
+                durability: 'durable',
+                conclusion: 'Freshdesk is winning enterprise evaluations from Zendesk.',
+                key_insights: [{ insight: 'Buyers are switching for support quality.' }],
+                product_claim: reportSafeCompetitorPairClaim(),
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Report-safe')).toBeInTheDocument()
+    expect(screen.queryByTestId('cross-vendor-battle-0-gate')).not.toBeInTheDocument()
+    expect(screen.getByText('winner: Freshdesk')).toBeInTheDocument()
+    expect(
+      screen.getByText('Freshdesk is winning enterprise evaluations from Zendesk.'),
     ).toBeInTheDocument()
   })
 
@@ -147,7 +245,7 @@ describe('SpecializedReportData', () => {
     )
 
     expect(screen.getAllByText('Helpdesk')).toHaveLength(2)
-    expect(screen.getAllByText('Freshdesk')).toHaveLength(3)
+    expect(screen.getByText('Freshdesk')).toBeInTheDocument()
     expect(screen.getByText('Mid-market teams are actively comparing alternatives.')).toBeInTheDocument()
   })
 

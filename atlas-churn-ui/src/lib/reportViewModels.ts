@@ -391,6 +391,8 @@ export function toCrossVendorBattles(value: unknown): CrossVendorBattleViewModel
     conclusion: asString(item.conclusion),
     confidence: asNumber(item.confidence) ?? null,
     key_insights: toKeyInsights(item.key_insights),
+    product_claim: toEmbeddedProductClaim(item.product_claim),
+    claim_validation_unavailable: asBoolean(item.claim_validation_unavailable) ?? false,
   }))
 }
 
