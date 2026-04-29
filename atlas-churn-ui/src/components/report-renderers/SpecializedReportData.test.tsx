@@ -37,7 +37,7 @@ describe('SpecializedReportData', () => {
     }
   }
 
-  it('renders thin-evidence battle cards without a headline using executive summary, talk track, and plays', () => {
+  it('fails closed for battle-card talk tracks and plays without ProductClaim context', () => {
     render(
       <MemoryRouter>
         <SpecializedReportData
@@ -70,6 +70,48 @@ describe('SpecializedReportData', () => {
     expect(
       screen.getByText(/Zendesk customers are trapped in multi-month support failures/i),
     ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/Buyers are actively pressure-testing Zendesk/i),
+    ).not.toBeInTheDocument()
+    expect(screen.getByTestId('battle-card-talk-track-gate')).toHaveTextContent(
+      'Legacy/unvalidated talk track',
+    )
+    expect(
+      screen.queryByText(/Target evaluators with a side-by-side evaluation/i),
+    ).not.toBeInTheDocument()
+    expect(screen.getByTestId('recommended-play-0-gate')).toHaveTextContent(
+      'Legacy/unvalidated play',
+    )
+  })
+
+  it('renders battle-card talk tracks and plays when their ProductClaims are report-safe', () => {
+    render(
+      <MemoryRouter>
+        <SpecializedReportData
+          reportType="battle_card"
+          data={{
+            vendor: 'Zendesk',
+            talk_track: {
+              opening: 'Buyers are actively pressure-testing Zendesk because reliability keeps resurfacing.',
+              mid_call_pivot: 'This is a trust problem.',
+              closing: 'Let us run a quick audit.',
+              product_claim: reportSafeCompetitorPairClaim({ claim_id: 'claim-talk-track' }),
+            },
+            recommended_plays: [
+              {
+                play: 'Target evaluators with a side-by-side evaluation on fit.',
+                key_message: 'Lead with faster clarity.',
+                product_claim: reportSafeCompetitorPairClaim({ claim_id: 'claim-play-1' }),
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getAllByText('Report-safe')).toHaveLength(2)
+    expect(screen.queryByTestId('battle-card-talk-track-gate')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('recommended-play-0-gate')).not.toBeInTheDocument()
     expect(
       screen.getByText(/Buyers are actively pressure-testing Zendesk/i),
     ).toBeInTheDocument()

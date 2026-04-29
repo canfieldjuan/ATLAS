@@ -368,6 +368,8 @@ export function toRecommendedPlays(value: unknown): RecommendedPlayViewModel[] {
     target_segment: asString(item.target_segment),
     key_message: asString(item.key_message),
     timing: asString(item.timing),
+    product_claim: toEmbeddedProductClaim(item.product_claim),
+    claim_validation_unavailable: asBoolean(item.claim_validation_unavailable) ?? false,
   }))
 }
 
@@ -379,6 +381,8 @@ export function toTalkTrack(value: unknown): TalkTrackViewModel | null {
     mid_call_pivot: asString(obj.mid_call_pivot),
     proof_points: toStringArray(obj.proof_points),
     closing: asString(obj.closing),
+    product_claim: toEmbeddedProductClaim(obj.product_claim),
+    claim_validation_unavailable: asBoolean(obj.claim_validation_unavailable) ?? false,
   }
 }
 

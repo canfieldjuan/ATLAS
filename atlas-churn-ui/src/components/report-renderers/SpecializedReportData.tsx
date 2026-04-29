@@ -1390,24 +1390,52 @@ function BattleCardDetail({ data, onOpenWitness, backTo, asOfDate, windowDays }:
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
             {data.talk_track && (
               <div className="space-y-3">
-                {[
-                  { key: 'opening' as const, label: 'Opening' },
-                  { key: 'mid_call_pivot' as const, label: 'Mid-Call Pivot' },
-                  { key: 'closing' as const, label: 'Closing' },
-                ].map(({ key, label }) => {
-                  const value = data.talk_track?.[key]
-                  if (!value) return null
-                  return <div key={key}><p className="text-xs text-slate-500 uppercase mb-1">{label}</p><p className="text-sm text-slate-300 break-words">{value}</p></div>
-                })}
+                <ProductClaimStatusBadge
+                  claim={data.talk_track.product_claim ?? null}
+                  validationUnavailable={data.talk_track.claim_validation_unavailable ?? false}
+                />
+                <ProductClaimGate
+                  claim={data.talk_track.product_claim ?? null}
+                  mode="report"
+                  validationUnavailable={data.talk_track.claim_validation_unavailable ?? false}
+                  fallback="Legacy/unvalidated talk track"
+                  testId="battle-card-talk-track-gate"
+                >
+                  <div className="space-y-3">
+                    {[
+                      { key: 'opening' as const, label: 'Opening' },
+                      { key: 'mid_call_pivot' as const, label: 'Mid-Call Pivot' },
+                      { key: 'closing' as const, label: 'Closing' },
+                    ].map(({ key, label }) => {
+                      const value = data.talk_track?.[key]
+                      if (!value) return null
+                      return <div key={key}><p className="text-xs text-slate-500 uppercase mb-1">{label}</p><p className="text-sm text-slate-300 break-words">{value}</p></div>
+                    })}
+                  </div>
+                </ProductClaimGate>
               </div>
             )}
             {data.recommended_plays.length > 0 && (
               <div className="space-y-2">
                 {data.recommended_plays.slice(0, 4).map((play: RecommendedPlayViewModel, index: number) => (
                   <div key={index} className="bg-slate-800/50 rounded-lg p-3">
-                    <p className="text-sm text-white font-medium">{play.play ?? play.name ?? play.description ?? ''}</p>
-                    {play.target_segment && <p className="text-xs text-amber-300 mt-1">{play.target_segment}</p>}
-                    {play.key_message && <p className="text-xs text-slate-400 mt-1">{play.key_message}</p>}
+                    <div className="mb-2">
+                      <ProductClaimStatusBadge
+                        claim={play.product_claim ?? null}
+                        validationUnavailable={play.claim_validation_unavailable ?? false}
+                      />
+                    </div>
+                    <ProductClaimGate
+                      claim={play.product_claim ?? null}
+                      mode="report"
+                      validationUnavailable={play.claim_validation_unavailable ?? false}
+                      fallback="Legacy/unvalidated play"
+                      testId={`recommended-play-${index}-gate`}
+                    >
+                      <p className="text-sm text-white font-medium">{play.play ?? play.name ?? play.description ?? ''}</p>
+                      {play.target_segment && <p className="text-xs text-amber-300 mt-1">{play.target_segment}</p>}
+                      {play.key_message && <p className="text-xs text-slate-400 mt-1">{play.key_message}</p>}
+                    </ProductClaimGate>
                   </div>
                 ))}
               </div>

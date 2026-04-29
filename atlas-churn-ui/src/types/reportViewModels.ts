@@ -119,6 +119,8 @@ export interface TalkTrackViewModel {
   mid_call_pivot?: string
   proof_points?: string[]
   closing?: string
+  product_claim?: VendorClaim | null
+  claim_validation_unavailable?: boolean
 }
 
 export interface WeaknessAnalysisItemViewModel {
@@ -140,6 +142,8 @@ export interface RecommendedPlayViewModel {
   target_segment?: string
   key_message?: string
   timing?: string
+  product_claim?: VendorClaim | null
+  claim_validation_unavailable?: boolean
 }
 
 export interface CompetitorDifferentiatorViewModel {
