@@ -1,0 +1,30 @@
+{
+  "name": "allow_control_no_history_yet",
+  "description": "Brand-new target with zero non-skipped runs in b2b_scrape_log. Cross-source gate must allow on the first scrape attempt rather than block a target with no history.",
+  "gate": "pre_scrape_cross_source_coverage",
+  "inputs": {
+    "target_id": "00000000-0000-0000-0000-000000000007",
+    "source": "g2",
+    "vendor_name": "FreshVendor"
+  },
+  "cfg": {
+    "pre_scrape_skip_enabled": true,
+    "pre_scrape_skip_lookback_runs": 5,
+    "pre_scrape_skip_min_reviews_found_total": 20,
+    "pre_scrape_skip_min_dup_rows": 10,
+    "pre_scrape_skip_dup_ratio": 0.9,
+    "pre_scrape_skip_max_age_days": 14,
+    "pre_scrape_skip_paid_sources_override": "g2,capterra,gartner,trustradius,software_advice,stackoverflow"
+  },
+  "pool_state": {
+    "fetchrow_returns": {
+      "real_runs": 0,
+      "total_found": 0,
+      "total_dupes": 0,
+      "last_real_scrape_at_offset_days": null
+    }
+  },
+  "expected_decision": {
+    "kind": "allow"
+  }
+}

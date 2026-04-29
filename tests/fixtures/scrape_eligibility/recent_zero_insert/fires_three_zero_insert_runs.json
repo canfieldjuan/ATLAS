@@ -1,0 +1,44 @@
+{
+  "name": "recent_zero_insert_fires_three_zero_insert_runs",
+  "description": "3 consecutive same-parser-version runs all stopped at page_cap with zero inserts and total 9 pages scraped. Gate fires.",
+  "gate": "pre_scrape_recent_zero_insert_page_cap",
+  "inputs": {
+    "target_id": "00000000-0000-0000-0000-000000000005",
+    "source": "stackoverflow",
+    "vendor_name": "AWS",
+    "parser_version": "stackoverflow.v1.0"
+  },
+  "cfg": {
+    "pre_scrape_recent_zero_insert_skip_enabled": true,
+    "pre_scrape_recent_zero_insert_skip_sources": "stackoverflow",
+    "pre_scrape_recent_zero_insert_skip_consecutive_runs": 3,
+    "pre_scrape_recent_zero_insert_skip_min_total_pages": 6,
+    "pre_scrape_recent_zero_insert_skip_max_age_days": 14
+  },
+  "pool_state": {
+    "fetchrow_returns": {
+      "real_runs": 3,
+      "total_found": 30,
+      "total_inserted": 0,
+      "total_pages_scraped": 9,
+      "all_successish": true,
+      "all_zero_insert": true,
+      "all_page_cap": true,
+      "all_current_parser": true,
+      "last_real_scrape_at_offset_days": -1
+    }
+  },
+  "expected_decision": {
+    "kind": "skip",
+    "status": "skipped_recent_zero_insert_page_cap",
+    "stop_reason": "pre_scrape_recent_zero_insert_page_cap",
+    "reason": "pre_scrape_recent_zero_insert_page_cap",
+    "detail_subset": {
+      "real_runs": 3,
+      "total_pages_scraped": 9,
+      "consecutive_runs": 3,
+      "min_total_pages": 6,
+      "parser_version": "stackoverflow.v1.0"
+    }
+  }
+}

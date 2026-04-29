@@ -1,0 +1,30 @@
+{
+  "name": "cross_source_does_not_fire_source_not_in_allowlist",
+  "description": "All conditional thresholds would otherwise fire the gate, but the override allowlist explicitly excludes the source. Gate must allow without consulting the aggregated row. Verifies pre_scrape_skip_paid_sources_override is honored (vs falling back to the capability-derived default).",
+  "gate": "pre_scrape_cross_source_coverage",
+  "inputs": {
+    "target_id": "00000000-0000-0000-0000-000000000009",
+    "source": "g2",
+    "vendor_name": "Shopify"
+  },
+  "cfg": {
+    "pre_scrape_skip_enabled": true,
+    "pre_scrape_skip_paid_sources_override": "capterra,gartner",
+    "pre_scrape_skip_lookback_runs": 5,
+    "pre_scrape_skip_min_reviews_found_total": 20,
+    "pre_scrape_skip_min_dup_rows": 10,
+    "pre_scrape_skip_dup_ratio": 0.9,
+    "pre_scrape_skip_max_age_days": 14
+  },
+  "pool_state": {
+    "fetchrow_returns": {
+      "real_runs": 5,
+      "total_found": 50,
+      "total_dupes": 46,
+      "last_real_scrape_at_offset_days": -2
+    }
+  },
+  "expected_decision": {
+    "kind": "allow"
+  }
+}
