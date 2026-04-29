@@ -1,44 +1,35 @@
-"""Phase 1 verification harness for the inline pre-scrape gate evaluators.
+"""Verification harness for the scrape-eligibility decision surface.
 
-This is the snapshot/parity layer for the scrape-eligibility refactor laid
-out in
+Canonical decision-shape test against
+``atlas_brain.services.scraping.eligibility.should_scrape_now()`` and
+``apply_skip_decision()``. Aligned with the refactor plan in
 docs/progress/b2b_scrape_architecture_refactor_plan_2026-04-28.md.
 
-What this harness asserts today:
+Layers:
 
-  - Each fixture under tests/fixtures/scrape_eligibility/<gate>/*.json
-    drives one of the three current inline evaluators in
-    atlas_brain.autonomous.tasks.b2b_scrape_intake:
-      - _evaluate_pre_scrape_skip                        (cross-source)
-      - _evaluate_pre_scrape_low_yield_skip              (low yield)
-      - _evaluate_pre_scrape_recent_zero_insert_skip     (recent zero-insert
-                                                          page-cap)
+  1. Fixture well-formedness -- each fixture's expected_decision follows
+     the unified {kind, status?, stop_reason?, reason?, detail_subset?}
+     shape, and skip variants reference a registered gate name.
+  2. Decision shape -- ``should_scrape_now(ctx)`` produces the expected
+     Decision for every fixture under
+     tests/fixtures/scrape_eligibility/<gate>/*.json.
+  3. apply_skip_decision integration -- mock the persistence helpers
+     (_log_pre_scrape_skip, _update_target_cooldown_only, record_dedup)
+     and verify they are called with arguments correctly derived from
+     the Skip dataclass + ScrapeContext, and that a record_dedup
+     failure is swallowed.
 
-  - The evaluator's dict-or-None return is normalized into the unified
-    {kind, status, stop_reason, reason, detail} payload that the future
-    should_scrape_now() will return after Phase 1 lands. The fixtures
-    therefore encode the post-refactor shape, not the pre-refactor dict.
+The mocked pool returns one aggregated row per fixture (matching the
+SQL each rule runs). Fixtures encode aggregated SQL output, not raw
+scrape_log rows; SQL changes that preserve aggregate semantics keep
+fixtures valid.
 
-  - Fixtures stay reusable unchanged. After Phase 1, a parallel test
-    layer parametrizes over should_scrape_now() and asserts the same
-    fixtures produce identical decisions. Decision parity proves the
-    refactor is behavior-preserving.
-
-The mocked pool only needs to return aggregated rows -- no per-row scrape
-log, no DB connection. Each gate runs a single SQL aggregation against
-b2b_scrape_log; the fixture encodes the column-shaped output of that
-aggregation directly. If the SQL changes during Phase 1, fixtures with the
-same logical inputs still produce the same decision because the fixture
-captures aggregated state, not raw rows.
-
-Fixture format (see fixtures/scrape_eligibility/*/*.json):
+Fixture format (see tests/fixtures/scrape_eligibility/*/*.json):
 
   {
     "name": str,
     "description": str,
-    "gate": "pre_scrape_cross_source_coverage"
-          | "pre_scrape_low_incremental_yield"
-          | "pre_scrape_recent_zero_insert_page_cap",
+    "gate": GateName.value,
     "inputs": {target_id, source, vendor_name, parser_version?},
     "cfg":   {<gate-specific config flags>},
     "pool_state": {
@@ -82,51 +73,17 @@ _asyncpg_mock.exceptions = _asyncpg_exceptions
 sys.modules.setdefault("asyncpg", _asyncpg_mock)
 sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
-from atlas_brain.autonomous.tasks.b2b_scrape_intake import (  # noqa: E402
-    _evaluate_pre_scrape_low_yield_skip,
-    _evaluate_pre_scrape_recent_zero_insert_skip,
-    _evaluate_pre_scrape_skip,
-)
 from atlas_brain.services.scraping.eligibility import (  # noqa: E402
     Allow,
     ScrapeContext,
     Skip,
+    _GATE_SKIP_STATUS,
     apply_skip_decision,
     should_scrape_now,
 )
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "scrape_eligibility"
-
-
-# Maps the canonical gate name (as used in skip "reason" strings and as
-# the future GateName enum value) to the inline evaluator + which kwargs
-# that evaluator accepts. Cross-source dedup does not take parser_version;
-# the other two do.
-_INLINE_EVALUATORS: dict[str, tuple[Any, frozenset[str]]] = {
-    "pre_scrape_cross_source_coverage": (
-        _evaluate_pre_scrape_skip,
-        frozenset({"target_id", "source", "vendor_name"}),
-    ),
-    "pre_scrape_low_incremental_yield": (
-        _evaluate_pre_scrape_low_yield_skip,
-        frozenset({"target_id", "source", "vendor_name", "parser_version"}),
-    ),
-    "pre_scrape_recent_zero_insert_page_cap": (
-        _evaluate_pre_scrape_recent_zero_insert_skip,
-        frozenset({"target_id", "source", "vendor_name", "parser_version"}),
-    ),
-}
-
-
-# Maps gate name to the unified Skip "status" string. Status values are
-# the orchestrator's skip-status (the value persisted to b2b_scrape_log
-# when the gate fires); they are stable across the refactor.
-_GATE_SKIP_STATUS: dict[str, str] = {
-    "pre_scrape_cross_source_coverage": "skipped_redundant",
-    "pre_scrape_low_incremental_yield": "skipped_low_incremental_yield",
-    "pre_scrape_recent_zero_insert_page_cap": "skipped_recent_zero_insert_page_cap",
-}
 
 
 def _load_fixtures() -> list[tuple[str, dict[str, Any]]]:
@@ -172,30 +129,11 @@ def _make_pool(fixture: dict[str, Any]) -> MagicMock:
     return pool
 
 
-def _normalize_inline_decision(
-    gate: str, raw: dict[str, Any] | None
-) -> dict[str, Any]:
-    """Adapt the inline evaluator's dict-or-None into the unified Decision
-    shape that should_scrape_now() returns."""
-    if raw is None:
-        return {"kind": "allow"}
-    status = _GATE_SKIP_STATUS[gate]
-    reason = str(raw.get("reason") or "")
-    detail = {k: v for k, v in raw.items() if k != "reason"}
-    return {
-        "kind": "skip",
-        "status": status,
-        "stop_reason": reason,
-        "reason": reason,
-        "detail": detail,
-    }
-
-
 def _normalize_dataclass_decision(decision: Any) -> dict[str, Any]:
     """Normalize a Decision dataclass (Allow|Skip from
-    atlas_brain.services.scraping.eligibility) into the same dict shape
-    the inline path produces. Lets layer 1 and layer 3 share assertion
-    logic and lets fixtures stay path-agnostic."""
+    atlas_brain.services.scraping.eligibility) into the unified
+    {kind, status?, stop_reason?, reason?, detail?} dict shape used by
+    the fixture format."""
     if isinstance(decision, Allow):
         return {"kind": "allow"}
     if isinstance(decision, Skip):
@@ -253,45 +191,7 @@ _FIXTURE_IDS = [name for name, _ in _FIXTURES]
 
 
 # ---------------------------------------------------------------------------
-# Test layer 1: direct gate behavior + final normalized decision shape
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "fixture_name,fixture",
-    _FIXTURES,
-    ids=_FIXTURE_IDS,
-)
-async def test_inline_evaluator_decision_matches_fixture(
-    fixture_name: str,
-    fixture: dict[str, Any],
-) -> None:
-    """Layer 1: the inline gate evaluator (current production path)
-    produces the expected normalized decision payload.
-
-    Same fixtures are exercised against ``should_scrape_now()`` in
-    layer 3; decision parity across the two layers is the Phase 1
-    behavior-preservation gate.
-    """
-    gate = fixture["gate"]
-    if gate not in _INLINE_EVALUATORS:
-        pytest.fail(f"{fixture_name}: unknown gate name {gate!r}")
-    evaluator, accepted_kwargs = _INLINE_EVALUATORS[gate]
-
-    pool = _make_pool(fixture)
-    cfg = SimpleNamespace(**fixture["cfg"])
-    inputs = fixture["inputs"]
-
-    call_kwargs = {k: v for k, v in inputs.items() if k in accepted_kwargs}
-    call_kwargs["cfg"] = cfg
-
-    raw = await evaluator(pool, **call_kwargs)
-    actual = _normalize_inline_decision(gate, raw)
-    _assert_decision_matches_fixture(fixture_name, actual, fixture["expected_decision"])
-
-
-# ---------------------------------------------------------------------------
-# Test layer 2: every fixture's normalized decision is well-formed
+# Test layer 1: fixture well-formedness
 # ---------------------------------------------------------------------------
 
 
@@ -352,18 +252,14 @@ def test_fixture_expected_decision_is_well_formed(
 
 
 # ---------------------------------------------------------------------------
-# Test layer 3: should_scrape_now() decision parity vs the inline evaluators
+# Test layer 2: should_scrape_now() decision shape per fixture
 #
-# Phase 1 acceptance gate. The same fixtures must produce the same decision
-# whether routed through the inline evaluator path (layer 1) or through the
-# new shared chain (this layer). If layer 1 and layer 3 diverge on any
-# fixture, the eligibility refactor is not behavior-preserving and Phase 1
-# orchestration replacement (Turn N+3) cannot proceed.
-#
-# After Turn N+3 deletes the inline evaluator functions, layer 1 will be
-# removed from this file. Layer 3 then becomes the canonical decision-shape
-# test against ``should_scrape_now()``. The fixtures stay unchanged across
-# both transitions.
+# Canonical decision-shape test now that the rule bodies live in
+# eligibility.py and the inline evaluators in b2b_scrape_intake have
+# been deleted (Turn N+3b). The chain runs all three pre-scrape rules
+# in order; fixtures isolate gate behavior via single-flag cfg so each
+# fixture exercises exactly one rule's evaluate() body and the chain's
+# short-circuit on the rest.
 # ---------------------------------------------------------------------------
 
 
@@ -376,14 +272,14 @@ async def test_should_scrape_now_matches_fixture(
     fixture_name: str,
     fixture: dict[str, Any],
 ) -> None:
-    """Layer 3: ``should_scrape_now()`` produces the same decision as the
-    inline evaluator for every fixture.
+    """``should_scrape_now()`` produces the expected decision for every
+    fixture.
 
     The chain runs all three pre-scrape rules in order. Fixtures isolate
     gate behavior via cfg flags -- each fixture only sets the
     ``_enabled`` flag for the gate it tests, so the chain naturally
     short-circuits at the other rules' enabled-checks before consulting
-    the pool. No fixture changes were required to support this layer.
+    the pool.
     """
     pool = _make_pool(fixture)
     cfg = SimpleNamespace(**fixture["cfg"])
