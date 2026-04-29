@@ -1119,6 +1119,52 @@ describe('VendorDetail', () => {
     })
   }
 
+  it('labels uncontracted Vendor Workspace fields as legacy and unvalidated', async () => {
+    api.fetchVendorProfile.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      churn_signal: {
+        ..._signalWithDmChurn(0.5),
+        nps_proxy: 4.2,
+        churn_intent_count: 7,
+        reasoning_executive_summary: 'Reasoning narrative from legacy synthesis.',
+        reasoning_atoms: {
+          theses: [
+            {
+              thesis_id: 'thesis-1',
+              summary: 'Support friction is compounding.',
+              confidence: 'medium',
+            },
+          ],
+        },
+      },
+      review_counts: { total: 12, pending_enrichment: 1, enriched: 11 },
+      high_intent_companies: [],
+      pain_distribution: [],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByTestId('nps-proxy-legacy-unvalidated')).toHaveTextContent('4.2')
+    expect(screen.getByTestId('nps-proxy-legacy-unvalidated')).toHaveTextContent('Legacy/unvalidated')
+    expect(screen.getByTestId('churn-intent-count-legacy-unvalidated')).toHaveTextContent('7')
+    expect(screen.getByTestId('churn-intent-count-legacy-unvalidated')).toHaveTextContent(
+      'Legacy/unvalidated',
+    )
+    expect(screen.getByTestId('reasoning-intelligence-legacy-unvalidated')).toHaveTextContent(
+      'Legacy/unvalidated',
+    )
+    expect(screen.getByTestId('slow-burn-legacy-unvalidated')).toHaveTextContent('Legacy/unvalidated')
+    expect(screen.getByTestId('reasoning-highlights-legacy-unvalidated')).toHaveTextContent(
+      'Legacy/unvalidated',
+    )
+  })
+
   function _claim(overrides: Partial<VendorClaim> = {}): VendorClaim {
     return {
       claim_id: 'a'.repeat(64),

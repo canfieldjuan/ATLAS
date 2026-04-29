@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Check, Copy, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -79,6 +80,27 @@ function DetailSkeleton() {
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 h-64" />
       </div>
     </div>
+  )
+}
+
+function LegacyUnvalidatedBadge({ testId }: { testId?: string }) {
+  return (
+    <span
+      data-testid={testId}
+      className="inline-flex items-center rounded-full border border-slate-600/40 bg-slate-800/70 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400"
+      title="No ProductClaim contract exists for this Vendor Workspace field yet."
+    >
+      Legacy/unvalidated
+    </span>
+  )
+}
+
+function LegacyUnvalidatedValue({ children, testId }: { children: ReactNode; testId: string }) {
+  return (
+    <span data-testid={testId} className="inline-flex items-center justify-end gap-2">
+      <span className="text-white">{children}</span>
+      <LegacyUnvalidatedBadge />
+    </span>
   )
 }
 
@@ -1199,7 +1221,11 @@ export default function VendorDetail() {
                 <dl className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <dt className="text-slate-400">NPS Proxy</dt>
-                    <dd className="text-white">{signal.nps_proxy?.toFixed(1) ?? '--'}</dd>
+                    <dd className="text-right">
+                      <LegacyUnvalidatedValue testId="nps-proxy-legacy-unvalidated">
+                        {signal.nps_proxy?.toFixed(1) ?? '--'}
+                      </LegacyUnvalidatedValue>
+                    </dd>
                   </div>
                   <div className="flex justify-between" data-testid="price-complaint-rate-card">
                     <dt className="text-slate-400">Price Complaint Rate</dt>
@@ -1227,13 +1253,20 @@ export default function VendorDetail() {
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-slate-400">Churn Intent Count</dt>
-                    <dd className="text-white">{signal.churn_intent_count}</dd>
+                    <dd className="text-right">
+                      <LegacyUnvalidatedValue testId="churn-intent-count-legacy-unvalidated">
+                        {signal.churn_intent_count}
+                      </LegacyUnvalidatedValue>
+                    </dd>
                   </div>
                 </dl>
               </div>
               {reasoningVisible && (
                 <div className="bg-slate-900/50 border border-cyan-500/20 rounded-xl p-5">
-                  <h3 className="text-sm font-medium text-cyan-300 mb-3">Reasoning Intelligence</h3>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-medium text-cyan-300">Reasoning Intelligence</h3>
+                    <LegacyUnvalidatedBadge testId="reasoning-intelligence-legacy-unvalidated" />
+                  </div>
                   <dl className="space-y-2 text-sm">
                     {signal.archetype && (
                       <div className="flex justify-between items-center">
@@ -1350,7 +1383,10 @@ export default function VendorDetail() {
                 </div>
               )}
               <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-                <h3 className="text-sm font-medium text-slate-300 mb-3">Slow-Burn Signals</h3>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-medium text-slate-300">Slow-Burn Signals</h3>
+                  <LegacyUnvalidatedBadge testId="slow-burn-legacy-unvalidated" />
+                </div>
                 <div className="space-y-3">
                   {slowBurnMetrics.map((metric) => {
                     const multiplier = metric.multiplier ?? 1
@@ -1521,7 +1557,10 @@ export default function VendorDetail() {
               {recentReportsCard}
               {(theses.length > 0 || timingWindows.length > 0 || reasoningDeltaItems.length > 0 || coverageLimits.length > 0 || counterevidence.length > 0 || reasoningContractGaps.length > 0) && (
                 <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-                  <h3 className="text-sm font-medium text-slate-300 mb-3">Reasoning Highlights</h3>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-medium text-slate-300">Reasoning Highlights</h3>
+                    <LegacyUnvalidatedBadge testId="reasoning-highlights-legacy-unvalidated" />
+                  </div>
                   {theses.length > 0 && (
                     <div className="space-y-3">
                       {theses.map((item, index) => (
