@@ -119,4 +119,85 @@ describe('StructuredReportData', () => {
     expect(screen.getByText('Backend flagged this section for operator review.')).toBeInTheDocument()
     expect(screen.queryByText('Thin evidence')).not.toBeInTheDocument()
   })
+
+  it('fails closed for dangerous structured report fields without ProductClaim context', () => {
+    render(
+      <StructuredReportData
+        data={{
+          cross_vendor_battles: [
+            {
+              opponent: 'Google Workspace',
+              winner: 'Microsoft 365',
+              loser: 'Google Workspace',
+              conclusion: 'Microsoft 365 is winning enterprise evaluations.',
+            },
+          ],
+        }}
+      />,
+    )
+
+    expect(screen.getByText('Cross Vendor Battles')).toBeInTheDocument()
+    expect(screen.getByTestId('dangerous-cross_vendor_battles-gate')).toHaveTextContent(
+      'Legacy/unvalidated report field',
+    )
+    expect(screen.queryByText('winner: Microsoft 365')).not.toBeInTheDocument()
+    expect(screen.queryByText('Microsoft 365 is winning enterprise evaluations.')).not.toBeInTheDocument()
+  })
+
+  it('renders dangerous structured report fields when every item is report-safe', () => {
+    render(
+      <StructuredReportData
+        data={{
+          cross_vendor_battles: [
+            {
+              opponent: 'Google Workspace',
+              winner: 'Microsoft 365',
+              conclusion: 'Microsoft 365 is winning enterprise evaluations.',
+              product_claim: {
+                render_allowed: true,
+                report_allowed: true,
+                supporting_count: 3,
+                direct_evidence_count: 3,
+                witness_count: 2,
+              },
+            },
+          ],
+        }}
+      />,
+    )
+
+    expect(screen.queryByTestId('dangerous-cross_vendor_battles-gate')).not.toBeInTheDocument()
+    expect(screen.getByText('winner: Microsoft 365')).toBeInTheDocument()
+    expect(screen.getByText('Microsoft 365 is winning enterprise evaluations.')).toBeInTheDocument()
+  })
+
+  it('fails closed for mixed dangerous sections when any item lacks ProductClaim context', () => {
+    render(
+      <StructuredReportData
+        data={{
+          recommended_plays: [
+            {
+              play: 'Lead with migration support',
+              product_claim: {
+                render_allowed: true,
+                report_allowed: true,
+                supporting_count: 2,
+                direct_evidence_count: 2,
+                witness_count: 2,
+              },
+            },
+            {
+              play: 'Claim the competitor is losing renewals',
+            },
+          ],
+        }}
+      />,
+    )
+
+    expect(screen.getByTestId('dangerous-recommended_plays-gate')).toHaveTextContent(
+      'Legacy/unvalidated report field',
+    )
+    expect(screen.queryByText('Lead with migration support')).not.toBeInTheDocument()
+    expect(screen.queryByText('Claim the competitor is losing renewals')).not.toBeInTheDocument()
+  })
 })

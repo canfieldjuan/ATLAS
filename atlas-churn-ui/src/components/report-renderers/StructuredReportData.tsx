@@ -1,9 +1,12 @@
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { clsx } from 'clsx'
 import ArchetypeBadge from '../ArchetypeBadge'
+import { ProductClaimGate } from '../ProductClaimGate'
 import CitationBar from './CitationBar'
 import { createCitationRegistry } from './useCitationRegistry'
 import type { CitationEntry } from './useCitationRegistry'
+import type { VendorClaim } from '../../api/client'
 import { REPORT_SCALAR_KEYS, humanLabel } from '../../lib/reportConstants'
 import {
   isRecord,
@@ -55,6 +58,71 @@ const SUMMARY_META_KEYS = [
 ]
 
 const REFERENCE_KEY_SUFFIXES = ['_reference_ids', '_witness_highlights']
+
+const DANGEROUS_STRUCTURED_FIELD_KEYS = new Set([
+  'cross_vendor_battles',
+  'objection_handlers',
+  'recommended_plays',
+  'talk_track',
+  'vendor_weaknesses',
+  'weakness_analysis',
+])
+
+function isDangerousStructuredField(key: string): boolean {
+  return DANGEROUS_STRUCTURED_FIELD_KEYS.has(key)
+}
+
+function toVendorClaimLike(value: unknown): VendorClaim | null {
+  if (!isRecord(value)) return null
+  if (!('report_allowed' in value) && !('render_allowed' in value)) return null
+  return {
+    supporting_count: 0,
+    direct_evidence_count: 0,
+    witness_count: 0,
+    suppression_reason: null,
+    ...value,
+  } as unknown as VendorClaim
+}
+
+function productClaimsFromRecord(record: AnyObject): VendorClaim[] {
+  return [
+    toVendorClaimLike(record.product_claim),
+    toVendorClaimLike(record.product_claim_gate),
+    toVendorClaimLike(record.claim),
+    toVendorClaimLike(record.direct_displacement_claim),
+    toVendorClaimLike(record),
+  ].filter((claim): claim is VendorClaim => claim != null)
+}
+
+function dangerousRecords(value: unknown): AnyObject[] {
+  return Array.isArray(value)
+    ? value.filter(isRecord)
+    : isRecord(value)
+      ? [value]
+      : []
+}
+
+function productClaimsFromDangerousValue(value: unknown): VendorClaim[] {
+  return dangerousRecords(value).flatMap(productClaimsFromRecord)
+}
+
+function dangerousStructuredValueHasLegacyItems(value: unknown): boolean {
+  const records = Array.isArray(value)
+    ? value.filter(isRecord)
+    : isRecord(value)
+      ? [value]
+      : []
+  if (records.length === 0) return true
+  return records.some((record) => productClaimsFromRecord(record).length === 0)
+}
+
+function dangerousStructuredValidationUnavailable(value: unknown): boolean {
+  return dangerousRecords(value).some((record) =>
+    record.claim_validation_unavailable === true
+    || record.validation_unavailable === true
+    || record.readiness_state === 'validation_unavailable',
+  )
+}
 
 function isEvidenceMetadataKey(key: string): boolean {
   return key === 'reference_ids'
@@ -567,6 +635,38 @@ function UnknownFallback({ value }: { value: unknown }) {
   )
 }
 
+function DangerousStructuredFieldGate({
+  fieldKey,
+  value,
+  children,
+}: {
+  fieldKey: string
+  value: unknown
+  children: ReactNode
+}) {
+  if (!isDangerousStructuredField(fieldKey)) return <>{children}</>
+  const validationUnavailable = dangerousStructuredValidationUnavailable(value)
+  const claims = productClaimsFromDangerousValue(value)
+  const unsafeClaim = claims.find((claim) => claim.report_allowed !== true) ?? null
+  const hasLegacyItems = dangerousStructuredValueHasLegacyItems(value)
+  if (!validationUnavailable && !hasLegacyItems && claims.length > 0 && !unsafeClaim) {
+    return <>{children}</>
+  }
+  return (
+    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+      <ProductClaimGate
+        claim={unsafeClaim}
+        mode="report"
+        validationUnavailable={validationUnavailable}
+        fallback="Legacy/unvalidated report field"
+        testId={`dangerous-${fieldKey}-gate`}
+      >
+        {children}
+      </ProductClaimGate>
+    </div>
+  )
+}
+
 function MixedObjectCard({ obj, label }: { obj: AnyObject; label?: string }) {
   const scalars = Object.entries(obj).filter(([, value]) => isScalarValue(value) && value !== null && value !== undefined)
   const nested = Object.entries(obj).filter(([, value]) => !isScalarValue(value) && value !== null && value !== undefined)
@@ -697,7 +797,9 @@ export function StructuredReportData({
                 {evidence.label}
               </span>
             </div>
-            <StructuredReportValue fieldKey={key} value={value} />
+            <DangerousStructuredFieldGate fieldKey={key} value={value}>
+              <StructuredReportValue fieldKey={key} value={value} />
+            </DangerousStructuredFieldGate>
             <p className="mt-3 text-xs text-slate-500">
               {evidence.detail}
             </p>
