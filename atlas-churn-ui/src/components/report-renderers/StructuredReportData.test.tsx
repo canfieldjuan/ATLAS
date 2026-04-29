@@ -200,4 +200,42 @@ describe('StructuredReportData', () => {
     expect(screen.queryByText('Lead with migration support')).not.toBeInTheDocument()
     expect(screen.queryByText('Claim the competitor is losing renewals')).not.toBeInTheDocument()
   })
+
+  it('fails closed for nested dangerous report fields inside mixed objects', () => {
+    render(
+      <StructuredReportData
+        data={{
+          competitive_analysis: {
+            summary: 'Nested competitive section.',
+            cross_vendor_battles: [
+              {
+                opponent: 'Google Workspace',
+                winner: 'Microsoft 365',
+                loser: 'Google Workspace',
+                conclusion: 'Microsoft 365 is winning enterprise evaluations.',
+              },
+            ],
+            talk_track: {
+              opening: 'Tell buyers Microsoft 365 is winning the category.',
+            },
+          },
+        }}
+      />,
+    )
+
+    expect(screen.getByText('Competitive Analysis')).toBeInTheDocument()
+    expect(screen.getByTestId('dangerous-cross_vendor_battles-gate')).toHaveTextContent(
+      'Legacy/unvalidated report field',
+    )
+    expect(screen.getByTestId('dangerous-talk_track-gate')).toHaveTextContent(
+      'Legacy/unvalidated report field',
+    )
+    expect(screen.queryByText('winner: Microsoft 365')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Microsoft 365 is winning enterprise evaluations.'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Tell buyers Microsoft 365 is winning the category.'),
+    ).not.toBeInTheDocument()
+  })
 })

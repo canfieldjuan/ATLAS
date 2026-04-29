@@ -686,11 +686,9 @@ function MixedObjectCard({ obj, label }: { obj: AnyObject; label?: string }) {
       )}
       {nested.map(([key, value]) => (
         <div key={key}>
-          {Array.isArray(value)
+          {Array.isArray(value) || isRecord(value)
             ? <StructuredReportValue fieldKey={key} value={value} />
-            : isRecord(value)
-              ? <MixedObjectCard obj={value} label={humanLabel(key)} />
-              : null}
+            : null}
         </div>
       ))}
     </div>
@@ -712,7 +710,7 @@ function evidenceExplorerPath(
   return `/evidence?${params.toString()}`
 }
 
-export function StructuredReportValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
+function StructuredReportValueContent({ fieldKey, value }: { fieldKey: string; value: unknown }) {
   if (value === null || value === undefined) return <span className="text-sm text-slate-500">--</span>
   if (typeof value === 'string') return <p className="text-sm text-slate-300 whitespace-pre-wrap break-words">{value}</p>
   if (typeof value === 'number') return <span className="text-lg font-bold text-white">{formatValue(value)}</span>
@@ -742,6 +740,17 @@ export function StructuredReportValue({ fieldKey, value }: { fieldKey: string; v
   if (Array.isArray(value)) return <MixedArrayList items={value} />
   if (isRecord(value)) return <MixedObjectCard obj={value} />
   return <UnknownFallback value={value} />
+}
+
+export function StructuredReportValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
+  if (!isDangerousStructuredField(fieldKey)) {
+    return <StructuredReportValueContent fieldKey={fieldKey} value={value} />
+  }
+  return (
+    <DangerousStructuredFieldGate fieldKey={fieldKey} value={value}>
+      <StructuredReportValueContent fieldKey={fieldKey} value={value} />
+    </DangerousStructuredFieldGate>
+  )
 }
 
 export function StructuredReportData({
@@ -797,9 +806,7 @@ export function StructuredReportData({
                 {evidence.label}
               </span>
             </div>
-            <DangerousStructuredFieldGate fieldKey={key} value={value}>
-              <StructuredReportValue fieldKey={key} value={value} />
-            </DangerousStructuredFieldGate>
+            <StructuredReportValue fieldKey={key} value={value} />
             <p className="mt-3 text-xs text-slate-500">
               {evidence.detail}
             </p>
