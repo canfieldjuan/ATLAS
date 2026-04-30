@@ -47,6 +47,7 @@ from ._b2b_shared import (
 )
 from .b2b_vendor_briefing import build_gate_url
 from .campaign_audit import log_campaign_event
+from .campaign_suppression import assign_recipient_to_sequence
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_campaign_generation")
 
@@ -1470,15 +1471,17 @@ async def _create_sequence_for_cold_email(
                 company_name,
             )
             if contact_email:
-                await pool.execute(
-                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
-                    contact_email,
-                    seq_id,
-                )
-                logger.info(
-                    "Auto-populated recipient %s for sequence %s (%s)",
-                    contact_email, seq_id, company_name,
-                )
+                result = await assign_recipient_to_sequence(pool, seq_id, contact_email)
+                if result.assigned:
+                    logger.info(
+                        "Auto-populated recipient %s for sequence %s (%s)",
+                        contact_email, seq_id, company_name,
+                    )
+                else:
+                    logger.info(
+                        "Recipient %s not assigned to sequence %s (%s): %s",
+                        contact_email, seq_id, company_name, result.reason,
+                    )
         except Exception:
             logger.warning("CRM recipient lookup failed for %s, skipping", company_name)
 
@@ -2838,11 +2841,7 @@ async def _generate_vendor_campaigns(
                             sequences_created += 1
                             contact_email = entry["target"].get("contact_email")
                             if contact_email:
-                                await pool.execute(
-                                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
-                                    contact_email,
-                                    seq_id,
-                                )
+                                await assign_recipient_to_sequence(pool, seq_id, contact_email)
                     except Exception as exc:
                         logger.warning("Failed to create vendor sequence for %s: %s", vendor_name, exc)
 
@@ -3544,11 +3543,7 @@ async def _generate_challenger_campaigns(
                             sequences_created += 1
                             contact_email = entry["target"].get("contact_email")
                             if contact_email:
-                                await pool.execute(
-                                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
-                                    contact_email,
-                                    seq_id,
-                                )
+                                await assign_recipient_to_sequence(pool, seq_id, contact_email)
                     except Exception as exc:
                         logger.warning("Failed to create challenger sequence for %s: %s", challenger_name, exc)
 
@@ -5352,10 +5347,8 @@ async def _store_vendor_retention_replayed_campaign(
                 cold_email_body=content.get("body", ""),
             )
             if seq_id and entry["target"].get("contact_email"):
-                await pool.execute(
-                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
-                    entry["target"].get("contact_email"),
-                    seq_id,
+                await assign_recipient_to_sequence(
+                    pool, seq_id, entry["target"].get("contact_email"),
                 )
         except Exception as exc:
             logger.warning("Failed to create replayed vendor sequence for %s: %s", vendor_name, exc)
@@ -5456,10 +5449,8 @@ async def _store_challenger_replayed_campaign(
                 cold_email_body=content.get("body", ""),
             )
             if seq_id and entry["target"].get("contact_email"):
-                await pool.execute(
-                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
-                    entry["target"].get("contact_email"),
-                    seq_id,
+                await assign_recipient_to_sequence(
+                    pool, seq_id, entry["target"].get("contact_email"),
                 )
         except Exception as exc:
             logger.warning("Failed to create replayed challenger sequence for %s: %s", challenger_name, exc)
