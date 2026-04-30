@@ -16,7 +16,7 @@ import json
 import logging
 import uuid as _uuid
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Param
@@ -162,9 +162,86 @@ def _annotation_join_parts(account_id: _uuid.UUID | None, param_idx: int) -> tup
     )
 
 
+# -- Response models ----------------------------------------------------------
+
+class EvidenceFacetsResponse(BaseModel):
+    pain_categories: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    witness_types: list[str] = Field(default_factory=list)
+
+
+class EvidenceWitnessResponse(BaseModel):
+    witness_id: str
+    review_id: Optional[str] = None
+    witness_type: Optional[str] = None
+    excerpt_text: Optional[str] = None
+    source: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    reviewer_company: Optional[str] = None
+    reviewer_title: Optional[str] = None
+    pain_category: Optional[str] = None
+    competitor: Optional[str] = None
+    salience_score: Optional[float] = None
+    specificity_score: Optional[float] = None
+    selection_reason: Optional[str] = None
+    signal_tags: Optional[list[str]] = None
+    as_of_date: Optional[str] = None
+    annotation_type: Optional[str] = None
+
+    grounding_status: Optional[str] = None
+    phrase_polarity: Optional[str] = None
+    phrase_subject: Optional[str] = None
+    phrase_role: Optional[str] = None
+    phrase_verbatim: Optional[bool] = None
+    pain_confidence: Optional[str] = None
+
+    # Safety-bearing witness gate fields. These are intentionally
+    # required, not optional: missing values indicate backend contract
+    # drift and should fail before React can accidentally render raw
+    # witness text.
+    quote_grade: bool
+    evidence_posture: str
+    confidence: str
+    render_allowed: bool
+    report_allowed: bool
+    suppression_reason: Optional[str] = Field(...)
+
+
+class EvidenceWitnessListResponse(BaseModel):
+    vendor_name: str
+    as_of_date: Optional[str] = None
+    analysis_window_days: int
+    witnesses: list[EvidenceWitnessResponse]
+    total: int
+    limit: int
+    offset: int
+    facets: EvidenceFacetsResponse
+
+
+class EvidenceWitnessDetailResponse(EvidenceWitnessResponse):
+    review_text: Optional[str] = None
+    summary: Optional[str] = None
+    pros: Optional[str] = None
+    cons: Optional[str] = None
+    rating: Optional[float] = None
+    review_source: Optional[str] = None
+    source_url: Optional[str] = None
+    enrichment_status: Optional[str] = None
+    highlight_start: Optional[int] = None
+    highlight_end: Optional[int] = None
+    highlight_source: Optional[str] = None
+    evidence_spans: list[dict[str, Any]] = Field(default_factory=list)
+    all_evidence_span_count: int = 0
+    evidence_span_source: Optional[str] = None
+
+
+class EvidenceWitnessDetailEnvelope(BaseModel):
+    witness: EvidenceWitnessDetailResponse
+
+
 # -- 1. List witnesses --------------------------------------------------------
 
-@router.get("/witnesses")
+@router.get("/witnesses", response_model=EvidenceWitnessListResponse)
 async def list_witnesses(
     vendor_name: str,
     as_of_date: Optional[str] = None,
@@ -335,7 +412,7 @@ async def list_witnesses(
 
 # -- 2. Single witness with review context ------------------------------------
 
-@router.get("/witnesses/{witness_id}")
+@router.get("/witnesses/{witness_id}", response_model=EvidenceWitnessDetailEnvelope)
 async def get_witness(
     witness_id: str,
     vendor_name: str,

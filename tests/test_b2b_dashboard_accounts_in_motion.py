@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 _asyncpg_mock = MagicMock()
 _asyncpg_exceptions = MagicMock()
@@ -2581,6 +2582,39 @@ def test_shape_high_intent_payload_adds_account_opportunity_claim():
     assert claim["evidence_posture"] == "usable"
     assert "render_allowed" not in payload
     assert "suppression_reason" not in payload
+
+
+def test_high_intent_response_model_requires_nested_opportunity_claim_gate_fields():
+    review_id = str(uuid4())
+    payload = b2b_dashboard._shape_high_intent_company_payload(
+        {
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "urgency": 8.4,
+            "buying_stage": "evaluation",
+            "review_id": review_id,
+            "quotes": [{"text": "We are evaluating alternatives."}],
+            "intent_signals": {"evaluation": True},
+        },
+        as_of_date=date(2026, 4, 26),
+        analysis_window_days=90,
+    )
+
+    model = b2b_dashboard.HighIntentCompanyResponse(**payload)
+    assert model.opportunity_claim.render_allowed is True
+    assert model.opportunity_claim.report_allowed is False
+
+    missing_gate = dict(payload["opportunity_claim"])
+    missing_gate.pop("render_allowed")
+    with pytest.raises(ValidationError):
+        b2b_dashboard.HighIntentCompanyResponse(
+            **{**payload, "opportunity_claim": missing_gate}
+        )
+
+    missing_claim = dict(payload)
+    missing_claim.pop("opportunity_claim")
+    with pytest.raises(ValidationError):
+        b2b_dashboard.HighIntentCompanyResponse(**missing_claim)
 
 
 def test_shape_high_intent_payload_suppresses_when_source_evidence_missing():

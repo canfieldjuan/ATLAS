@@ -148,6 +148,74 @@ class VendorRefreshBody(BaseModel):
     refresh_accounts_in_motion: bool = True
 
 
+class AccountOpportunityClaimResponse(BaseModel):
+    claim_id: str
+    claim_key: str
+    claim_scope: str
+    claim_type: str
+    claim_text: str
+    target_entity: str
+    secondary_target: Optional[str] = None
+    supporting_count: int
+    direct_evidence_count: int
+    witness_count: int
+    contradiction_count: int
+    denominator: Optional[int] = None
+    sample_size: Optional[int] = None
+    source_review_count: int
+    has_grounded_evidence: bool
+    confidence: str
+    evidence_posture: str
+    render_allowed: bool
+    report_allowed: bool
+    suppression_reason: Optional[str] = Field(...)
+    evidence_links: list[str] = Field(default_factory=list)
+    contradicting_links: list[str] = Field(default_factory=list)
+    as_of_date: str
+    analysis_window_days: int
+    schema_version: str
+
+
+class HighIntentCompanyResponse(BaseModel):
+    company: Optional[str] = None
+    vendor: Optional[str] = None
+    category: Optional[str] = None
+    role_level: Optional[str] = None
+    decision_maker: Optional[bool] = None
+    urgency: float
+    pain: Optional[str] = None
+    alternatives: Any = None
+    contract_signal: Optional[str] = None
+    seat_count: Optional[int] = None
+    lock_in_level: Optional[str] = None
+    contract_end: Optional[str] = None
+    buying_stage: Optional[str] = None
+    reviewer_title: Optional[str] = None
+    company_size: Optional[str] = None
+    industry: Optional[str] = None
+    review_id: Optional[str] = None
+    source_review_ids: Any = None
+    source: Optional[str] = None
+    quotes: Any = None
+    intent_signals: Any = None
+    relevance_score: Optional[float] = None
+    author_churn_score: Optional[float] = None
+    resolution_confidence: Optional[str] = None
+    verified_employee_count: Optional[int] = None
+    company_domain: Optional[str] = None
+    company_country: Optional[str] = None
+    revenue_range: Optional[str] = None
+    founded_year: Optional[int] = None
+    company_description: Optional[str] = None
+    account_review_focus: Optional[dict[str, Any]] = None
+    opportunity_claim: AccountOpportunityClaimResponse
+
+
+class HighIntentCompaniesResponse(BaseModel):
+    companies: list[HighIntentCompanyResponse]
+    count: int
+
+
 def _safe_json(val):
     """Return val if already a list/dict, else try json.loads, else as-is."""
     if isinstance(val, (list, dict)):
@@ -1820,7 +1888,7 @@ async def _resolve_high_intent_account_review_focuses(
     return focuses
 
 
-@router.get("/high-intent")
+@router.get("/high-intent", response_model=HighIntentCompaniesResponse)
 async def list_high_intent(
     vendor_name: Optional[str] = Query(None),
     min_urgency: float = Query(7, ge=0, le=10),

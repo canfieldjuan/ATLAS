@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 import atlas_brain.api.b2b_tenant_dashboard as tenant_dashboard_api
 import atlas_brain.api.b2b_campaigns as campaigns_api
@@ -334,6 +336,33 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
     assert body["witnesses"][0]["phrase_verbatim"] is True
     assert body["witnesses"][0]["pain_confidence"] == "strong"
     assert body["witnesses"][0]["quote_grade"] is True
+    assert body["witnesses"][0]["evidence_posture"] == "usable"
+    assert body["witnesses"][0]["confidence"] == "high"
+    assert body["witnesses"][0]["render_allowed"] is True
+    assert body["witnesses"][0]["report_allowed"] is True
+    assert body["witnesses"][0]["suppression_reason"] is None
+
+
+def test_b2b_evidence_witness_response_model_requires_gate_fields():
+    with pytest.raises(ValidationError):
+        evidence_api.EvidenceWitnessResponse(
+            witness_id="w1",
+            quote_grade=True,
+            evidence_posture="usable",
+            confidence="high",
+            report_allowed=True,
+            suppression_reason=None,
+        )
+
+    with pytest.raises(ValidationError):
+        evidence_api.EvidenceWitnessResponse(
+            witness_id="w1",
+            quote_grade=True,
+            evidence_posture="usable",
+            confidence="high",
+            render_allowed=True,
+            report_allowed=True,
+        )
 
 
 def test_b2b_evidence_annotations_list_uses_b2b_gate_and_canonical_vendor(monkeypatch):
