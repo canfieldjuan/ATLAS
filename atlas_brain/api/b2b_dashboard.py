@@ -3990,7 +3990,7 @@ async def list_company_signal_candidates(
 async def approve_company_signal_candidate(
     candidate_id: str,
     body: CompanySignalCandidateReviewBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
@@ -4148,7 +4148,7 @@ async def approve_company_signal_candidate(
 async def suppress_company_signal_candidate(
     candidate_id: str,
     body: CompanySignalCandidateReviewBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
@@ -4295,7 +4295,7 @@ async def suppress_company_signal_candidate(
 async def approve_company_signal_candidate_group(
     group_id: str,
     body: CompanySignalCandidateReviewBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     group = await _fetch_company_signal_candidate_group_or_404(pool, group_id, user)
@@ -4440,7 +4440,7 @@ async def approve_company_signal_candidate_group(
 async def suppress_company_signal_candidate_group(
     group_id: str,
     body: CompanySignalCandidateReviewBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     group = await _fetch_company_signal_candidate_group_or_404(pool, group_id, user)
@@ -4574,7 +4574,7 @@ async def suppress_company_signal_candidate_group(
 @router.post("/company-signal-candidate-groups/approve")
 async def approve_company_signal_candidate_groups(
     body: BulkCompanySignalCandidateGroupReviewBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
@@ -4719,7 +4719,7 @@ async def approve_company_signal_candidate_groups(
 @router.post("/company-signal-candidate-groups/suppress")
 async def suppress_company_signal_candidate_groups(
     body: BulkCompanySignalCandidateGroupReviewBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())

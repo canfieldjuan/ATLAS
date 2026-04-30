@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from atlas_brain.api import router as api_router
 from atlas_brain.api import admin_costs
+from atlas_brain.api import b2b_dashboard
 from atlas_brain.api import b2b_campaigns
 from atlas_brain.api import b2b_crm_events
 from atlas_brain.api import b2b_vendor_briefing
@@ -89,6 +90,36 @@ _TARGET_ID = str(uuid4())
         ("GET", "/api/v1/b2b/crm/events/enrichment-stats", None),
         (
             "POST",
+            f"/api/v1/b2b/tenant/company-signal-candidates/{_TARGET_ID}/approve",
+            {"notes": "boundary"},
+        ),
+        (
+            "POST",
+            f"/api/v1/b2b/tenant/company-signal-candidates/{_TARGET_ID}/suppress",
+            {"notes": "boundary"},
+        ),
+        (
+            "POST",
+            f"/api/v1/b2b/tenant/company-signal-candidate-groups/{_TARGET_ID}/approve",
+            {"notes": "boundary"},
+        ),
+        (
+            "POST",
+            f"/api/v1/b2b/tenant/company-signal-candidate-groups/{_TARGET_ID}/suppress",
+            {"notes": "boundary"},
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/company-signal-candidate-groups/approve",
+            {"group_ids": [str(uuid4())], "notes": "boundary"},
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/company-signal-candidate-groups/suppress",
+            {"group_ids": [str(uuid4())], "notes": "boundary"},
+        ),
+        (
+            "POST",
             "/api/v1/b2b/campaigns/suppressions",
             {"email": "boundary@example.com", "reason": "manual"},
         ),
@@ -126,6 +157,7 @@ def test_tenant_and_operator_routes_reject_unauthenticated_requests(
         raise AssertionError("db touched before auth")
 
     monkeypatch.setattr(vendor_targets, "get_db_pool", _fail_pool)
+    monkeypatch.setattr(b2b_dashboard, "get_db_pool", _fail_pool)
     monkeypatch.setattr(b2b_vendor_briefing, "get_db_pool", _fail_pool)
     monkeypatch.setattr(b2b_campaigns, "get_db_pool", _fail_pool)
     monkeypatch.setattr(b2b_crm_events, "get_db_pool", _fail_pool)
