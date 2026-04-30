@@ -47,3 +47,9 @@ python scripts/check_extracted_imports.py
 ```
 
 Known unresolved relative imports are tracked in `extracted_content_pipeline/import_debt_allowlist.txt`.
+
+## One-shot checks
+
+```bash
+bash scripts/run_extracted_pipeline_checks.sh
+```
