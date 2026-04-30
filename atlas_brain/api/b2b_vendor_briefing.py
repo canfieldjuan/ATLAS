@@ -86,6 +86,25 @@ def _row_to_dict(row) -> dict:
 
 # Dollar amounts like $180K, $500/month, $120K/year
 _DOLLAR_RE = re.compile(r"\$[\d,.]+[KkMm]?(?:/\w+)?")
+_PUBLIC_PRODUCT_CLAIM_DANGEROUS_KEYS = {
+    "cross_vendor_battles",
+    "objection_handlers",
+    "recommended_plays",
+    "talk_track",
+    "vendor_weaknesses",
+    "weakness_analysis",
+    "top_displacement_targets",
+    "market_winners",
+    "market_losers",
+    "top_battles",
+    "category_council",
+}
+_PUBLIC_UNVALIDATED_PROFILE_KEYS = {
+    "strengths",
+    "weaknesses",
+    "commonly_compared_to",
+    "commonly_switched_from",
+}
 
 
 def _redact_quotes(evidence: list) -> list:
@@ -156,6 +175,83 @@ def _redact_public_account_identity(briefing_data: dict) -> dict:
             briefing_data.pop("account_reasoning_preview", None)
 
     return briefing_data
+
+
+def _is_product_claim_like(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and ("report_allowed" in value or "render_allowed" in value)
+        and (
+            "claim_type" in value
+            or "claim_scope" in value
+            or "evidence_posture" in value
+            or "confidence" in value
+        )
+    )
+
+
+def _collect_product_claims(value: object) -> list[dict]:
+    if _is_product_claim_like(value):
+        return [value]  # type: ignore[list-item]
+    if isinstance(value, list):
+        claims: list[dict] = []
+        for item in value:
+            claims.extend(_collect_product_claims(item))
+        return claims
+    if isinstance(value, dict):
+        claims: list[dict] = []
+        for item in value.values():
+            claims.extend(_collect_product_claims(item))
+        return claims
+    return []
+
+
+def _has_report_safe_product_claim_context(value: object) -> bool:
+    claims = _collect_product_claims(value)
+    return bool(claims) and all(claim.get("report_allowed") is True for claim in claims)
+
+
+def _public_report_safe_value(value: object) -> object | None:
+    if isinstance(value, list):
+        kept = [
+            _strip_public_unvalidated_sections(item)
+            for item in value
+            if _has_report_safe_product_claim_context(item)
+        ]
+        return kept or None
+    if _has_report_safe_product_claim_context(value):
+        return _strip_public_unvalidated_sections(value)
+    return None
+
+
+def _strip_public_unvalidated_sections(value: object) -> object:
+    if isinstance(value, list):
+        return [_strip_public_unvalidated_sections(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    cleaned: dict = {}
+    for key, item in value.items():
+        if key in _PUBLIC_PRODUCT_CLAIM_DANGEROUS_KEYS:
+            report_safe_item = _public_report_safe_value(item)
+            if report_safe_item not in (None, [], {}):
+                cleaned[key] = report_safe_item
+            continue
+        cleaned[key] = _strip_public_unvalidated_sections(item)
+    return cleaned
+
+
+def _strip_public_unvalidated_product_profile(profile: dict | None) -> dict | None:
+    if not isinstance(profile, dict):
+        return None
+    if _has_report_safe_product_claim_context(profile):
+        stripped = _strip_public_unvalidated_sections(profile)
+        return stripped if isinstance(stripped, dict) else {}
+    return {
+        key: value
+        for key, value in profile.items()
+        if key not in _PUBLIC_UNVALIDATED_PROFILE_KEYS
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -627,6 +723,8 @@ async def report_data(token: str = Query(..., min_length=10)):
     # Strip company-identifying details from quotes
     evidence = briefing_data.get("evidence") or []
     briefing_data["evidence"] = _redact_quotes(evidence)
+    stripped_briefing = _strip_public_unvalidated_sections(briefing_data)
+    briefing_data = stripped_briefing if isinstance(stripped_briefing, dict) else {}
 
     # 2. Enrich with b2b_intelligence reports (vendor comparisons, deeper analysis)
     intelligence_reports = []
@@ -659,6 +757,7 @@ async def report_data(token: str = Query(..., min_length=10)):
         }
         if isinstance(redacted_data, dict):
             redacted_data = _redact_public_account_identity(redacted_data)
+            redacted_data = _strip_public_unvalidated_sections(redacted_data)
         intelligence_reports.append({
             "report_type": row["report_type"],
             "executive_summary": row["executive_summary"],
@@ -690,6 +789,7 @@ async def report_data(token: str = Query(..., min_length=10)):
                     product_profile[key] = val
             else:
                 product_profile[key] = val
+        product_profile = _strip_public_unvalidated_product_profile(product_profile)
 
     return {
         "vendor_name": vendor_name,
