@@ -160,6 +160,26 @@ _TARGET_ID = str(uuid4())
         ("GET", "/api/v1/b2b/tenant/vendors/search?q=ClickUp", None),
         ("POST", "/api/v1/b2b/tenant/vendors/ClickUp/refresh", {}),
         ("POST", "/api/v1/b2b/tenant/calibration/trigger", None),
+        ("GET", "/api/v1/b2b/tenant/reports", None),
+        ("GET", f"/api/v1/b2b/tenant/reports/{_TARGET_ID}", None),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/reports/compare",
+            {"primary_vendor": "ClickUp", "comparison_vendor": "Monday.com"},
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/reports/compare-companies",
+            {"primary_company": "Acme", "comparison_company": "Globex"},
+        ),
+        ("POST", "/api/v1/b2b/tenant/reports/company-deep-dive", {"company_name": "Acme"}),
+        ("POST", "/api/v1/b2b/tenant/reports/battle-card", {"vendor_name": "ClickUp"}),
+        ("GET", "/api/v1/b2b/tenant/report-subscriptions/library/default", None),
+        (
+            "PUT",
+            "/api/v1/b2b/tenant/report-subscriptions/library/default",
+            {"scope_label": "Boundary Library", "enabled": False},
+        ),
         (
             "POST",
             "/api/v1/b2b/tenant/webhooks",
@@ -334,6 +354,26 @@ def test_tenant_and_operator_routes_reject_unauthenticated_requests(
             "POST",
             f"/api/v1/b2b/tenant/watchlist-views/{_TARGET_ID}/alert-events/deliver-email",
             {},
+        ),
+        ("GET", "/api/v1/b2b/tenant/reports", None),
+        ("GET", f"/api/v1/b2b/tenant/reports/{_TARGET_ID}", None),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/reports/compare",
+            {"primary_vendor": "ClickUp", "comparison_vendor": "Monday.com"},
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/reports/compare-companies",
+            {"primary_company": "Acme", "comparison_company": "Globex"},
+        ),
+        ("POST", "/api/v1/b2b/tenant/reports/company-deep-dive", {"company_name": "Acme"}),
+        ("POST", "/api/v1/b2b/tenant/reports/battle-card", {"vendor_name": "ClickUp"}),
+        ("GET", "/api/v1/b2b/tenant/report-subscriptions/library/default", None),
+        (
+            "PUT",
+            "/api/v1/b2b/tenant/report-subscriptions/library/default",
+            {"scope_label": "Boundary Library", "enabled": False},
         ),
     ],
 )

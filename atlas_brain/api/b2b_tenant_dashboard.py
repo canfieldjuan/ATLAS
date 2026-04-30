@@ -3512,7 +3512,7 @@ async def get_lead_detail(company: str, user: AuthUser = Depends(require_auth)):
 @router.post("/reports/compare")
 async def generate_tenant_comparison_report(
     body: VendorComparisonRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Generate a vendor comparison report from tenant-scoped dashboard."""
     _require_b2b_product(user)
@@ -3548,7 +3548,7 @@ async def generate_tenant_comparison_report(
 @router.post("/reports/compare-companies")
 async def generate_tenant_account_comparison_report(
     body: AccountComparisonRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Generate a company comparison report from tenant-scoped dashboard."""
     _require_b2b_product(user)
@@ -3575,7 +3575,7 @@ async def generate_tenant_account_comparison_report(
 @router.post("/reports/company-deep-dive")
 async def generate_tenant_account_deep_dive_report(
     body: AccountDeepDiveRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Generate a company deep-dive report from tenant-scoped dashboard."""
     _require_b2b_product(user)
@@ -3598,7 +3598,7 @@ async def generate_tenant_account_deep_dive_report(
 @router.post("/reports/battle-card")
 async def generate_tenant_battle_card_report(
     body: BattleCardRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Return a persisted battle card artifact for a tracked vendor."""
     _require_b2b_product(user)
@@ -3778,7 +3778,7 @@ async def list_tenant_reports(
     review_state: Optional[str] = None,
     include_stale: bool = Query(False),
     limit: int = Query(10, ge=1, le=200),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Reports scoped to tracked vendors."""
     _require_b2b_product(user)
@@ -3968,7 +3968,10 @@ async def list_tenant_reports(
 
 
 @router.get("/reports/{report_id}")
-async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_auth)):
+async def get_tenant_report(
+    report_id: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Report detail (verify vendor in tracked)."""
     _require_b2b_product(user)
     report_id = _clean_optional_text(report_id)
@@ -4077,7 +4080,7 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
 async def get_report_subscription(
     scope_type: str,
     scope_key: str,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Load the saved recurring-delivery policy for the library or a specific report."""
     _require_b2b_product(user)
@@ -4111,7 +4114,7 @@ async def upsert_report_subscription(
     scope_type: str,
     scope_key: str,
     body: ReportSubscriptionUpsertRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Create or update the saved recurring-delivery policy for the library or a specific report."""
     _require_b2b_product(user)
