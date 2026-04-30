@@ -118,6 +118,13 @@ _TARGET_ID = str(uuid4())
             "/api/v1/b2b/tenant/company-signal-candidate-groups/suppress",
             {"group_ids": [str(uuid4())], "notes": "boundary"},
         ),
+        ("GET", "/api/v1/b2b/tenant/company-signals", None),
+        ("GET", "/api/v1/b2b/tenant/company-signal-candidates", None),
+        ("GET", "/api/v1/b2b/tenant/company-signal-candidate-groups", None),
+        ("GET", "/api/v1/b2b/tenant/company-signal-candidate-group-summary", None),
+        ("GET", "/api/v1/b2b/tenant/company-signal-review-impact-summary", None),
+        ("GET", "/api/v1/b2b/tenant/accounts-in-motion?vendor_name=ClickUp", None),
+        ("GET", "/api/v1/b2b/tenant/accounts-in-motion/live?vendor_name=ClickUp", None),
         (
             "POST",
             "/api/v1/b2b/tenant/corrections",

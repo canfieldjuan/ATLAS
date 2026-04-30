@@ -3614,7 +3614,7 @@ async def list_company_signals(
     decision_makers_only: bool = Query(False),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     conditions: list[str] = ["last_seen_at > NOW() - make_interval(days => $1)"]
@@ -3706,7 +3706,7 @@ async def list_company_signal_candidate_groups(
     signal_evidence_present: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List grouped company-signal candidates as the primary operator queue."""
     vendor_name = _optional_query_text(vendor_name)
@@ -3781,7 +3781,7 @@ async def get_company_signal_candidate_group_summary(
     signal_evidence_present: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
     top_n: int = Query(10, ge=1, le=25),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Summarize grouped company-signal queue health for analyst review."""
     vendor_name = _optional_query_text(vendor_name)
@@ -3854,7 +3854,7 @@ async def get_company_signal_review_impact_summary(
     rebuild_reason: Optional[str] = Query(None),
     window_days: int = Query(30, ge=1, le=3650),
     top_n: int = Query(10, ge=1, le=25),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Summarize downstream yield from company-signal review actions."""
     vendor_name = _optional_query_text(vendor_name)
@@ -3943,7 +3943,7 @@ async def list_company_signal_candidates(
     signal_evidence_present: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List analyst-assist company-signal candidates without mixing them into canonical signals."""
     vendor_name = _optional_query_text(vendor_name)
@@ -9473,7 +9473,7 @@ async def list_accounts_in_motion(
     min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
     window_days: int = Query(settings.b2b_churn.intelligence_window_days, ge=1, le=3650),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Ranked list of companies showing churn intent for a specific vendor.
 
@@ -9505,7 +9505,7 @@ async def list_accounts_in_motion_live(
     min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
     window_days: int = Query(settings.b2b_churn.intelligence_window_days, ge=1, le=3650),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Live exploratory accounts-in-motion view rebuilt directly from reviews."""
     vendor_name = _required_query_text(vendor_name, "vendor_name")
