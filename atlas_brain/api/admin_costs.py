@@ -3623,7 +3623,8 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
     # -- Throughput per source x vendor --
     # Excludes pre-scrape skip rows so they do not deflate insert rates
     # or blocked counts. See migration 304 for the cross_source_duplicates
-    # column and b2b_scrape_intake._evaluate_pre_scrape_skip for the gate.
+    # column and atlas_brain.services.scraping.eligibility for the gate
+    # (entry point: should_scrape_now()).
     throughput_rows = await pool.fetch(
         """
         SELECT

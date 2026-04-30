@@ -1,0 +1,32 @@
+{
+  "name": "low_yield_does_not_fire_ratio_above_threshold",
+  "description": "5 recent same-parser-version runs with total_found=100 and 10 net-new unique inserts yields ratio 0.10, above the 0.05 threshold. The parser is producing actionable rows; gate must allow.",
+  "gate": "pre_scrape_low_incremental_yield",
+  "inputs": {
+    "target_id": "00000000-0000-0000-0000-000000000012",
+    "source": "g2",
+    "vendor_name": "Shopify",
+    "parser_version": "g2.v3.2"
+  },
+  "cfg": {
+    "pre_scrape_low_yield_skip_enabled": true,
+    "pre_scrape_low_yield_skip_lookback_runs": 5,
+    "pre_scrape_low_yield_skip_min_found_total": 50,
+    "pre_scrape_low_yield_skip_ratio_threshold": 0.05,
+    "pre_scrape_low_yield_skip_max_age_days": 14,
+    "pre_scrape_skip_paid_sources_override": "g2,capterra,gartner,trustradius,software_advice,stackoverflow"
+  },
+  "pool_state": {
+    "fetchrow_returns": {
+      "real_runs": 5,
+      "total_found": 100,
+      "total_inserted": 10,
+      "total_cross_source_duplicates": 0,
+      "total_unique_inserted": 10,
+      "last_real_scrape_at_offset_days": -1
+    }
+  },
+  "expected_decision": {
+    "kind": "allow"
+  }
+}

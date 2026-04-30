@@ -4331,7 +4331,8 @@ class B2BScrapeConfig(BaseSettings):
     # Pre-scrape coverage gate: skip a paid scrape when recent runs of this
     # target produced enough cross-source duplicates that another fetch is
     # almost certainly redundant. Defaults are conservative -- see
-    # b2b_scrape_intake._evaluate_pre_scrape_skip for the decision rule.
+    # atlas_brain.services.scraping.eligibility._CrossSourceCoverageRule
+    # (and should_scrape_now() as the entry point) for the decision rule.
     pre_scrape_skip_enabled: bool = Field(
         default=True,
         description="Gate paid scrapes on recent cross-source duplicate ratios",

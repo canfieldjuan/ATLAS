@@ -1,0 +1,30 @@
+{
+  "name": "cross_source_does_not_fire_outside_age_window",
+  "description": "All conditional thresholds would otherwise fire the gate (5 runs, 50 found, 46 dupes, ratio 0.92 above 0.90), but the last real scrape is 30 days ago, outside the 14-day max-age window. Escape hatch keeps the target re-testable rather than locking it out indefinitely.",
+  "gate": "pre_scrape_cross_source_coverage",
+  "inputs": {
+    "target_id": "00000000-0000-0000-0000-000000000010",
+    "source": "g2",
+    "vendor_name": "Shopify"
+  },
+  "cfg": {
+    "pre_scrape_skip_enabled": true,
+    "pre_scrape_skip_lookback_runs": 5,
+    "pre_scrape_skip_min_reviews_found_total": 20,
+    "pre_scrape_skip_min_dup_rows": 10,
+    "pre_scrape_skip_dup_ratio": 0.9,
+    "pre_scrape_skip_max_age_days": 14,
+    "pre_scrape_skip_paid_sources_override": "g2,capterra,gartner,trustradius,software_advice,stackoverflow"
+  },
+  "pool_state": {
+    "fetchrow_returns": {
+      "real_runs": 5,
+      "total_found": 50,
+      "total_dupes": 46,
+      "last_real_scrape_at_offset_days": -30
+    }
+  },
+  "expected_decision": {
+    "kind": "allow"
+  }
+}
