@@ -16,7 +16,6 @@ runner does not double-synthesize.
 """
 
 import asyncio
-import hashlib
 import inspect
 import json
 import logging
@@ -246,6 +245,20 @@ from ...services.b2b.enrichment_stage_planner import (
     build_tier2_stage_plan,
     stage_backend_name as _planner_stage_backend_name,
 )
+from ...services.b2b.enrichment_stage_support import (
+    accumulate_exact_cache_usage as _service_accumulate_exact_cache_usage,
+    empty_exact_cache_usage as _service_empty_exact_cache_usage,
+    enrichment_batch_custom_id as _service_enrichment_batch_custom_id,
+    pack_stage_result as _service_pack_stage_result,
+    parse_stage_row_result as _service_parse_stage_row_result,
+    prepare_stage_request as _service_prepare_stage_request,
+    row_usage_result as _service_row_usage_result,
+    stage_result_text as _service_stage_result_text,
+    stage_usage_from_row as _service_stage_usage_from_row,
+    stage_usage_snapshot as _service_stage_usage_snapshot,
+    unpack_cached_lookup_result as _service_unpack_cached_lookup_result,
+    unpack_stage_result as _service_unpack_stage_result,
+)
 from ...services.b2b.enrichment_row_runner import EnrichmentRunnerDeps, run_enrichment_rows
 from ...services.b2b.enrichment_task_runner import EnrichmentTaskRunnerDeps, run_enrichment_task
 from ...services.b2b.enrichment_stage_runs import (
@@ -308,9 +321,7 @@ def _config_allowlist(raw_value: Any, fallback: str | list[str] | tuple[str, ...
 
 
 def _enrichment_batch_custom_id(stage: str, review_id: Any) -> str:
-    normalized_stage = re.sub(r"[^A-Za-z0-9_-]+", "_", str(stage or "").strip()).strip("_") or "stage"
-    normalized_review = re.sub(r"[^A-Za-z0-9_-]+", "_", str(review_id or "").strip()).strip("_") or "review"
-    return f"{normalized_stage}_{normalized_review}"[:64]
+    return _service_enrichment_batch_custom_id(stage, review_id)
 
 
 def _stage_backend_name(*, batch_enabled: bool, provider: str) -> str:
@@ -500,25 +511,13 @@ async def _lookup_cached_json_response(
 def _unpack_cached_lookup_result(
     result: tuple[Any, ...],
 ) -> tuple[dict[str, Any] | None, dict[str, Any], bool]:
-    if len(result) == 3:
-        cached, request_envelope, cache_hit = result
-        return cached, request_envelope, bool(cache_hit)
-    if len(result) == 2:
-        cached, request_envelope = result
-        return cached, request_envelope, cached is not None
-    raise ValueError(f"Unexpected cached lookup result shape: {len(result)}")
+    return _service_unpack_cached_lookup_result(result)
 
 
 def _unpack_stage_result(
     result: tuple[Any, ...],
 ) -> tuple[dict[str, Any] | None, str | None, bool]:
-    if len(result) == 3:
-        parsed, model_id, cache_hit = result
-        return parsed, model_id, bool(cache_hit)
-    if len(result) == 2:
-        parsed, model_id = result
-        return parsed, model_id, False
-    raise ValueError(f"Unexpected stage result shape: {len(result)}")
+    return _service_unpack_stage_result(result)
 
 
 def _pack_stage_result(
@@ -528,9 +527,12 @@ def _pack_stage_result(
     *,
     include_cache_hit: bool,
 ) -> tuple[dict[str, Any] | None, str | None] | tuple[dict[str, Any] | None, str | None, bool]:
-    if include_cache_hit:
-        return parsed, model_id, cache_hit
-    return parsed, model_id
+    return _service_pack_stage_result(
+        parsed,
+        model_id,
+        cache_hit,
+        include_cache_hit=include_cache_hit,
+    )
 
 
 def _prepare_stage_request(
@@ -545,86 +547,37 @@ def _prepare_stage_request(
     response_format: dict[str, Any] | None = None,
     guided_json: dict[str, Any] | None = None,
 ):
-    from ...services.b2b.cache_runner import prepare_b2b_exact_stage_request
-    from ._b2b_batch_utils import exact_stage_request_fingerprint
-
-    work_fingerprint_payload = {
-        "stage_id": str(stage_id or ""),
-        "system_prompt": str(system_prompt or ""),
-        "user_content": str(user_content or ""),
-        "max_tokens": int(max_tokens),
-        "temperature": float(temperature),
-    }
-    request = prepare_b2b_exact_stage_request(
+    return _service_prepare_stage_request(
         stage_id,
         provider=provider,
         model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
+        system_prompt=system_prompt,
+        user_content=user_content,
         max_tokens=max_tokens,
         temperature=temperature,
         response_format=response_format,
         guided_json=guided_json,
     )
-    work_fingerprint = hashlib.sha256(
-        json.dumps(
-            work_fingerprint_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        ).encode("utf-8")
-    ).hexdigest()
-    return request, exact_stage_request_fingerprint(request), work_fingerprint
 
 
 def _stage_result_text(parsed: dict[str, Any] | None) -> str | None:
-    if parsed is None:
-        return None
-    return json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return _service_stage_result_text(parsed)
 
 
 def _stage_usage_snapshot(*, tier: int, cache_hit: bool, generated: bool) -> dict[str, int]:
-    usage = _empty_exact_cache_usage()
-    if cache_hit:
-        usage[f"tier{tier}_exact_cache_hits"] += 1
-        usage["exact_cache_hits"] += 1
-    elif generated:
-        usage[f"tier{tier}_generated_calls"] += 1
-        usage["generated"] += 1
-    return usage
+    return _service_stage_usage_snapshot(
+        tier=tier,
+        cache_hit=cache_hit,
+        generated=generated,
+    )
 
 
 def _stage_usage_from_row(row: dict[str, Any] | None, *, tier: int) -> dict[str, int]:
-    usage = _empty_exact_cache_usage()
-    if not isinstance(row, dict):
-        return usage
-    stored = row.get("usage_json")
-    if isinstance(stored, dict):
-        for key in usage:
-            usage[key] = int(stored.get(key) or 0)
-        if any(usage.values()):
-            return usage
-    result_source = str(row.get("result_source") or "").strip().lower()
-    if result_source == "exact_cache":
-        return _stage_usage_snapshot(tier=tier, cache_hit=True, generated=False)
-    if result_source in {"generated", "batch_reuse"}:
-        return _stage_usage_snapshot(tier=tier, cache_hit=False, generated=True)
-    return usage
+    return _service_stage_usage_from_row(row, tier=tier)
 
 
 def _parse_stage_row_result(row: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(row, dict):
-        return None
-    text = str(row.get("response_text") or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    return _service_parse_stage_row_result(row)
 
 
 def _trace_enrichment_llm_call(
@@ -1883,37 +1836,14 @@ def _coerce_int_override(
 
 
 def _empty_exact_cache_usage() -> dict[str, int]:
-    return {
-        "exact_cache_hits": 0,
-        "tier1_exact_cache_hits": 0,
-        "tier2_exact_cache_hits": 0,
-        "generated": 0,
-        "tier1_generated_calls": 0,
-        "tier2_generated_calls": 0,
-        "witness_rows": 0,
-        "witness_count": 0,
-        "secondary_write_hits": 0,
-    }
+    return _service_empty_exact_cache_usage()
 
 
 def _accumulate_exact_cache_usage(
     totals: dict[str, int],
     usage: dict[str, Any] | None,
 ) -> None:
-    if not usage:
-        return
-    for key in (
-        "exact_cache_hits",
-        "tier1_exact_cache_hits",
-        "tier2_exact_cache_hits",
-        "generated",
-        "tier1_generated_calls",
-        "tier2_generated_calls",
-        "witness_rows",
-        "witness_count",
-        "secondary_write_hits",
-    ):
-        totals[key] = int(totals.get(key, 0) or 0) + int(usage.get(key, 0) or 0)
+    _service_accumulate_exact_cache_usage(totals, usage)
 
 
 def _witness_metrics(result: dict[str, Any] | None) -> tuple[int, int]:
@@ -1921,11 +1851,7 @@ def _witness_metrics(result: dict[str, Any] | None) -> tuple[int, int]:
 
 
 def _row_usage_result(status: Any, usage: dict[str, Any] | None = None) -> dict[str, Any]:
-    normalized = {"status": status}
-    usage_dict = usage or {}
-    for key in _empty_exact_cache_usage():
-        normalized[key] = int(usage_dict.get(key, 0) or 0)
-    return normalized
+    return _service_row_usage_result(status, usage)
 
 
 async def _defer_batch_row(
