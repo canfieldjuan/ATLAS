@@ -163,6 +163,7 @@ _TARGET_ID = str(uuid4())
         ("GET", f"/api/v1/b2b/tenant/webhooks/{_TARGET_ID}/deliveries", None),
         ("POST", f"/api/v1/b2b/tenant/webhooks/{_TARGET_ID}/test", None),
         ("GET", f"/api/v1/b2b/tenant/webhooks/{_TARGET_ID}/crm-push-log", None),
+        ("GET", f"/api/v1/b2b/tenant/reports/{_TARGET_ID}/pdf", None),
         (
             "POST",
             "/api/v1/b2b/campaigns/suppressions",

@@ -2602,7 +2602,7 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
 
 
 @router.get("/reports/{report_id}/pdf")
-async def export_report_pdf(report_id: str, user: AuthUser | None = Depends(optional_auth)):
+async def export_report_pdf(report_id: str, user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Download a B2B intelligence report as PDF."""
     try:
         rid = _uuid.UUID(report_id)
