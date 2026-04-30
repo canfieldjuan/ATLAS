@@ -156,6 +156,9 @@ def test_ingest_crm_events_batch_trims_text_fields_before_persistence(monkeypatc
 def test_list_crm_events_validates_filters_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(crm_events_api.router)
+    app.dependency_overrides[crm_events_api.require_auth] = lambda: SimpleNamespace(
+        account_id="11111111-1111-1111-1111-111111111111"
+    )
 
     monkeypatch.setattr(crm_events_api.settings.crm_event, "enabled", True)
 
@@ -180,6 +183,9 @@ def test_list_crm_events_validates_filters_before_db_touch(monkeypatch):
 def test_list_crm_events_normalizes_blank_optional_filters(monkeypatch):
     app = FastAPI()
     app.include_router(crm_events_api.router)
+    app.dependency_overrides[crm_events_api.require_auth] = lambda: SimpleNamespace(
+        account_id="11111111-1111-1111-1111-111111111111"
+    )
 
     pool = MagicMock()
     pool.is_initialized = True
@@ -208,7 +214,8 @@ def test_list_crm_events_normalizes_blank_optional_filters(monkeypatch):
     assert "LOWER(company_name) LIKE" not in query
     assert "received_at >= $" not in query
     assert "received_at < $" not in query
-    assert params == [50, 0]
+    assert "account_id = $1::uuid" in query
+    assert params == ["11111111-1111-1111-1111-111111111111", 50, 0]
 
 
 def test_native_crm_webhooks_reject_invalid_json_before_db_touch(monkeypatch):
@@ -243,7 +250,7 @@ def test_native_crm_webhooks_reject_invalid_json_before_db_touch(monkeypatch):
 def test_get_enrichment_stats_scopes_to_authenticated_account(monkeypatch):
     app = FastAPI()
     app.include_router(crm_events_api.router)
-    app.dependency_overrides[crm_events_api.optional_auth] = lambda: SimpleNamespace(
+    app.dependency_overrides[crm_events_api.require_auth] = lambda: SimpleNamespace(
         account_id="11111111-1111-1111-1111-111111111111"
     )
 
@@ -275,36 +282,20 @@ def test_get_enrichment_stats_scopes_to_authenticated_account(monkeypatch):
     assert params == ["11111111-1111-1111-1111-111111111111"]
 
 
-def test_get_enrichment_stats_keeps_global_query_without_auth(monkeypatch):
+def test_get_enrichment_stats_rejects_unauthenticated_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(crm_events_api.router)
 
-    pool = MagicMock()
-    pool.is_initialized = True
-    pool.fetchrow = AsyncMock(
-        return_value={
-            "total_events": 0,
-            "matched": 0,
-            "unmatched": 0,
-            "skipped": 0,
-            "pending": 0,
-            "errored": 0,
-            "has_company": 0,
-            "has_email": 0,
-            "missing_both": 0,
-            "enriched_count": 0,
-            "enriched_matched": 0,
-        }
-    )
-    monkeypatch.setattr(crm_events_api, "get_db_pool", lambda: pool)
+    def _boom():
+        raise AssertionError("DB pool should not be acquired")
+
+    monkeypatch.setattr(crm_events_api, "get_db_pool", _boom)
 
     with TestClient(app) as client:
         response = client.get("/b2b/crm/events/enrichment-stats")
 
-    assert response.status_code == 200
-    query, *params = pool.fetchrow.await_args.args
-    assert "WHERE account_id = $1::uuid" not in query
-    assert params == []
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required"
 
 
 def test_ingest_hubspot_webhook_persists_account_id(monkeypatch):

@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ..auth.dependencies import AuthUser, optional_auth
+from ..auth.dependencies import AuthUser, optional_auth, require_auth
 from ..config import settings
 from ..services.tracing import (
     build_business_trace_context,
@@ -866,7 +866,7 @@ async def list_crm_events(
     end_date: Optional[str] = Query(None, description="Filter events received before (ISO 8601)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """List ingested CRM events with optional filters."""
     status = (_clean_optional_text(status) or "").lower() or None
@@ -901,14 +901,9 @@ async def list_crm_events(
             raise HTTPException(status_code=400, detail="Invalid end_date (ISO 8601 expected)") from exc
 
     pool = _pool_or_503()
-    conditions = ["1=1"]
-    params: list = []
-    idx = 1
-
-    if user:
-        conditions.append(f"account_id = ${idx}::uuid")
-        params.append(str(user.account_id))
-        idx += 1
+    conditions = ["account_id = $1::uuid"]
+    params: list = [str(user.account_id)]
+    idx = 2
 
     if status:
         conditions.append(f"status = ${idx}")
@@ -985,16 +980,13 @@ async def list_crm_events(
 
 @router.get("/events/enrichment-stats")
 async def get_enrichment_stats(
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Show enrichment coverage and effectiveness stats for CRM events."""
     pool = _pool_or_503()
 
-    where = ""
-    params: list[str] = []
-    if user:
-        where = "WHERE account_id = $1::uuid"
-        params.append(str(user.account_id))
+    where = "WHERE account_id = $1::uuid"
+    params: list[str] = [str(user.account_id)]
 
     row = await pool.fetchrow(
         f"""
