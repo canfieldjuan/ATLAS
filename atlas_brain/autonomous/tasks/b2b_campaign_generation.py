@@ -1118,6 +1118,14 @@ async def _prepare_churning_company_context(
     base_context = _build_company_context(best, opps)
     base_context["opportunity_source"] = best.get("opportunity_source")
 
+    if cfg.evidence_gate_shadow_enabled:
+        await _shadow_log_evidence_coverage(
+            pool,
+            vendor_name=str(best.get("vendor_name") or "").strip(),
+            opps=opps,
+            min_pain_confidence=cfg.min_claim_confidence,
+        )
+
     try:
         from ...services.b2b.product_matching import match_products
 
@@ -1190,6 +1198,56 @@ async def _prepare_churning_company_context(
 
 
 from ._blog_matching import fetch_relevant_blog_posts as _fetch_blog_posts
+
+
+async def _shadow_log_evidence_coverage(
+    pool,
+    *,
+    vendor_name: str,
+    opps: list[dict[str, Any]],
+    min_pain_confidence: str,
+) -> None:
+    """Run the evidence-claim coverage gate in shadow mode and log the delta.
+
+    Writes one campaign_audit_log row with event_type='claim_gate_shadow' and
+    NULL sequence_id/campaign_id (the sequence does not exist yet at this stage).
+    Vendor name and full coverage payload live in the metadata column so the
+    audit is queryable by `metadata->>'vendor_name'` during the soak window.
+
+    Failures here MUST NOT break campaign generation — the shadow audit is
+    measurement infra, not a load-bearing component.
+    """
+    if not vendor_name or not opps:
+        return
+    try:
+        from ...services.b2b.evidence_gate import audit_witness_evidence_coverage
+
+        review_ids = [
+            str(opp.get("review_id") or "").strip()
+            for opp in opps
+            if str(opp.get("review_id") or "").strip()
+        ]
+        if not review_ids:
+            return
+        coverage = await audit_witness_evidence_coverage(
+            pool,
+            vendor_name=vendor_name,
+            source_review_ids=review_ids,
+            min_pain_confidence=min_pain_confidence,
+        )
+        await pool.execute(
+            """
+            INSERT INTO campaign_audit_log
+                (event_type, source, metadata)
+            VALUES ('claim_gate_shadow', 'system', $1::jsonb)
+            """,
+            json.dumps(coverage, default=str),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Evidence-gate shadow audit failed for vendor=%s: %s",
+            vendor_name, exc,
+        )
 
 
 # ---------------------------------------------------------------------------
