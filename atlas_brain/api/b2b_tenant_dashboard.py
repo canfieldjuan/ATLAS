@@ -2305,7 +2305,7 @@ async def list_tenant_accounts_in_motion_feed(
 
 
 @router.get("/watchlist-views")
-async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
+async def list_watchlist_views(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     _require_b2b_product(user)
     pool = _pool_or_503()
     rows = await pool.fetch(
@@ -2338,7 +2338,7 @@ async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
 @router.post("/watchlist-views", status_code=201)
 async def create_watchlist_view(
     req: WatchlistViewRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     account_id = _uuid.UUID(user.account_id)
@@ -2418,7 +2418,7 @@ async def create_watchlist_view(
 async def update_watchlist_view(
     view_id: _uuid.UUID,
     req: WatchlistViewRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     name = _clean_required_watchlist_view_name(req.name)
@@ -2597,7 +2597,7 @@ async def update_watchlist_view(
 @router.delete("/watchlist-views/{view_id}")
 async def delete_watchlist_view(
     view_id: _uuid.UUID,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -2621,7 +2621,7 @@ async def list_watchlist_alert_events(
     view_id: _uuid.UUID,
     status: str = Query("open"),
     limit: int = Query(25, ge=1, le=200),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     status_text = _clean_optional_text(status)
@@ -2669,7 +2669,7 @@ async def list_watchlist_alert_events(
 @router.post("/watchlist-views/{view_id}/alert-events/evaluate")
 async def evaluate_watchlist_alert_events(
     view_id: _uuid.UUID,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -2692,7 +2692,7 @@ async def evaluate_watchlist_alert_events(
 async def list_watchlist_alert_email_log(
     view_id: _uuid.UUID,
     limit: int = Query(10, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -2746,7 +2746,7 @@ async def list_watchlist_alert_email_log(
 async def deliver_watchlist_alert_email(
     view_id: _uuid.UUID,
     body: WatchlistAlertEmailRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
