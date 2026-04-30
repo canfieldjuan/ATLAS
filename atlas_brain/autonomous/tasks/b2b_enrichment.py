@@ -39,9 +39,12 @@ from ...services.b2b.enrichment_stage_controller import (
 )
 from ...services.b2b.enrichment_domain import (
     build_classify_payload as _domain_build_classify_payload,
+    coerce_int_value as _domain_coerce_int_value,
     combined_review_text_length as _domain_combined_review_text_length,
+    config_allowlist as _domain_config_allowlist,
     effective_enrichment_skip_sources as _domain_effective_enrichment_skip_sources,
     effective_min_review_text_length as _domain_effective_min_review_text_length,
+    smart_truncate as _domain_smart_truncate,
     tier1_has_extraction_gaps as _domain_tier1_has_extraction_gaps,
     tier2_system_prompt_for_content_type as _domain_tier2_system_prompt_for_content_type,
 )
@@ -251,7 +254,7 @@ from ...services.b2b.enrichment_stage_runs import (
 )
 from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
-from ...services.scraping.sources import filter_deprecated_sources, parse_source_allowlist
+from ...services.scraping.sources import filter_deprecated_sources
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ._b2b_shared import _fetch_review_funnel_audit
@@ -277,26 +280,7 @@ _TIER2_OUTPUT_SECTION_HEADER = "## Output"
 
 
 def _coerce_int_value(raw_value: Any, fallback: int) -> int:
-    if isinstance(raw_value, bool):
-        return int(raw_value)
-    if isinstance(raw_value, int):
-        return raw_value
-    if isinstance(raw_value, float):
-        if raw_value != raw_value:
-            return fallback
-        return int(raw_value)
-    if isinstance(raw_value, str):
-        text = raw_value.strip()
-        if not text:
-            return fallback
-        try:
-            return int(text)
-        except ValueError:
-            try:
-                return int(float(text))
-            except ValueError:
-                return fallback
-    return fallback
+    return _domain_coerce_int_value(raw_value, fallback)
 
 
 def _coerce_float_value(raw_value: Any, fallback: float) -> float:
@@ -320,8 +304,7 @@ def _coerce_float_value(raw_value: Any, fallback: float) -> float:
 
 
 def _config_allowlist(raw_value: Any, fallback: str | list[str] | tuple[str, ...] | set[str] | frozenset[str] = "") -> list[str]:
-    candidate = raw_value if isinstance(raw_value, (str, list, tuple, set, frozenset)) else fallback
-    return list(parse_source_allowlist(candidate))
+    return _domain_config_allowlist(raw_value, fallback)
 
 
 def _enrichment_batch_custom_id(stage: str, review_id: Any) -> str:
@@ -2248,12 +2231,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ),
     )
 
-
-_MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
-
-# Verified review platforms -- every review gets full extraction (skip triage).
-
-
 def _combined_review_text_length(row: dict[str, Any] | None) -> int:
     return _domain_combined_review_text_length(row)
 
@@ -2721,15 +2698,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
 
 
 def _smart_truncate(text: str, max_len: int = 3000) -> str:
-    """Truncate preserving both beginning and end of review text.
-
-    Churn signals often appear at the end ("I'm switching to X next quarter"),
-    so naive head-only truncation loses them.
-    """
-    if len(text) <= max_len:
-        return text
-    half = max_len // 2 - 15
-    return text[:half] + "\n[...truncated...]\n" + text[-half:]
+    return _domain_smart_truncate(text, max_len=max_len)
 
 
 def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:

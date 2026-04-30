@@ -6,12 +6,12 @@ from typing import Any
 from ...config import settings
 from ...services.scraping.sources import parse_source_allowlist
 
-_MIN_REVIEW_TEXT_LENGTH = 80
+MIN_REVIEW_TEXT_LENGTH = 80
 _TIER2_INSIDER_SECTION_HEADER = "### insider_signals -- CLASSIFY + EXTRACT (only for insider_account)"
 _TIER2_OUTPUT_SECTION_HEADER = "## Output"
 
 
-def _coerce_int_value(raw_value: Any, fallback: int) -> int:
+def coerce_int_value(raw_value: Any, fallback: int) -> int:
     if isinstance(raw_value, bool):
         return int(raw_value)
     if isinstance(raw_value, int):
@@ -34,12 +34,19 @@ def _coerce_int_value(raw_value: Any, fallback: int) -> int:
     return fallback
 
 
-def _config_allowlist(
+def config_allowlist(
     raw_value: Any,
     fallback: str | list[str] | tuple[str, ...] | set[str] | frozenset[str] = "",
 ) -> list[str]:
     candidate = raw_value if isinstance(raw_value, (str, list, tuple, set, frozenset)) else fallback
     return list(parse_source_allowlist(candidate))
+
+
+def smart_truncate(text: str, max_len: int = 3000) -> str:
+    if len(text) <= max_len:
+        return text
+    half = max_len // 2 - 15
+    return text[:half] + "\n[...truncated...]\n" + text[-half:]
 
 
 def build_classify_payload(
@@ -118,7 +125,7 @@ def effective_min_review_text_length(row: dict[str, Any] | None) -> int:
     if source == "capterra":
         try:
             return min(
-                _MIN_REVIEW_TEXT_LENGTH,
+                MIN_REVIEW_TEXT_LENGTH,
                 max(
                     20,
                     int(
@@ -132,12 +139,12 @@ def effective_min_review_text_length(row: dict[str, Any] | None) -> int:
             )
         except (TypeError, ValueError):
             return 40
-    return _MIN_REVIEW_TEXT_LENGTH
+    return MIN_REVIEW_TEXT_LENGTH
 
 
 def effective_enrichment_skip_sources() -> set[str]:
-    configured = _config_allowlist(getattr(settings.b2b_churn, "enrichment_skip_sources", ""), "")
-    deprecated = _config_allowlist(
+    configured = config_allowlist(getattr(settings.b2b_churn, "enrichment_skip_sources", ""), "")
+    deprecated = config_allowlist(
         getattr(settings.b2b_churn, "deprecated_review_sources", ""),
         "capterra,software_advice,trustpilot,trustradius",
     )
@@ -159,7 +166,7 @@ def tier1_has_extraction_gaps(tier1: dict[str, Any], *, source: str | None = Non
     has_evidence = bool(complaints or quotes or competitors or pricing or rec_lang)
     source_norm = str(source or "").strip().lower()
     strict_sources = set(
-        _config_allowlist(
+        config_allowlist(
             getattr(settings.b2b_churn, "enrichment_tier2_strict_sources", ""),
             "",
         )
@@ -181,12 +188,12 @@ def tier1_has_extraction_gaps(tier1: dict[str, Any], *, source: str | None = Non
         has_strong_structured_evidence = (
             bool(competitors)
             or bool(pricing)
-            or complaint_count >= _coerce_int_value(
+            or complaint_count >= coerce_int_value(
                 getattr(settings.b2b_churn, "enrichment_tier2_strict_min_complaints", 2),
                 2,
             )
             or (
-                quote_count >= _coerce_int_value(
+                quote_count >= coerce_int_value(
                     getattr(settings.b2b_churn, "enrichment_tier2_strict_min_quotes", 2),
                     2,
                 )
