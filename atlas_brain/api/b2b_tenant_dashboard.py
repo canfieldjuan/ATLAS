@@ -1174,7 +1174,7 @@ class WatchlistAlertEmailRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("/vendors")
-async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
+async def list_tracked_vendors(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """List tracked vendors with inline signal summary."""
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -1267,7 +1267,10 @@ async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
 
 
 @router.post("/vendors")
-async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(require_auth)):
+async def add_tracked_vendor(
+    req: AddVendorRequest,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Add a vendor to track. Enforces vendor_limit in a transaction."""
     _require_b2b_product(user)
     vendor_name = _clean_required_text(req.vendor_name, "vendor_name")
@@ -1381,7 +1384,10 @@ async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(req
 
 
 @router.delete("/vendors/{vendor_name}")
-async def remove_tracked_vendor(vendor_name: str, user: AuthUser = Depends(require_auth)):
+async def remove_tracked_vendor(
+    vendor_name: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Remove a tracked vendor."""
     _require_b2b_product(user)
     vname = _clean_required_text(vendor_name, "vendor_name")
@@ -1419,7 +1425,7 @@ async def remove_tracked_vendor(vendor_name: str, user: AuthUser = Depends(requi
 async def search_available_vendors(
     q: str = Query(..., min_length=1, max_length=256),
     limit: int = Query(20, ge=1, le=50),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Search b2b_churn_signals for vendors matching query (for onboarding)."""
     _require_b2b_product(user)
@@ -3662,7 +3668,7 @@ async def generate_tenant_battle_card_report(
 async def refresh_tenant_vendor_pipeline(
     vendor_name: str,
     body: VendorRefreshRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Refresh one tracked vendor across core intelligence and key outputs."""
     _require_b2b_product(user)

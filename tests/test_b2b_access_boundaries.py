@@ -154,6 +154,11 @@ _TARGET_ID = str(uuid4())
             "/api/v1/b2b/tenant/vendors/compare-reasoning",
             {"vendors": ["ClickUp", "Monday.com"]},
         ),
+        ("GET", "/api/v1/b2b/tenant/vendors", None),
+        ("POST", "/api/v1/b2b/tenant/vendors", {"vendor_name": "ClickUp", "track_mode": "own"}),
+        ("DELETE", "/api/v1/b2b/tenant/vendors/ClickUp", None),
+        ("GET", "/api/v1/b2b/tenant/vendors/search?q=ClickUp", None),
+        ("POST", "/api/v1/b2b/tenant/vendors/ClickUp/refresh", {}),
         ("POST", "/api/v1/b2b/tenant/calibration/trigger", None),
         (
             "POST",
@@ -301,9 +306,14 @@ def test_tenant_and_operator_routes_reject_unauthenticated_requests(
         ("DELETE", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}", None),
         ("GET", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}/plan", None),
         ("POST", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}/run", {}),
+        ("GET", "/api/v1/b2b/tenant/vendors", None),
+        ("POST", "/api/v1/b2b/tenant/vendors", {"vendor_name": "ClickUp", "track_mode": "own"}),
+        ("DELETE", "/api/v1/b2b/tenant/vendors/ClickUp", None),
+        ("GET", "/api/v1/b2b/tenant/vendors/search?q=ClickUp", None),
+        ("POST", "/api/v1/b2b/tenant/vendors/ClickUp/refresh", {}),
     ],
 )
-def test_competitive_set_routes_reject_authenticated_underplan_before_service_touch(
+def test_product_tenant_routes_reject_authenticated_underplan_before_service_touch(
     monkeypatch,
     method: str,
     path: str,
