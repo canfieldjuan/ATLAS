@@ -1,0 +1,44 @@
+{
+  "mappings": [
+    {
+      "source": "atlas_brain/autonomous/tasks/blog_post_generation.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/blog_post_generation.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/b2b_blog_post_generation.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/b2b_blog_post_generation.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/complaint_content_generation.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/complaint_content_generation.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/article_enrichment.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/article_enrichment.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/complaint_enrichment.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/complaint_enrichment.py"
+    },
+    {
+      "source": "atlas_brain/skills/digest/blog_post_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/blog_post_generation.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/b2b_blog_post_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_blog_post_generation.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/complaint_content_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/complaint_content_generation.md"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/084_blog_posts.sql",
+      "target": "extracted_content_pipeline/storage/migrations/084_blog_posts.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/264_blog_post_rejection_count.sql",
+      "target": "extracted_content_pipeline/storage/migrations/264_blog_post_rejection_count.sql"
+    }
+  ]
+}
