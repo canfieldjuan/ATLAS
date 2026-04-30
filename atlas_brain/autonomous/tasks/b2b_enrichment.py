@@ -132,6 +132,112 @@ from ...services.b2b.enrichment_support import (
     normalized_name_tokens as _service_normalized_name_tokens,
     text_mentions_name as _service_text_mentions_name,
 )
+from ...services.b2b.enrichment_policy_low_fidelity import (
+    LOW_FIDELITY_COMMERCIAL_MARKERS as _LOW_FIDELITY_COMMERCIAL_MARKERS,
+    LOW_FIDELITY_CONSUMER_PATTERNS as _LOW_FIDELITY_CONSUMER_PATTERNS,
+    LOW_FIDELITY_STRONG_COMMERCIAL_MARKERS as _LOW_FIDELITY_STRONG_COMMERCIAL_MARKERS,
+    LOW_FIDELITY_TECHNICAL_PATTERNS as _LOW_FIDELITY_TECHNICAL_PATTERNS,
+    LOW_FIDELITY_TOKEN_STOPWORDS as _LOW_FIDELITY_TOKEN_STOPWORDS,
+)
+from ...services.b2b.enrichment_policy_pain import (
+    COMPETITOR_CONTEXT_PATTERNS as _COMPETITOR_CONTEXT_PATTERNS,
+    COMPETITOR_RECOVERY_BLOCKLIST as _COMPETITOR_RECOVERY_BLOCKLIST,
+    COMPETITOR_RECOVERY_PATTERNS as _COMPETITOR_RECOVERY_PATTERNS,
+    GENERIC_COMPETITOR_TOKENS as _GENERIC_COMPETITOR_TOKENS,
+    KNOWN_PAIN_CATEGORIES as _KNOWN_PAIN_CATEGORIES,
+    LEGACY_GENERIC_PAIN_CATEGORIES as _LEGACY_GENERIC_PAIN_CATEGORIES,
+    PAIN_DERIVATION_FIELDS as _PAIN_DERIVATION_FIELDS,
+    PAIN_KEYWORDS as _PAIN_KEYWORDS,
+    PAIN_KEYWORDS_RAW as _PAIN_KEYWORDS_RAW,
+    PAIN_PATTERNS as _PAIN_PATTERNS,
+    normalize_pain_category as _policy_normalize_pain_category,
+)
+from ...services.b2b.enrichment_policy_timeline_budget import (
+    BUDGET_ANNUAL_AMOUNT_RE as _BUDGET_ANNUAL_AMOUNT_RE,
+    BUDGET_ANNUAL_CONTEXT_PATTERNS as _BUDGET_ANNUAL_CONTEXT_PATTERNS,
+    BUDGET_ANNUAL_PERIOD_PATTERNS as _BUDGET_ANNUAL_PERIOD_PATTERNS,
+    BUDGET_ANY_AMOUNT_TOKEN_RE as _BUDGET_ANY_AMOUNT_TOKEN_RE,
+    BUDGET_COMMERCIAL_CONTEXT_PATTERNS as _BUDGET_COMMERCIAL_CONTEXT_PATTERNS,
+    BUDGET_CURRENCY_TOKEN_RE as _BUDGET_CURRENCY_TOKEN_RE,
+    BUDGET_MONTHLY_PERIOD_PATTERNS as _BUDGET_MONTHLY_PERIOD_PATTERNS,
+    BUDGET_NOISE_PATTERNS as _BUDGET_NOISE_PATTERNS,
+    BUDGET_PER_UNIT_PATTERNS as _BUDGET_PER_UNIT_PATTERNS,
+    BUDGET_PRICE_INCREASE_DETAIL_RE as _BUDGET_PRICE_INCREASE_DETAIL_RE,
+    BUDGET_PRICE_INCREASE_RE as _BUDGET_PRICE_INCREASE_RE,
+    BUDGET_PRICE_PER_SEAT_RE as _BUDGET_PRICE_PER_SEAT_RE,
+    BUDGET_SEAT_COUNT_RE as _BUDGET_SEAT_COUNT_RE,
+    TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS as _TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS,
+    TIMELINE_AMBIGUOUS_VENDOR_TOKENS as _TIMELINE_AMBIGUOUS_VENDOR_TOKENS,
+    TIMELINE_CONTRACT_END_PATTERNS as _TIMELINE_CONTRACT_END_PATTERNS,
+    TIMELINE_CONTRACT_EVENT_PATTERNS as _TIMELINE_CONTRACT_EVENT_PATTERNS,
+    TIMELINE_DECISION_DEADLINE_PATTERNS as _TIMELINE_DECISION_DEADLINE_PATTERNS,
+    TIMELINE_DECISION_PATTERNS as _TIMELINE_DECISION_PATTERNS,
+    TIMELINE_EXPLICIT_ANCHOR_PHRASES as _TIMELINE_EXPLICIT_ANCHOR_PHRASES,
+    TIMELINE_IMMEDIATE_PATTERNS as _TIMELINE_IMMEDIATE_PATTERNS,
+    TIMELINE_ISO_DATE_RE as _TIMELINE_ISO_DATE_RE,
+    TIMELINE_MONTH_DAY_RE as _TIMELINE_MONTH_DAY_RE,
+    TIMELINE_QUARTER_PATTERNS as _TIMELINE_QUARTER_PATTERNS,
+    TIMELINE_RELATIVE_ANCHOR_RE as _TIMELINE_RELATIVE_ANCHOR_RE,
+    TIMELINE_SLASH_DATE_RE as _TIMELINE_SLASH_DATE_RE,
+    TIMELINE_YEAR_PATTERNS as _TIMELINE_YEAR_PATTERNS,
+)
+from ...services.b2b.enrichment_policy_buyer_authority import (
+    CHAMPION_REVIEWER_TITLE_PATTERN as _CHAMPION_REVIEWER_TITLE_PATTERN,
+    CHAMPION_TEXT_PATTERNS as _CHAMPION_TEXT_PATTERNS,
+    COMMERCIAL_DECISION_TEXT_PATTERN as _COMMERCIAL_DECISION_TEXT_PATTERN,
+    DIRECTOR_ROLE_TEXT_PATTERN as _DIRECTOR_ROLE_TEXT_PATTERN,
+    ECONOMIC_BUYER_TEXT_PATTERNS as _ECONOMIC_BUYER_TEXT_PATTERNS,
+    END_USER_TEXT_PATTERNS as _END_USER_TEXT_PATTERNS,
+    EVALUATOR_REVIEWER_TITLE_PATTERN as _EVALUATOR_REVIEWER_TITLE_PATTERN,
+    EVALUATOR_TEXT_PATTERNS as _EVALUATOR_TEXT_PATTERNS,
+    EXEC_REVIEWER_TITLE_PATTERN as _EXEC_REVIEWER_TITLE_PATTERN,
+    EXEC_ROLE_TEXT_PATTERN as _EXEC_ROLE_TEXT_PATTERN,
+    IC_ROLE_TEXT_PATTERN as _IC_ROLE_TEXT_PATTERN,
+    MANAGER_DECISION_TITLE_PATTERN as _MANAGER_DECISION_TITLE_PATTERN,
+    MANAGER_ROLE_TEXT_PATTERN as _MANAGER_ROLE_TEXT_PATTERN,
+    POST_PURCHASE_REVIEW_SOURCES as _POST_PURCHASE_REVIEW_SOURCES,
+    POST_PURCHASE_USAGE_PATTERNS as _POST_PURCHASE_USAGE_PATTERNS,
+    ROLE_LEVEL_ALIASES as _ROLE_LEVEL_ALIASES,
+    ROLE_TYPE_ALIASES as _ROLE_TYPE_ALIASES,
+)
+from ...services.b2b.enrichment_policy_validation import (
+    CHURN_SIGNAL_BOOL_FIELDS as _CHURN_SIGNAL_BOOL_FIELDS,
+    KNOWN_BUYING_STAGES as _KNOWN_BUYING_STAGES,
+    KNOWN_CONTENT_TYPES as _KNOWN_CONTENT_TYPES,
+    KNOWN_CONTRACT_VALUE_SIGNALS as _KNOWN_CONTRACT_VALUE_SIGNALS,
+    KNOWN_DEPARTURE_TYPES as _KNOWN_DEPARTURE_TYPES,
+    KNOWN_DECISION_TIMELINES as _KNOWN_DECISION_TIMELINES,
+    KNOWN_INNOVATION_CLIMATES as _KNOWN_INNOVATION_CLIMATES,
+    KNOWN_LEADERSHIP_QUALITIES as _KNOWN_LEADERSHIP_QUALITIES,
+    KNOWN_LOCK_IN_LEVELS as _KNOWN_LOCK_IN_LEVELS,
+    KNOWN_MORALE_LEVELS as _KNOWN_MORALE_LEVELS,
+    KNOWN_OPERATING_MODEL_SHIFTS as _KNOWN_OPERATING_MODEL_SHIFTS,
+    KNOWN_ORG_HEALTH_LEVELS as _KNOWN_ORG_HEALTH_LEVELS,
+    KNOWN_ORG_PRESSURE_TYPES as _KNOWN_ORG_PRESSURE_TYPES,
+    KNOWN_PRODUCTIVITY_DELTA_CLAIMS as _KNOWN_PRODUCTIVITY_DELTA_CLAIMS,
+    KNOWN_REPLACEMENT_MODES as _KNOWN_REPLACEMENT_MODES,
+    KNOWN_ROLE_LEVELS as _KNOWN_ROLE_LEVELS,
+    KNOWN_ROLE_TYPES as _KNOWN_ROLE_TYPES,
+    KNOWN_SENTIMENT_DIRECTIONS as _KNOWN_SENTIMENT_DIRECTIONS,
+    KNOWN_SEVERITY_LEVELS as _KNOWN_SEVERITY_LEVELS,
+)
+from ...services.b2b.enrichment_policy_phrase_metadata import (
+    PHRASE_METADATA_FIELDS as _PHRASE_METADATA_FIELDS,
+    PHRASE_POLARITY_VALUES as _PHRASE_POLARITY_VALUES,
+    PHRASE_ROLE_VALUES as _PHRASE_ROLE_VALUES,
+    PHRASE_SUBJECT_VALUES as _PHRASE_SUBJECT_VALUES,
+    PHRASE_UNCLEAR as _PHRASE_UNCLEAR,
+)
+from ...services.b2b.enrichment_policy_repair import (
+    REPAIR_CATEGORY_SHIFT_PATTERNS as _REPAIR_CATEGORY_SHIFT_PATTERNS,
+    REPAIR_COMPETITOR_PATTERNS as _REPAIR_COMPETITOR_PATTERNS,
+    REPAIR_CURRENCY_RE as _REPAIR_CURRENCY_RE,
+    REPAIR_FEATURE_GAP_PATTERNS as _REPAIR_FEATURE_GAP_PATTERNS,
+    REPAIR_NEGATIVE_PATTERNS as _REPAIR_NEGATIVE_PATTERNS,
+    REPAIR_PRICING_PATTERNS as _REPAIR_PRICING_PATTERNS,
+    REPAIR_RECOMMEND_PATTERNS as _REPAIR_RECOMMEND_PATTERNS,
+    REPAIR_TIMELINE_PATTERNS as _REPAIR_TIMELINE_PATTERNS,
+)
 from ...services.b2b.enrichment_stage_planner import (
     build_tier1_stage_plan,
     build_tier2_stage_plan,
@@ -1154,62 +1260,12 @@ def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
     return result
 
 
-def _build_pain_patterns(
-    keywords: dict[str, tuple[str, ...]],
-) -> dict[str, re.Pattern[str]]:
-    """Compile keyword tuples into word-boundary regexes per category."""
-    compiled: dict[str, re.Pattern[str]] = {}
-    for category, needles in keywords.items():
-        parts = [r"\b" + re.escape(n) + r"\b" for n in needles]
-        compiled[category] = re.compile("|".join(parts), re.IGNORECASE)
-    return compiled
-
-
-_PAIN_KEYWORDS_RAW = {
-    "pricing": (
-        "price", "pricing", "cost", "costly", "expensive", "overpriced", "renewal",
-        "invoice", "invoiced", "billing", "billed", "charged", "charge", "overcharge",
-        "fee", "fees", "refund", "cost increase", "price increase",
-    ),
-    "support": ("support", "ticket", "response", "customer service", "escalation", "escalated", "escalate"),
-    "features": ("feature", "functionality", "capability", "missing"),
-    "ux": ("ui", "ux", "interface", "clunky", "usability", "navigation"),
-    "reliability": ("outage", "downtime", "crash", "bug", "unstable", "reliable"),
-    "performance": ("slow", "latency", "lag", "performance", "speed"),
-    "integration": ("integration", "integrate", "sync", "connector", "api"),
-    "security": ("security", "permission", "access control", "compliance", "sso", "mfa"),
-    "onboarding": ("onboarding", "setup", "implementation", "training", "adoption"),
-    "technical_debt": ("technical debt", "legacy", "outdated", "deprecated", "workaround"),
-    "contract_lock_in": (
-        "lock-in", "locked in", "vendor lock", "multi-year", "exit fee", "cancel",
-        "cancellation", "terminate", "termination", "auto renew", "automatic renewal",
-        "renewed without notice", "notice period", "contract term", "contract trap",
-        "billing dispute", "runaround",
-    ),
-    "data_migration": ("migration", "migrate", "import", "export", "data transfer"),
-    "api_limitations": ("api", "webhook", "sdk", "rate limit", "endpoint"),
-    "privacy": ("spam", "unsubscribe", "unsolicited", "data breach", "privacy violation"),
-}
-# Keep the dict name for any external references; remove "value" (matches
-# valuable/evaluate/values too broadly in review text).
-_PAIN_KEYWORDS = _PAIN_KEYWORDS_RAW
-_PAIN_PATTERNS = _build_pain_patterns(_PAIN_KEYWORDS_RAW)
-
-
 def _normalize_text_list(values: Any) -> list[str]:
     return _service_normalize_text_list(values)
 
 
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     return _service_contains_any(text, needles)
-
-
-_PAIN_DERIVATION_FIELDS: tuple[str, ...] = (
-    "specific_complaints",
-    "pricing_phrases",
-    "feature_gaps",
-    "quotable_phrases",
-)
 
 
 def _pain_competition_deps() -> EnrichmentPainCompetitionDeps:
@@ -1253,32 +1309,6 @@ def _demote_primary_pain(result: dict, demoted_category: str) -> None:
     _service_demote_primary_pain(result, demoted_category)
 
 
-_COMPETITOR_RECOVERY_PATTERNS = (
-    r"\b(?:switched to|moved to|replaced with|migrating to|migration to)\s+([A-Z][A-Za-z0-9.&+/\-]*(?:\s+[A-Z][A-Za-z0-9.&+/\-]*){0,3})",
-    r"\b(?:evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)\s+([A-Z][A-Za-z0-9.&+/\-]*(?:\s+[A-Z][A-Za-z0-9.&+/\-]*){0,3})",
-)
-
-_COMPETITOR_RECOVERY_BLOCKLIST = {
-    "a", "an", "the", "another tool", "another vendor", "other tool", "other vendor",
-    "new tool", "new vendor", "options", "alternative", "alternatives",
-    "alternative platform", "alternative platforms", "crm",
-    "provider", "providers", "competing provider", "competing providers",
-}
-
-_GENERIC_COMPETITOR_TOKENS = {
-    "alternative", "alternatives", "platform", "platforms", "tool", "tools",
-    "vendor", "vendors", "software", "solutions", "solution", "service",
-    "services", "system", "systems", "crm", "suite", "app", "apps",
-    "provider", "providers", "competing",
-}
-
-_COMPETITOR_CONTEXT_PATTERNS = (
-    "switched to", "moved to", "replaced with", "migrating to", "migration to",
-    "evaluating", "looking at", "considering", "shortlisting", "shortlisted",
-    "poc with", "proof of concept with", "instead of", "compared to", "versus", " vs ",
-)
-
-
 def _recover_competitor_mentions(result: dict, source_row: dict[str, Any]) -> list[dict[str, Any]]:
     return _service_recover_competitor_mentions(
         result,
@@ -1293,122 +1323,6 @@ def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> 
         source_row,
         deps=_pain_competition_deps(),
     )
-
-
-_TIMELINE_IMMEDIATE_PATTERNS = ("asap", "immediately", "right away", "this week", "today", "urgent")
-_TIMELINE_QUARTER_PATTERNS = ("next quarter", "this quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days")
-_TIMELINE_YEAR_PATTERNS = ("this year", "next year", "12 months", "end of year", "2026", "2027")
-_TIMELINE_DECISION_PATTERNS = (
-    "decide", "decision", "renewal", "contract", "evaluate", "evaluation",
-    "considering", "switch", "switching", "migration", "migrate",
-    "deadline", "cutover", "go live", "go-live",
-)
-_TIMELINE_EXPLICIT_ANCHOR_PHRASES = (
-    "end of quarter", "quarter end", "end of month", "month end",
-    "end of year", "next quarter", "this quarter", "next month", "this month",
-    "this week", "next week", "a few weeks", "few weeks", "a few days", "few days",
-    "30 days", "60 days", "90 days", "12 months", "next year", "this year",
-    "asap", "immediately", "right away", "today", "tomorrow",
-)
-_TIMELINE_RELATIVE_ANCHOR_RE = re.compile(
-    r"\b(?:\d+\s*-\s*\d+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few|few)"
-    r"(?:\s+to\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))?"
-    r"\s+(?:business\s+days?|days?|weeks?|months?)\b",
-    re.IGNORECASE,
-)
-_TIMELINE_MONTH_DAY_RE = re.compile(
-    r"\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|"
-    r"aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?"
-    r"\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b",
-    re.IGNORECASE,
-)
-_TIMELINE_SLASH_DATE_RE = re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b")
-_TIMELINE_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
-_TIMELINE_CONTRACT_END_PATTERNS = (
-    "contract end", "contract ends", "contract expires", "expiration date",
-    "expiry date", "renewal date", "renewal window", "term ends", "term expires",
-    "auto renew", "auto-renew", "automatic renewal", "at renewal", "upon renewal",
-    "final month of", "current contract",
-)
-_TIMELINE_DECISION_DEADLINE_PATTERNS = (
-    "notice", "notice period", "before renewal", "before the contract ends",
-    "before the contract expires", "deadline", "decide", "decision", "evaluating",
-    "evaluation", "considering", "switch", "switching", "migrate", "migration",
-    "cutover", "go live", "go-live", "cancel by",
-)
-_TIMELINE_CONTRACT_EVENT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(?:at|upon)\s+(?:the\s+)?renewal\b", re.I),
-    re.compile(r"\b(?:auto[- ]?renew(?:al)?|annual renewal|next renewal|renewal date|renewal window)\b", re.I),
-    re.compile(r"\bfinal month of (?:my|our|the) current contract\b", re.I),
-    re.compile(r"\b(?:current|existing)\s+contract\b", re.I),
-)
-_TIMELINE_AMBIGUOUS_VENDOR_TOKENS = {"copper", "close"}
-_TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS = (
-    "crm", "sales", "pipeline", "lead", "leads", "deal", "deals", "account",
-    "contact", "contacts", "prospect", "prospects", "software", "saas",
-)
-_BUDGET_CURRENCY_TOKEN_RE = re.compile(
-    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)",
-    re.IGNORECASE,
-)
-_BUDGET_ANY_AMOUNT_TOKEN_RE = re.compile(
-    r"(?:\$|usd\s*|\u20ac|eur\s*|\u00a3|gbp\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?",
-    re.IGNORECASE,
-)
-_BUDGET_ANNUAL_AMOUNT_RE = re.compile(
-    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)"
-    r"\s*(?P<period>(?:/\s*|\bper\b\s*|\ba\b\s*)?(?:yr|year)\b|annually\b|annual\b|yearly\b)",
-    re.IGNORECASE,
-)
-_BUDGET_PRICE_PER_SEAT_RE = re.compile(
-    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)"
-    r"\s*(?:/|\bper\b)\s*(?:seat|user|license|licence)\b"
-    r"(?:\s*(?:/|\bper\b)\s*(?:monthly|month|mo|annually|annual|year|yr))?",
-    re.IGNORECASE,
-)
-_BUDGET_SEAT_COUNT_RE = re.compile(
-    r"\b(?P<count>\d[\d,]{0,6})\s+(?P<unit>seats?|users?|licenses?|licences?)\b",
-    re.IGNORECASE,
-)
-_BUDGET_PRICE_INCREASE_RE = re.compile(
-    r"\b(?:\d+(?:\.\d+)?%\s+(?:price\s+)?(?:increase|higher|more|jump|hike)"
-    r"|(?:price|pricing|renewal)\s+(?:increase|jump|hike)"
-    r"|(?:raised|increased)\s+(?:our\s+)?(?:price|pricing|renewal|invoice))\b",
-    re.IGNORECASE,
-)
-_BUDGET_PRICE_INCREASE_DETAIL_RE = re.compile(
-    r"\b(?:\d+(?:\.\d+)?%\s+(?:price\s+)?(?:increase|higher|more|jump|hike)"
-    r"|(?:price|pricing|renewal)\s+(?:increase|jump|hike)[^.!,;]{0,80}"
-    r"|(?:raised|increased)[^.!,;]{0,80})",
-    re.IGNORECASE,
-)
-_BUDGET_COMMERCIAL_CONTEXT_PATTERNS = (
-    "pricing", "price", "priced", "cost", "costs", "costly", "expensive",
-    "budget", "billing", "invoice", "overcharg", "renewal", "quote", "quoted",
-    "contract", "subscription", "license", "licence", "plan", "seat", "user",
-)
-_BUDGET_ANNUAL_CONTEXT_PATTERNS = (
-    "renewal", "quote", "quoted", "contract", "subscription", "license",
-    "licence", "annual", "annually", "yearly", "per year", "/year", "/yr",
-)
-_BUDGET_MONTHLY_PERIOD_PATTERNS = (
-    "monthly", "per month", "/month", "/mo", "a month",
-)
-_BUDGET_ANNUAL_PERIOD_PATTERNS = (
-    "annual", "annually", "yearly", "per year", "/year", "/yr", "a year", "a yr",
-)
-_BUDGET_PER_UNIT_PATTERNS = (
-    "per seat", "/seat", "per user", "/user", "per license", "/license",
-    "per licence", "/licence", "per agent", "/agent", "per person", "/person",
-    "per employee", "/employee", "per endpoint", "/endpoint", "per device", "/device",
-    "per member", "/member", "per contact", "/contact",
-)
-_BUDGET_NOISE_PATTERNS = (
-    "salary", "salaries", "compensation", "bonus", "payroll", "hourly",
-    "per hour", "an hour", "wage", "wages", "job offer", "interview", "intern",
-    "income", "revenue", "profit", "arr", "mrr", "valuation", "mortgage",
-    "rent", "tuition", "commission",
-)
 
 
 def _normalize_timeline_anchor(anchor: Any) -> str | None:
@@ -1712,35 +1626,6 @@ def _derive_contract_value_signal(result: dict) -> str:
     return _service_derive_contract_value_signal(result)
 
 
-_POST_PURCHASE_REVIEW_SOURCES = frozenset({
-    "g2",
-    "gartner",
-    "trustradius",
-    "capterra",
-    "software_advice",
-    "peerspot",
-    "sourceforge",
-    "trustpilot",
-})
-_POST_PURCHASE_USAGE_PATTERNS = (
-    "we use",
-    "we've used",
-    "we have used",
-    "been using",
-    "using this",
-    "using it",
-    "in production",
-    "implemented",
-    "deployed",
-    "rolled out",
-    "adopted",
-    "renewed",
-    "customer since",
-    "our team uses",
-    "our company uses",
-)
-
-
 def _has_post_purchase_signal(source_row: dict[str, Any], review_blob: str) -> bool:
     source = str(source_row.get("source") or "").strip().lower()
     if source in _POST_PURCHASE_REVIEW_SOURCES:
@@ -1781,26 +1666,6 @@ def _is_no_signal_result(result: dict, source_row: dict[str, Any]) -> bool:
 # Phrase metadata v2 schema (parallel to legacy list[str] phrase arrays).
 # See atlas_brain/autonomous/tasks/_b2b_phrase_metadata.py for the reader API.
 # ---------------------------------------------------------------------------
-
-_PHRASE_METADATA_FIELDS: tuple[str, ...] = (
-    "specific_complaints",
-    "pricing_phrases",
-    "feature_gaps",
-    "quotable_phrases",
-    "recommendation_language",
-    "positive_aspects",
-)
-_PHRASE_SUBJECT_VALUES: tuple[str, ...] = (
-    "subject_vendor", "alternative", "self", "third_party", "unclear",
-)
-_PHRASE_POLARITY_VALUES: tuple[str, ...] = (
-    "negative", "positive", "mixed", "unclear",
-)
-_PHRASE_ROLE_VALUES: tuple[str, ...] = (
-    "primary_driver", "supporting_context", "passing_mention", "unclear",
-)
-_PHRASE_UNCLEAR = "unclear"
-
 
 def _coerce_legacy_phrase_arrays(result: dict) -> None:
     _service_coerce_legacy_phrase_arrays(result)
@@ -2875,62 +2740,6 @@ def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
     )
 
 
-_LOW_FIDELITY_TOKEN_STOPWORDS = {
-    "and", "for", "the", "with", "cloud", "software", "platform",
-}
-
-_LOW_FIDELITY_COMMERCIAL_MARKERS = {
-    "alternative", "alternatives", "budget", "contract", "cost", "expensive",
-    "migrate", "migration", "pricing", "renewal", "replace", "replaced",
-    "seat", "seats", "support", "switch", "switching",
-}
-
-_LOW_FIDELITY_STRONG_COMMERCIAL_MARKERS = {
-    "alternative", "alternatives", "budget", "contract", "cost", "expensive",
-    "migrate", "migration", "pricing", "renewal", "replace", "replaced",
-    "seat", "seats", "switch", "switching",
-}
-
-_LOW_FIDELITY_TECHNICAL_PATTERNS = (
-    r"\bhow (?:can|do|to)\b",
-    r"\bbest practice\b",
-    r"\bsetting up\b",
-    r"\banswer to question\b",
-    r"\bapi token\b",
-    r"\bbuild pipeline\b",
-    r"\bconnect(?:ing)?\b",
-    r"\bcosmos db\b",
-    r"\bdocker\b",
-    r"\berror\b",
-    r"\bfailed\b",
-    r"\bintegrat(?:e|ion)\b",
-    r"\bjenkins\b",
-    r"\bkey vault\b",
-    r"\blogin\b",
-    r"\bplugin\b",
-    r"\breact frontend\b",
-    r"\bssl verification failed\b",
-    r"\bsubscription form\b",
-    r"\bvagrant\b",
-    r"\bxamarin\b",
-)
-
-_LOW_FIDELITY_CONSUMER_PATTERNS = (
-    r"\b2fa\b",
-    r"\bapp support\b",
-    r"\bdownloaded\b",
-    r"\bghosting email\b",
-    r"\bgoogle play\b",
-    r"\bhacked\b",
-    r"\bminecraft\b",
-    r"\bmy son\b",
-    r"\boutlook app\b",
-    r"\btaskbar\b",
-    r"\bwindows 11\b",
-    r"\bworkspace account\b",
-)
-
-
 def _normalize_compare_text(value: Any) -> str:
     return _service_normalize_compare_text(value)
 
@@ -3010,234 +2819,12 @@ def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) ->
     )
 
 
-_KNOWN_PAIN_CATEGORIES = {
-    "pricing", "features", "reliability", "support", "integration",
-    "performance", "security", "ux", "onboarding", "overall_dissatisfaction",
-    "technical_debt", "contract_lock_in", "data_migration", "api_limitations",
-    "outcome_gap", "admin_burden", "ai_hallucination", "integration_debt",
-    "privacy",
-}
-
-_LEGACY_GENERIC_PAIN_CATEGORIES = {"other", "general_dissatisfaction"}
-
-
 def _normalize_pain_category(category: Any) -> str:
-    raw = str(category or "").strip().lower()
-    if not raw:
-        return "overall_dissatisfaction"
-    if raw in _LEGACY_GENERIC_PAIN_CATEGORIES:
-        return "overall_dissatisfaction"
-    if raw in _KNOWN_PAIN_CATEGORIES:
-        return raw
-    return "overall_dissatisfaction"
+    return _policy_normalize_pain_category(category)
 
 
 def _coerce_bool(value: Any) -> bool | None:
     return _service_coerce_bool(value)
-
-
-_CHURN_SIGNAL_BOOL_FIELDS = (
-    "intent_to_leave",
-    "actively_evaluating",
-    "migration_in_progress",
-    "support_escalation",
-    "contract_renewal_mentioned",
-)
-
-_KNOWN_SEVERITY_LEVELS = {"primary", "secondary", "minor"}
-_KNOWN_LOCK_IN_LEVELS = {"high", "medium", "low", "unknown"}
-_KNOWN_SENTIMENT_DIRECTIONS = {"declining", "consistently_negative", "improving", "stable_positive", "unknown"}
-_KNOWN_ROLE_TYPES = {"economic_buyer", "champion", "evaluator", "end_user", "unknown"}
-_KNOWN_ROLE_LEVELS = {"executive", "director", "manager", "ic", "unknown"}
-_KNOWN_BUYING_STAGES = {"active_purchase", "evaluation", "renewal_decision", "post_purchase", "unknown"}
-_KNOWN_DECISION_TIMELINES = {"immediate", "within_quarter", "within_year", "unknown"}
-_KNOWN_CONTRACT_VALUE_SIGNALS = {"enterprise_high", "enterprise_mid", "mid_market", "smb", "unknown"}
-_KNOWN_REPLACEMENT_MODES = {
-    "competitor_switch", "bundled_suite_consolidation", "workflow_substitution",
-    "internal_tool", "none",
-}
-_KNOWN_OPERATING_MODEL_SHIFTS = {
-    "sync_to_async", "chat_to_docs", "chat_to_ticketing", "consolidation", "none",
-}
-_KNOWN_PRODUCTIVITY_DELTA_CLAIMS = {"more_productive", "less_productive", "no_change", "unknown"}
-_KNOWN_ORG_PRESSURE_TYPES = {
-    "procurement_mandate", "standardization_mandate", "bundle_pressure",
-    "budget_freeze", "none",
-}
-
-# Insider signal validation sets (migration 133)
-_KNOWN_CONTENT_TYPES = {"review", "community_discussion", "comment", "insider_account"}
-_KNOWN_ORG_HEALTH_LEVELS = {"high", "medium", "low", "unknown"}
-_KNOWN_LEADERSHIP_QUALITIES = {"poor", "mixed", "good", "unknown"}
-_KNOWN_INNOVATION_CLIMATES = {"stagnant", "declining", "healthy", "unknown"}
-_KNOWN_MORALE_LEVELS = {"high", "medium", "low", "unknown"}
-_KNOWN_DEPARTURE_TYPES = {"voluntary", "involuntary", "still_employed", "unknown"}
-
-_ROLE_TYPE_ALIASES = {
-    "economicbuyer": "economic_buyer",
-    "decisionmaker": "economic_buyer",
-    "buyer": "economic_buyer",
-    "budgetowner": "economic_buyer",
-    "executive": "economic_buyer",
-    "director": "economic_buyer",
-    "champion": "champion",
-    "manager": "champion",
-    "teamlead": "champion",
-    "lead": "champion",
-    "evaluator": "evaluator",
-    "admin": "evaluator",
-    "administrator": "evaluator",
-    "analyst": "evaluator",
-    "architect": "evaluator",
-    "enduser": "end_user",
-    "user": "end_user",
-    "ic": "end_user",
-    "individualcontributor": "end_user",
-    "unknown": "unknown",
-}
-
-_ROLE_LEVEL_ALIASES = {
-    "executive": "executive",
-    "exec": "executive",
-    "csuite": "executive",
-    "cxo": "executive",
-    "ceo": "executive",
-    "cto": "executive",
-    "cfo": "executive",
-    "cio": "executive",
-    "cmo": "executive",
-    "coo": "executive",
-    "cro": "executive",
-    "president": "executive",
-    "founder": "executive",
-    "owner": "executive",
-    "executivedirector": "executive",
-    "presidentfounder": "executive",
-    "ownermanagingmember": "executive",
-    "ed": "executive",
-    "director": "director",
-    "vp": "director",
-    "vicepresident": "director",
-    "head": "director",
-    "directeur": "director",
-    "managingdirector": "director",
-    "headofcustomerexperience": "director",
-    "manager": "manager",
-    "lead": "manager",
-    "teamlead": "manager",
-    "supervisor": "manager",
-    "coordinator": "manager",
-    "projectmanager": "manager",
-    "programmanager": "manager",
-    "productmanager": "manager",
-    "marketingmanager": "manager",
-    "digitalmarketingmanager": "manager",
-    "salesmanager": "manager",
-    "operationsmanager": "manager",
-    "itmanager": "manager",
-    "businessdevelopmentmanager": "manager",
-    "clientservicemanager": "manager",
-    "customersuccessmanager": "manager",
-    "pmo": "manager",
-    "bdm": "manager",
-    "leadconsultant": "manager",
-    "projectmanagement": "manager",
-    "ic": "ic",
-    "individualcontributor": "ic",
-    "individual": "ic",
-    "user": "ic",
-    "product": "ic",
-    "marketing": "ic",
-    "digitalmarketing": "ic",
-    "consultant": "ic",
-    "customersupport": "ic",
-    "customersuccess": "ic",
-    "humanresources": "ic",
-    "softwaredevelopment": "ic",
-    "it": "ic",
-    "devops": "ic",
-    "swe": "ic",
-    "fse": "ic",
-    "cybersecurityanalyst": "ic",
-    "chemicalengineer": "ic",
-    "industrialengineer": "ic",
-    "customersatisfactionandqa": "ic",
-    "marketingteam": "ic",
-}
-
-_EXEC_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(vp\b|vice president|director|head of|chief|cfo|ceo|coo|cio|cto|cro|cmo|founder|owner|president|executive director|managing member)\b",
-    re.I,
-)
-_CHAMPION_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(manager|lead|team lead|supervisor|coordinator|pmo|project management|bdm)\b",
-    re.I,
-)
-_EVALUATOR_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(analyst|architect|engineer|developer|administrator|admin|consultant|specialist|devops|qa|customer support|customer success|human resources|marketing|product|software development|cybersecurity|it\b|swe\b|fse\b)\b",
-    re.I,
-)
-_EXEC_ROLE_TEXT_PATTERN = re.compile(
-    r"\b(i am|i'm|as|working as|as the)\s+(an?\s+|the\s+)?"
-    r"(ceo|cto|cfo|cio|coo|cmo|cro|chief|founder|owner|president)\b",
-    re.I,
-)
-_DIRECTOR_ROLE_TEXT_PATTERN = re.compile(
-    r"\b(i am|i'm|as|working as|as the)\s+(an?\s+|the\s+)?"
-    r"(vp|vice president|svp|evp|director|head of)\b",
-    re.I,
-)
-_MANAGER_ROLE_TEXT_PATTERN = re.compile(
-    r"\b(i am|i'm|as|working as|as the)\s+(an?\s+|the\s+)?"
-    r"(manager|team lead|lead|supervisor|coordinator)\b",
-    re.I,
-)
-_IC_ROLE_TEXT_PATTERN = re.compile(
-    r"\b(i am|i'm|as|working as|as the)\s+(an?\s+|the\s+)?"
-    r"(engineer|developer|administrator|admin|analyst|specialist|"
-    r"consultant|marketer|designer|architect)\b",
-    re.I,
-)
-_ECONOMIC_BUYER_TEXT_PATTERNS = (
-    re.compile(
-        r"\b(we|i) decided to (switch|move|migrate|leave|replace|renew|buy|adopt|go with)\b",
-        re.I,
-    ),
-    re.compile(r"\bapproved (the )?(purchase|renewal|budget)\b", re.I),
-    re.compile(r"\bsigned off on (the )?(purchase|renewal|budget|migration)\b", re.I),
-    re.compile(r"\bfinal decision (was|is) to\b", re.I),
-)
-_CHAMPION_TEXT_PATTERNS = (
-    re.compile(r"\b(i|we) recommended\b", re.I),
-    re.compile(r"\bchampioned\b", re.I),
-    re.compile(r"\bpushed for\b", re.I),
-    re.compile(r"\badvocated for\b", re.I),
-)
-_EVALUATOR_TEXT_PATTERNS = (
-    re.compile(r"\bevaluating alternatives\b", re.I),
-    re.compile(r"\bcomparing options\b", re.I),
-    re.compile(r"\bproof of concept\b", re.I),
-    re.compile(r"\bpoc\b", re.I),
-    re.compile(r"\bshortlist\b", re.I),
-    re.compile(r"\btrialing\b", re.I),
-    re.compile(r"\bpiloting\b", re.I),
-    re.compile(r"\btasked with evaluating\b", re.I),
-)
-_END_USER_TEXT_PATTERNS = (
-    re.compile(r"\bi use\b", re.I),
-    re.compile(r"\bwe use\b", re.I),
-    re.compile(r"\bday-to-day\b", re.I),
-    re.compile(r"\bdaily use\b", re.I),
-    re.compile(r"\buse it for\b", re.I),
-)
-_MANAGER_DECISION_TITLE_PATTERN = re.compile(
-    r"\b(operations manager|it manager|project manager|program manager|product manager|marketing manager|sales manager|business development manager|client service manager|customer success manager|team lead|lead consultant|pmo|bdm|security manager|risk management)\b",
-    re.I,
-)
-_COMMERCIAL_DECISION_TEXT_PATTERN = re.compile(
-    r"\b(renewal|quote|quoted|pricing|price increase|budget|contract|procurement|vendor selection|selected|chose|approved|sign(?:ed)? off|purchase|buying committee|rfp|rfq|evaluate|evaluation|migration)\b",
-    re.I,
-)
 
 
 def _canonical_role_type(value: Any) -> str:
@@ -3441,40 +3028,6 @@ def _is_unknownish(value: Any) -> bool:
 
 def _coerce_json_dict(value: Any) -> dict[str, Any]:
     return _service_coerce_json_dict(value)
-
-
-_REPAIR_NEGATIVE_PATTERNS = (
-    "cancel", "cancellation", "billing dispute", "refund denied", "runaround",
-    "automatic renewal", "auto renew", "renewed without notice", "charged",
-    "invoiced", "price increase", "overcharged", "switching cost",
-)
-_REPAIR_COMPETITOR_PATTERNS = (
-    "switched to", "moved to", "replaced with", "evaluating", "looking at",
-    "considering", "shortlisting", "shortlisted", "poc with", "proof of concept with",
-)
-_REPAIR_PRICING_PATTERNS = (
-    "billing", "invoice", "invoiced", "charged", "refund", "renewal",
-    "price increase", "cost increase", "automatic renewal", "auto renew",
-    "overcharged",
-)
-_REPAIR_RECOMMEND_PATTERNS = (
-    "would not recommend", "wouldn't recommend", "do not recommend",
-    "don't recommend", "stay away", "avoid", "not worth", "cannot recommend",
-)
-_REPAIR_FEATURE_GAP_PATTERNS = (
-    "missing", "lacks", "lacking", "wish it had", "wish they had",
-    "need better", "needs better", "needs more", "could use", "limited",
-)
-_REPAIR_TIMELINE_PATTERNS = (
-    "renewal", "contract end", "contract expires", "deadline", "next quarter",
-    "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days",
-)
-_REPAIR_CATEGORY_SHIFT_PATTERNS = (
-    "async", "docs", "documentation", "notion", "confluence", "bundle",
-    "workspace", "microsoft 365", "google workspace", "internal tool",
-    "homegrown", "home-grown", "custom tool",
-)
-_REPAIR_CURRENCY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?", re.I)
 
 
 def _trusted_repair_sources() -> set[str]:
