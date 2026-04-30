@@ -2280,7 +2280,7 @@ async def refresh_vendor_pipeline(
 async def reason_vendor(
     vendor_name: str,
     force: bool = Query(False, description="Compatibility no-op; returns the best available persisted reasoning"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Return the best available persisted reasoning for a single vendor."""
     _ = force
@@ -2325,7 +2325,7 @@ async def reason_vendor(
 @router.post("/vendors/compare-reasoning")
 async def compare_vendor_reasoning(
     body: dict,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Side-by-side persisted reasoning for multiple vendors (2-5)."""
 
@@ -6277,7 +6277,7 @@ async def get_signal_to_outcome(
 @router.post("/calibration/trigger")
 async def trigger_calibration(
     window_days: int = Query(180, ge=30, le=730),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Trigger score calibration from campaign outcomes (on-demand)."""
     pool = _pool_or_503()
@@ -6289,7 +6289,7 @@ async def trigger_calibration(
         return {
             "triggered": True,
             "window_days": window_days,
-            "triggered_by": f"api:{user.email}" if user else "api",
+            "triggered_by": f"api:{user.email}" if getattr(user, "email", None) else "api",
             **result,
         }
     except Exception as exc:
@@ -6651,7 +6651,7 @@ def _validate_webhook_event_types_for_channel(event_types: list[str], channel: s
 @router.post("/webhooks")
 async def create_webhook(
     body: CreateWebhookBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -6806,7 +6806,7 @@ def _webhook_crm_company_scope_condition(
 async def list_webhooks(
     vendor_name: Optional[str] = Query(None, description="Scope webhook summary activity to a vendor"),
     company_name: Optional[str] = Query(None, description="Scope webhook summary activity to a company"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7146,7 +7146,7 @@ async def webhook_delivery_summary(
     days: int = Query(7, ge=1, le=90),
     vendor_name: Optional[str] = Query(None, description="Scope aggregate delivery health to a vendor"),
     company_name: Optional[str] = Query(None, description="Scope aggregate delivery health to a company"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Aggregate delivery health across all webhooks for the authenticated account."""
     if not user:
@@ -7218,7 +7218,7 @@ async def webhook_delivery_summary(
 @router.get("/webhooks/{webhook_id}")
 async def get_webhook(
     webhook_id: str,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7257,7 +7257,7 @@ async def get_webhook(
 @router.delete("/webhooks/{webhook_id}")
 async def delete_webhook(
     webhook_id: str,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7282,7 +7282,7 @@ async def delete_webhook(
 async def update_webhook(
     webhook_id: str,
     body: UpdateWebhookBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Update webhook subscription fields (enabled, event_types, url, description)."""
     if not user:
@@ -7383,7 +7383,7 @@ async def list_webhook_deliveries(
     vendor_name: Optional[str] = Query(None, description="Filter by vendor context"),
     company_name: Optional[str] = Query(None, description="Filter by company context"),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7560,7 +7560,7 @@ async def list_webhook_deliveries(
 @router.post("/webhooks/{webhook_id}/test")
 async def test_webhook(
     webhook_id: str,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7597,7 +7597,7 @@ async def list_crm_push_log(
     status: Optional[str] = Query(None, description="Filter by normalized CRM push status"),
     vendor_name: Optional[str] = Query(None, description="Filter by vendor context"),
     company_name: Optional[str] = Query(None, description="Filter by company context"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7625,8 +7625,8 @@ async def list_crm_push_log(
         raise HTTPException(status_code=404, detail="Webhook not found")
 
     normalized_status_sql = (
-        "CASE WHEN lower(coalesce(status, '')) = 'pushed' THEN 'success' "
-        "ELSE lower(coalesce(status, '')) END"
+        "CASE WHEN lower(coalesce(cp.status, '')) = 'pushed' THEN 'success' "
+        "ELSE lower(coalesce(cp.status, '')) END"
     )
     conditions = ["subscription_id = $1"]
     params: list[Any] = [wid]
