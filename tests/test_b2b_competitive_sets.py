@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -902,6 +903,60 @@ async def test_competitive_scope_start_forwards_force_flags(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_competitive_set_due_queue_health_summarizes_ineligibility(monkeypatch):
+    from atlas_brain.storage.repositories import competitive_set as mod
+
+    next_due_at = datetime(2026, 5, 4, 17, 0, tzinfo=timezone.utc)
+    observed = {}
+
+    class FakePool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            observed["query"] = query
+            observed["args"] = args
+            return {
+                "total_sets": 9,
+                "active_sets": 7,
+                "inactive_sets": 2,
+                "scheduled_sets": 5,
+                "non_scheduled_sets": 2,
+                "missing_interval_sets": 1,
+                "scheduled_with_interval_sets": 4,
+                "running_sets": 1,
+                "stale_running_sets": 1,
+                "due_sets": 0,
+                "not_due_sets": 3,
+                "next_due_at": next_due_at,
+            }
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: FakePool())
+
+    result = await mod.CompetitiveSetRepository().scheduled_due_queue_health(
+        stale_running_after_hours=12,
+    )
+
+    assert observed["args"] == (12,)
+    assert "last_run_status = 'running'" in observed["query"]
+    assert "make_interval(hours => cs.refresh_interval_hours)" in observed["query"]
+    assert result == {
+        "total_sets": 9,
+        "active_sets": 7,
+        "inactive_sets": 2,
+        "scheduled_sets": 5,
+        "non_scheduled_sets": 2,
+        "missing_interval_sets": 1,
+        "scheduled_with_interval_sets": 4,
+        "running_sets": 1,
+        "stale_running_sets": 1,
+        "due_sets": 0,
+        "not_due_sets": 3,
+        "next_due_at": next_due_at.isoformat(),
+        "stale_running_after_hours": 12,
+    }
+
+
+@pytest.mark.asyncio
 async def test_competitive_set_repo_mark_run_started_persists_scope_flags(monkeypatch):
     from atlas_brain.storage.repositories import competitive_set as mod
 
@@ -1026,3 +1081,43 @@ async def test_scheduled_competitive_sets_use_configured_changed_only_default(mo
 
     assert result["competitive_sets_processed"] == 1
     assert child_meta["changed_vendors_only"] is False
+
+
+@pytest.mark.asyncio
+async def test_scheduled_competitive_sets_no_due_returns_due_queue_health(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    due_queue_health = {
+        "total_sets": 7,
+        "active_sets": 7,
+        "scheduled_sets": 7,
+        "scheduled_with_interval_sets": 7,
+        "running_sets": 0,
+        "stale_running_sets": 0,
+        "due_sets": 0,
+        "not_due_sets": 7,
+        "next_due_at": "2026-05-04T17:00:00+00:00",
+    }
+    repo = SimpleNamespace(
+        list_due_scheduled=AsyncMock(return_value=[]),
+        scheduled_due_queue_health=AsyncMock(return_value=due_queue_health),
+    )
+
+    class FakePool:
+        is_initialized = True
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: FakePool())
+    monkeypatch.setattr(mod.settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False)
+    monkeypatch.setattr(
+        "atlas_brain.storage.repositories.competitive_set.get_competitive_set_repo",
+        lambda: repo,
+    )
+
+    result = await mod.run(SimpleNamespace(
+        metadata={"scheduled_scope_strategy": "competitive_sets"},
+        schedule_type="interval",
+    ))
+
+    assert result["_skip_synthesis"] == "No due competitive sets"
+    assert result["competitive_set_due_queue"] == due_queue_health
+    repo.scheduled_due_queue_health.assert_awaited_once()

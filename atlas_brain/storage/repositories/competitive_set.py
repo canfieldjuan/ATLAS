@@ -337,6 +337,116 @@ class CompetitiveSetRepository:
         except Exception as exc:
             raise DatabaseOperationError("list due competitive sets", exc)
 
+    async def scheduled_due_queue_health(
+        self,
+        *,
+        stale_running_after_hours: int = 24,
+    ) -> dict[str, Any]:
+        """Summarize why scheduled competitive sets are or are not due."""
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("competitive set due queue health")
+        try:
+            row = await pool.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS total_sets,
+                    COUNT(*) FILTER (WHERE cs.active IS TRUE) AS active_sets,
+                    COUNT(*) FILTER (WHERE cs.active IS NOT TRUE) AS inactive_sets,
+                    COUNT(*) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode = 'scheduled'
+                    ) AS scheduled_sets,
+                    COUNT(*) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode IS DISTINCT FROM 'scheduled'
+                    ) AS non_scheduled_sets,
+                    COUNT(*) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode = 'scheduled'
+                          AND cs.refresh_interval_hours IS NULL
+                    ) AS missing_interval_sets,
+                    COUNT(*) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode = 'scheduled'
+                          AND cs.refresh_interval_hours IS NOT NULL
+                    ) AS scheduled_with_interval_sets,
+                    COUNT(*) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode = 'scheduled'
+                          AND cs.refresh_interval_hours IS NOT NULL
+                          AND cs.last_run_status = 'running'
+                    ) AS running_sets,
+                    COUNT(*) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode = 'scheduled'
+                          AND cs.refresh_interval_hours IS NOT NULL
+                          AND cs.last_run_status = 'running'
+                          AND COALESCE(cs.last_run_at, cs.last_success_at, cs.created_at)
+                              <= NOW() - make_interval(hours => $1)
+                    ) AS stale_running_sets,
+                    COUNT(*) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode = 'scheduled'
+                          AND cs.refresh_interval_hours IS NOT NULL
+                          AND (
+                                cs.last_run_status IS NULL
+                                OR cs.last_run_status != 'running'
+                              )
+                          AND COALESCE(cs.last_run_at, cs.last_success_at, cs.created_at)
+                              <= NOW() - make_interval(hours => cs.refresh_interval_hours)
+                    ) AS due_sets,
+                    COUNT(*) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode = 'scheduled'
+                          AND cs.refresh_interval_hours IS NOT NULL
+                          AND (
+                                cs.last_run_status IS NULL
+                                OR cs.last_run_status != 'running'
+                              )
+                          AND COALESCE(cs.last_run_at, cs.last_success_at, cs.created_at)
+                              > NOW() - make_interval(hours => cs.refresh_interval_hours)
+                    ) AS not_due_sets,
+                    MIN(
+                        COALESCE(cs.last_run_at, cs.last_success_at, cs.created_at)
+                        + make_interval(hours => cs.refresh_interval_hours)
+                    ) FILTER (
+                        WHERE cs.active IS TRUE
+                          AND cs.refresh_mode = 'scheduled'
+                          AND cs.refresh_interval_hours IS NOT NULL
+                          AND (
+                                cs.last_run_status IS NULL
+                                OR cs.last_run_status != 'running'
+                              )
+                    ) AS next_due_at
+                FROM b2b_competitive_sets cs
+                """,
+                max(1, int(stale_running_after_hours)),
+            )
+            row_data = dict(row) if row else {}
+            next_due_at = row_data.get("next_due_at")
+            if isinstance(next_due_at, datetime):
+                next_due_at = next_due_at.isoformat()
+            return {
+                "total_sets": int(row_data.get("total_sets") or 0),
+                "active_sets": int(row_data.get("active_sets") or 0),
+                "inactive_sets": int(row_data.get("inactive_sets") or 0),
+                "scheduled_sets": int(row_data.get("scheduled_sets") or 0),
+                "non_scheduled_sets": int(row_data.get("non_scheduled_sets") or 0),
+                "missing_interval_sets": int(row_data.get("missing_interval_sets") or 0),
+                "scheduled_with_interval_sets": int(row_data.get("scheduled_with_interval_sets") or 0),
+                "running_sets": int(row_data.get("running_sets") or 0),
+                "stale_running_sets": int(row_data.get("stale_running_sets") or 0),
+                "due_sets": int(row_data.get("due_sets") or 0),
+                "not_due_sets": int(row_data.get("not_due_sets") or 0),
+                "next_due_at": next_due_at,
+                "stale_running_after_hours": max(1, int(stale_running_after_hours)),
+            }
+        except DatabaseUnavailableError:
+            raise
+        except Exception as exc:
+            raise DatabaseOperationError("competitive set due queue health", exc)
+
     async def mark_run_started(
         self,
         competitive_set_id: UUID,

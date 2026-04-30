@@ -1259,7 +1259,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             limit=max(1, int(getattr(cfg, "competitive_set_refresh_batch_size", 10))),
         )
         if not due_sets:
-            return {"_skip_synthesis": "No due competitive sets"}
+            skip_result = {"_skip_synthesis": "No due competitive sets"}
+            health_loader = getattr(repo, "scheduled_due_queue_health", None)
+            if callable(health_loader):
+                try:
+                    skip_result["competitive_set_due_queue"] = await health_loader(
+                        stale_running_after_hours=max(
+                            1,
+                            int(getattr(cfg, "competitive_set_stale_running_hours", 24)),
+                        ),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Competitive set due queue health unavailable",
+                        exc_info=True,
+                    )
+            return skip_result
 
         aggregate = {
             "competitive_sets_processed": 0,
