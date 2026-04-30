@@ -1548,7 +1548,7 @@ async def push_to_crm(
 @router.get("/competitive-sets")
 async def list_competitive_sets(
     include_inactive: bool = Query(False),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     repo = get_competitive_set_repo()
@@ -1566,7 +1566,7 @@ async def list_competitive_sets(
 @router.post("/competitive-sets", status_code=201)
 async def create_competitive_set(
     req: CompetitiveSetRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     repo = get_competitive_set_repo()
@@ -1603,7 +1603,7 @@ async def create_competitive_set(
 async def update_competitive_set(
     competitive_set_id: _uuid.UUID,
     req: CompetitiveSetUpdateRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     next_name = _clean_required_text(req.name, "name") if req.name is not None else None
@@ -1655,7 +1655,7 @@ async def update_competitive_set(
 @router.delete("/competitive-sets/{competitive_set_id}")
 async def delete_competitive_set(
     competitive_set_id: _uuid.UUID,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     repo = get_competitive_set_repo()
@@ -1669,7 +1669,7 @@ async def delete_competitive_set(
 @router.get("/competitive-sets/{competitive_set_id}/plan")
 async def preview_competitive_set_plan(
     competitive_set_id: _uuid.UUID,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -1694,7 +1694,7 @@ async def preview_competitive_set_plan(
 async def run_competitive_set_now(
     competitive_set_id: _uuid.UUID,
     req: CompetitiveSetRunRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()

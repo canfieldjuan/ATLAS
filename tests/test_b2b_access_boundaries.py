@@ -21,9 +21,11 @@ from atlas_brain.api import admin_costs
 from atlas_brain.api import b2b_dashboard
 from atlas_brain.api import b2b_campaigns
 from atlas_brain.api import b2b_crm_events
+from atlas_brain.api import b2b_tenant_dashboard
 from atlas_brain.api import b2b_vendor_briefing
 from atlas_brain.api import seller_campaigns
 from atlas_brain.api import vendor_targets
+from atlas_brain.auth.dependencies import AuthUser, require_auth
 from atlas_brain.config import settings
 
 
@@ -199,6 +201,24 @@ _TARGET_ID = str(uuid4())
         ("GET", "/api/v1/b2b/tenant/operational-overview", None),
         ("GET", "/api/v1/b2b/tenant/calibration-weights", None),
         ("GET", "/api/v1/b2b/tenant/signal-to-outcome", None),
+        ("GET", "/api/v1/b2b/tenant/competitive-sets", None),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/competitive-sets",
+            {
+                "name": "Boundary Set",
+                "focal_vendor_name": "ClickUp",
+                "competitor_vendor_names": ["Monday.com"],
+            },
+        ),
+        (
+            "PUT",
+            f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}",
+            {"name": "Boundary Set"},
+        ),
+        ("DELETE", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}", None),
+        ("GET", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}/plan", None),
+        ("POST", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}/run", {}),
         (
             "POST",
             "/api/v1/b2b/campaigns/suppressions",
@@ -242,8 +262,14 @@ def test_tenant_and_operator_routes_reject_unauthenticated_requests(
     monkeypatch.setattr(b2b_vendor_briefing, "get_db_pool", _fail_pool)
     monkeypatch.setattr(b2b_campaigns, "get_db_pool", _fail_pool)
     monkeypatch.setattr(b2b_crm_events, "get_db_pool", _fail_pool)
+    monkeypatch.setattr(b2b_tenant_dashboard, "get_db_pool", _fail_pool)
     monkeypatch.setattr(admin_costs, "get_db_pool", _fail_pool)
     monkeypatch.setattr(seller_campaigns, "get_db_pool", _fail_pool)
+
+    def _fail_competitive_set_repo():
+        raise AssertionError("competitive-set repo touched before auth")
+
+    monkeypatch.setattr(b2b_tenant_dashboard, "get_competitive_set_repo", _fail_competitive_set_repo)
 
     app = _make_app()
 
@@ -252,3 +278,63 @@ def test_tenant_and_operator_routes_reject_unauthenticated_requests(
 
     assert response.status_code == 401, response.text
     assert response.json()["detail"] == "Authentication required"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("GET", "/api/v1/b2b/tenant/competitive-sets", None),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/competitive-sets",
+            {
+                "name": "Boundary Set",
+                "focal_vendor_name": "ClickUp",
+                "competitor_vendor_names": ["Monday.com"],
+            },
+        ),
+        (
+            "PUT",
+            f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}",
+            {"name": "Boundary Set"},
+        ),
+        ("DELETE", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}", None),
+        ("GET", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}/plan", None),
+        ("POST", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}/run", {}),
+    ],
+)
+def test_competitive_set_routes_reject_authenticated_underplan_before_service_touch(
+    monkeypatch,
+    method: str,
+    path: str,
+    json_body: dict | None,
+):
+    monkeypatch.setattr(settings.saas_auth, "enabled", True, raising=False)
+
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(uuid4()),
+        plan="b2b_trial",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+
+    def _fail_pool():
+        raise AssertionError("db touched before plan gate")
+
+    def _fail_competitive_set_repo():
+        raise AssertionError("competitive-set repo touched before plan gate")
+
+    monkeypatch.setattr(b2b_tenant_dashboard, "get_db_pool", _fail_pool)
+    monkeypatch.setattr(b2b_tenant_dashboard, "get_competitive_set_repo", _fail_competitive_set_repo)
+
+    app = _make_app()
+    app.dependency_overrides[require_auth] = lambda: user
+
+    with TestClient(app) as client:
+        response = client.request(method, path, json=json_body)
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "Plan 'b2b_growth' or higher required (current: 'b2b_trial')"
