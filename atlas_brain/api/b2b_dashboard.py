@@ -1930,7 +1930,7 @@ async def list_high_intent(
 
 
 @router.get("/vendors/{vendor_name}")
-async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(optional_auth)):
+async def get_vendor_profile(vendor_name: str, user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     vname = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
 
@@ -3019,6 +3019,7 @@ def _row_to_source_dict(r) -> dict:
 async def get_source_health(
     window_days: int = Query(7, ge=1, le=30),
     source: Optional[str] = Query(None),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     source = _normalize_source_query(source)
     if source is not None:
@@ -3064,7 +3065,7 @@ async def get_source_health(
 async def get_source_telemetry(
     window_days: int = Query(7, ge=1, le=30),
     source: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """CAPTCHA attempts, solve times, block type distribution, and proxy usage per source."""
     conditions = ["started_at >= NOW() - make_interval(days => $1)"]
@@ -3149,7 +3150,7 @@ async def get_source_telemetry(
 @router.get("/source-capabilities")
 async def list_source_capabilities(
     source: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List source capability profiles (access pattern, anti-bot, proxy tier, fallback chain)."""
     source = _normalize_source_query(source)
@@ -3237,7 +3238,7 @@ async def get_source_impact_ledger(
 
 @router.get("/operational-overview")
 async def get_operational_overview(
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Single endpoint combining pipeline status, source health, telemetry, and recent events."""
     pool = _pool_or_503()
@@ -3367,7 +3368,7 @@ async def get_operational_overview(
 async def get_telemetry_timeline(
     days: int = Query(14, ge=1, le=30),
     source: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Daily time-series of CAPTCHA attempts, blocks, and success rates for trending."""
     conditions = ["started_at >= NOW() - make_interval(days => $1)"]
@@ -3472,7 +3473,7 @@ async def list_displacement_edges(
     min_confidence: Optional[float] = Query(None, ge=0, le=1),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     from_vendor = _optional_query_text(from_vendor)
     to_vendor = _optional_query_text(to_vendor)
@@ -3563,7 +3564,7 @@ async def get_displacement_history(
     from_vendor: str = Query(...),
     to_vendor: str = Query(...),
     window_days: int = Query(365, ge=1, le=730),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Time-series of displacement edge strength for a vendor pair."""
     from_vendor = _required_query_text(from_vendor, "from_vendor")
@@ -4871,7 +4872,7 @@ async def list_vendor_pain_points(
     min_confidence: float = Query(0, ge=0, le=1),
     min_mentions: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -4958,7 +4959,7 @@ async def list_vendor_use_cases(
     min_confidence: float = Query(0, ge=0, le=1),
     min_mentions: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -5041,7 +5042,7 @@ async def list_vendor_integrations(
     min_confidence: float = Query(0, ge=0, le=1),
     min_mentions: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -5122,7 +5123,7 @@ async def list_vendor_buyer_profiles(
     min_confidence: float = Query(0, ge=0, le=1),
     min_reviews: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -5263,7 +5264,7 @@ async def get_vendor_history(
 @router.get("/product-profile")
 async def get_product_profile(
     vendor_name: str = Query(...),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Fetch pre-computed product profile knowledge card for a vendor."""
     vendor_name = _required_query_text(vendor_name, "vendor_name")
@@ -5319,7 +5320,7 @@ async def get_product_profile_history(
     vendor_name: str = Query(...),
     days: int = Query(90, ge=1, le=365),
     limit: int = Query(90, ge=1, le=365),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     vendor_name = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
@@ -5373,7 +5374,7 @@ async def list_change_events(
     event_type: Optional[str] = Query(None),
     days: int = Query(30, ge=1, le=365),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -5430,7 +5431,7 @@ async def list_change_events(
 @router.get("/change-events/summary")
 async def change_events_summary(
     days: int = Query(7, ge=1, le=90),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
 
@@ -5481,7 +5482,7 @@ async def list_concurrent_events(
     event_type: Optional[str] = Query(None),
     min_vendors: int = Query(2, ge=2, le=50),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Find dates where multiple vendors experienced the same change event type.
 
@@ -5546,6 +5547,7 @@ async def fuzzy_vendor_search(
     q: str = "",
     limit: int = 10,
     min_similarity: float = 0.3,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="q parameter is required")
@@ -5569,6 +5571,7 @@ async def fuzzy_company_search(
     vendor_name: str | None = None,
     limit: int = 10,
     min_similarity: float = 0.3,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="q parameter is required")
@@ -5590,7 +5593,7 @@ async def fuzzy_company_search(
 
 
 @router.get("/parser-version-status")
-async def parser_version_status():
+async def parser_version_status(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Show per-source parser version status and count of reviews needing re-extraction."""
     pool = _pool_or_503()
 
@@ -5637,7 +5640,7 @@ async def get_vendor_correlation(
     vendor_b: str = Query(...),
     days: int = Query(90, ge=7, le=365),
     metric: str = Query("churn_density"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Compare two vendors' metric trends over time and compute correlation.
 
@@ -5950,7 +5953,7 @@ async def signal_effectiveness(
 
 
 @router.get("/parser-health")
-async def get_parser_health(user: AuthUser | None = Depends(optional_auth)):
+async def get_parser_health(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Parser version distribution and stale review counts per source."""
     pool = _pool_or_503()
     rows = await pool.fetch("""
@@ -6015,7 +6018,7 @@ async def get_parser_health(user: AuthUser | None = Depends(optional_auth)):
 async def get_calibration_weights(
     dimension: Optional[str] = Query(None),
     model_version: Optional[int] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """View score calibration weights derived from campaign outcomes."""
     dimension = _optional_query_text(dimension)
@@ -6180,7 +6183,7 @@ async def get_signal_to_outcome(
     vendor_name: Optional[str] = Query(None),
     min_sequences: int = Query(5, ge=1, le=100),
     group_by: str = Query("buying_stage"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Signal effectiveness attribution view: which signal dimensions produce the best outcomes."""
     if group_by not in _ATTRIBUTION_GROUP_EXPRS:
