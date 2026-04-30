@@ -7740,7 +7740,7 @@ async def list_crm_push_log(
 @router.post("/corrections")
 async def create_correction(
     body: CreateCorrectionBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     metadata = dict(body.metadata or {})
     metadata_source_name = _optional_query_text(metadata.get("source_name"))
@@ -7753,10 +7753,10 @@ async def create_correction(
     span = tracer.start_span(
         span_name="b2b.correction.create",
         operation_type="business_operation",
-        session_id=str(user.account_id) if user else None,
+        session_id=str(user.account_id),
         metadata={
             "business": build_business_trace_context(
-                account_id=str(user.account_id) if user else None,
+                account_id=str(user.account_id),
                 workflow="analyst_correction",
                 entity_type=body.entity_type,
                 correction_type=body.correction_type,
@@ -7810,7 +7810,7 @@ async def create_correction(
         raise HTTPException(status_code=400, detail="entity_id must be a valid UUID")
 
     pool = _pool_or_503()
-    corrected_by = f"api:{user.user_id}" if user else "analyst"
+    corrected_by = f"api:{user.user_id}"
     meta = json.dumps(metadata) if metadata else "{}"
 
     row = await pool.fetchrow(
@@ -7888,7 +7888,7 @@ async def list_corrections(
     start_date: Optional[str] = Query(None, description="Corrections created on or after (ISO 8601)"),
     end_date: Optional[str] = Query(None, description="Corrections created before (ISO 8601)"),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     entity_type = _optional_query_text(entity_type)
     entity_id = _optional_query_text(entity_id)
@@ -8012,7 +8012,7 @@ async def list_corrections(
 @router.get("/corrections/stats")
 async def get_correction_stats(
     days: int = Query(30, ge=1, le=365),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Aggregate correction activity: counts by type, status, and top correctors."""
     pool = _pool_or_503()
@@ -8096,7 +8096,7 @@ async def get_correction_stats(
 @router.get("/corrections/{correction_id}")
 async def get_correction(
     correction_id: str,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     try:
         cid = _uuid.UUID(correction_id)
@@ -8146,7 +8146,7 @@ async def get_correction(
 async def revert_correction(
     correction_id: str,
     body: RevertCorrectionBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     try:
         cid = _uuid.UUID(correction_id)
@@ -8166,7 +8166,7 @@ async def revert_correction(
             detail=f"Cannot revert correction with status '{row['status']}' (must be 'applied')",
         )
 
-    reverted_by = f"api:{user.user_id}" if user else "analyst"
+    reverted_by = f"api:{user.user_id}"
 
     updated = await pool.fetchrow(
         """
@@ -8193,7 +8193,7 @@ async def revert_correction(
 
 @router.get("/source-corrections/impact")
 async def get_source_correction_impact(
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Show impact of active source suppressions: how many reviews are excluded per source."""
     pool = _pool_or_503()

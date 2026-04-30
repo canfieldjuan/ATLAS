@@ -120,6 +120,27 @@ _TARGET_ID = str(uuid4())
         ),
         (
             "POST",
+            "/api/v1/b2b/tenant/corrections",
+            {
+                "entity_type": "vendor",
+                "entity_id": str(uuid4()),
+                "correction_type": "merge_vendor",
+                "old_value": "Salesforce",
+                "new_value": "HubSpot",
+                "reason": "boundary",
+            },
+        ),
+        ("GET", "/api/v1/b2b/tenant/corrections", None),
+        ("GET", "/api/v1/b2b/tenant/corrections/stats", None),
+        ("GET", f"/api/v1/b2b/tenant/corrections/{_TARGET_ID}", None),
+        (
+            "POST",
+            f"/api/v1/b2b/tenant/corrections/{_TARGET_ID}/revert",
+            {"reason": "boundary"},
+        ),
+        ("GET", "/api/v1/b2b/tenant/source-corrections/impact", None),
+        (
+            "POST",
             "/api/v1/b2b/campaigns/suppressions",
             {"email": "boundary@example.com", "reason": "manual"},
         ),
