@@ -159,6 +159,35 @@ _TARGET_ID = str(uuid4())
         ("DELETE", "/api/v1/b2b/tenant/vendors/ClickUp", None),
         ("GET", "/api/v1/b2b/tenant/vendors/search?q=ClickUp", None),
         ("POST", "/api/v1/b2b/tenant/vendors/ClickUp/refresh", {}),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/push-to-crm",
+            {"opportunities": [{"company": "Acme", "vendor": "ClickUp", "urgency": 8}]},
+        ),
+        ("GET", "/api/v1/b2b/tenant/opportunity-dispositions", None),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/opportunity-dispositions",
+            {
+                "opportunity_key": "Acme::ClickUp",
+                "company": "Acme",
+                "vendor": "ClickUp",
+                "disposition": "saved",
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/opportunity-dispositions/bulk",
+            {
+                "items": [{"opportunity_key": "Acme::ClickUp", "company": "Acme", "vendor": "ClickUp"}],
+                "disposition": "saved",
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/opportunity-dispositions/remove",
+            {"opportunity_keys": ["Acme::ClickUp"]},
+        ),
         ("POST", "/api/v1/b2b/tenant/calibration/trigger", None),
         ("GET", "/api/v1/b2b/tenant/reports", None),
         ("GET", f"/api/v1/b2b/tenant/reports/{_TARGET_ID}", None),
@@ -343,6 +372,35 @@ def test_tenant_and_operator_routes_reject_unauthenticated_requests(
         ("DELETE", "/api/v1/b2b/tenant/vendors/ClickUp", None),
         ("GET", "/api/v1/b2b/tenant/vendors/search?q=ClickUp", None),
         ("POST", "/api/v1/b2b/tenant/vendors/ClickUp/refresh", {}),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/push-to-crm",
+            {"opportunities": [{"company": "Acme", "vendor": "ClickUp", "urgency": 8}]},
+        ),
+        ("GET", "/api/v1/b2b/tenant/opportunity-dispositions", None),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/opportunity-dispositions",
+            {
+                "opportunity_key": "Acme::ClickUp",
+                "company": "Acme",
+                "vendor": "ClickUp",
+                "disposition": "saved",
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/opportunity-dispositions/bulk",
+            {
+                "items": [{"opportunity_key": "Acme::ClickUp", "company": "Acme", "vendor": "ClickUp"}],
+                "disposition": "saved",
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/tenant/opportunity-dispositions/remove",
+            {"opportunity_keys": ["Acme::ClickUp"]},
+        ),
         ("GET", "/api/v1/b2b/tenant/watchlist-views", None),
         ("POST", "/api/v1/b2b/tenant/watchlist-views", {"name": "Boundary View", "vendor_names": ["ClickUp"]}),
         ("PUT", f"/api/v1/b2b/tenant/watchlist-views/{_TARGET_ID}", {"name": "Boundary View"}),

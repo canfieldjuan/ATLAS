@@ -1462,7 +1462,7 @@ async def search_available_vendors(
 @router.post("/push-to-crm")
 async def push_to_crm(
     body: PushToCrmBody,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Push selected high-intent opportunities to configured CRM webhooks."""
     _require_b2b_product(user)
@@ -4658,7 +4658,7 @@ def _validate_disposition(disposition: str, snoozed_until: str | None) -> dateti
 @router.get("/opportunity-dispositions")
 async def list_opportunity_dispositions(
     disposition: str | None = Query(None, description="Filter: snoozed, dismissed, saved"),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List persisted opportunity dispositions for this account."""
     _require_b2b_product(user)
@@ -4706,7 +4706,7 @@ async def list_opportunity_dispositions(
 @router.post("/opportunity-dispositions", status_code=200)
 async def set_opportunity_disposition(
     req: SetDispositionRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Upsert a single opportunity disposition (save, snooze, or dismiss)."""
     _require_b2b_product(user)
@@ -4747,7 +4747,7 @@ async def set_opportunity_disposition(
 @router.post("/opportunity-dispositions/bulk", status_code=200)
 async def bulk_set_opportunity_dispositions(
     req: BulkSetDispositionRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Bulk upsert opportunity dispositions."""
     _require_b2b_product(user)
@@ -4795,7 +4795,7 @@ async def bulk_set_opportunity_dispositions(
 @router.post("/opportunity-dispositions/remove", status_code=200)
 async def remove_opportunity_dispositions(
     req: RemoveDispositionsRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Remove dispositions (restore opportunities to active)."""
     _require_b2b_product(user)
