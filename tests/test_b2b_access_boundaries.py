@@ -310,6 +310,8 @@ _TARGET_ID = str(uuid4())
             {"email": "boundary@example.com", "reason": "manual"},
         ),
         ("DELETE", f"/api/v1/b2b/campaigns/suppressions/{_TARGET_ID}", None),
+        ("GET", "/api/v1/b2b/campaigns/suppressions", None),
+        ("GET", "/api/v1/b2b/campaigns/suppressions/check?email=boundary@example.com", None),
         (
             "POST",
             f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/set-recipient",
@@ -499,6 +501,46 @@ def test_product_tenant_routes_reject_authenticated_underplan_before_service_tou
 
     monkeypatch.setattr(b2b_tenant_dashboard, "get_db_pool", _fail_pool)
     monkeypatch.setattr(b2b_tenant_dashboard, "get_competitive_set_repo", _fail_competitive_set_repo)
+
+    app = _make_app()
+    app.dependency_overrides[require_auth] = lambda: user
+
+    with TestClient(app) as client:
+        response = client.request(method, path, json=json_body)
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "Plan 'b2b_growth' or higher required (current: 'b2b_trial')"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("GET", "/api/v1/b2b/campaigns/suppressions", None),
+        ("GET", "/api/v1/b2b/campaigns/suppressions/check?email=boundary@example.com", None),
+    ],
+)
+def test_campaign_suppression_reads_reject_authenticated_underplan_before_db_touch(
+    monkeypatch,
+    method: str,
+    path: str,
+    json_body: dict | None,
+):
+    monkeypatch.setattr(settings.saas_auth, "enabled", True, raising=False)
+
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(uuid4()),
+        plan="b2b_trial",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+
+    def _fail_pool():
+        raise AssertionError("db touched before plan gate")
+
+    monkeypatch.setattr(b2b_campaigns, "get_db_pool", _fail_pool)
 
     app = _make_app()
     app.dependency_overrides[require_auth] = lambda: user

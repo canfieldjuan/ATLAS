@@ -1160,6 +1160,7 @@ async def list_suppressions(
     email: Optional[str] = Query(None),
     domain: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List suppression records with optional filters."""
     pool = _pool_or_503()
@@ -1253,7 +1254,10 @@ async def delete_suppression(
 
 
 @router.get("/suppressions/check")
-async def check_suppression(email: str = Query(...)):
+async def check_suppression(
+    email: str = Query(...),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Check if an email is suppressed."""
     pool = _pool_or_503()
 
