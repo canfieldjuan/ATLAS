@@ -4385,7 +4385,7 @@ async def export_tenant_signals(
     vendor_name: Optional[str] = Query(None),
     min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     from .b2b_dashboard import export_signals
@@ -4405,7 +4405,7 @@ async def export_tenant_reviews(
     company: Optional[str] = Query(None),
     has_churn_intent: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     from .b2b_dashboard import export_reviews
@@ -4426,7 +4426,7 @@ async def export_tenant_high_intent(
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(90, ge=1, le=3650),
     report_safe_only: bool = Query(True),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     from .b2b_dashboard import export_high_intent
@@ -4443,7 +4443,7 @@ async def export_tenant_high_intent(
 async def export_tenant_source_health(
     window_days: int = Query(7, ge=1, le=30),
     source: Optional[str] = Query(None),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     from .b2b_dashboard import export_source_health

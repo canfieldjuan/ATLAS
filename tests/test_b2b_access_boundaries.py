@@ -159,6 +159,10 @@ _TARGET_ID = str(uuid4())
         ("DELETE", "/api/v1/b2b/tenant/vendors/ClickUp", None),
         ("GET", "/api/v1/b2b/tenant/vendors/search?q=ClickUp", None),
         ("POST", "/api/v1/b2b/tenant/vendors/ClickUp/refresh", {}),
+        ("GET", "/api/v1/b2b/tenant/export/signals", None),
+        ("GET", "/api/v1/b2b/tenant/export/reviews", None),
+        ("GET", "/api/v1/b2b/tenant/export/high-intent", None),
+        ("GET", "/api/v1/b2b/tenant/export/source-health", None),
         (
             "POST",
             "/api/v1/b2b/tenant/push-to-crm",
@@ -372,6 +376,10 @@ def test_tenant_and_operator_routes_reject_unauthenticated_requests(
         ("DELETE", "/api/v1/b2b/tenant/vendors/ClickUp", None),
         ("GET", "/api/v1/b2b/tenant/vendors/search?q=ClickUp", None),
         ("POST", "/api/v1/b2b/tenant/vendors/ClickUp/refresh", {}),
+        ("GET", "/api/v1/b2b/tenant/export/signals", None),
+        ("GET", "/api/v1/b2b/tenant/export/reviews", None),
+        ("GET", "/api/v1/b2b/tenant/export/high-intent", None),
+        ("GET", "/api/v1/b2b/tenant/export/source-health", None),
         (
             "POST",
             "/api/v1/b2b/tenant/push-to-crm",
