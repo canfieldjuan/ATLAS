@@ -39,3 +39,11 @@ bash scripts/validate_extracted_content_pipeline.sh
 ```bash
 bash scripts/check_ascii_python.sh
 ```
+
+## Import debt check
+
+```bash
+python scripts/check_extracted_imports.py
+```
+
+Known unresolved relative imports are tracked in `extracted_content_pipeline/import_debt_allowlist.txt`.
