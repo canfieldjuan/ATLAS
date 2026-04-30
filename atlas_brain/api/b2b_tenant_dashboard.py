@@ -1764,7 +1764,7 @@ def _tenant_params(user: AuthUser) -> list:
 # ---------------------------------------------------------------------------
 
 @router.get("/overview")
-async def dashboard_overview(user: AuthUser = Depends(require_auth)):
+async def dashboard_overview(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Dashboard overview stats for tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -1834,7 +1834,7 @@ async def list_tenant_signals(
     min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Churn signals for tracked vendors."""
     _require_b2b_product(user)
@@ -1917,7 +1917,7 @@ async def list_tenant_slow_burn_watchlist(
     vendor_alert_threshold: float | None = Query(None, ge=0, le=10),
     stale_days_threshold: int | None = Query(None, ge=0, le=365),
     limit: int = Query(10, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Slow-burn watchlist for tracked vendors."""
     _require_b2b_product(user)
@@ -2004,7 +2004,10 @@ async def list_tenant_slow_burn_watchlist(
 
 
 @router.get("/signals/{vendor_name}")
-async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_auth)):
+async def get_vendor_detail(
+    vendor_name: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Full vendor detail: signal + pain + competitors + evidence."""
     _require_b2b_product(user)
     vname = _clean_required_text(vendor_name, "vendor_name")
@@ -2148,7 +2151,7 @@ async def list_tenant_accounts_in_motion_feed(
     stale_days_threshold: int | None = Query(None, ge=0, le=365),
     per_vendor_limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_feed_max_total, ge=1, le=200),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Aggregated persisted accounts-in-motion feed across tracked vendors."""
     _require_b2b_product(user)
@@ -3024,7 +3027,7 @@ async def get_tenant_vendor_history(
     vendor_name: str = Query(...),
     days: int = Query(90, ge=1, le=365),
     limit: int = Query(90, ge=1, le=365),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Snapshot history for a tracked vendor."""
     _require_b2b_product(user)
@@ -3087,7 +3090,7 @@ async def compare_tenant_vendor_periods(
     vendor_name: str = Query(...),
     period_a_days_ago: int = Query(30, ge=0, le=365),
     period_b_days_ago: int = Query(0, ge=0, le=365),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Compare two snapshot periods for a tracked vendor."""
     _require_b2b_product(user)
@@ -3174,7 +3177,7 @@ async def compare_tenant_vendor_periods(
 @router.get("/pain-trends")
 async def pain_trends(
     window_days: int = Query(90, ge=1, le=3650),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Pain categories over time for tracked vendors."""
     _require_b2b_product(user)
@@ -3231,7 +3234,7 @@ async def pain_trends(
 @router.get("/displacement")
 async def competitor_displacement(
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Competitor displacement flows for tracked vendors."""
     _require_b2b_product(user)
@@ -3287,7 +3290,7 @@ async def competitor_displacement(
 
 
 @router.get("/pipeline")
-async def get_tenant_pipeline_status(user: AuthUser = Depends(require_auth)):
+async def get_tenant_pipeline_status(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Pipeline status for tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -3364,7 +3367,7 @@ async def list_leads(
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(30, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """High-intent companies leaving tracked vendors."""
     _require_b2b_product(user)
@@ -3435,7 +3438,7 @@ async def list_tenant_high_intent(
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(30, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Compatibility alias for legacy high-intent payload shape."""
     _require_b2b_product(user)
@@ -3451,7 +3454,10 @@ async def list_tenant_high_intent(
 
 
 @router.get("/leads/{company}")
-async def get_lead_detail(company: str, user: AuthUser = Depends(require_auth)):
+async def get_lead_detail(
+    company: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Company drill-down: all reviews, signals, buying stage."""
     _require_b2b_product(user)
     company_name = _clean_required_text(company, "company")
@@ -4247,7 +4253,7 @@ async def list_tenant_reviews(
     has_churn_intent: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Reviews scoped to tracked vendors."""
     _require_b2b_product(user)
@@ -4301,7 +4307,10 @@ async def list_tenant_reviews(
 
 
 @router.get("/reviews/{review_id}")
-async def get_tenant_review(review_id: str, user: AuthUser = Depends(require_auth)):
+async def get_tenant_review(
+    review_id: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Review detail (verify vendor in tracked)."""
     _require_b2b_product(user)
     review_id = _clean_optional_text(review_id)
