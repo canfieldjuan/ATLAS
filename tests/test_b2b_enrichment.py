@@ -9,6 +9,92 @@ import pytest
 from atlas_brain.autonomous.tasks import b2b_enrichment
 from atlas_brain.autonomous.tasks._b2b_batch_utils import exact_stage_request_fingerprint, reconcile_existing_batch_artifacts
 from atlas_brain.reasoning import evidence_engine
+from atlas_brain.services.b2b.enrichment_stage_controller import (
+    apply_stage_decision,
+    apply_review_stage_transition,
+    defer_review_transition,
+    persist_review_transition,
+    StageExecutionDecision,
+    finalize_stage_batch,
+    prepare_stage_execution,
+    submit_stage_batch,
+)
+from atlas_brain.services.b2b.enrichment_persistence import (
+    EnrichmentFinalizationDeps,
+    EnrichmentPersistenceDeps,
+    finalize_enrichment_for_persist as service_finalize_enrichment_for_persist,
+    persist_enrichment_result as service_persist_enrichment_result,
+)
+from atlas_brain.services.b2b.enrichment_outcome_policy import (
+    EnrichmentOutcomePolicyDeps,
+    is_no_signal_result as service_is_no_signal_result,
+    trusted_reviewer_company_name as service_trusted_reviewer_company_name,
+    witness_metrics as service_witness_metrics,
+)
+from atlas_brain.services.b2b.enrichment_validation import (
+    EnrichmentValidationDeps,
+    validate_enrichment as service_validate_enrichment,
+)
+from atlas_brain.services.b2b.enrichment_derivation import (
+    EnrichmentDerivationDeps,
+    compute_derived_fields as service_compute_derived_fields,
+)
+from atlas_brain.services.b2b.enrichment_phrase_metadata import (
+    EnrichmentPhraseMetadataDeps,
+    apply_phrase_metadata_contract as service_apply_phrase_metadata_contract,
+    coerce_legacy_phrase_arrays as service_coerce_legacy_phrase_arrays,
+    normalize_tag_value as service_normalize_tag_value,
+)
+from atlas_brain.services.b2b.enrichment_repair import (
+    EnrichmentRepairDeps,
+    apply_structural_repair as service_apply_structural_repair,
+    repair_target_fields as service_repair_target_fields,
+)
+from atlas_brain.services.b2b.enrichment_buyer_authority import (
+    EnrichmentBuyerAuthorityDeps,
+    derive_buyer_authority_fields as service_derive_buyer_authority_fields,
+    infer_role_level_from_text as service_infer_role_level_from_text,
+)
+from atlas_brain.services.b2b.enrichment_timeline import (
+    EnrichmentTimelineDeps,
+    derive_concrete_timeline_fields as service_derive_concrete_timeline_fields,
+    derive_decision_timeline as service_derive_decision_timeline,
+)
+from atlas_brain.services.b2b.enrichment_budget import (
+    EnrichmentBudgetDeps,
+    derive_budget_signals as service_derive_budget_signals,
+    derive_contract_value_signal as service_derive_contract_value_signal,
+)
+from atlas_brain.services.b2b.enrichment_pain_competition import (
+    EnrichmentPainCompetitionDeps,
+    compute_pain_confidence as service_compute_pain_confidence,
+    demote_primary_pain as service_demote_primary_pain,
+    derive_competitor_annotations as service_derive_competitor_annotations,
+    derive_pain_categories as service_derive_pain_categories,
+    recover_competitor_mentions as service_recover_competitor_mentions,
+    subject_vendor_phrase_texts as service_subject_vendor_phrase_texts,
+)
+from atlas_brain.services.b2b.enrichment_urgency import (
+    EnrichmentUrgencyDeps,
+    derive_urgency_indicators as service_derive_urgency_indicators,
+)
+from atlas_brain.services.b2b.enrichment_support import (
+    coerce_bool as service_coerce_bool,
+    coerce_json_dict as service_coerce_json_dict,
+    combined_source_text as service_combined_source_text,
+    contains_any as service_contains_any,
+    has_technical_context as service_has_technical_context,
+    normalize_compare_text as service_normalize_compare_text,
+    normalized_low_fidelity_noisy_sources as service_normalized_low_fidelity_noisy_sources,
+    normalized_name_tokens as service_normalized_name_tokens,
+    text_mentions_name as service_text_mentions_name,
+)
+from atlas_brain.services.b2b.enrichment_stage_planner import (
+    build_tier1_stage_plan,
+    build_tier2_stage_plan,
+    stage_backend_name,
+)
+from atlas_brain.services.b2b.enrichment_stage_runs import StageRunResolution, resolve_stage_run
 from atlas_brain.storage.models import ScheduledTask
 
 
@@ -46,6 +132,73 @@ def test_enrichment_batch_custom_id_is_anthropic_safe():
     assert b2b_enrichment._enrichment_batch_custom_id("tier1", "1234-5678") == "tier1_1234-5678"
 
 
+def test_stage_backend_name_maps_batch_and_provider():
+    assert stage_backend_name(batch_enabled=True, provider="openrouter") == "anthropic_batch"
+    assert stage_backend_name(batch_enabled=False, provider="openrouter") == "direct_openrouter"
+    assert stage_backend_name(batch_enabled=False, provider="vllm") == "direct_vllm"
+
+
+def test_build_tier1_stage_plan_captures_request_identity():
+    def _prepare_stage_request(stage_id, **kwargs):
+        return (
+            SimpleNamespace(stage_id=stage_id, kwargs=kwargs),
+            "request-fingerprint",
+            "work-fingerprint",
+        )
+
+    plan = build_tier1_stage_plan(
+        row={"id": "review-1"},
+        payload_json='{"vendor_name":"Zendesk"}',
+        system_prompt="tier1 prompt",
+        model="anthropic/claude-haiku-4-5",
+        provider="openrouter",
+        batch_enabled=True,
+        run_id="run-1",
+        prepare_stage_request=_prepare_stage_request,
+        max_tokens=4096,
+        guided_json=None,
+    )
+
+    assert plan.stage_id == "b2b_enrichment.tier1"
+    assert plan.backend == "anthropic_batch"
+    assert plan.request_fingerprint == "request-fingerprint"
+    assert plan.work_fingerprint == "work-fingerprint"
+    assert plan.messages[0]["content"] == "tier1 prompt"
+
+
+def test_build_tier2_stage_plan_includes_tier1_fields_and_prompt_filter():
+    def _prepare_stage_request(stage_id, **kwargs):
+        return (
+            SimpleNamespace(stage_id=stage_id, kwargs=kwargs),
+            "request-fingerprint",
+            "work-fingerprint",
+        )
+
+    plan = build_tier2_stage_plan(
+        row={"id": "review-1"},
+        base_payload={"content_type": "review", "vendor_name": "Zendesk"},
+        tier1_result={
+            "specific_complaints": ["pricing pressure"],
+            "quotable_phrases": ["renewal discussions are tense"],
+        },
+        system_prompt="tier2 prompt",
+        model="anthropic/claude-haiku-4-5",
+        provider="openrouter",
+        batch_enabled=False,
+        run_id="run-1",
+        prepare_stage_request=_prepare_stage_request,
+        prompt_for_content_type=lambda prompt, _content_type: f"{prompt}::filtered",
+        max_tokens=512,
+        workload="direct",
+    )
+
+    payload = json.loads(plan.payload_json)
+    assert payload["tier1_specific_complaints"] == ["pricing pressure"]
+    assert payload["tier1_quotable_phrases"] == ["renewal discussions are tense"]
+    assert plan.messages[0]["content"] == "tier2 prompt::filtered"
+    assert plan.backend == "direct_openrouter"
+
+
 def test_derive_competitor_annotations_prunes_generic_provider_labels():
     row = {
         "vendor_name": "Amazon Web Services",
@@ -80,6 +233,127 @@ def test_derive_competitor_annotations_prunes_weak_neutral_mentions_without_name
     derived = b2b_enrichment._derive_competitor_annotations(result, row)
 
     assert derived == []
+
+
+def test_service_subject_vendor_phrase_texts_filters_v2_non_subject_phrases():
+    result = {
+        "specific_complaints": ["pricing doubled", "our migration team was overwhelmed"],
+        "phrase_metadata": [
+            {"field": "specific_complaints", "index": 0, "subject": "subject_vendor", "polarity": "negative"},
+            {"field": "specific_complaints", "index": 1, "subject": "self", "polarity": "negative"},
+        ],
+        "enrichment_schema_version": 4,
+    }
+
+    texts = service_subject_vendor_phrase_texts(
+        result,
+        "specific_complaints",
+        deps=_pain_competition_test_deps(),
+    )
+
+    assert texts == ["pricing doubled"]
+
+
+def test_service_derive_pain_categories_and_confidence_use_v2_filters():
+    result = {
+        "specific_complaints": ["pricing doubled", "our IT team was learning the system"],
+        "pricing_phrases": ["renewal bill jumped 40%"],
+        "feature_gaps": [],
+        "quotable_phrases": [],
+        "phrase_metadata": [
+            {"field": "specific_complaints", "index": 0, "subject": "subject_vendor", "polarity": "negative"},
+            {"field": "specific_complaints", "index": 1, "subject": "self", "polarity": "negative"},
+            {"field": "pricing_phrases", "index": 0, "subject": "subject_vendor", "polarity": "mixed"},
+        ],
+        "enrichment_schema_version": 4,
+        "churn_signals": {"intent_to_leave": True},
+        "would_recommend": False,
+        "sentiment_trajectory": {"direction": "declining"},
+    }
+
+    categories = service_derive_pain_categories(result, deps=_pain_competition_test_deps())
+    confidence = service_compute_pain_confidence(result, "pricing", deps=_pain_competition_test_deps())
+
+    assert categories[0] == {"category": "pricing", "severity": "primary"}
+    assert confidence == "strong"
+
+
+def test_service_demote_primary_pain_preserves_demoted_context():
+    result = {
+        "pain_categories": [
+            {"category": "pricing", "severity": "primary"},
+            {"category": "support", "severity": "secondary"},
+        ]
+    }
+
+    service_demote_primary_pain(result, "pricing")
+
+    assert result["pain_categories"][0] == {"category": "overall_dissatisfaction", "severity": "primary"}
+    assert {"category": "pricing", "severity": "secondary"} in result["pain_categories"]
+
+
+def test_service_recover_competitor_mentions_and_annotations():
+    row = {
+        "vendor_name": "Zendesk",
+        "summary": "We switched after the renewal",
+        "review_text": "We switched to Intercom after Zendesk raised prices at renewal.",
+        "pros": "",
+        "cons": "",
+    }
+    recovered = service_recover_competitor_mentions(
+        {"competitors_mentioned": [], "quotable_phrases": []},
+        row,
+        deps=_pain_competition_test_deps(),
+    )
+    annotated = service_derive_competitor_annotations(
+        {
+            "competitors_mentioned": recovered,
+            "churn_signals": {"migration_in_progress": True, "renewal_timing": "this quarter"},
+        },
+        row,
+        deps=_pain_competition_test_deps(),
+    )
+
+    assert recovered == [{"name": "Intercom"}]
+    assert annotated[0]["evidence_type"] == "explicit_switch"
+    assert annotated[0]["displacement_confidence"] == "high"
+
+
+def test_service_derive_urgency_indicators_tracks_price_and_decision_signals():
+    row = {
+        "summary": "Renewal decision is next quarter",
+        "review_text": "We are considering switching and I decided we need another tool before renewal.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": True,
+            "migration_in_progress": False,
+            "renewal_timing": "next quarter",
+        },
+        "budget_signals": {"annual_spend_estimate": "$60k/year", "price_per_seat": None},
+        "timeline": {"contract_end": "next quarter", "evaluation_deadline": None},
+        "competitors_mentioned": [{"name": "Intercom", "reason_detail": "better pricing"}],
+        "specific_complaints": ["pricing backlash"],
+        "pricing_phrases": ["price increase at renewal"],
+        "recommendation_language": ["I decided we should switch"],
+        "reviewer_context": {"decision_maker": True},
+    }
+
+    indicators = service_derive_urgency_indicators(
+        result,
+        row,
+        deps=_urgency_test_deps(),
+    )
+
+    assert indicators["intent_to_leave_signal"] is True
+    assert indicators["actively_evaluating_signal"] is True
+    assert indicators["named_alternative_with_reason"] is True
+    assert indicators["price_pressure_language"] is True
+    assert indicators["timeline_mentioned"] is True
+    assert indicators["decision_maker_language"] is True
 
 
 def test_repair_target_fields_skips_roundup_style_competitor_repair_without_named_displacement():
@@ -361,6 +635,544 @@ def test_is_no_signal_result_accepts_empty_community_discussion_without_rating()
     }
 
     assert b2b_enrichment._is_no_signal_result(result, row) is True
+
+
+def test_service_is_no_signal_result_accepts_empty_community_discussion_without_rating():
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "support_escalation": False,
+            "contract_renewal_mentioned": False,
+        },
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "event_mentions": [],
+        "feature_gaps": [],
+    }
+    row = {
+        "content_type": "community_discussion",
+        "rating": None,
+    }
+
+    assert service_is_no_signal_result(result, row) is True
+
+
+def test_service_trusted_reviewer_company_name_filters_vendor_match():
+    deps = EnrichmentOutcomePolicyDeps(
+        normalized_low_fidelity_noisy_sources=lambda: set(),
+        normalize_compare_text=lambda value: str(value or ""),
+        text_mentions_name=lambda haystack, needle: False,
+        normalized_name_tokens=lambda value: [],
+        has_commercial_context=lambda text: False,
+        has_strong_commercial_context=lambda text: False,
+        has_technical_context=lambda summary_text, combined_text: False,
+        has_consumer_context=lambda text: False,
+        dedupe_reason_codes=lambda codes: codes,
+        normalize_company_name=lambda value: str(value or "").strip().lower().replace(" ", ""),
+    )
+    row = {
+        "reviewer_company": "HubSpot",
+        "vendor_name": "Hub Spot",
+    }
+
+    assert service_trusted_reviewer_company_name(row, deps=deps) is None
+
+
+def test_service_witness_metrics_counts_grounded_spans():
+    result = {
+        "evidence_spans": [
+            {"text": "pricing doubled"},
+            {"text": " support declined "},
+            {"text": ""},
+            {"other": "ignored"},
+        ]
+    }
+
+    assert service_witness_metrics(result) == (1, 2)
+
+
+def _validation_test_deps() -> EnrichmentValidationDeps:
+    return EnrichmentValidationDeps(
+        coerce_bool=b2b_enrichment._coerce_bool,
+        normalize_pain_category=b2b_enrichment._normalize_pain_category,
+        normalize_budget_value_text=b2b_enrichment._normalize_budget_value_text,
+        normalize_budget_detail_text=b2b_enrichment._normalize_budget_detail_text,
+        canonical_role_type=b2b_enrichment._canonical_role_type,
+        canonical_role_level=b2b_enrichment._canonical_role_level,
+        infer_role_level_from_text=b2b_enrichment._infer_role_level_from_text,
+        infer_decision_maker=b2b_enrichment._infer_decision_maker,
+        infer_buyer_role_type=b2b_enrichment._infer_buyer_role_type,
+        coerce_json_dict=b2b_enrichment._coerce_json_dict,
+        schema_version=b2b_enrichment._schema_version,
+        missing_witness_primitives=b2b_enrichment._missing_witness_primitives,
+        compute_derived_fields=b2b_enrichment._compute_derived_fields,
+        trusted_reviewer_company_name=b2b_enrichment._trusted_reviewer_company_name,
+        churn_signal_bool_fields=b2b_enrichment._CHURN_SIGNAL_BOOL_FIELDS,
+        known_severity_levels=b2b_enrichment._KNOWN_SEVERITY_LEVELS,
+        known_lock_in_levels=b2b_enrichment._KNOWN_LOCK_IN_LEVELS,
+        known_sentiment_directions=b2b_enrichment._KNOWN_SENTIMENT_DIRECTIONS,
+        known_buying_stages=b2b_enrichment._KNOWN_BUYING_STAGES,
+        known_decision_timelines=b2b_enrichment._KNOWN_DECISION_TIMELINES,
+        known_contract_value_signals=b2b_enrichment._KNOWN_CONTRACT_VALUE_SIGNALS,
+        known_replacement_modes=b2b_enrichment._KNOWN_REPLACEMENT_MODES,
+        known_operating_model_shifts=b2b_enrichment._KNOWN_OPERATING_MODEL_SHIFTS,
+        known_productivity_delta_claims=b2b_enrichment._KNOWN_PRODUCTIVITY_DELTA_CLAIMS,
+        known_org_pressure_types=b2b_enrichment._KNOWN_ORG_PRESSURE_TYPES,
+        known_content_types=b2b_enrichment._KNOWN_CONTENT_TYPES,
+        known_org_health_levels=b2b_enrichment._KNOWN_ORG_HEALTH_LEVELS,
+        known_leadership_qualities=b2b_enrichment._KNOWN_LEADERSHIP_QUALITIES,
+        known_innovation_climates=b2b_enrichment._KNOWN_INNOVATION_CLIMATES,
+        known_morale_levels=b2b_enrichment._KNOWN_MORALE_LEVELS,
+        known_departure_types=b2b_enrichment._KNOWN_DEPARTURE_TYPES,
+        known_pain_categories=b2b_enrichment._KNOWN_PAIN_CATEGORIES,
+    )
+
+
+def _derivation_test_deps() -> EnrichmentDerivationDeps:
+    from atlas_brain.reasoning import evidence_engine
+
+    return EnrichmentDerivationDeps(
+        get_evidence_engine=evidence_engine.get_evidence_engine,
+        coerce_legacy_phrase_arrays=b2b_enrichment._coerce_legacy_phrase_arrays,
+        apply_phrase_metadata_contract=b2b_enrichment._apply_phrase_metadata_contract,
+        derive_pain_categories=b2b_enrichment._derive_pain_categories,
+        recover_competitor_mentions=b2b_enrichment._recover_competitor_mentions,
+        derive_competitor_annotations=b2b_enrichment._derive_competitor_annotations,
+        derive_budget_signals=b2b_enrichment._derive_budget_signals,
+        derive_buyer_authority_fields=b2b_enrichment._derive_buyer_authority_fields,
+        derive_concrete_timeline_fields=b2b_enrichment._derive_concrete_timeline_fields,
+        derive_decision_timeline=b2b_enrichment._derive_decision_timeline,
+        derive_contract_value_signal=b2b_enrichment._derive_contract_value_signal,
+        derive_urgency_indicators=b2b_enrichment._derive_urgency_indicators,
+        normalize_pain_category=b2b_enrichment._normalize_pain_category,
+        subject_vendor_phrase_texts=b2b_enrichment._subject_vendor_phrase_texts,
+        compute_pain_confidence=b2b_enrichment._compute_pain_confidence,
+        demote_primary_pain=b2b_enrichment._demote_primary_pain,
+        derive_replacement_mode=b2b_enrichment.derive_replacement_mode,
+        derive_operating_model_shift=b2b_enrichment.derive_operating_model_shift,
+        derive_productivity_delta_claim=b2b_enrichment.derive_productivity_delta_claim,
+        derive_org_pressure_type=b2b_enrichment.derive_org_pressure_type,
+        derive_salience_flags=b2b_enrichment.derive_salience_flags,
+        derive_evidence_spans=b2b_enrichment.derive_evidence_spans,
+    )
+
+
+def _budget_test_deps() -> EnrichmentBudgetDeps:
+    return EnrichmentBudgetDeps(
+        contains_any=b2b_enrichment._contains_any,
+        coerce_bool=b2b_enrichment._coerce_bool,
+        normalize_compare_text=b2b_enrichment._normalize_compare_text,
+        normalize_text_list=b2b_enrichment._normalize_text_list,
+        combined_source_text=b2b_enrichment._combined_source_text,
+        normalized_low_fidelity_noisy_sources=b2b_enrichment._normalized_low_fidelity_noisy_sources,
+        text_mentions_name=b2b_enrichment._text_mentions_name,
+        has_commercial_context=b2b_enrichment._has_commercial_context,
+        has_strong_commercial_context=b2b_enrichment._has_strong_commercial_context,
+        has_technical_context=b2b_enrichment._has_technical_context,
+        has_consumer_context=b2b_enrichment._has_consumer_context,
+        timeline_ambiguous_vendor_tokens=b2b_enrichment._TIMELINE_AMBIGUOUS_VENDOR_TOKENS,
+        timeline_ambiguous_vendor_product_context_patterns=(
+            b2b_enrichment._TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS
+        ),
+        budget_any_amount_token_re=b2b_enrichment._BUDGET_ANY_AMOUNT_TOKEN_RE,
+        budget_price_per_seat_re=b2b_enrichment._BUDGET_PRICE_PER_SEAT_RE,
+        budget_annual_amount_re=b2b_enrichment._BUDGET_ANNUAL_AMOUNT_RE,
+        budget_currency_token_re=b2b_enrichment._BUDGET_CURRENCY_TOKEN_RE,
+        budget_seat_count_re=b2b_enrichment._BUDGET_SEAT_COUNT_RE,
+        budget_price_increase_re=b2b_enrichment._BUDGET_PRICE_INCREASE_RE,
+        budget_price_increase_detail_re=b2b_enrichment._BUDGET_PRICE_INCREASE_DETAIL_RE,
+        budget_annual_period_patterns=b2b_enrichment._BUDGET_ANNUAL_PERIOD_PATTERNS,
+        budget_monthly_period_patterns=b2b_enrichment._BUDGET_MONTHLY_PERIOD_PATTERNS,
+        budget_noise_patterns=b2b_enrichment._BUDGET_NOISE_PATTERNS,
+        budget_per_unit_patterns=b2b_enrichment._BUDGET_PER_UNIT_PATTERNS,
+        budget_annual_context_patterns=b2b_enrichment._BUDGET_ANNUAL_CONTEXT_PATTERNS,
+        budget_commercial_context_patterns=b2b_enrichment._BUDGET_COMMERCIAL_CONTEXT_PATTERNS,
+    )
+
+
+def _pain_competition_test_deps() -> EnrichmentPainCompetitionDeps:
+    return EnrichmentPainCompetitionDeps(
+        normalize_text_list=b2b_enrichment._normalize_text_list,
+        normalize_pain_category=b2b_enrichment._normalize_pain_category,
+        normalize_company_name=b2b_enrichment.normalize_company_name,
+        pain_patterns=b2b_enrichment._PAIN_PATTERNS,
+        pain_derivation_fields=b2b_enrichment._PAIN_DERIVATION_FIELDS,
+        competitor_recovery_patterns=b2b_enrichment._COMPETITOR_RECOVERY_PATTERNS,
+        competitor_recovery_blocklist=b2b_enrichment._COMPETITOR_RECOVERY_BLOCKLIST,
+        generic_competitor_tokens=b2b_enrichment._GENERIC_COMPETITOR_TOKENS,
+        competitor_context_patterns=b2b_enrichment._COMPETITOR_CONTEXT_PATTERNS,
+    )
+
+
+def _urgency_test_deps() -> EnrichmentUrgencyDeps:
+    return EnrichmentUrgencyDeps(
+        contains_any=b2b_enrichment._contains_any,
+        normalize_text_list=b2b_enrichment._normalize_text_list,
+    )
+
+
+def _phrase_metadata_test_deps() -> EnrichmentPhraseMetadataDeps:
+    return EnrichmentPhraseMetadataDeps(
+        check_phrase_grounded=lambda phrase, summary=None, review_text=None: True,
+    )
+
+
+def _repair_test_deps() -> EnrichmentRepairDeps:
+    return EnrichmentRepairDeps(
+        normalize_text_list=b2b_enrichment._normalize_text_list,
+        normalize_pain_category=b2b_enrichment._normalize_pain_category,
+        contains_any=b2b_enrichment._contains_any,
+        coerce_json_dict=b2b_enrichment._coerce_json_dict,
+        is_unknownish=b2b_enrichment._is_unknownish,
+        trusted_repair_sources=b2b_enrichment._trusted_repair_sources,
+        normalize_company_name=b2b_enrichment.normalize_company_name,
+        repair_negative_patterns=b2b_enrichment._REPAIR_NEGATIVE_PATTERNS,
+        repair_competitor_patterns=b2b_enrichment._REPAIR_COMPETITOR_PATTERNS,
+        repair_pricing_patterns=b2b_enrichment._REPAIR_PRICING_PATTERNS,
+        repair_recommend_patterns=b2b_enrichment._REPAIR_RECOMMEND_PATTERNS,
+        repair_feature_gap_patterns=b2b_enrichment._REPAIR_FEATURE_GAP_PATTERNS,
+        repair_timeline_patterns=b2b_enrichment._REPAIR_TIMELINE_PATTERNS,
+        repair_category_shift_patterns=b2b_enrichment._REPAIR_CATEGORY_SHIFT_PATTERNS,
+        repair_currency_re=b2b_enrichment._REPAIR_CURRENCY_RE,
+    )
+
+
+def _buyer_authority_test_deps() -> EnrichmentBuyerAuthorityDeps:
+    return EnrichmentBuyerAuthorityDeps(
+        sanitize_reviewer_title=b2b_enrichment.sanitize_reviewer_title,
+        coerce_bool=b2b_enrichment._coerce_bool,
+        coerce_json_dict=b2b_enrichment._coerce_json_dict,
+        contains_any=b2b_enrichment._contains_any,
+        role_type_aliases=b2b_enrichment._ROLE_TYPE_ALIASES,
+        role_level_aliases=b2b_enrichment._ROLE_LEVEL_ALIASES,
+        champion_reviewer_title_pattern=b2b_enrichment._CHAMPION_REVIEWER_TITLE_PATTERN,
+        evaluator_reviewer_title_pattern=b2b_enrichment._EVALUATOR_REVIEWER_TITLE_PATTERN,
+        exec_role_text_pattern=b2b_enrichment._EXEC_ROLE_TEXT_PATTERN,
+        director_role_text_pattern=b2b_enrichment._DIRECTOR_ROLE_TEXT_PATTERN,
+        manager_role_text_pattern=b2b_enrichment._MANAGER_ROLE_TEXT_PATTERN,
+        ic_role_text_pattern=b2b_enrichment._IC_ROLE_TEXT_PATTERN,
+        commercial_decision_text_pattern=b2b_enrichment._COMMERCIAL_DECISION_TEXT_PATTERN,
+        exec_reviewer_title_pattern=b2b_enrichment._EXEC_REVIEWER_TITLE_PATTERN,
+        manager_decision_title_pattern=b2b_enrichment._MANAGER_DECISION_TITLE_PATTERN,
+        economic_buyer_text_patterns=b2b_enrichment._ECONOMIC_BUYER_TEXT_PATTERNS,
+        champion_text_patterns=b2b_enrichment._CHAMPION_TEXT_PATTERNS,
+        evaluator_text_patterns=b2b_enrichment._EVALUATOR_TEXT_PATTERNS,
+        end_user_text_patterns=b2b_enrichment._END_USER_TEXT_PATTERNS,
+        post_purchase_review_sources=set(b2b_enrichment._POST_PURCHASE_REVIEW_SOURCES),
+        post_purchase_usage_patterns=b2b_enrichment._POST_PURCHASE_USAGE_PATTERNS,
+    )
+
+
+def _timeline_test_deps() -> EnrichmentTimelineDeps:
+    return EnrichmentTimelineDeps(
+        contains_any=b2b_enrichment._contains_any,
+        normalize_compare_text=b2b_enrichment._normalize_compare_text,
+        has_commercial_context=b2b_enrichment._has_commercial_context,
+        has_strong_commercial_context=b2b_enrichment._has_strong_commercial_context,
+        has_technical_context=b2b_enrichment._has_technical_context,
+        has_consumer_context=b2b_enrichment._has_consumer_context,
+        normalized_low_fidelity_noisy_sources=b2b_enrichment._normalized_low_fidelity_noisy_sources,
+        text_mentions_name=b2b_enrichment._text_mentions_name,
+        timeline_month_day_re=b2b_enrichment._TIMELINE_MONTH_DAY_RE,
+        timeline_slash_date_re=b2b_enrichment._TIMELINE_SLASH_DATE_RE,
+        timeline_iso_date_re=b2b_enrichment._TIMELINE_ISO_DATE_RE,
+        timeline_explicit_anchor_phrases=b2b_enrichment._TIMELINE_EXPLICIT_ANCHOR_PHRASES,
+        timeline_relative_anchor_re=b2b_enrichment._TIMELINE_RELATIVE_ANCHOR_RE,
+        timeline_contract_event_patterns=b2b_enrichment._TIMELINE_CONTRACT_EVENT_PATTERNS,
+        timeline_decision_deadline_patterns=b2b_enrichment._TIMELINE_DECISION_DEADLINE_PATTERNS,
+        timeline_contract_end_patterns=b2b_enrichment._TIMELINE_CONTRACT_END_PATTERNS,
+        timeline_immediate_patterns=b2b_enrichment._TIMELINE_IMMEDIATE_PATTERNS,
+        timeline_quarter_patterns=b2b_enrichment._TIMELINE_QUARTER_PATTERNS,
+        timeline_year_patterns=b2b_enrichment._TIMELINE_YEAR_PATTERNS,
+        timeline_decision_patterns=b2b_enrichment._TIMELINE_DECISION_PATTERNS,
+        timeline_ambiguous_vendor_tokens=b2b_enrichment._TIMELINE_AMBIGUOUS_VENDOR_TOKENS,
+        timeline_ambiguous_vendor_product_context_patterns=b2b_enrichment._TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS,
+    )
+
+
+def test_service_validate_enrichment_rejects_out_of_range_urgency():
+    result = {
+        "churn_signals": {},
+        "urgency_score": 11,
+    }
+
+    assert service_validate_enrichment(result, None, deps=_validation_test_deps()) is False
+
+
+def test_service_validate_enrichment_coerces_unknown_decision_timeline():
+    result = {
+        "churn_signals": {},
+        "urgency_score": 4,
+        "timeline": {"decision_timeline": "someday"},
+    }
+
+    assert service_validate_enrichment(result, None, deps=_validation_test_deps()) is True
+    assert result["timeline"]["decision_timeline"] == "unknown"
+
+
+def test_service_compute_derived_fields_promotes_event_timeframe_into_contract_end(monkeypatch):
+    from atlas_brain.reasoning import evidence_engine
+
+    class _Engine:
+        map_hash = "test-hash"
+
+        def derive_price_complaint(self, result):
+            return False
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 7.1
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+    row, result = _witness_ready_row_and_result()
+
+    derived = service_compute_derived_fields(result, row, deps=_derivation_test_deps())
+
+    assert derived["timeline"]["contract_end"] == "next quarter"
+    assert derived["timeline"]["decision_timeline"] == "within_quarter"
+
+
+def test_service_compute_derived_fields_sets_evidence_map_hash(monkeypatch):
+    from atlas_brain.reasoning import evidence_engine
+
+    class _Engine:
+        map_hash = "service-derivation-hash"
+
+        def derive_price_complaint(self, result):
+            return False
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 5.0
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return None
+
+        def derive_budget_authority(self, result):
+            return True
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+    row, result = _witness_ready_row_and_result()
+
+    derived = service_compute_derived_fields(result, row, deps=_derivation_test_deps())
+
+    assert derived["evidence_map_hash"] == "service-derivation-hash"
+
+
+def test_service_coerce_legacy_phrase_arrays_extracts_text_from_dict_entries():
+    result = {
+        "specific_complaints": [
+            {"text": "Support was slow"},
+            "Billing was confusing",
+            {"ignored": True},
+        ]
+    }
+
+    service_coerce_legacy_phrase_arrays(result)
+
+    assert result["specific_complaints"] == [
+        "Support was slow",
+        "Billing was confusing",
+    ]
+
+
+def test_service_normalize_tag_value_flattens_unknown_values():
+    normalized, was_coerced = service_normalize_tag_value("WEIRD", ("allowed", "unclear"))
+
+    assert normalized == "unclear"
+    assert was_coerced is True
+
+
+def test_service_apply_phrase_metadata_contract_sets_schema_v4_when_rows_are_usable():
+    review_id = uuid4()
+    result = {
+        "specific_complaints": ["Support was slow"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "quotable_phrases": [],
+        "recommendation_language": [],
+        "positive_aspects": [],
+        "phrase_metadata": [
+            {
+                "field": "specific_complaints",
+                "index": 0,
+                "text": "Support was slow",
+                "subject": "subject_vendor",
+                "polarity": "negative",
+                "role": "primary_driver",
+                "verbatim": True,
+            }
+        ],
+    }
+    row = {
+        "id": review_id,
+        "summary": "Support was slow",
+        "review_text": "Support was slow and unhelpful.",
+    }
+
+    service_apply_phrase_metadata_contract(result, row, deps=_phrase_metadata_test_deps())
+
+    assert result["enrichment_schema_version"] == 4
+    assert result["phrase_metadata"][0]["verbatim"] is True
+
+
+def test_service_repair_target_fields_skips_competitor_repair_for_multi_vendor_summary():
+    row = {
+        "source": "g2",
+        "summary": "Asana vs Monday vs Notion vs Trello",
+        "review_text": (
+            "Asana is strong for structured teams and workflows. Monday.com has great UI. "
+            "Notion is loved for docs plus project hybrid use. Trello falls short for growing teams."
+        ),
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "pain_category": "overall_dissatisfaction",
+        "salience_flags": [],
+        "competitors_mentioned": [],
+        "specific_complaints": ["limited customization compared to others"],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "feature_gaps": ["limited customization compared to others"],
+        "event_mentions": [],
+        "timeline": {"decision_timeline": "unknown"},
+    }
+
+    targets = service_repair_target_fields(result, row, deps=_repair_test_deps())
+
+    assert "competitors_mentioned" not in targets
+
+
+def test_service_apply_structural_repair_backfills_only_unknown_fields():
+    baseline = {
+        "urgency_score": 8,
+        "churn_signals": {"intent_to_leave": True, "actively_evaluating": True},
+        "buyer_authority": {"role_type": "unknown", "buying_stage": "unknown"},
+        "timeline": {"decision_timeline": "unknown"},
+        "contract_context": {"contract_value_signal": "unknown", "usage_duration": None},
+    }
+    repair = {
+        "urgency_score": 2,
+        "churn_signals": {"intent_to_leave": False, "actively_evaluating": False},
+        "buyer_authority": {"role_type": "economic_buyer", "buying_stage": "renewal_decision"},
+        "timeline": {"decision_timeline": "within_quarter"},
+        "contract_context": {"contract_value_signal": "enterprise_mid", "usage_duration": "2_years"},
+    }
+
+    merged, applied = service_apply_structural_repair(baseline, repair, deps=_repair_test_deps())
+
+    assert merged["urgency_score"] == 8
+    assert merged["churn_signals"]["intent_to_leave"] is True
+    assert merged["buyer_authority"]["role_type"] == "economic_buyer"
+    assert merged["timeline"]["decision_timeline"] == "within_quarter"
+    assert merged["contract_context"]["contract_value_signal"] == "enterprise_mid"
+    assert "buyer_authority.role_type" in applied
+    assert "timeline.decision_timeline" in applied
+    assert "contract_context.contract_value_signal" in applied
+
+
+def test_service_infer_role_level_from_text_aliases():
+    row = {"summary": "", "review_text": "", "pros": "", "cons": ""}
+
+    assert service_infer_role_level_from_text("PMO", row, deps=_buyer_authority_test_deps()) == "manager"
+    assert service_infer_role_level_from_text("Product", row, deps=_buyer_authority_test_deps()) == "ic"
+    assert service_infer_role_level_from_text("Owner/Managing Member", row, deps=_buyer_authority_test_deps()) == "executive"
+
+
+def test_service_derive_buyer_authority_fields_defaults_structured_reviews_to_post_purchase():
+    result = {
+        "reviewer_context": {"role_level": "manager", "decision_maker": False},
+        "churn_signals": {
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+        },
+    }
+    row = {
+        "source": "g2",
+        "summary": "Reliable tool after rollout",
+        "review_text": "We use this product every day across the team.",
+        "pros": "",
+        "cons": "",
+    }
+
+    _, _, buying_stage = service_derive_buyer_authority_fields(result, row, deps=_buyer_authority_test_deps())
+
+    assert buying_stage == "post_purchase"
+
+
+def test_service_derive_decision_timeline_uses_raw_text_when_commercial_context_exists():
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+        },
+        "timeline": {"contract_end": None, "evaluation_deadline": None},
+        "event_mentions": [],
+        "pricing_phrases": ["pricing pressure"],
+        "specific_complaints": ["We need to decide next quarter"],
+        "competitors_mentioned": [],
+    }
+    row = {
+        "summary": "Renewal decision coming soon",
+        "review_text": "Pricing pressure means we need to decide next quarter whether to switch.",
+        "pros": "",
+        "cons": "",
+    }
+
+    assert service_derive_decision_timeline(result, row, deps=_timeline_test_deps()) == "within_quarter"
+
+
+def test_service_derive_concrete_timeline_fields_promotes_contract_notice_into_evaluation_deadline():
+    row = {
+        "summary": "Cancel before renewal",
+        "review_text": (
+            "We need to give 30 days notice before renewal or they auto renew the contract. "
+            "Support refused to help us cancel."
+        ),
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": False,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": None,
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "event_mentions": [],
+        "timeline": {},
+        "pricing_phrases": [],
+        "specific_complaints": ["Support refused to help us cancel."],
+        "competitors_mentioned": [],
+    }
+
+    contract_end, evaluation_deadline = service_derive_concrete_timeline_fields(result, row, deps=_timeline_test_deps())
+
+    assert contract_end == "renewal"
+    assert evaluation_deadline == "30 days"
 
 
 @pytest.mark.asyncio
@@ -685,10 +1497,17 @@ async def test_enrich_rows_reuses_existing_completed_tier1_batch_result(monkeypa
     monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text", AsyncMock(return_value=None))
     monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.store_b2b_exact_stage_text", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_batch_utils.reconcile_existing_batch_artifacts",
+        b2b_enrichment,
+        "prepare_stage_execution",
         AsyncMock(
-            return_value={
-                str(row_id): {
+            return_value=StageExecutionDecision(
+                "reuse_batch_result",
+                None,
+                {
+                    "specific_complaints": ["pricing pressure"],
+                    "quotable_phrases": [],
+                },
+                {
                     "state": "succeeded",
                     "cached": False,
                     "response_text": json.dumps({
@@ -696,8 +1515,8 @@ async def test_enrich_rows_reuses_existing_completed_tier1_batch_result(monkeypa
                         "quotable_phrases": [],
                     }),
                     "custom_id": b2b_enrichment._enrichment_batch_custom_id("tier1", row_id),
-                }
-            }
+                },
+            )
         ),
     )
     run_batch = AsyncMock()
@@ -715,6 +1534,237 @@ async def test_enrich_rows_reuses_existing_completed_tier1_batch_result(monkeypa
     assert result["enriched"] == 1
     assert persist.await_count == 1
     run_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enrich_rows_passes_tier1_request_fingerprints_to_batch_reconcile(monkeypatch):
+    row_id = uuid4()
+    reconcile_mock = AsyncMock(return_value={})
+    row = {
+        "id": row_id,
+        "vendor_name": "Zendesk",
+        "product_name": "Zendesk",
+        "product_category": "Help Desk",
+        "source": "g2",
+        "summary": "Pricing is getting rough",
+        "review_text": (
+            "Pricing pressure and support issues are pushing us to review options. "
+            "Renewal discussions are tense, the team is comparing alternatives, "
+            "and we need a better answer before the next contract cycle."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "company_size_raw": "",
+        "reviewer_industry": "",
+        "content_type": "review",
+        "raw_metadata": {},
+        "rating": None,
+        "rating_max": 5,
+        "enrichment_attempts": 0,
+    }
+    cfg = SimpleNamespace(
+        review_truncate_length=3000,
+        enrichment_tier1_max_tokens=512,
+    )
+
+    def _prepare_request(*args, **kwargs):
+        return SimpleNamespace(
+            namespace="ns",
+            provider="openrouter",
+            model="anthropic/claude-haiku-4-5",
+            request_envelope={
+                "messages": kwargs["messages"],
+                "max_tokens": kwargs["max_tokens"],
+                "temperature": kwargs["temperature"],
+                "response_format": kwargs["response_format"],
+            },
+        )
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.prepare_b2b_exact_stage_request",
+        _prepare_request,
+    )
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text", AsyncMock(return_value=None))
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.store_b2b_exact_stage_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.reconcile_existing_batch_artifacts",
+        reconcile_mock,
+    )
+
+    expected_request = _prepare_request(
+        "b2b_enrichment.tier1",
+        provider="openrouter",
+        model="anthropic/claude-haiku-4-5",
+        messages=[
+            {"role": "system", "content": "digest/b2b_churn_extraction_tier1 prompt"},
+            {"role": "user", "content": json.dumps(b2b_enrichment._build_classify_payload(row, cfg.review_truncate_length))},
+        ],
+        max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+        temperature=0.0,
+        response_format={"type": "json_object"},
+    )
+    expected_fingerprint = exact_stage_request_fingerprint(expected_request)
+
+    decision = await prepare_stage_execution(
+        pool=SimpleNamespace(),
+        llm=object(),
+        task_name="b2b_enrichment",
+        artifact_type="review_enrichment_tier1",
+        artifact_id=str(row_id),
+        review_id=row_id,
+        stage_id="b2b_enrichment.tier1",
+        work_fingerprint="tier1-work",
+        request_fingerprint=expected_fingerprint,
+        parse_response_text=b2b_enrichment._parse_stage_row_result,
+        defer_on_submitted=False,
+        reconcile_batch=True,
+    )
+
+    assert decision.action == "execute"
+    assert reconcile_mock.await_args.kwargs["expected_request_fingerprints"] == {
+        str(row_id): expected_fingerprint,
+    }
+
+
+@pytest.mark.asyncio
+async def test_enrich_rows_batch_item_metadata_includes_request_fingerprint(monkeypatch):
+    class FakeAnthropicLLM:
+        def __init__(self, model: str = "claude-haiku-4-5"):
+            self.model = model
+            self.name = "anthropic"
+
+    row_id = uuid4()
+    rows = [{
+        "id": row_id,
+        "vendor_name": "Zendesk",
+        "product_name": "Zendesk",
+        "product_category": "Help Desk",
+        "source": "g2",
+        "summary": "Pricing is getting rough",
+        "review_text": (
+            "Pricing pressure and support issues are pushing us to review options. "
+            "Renewal discussions are tense, the team is comparing alternatives, "
+            "and we need a better answer before the next contract cycle."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "company_size_raw": "",
+        "reviewer_industry": "",
+        "content_type": "review",
+        "raw_metadata": {},
+        "rating": None,
+        "rating_max": 5,
+        "enrichment_attempts": 0,
+    }]
+    cfg = SimpleNamespace(
+        enrichment_max_attempts=3,
+        enrichment_concurrency=2,
+        enrichment_local_only=False,
+        enrichment_max_tokens=2048,
+        review_truncate_length=3000,
+        openrouter_api_key="test-key",
+        enrichment_openrouter_model="anthropic/claude-haiku-4-5",
+        enrichment_tier1_max_tokens=512,
+        enrichment_tier2_max_tokens=512,
+        enrichment_tier2_openrouter_model="",
+        anthropic_batch_enabled=True,
+        enrichment_anthropic_batch_enabled=True,
+    )
+    task = _task()
+    task.metadata["anthropic_batch_enabled"] = True
+    task.metadata["enrichment_anthropic_batch_enabled"] = True
+    pool = SimpleNamespace(
+        fetch=AsyncMock(return_value=[{"enrichment_status": "enriched", "ct": 1}]),
+        execute=AsyncMock(return_value="OK"),
+    )
+    persist = AsyncMock(return_value=True)
+    captured_items = []
+
+    monkeypatch.setattr("atlas_brain.services.llm.anthropic.AnthropicLLM", FakeAnthropicLLM)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_batch_utils.resolve_anthropic_batch_llm",
+        lambda **_kwargs: FakeAnthropicLLM(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.skills.get_skill_registry",
+        lambda: SimpleNamespace(
+            get=lambda name: SimpleNamespace(content=f"{name} prompt")
+            if name in {"digest/b2b_churn_extraction_tier1", "digest/b2b_churn_extraction_tier2"}
+            else None
+        ),
+    )
+
+    def _prepare_request(*args, **kwargs):
+        return SimpleNamespace(
+            namespace="ns",
+            provider="openrouter",
+            model="anthropic/claude-haiku-4-5",
+            request_envelope={
+                "messages": kwargs["messages"],
+                "max_tokens": kwargs["max_tokens"],
+                "temperature": kwargs["temperature"],
+                "response_format": kwargs["response_format"],
+            },
+        )
+
+    async def _run_batch(**kwargs):
+        captured_items.extend(kwargs["items"])
+        return SimpleNamespace(
+            local_batch_id="batch-1",
+            provider_batch_id="provider-batch-1",
+            submitted_items=1,
+            cache_prefiltered_items=0,
+            fallback_single_call_items=0,
+            completed_items=1,
+            failed_items=0,
+            results_by_custom_id={
+                b2b_enrichment._enrichment_batch_custom_id("tier1", row_id): SimpleNamespace(
+                    response_text=json.dumps({
+                        "specific_complaints": ["pricing pressure"],
+                        "quotable_phrases": [],
+                    }),
+                    cached=False,
+                    usage={},
+                    error_text=None,
+                )
+            },
+        )
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.prepare_b2b_exact_stage_request",
+        _prepare_request,
+    )
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text", AsyncMock(return_value=None))
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.store_b2b_exact_stage_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+        _run_batch,
+    )
+    monkeypatch.setattr(b2b_enrichment, "_persist_enrichment_result", persist)
+    monkeypatch.setattr(b2b_enrichment, "_tier1_has_extraction_gaps", lambda *_args, **_kwargs: False)
+
+    await b2b_enrichment._enrich_rows(rows, cfg, pool, run_id="run-1", task=task)
+
+    expected_request = _prepare_request(
+        "b2b_enrichment.tier1",
+        provider="openrouter",
+        model="anthropic/claude-haiku-4-5",
+        messages=[
+            {"role": "system", "content": "digest/b2b_churn_extraction_tier1 prompt"},
+            {"role": "user", "content": json.dumps(b2b_enrichment._build_classify_payload(rows[0], cfg.review_truncate_length))},
+        ],
+        max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+        temperature=0.0,
+        response_format={"type": "json_object"},
+    )
+    expected_fingerprint = exact_stage_request_fingerprint(expected_request)
+
+    assert captured_items
+    assert captured_items[0].request_metadata["request_fingerprint"] == expected_fingerprint
 
 
 @pytest.mark.asyncio
@@ -797,6 +1847,53 @@ async def test_reconcile_existing_batch_artifacts_skips_mismatched_request_finge
     )
 
     assert result == {}
+
+
+def test_prepare_stage_request_keeps_work_fingerprint_backend_invariant(monkeypatch):
+    def _prepare_request(stage_id, **kwargs):
+        return SimpleNamespace(
+            namespace=stage_id,
+            provider=kwargs["provider"],
+            model=kwargs["model"],
+            request_envelope={
+                "messages": kwargs["messages"],
+                "max_tokens": kwargs["max_tokens"],
+                "temperature": kwargs["temperature"],
+                "response_format": kwargs.get("response_format"),
+                "guided_json": kwargs.get("guided_json"),
+            },
+        )
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.prepare_b2b_exact_stage_request",
+        _prepare_request,
+    )
+
+    request_a, request_fingerprint_a, work_fingerprint_a = b2b_enrichment._prepare_stage_request(
+        "b2b_enrichment.tier1",
+        provider="openrouter",
+        model="anthropic/claude-haiku-4-5",
+        system_prompt="tier1 prompt",
+        user_content='{"vendor":"Zendesk"}',
+        max_tokens=4096,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+    )
+    request_b, request_fingerprint_b, work_fingerprint_b = b2b_enrichment._prepare_stage_request(
+        "b2b_enrichment.tier1",
+        provider="vllm",
+        model="local-tier1",
+        system_prompt="tier1 prompt",
+        user_content='{"vendor":"Zendesk"}',
+        max_tokens=4096,
+        temperature=0.0,
+        guided_json={"type": "object"},
+    )
+
+    assert request_a.provider == "openrouter"
+    assert request_b.provider == "vllm"
+    assert request_fingerprint_a != request_fingerprint_b
+    assert work_fingerprint_a == work_fingerprint_b
 
 
 def test_get_base_enrichment_llm_uses_vllm_first(monkeypatch):
@@ -1058,6 +2155,822 @@ async def test_enrich_single_uses_single_pass_tier1_only(monkeypatch):
     tier1_call.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_enrich_single_marks_stage_runs_with_stage_local_usage(monkeypatch):
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
+    row = {
+        "id": uuid4(),
+        "source": "g2",
+        "enrichment_attempts": 0,
+        "vendor_name": "Example",
+        "product_name": "Example Product",
+        "product_category": "CRM",
+        "raw_metadata": {},
+        "rating_max": 5,
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Sales",
+        "reviewer_company": "Acme",
+        "company_size_raw": "1001-5000",
+        "reviewer_industry": "Technology",
+        "content_type": "review",
+        "summary": "Switching evaluation",
+        "review_text": "We are actively evaluating alternatives after support issues." * 4,
+        "rating": 2.0,
+    }
+    tier1_result = {
+        "specific_complaints": ["support issues"],
+        "quotable_phrases": ["actively evaluating alternatives"],
+    }
+    tier2_result = {
+        "pain_category": "support_quality",
+        "pricing_phrases": [],
+    }
+    ensure_mock = AsyncMock(return_value=None)
+    mark_mock = AsyncMock(return_value=None)
+    persist_mock = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(b2b_enrichment, "ensure_stage_run", ensure_mock)
+    monkeypatch.setattr(b2b_enrichment, "mark_stage_run", mark_mock)
+    monkeypatch.setattr(
+        "atlas_brain.skills.get_skill_registry",
+        lambda: SimpleNamespace(
+            get=lambda name: SimpleNamespace(content=f"{name} prompt")
+            if name in {"digest/b2b_churn_extraction_tier1", "digest/b2b_churn_extraction_tier2"}
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_prepare_stage_request",
+        lambda stage_id, **_kwargs: (
+            SimpleNamespace(stage_id=stage_id),
+            f"{stage_id}-request-fp",
+            f"{stage_id}-work-fp",
+        ),
+    )
+    monkeypatch.setattr(b2b_enrichment, "_get_tier1_client", lambda _cfg: object())
+    monkeypatch.setattr(b2b_enrichment, "_get_tier2_client", lambda _cfg: object())
+    monkeypatch.setattr(b2b_enrichment, "_resolve_tier_routing", lambda *_args, **_kwargs: (False, False))
+    monkeypatch.setattr(b2b_enrichment, "_call_vllm_tier1", AsyncMock(return_value=(tier1_result, "vllm-tier1")))
+    monkeypatch.setattr(b2b_enrichment, "_call_vllm_tier2", AsyncMock(return_value=(tier2_result, "vllm-tier2")))
+    monkeypatch.setattr(b2b_enrichment, "_tier1_has_extraction_gaps", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(b2b_enrichment, "_validate_enrichment", lambda result, source_row=None: True)
+    monkeypatch.setattr(b2b_enrichment, "_notify_high_urgency", AsyncMock(return_value=None))
+    monkeypatch.setattr(b2b_enrichment, "_persist_enrichment_result", persist_mock)
+
+    ok = await b2b_enrichment._enrich_single(
+        pool,
+        row,
+        max_attempts=3,
+        local_only=True,
+        max_tokens=512,
+    )
+
+    assert ok is True
+    assert mark_mock.await_count == 2
+    tier1_mark = mark_mock.await_args_list[0].kwargs
+    tier2_mark = mark_mock.await_args_list[1].kwargs
+    assert tier1_mark["stage_id"] == "b2b_enrichment.tier1"
+    assert tier1_mark["usage"]["tier1_generated_calls"] == 1
+    assert tier1_mark["usage"]["generated"] == 1
+    assert tier1_mark["usage"]["tier2_generated_calls"] == 0
+    assert tier1_mark["work_fingerprint"] == "b2b_enrichment.tier1-work-fp"
+    assert json.loads(tier1_mark["response_text"]) == tier1_result
+    assert tier2_mark["stage_id"] == "b2b_enrichment.tier2"
+    assert tier2_mark["usage"]["tier2_generated_calls"] == 1
+    assert tier2_mark["usage"]["generated"] == 1
+    assert tier2_mark["usage"]["tier1_generated_calls"] == 0
+    assert tier2_mark["work_fingerprint"] == "b2b_enrichment.tier2-work-fp"
+    assert json.loads(tier2_mark["response_text"]) == tier2_result
+
+
+@pytest.mark.asyncio
+async def test_enrich_single_reuses_succeeded_stage_run_before_provider_call(monkeypatch):
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
+    row = {
+        "id": uuid4(),
+        "source": "g2",
+        "enrichment_attempts": 0,
+        "vendor_name": "Example",
+        "product_name": "Example Product",
+        "product_category": "CRM",
+        "raw_metadata": {},
+        "rating_max": 5,
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Sales",
+        "reviewer_company": "Acme",
+        "company_size_raw": "1001-5000",
+        "reviewer_industry": "Technology",
+        "content_type": "review",
+        "summary": "Switching evaluation",
+        "review_text": "We are actively evaluating alternatives after support issues." * 4,
+        "rating": 2.0,
+    }
+    tier1_result = {
+        "specific_complaints": ["support issues"],
+        "quotable_phrases": ["actively evaluating alternatives"],
+    }
+    tier1_call = AsyncMock()
+    persist_mock = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(
+        "atlas_brain.skills.get_skill_registry",
+        lambda: SimpleNamespace(
+            get=lambda name: SimpleNamespace(content=f"{name} prompt")
+            if name in {"digest/b2b_churn_extraction_tier1", "digest/b2b_churn_extraction_tier2"}
+            else None
+        ),
+    )
+    monkeypatch.setattr(b2b_enrichment, "_resolve_tier_routing", lambda *_args, **_kwargs: (False, False))
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_prepare_stage_request",
+        lambda stage_id, **_kwargs: (
+            SimpleNamespace(stage_id=stage_id),
+            f"{stage_id}-request-fp",
+            f"{stage_id}-work-fp",
+        ),
+    )
+    monkeypatch.setattr(b2b_enrichment, "_get_tier1_client", lambda _cfg: object())
+    monkeypatch.setattr(b2b_enrichment, "_call_vllm_tier1", tier1_call)
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "prepare_stage_execution",
+        AsyncMock(
+            return_value=StageExecutionDecision(
+                "reuse_stage",
+                {
+                    "state": "succeeded",
+                    "model": "vllm-tier1",
+                    "result_source": "generated",
+                    "response_text": json.dumps(tier1_result),
+                    "usage_json": {"tier1_generated_calls": 1, "generated": 1},
+                },
+                tier1_result,
+                None,
+            )
+        ),
+    )
+    monkeypatch.setattr(b2b_enrichment, "_tier1_has_extraction_gaps", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(b2b_enrichment, "_validate_enrichment", lambda result, source_row=None: True)
+    monkeypatch.setattr(b2b_enrichment, "_notify_high_urgency", AsyncMock(return_value=None))
+    monkeypatch.setattr(b2b_enrichment, "_persist_enrichment_result", persist_mock)
+
+    ok = await b2b_enrichment._enrich_single(
+        pool,
+        row,
+        max_attempts=3,
+        local_only=True,
+        max_tokens=512,
+    )
+
+    assert ok is True
+    tier1_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enrich_single_defers_when_stage_run_is_submitted(monkeypatch):
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
+    row = {
+        "id": uuid4(),
+        "source": "g2",
+        "enrichment_attempts": 0,
+        "vendor_name": "Example",
+        "product_name": "Example Product",
+        "product_category": "CRM",
+        "raw_metadata": {},
+        "rating_max": 5,
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Sales",
+        "reviewer_company": "Acme",
+        "company_size_raw": "1001-5000",
+        "reviewer_industry": "Technology",
+        "content_type": "review",
+        "summary": "Switching evaluation",
+        "review_text": "We are actively evaluating alternatives after support issues." * 4,
+        "rating": 2.0,
+    }
+    tier1_call = AsyncMock()
+
+    monkeypatch.setattr(
+        "atlas_brain.skills.get_skill_registry",
+        lambda: SimpleNamespace(
+            get=lambda name: SimpleNamespace(content=f"{name} prompt")
+            if name in {"digest/b2b_churn_extraction_tier1", "digest/b2b_churn_extraction_tier2"}
+            else None
+        ),
+    )
+    monkeypatch.setattr(b2b_enrichment, "_resolve_tier_routing", lambda *_args, **_kwargs: (False, False))
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_prepare_stage_request",
+        lambda stage_id, **_kwargs: (
+            SimpleNamespace(stage_id=stage_id),
+            f"{stage_id}-request-fp",
+            f"{stage_id}-work-fp",
+        ),
+    )
+    monkeypatch.setattr(b2b_enrichment, "_get_tier1_client", lambda _cfg: object())
+    monkeypatch.setattr(b2b_enrichment, "_call_vllm_tier1", tier1_call)
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "prepare_stage_execution",
+        AsyncMock(
+            return_value=StageExecutionDecision(
+                "defer_submitted_stage",
+                {
+                    "state": "submitted",
+                    "batch_custom_id": "tier1_pending",
+                },
+                None,
+                None,
+            )
+        ),
+    )
+
+    status = await b2b_enrichment._enrich_single(
+        pool,
+        row,
+        max_attempts=3,
+        local_only=True,
+        max_tokens=512,
+    )
+
+    assert status == "deferred"
+    tier1_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_stage_run_defers_submitted_state():
+    pool = SimpleNamespace(
+        fetchrow=AsyncMock(
+            return_value={
+                "state": "submitted",
+                "batch_custom_id": "tier2_pending",
+                "response_text": "",
+            }
+        )
+    )
+
+    resolution = await resolve_stage_run(
+        pool,
+        review_id="review-1",
+        stage_id="b2b_enrichment.tier2",
+        work_fingerprint="tier2-work",
+        parse_response_text=b2b_enrichment._parse_stage_row_result,
+        defer_on_submitted=True,
+    )
+
+    assert resolution.action == "defer"
+    assert resolution.stage_row["batch_custom_id"] == "tier2_pending"
+    assert resolution.parsed_result is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_stage_execution_reuses_pending_batch_result(monkeypatch):
+    stage_row = {
+        "state": "submitted",
+        "batch_custom_id": "tier2_pending",
+    }
+    batch_result = {
+        "state": "pending",
+        "custom_id": "tier2_pending",
+        "batch_id": "batch-1",
+    }
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.get_stage_run",
+        AsyncMock(return_value=stage_row),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.reconcile_existing_batch_artifacts",
+        AsyncMock(return_value={"review-1": batch_result}),
+    )
+
+    decision = await prepare_stage_execution(
+        pool=SimpleNamespace(),
+        llm=object(),
+        task_name="b2b_enrichment",
+        artifact_type="review_enrichment_tier2",
+        artifact_id="review-1",
+        review_id="review-1",
+        stage_id="b2b_enrichment.tier2",
+        work_fingerprint="tier2-work",
+        request_fingerprint="request-fp",
+        parse_response_text=b2b_enrichment._parse_stage_row_result,
+        defer_on_submitted=False,
+        reconcile_batch=True,
+    )
+
+    assert decision.action == "defer_pending_batch"
+    assert decision.stage_row == stage_row
+    assert decision.batch_result == batch_result
+
+
+@pytest.mark.asyncio
+async def test_prepare_stage_execution_reuses_completed_batch_result(monkeypatch):
+    batch_result = {
+        "state": "succeeded",
+        "cached": False,
+        "response_text": json.dumps({"specific_complaints": ["pricing"]}),
+        "custom_id": "tier1_review-1",
+        "batch_id": "batch-1",
+    }
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.get_stage_run",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.reconcile_existing_batch_artifacts",
+        AsyncMock(return_value={"review-1": batch_result}),
+    )
+
+    decision = await prepare_stage_execution(
+        pool=SimpleNamespace(),
+        llm=object(),
+        task_name="b2b_enrichment",
+        artifact_type="review_enrichment_tier1",
+        artifact_id="review-1",
+        review_id="review-1",
+        stage_id="b2b_enrichment.tier1",
+        work_fingerprint="tier1-work",
+        request_fingerprint="request-fp",
+        parse_response_text=b2b_enrichment._parse_stage_row_result,
+        defer_on_submitted=False,
+        reconcile_batch=True,
+    )
+
+    assert decision.action == "reuse_batch_result"
+    assert decision.parsed_result == {"specific_complaints": ["pricing"]}
+    assert decision.batch_result == batch_result
+
+
+@pytest.mark.asyncio
+async def test_apply_stage_decision_marks_reused_batch_result(monkeypatch):
+    mark_stage_run_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.mark_stage_run",
+        mark_stage_run_mock,
+    )
+
+    applied = await apply_stage_decision(
+        pool=SimpleNamespace(),
+        decision=StageExecutionDecision(
+            "reuse_batch_result",
+            None,
+            {"specific_complaints": ["pricing"]},
+            {
+                "batch_id": "batch-1",
+                "custom_id": "tier1_review-1",
+                "cached": False,
+                "response_text": json.dumps({"specific_complaints": ["pricing"]}),
+            },
+        ),
+        review_id="review-1",
+        stage_id="b2b_enrichment.tier1",
+        work_fingerprint="work-1",
+        tier=1,
+        usage_from_stage_row=b2b_enrichment._stage_usage_from_row,
+        pending_metadata={"tier": 1, "workload": "anthropic_batch_pending"},
+        success_metadata={"tier": 1, "workload": "anthropic_batch_reuse"},
+        stage_usage_snapshot=b2b_enrichment._stage_usage_snapshot,
+    )
+
+    assert applied is not None
+    assert applied.cache_hit is False
+    assert applied.usage["tier1_generated_calls"] == 1
+    assert applied.parsed_result == {"specific_complaints": ["pricing"]}
+    assert mark_stage_run_mock.await_args.kwargs["state"] == "succeeded"
+    assert mark_stage_run_mock.await_args.kwargs["result_source"] == "batch_reuse"
+
+
+@pytest.mark.asyncio
+async def test_apply_stage_decision_materializes_reuse_stage_without_write(monkeypatch):
+    mark_stage_run_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.mark_stage_run",
+        mark_stage_run_mock,
+    )
+
+    applied = await apply_stage_decision(
+        pool=SimpleNamespace(),
+        decision=StageExecutionDecision(
+            "reuse_stage",
+            {
+                "model": "anthropic/claude-haiku-4-5",
+                "result_source": "exact_cache",
+                "response_text": json.dumps({"specific_complaints": ["pricing"]}),
+                "usage_json": {"tier1_exact_cache_hits": 1, "exact_cache_hits": 1},
+            },
+            {"specific_complaints": ["pricing"]},
+            None,
+        ),
+        review_id="review-1",
+        stage_id="b2b_enrichment.tier1",
+        work_fingerprint="work-1",
+        tier=1,
+        usage_from_stage_row=b2b_enrichment._stage_usage_from_row,
+        pending_metadata={"tier": 1, "workload": "direct"},
+        success_metadata={"tier": 1, "workload": "direct"},
+        stage_usage_snapshot=b2b_enrichment._stage_usage_snapshot,
+    )
+
+    assert applied is not None
+    assert applied.action == "reuse_stage"
+    assert applied.cache_hit is True
+    assert applied.model == "anthropic/claude-haiku-4-5"
+    assert applied.usage["tier1_exact_cache_hits"] == 1
+    mark_stage_run_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_apply_stage_decision_materializes_submitted_defer_without_write(monkeypatch):
+    mark_stage_run_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.mark_stage_run",
+        mark_stage_run_mock,
+    )
+
+    applied = await apply_stage_decision(
+        pool=SimpleNamespace(),
+        decision=StageExecutionDecision(
+            "defer_submitted_stage",
+            {
+                "batch_custom_id": "tier2_pending",
+                "batch_id": "batch-1",
+            },
+            None,
+            None,
+        ),
+        review_id="review-1",
+        stage_id="b2b_enrichment.tier2",
+        work_fingerprint="work-2",
+        tier=2,
+        usage_from_stage_row=b2b_enrichment._stage_usage_from_row,
+        pending_metadata={"tier": 2, "workload": "direct"},
+        success_metadata={"tier": 2, "workload": "direct"},
+        stage_usage_snapshot=b2b_enrichment._stage_usage_snapshot,
+    )
+
+    assert applied is not None
+    assert applied.action == "defer_submitted_stage"
+    assert applied.custom_id == "tier2_pending"
+    assert applied.batch_id == "batch-1"
+    mark_stage_run_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_persist_review_transition_merges_and_persists():
+    persist_review = AsyncMock(return_value={"status": "enriched"})
+
+    result = await persist_review_transition(
+        row={"id": "review-1"},
+        tier1_result={"specific_complaints": ["pricing"]},
+        tier2_result={"pain_categories": ["budget"]},
+        model_id="hybrid:tier1+tier2",
+        usage={"generated": 2},
+        merge_results=lambda tier1, tier2: {"tier1": tier1, "tier2": tier2},
+        persist_review=persist_review,
+    )
+
+    assert result == {"status": "enriched"}
+    assert persist_review.await_args.args[1] == {
+        "tier1": {"specific_complaints": ["pricing"]},
+        "tier2": {"pain_categories": ["budget"]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_review_stage_transition_defers_review():
+    defer_review = AsyncMock(return_value={"status": "deferred"})
+
+    result = await apply_review_stage_transition(
+        applied=SimpleNamespace(
+            action="defer_pending_batch",
+            parsed_result=None,
+            usage=None,
+            custom_id="tier2_pending",
+        ),
+        row={"id": "review-1"},
+        tier="tier2",
+        usage={"generated": 1},
+        tier1_result={"specific_complaints": ["pricing"]},
+        model_id="hybrid:tier1+tier2",
+        accumulate_usage=lambda *_args, **_kwargs: None,
+        merge_results=lambda tier1, tier2: {"tier1": tier1, "tier2": tier2},
+        persist_review=AsyncMock(),
+        defer_review=defer_review,
+    )
+
+    assert result is not None
+    assert result.action == "defer_pending_batch"
+    assert result.row_result == {"status": "deferred"}
+    assert defer_review.await_args.kwargs["tier"] == "tier2"
+    assert defer_review.await_args.kwargs["custom_id"] == "tier2_pending"
+
+
+@pytest.mark.asyncio
+async def test_submit_stage_batch_marks_entries_submitted(monkeypatch):
+    execution = SimpleNamespace(
+        status="running",
+        local_batch_id="batch-local-1",
+        provider_batch_id="provider-batch-1",
+        submitted_items=2,
+        cache_prefiltered_items=0,
+        fallback_single_call_items=0,
+        completed_items=0,
+        failed_items=0,
+    )
+    mark_stage_run_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.mark_stage_run",
+        mark_stage_run_mock,
+    )
+
+    batch = await submit_stage_batch(
+        run_batch=AsyncMock(return_value=execution),
+        llm=object(),
+        stage_id="b2b_enrichment.tier1",
+        task_name="b2b_enrichment",
+        items=[object(), object()],
+        run_id="run-1",
+        min_batch_size=2,
+        batch_metadata={"stage": "tier1"},
+        pool=SimpleNamespace(),
+        entries=[
+            {"row": {"id": "review-1"}, "work_fingerprint": "work-1"},
+            {"row": {"id": "review-2"}, "work_fingerprint": "work-2"},
+        ],
+        custom_id_for_entry=lambda entry: f"tier1_{entry['row']['id']}",
+        pending_metadata={"tier": 1, "workload": "anthropic_batch_pending"},
+    )
+
+    assert batch.execution is execution
+    assert batch.metrics["jobs"] == 1
+    assert mark_stage_run_mock.await_count == 2
+    first_call = mark_stage_run_mock.await_args_list[0].kwargs
+    assert first_call["state"] == "submitted"
+    assert first_call["batch_id"] == "batch-local-1"
+    assert first_call["batch_custom_id"] == "tier1_review-1"
+
+
+@pytest.mark.asyncio
+async def test_finalize_stage_batch_treats_missing_result_as_failed(monkeypatch):
+    mark_stage_run_mock = AsyncMock(return_value=None)
+    record_batch_fallback_mock = AsyncMock(return_value=None)
+    store_cached_response_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.enrichment_stage_controller.mark_stage_run",
+        mark_stage_run_mock,
+    )
+
+    outcomes = await finalize_stage_batch(
+        pool=SimpleNamespace(),
+        execution=SimpleNamespace(local_batch_id="batch-local-1", results_by_custom_id={}),
+        entries=[
+            {
+                "row": {"id": "review-1"},
+                "request": SimpleNamespace(),
+                "work_fingerprint": "work-1",
+            }
+        ],
+        stage_id="b2b_enrichment.tier1",
+        custom_id_for_entry=lambda entry: f"tier1_{entry['row']['id']}",
+        parse_response_text=lambda _text: None,
+        normalize_response_text=lambda text: text,
+        store_cached_response=store_cached_response_mock,
+        stage_usage_snapshot=lambda **_kwargs: {"generated": 1},
+        record_batch_fallback=record_batch_fallback_mock,
+        success_metadata={"tier": 1, "workload": "anthropic_batch"},
+        failure_metadata={"tier": 1, "workload": "anthropic_batch"},
+        failure_error_code="tier1_batch_parse_failed",
+    )
+
+    assert len(outcomes) == 1
+    assert outcomes[0].success is False
+    assert outcomes[0].error_text == "tier1_batch_parse_failed"
+    assert mark_stage_run_mock.await_args.kwargs["state"] == "failed"
+    store_cached_response_mock.assert_not_awaited()
+    record_batch_fallback_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enrich_rows_reuses_stage_run_before_batch_submission(monkeypatch):
+    class FakeAnthropicLLM:
+        def __init__(self, model: str = "claude-haiku-4-5"):
+            self.model = model
+            self.name = "anthropic"
+
+    row_id = uuid4()
+    rows = [{
+        "id": row_id,
+        "vendor_name": "Zendesk",
+        "product_name": "Zendesk",
+        "product_category": "Help Desk",
+        "source": "g2",
+        "summary": "Pricing is getting rough",
+        "review_text": (
+            "Pricing pressure and support issues are pushing us to review options. "
+            "Renewal discussions are tense, the team is comparing alternatives, "
+            "and we need a better answer before the next contract cycle."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "company_size_raw": "",
+        "reviewer_industry": "",
+        "content_type": "review",
+        "raw_metadata": {},
+        "rating": None,
+        "rating_max": 5,
+        "enrichment_attempts": 0,
+    }]
+    cfg = SimpleNamespace(
+        enrichment_max_attempts=3,
+        enrichment_concurrency=2,
+        enrichment_local_only=False,
+        enrichment_max_tokens=2048,
+        review_truncate_length=3000,
+        openrouter_api_key="test-key",
+        enrichment_openrouter_model="anthropic/claude-haiku-4-5",
+        enrichment_tier1_max_tokens=512,
+        enrichment_tier2_max_tokens=512,
+        enrichment_tier2_openrouter_model="",
+        anthropic_batch_enabled=True,
+        enrichment_anthropic_batch_enabled=True,
+    )
+    task = _task()
+    task.metadata["anthropic_batch_enabled"] = True
+    task.metadata["enrichment_anthropic_batch_enabled"] = True
+    pool = SimpleNamespace(
+        fetch=AsyncMock(return_value=[{"enrichment_status": "enriched", "ct": 1}]),
+        fetchrow=AsyncMock(
+            return_value={
+                "state": "succeeded",
+                "model": "anthropic/claude-haiku-4-5",
+                "result_source": "generated",
+                "response_text": json.dumps({
+                    "specific_complaints": ["pricing pressure"],
+                    "quotable_phrases": [],
+                }),
+                "usage_json": {"tier1_generated_calls": 1, "generated": 1},
+            }
+        ),
+        execute=AsyncMock(return_value="OK"),
+    )
+    persist = AsyncMock(return_value=True)
+    run_batch = AsyncMock()
+
+    monkeypatch.setattr("atlas_brain.services.llm.anthropic.AnthropicLLM", FakeAnthropicLLM)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_batch_utils.resolve_anthropic_batch_llm",
+        lambda **_kwargs: FakeAnthropicLLM(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.skills.get_skill_registry",
+        lambda: SimpleNamespace(
+            get=lambda name: SimpleNamespace(content=f"{name} prompt")
+            if name in {"digest/b2b_churn_extraction_tier1", "digest/b2b_churn_extraction_tier2"}
+            else None
+        ),
+    )
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text", AsyncMock(return_value=None))
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.store_b2b_exact_stage_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+        run_batch,
+    )
+    monkeypatch.setattr(b2b_enrichment, "_persist_enrichment_result", persist)
+    monkeypatch.setattr(b2b_enrichment, "_tier1_has_extraction_gaps", lambda *_args, **_kwargs: False)
+
+    result = await b2b_enrichment._enrich_rows(rows, cfg, pool, run_id="run-1", task=task)
+
+    assert result["enriched"] == 1
+    run_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enrich_rows_single_call_fallback_defers_submitted_stage_run(monkeypatch):
+    class FakeAnthropicLLM:
+        def __init__(self, model: str = "claude-haiku-4-5"):
+            self.model = model
+            self.name = "anthropic"
+
+    row_id = uuid4()
+    rows = [{
+        "id": row_id,
+        "vendor_name": "Zendesk",
+        "product_name": "Zendesk",
+        "product_category": "Help Desk",
+        "source": "g2",
+        "summary": "Pricing is getting rough",
+        "review_text": "Pricing pressure and support issues are pushing us to review options." * 4,
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "company_size_raw": "",
+        "reviewer_industry": "",
+        "content_type": "review",
+        "raw_metadata": {},
+        "rating": None,
+        "rating_max": 5,
+        "enrichment_attempts": 0,
+    }]
+    cfg = SimpleNamespace(
+        enrichment_max_attempts=3,
+        enrichment_concurrency=2,
+        enrichment_local_only=False,
+        enrichment_max_tokens=2048,
+        review_truncate_length=3000,
+        openrouter_api_key="test-key",
+        enrichment_openrouter_model="anthropic/claude-haiku-4-5",
+        enrichment_tier1_max_tokens=512,
+        enrichment_tier2_max_tokens=512,
+        enrichment_tier2_openrouter_model="",
+        anthropic_batch_enabled=True,
+        enrichment_anthropic_batch_enabled=True,
+    )
+    task = _task()
+    task.metadata["anthropic_batch_enabled"] = True
+    task.metadata["enrichment_anthropic_batch_enabled"] = True
+    pool = SimpleNamespace(
+        fetch=AsyncMock(return_value=[{"enrichment_status": "pending", "ct": 1}]),
+        fetchrow=AsyncMock(return_value=None),
+        execute=AsyncMock(return_value="OK"),
+    )
+    persist = AsyncMock(return_value=True)
+    run_batch = AsyncMock()
+    tier1_result = {
+        "specific_complaints": ["pricing pressure"],
+        "quotable_phrases": ["review options"],
+    }
+    resolution_calls = []
+
+    async def _prepare_stage_execution(*_args, **kwargs):
+        resolution_calls.append((kwargs["stage_id"], kwargs.get("defer_on_submitted", False)))
+        if kwargs["stage_id"] == "b2b_enrichment.tier1":
+            return StageExecutionDecision(
+                "reuse_stage",
+                {
+                    "state": "succeeded",
+                    "model": "anthropic/claude-haiku-4-5",
+                    "result_source": "generated",
+                    "response_text": json.dumps(tier1_result),
+                    "usage_json": {"tier1_generated_calls": 1, "generated": 1},
+                },
+                tier1_result,
+                None,
+            )
+        return StageExecutionDecision(
+            "defer_submitted_stage",
+            {
+                "state": "submitted",
+                "batch_custom_id": "tier2_pending",
+            },
+            None,
+            None,
+        )
+
+    monkeypatch.setattr("atlas_brain.services.llm.anthropic.AnthropicLLM", FakeAnthropicLLM)
+    batch_llm_resolutions = iter([FakeAnthropicLLM(), None])
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_batch_utils.resolve_anthropic_batch_llm",
+        lambda **_kwargs: next(batch_llm_resolutions),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.skills.get_skill_registry",
+        lambda: SimpleNamespace(
+            get=lambda name: SimpleNamespace(content=f"{name} prompt")
+            if name in {"digest/b2b_churn_extraction_tier1", "digest/b2b_churn_extraction_tier2"}
+            else None
+        ),
+    )
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text", AsyncMock(return_value=None))
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.store_b2b_exact_stage_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+        run_batch,
+    )
+    monkeypatch.setattr(b2b_enrichment, "_persist_enrichment_result", persist)
+    monkeypatch.setattr(b2b_enrichment, "_tier1_has_extraction_gaps", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(b2b_enrichment, "prepare_stage_execution", AsyncMock(side_effect=_prepare_stage_execution))
+
+    await b2b_enrichment._enrich_rows(rows, cfg, pool, run_id="run-1", task=task)
+
+    assert persist.await_count == 0
+    run_batch.assert_not_awaited()
+    assert resolution_calls == [
+        ("b2b_enrichment.tier1", False),
+        ("b2b_enrichment.tier2", True),
+    ]
+
+
+
+
 def test_detect_low_fidelity_reasons_flags_vendor_absent_noisy_source(monkeypatch):
     monkeypatch.setattr(
         b2b_enrichment.settings.b2b_churn,
@@ -1093,6 +3006,17 @@ def test_normalized_low_fidelity_noisy_sources_merges_required_defaults(monkeypa
     )
 
     values = b2b_enrichment._normalized_low_fidelity_noisy_sources()
+
+    assert "reddit" in values
+    assert "software_advice" in values
+    assert "hackernews" in values
+
+
+def test_service_normalized_low_fidelity_noisy_sources_merges_defaults():
+    values = service_normalized_low_fidelity_noisy_sources(
+        "hackernews,quora,twitter,github,stackoverflow",
+        b2b_enrichment.B2BChurnConfig.model_fields["enrichment_low_fidelity_noisy_sources"].default,
+    )
 
     assert "reddit" in values
     assert "software_advice" in values
@@ -1302,6 +3226,35 @@ def test_text_mentions_name_matches_compact_vendor_with_spaced_text():
     )
 
     assert b2b_enrichment._text_mentions_name(haystack, "RingCentral") is True
+
+
+def test_service_text_and_coercion_support_helpers_preserve_behavior():
+    haystack = service_normalize_compare_text(
+        "Ring Central's servicing is very poor and support did not clarify the contract."
+    )
+
+    assert service_text_mentions_name(
+        haystack,
+        "RingCentral",
+        low_fidelity_token_stopwords=b2b_enrichment._LOW_FIDELITY_TOKEN_STOPWORDS,
+    ) is True
+    assert service_normalized_name_tokens(
+        "The Ring Central platform",
+        low_fidelity_token_stopwords=b2b_enrichment._LOW_FIDELITY_TOKEN_STOPWORDS,
+    ) == ["ring", "central"]
+    assert service_contains_any("pricing doubled at renewal", ("renewal", "cancel")) is True
+    assert service_has_technical_context(
+        "How do I configure this?",
+        "API integration issue",
+        low_fidelity_technical_patterns=b2b_enrichment._LOW_FIDELITY_TECHNICAL_PATTERNS,
+    ) is True
+    assert service_combined_source_text(
+        {"summary": "One", "review_text": "Two", "pros": "", "cons": "Three"}
+    ) == "One\nTwo\nThree"
+    assert service_coerce_bool("true") is True
+    assert service_coerce_bool("null") is False
+    assert service_coerce_json_dict('{"ok": 1}') == {"ok": 1}
+    assert service_coerce_json_dict("[]") == {}
 
 
 def test_apply_structural_repair_promotes_only_unknown_fields():
@@ -2305,6 +4258,81 @@ def test_normalize_budget_value_text_preserves_readable_time_markers():
     assert b2b_enrichment._normalize_budget_value_text("$4/ user/ month") == "$4/user/month"
 
 
+def test_service_derive_budget_signals_extracts_budget_fields():
+    row = {
+        "source": "g2",
+        "vendor_name": "Zendesk",
+        "product_name": "Zendesk Support",
+        "summary": "Renewal costs keep climbing",
+        "review_text": (
+            "Zendesk raised us to $15 per seat per month for 300 seats. "
+            "That puts us around $54k/year and the renewal increase was hard to justify."
+        ),
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "pricing_phrases": ["$15 per seat per month", "$54k/year", "renewal increase"],
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": True,
+        },
+        "budget_signals": {},
+    }
+
+    budget = service_derive_budget_signals(result, row, deps=_budget_test_deps())
+
+    assert budget["price_per_seat"] == "$15 per seat per month"
+    assert budget["annual_spend_estimate"] == "$54k/year"
+    assert budget["seat_count"] == 300
+    assert budget["price_increase_mentioned"] is True
+
+
+def test_service_derive_budget_signals_derives_annual_spend_from_unit_price():
+    row = {
+        "source": "g2",
+        "vendor_name": "Intercom",
+        "product_name": "Intercom",
+        "summary": "Seat pricing added up fast",
+        "review_text": "We now pay $20 per seat per month for 250 seats.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "pricing_phrases": ["$20 per seat per month", "250 seats"],
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "budget_signals": {},
+    }
+
+    budget = service_derive_budget_signals(result, row, deps=_budget_test_deps())
+
+    assert budget["price_per_seat"] == "$20 per seat per month"
+    assert budget["seat_count"] == 250
+    assert budget["annual_spend_estimate"] == "$60k/year"
+
+
+def test_service_derive_contract_value_signal_uses_budget_and_segment():
+    assert service_derive_contract_value_signal(
+        {
+            "budget_signals": {"annual_spend_estimate": "$120k/year", "seat_count": 75},
+            "reviewer_context": {"company_size_segment": "mid_market"},
+        }
+    ) == "enterprise_high"
+    assert service_derive_contract_value_signal(
+        {
+            "budget_signals": {"annual_spend_estimate": None, "seat_count": 40},
+            "reviewer_context": {"company_size_segment": "startup"},
+        }
+    ) == "mid_market"
+
+
 @pytest.mark.asyncio
 async def test_enrich_rows_counts_quarantined(monkeypatch):
     async def _fake_enrich_single(pool, row, max_attempts, local_only, max_tokens, truncate_length):
@@ -2571,6 +4599,79 @@ def test_finalize_enrichment_for_persist_populates_witness_primitives():
     assert finalized["salience_flags"]
     assert finalized["evidence_spans"]
     assert finalized["evidence_map_hash"]
+
+
+def test_service_finalize_enrichment_for_persist_rejects_invalid_payload():
+    finalized, error = service_finalize_enrichment_for_persist(
+        "not-a-dict",
+        {"id": "review-1"},
+        deps=EnrichmentFinalizationDeps(
+            compute_derived_fields=lambda payload, _row: payload,
+            validate_enrichment=lambda payload, _row: True,
+        ),
+    )
+
+    assert finalized is None
+    assert error == "invalid_payload"
+
+
+def test_service_finalize_enrichment_for_persist_returns_compute_failed():
+    def _raise_compute(_payload, _row):
+        raise RuntimeError("boom")
+
+    finalized, error = service_finalize_enrichment_for_persist(
+        {"churn_signals": {}, "urgency_score": 1},
+        {"id": "review-1"},
+        deps=EnrichmentFinalizationDeps(
+            compute_derived_fields=_raise_compute,
+            validate_enrichment=lambda payload, _row: True,
+        ),
+    )
+
+    assert finalized is None
+    assert error == "compute_failed"
+
+
+def test_service_finalize_enrichment_for_persist_returns_validation_failed():
+    finalized, error = service_finalize_enrichment_for_persist(
+        {"churn_signals": {}, "urgency_score": 1},
+        {"id": "review-1"},
+        deps=EnrichmentFinalizationDeps(
+            compute_derived_fields=lambda payload, _row: payload,
+            validate_enrichment=lambda _payload, _row: False,
+        ),
+    )
+
+    assert finalized is None
+    assert error == "validation_failed"
+
+
+@pytest.mark.asyncio
+async def test_service_persist_enrichment_result_increments_attempts_on_empty_result():
+    pool = SimpleNamespace(execute=AsyncMock(return_value="OK"))
+    increment_attempts = AsyncMock(return_value=None)
+
+    status = await service_persist_enrichment_result(
+        pool,
+        {"id": uuid4(), "enrichment_attempts": 1},
+        None,
+        model_id="anthropic/claude-haiku-4-5",
+        max_attempts=3,
+        run_id="run-1",
+        cache_usage={"secondary_write_hits": 0, "witness_rows": 0, "witness_count": 0},
+        deps=EnrichmentPersistenceDeps(
+            finalize_enrichment_for_persist=lambda result, row: (result, None),
+            witness_metrics=lambda _result: (0, 0),
+            detect_low_fidelity_reasons=lambda _row, _result: [],
+            is_no_signal_result=lambda _result, _row: False,
+            notify_high_urgency=AsyncMock(return_value=None),
+            increment_attempts=increment_attempts,
+            normalize_company_name=lambda value: value,
+        ),
+    )
+
+    assert status is False
+    increment_attempts.assert_awaited_once()
 
 
 def test_validate_enrichment_schema_v3_recomputes_missing_witness_primitives():

@@ -16,6 +16,7 @@ runner does not double-synthesize.
 """
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -27,6 +28,121 @@ from types import SimpleNamespace
 from typing import Any
 
 from ...config import B2BChurnConfig, settings
+from ...services.b2b.enrichment_stage_controller import (
+    apply_stage_decision,
+    apply_review_stage_transition,
+    defer_review_transition,
+    finalize_stage_batch,
+    prepare_stage_execution,
+    persist_review_transition,
+    submit_stage_batch,
+)
+from ...services.b2b.enrichment_domain import (
+    build_classify_payload as _domain_build_classify_payload,
+    combined_review_text_length as _domain_combined_review_text_length,
+    effective_enrichment_skip_sources as _domain_effective_enrichment_skip_sources,
+    effective_min_review_text_length as _domain_effective_min_review_text_length,
+    tier1_has_extraction_gaps as _domain_tier1_has_extraction_gaps,
+    tier2_system_prompt_for_content_type as _domain_tier2_system_prompt_for_content_type,
+)
+from ...services.b2b.enrichment_persistence import (
+    EnrichmentFinalizationDeps,
+    EnrichmentPersistenceDeps,
+    finalize_enrichment_for_persist as _service_finalize_enrichment_for_persist,
+    persist_enrichment_result as _service_persist_enrichment_result,
+)
+from ...services.b2b.enrichment_outcome_policy import (
+    EnrichmentOutcomePolicyDeps,
+    detect_low_fidelity_reasons as _service_detect_low_fidelity_reasons,
+    is_no_signal_result as _service_is_no_signal_result,
+    trusted_reviewer_company_name as _service_trusted_reviewer_company_name,
+    witness_metrics as _service_witness_metrics,
+)
+from ...services.b2b.enrichment_validation import (
+    EnrichmentValidationDeps,
+    validate_enrichment as _service_validate_enrichment,
+)
+from ...services.b2b.enrichment_derivation import (
+    EnrichmentDerivationDeps,
+    compute_derived_fields as _service_compute_derived_fields,
+)
+from ...services.b2b.enrichment_phrase_metadata import (
+    EnrichmentPhraseMetadataDeps,
+    apply_phrase_metadata_contract as _service_apply_phrase_metadata_contract,
+    coerce_legacy_phrase_arrays as _service_coerce_legacy_phrase_arrays,
+    normalize_phrase_metadata as _service_normalize_phrase_metadata,
+    normalize_tag_value as _service_normalize_tag_value,
+)
+from ...services.b2b.enrichment_repair import (
+    EnrichmentRepairDeps,
+    apply_field_repair as _service_apply_field_repair,
+    apply_structural_repair as _service_apply_structural_repair,
+    has_structural_gap as _service_has_structural_gap,
+    needs_field_repair as _service_needs_field_repair,
+    repair_target_fields as _service_repair_target_fields,
+)
+from ...services.b2b.enrichment_buyer_authority import (
+    EnrichmentBuyerAuthorityDeps,
+    canonical_role_level as _service_canonical_role_level,
+    canonical_role_type as _service_canonical_role_type,
+    derive_buyer_authority_fields as _service_derive_buyer_authority_fields,
+    infer_buyer_role_type as _service_infer_buyer_role_type,
+    infer_decision_maker as _service_infer_decision_maker,
+    infer_role_level_from_text as _service_infer_role_level_from_text,
+)
+from ...services.b2b.enrichment_timeline import (
+    EnrichmentTimelineDeps,
+    derive_concrete_timeline_fields as _service_derive_concrete_timeline_fields,
+    derive_decision_timeline as _service_derive_decision_timeline,
+)
+from ...services.b2b.enrichment_budget import (
+    EnrichmentBudgetDeps,
+    derive_budget_signals as _service_derive_budget_signals,
+    derive_contract_value_signal as _service_derive_contract_value_signal,
+    normalize_budget_detail_text as _service_normalize_budget_detail_text,
+    normalize_budget_value_text as _service_normalize_budget_value_text,
+)
+from ...services.b2b.enrichment_pain_competition import (
+    EnrichmentPainCompetitionDeps,
+    compute_pain_confidence as _service_compute_pain_confidence,
+    demote_primary_pain as _service_demote_primary_pain,
+    derive_competitor_annotations as _service_derive_competitor_annotations,
+    derive_pain_categories as _service_derive_pain_categories,
+    recover_competitor_mentions as _service_recover_competitor_mentions,
+    subject_vendor_phrase_texts as _service_subject_vendor_phrase_texts,
+)
+from ...services.b2b.enrichment_urgency import (
+    EnrichmentUrgencyDeps,
+    derive_urgency_indicators as _service_derive_urgency_indicators,
+)
+from ...services.b2b.enrichment_support import (
+    coerce_bool as _service_coerce_bool,
+    coerce_json_dict as _service_coerce_json_dict,
+    combined_source_text as _service_combined_source_text,
+    contains_any as _service_contains_any,
+    dedupe_reason_codes as _service_dedupe_reason_codes,
+    has_commercial_context as _service_has_commercial_context,
+    has_consumer_context as _service_has_consumer_context,
+    has_strong_commercial_context as _service_has_strong_commercial_context,
+    has_technical_context as _service_has_technical_context,
+    is_unknownish as _service_is_unknownish,
+    normalize_compare_text as _service_normalize_compare_text,
+    normalize_text_list as _service_normalize_text_list,
+    normalized_low_fidelity_noisy_sources as _service_normalized_low_fidelity_noisy_sources,
+    normalized_name_tokens as _service_normalized_name_tokens,
+    text_mentions_name as _service_text_mentions_name,
+)
+from ...services.b2b.enrichment_stage_planner import (
+    build_tier1_stage_plan,
+    build_tier2_stage_plan,
+    stage_backend_name as _planner_stage_backend_name,
+)
+from ...services.b2b.enrichment_row_runner import EnrichmentRunnerDeps, run_enrichment_rows
+from ...services.b2b.enrichment_task_runner import EnrichmentTaskRunnerDeps, run_enrichment_task
+from ...services.b2b.enrichment_stage_runs import (
+    ensure_stage_run,
+    mark_stage_run,
+)
 from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
 from ...services.scraping.sources import filter_deprecated_sources, parse_source_allowlist
@@ -107,6 +223,11 @@ def _enrichment_batch_custom_id(stage: str, review_id: Any) -> str:
     normalized_review = re.sub(r"[^A-Za-z0-9_-]+", "_", str(review_id or "").strip()).strip("_") or "review"
     return f"{normalized_stage}_{normalized_review}"[:64]
 
+
+def _stage_backend_name(*, batch_enabled: bool, provider: str) -> str:
+    return _planner_stage_backend_name(batch_enabled=batch_enabled, provider=provider)
+
+
 def _get_base_enrichment_llm(local_only: bool):
     """Resolve the deterministic local enrichment model from vLLM only."""
     from ...pipelines.llm import get_pipeline_llm
@@ -119,16 +240,7 @@ def _get_base_enrichment_llm(local_only: bool):
 
 
 def _tier2_system_prompt_for_content_type(prompt: str, content_type: str | None) -> str:
-    """Skip insider-account instructions for non-insider rows to save tokens."""
-    if str(content_type or "").strip().lower() == "insider_account":
-        return prompt
-    before, marker, after = prompt.partition(_TIER2_INSIDER_SECTION_HEADER)
-    if not marker:
-        return prompt
-    _insider_body, output_marker, output_tail = after.partition(_TIER2_OUTPUT_SECTION_HEADER)
-    if not output_marker:
-        return prompt
-    return f"{before.rstrip()}\n\n{_TIER2_OUTPUT_SECTION_HEADER}{output_tail}"
+    return _domain_tier2_system_prompt_for_content_type(prompt, content_type)
 
 
 _ANTHROPIC_CACHE_MIN_CHARS = 1024
@@ -330,6 +442,100 @@ def _pack_stage_result(
     if include_cache_hit:
         return parsed, model_id, cache_hit
     return parsed, model_id
+
+
+def _prepare_stage_request(
+    stage_id: str,
+    *,
+    provider: str,
+    model: str,
+    system_prompt: str,
+    user_content: str,
+    max_tokens: int,
+    temperature: float,
+    response_format: dict[str, Any] | None = None,
+    guided_json: dict[str, Any] | None = None,
+):
+    from ...services.b2b.cache_runner import prepare_b2b_exact_stage_request
+    from ._b2b_batch_utils import exact_stage_request_fingerprint
+
+    work_fingerprint_payload = {
+        "stage_id": str(stage_id or ""),
+        "system_prompt": str(system_prompt or ""),
+        "user_content": str(user_content or ""),
+        "max_tokens": int(max_tokens),
+        "temperature": float(temperature),
+    }
+    request = prepare_b2b_exact_stage_request(
+        stage_id,
+        provider=provider,
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        response_format=response_format,
+        guided_json=guided_json,
+    )
+    work_fingerprint = hashlib.sha256(
+        json.dumps(
+            work_fingerprint_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return request, exact_stage_request_fingerprint(request), work_fingerprint
+
+
+def _stage_result_text(parsed: dict[str, Any] | None) -> str | None:
+    if parsed is None:
+        return None
+    return json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _stage_usage_snapshot(*, tier: int, cache_hit: bool, generated: bool) -> dict[str, int]:
+    usage = _empty_exact_cache_usage()
+    if cache_hit:
+        usage[f"tier{tier}_exact_cache_hits"] += 1
+        usage["exact_cache_hits"] += 1
+    elif generated:
+        usage[f"tier{tier}_generated_calls"] += 1
+        usage["generated"] += 1
+    return usage
+
+
+def _stage_usage_from_row(row: dict[str, Any] | None, *, tier: int) -> dict[str, int]:
+    usage = _empty_exact_cache_usage()
+    if not isinstance(row, dict):
+        return usage
+    stored = row.get("usage_json")
+    if isinstance(stored, dict):
+        for key in usage:
+            usage[key] = int(stored.get(key) or 0)
+        if any(usage.values()):
+            return usage
+    result_source = str(row.get("result_source") or "").strip().lower()
+    if result_source == "exact_cache":
+        return _stage_usage_snapshot(tier=tier, cache_hit=True, generated=False)
+    if result_source in {"generated", "batch_reuse"}:
+        return _stage_usage_snapshot(tier=tier, cache_hit=False, generated=True)
+    return usage
+
+
+def _parse_stage_row_result(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        return None
+    text = str(row.get("response_text") or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _trace_enrichment_llm_call(
@@ -625,63 +831,7 @@ async def _call_openrouter_tier1(
 
 
 def _tier1_has_extraction_gaps(tier1: dict, *, source: str | None = None) -> bool:
-    """Check if tier 1 left gaps that tier 2 should fill.
-
-    Tier 2 adds: pain_categories, competitor classification, buyer_authority,
-    sentiment_trajectory. These are ALWAYS missing from tier 1 (by design).
-    So we only trigger tier 2 when tier 1 missed verbatim extractions that
-    indicate the review has substance worth classifying.
-    """
-    complaints = tier1.get("specific_complaints") or []
-    quotes = tier1.get("quotable_phrases") or []
-    competitors = tier1.get("competitors_mentioned") or []
-    pricing = tier1.get("pricing_phrases") or []
-    rec_lang = tier1.get("recommendation_language") or []
-    churn = tier1.get("churn_signals") or {}
-    has_churn = any(bool(v) for v in churn.values())
-    has_evidence = bool(complaints or quotes or competitors or pricing or rec_lang)
-    source_norm = str(source or "").strip().lower()
-    strict_sources = set(
-        _config_allowlist(
-            getattr(settings.b2b_churn, "enrichment_tier2_strict_sources", ""),
-            "",
-        )
-    )
-    if source_norm in strict_sources:
-        complaint_count = len(complaints) if isinstance(complaints, list) else 0
-        quote_count = len(quotes) if isinstance(quotes, list) else 0
-        evidence_groups = sum(
-            1
-            for present in (
-                bool(complaints),
-                bool(quotes),
-                bool(competitors),
-                bool(pricing),
-                bool(rec_lang),
-            )
-            if present
-        )
-        has_strong_structured_evidence = (
-            bool(competitors)
-            or bool(pricing)
-            or complaint_count >= _coerce_int_value(
-                getattr(settings.b2b_churn, "enrichment_tier2_strict_min_complaints", 2),
-                2,
-            )
-            or (
-                quote_count >= _coerce_int_value(
-                    getattr(settings.b2b_churn, "enrichment_tier2_strict_min_quotes", 2),
-                    2,
-                )
-                and evidence_groups >= 2
-            )
-        )
-        return has_churn or has_strong_structured_evidence
-    # Tier 2 fires when the review has substance worth classifying:
-    # 1. Any churn signal or negative evidence -> need pain classification
-    # 2. Competitors mentioned -> need evidence_type + displacement scoring
-    # Skip tier 2 ONLY for purely positive reviews with zero signals
-    return has_churn or has_evidence
+    return _domain_tier1_has_extraction_gaps(tier1, source=source)
 
 
 async def _call_vllm_tier2(
@@ -1047,37 +1197,11 @@ _PAIN_PATTERNS = _build_pain_patterns(_PAIN_KEYWORDS_RAW)
 
 
 def _normalize_text_list(values: Any) -> list[str]:
-    normalized: list[str] = []
-    for value in values or []:
-        if value:
-            normalized.append(str(value))
-    return normalized
+    return _service_normalize_text_list(values)
 
 
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
-    haystack = text.lower()
-    return any(needle in haystack for needle in needles)
-
-
-def _pain_scores(texts: list[str]) -> dict[str, int]:
-    scores = {category: 0 for category in _PAIN_PATTERNS}
-    for text in texts:
-        for category, pattern in _PAIN_PATTERNS.items():
-            if pattern.search(text):
-                scores[category] += 1
-    return scores
-
-
-def _primary_reason_category(*texts: str) -> str | None:
-    normalized = [text for text in texts if text]
-    if not normalized:
-        return None
-    scored = _pain_scores(normalized)
-    ranked = sorted(
-        ((score, category) for category, score in scored.items() if score > 0),
-        reverse=True,
-    )
-    return ranked[0][1] if ranked else None
+    return _service_contains_any(text, needles)
 
 
 _PAIN_DERIVATION_FIELDS: tuple[str, ...] = (
@@ -1088,241 +1212,45 @@ _PAIN_DERIVATION_FIELDS: tuple[str, ...] = (
 )
 
 
+def _pain_competition_deps() -> EnrichmentPainCompetitionDeps:
+    return EnrichmentPainCompetitionDeps(
+        normalize_text_list=_normalize_text_list,
+        normalize_pain_category=_normalize_pain_category,
+        normalize_company_name=normalize_company_name,
+        pain_patterns=_PAIN_PATTERNS,
+        pain_derivation_fields=_PAIN_DERIVATION_FIELDS,
+        competitor_recovery_patterns=_COMPETITOR_RECOVERY_PATTERNS,
+        competitor_recovery_blocklist=_COMPETITOR_RECOVERY_BLOCKLIST,
+        generic_competitor_tokens=_GENERIC_COMPETITOR_TOKENS,
+        competitor_context_patterns=_COMPETITOR_CONTEXT_PATTERNS,
+    )
+
+
 def _subject_vendor_phrase_texts(result: dict, field: str) -> list[str]:
-    """Return phrase texts allowed to describe the subject vendor's pain.
-
-    v1 rows have no subject metadata, so this preserves legacy behavior.
-    v2 rows are conservative: only subject_vendor phrases survive.
-    """
-    raw = result.get(field) or []
-    if not raw:
-        return []
-
-    from ._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
-
-    if not is_v2_tagged(result):
-        return _normalize_text_list(raw)
-
-    meta = phrase_metadata_map(result)
-    texts: list[str] = []
-    for index, value in enumerate(raw):
-        phrase = str(value or "").strip()
-        if not phrase:
-            continue
-        row = meta.get((field, index)) or {}
-        if row.get("subject") == "subject_vendor":
-            texts.append(phrase)
-    return texts
+    return _service_subject_vendor_phrase_texts(
+        result,
+        field,
+        deps=_pain_competition_deps(),
+    )
 
 
 def _derive_pain_categories(result: dict) -> list[dict[str, str]]:
-    """Derive pain_categories list from extracted phrases.
-
-    Phase 2 (Layer 1 -- subject attribution gate): v2 phrase metadata
-    filters phrases to subject='subject_vendor' before scoring so self /
-    alternative / third_party references cannot inflate the subject
-    vendor's pain.
-
-    Phase 3 (Layer 2 -- polarity gate): v2 phrase metadata further
-    filters phrases by polarity. `positive` and `unclear` are dropped
-    entirely. `negative` phrases count at full weight (1.0). `mixed`
-    phrases count at half weight (0.5) because the phrase carries some
-    negative content but the LLM flagged ambiguity.
-
-    v1 data falls through to keyword-only scoring across all phrases at
-    uniform weight.
-    """
-    from ._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
-
-    if is_v2_tagged(result):
-        meta = phrase_metadata_map(result)
-        weighted_items: list[tuple[str, float]] = []
-        for field in _PAIN_DERIVATION_FIELDS:
-            raw = result.get(field) or []
-            for index, value in enumerate(raw):
-                phrase = str(value or "").strip()
-                if not phrase:
-                    continue
-                row = meta.get((field, index)) or {}
-                if row.get("subject") != "subject_vendor":
-                    continue
-                polarity = row.get("polarity")
-                if polarity == "negative":
-                    weighted_items.append((phrase, 1.0))
-                elif polarity == "mixed":
-                    weighted_items.append((phrase, 0.5))
-                # positive / unclear -> dropped (Layer 2)
-        if not weighted_items:
-            return []
-        # Weighted scoring: each matched category accumulates the phrase's
-        # polarity weight. Mirrors _pain_scores semantics but with weights.
-        scores: dict[str, float] = {category: 0.0 for category in _PAIN_PATTERNS}
-        for text, weight in weighted_items:
-            for category, pattern in _PAIN_PATTERNS.items():
-                if pattern.search(text):
-                    scores[category] += weight
-        ranked: list[tuple[float, str]] = [
-            (score, category)
-            for category, score in scores.items()
-            if score > 0
-        ]
-    else:
-        texts = (
-            _normalize_text_list(result.get("specific_complaints"))
-            + _normalize_text_list(result.get("pricing_phrases"))
-            + _normalize_text_list(result.get("feature_gaps"))
-            + _normalize_text_list(result.get("quotable_phrases"))
-        )
-        if not texts:
-            return []
-        scored = _pain_scores(texts)
-        ranked = [
-            (float(score), category)
-            for category, score in scored.items()
-            if score > 0
-        ]
-
-    ranked.sort(reverse=True)
-    if not ranked:
-        return [{"category": "overall_dissatisfaction", "severity": "primary"}]
-    categories = [{"category": ranked[0][1], "severity": "primary"}]
-    for _score, category in ranked[1:3]:
-        if category != categories[0]["category"]:
-            categories.append({"category": category, "severity": "secondary"})
-    return categories
-
-
-def _count_corroborating_signals(result: dict) -> int:
-    """Count universal churn / sentiment signals that support a pain claim.
-
-    These are independent of any specific pain category -- they indicate
-    the reviewer is genuinely unhappy / leaving / dissatisfied, which
-    corroborates that a single pain phrase is more than a passing mention.
-
-    Signals considered:
-      - churn_signals.intent_to_leave is True
-      - churn_signals.actively_evaluating is True
-      - churn_signals.migration_in_progress is True
-      - would_recommend is False
-      - sentiment_trajectory.direction in (consistently_negative, declining)
-    """
-    count = 0
-    churn = result.get("churn_signals")
-    if isinstance(churn, dict):
-        for key in ("intent_to_leave", "actively_evaluating", "migration_in_progress"):
-            if churn.get(key) is True:
-                count += 1
-    if result.get("would_recommend") is False:
-        count += 1
-    sentiment = result.get("sentiment_trajectory")
-    if isinstance(sentiment, dict):
-        direction = str(sentiment.get("direction") or "").strip().lower()
-        if direction in ("consistently_negative", "declining"):
-            count += 1
-    return count
-
-
-def _count_pain_phrase_matches(result: dict, pain_category: str) -> int:
-    """Count vendor-subject negative/mixed phrases that match a pain category.
-
-    For v2 results, applies the subject + polarity gates so only phrases
-    that actually describe the subject vendor's negative experience count.
-    For v1 results, falls back to keyword scan across raw phrases.
-    """
-    pattern = _PAIN_PATTERNS.get(pain_category)
-    if pattern is None:
-        return 0
-
-    from ._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
-
-    count = 0
-    if is_v2_tagged(result):
-        meta = phrase_metadata_map(result)
-        for field in _PAIN_DERIVATION_FIELDS:
-            for index, value in enumerate(result.get(field) or []):
-                phrase = str(value or "").strip()
-                if not phrase:
-                    continue
-                row = meta.get((field, index)) or {}
-                if row.get("subject") != "subject_vendor":
-                    continue
-                if row.get("polarity") not in ("negative", "mixed"):
-                    continue
-                if pattern.search(phrase):
-                    count += 1
-    else:
-        texts: list[str] = []
-        for field in _PAIN_DERIVATION_FIELDS:
-            texts.extend(_normalize_text_list(result.get(field)))
-        for text in texts:
-            if pattern.search(text):
-                count += 1
-    return count
+    return _service_derive_pain_categories(
+        result,
+        deps=_pain_competition_deps(),
+    )
 
 
 def _compute_pain_confidence(result: dict, pain_category: str) -> str:
-    """Layer 3 (causality gate): grade evidence for the primary pain.
-
-    Returns one of:
-      "strong" -- 2+ matching phrases (multiple independent textual evidence)
-                  OR (overall_dissatisfaction with 2+ universal signals)
-      "weak"   -- 1 matching phrase + at least 1 universal signal
-                  OR (overall_dissatisfaction with 1 universal signal)
-      "none"   -- everything weaker; caller should demote a non-fallback
-                  pain_category to overall_dissatisfaction
-    """
-    normalized = _normalize_pain_category(pain_category)
-    signal_count = _count_corroborating_signals(result)
-
-    if normalized == "overall_dissatisfaction":
-        if signal_count >= 2:
-            return "strong"
-        if signal_count >= 1:
-            return "weak"
-        return "none"
-
-    phrase_count = _count_pain_phrase_matches(result, normalized)
-    if phrase_count >= 2:
-        return "strong"
-    if phrase_count >= 1 and signal_count >= 1:
-        return "weak"
-    return "none"
+    return _service_compute_pain_confidence(
+        result,
+        pain_category,
+        deps=_pain_competition_deps(),
+    )
 
 
 def _demote_primary_pain(result: dict, demoted_category: str) -> None:
-    """Demote a Layer-3-rejected primary pain to a secondary entry.
-
-    Replaces the primary in pain_categories with overall_dissatisfaction and
-    re-attaches the original primary as secondary so the keyword evidence is
-    not lost (downstream reports may still want to mention it as context).
-    """
-    if demoted_category == "overall_dissatisfaction":
-        return
-    existing = result.get("pain_categories")
-    if not isinstance(existing, list):
-        existing = []
-    new_list: list[dict[str, str]] = [
-        {"category": "overall_dissatisfaction", "severity": "primary"}
-    ]
-    appended_demoted = False
-    for entry in existing:
-        if not isinstance(entry, dict):
-            continue
-        category = str(entry.get("category") or "").strip().lower()
-        if not category:
-            continue
-        if category == "overall_dissatisfaction":
-            continue
-        if category == demoted_category and not appended_demoted:
-            new_list.append({"category": demoted_category, "severity": "secondary"})
-            appended_demoted = True
-        elif category != demoted_category:
-            new_list.append(
-                {"category": category, "severity": entry.get("severity", "secondary")}
-            )
-    if not appended_demoted:
-        new_list.append({"category": demoted_category, "severity": "secondary"})
-    result["pain_categories"] = new_list
+    _service_demote_primary_pain(result, demoted_category)
 
 
 _COMPETITOR_RECOVERY_PATTERNS = (
@@ -1351,154 +1279,20 @@ _COMPETITOR_CONTEXT_PATTERNS = (
 )
 
 
-def _is_generic_competitor_name(name: str) -> bool:
-    normalized = normalize_company_name(name) or str(name or "").strip().lower()
-    if not normalized:
-        return True
-    if normalized in _COMPETITOR_RECOVERY_BLOCKLIST:
-        return True
-    tokens = [
-        token.lower()
-        for token in re.findall(r"[A-Za-z0-9]+", str(name or ""))
-        if token
-    ]
-    return bool(tokens) and all(token in _GENERIC_COMPETITOR_TOKENS for token in tokens)
-
-
-def _has_named_competitor_context(name: str, source_row: dict[str, Any]) -> bool:
-    candidate = str(name or "").strip()
-    if not candidate:
-        return False
-    review_blob = " ".join(
-        str(source_row.get(field) or "")
-        for field in ("summary", "review_text", "pros", "cons")
-    ).lower()
-    name_lower = candidate.lower()
-    for match in re.finditer(re.escape(name_lower), review_blob):
-        start = max(0, match.start() - 96)
-        end = min(len(review_blob), match.end() + 96)
-        window = review_blob[start:end]
-        if any(pattern in window for pattern in _COMPETITOR_CONTEXT_PATTERNS):
-            return True
-    return False
-
-
 def _recover_competitor_mentions(result: dict, source_row: dict[str, Any]) -> list[dict[str, Any]]:
-    existing = [
-        dict(comp) for comp in (result.get("competitors_mentioned") or [])
-        if isinstance(comp, dict) and str(comp.get("name") or "").strip()
-    ]
-    if not existing and not any(source_row.get(field) for field in ("summary", "review_text", "pros", "cons")):
-        return existing
-
-    incumbent_norm = normalize_company_name(str(source_row.get("vendor_name") or "")) or ""
-    seen = {
-        (normalize_company_name(str(comp.get("name") or "")) or str(comp.get("name") or "").strip().lower()): comp
-        for comp in existing
-    }
-
-    recovery_blob = " ".join(
-        [str(source_row.get(field) or "") for field in ("summary", "review_text", "pros", "cons")]
-        + _normalize_text_list(result.get("quotable_phrases"))
+    return _service_recover_competitor_mentions(
+        result,
+        source_row,
+        deps=_pain_competition_deps(),
     )
-
-    for pattern in _COMPETITOR_RECOVERY_PATTERNS:
-        for match in re.finditer(pattern, recovery_blob):
-            candidate = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9.]+$", "", match.group(1).strip())
-            if not candidate:
-                continue
-            normalized = normalize_company_name(candidate) or candidate.lower()
-            if not normalized or normalized == incumbent_norm:
-                continue
-            if normalized in _COMPETITOR_RECOVERY_BLOCKLIST:
-                continue
-            generic_tokens = [
-                token.lower()
-                for token in re.findall(r"[A-Za-z0-9]+", candidate)
-                if token
-            ]
-            if generic_tokens and all(token in _GENERIC_COMPETITOR_TOKENS for token in generic_tokens):
-                continue
-            if normalized in seen:
-                continue
-            seen[normalized] = {"name": candidate}
-
-    return list(seen.values())
 
 
 def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> list[dict[str, Any]]:
-    comps = []
-    churn = result.get("churn_signals") or {}
-    review_blob = " ".join(
-        str(source_row.get(field) or "")
-        for field in ("summary", "review_text", "pros", "cons")
-    ).lower()
-    for comp in result.get("competitors_mentioned", []) or []:
-        if not isinstance(comp, dict):
-            continue
-        merged = dict(comp)
-        name = str(comp.get("name") or "").strip()
-        if _is_generic_competitor_name(name):
-            continue
-        comp_blob = " ".join(
-            [name]
-            + _normalize_text_list(comp.get("features"))
-            + [str(comp.get("reason_detail") or "")]
-        ).lower()
-        named_context = _has_named_competitor_context(name, source_row)
-        switch_patterns = (
-            f"switched to {name.lower()}",
-            f"moved to {name.lower()}",
-            f"replaced with {name.lower()}",
-            f"migrating to {name.lower()}",
-        )
-        reverse_patterns = (
-            f"moved from {name.lower()}",
-            f"switched from {name.lower()}",
-        )
-        evaluation_patterns = (
-            f"evaluating {name.lower()}",
-            f"looking at {name.lower()}",
-            f"considering {name.lower()}",
-            f"shortlist {name.lower()}",
-            f"poc with {name.lower()}",
-        )
-        if any(pattern in review_blob for pattern in reverse_patterns):
-            evidence_type = "reverse_flow"
-        elif any(pattern in review_blob for pattern in switch_patterns):
-            evidence_type = "explicit_switch"
-        elif any(pattern in review_blob for pattern in evaluation_patterns) or churn.get("actively_evaluating"):
-            evidence_type = "active_evaluation"
-        elif merged.get("reason_detail") or merged.get("features"):
-            evidence_type = "implied_preference"
-        elif named_context:
-            evidence_type = "implied_preference"
-        else:
-            evidence_type = "neutral_mention"
-        confidence = "low"
-        if evidence_type == "explicit_switch":
-            confidence = "high" if churn.get("migration_in_progress") or churn.get("renewal_timing") else "medium"
-        elif evidence_type == "active_evaluation":
-            confidence = "medium" if merged.get("reason_detail") else "low"
-        elif evidence_type == "implied_preference" and merged.get("reason_detail"):
-            confidence = "medium"
-        merged["evidence_type"] = evidence_type
-        merged["displacement_confidence"] = confidence
-        merged["reason_category"] = _primary_reason_category(
-            str(merged.get("reason_detail") or ""),
-            comp_blob,
-        )
-        if (
-            merged["evidence_type"] == "neutral_mention"
-            and merged["displacement_confidence"] == "low"
-            and not str(merged.get("reason_detail") or "").strip()
-            and not str(merged.get("reason_category") or "").strip()
-            and not _normalize_text_list(merged.get("features"))
-            and not named_context
-        ):
-            continue
-        comps.append(merged)
-    return comps
+    return _service_derive_competitor_annotations(
+        result,
+        source_row,
+        deps=_pain_competition_deps(),
+    )
 
 
 _TIMELINE_IMMEDIATE_PATTERNS = ("asap", "immediately", "right away", "this week", "today", "urgent")
@@ -1722,105 +1516,22 @@ def _derive_concrete_timeline_fields(
     result: dict,
     source_row: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
-    churn = result.get("churn_signals") or {}
-    timeline = result.get("timeline") or {}
-    contract_end = _normalize_timeline_anchor(timeline.get("contract_end"))
-    evaluation_deadline = _normalize_timeline_anchor(timeline.get("evaluation_deadline"))
-    if contract_end and evaluation_deadline:
-        return contract_end, evaluation_deadline
-
-    candidates: list[tuple[str, str]] = []
-    for event in result.get("event_mentions") or []:
-        if not isinstance(event, dict):
-            continue
-        anchor = _extract_concrete_timeline_anchor(event.get("timeframe"))
-        if not anchor:
-            continue
-        context = " ".join(
-            str(event.get(key) or "")
-            for key in ("event", "detail", "timeframe")
-        )
-        candidates.append((anchor, context.lower()))
-
-    if source_row is not None and _has_timeline_commercial_signal(result, source_row):
-        review_blob = " ".join(
-            str(source_row.get(field) or "")
-            for field in ("summary", "review_text", "pros", "cons")
-        )
-        anchor = _extract_concrete_timeline_anchor(review_blob)
-        if anchor:
-            candidates.append((anchor, review_blob.lower()))
-
-    for anchor, context in candidates:
-        if not evaluation_deadline and (
-            _contains_any(context, _TIMELINE_DECISION_DEADLINE_PATTERNS)
-            or " before " in context
-        ):
-            evaluation_deadline = anchor
-            continue
-        if not contract_end and (
-            _contains_any(context, _TIMELINE_CONTRACT_END_PATTERNS)
-            or bool(churn.get("contract_renewal_mentioned"))
-        ):
-            contract_end = anchor
-            continue
-        if not evaluation_deadline and (
-            bool(churn.get("actively_evaluating"))
-            or bool(churn.get("migration_in_progress"))
-            or bool(churn.get("intent_to_leave"))
-        ):
-            evaluation_deadline = anchor
-            continue
-
-    if not contract_end and source_row is not None and _has_timeline_commercial_signal(result, source_row):
-        review_blob = " ".join(
-            str(source_row.get(field) or "")
-            for field in ("summary", "review_text", "pros", "cons")
-        )
-        contract_event_anchor = _extract_contract_end_event_anchor(review_blob)
-        if contract_event_anchor:
-            contract_end = contract_event_anchor
-
-    return contract_end, evaluation_deadline
+    return _service_derive_concrete_timeline_fields(
+        result,
+        source_row,
+        deps=_timeline_deps(),
+    )
 
 
 def _derive_decision_timeline(
     result: dict,
     source_row: dict[str, Any] | None = None,
 ) -> str:
-    churn = result.get("churn_signals") or {}
-    timeline = result.get("timeline") or {}
-    event_mentions = result.get("event_mentions") or []
-    parts = [
-        str(churn.get("renewal_timing") or ""),
-        str(timeline.get("contract_end") or ""),
-        str(timeline.get("evaluation_deadline") or ""),
-    ]
-    for event in event_mentions:
-        if isinstance(event, dict):
-            parts.append(str(event.get("timeframe") or ""))
-    text = " ".join(parts).lower()
-    if _contains_any(text, _TIMELINE_IMMEDIATE_PATTERNS):
-        return "immediate"
-    if _contains_any(text, _TIMELINE_QUARTER_PATTERNS):
-        return "within_quarter"
-    if _contains_any(text, _TIMELINE_YEAR_PATTERNS):
-        return "within_year"
-
-    if source_row is not None:
-        review_blob = " ".join(
-            str(source_row.get(field) or "")
-            for field in ("summary", "review_text", "pros", "cons")
-        ).lower()
-        has_commercial_signal = _has_timeline_commercial_signal(result, source_row)
-        if has_commercial_signal and _contains_any(review_blob, _TIMELINE_DECISION_PATTERNS):
-            if _contains_any(review_blob, _TIMELINE_IMMEDIATE_PATTERNS):
-                return "immediate"
-            if _contains_any(review_blob, _TIMELINE_QUARTER_PATTERNS):
-                return "within_quarter"
-            if _contains_any(review_blob, _TIMELINE_YEAR_PATTERNS):
-                return "within_year"
-    return "unknown"
+    return _service_derive_decision_timeline(
+        result,
+        source_row,
+        deps=_timeline_deps(),
+    )
 
 
 def _budget_match_window(text: str, match: re.Match[str], radius: int = 56) -> str:
@@ -1830,24 +1541,11 @@ def _budget_match_window(text: str, match: re.Match[str], radius: int = 56) -> s
 
 
 def _normalize_budget_value_text(value: Any) -> str | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    text = text.lower()
-    text = re.sub(r"\busd\b\s*", "$", text)
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"\$\s+", "$", text)
-    text = re.sub(r"(?<=[0-9km])a(year|yr)\b", r" a \1", text)
-    text = re.sub(r"\s*/\s*", "/", text)
-    text = re.sub(r"\bper\s+", "per ", text)
-    text = re.sub(r"\ba\s+(year|yr)\b", r"a \1", text)
-    text = text.strip()
-    return text or None
+    return _service_normalize_budget_value_text(value)
 
 
 def _normalize_budget_detail_text(value: Any) -> str | None:
-    text = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n'\".,;:()[]{}")
-    return text or None
+    return _service_normalize_budget_detail_text(value)
 
 
 def _extract_budget_currency_marker(value: Any) -> str | None:
@@ -1988,121 +1686,11 @@ def _has_budget_commercial_signal(
 
 
 def _derive_budget_signals(result: dict, source_row: dict[str, Any]) -> dict[str, Any]:
-    budget = result.get("budget_signals")
-    if not isinstance(budget, dict):
-        budget = {}
-        result["budget_signals"] = budget
-
-    if not _has_budget_commercial_signal(result, source_row):
-        return budget
-
-    candidates: list[str] = []
-    seen_candidates: set[str] = set()
-    for phrase in _normalize_text_list(result.get("pricing_phrases")):
-        lowered = phrase.lower()
-        if lowered not in seen_candidates:
-            seen_candidates.add(lowered)
-            candidates.append(phrase)
-    review_blob = _combined_source_text(source_row)
-    if review_blob.strip():
-        candidates.append(review_blob)
-
-    if not budget.get("price_per_seat"):
-        for text in candidates:
-            match = _BUDGET_PRICE_PER_SEAT_RE.search(text)
-            if not match:
-                continue
-            window = _budget_match_window(text, match)
-            if _has_budget_noise_context(window):
-                continue
-            normalized = _normalize_budget_value_text(match.group(0))
-            if normalized:
-                budget["price_per_seat"] = normalized
-                break
-
-    if not budget.get("annual_spend_estimate"):
-        for text in candidates:
-            match = _BUDGET_ANNUAL_AMOUNT_RE.search(text)
-            if not match:
-                continue
-            window = _budget_match_window(text, match)
-            if _has_budget_noise_context(window):
-                continue
-            normalized = _normalize_budget_value_text(match.group(0))
-            if normalized:
-                budget["annual_spend_estimate"] = normalized
-                break
-        if not budget.get("annual_spend_estimate"):
-            for text in candidates:
-                for match in _BUDGET_CURRENCY_TOKEN_RE.finditer(text):
-                    window = _budget_match_window(text, match)
-                    if _has_budget_noise_context(window):
-                        continue
-                    if _contains_any(window, _BUDGET_PER_UNIT_PATTERNS):
-                        continue
-                    if _contains_any(window, _BUDGET_MONTHLY_PERIOD_PATTERNS):
-                        continue
-                    if not _contains_any(window, _BUDGET_ANNUAL_CONTEXT_PATTERNS):
-                        continue
-                    normalized = _normalize_budget_value_text(match.group("raw"))
-                    if normalized:
-                        budget["annual_spend_estimate"] = normalized
-                        break
-                if budget.get("annual_spend_estimate"):
-                    break
-
-    if not budget.get("seat_count"):
-        for text in candidates:
-            for match in _BUDGET_SEAT_COUNT_RE.finditer(text):
-                window = _budget_match_window(text, match)
-                if _has_budget_noise_context(window):
-                    continue
-                if not _contains_any(window, _BUDGET_COMMERCIAL_CONTEXT_PATTERNS):
-                    continue
-                try:
-                    count = int(match.group("count").replace(",", ""))
-                except ValueError:
-                    continue
-                if 1 <= count <= 1_000_000:
-                    budget["seat_count"] = count
-                    break
-            if budget.get("seat_count"):
-                break
-
-    if not budget.get("annual_spend_estimate"):
-        derived_annual_spend = _derive_annual_spend_from_unit_price(budget)
-        if derived_annual_spend:
-            budget["annual_spend_estimate"] = derived_annual_spend
-
-    if not _coerce_bool(budget.get("price_increase_mentioned")):
-        for text in candidates:
-            match = _BUDGET_PRICE_INCREASE_RE.search(text)
-            if not match:
-                continue
-            window = _budget_match_window(text, match)
-            if _has_budget_noise_context(window):
-                continue
-            if not _contains_any(window, _BUDGET_COMMERCIAL_CONTEXT_PATTERNS):
-                continue
-            budget["price_increase_mentioned"] = True
-            if not budget.get("price_increase_detail"):
-                detail_match = _BUDGET_PRICE_INCREASE_DETAIL_RE.search(text)
-                detail = _normalize_budget_detail_text(
-                    detail_match.group(0) if detail_match else match.group(0)
-                )
-                if detail:
-                    budget["price_increase_detail"] = detail
-            break
-    elif not budget.get("price_increase_detail"):
-        for text in candidates:
-            detail_match = _BUDGET_PRICE_INCREASE_DETAIL_RE.search(text)
-            if detail_match:
-                detail = _normalize_budget_detail_text(detail_match.group(0))
-                if detail:
-                    budget["price_increase_detail"] = detail
-                    break
-
-    return budget
+    return _service_derive_budget_signals(
+        result,
+        source_row,
+        deps=_budget_deps(),
+    )
 
 
 def _extract_numeric_amount(value: Any) -> float | None:
@@ -2121,30 +1709,7 @@ def _extract_numeric_amount(value: Any) -> float | None:
 
 
 def _derive_contract_value_signal(result: dict) -> str:
-    budget = result.get("budget_signals") or {}
-    reviewer_context = result.get("reviewer_context") or {}
-    spend = _extract_numeric_amount(budget.get("annual_spend_estimate"))
-    seats = budget.get("seat_count")
-    try:
-        seat_count = int(seats) if seats is not None else 0
-    except (TypeError, ValueError):
-        seat_count = 0
-    segment = str(reviewer_context.get("company_size_segment") or "unknown")
-    if spend is not None and spend >= 100000:
-        return "enterprise_high"
-    if seat_count >= 500 or segment == "enterprise":
-        return "enterprise_high"
-    if spend is not None and spend >= 25000:
-        return "enterprise_mid"
-    if seat_count >= 200 or segment == "mid_market":
-        return "enterprise_mid"
-    if spend is not None and spend >= 5000:
-        return "mid_market"
-    if seat_count >= 25:
-        return "mid_market"
-    if segment in {"smb", "startup"}:
-        return "smb"
-    return "unknown"
+    return _service_derive_contract_value_signal(result)
 
 
 _POST_PURCHASE_REVIEW_SOURCES = frozenset({
@@ -2184,39 +1749,11 @@ def _has_post_purchase_signal(source_row: dict[str, Any], review_blob: str) -> b
 
 
 def _derive_buyer_authority_fields(result: dict, source_row: dict[str, Any]) -> tuple[str, bool, str]:
-    reviewer_context = result.get("reviewer_context") or {}
-    churn = result.get("churn_signals") or {}
-    role_level = str(reviewer_context.get("role_level") or "unknown")
-    decision_maker = bool(reviewer_context.get("decision_maker"))
-    review_blob = " ".join(
-        str(source_row.get(field) or "")
-        for field in ("summary", "review_text", "pros", "cons")
-    ).lower()
-    if decision_maker or role_level in {"executive", "director"}:
-        role_type = "economic_buyer"
-    elif churn.get("actively_evaluating"):
-        role_type = "evaluator"
-    elif role_level == "manager":
-        role_type = "champion"
-    elif role_level == "ic":
-        role_type = "end_user"
-    else:
-        role_type = "unknown"
-    executive_sponsor_mentioned = _contains_any(
-        review_blob,
-        ("ceo", "cfo", "cto", "coo", "leadership", "executive team", "vp approved", "signed off"),
+    return _service_derive_buyer_authority_fields(
+        result,
+        source_row,
+        deps=_buyer_authority_deps(),
     )
-    if churn.get("contract_renewal_mentioned") or churn.get("renewal_timing"):
-        buying_stage = "renewal_decision"
-    elif churn.get("actively_evaluating") or churn.get("migration_in_progress"):
-        buying_stage = "evaluation"
-    elif decision_maker and _contains_any(review_blob, ("approved", "signed off", "purchased", "bought")):
-        buying_stage = "active_purchase"
-    elif _has_post_purchase_signal(source_row, review_blob):
-        buying_stage = "post_purchase"
-    else:
-        buying_stage = "unknown"
-    return role_type, executive_sponsor_mentioned, buying_stage
 
 
 def _derive_urgency_indicators(
@@ -2225,91 +1762,19 @@ def _derive_urgency_indicators(
     *,
     price_complaint: bool = False,
 ) -> dict[str, bool]:
-    churn = result.get("churn_signals") or {}
-    budget = result.get("budget_signals") or {}
-    timeline = result.get("timeline") or {}
-    competitors = result.get("competitors_mentioned") or []
-    complaints = result.get("specific_complaints") or []
-    review_blob = " ".join(
-        str(source_row.get(field) or "")
-        for field in ("summary", "review_text", "pros", "cons")
-    ).lower()
-    price_text = " ".join(_normalize_text_list(result.get("pricing_phrases"))).lower()
-    recommendation_text = " ".join(_normalize_text_list(result.get("recommendation_language"))).lower()
-    named_alt_with_reason = any(
-        isinstance(comp, dict) and comp.get("name") and comp.get("reason_detail")
-        for comp in competitors
+    return _service_derive_urgency_indicators(
+        result,
+        source_row,
+        deps=EnrichmentUrgencyDeps(
+            contains_any=_contains_any,
+            normalize_text_list=_normalize_text_list,
+        ),
+        price_complaint=price_complaint,
     )
-    return {
-        "intent_to_leave_signal": bool(churn.get("intent_to_leave")),
-        "actively_evaluating_signal": bool(churn.get("actively_evaluating")),
-        "migration_in_progress_signal": bool(churn.get("migration_in_progress")),
-        "explicit_cancel_language": bool(churn.get("intent_to_leave")) and _contains_any(
-            review_blob, ("cancel", "not renewing", "terminate", "ending our contract")
-        ),
-        "active_migration_language": bool(churn.get("migration_in_progress")) or "migrat" in review_blob,
-        "active_evaluation_language": bool(churn.get("actively_evaluating")) or _contains_any(
-            review_blob, ("evaluating", "shortlist", "poc", "comparing options")
-        ),
-        "completed_switch_language": _contains_any(review_blob, ("switched to", "moved to", "replaced with")),
-        "comparison_shopping_language": _contains_any(review_blob, ("vs ", "alternative", "which should", "looking for options")),
-        "named_alternative_with_reason": named_alt_with_reason,
-        "frustration_without_alternative": bool(complaints) and not competitors,
-        "price_pressure_language": bool(price_complaint) or _contains_any(
-            review_blob + " " + price_text,
-            (
-                "price increase",
-                "pricing policy",
-                "too expensive",
-                "costs will constantly increase",
-                "forced to change provider",
-                "unjustified expenses",
-            ),
-        ),
-        "reconsideration_language": _contains_any(
-            review_blob,
-            (
-                "reconsidering",
-                "considering changing",
-                "considering switching",
-                "considering swtiching",
-                "forced to change provider",
-                "considering another tool",
-            ),
-        ),
-        "dollar_amount_mentioned": bool(budget.get("annual_spend_estimate") or budget.get("price_per_seat")) or "$" in price_text,
-        "timeline_mentioned": bool(
-            churn.get("renewal_timing")
-            or timeline.get("contract_end")
-            or timeline.get("evaluation_deadline")
-        ),
-        "decision_maker_language": bool((result.get("reviewer_context") or {}).get("decision_maker")) or _contains_any(
-            review_blob + " " + recommendation_text,
-            ("i decided", "we approved", "signed off", "our team approved"),
-        ),
-    }
 
 
 def _is_no_signal_result(result: dict, source_row: dict[str, Any]) -> bool:
-    churn = result.get("churn_signals") or {}
-    if any(bool(value) for value in churn.values()):
-        return False
-    if result.get("competitors_mentioned"):
-        return False
-    if result.get("specific_complaints") or result.get("quotable_phrases"):
-        return False
-    if result.get("pricing_phrases") or result.get("recommendation_language"):
-        return False
-    if result.get("event_mentions") or result.get("feature_gaps"):
-        return False
-    content_type = str(source_row.get("content_type") or "").strip().lower()
-    if content_type in {"community_discussion", "comment"}:
-        return True
-    rating = source_row.get("rating")
-    try:
-        return float(rating or 0) >= 3.0
-    except (TypeError, ValueError):
-        return True
+    return _service_is_no_signal_result(result, source_row)
 
 
 # ---------------------------------------------------------------------------
@@ -2338,391 +1803,73 @@ _PHRASE_UNCLEAR = "unclear"
 
 
 def _coerce_legacy_phrase_arrays(result: dict) -> None:
-    """Force the six legacy phrase arrays to list[str]. In-place mutation.
-
-    Invariant: legacy arrays stay list[str] regardless of what the LLM
-    returned. If the LLM returned a dict with a 'text' field (v2-style), we
-    pull the text out; if it returned something unusable, we drop the entry.
-    This defends downstream scoring/witness code that assumes str elements.
-    """
-    for field in _PHRASE_METADATA_FIELDS:
-        value = result.get(field)
-        if not isinstance(value, list):
-            result[field] = []
-            continue
-        coerced: list[str] = []
-        for entry in value:
-            if isinstance(entry, str):
-                text = entry.strip()
-                if text:
-                    coerced.append(text)
-            elif isinstance(entry, dict):
-                text = str(entry.get("text") or "").strip()
-                if text:
-                    coerced.append(text)
-        result[field] = coerced
+    _service_coerce_legacy_phrase_arrays(result)
 
 
 def _normalize_tag_value(value: Any, allowed: tuple[str, ...]) -> tuple[str, bool]:
-    """Coerce a tag to the allowed enum. Returns (normalized, was_coerced).
-
-    Coercion counts only unknown-value flattening ("WEIRD" -> "unclear");
-    silent lowercasing or None->"unclear" are not counted as coercions.
-    """
-    raw = value if isinstance(value, str) else None
-    if raw is None:
-        return _PHRASE_UNCLEAR, False
-    normalized = raw.strip().lower()
-    if not normalized:
-        return _PHRASE_UNCLEAR, False
-    if normalized in allowed:
-        return normalized, False
-    return _PHRASE_UNCLEAR, True
+    return _service_normalize_tag_value(value, allowed)
 
 
 def _normalize_phrase_metadata(
     result: dict,
     source_row: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Build canonical phrase_metadata for v2 enrichments.
-
-    Produces one metadata row per non-empty legacy-array element. Fills
-    defaults for phrases the LLM didn't tag. Enforces the text-invariant:
-    each row's `text` must equal the legacy array entry at (field, index);
-    if it doesn't, we overwrite with the legacy value and flag verbatim=False
-    so grounding downstream cannot be fooled.
-
-    When `source_row` is provided (with `summary` + `review_text`), an LLM
-    self-reported `verbatim=True` is additionally validated against the
-    source text via `check_phrase_grounded`. If grounding rejects it, the
-    flag is coerced to False and counted in `verbatim_grounding_failures`.
-    This is Phase 1b's write-time grounding gate. Phase 1a tests pass
-    `source_row=None` and skip the gate.
-
-    Returns (canonical_list, telemetry_counters). Caller is expected to emit
-    the counters via logger.info for visibility into LLM tag quality.
-    """
     from ._b2b_grounding import check_phrase_grounded
-
-    source_metadata = result.get("phrase_metadata")
-    if not isinstance(source_metadata, list):
-        source_metadata = []
-
-    source_by_key: dict[tuple[str, int], dict[str, Any]] = {}
-    for entry in source_metadata:
-        if not isinstance(entry, dict):
-            continue
-        field = str(entry.get("field") or "")
-        try:
-            idx = int(entry.get("index"))
-        except (TypeError, ValueError):
-            continue
-        if field and idx >= 0:
-            source_by_key[(field, idx)] = entry
-
-    counters = {
-        "llm_provided_rows": 0,
-        "llm_missing_rows": 0,
-        "text_mismatch_rows": 0,
-        "unknown_tag_coercions": 0,
-        "verbatim_grounding_failures": 0,
-        "verbatim_grounding_wins": 0,
-    }
-    canonical: list[dict[str, Any]] = []
-
-    summary_text = (source_row or {}).get("summary") if source_row else None
-    review_text = (source_row or {}).get("review_text") if source_row else None
-    grounding_enabled = source_row is not None
-
-    for field in _PHRASE_METADATA_FIELDS:
-        legacy_array = result.get(field) or []
-        for index, legacy_text in enumerate(legacy_array):
-            llm_row = source_by_key.get((field, index))
-            if llm_row is None:
-                counters["llm_missing_rows"] += 1
-                canonical.append({
-                    "field": field,
-                    "index": index,
-                    "text": str(legacy_text),
-                    "subject": _PHRASE_UNCLEAR,
-                    "polarity": _PHRASE_UNCLEAR,
-                    "role": _PHRASE_UNCLEAR,
-                    "verbatim": False,
-                    "category_hint": None,
-                })
-                continue
-
-            counters["llm_provided_rows"] += 1
-            subject, sub_coerced = _normalize_tag_value(
-                llm_row.get("subject"), _PHRASE_SUBJECT_VALUES,
-            )
-            polarity, pol_coerced = _normalize_tag_value(
-                llm_row.get("polarity"), _PHRASE_POLARITY_VALUES,
-            )
-            role, role_coerced = _normalize_tag_value(
-                llm_row.get("role"), _PHRASE_ROLE_VALUES,
-            )
-            counters["unknown_tag_coercions"] += int(sub_coerced) + int(pol_coerced) + int(role_coerced)
-
-            # Strict boolean: "false", "no", 0 must not become True after
-            # bool() coercion. Only the literal Python True is accepted as
-            # an LLM affirmative; everything else is False.
-            verbatim = llm_row.get("verbatim") is True
-            hint = llm_row.get("category_hint")
-            category_hint = (
-                str(hint).strip()
-                if isinstance(hint, str) and str(hint).strip()
-                else None
-            )
-
-            # Text invariant: metadata text must equal the legacy array entry
-            llm_text = str(llm_row.get("text") or "").strip()
-            if llm_text != str(legacy_text).strip():
-                counters["text_mismatch_rows"] += 1
-                verbatim = False
-
-            # Phase 1b grounding gate: only retain verbatim=True when the
-            # phrase actually appears (after normalization) in the source
-            # text. Skipped when source_row is unavailable (Phase 1a unit
-            # tests pass source_row=None).
-            if verbatim and grounding_enabled:
-                if check_phrase_grounded(
-                    str(legacy_text),
-                    summary=summary_text,
-                    review_text=review_text,
-                ):
-                    counters["verbatim_grounding_wins"] += 1
-                else:
-                    counters["verbatim_grounding_failures"] += 1
-                    verbatim = False
-
-            canonical.append({
-                "field": field,
-                "index": index,
-                "text": str(legacy_text),
-                "subject": subject,
-                "polarity": polarity,
-                "role": role,
-                "verbatim": verbatim,
-                "category_hint": category_hint,
-            })
-
-    return canonical, counters
+    return _service_normalize_phrase_metadata(
+        result,
+        source_row,
+        deps=EnrichmentPhraseMetadataDeps(
+            check_phrase_grounded=check_phrase_grounded,
+        ),
+    )
 
 
 def _apply_phrase_metadata_contract(
     result: dict,
     source_row: dict[str, Any],
 ) -> None:
-    """Normalize phrase_metadata before deterministic derived fields run.
+    from ._b2b_grounding import check_phrase_grounded
 
-    Phase 2 gates read phrase_metadata through the helper API, which only
-    activates when the enrichment is already schema version 4. The version
-    marker therefore must be set before pain, price, and witness derivation,
-    not after them.
-    """
-    if isinstance(result.get("phrase_metadata"), list):
-        canonical_metadata, metadata_counters = _normalize_phrase_metadata(
-            result, source_row,
-        )
-        total_legacy_phrases = sum(
-            len(result.get(f) or []) for f in _PHRASE_METADATA_FIELDS
-        )
-        llm_genuinely_tried = (
-            metadata_counters["llm_provided_rows"] > 0
-            or total_legacy_phrases == 0
-        )
-        if llm_genuinely_tried:
-            result["phrase_metadata"] = canonical_metadata
-            result["enrichment_schema_version"] = 4
-            logger.info(
-                "phrase_metadata normalized for %s: %s",
-                source_row.get("id"),
-                metadata_counters,
-            )
-        else:
-            result.pop("phrase_metadata", None)
-            result["enrichment_schema_version"] = 3
-            logger.warning(
-                "phrase_metadata present but unusable for %s "
-                "(legacy_phrases=%d, provided_rows=0); falling back to v3",
-                source_row.get("id"),
-                total_legacy_phrases,
-            )
-    else:
-        result.pop("phrase_metadata", None)
-        result["enrichment_schema_version"] = 3
+    _service_apply_phrase_metadata_contract(
+        result,
+        source_row,
+        deps=EnrichmentPhraseMetadataDeps(
+            check_phrase_grounded=check_phrase_grounded,
+        ),
+    )
 
 
 def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
-    """Layer 3: compute deterministic fields from Layer 1 + Layer 2 extractions.
-
-    Replaces 7 former LLM INFER fields with pipeline-computed values using
-    the declarative Evidence Map. All downstream consumers see the same
-    JSONB paths -- zero breakage.
-    """
     from ...reasoning.evidence_engine import get_evidence_engine
 
-    engine = get_evidence_engine()
-
-    raw_meta = source_row.get("raw_metadata") or {}
-    if isinstance(raw_meta, str):
-        raw_meta = json.loads(raw_meta)
-    source_weight = float(raw_meta.get("source_weight", 0.7))
-    content_type = source_row.get("content_type") or result.get("content_classification") or "review"
-    rating = float(source_row["rating"]) if source_row.get("rating") is not None else None
-    rating_max = float(source_row.get("rating_max") or 5)
-
-    # Sanitize legacy phrase arrays to list[str] before any downstream scoring
-    # sees them. Defends against dict-form entries the LLM may emit under the
-    # new v2 prompt; downstream code (pain scoring, witnesses) assumes strings.
-    # Done BEFORE reading the locals below so pain derivation never sees dicts.
-    _coerce_legacy_phrase_arrays(result)
-    _apply_phrase_metadata_contract(result, source_row)
-
-    complaints = result.get("specific_complaints", [])
-    quotable = result.get("quotable_phrases", [])
-    pricing_phrases = result.get("pricing_phrases", [])
-    rec_lang = result.get("recommendation_language", [])
-    events = result.get("event_mentions", [])
-    reviewer = result.get("reviewer_context", {})
-
-    # 0. deterministic replacements for deprecated Tier 2 classify path
-    result["pain_categories"] = _derive_pain_categories(result)
-    result["competitors_mentioned"] = _recover_competitor_mentions(result, source_row)
-    result["competitors_mentioned"] = _derive_competitor_annotations(result, source_row)
-    _derive_budget_signals(result, source_row)
-
-    ba = result.get("buyer_authority")
-    if not isinstance(ba, dict):
-        ba = {}
-        result["buyer_authority"] = ba
-    role_type, executive_sponsor_mentioned, buying_stage = _derive_buyer_authority_fields(
-        result, source_row
-    )
-    ba["role_type"] = role_type
-    ba["executive_sponsor_mentioned"] = executive_sponsor_mentioned
-    ba["buying_stage"] = buying_stage
-
-    timeline = result.get("timeline")
-    if not isinstance(timeline, dict):
-        timeline = {}
-        result["timeline"] = timeline
-    contract_end, evaluation_deadline = _derive_concrete_timeline_fields(result, source_row)
-    if contract_end and not str(timeline.get("contract_end") or "").strip():
-        timeline["contract_end"] = contract_end
-    if evaluation_deadline and not str(timeline.get("evaluation_deadline") or "").strip():
-        timeline["evaluation_deadline"] = evaluation_deadline
-    timeline["decision_timeline"] = _derive_decision_timeline(result, source_row)
-
-    cc = result.get("contract_context")
-    if not isinstance(cc, dict):
-        cc = {}
-        result["contract_context"] = cc
-    cc["contract_value_signal"] = _derive_contract_value_signal(result)
-    price_complaint = engine.derive_price_complaint(result)
-    result["urgency_indicators"] = _derive_urgency_indicators(
+    return _service_compute_derived_fields(
         result,
         source_row,
-        price_complaint=price_complaint,
+        deps=EnrichmentDerivationDeps(
+            get_evidence_engine=get_evidence_engine,
+            coerce_legacy_phrase_arrays=_coerce_legacy_phrase_arrays,
+            apply_phrase_metadata_contract=_apply_phrase_metadata_contract,
+            derive_pain_categories=_derive_pain_categories,
+            recover_competitor_mentions=_recover_competitor_mentions,
+            derive_competitor_annotations=_derive_competitor_annotations,
+            derive_budget_signals=_derive_budget_signals,
+            derive_buyer_authority_fields=_derive_buyer_authority_fields,
+            derive_concrete_timeline_fields=_derive_concrete_timeline_fields,
+            derive_decision_timeline=_derive_decision_timeline,
+            derive_contract_value_signal=_derive_contract_value_signal,
+            derive_urgency_indicators=_derive_urgency_indicators,
+            normalize_pain_category=_normalize_pain_category,
+            subject_vendor_phrase_texts=_subject_vendor_phrase_texts,
+            compute_pain_confidence=_compute_pain_confidence,
+            demote_primary_pain=_demote_primary_pain,
+            derive_replacement_mode=derive_replacement_mode,
+            derive_operating_model_shift=derive_operating_model_shift,
+            derive_productivity_delta_claim=derive_productivity_delta_claim,
+            derive_org_pressure_type=derive_org_pressure_type,
+            derive_salience_flags=derive_salience_flags,
+            derive_evidence_spans=derive_evidence_spans,
+        ),
     )
-
-    indicators = result.get("urgency_indicators", {})
-    pain_cats = result.get("pain_categories", [])
-
-    # 1. urgency_score
-    result["urgency_score"] = engine.compute_urgency(
-        indicators, rating, rating_max, content_type, source_weight,
-    )
-
-    # 2. pain_category (backward compat top-level field)
-    primary_pain = "overall_dissatisfaction"
-    if pain_cats:
-        primary_list = [p for p in pain_cats if isinstance(p, dict) and p.get("severity") == "primary"]
-        if primary_list:
-            primary_pain = primary_list[0].get("category", "overall_dissatisfaction")
-        elif isinstance(pain_cats[0], dict):
-            primary_pain = pain_cats[0].get("category", "overall_dissatisfaction")
-    result["pain_category"] = engine.override_pain(
-        _normalize_pain_category(primary_pain),
-        _subject_vendor_phrase_texts(result, "specific_complaints"),
-        _subject_vendor_phrase_texts(result, "quotable_phrases"),
-        _subject_vendor_phrase_texts(result, "pricing_phrases"),
-        _subject_vendor_phrase_texts(result, "feature_gaps"),
-        _subject_vendor_phrase_texts(result, "recommendation_language"),
-    )
-
-    # 2b. Recommendation + sentiment are corroborating inputs to the Phase 4
-    # causality gate below, so compute them before pain_confidence.
-    result["would_recommend"] = engine.derive_recommend(rec_lang, rating, rating_max)
-
-    st = result.get("sentiment_trajectory")
-    if not isinstance(st, dict):
-        st = {}
-        result["sentiment_trajectory"] = st
-    rating_norm = (rating / rating_max) if rating is not None and rating_max else None
-    churn_signals_raw = result.get("churn_signals") or {}
-    intent_to_leave = bool(churn_signals_raw.get("intent_to_leave")) if isinstance(churn_signals_raw, dict) else False
-    would_rec = result.get("would_recommend")
-    if rating_norm is not None:
-        if rating_norm <= 0.4 or (rating_norm <= 0.6 and intent_to_leave):
-            st["direction"] = "consistently_negative"
-        elif rating_norm >= 0.8 and would_rec is True:
-            st["direction"] = "stable_positive"
-        elif rating_norm >= 0.7 and would_rec is not False:
-            st["direction"] = "stable_positive"
-        else:
-            st["direction"] = "unknown"
-    else:
-        st["direction"] = "unknown"
-
-    # 2c. Phase 4 (Layer 3 -- causality gate): grade the primary pain. A
-    # pain category backed by a single keyword match with no churn /
-    # sentiment corroboration is an unreliable classification (passing
-    # mention, not a real pain), so we demote it to overall_dissatisfaction
-    # and keep the original as a secondary entry for visibility.
-    final_pain = _normalize_pain_category(result.get("pain_category"))
-    confidence = _compute_pain_confidence(result, final_pain)
-    if confidence == "none" and final_pain != "overall_dissatisfaction":
-        _demote_primary_pain(result, final_pain)
-        result["pain_category"] = "overall_dissatisfaction"
-        # Re-grade against the new (fallback) primary so pain_confidence
-        # reflects the surviving classification, not the demoted one.
-        confidence = _compute_pain_confidence(result, "overall_dissatisfaction")
-    result["pain_confidence"] = confidence
-
-    # 3. sentiment_trajectory.turning_point from event_mentions
-    if events and isinstance(events, list) and len(events) > 0:
-        first = events[0] if isinstance(events[0], dict) else {}
-        event_text = str(first.get("event", "")).strip()
-        timeframe = str(first.get("timeframe", "")).strip()
-        if event_text and timeframe and timeframe.lower() != "null":
-            st["turning_point"] = f"{event_text} ({timeframe})"
-        elif event_text:
-            st["turning_point"] = event_text
-        else:
-            st.setdefault("turning_point", None)
-    else:
-        st.setdefault("turning_point", None)
-
-    # 6. buyer_authority.has_budget_authority
-    ba["has_budget_authority"] = engine.derive_budget_authority(result)
-
-    # 7. contract_context.price_complaint + price_context
-    cc["price_complaint"] = price_complaint
-    cc["price_context"] = pricing_phrases[0] if pricing_phrases else None
-
-    # 8. witness-oriented deterministic evidence primitives
-    result["replacement_mode"] = derive_replacement_mode(result, source_row)
-    result["operating_model_shift"] = derive_operating_model_shift(result, source_row)
-    result["productivity_delta_claim"] = derive_productivity_delta_claim(source_row)
-    result["org_pressure_type"] = derive_org_pressure_type(source_row)
-    result["salience_flags"] = derive_salience_flags(result, source_row)
-    result["evidence_spans"] = derive_evidence_spans(result, source_row)
-
-    result["evidence_map_hash"] = engine.map_hash
-
-    return result
 
 
 def _missing_witness_primitives(result: dict[str, Any]) -> list[str]:
@@ -2762,37 +1909,32 @@ def _finalize_enrichment_for_persist(
     result: dict[str, Any],
     source_row: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
-    if not isinstance(result, dict):
-        return None, "invalid_payload"
-
-    payload = json.loads(json.dumps(result))
-    try:
-        payload = _compute_derived_fields(payload, source_row)
-    except Exception:
-        logger.warning(
-            "Evidence engine compute failed while finalizing enrichment for %s",
-            source_row.get("id"),
-            exc_info=True,
-        )
-        return None, "compute_failed"
-
-    if not _validate_enrichment(payload, source_row):
-        return None, "validation_failed"
-
-    return payload, None
+    return _service_finalize_enrichment_for_persist(
+        result,
+        source_row,
+        deps=EnrichmentFinalizationDeps(
+            compute_derived_fields=_compute_derived_fields,
+            validate_enrichment=_validate_enrichment,
+        ),
+    )
 
 
 def _trusted_reviewer_company_name(source_row: dict[str, Any] | None) -> str | None:
-    """Return a safe reviewer company candidate from trusted raw fields."""
-    row = source_row if isinstance(source_row, dict) else {}
-    company = str(row.get("reviewer_company") or "").strip()
-    if not company:
-        return None
-    company_norm = normalize_company_name(company) or company.lower()
-    vendor_norm = normalize_company_name(str(row.get("vendor_name") or "")) or ""
-    if vendor_norm and company_norm == vendor_norm:
-        return None
-    return company
+    return _service_trusted_reviewer_company_name(
+        source_row,
+        deps=EnrichmentOutcomePolicyDeps(
+            normalized_low_fidelity_noisy_sources=_normalized_low_fidelity_noisy_sources,
+            normalize_compare_text=_normalize_compare_text,
+            text_mentions_name=_text_mentions_name,
+            normalized_name_tokens=_normalized_name_tokens,
+            has_commercial_context=_has_commercial_context,
+            has_strong_commercial_context=_has_strong_commercial_context,
+            has_technical_context=_has_technical_context,
+            has_consumer_context=_has_consumer_context,
+            dedupe_reason_codes=_dedupe_reason_codes,
+            normalize_company_name=normalize_company_name,
+        ),
+    )
 
 
 async def _notify_high_urgency(
@@ -2927,19 +2069,7 @@ def _accumulate_exact_cache_usage(
 
 
 def _witness_metrics(result: dict[str, Any] | None) -> tuple[int, int]:
-    if not isinstance(result, dict):
-        return 0, 0
-    spans = result.get("evidence_spans")
-    if not isinstance(spans, list):
-        return 0, 0
-    witness_count = 0
-    for span in spans:
-        if not isinstance(span, dict):
-            continue
-        if not str(span.get("text") or "").strip():
-            continue
-        witness_count += 1
-    return (1 if witness_count > 0 else 0), witness_count
+    return _service_witness_metrics(result)
 
 
 def _row_usage_result(status: Any, usage: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2985,171 +2115,24 @@ async def _persist_enrichment_result(
     run_id: str | None,
     cache_usage: dict[str, int],
 ) -> bool | str:
-    review_id = row["id"]
-    cfg = settings.b2b_churn
-
-    if result:
-        result, finalize_error = _finalize_enrichment_for_persist(result, row)
-        if finalize_error == "compute_failed":
-            logger.warning(
-                "Evidence engine compute failed for %s -- quarantining to prevent model-dependent output",
-                review_id, exc_info=True,
-            )
-            await pool.execute(
-                """
-                UPDATE b2b_reviews
-                SET enrichment_status = 'quarantined',
-                    enrichment_attempts = enrichment_attempts + 1,
-                    low_fidelity = true,
-                    low_fidelity_reasons = $2::jsonb
-                WHERE id = $1
-                """,
-                review_id,
-                json.dumps(["evidence_engine_compute_failure"]),
-            )
-            from ..visibility import record_quarantine
-
-            await record_quarantine(
-                pool,
-                review_id=str(review_id),
-                vendor_name=row.get("vendor_name"),
-                source=row.get("source"),
-                reason_code="evidence_engine_compute_failure",
-                severity="error",
-                actionable=True,
-                summary=f"Evidence engine failed for {row.get('vendor_name')} review",
-                run_id=run_id,
-            )
-            return "quarantined"
-        if finalize_error == "validation_failed":
-            logger.warning(
-                "Enrichment validation failed for %s -- quarantining",
-                review_id,
-            )
-            await pool.execute(
-                """
-                UPDATE b2b_reviews
-                SET enrichment_status = 'quarantined',
-                    enrichment_attempts = enrichment_attempts + 1,
-                    low_fidelity = true,
-                    low_fidelity_reasons = $2::jsonb
-                WHERE id = $1
-                """,
-                review_id,
-                json.dumps(["enrichment_validation_failed"]),
-            )
-            from ..visibility import record_quarantine
-
-            await record_quarantine(
-                pool,
-                review_id=str(review_id),
-                vendor_name=row.get("vendor_name"),
-                source=row.get("source"),
-                reason_code="enrichment_validation_failed",
-                severity="warning",
-                actionable=True,
-                summary=f"Validation failed for {row.get('vendor_name')} review",
-                run_id=run_id,
-            )
-            return "quarantined"
-
-    if result:
-        st = result.get("sentiment_trajectory") or {}
-        st_direction = st.get("direction") if isinstance(st, dict) else None
-        st_tenure = st.get("tenure") if isinstance(st, dict) else None
-        st_turning = st.get("turning_point") if isinstance(st, dict) else None
-        witness_rows, witness_count = _witness_metrics(result)
-        cache_usage["witness_rows"] += witness_rows
-        cache_usage["witness_count"] += witness_count
-        low_fidelity_reasons = (
-            _detect_low_fidelity_reasons(row, result)
-            if cfg.enrichment_low_fidelity_enabled
-            else []
-        )
-        detected_at = datetime.now(timezone.utc)
-        if not low_fidelity_reasons and _is_no_signal_result(result, row):
-            target_status = "no_signal"
-        else:
-            target_status = "quarantined" if low_fidelity_reasons else "enriched"
-
-        await pool.execute(
-            """
-            UPDATE b2b_reviews
-            SET enrichment = $1,
-                enrichment_status = $8,
-                enrichment_attempts = enrichment_attempts + 1,
-                enriched_at = $2,
-                enrichment_model = $4,
-                sentiment_direction = $5,
-                sentiment_tenure = $6,
-                sentiment_turning_point = $7,
-                low_fidelity = $9,
-                low_fidelity_reasons = $10::jsonb,
-                low_fidelity_detected_at = $11
-            WHERE id = $3
-            """,
-            json.dumps(result),
-            detected_at,
-            review_id,
-            model_id,
-            st_direction,
-            st_tenure,
-            st_turning if st_turning and st_turning != "null" else None,
-            target_status,
-            bool(low_fidelity_reasons),
-            json.dumps(low_fidelity_reasons),
-            detected_at if low_fidelity_reasons else None,
-        )
-
-        if low_fidelity_reasons:
-            from ..visibility import record_quarantine
-
-            await record_quarantine(
-                pool,
-                review_id=str(review_id),
-                vendor_name=row.get("vendor_name"),
-                source=row.get("source"),
-                reason_code=low_fidelity_reasons[0],
-                severity="warning",
-                summary=f"Low-fidelity: {', '.join(low_fidelity_reasons[:3])}",
-                evidence={"reasons": low_fidelity_reasons, "source": row.get("source")},
-                run_id=run_id,
-            )
-
-        try:
-            urgency = result.get("urgency_score", 0)
-            threshold = settings.b2b_churn.high_churn_urgency_threshold
-            if urgency >= threshold:
-                signals = result.get("churn_signals", {})
-                await _notify_high_urgency(
-                    vendor_name=row["vendor_name"],
-                    reviewer_company=row.get("reviewer_company") or "",
-                    urgency=urgency,
-                    pain_category=result.get("pain_category", ""),
-                    intent_to_leave=bool(signals.get("intent_to_leave")),
-                )
-        except Exception:
-            logger.warning("ntfy notification failed for review %s, enrichment preserved", review_id)
-
-        try:
-            _ctx = result.get("reviewer_context") or {}
-            _extracted_company = (_ctx.get("company_name") or "").strip()
-            if _extracted_company and not (row.get("reviewer_company") or "").strip():
-                _extracted_company_norm = normalize_company_name(_extracted_company) or None
-                await pool.execute(
-                    "UPDATE b2b_reviews SET reviewer_company = $1, reviewer_company_norm = $2 WHERE id = $3",
-                    _extracted_company,
-                    _extracted_company_norm,
-                    review_id,
-                )
-                cache_usage["secondary_write_hits"] += 1
-        except Exception:
-            logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
-
-        return "quarantined" if target_status == "quarantined" else True
-
-    await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-    return False
+    return await _service_persist_enrichment_result(
+        pool,
+        row,
+        result,
+        model_id=model_id,
+        max_attempts=max_attempts,
+        run_id=run_id,
+        cache_usage=cache_usage,
+        deps=EnrichmentPersistenceDeps(
+            finalize_enrichment_for_persist=_finalize_enrichment_for_persist,
+            witness_metrics=_witness_metrics,
+            detect_low_fidelity_reasons=_detect_low_fidelity_reasons,
+            is_no_signal_result=_is_no_signal_result,
+            notify_high_urgency=_notify_high_urgency,
+            increment_attempts=_increment_attempts,
+            normalize_company_name=normalize_company_name,
+        ),
+    )
 
 
 async def _enrich_rows(
@@ -3163,7 +2146,6 @@ async def _enrich_rows(
 ) -> dict[str, Any]:
     """Enrich a list of claimed rows concurrently."""
     max_attempts = _coerce_int_value(getattr(cfg, "enrichment_max_attempts", 3), 3)
-
     effective_concurrency = max(
         1,
         _coerce_int_value(
@@ -3171,689 +2153,48 @@ async def _enrich_rows(
             10,
         ),
     )
-    sem = asyncio.Semaphore(effective_concurrency)
-    enrich_single_params = inspect.signature(_enrich_single).parameters
-    supports_usage_out = "usage_out" in enrich_single_params
-    supports_run_id = "run_id" in enrich_single_params
-
-    async def _bounded_enrich(row):
-        async with sem:
-            usage = _empty_exact_cache_usage()
-            kwargs: dict[str, Any] = {}
-            if supports_run_id:
-                kwargs["run_id"] = run_id
-            if supports_usage_out:
-                status = await _enrich_single(
-                    pool,
-                    row,
-                    max_attempts,
-                    cfg.enrichment_local_only,
-                    cfg.enrichment_max_tokens,
-                    cfg.review_truncate_length,
-                    usage_out=usage,
-                    **kwargs,
-                )
-            else:
-                status = await _enrich_single(
-                    pool,
-                    row,
-                    max_attempts,
-                    cfg.enrichment_local_only,
-                    cfg.enrichment_max_tokens,
-                    cfg.review_truncate_length,
-                    **kwargs,
-                )
-            return _row_usage_result(status, usage)
-
-    async def _run_single_rows(target_rows: list[dict[str, Any]]) -> list[dict[str, Any] | Exception]:
-        if not target_rows:
-            return []
-        return await asyncio.gather(
-            *[_bounded_enrich(row) for row in target_rows],
-            return_exceptions=True,
-        )
-
-    results: list[dict[str, Any] | Exception] = []
-    batch_metrics = {
-        "jobs": 0,
-        "submitted_items": 0,
-        "cache_prefiltered_items": 0,
-        "fallback_single_call_items": 0,
-        "completed_items": 0,
-        "failed_items": 0,
-        "reused_completed_items": 0,
-        "reused_pending_items": 0,
-        "rows_deferred": 0,
-        "tier2_single_fallback_rows": 0,
-    }
-
-    from ...services.b2b.anthropic_batch import (
-        AnthropicBatchItem,
-        mark_batch_fallback_result,
-        run_anthropic_message_batch,
-    )
-    from ...services.b2b.cache_runner import (
-        lookup_b2b_exact_stage_text,
-        prepare_b2b_exact_stage_request,
-        store_b2b_exact_stage_text,
-    )
-    from ...services.llm.anthropic import AnthropicLLM
-    from ...services.protocols import Message
-    from ...pipelines.llm import clean_llm_output, parse_json_response
-    from ...skills import get_skill_registry
-    from ._b2b_batch_utils import (
-        anthropic_batch_min_items,
-        anthropic_batch_requested,
-        reconcile_existing_batch_artifacts,
-        resolve_anthropic_batch_llm,
-    )
-
-    def _eligible_for_batch(row: dict[str, Any]) -> bool:
-        if _combined_review_text_length(row) < _effective_min_review_text_length(row):
-            return False
-        source = str(row.get("source") or "").strip().lower()
-        return source not in _effective_enrichment_skip_sources()
-
-    def _parse_batch_text(text: str | None) -> dict[str, Any] | None:
-        if not text:
-            return None
-        cleaned = clean_llm_output(text)
-        parsed = parse_json_response(cleaned, recover_truncated=True)
-        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-            return parsed
-        return None
-
-    use_openrouter_tier1, use_openrouter_tier2 = _resolve_tier_routing(cfg)
-    batch_requested = anthropic_batch_requested(
-        task,
-        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
-        task_default=True,
-        task_keys=("enrichment_anthropic_batch_enabled",),
-    )
-    tier1_batch_llm = (
-        resolve_anthropic_batch_llm(
-            current_llm=SimpleNamespace(
-                name="openrouter",
-                model=str(getattr(cfg, "enrichment_openrouter_model", "") or "anthropic/claude-haiku-4-5"),
-            ),
-            target_model_candidates=(getattr(cfg, "enrichment_openrouter_model", ""),),
-        )
-        if use_openrouter_tier1 and batch_requested
-        else None
-    )
-    tier2_model_id = (
-        getattr(cfg, "enrichment_tier2_openrouter_model", "")
-        or getattr(cfg, "enrichment_openrouter_model", "")
-        or "anthropic/claude-haiku-4-5"
-    )
-    tier2_batch_llm = (
-        resolve_anthropic_batch_llm(
-            current_llm=SimpleNamespace(name="openrouter", model=str(tier2_model_id)),
-            target_model_candidates=(tier2_model_id,),
-        )
-        if use_openrouter_tier2 and batch_requested
-        else None
-    )
-
-    if not isinstance(tier1_batch_llm, AnthropicLLM):
-        tier1_batch_llm = None
-    if not isinstance(tier2_batch_llm, AnthropicLLM):
-        tier2_batch_llm = None
-
-    tier1_batch_model_id = str(
-        getattr(cfg, "enrichment_openrouter_model", "") or "anthropic/claude-haiku-4-5"
-    )
-    full_extraction_timeout = max(
-        0.0,
-        _coerce_float_value(
-            getattr(cfg, "enrichment_full_extraction_timeout_seconds", 120.0),
-            120.0,
+    return await run_enrichment_rows(
+        rows,
+        cfg,
+        pool,
+        max_attempts=max_attempts,
+        effective_concurrency=effective_concurrency,
+        run_id=run_id,
+        task=task,
+        deps=EnrichmentRunnerDeps(
+            apply_review_stage_transition=apply_review_stage_transition,
+            apply_stage_decision=apply_stage_decision,
+            build_tier1_stage_plan=build_tier1_stage_plan,
+            build_tier2_stage_plan=build_tier2_stage_plan,
+            defer_review_transition=defer_review_transition,
+            enrich_single=_enrich_single,
+            finalize_stage_batch=finalize_stage_batch,
+            parse_stage_row_result=_parse_stage_row_result,
+            empty_exact_cache_usage=_empty_exact_cache_usage,
+            persist_review_transition=persist_review_transition,
+            prepare_stage_execution=prepare_stage_execution,
+            row_usage_result=_row_usage_result,
+            resolve_tier_routing=_resolve_tier_routing,
+            combined_review_text_length=_combined_review_text_length,
+            effective_min_review_text_length=_effective_min_review_text_length,
+            effective_enrichment_skip_sources=_effective_enrichment_skip_sources,
+            build_classify_payload=_build_classify_payload,
+            prepare_stage_request=_prepare_stage_request,
+            tier2_system_prompt_for_content_type=_tier2_system_prompt_for_content_type,
+            stage_usage_from_row=_stage_usage_from_row,
+            stage_usage_snapshot=_stage_usage_snapshot,
+            accumulate_exact_cache_usage=_accumulate_exact_cache_usage,
+            tier1_has_extraction_gaps=_tier1_has_extraction_gaps,
+            merge_tier1_tier2=_merge_tier1_tier2,
+            persist_enrichment_result=_persist_enrichment_result,
+            defer_batch_row=_defer_batch_row,
+            submit_stage_batch=submit_stage_batch,
+            unpack_stage_result=_unpack_stage_result,
+            call_openrouter_tier2=_call_openrouter_tier2,
+            call_vllm_tier2=_call_vllm_tier2,
+            get_tier2_client=_get_tier2_client,
         ),
     )
-    tier2_client = None
-
-    async def _persist_wrapped(
-        row: dict[str, Any],
-        result: dict[str, Any] | None,
-        *,
-        model_id: str,
-        usage: dict[str, int],
-    ) -> dict[str, Any]:
-        status = await _persist_enrichment_result(
-            pool,
-            row,
-            result,
-            model_id=model_id,
-            max_attempts=max_attempts,
-            run_id=run_id,
-            cache_usage=usage,
-        )
-        return _row_usage_result(status, usage)
-
-    async def _run_single_tier2_fallback(
-        row: dict[str, Any],
-        tier1: dict[str, Any],
-        usage: dict[str, int],
-    ) -> dict[str, Any]:
-        nonlocal tier2_client
-
-        logger.info(
-            "B2B enrichment: Tier 2 batch unavailable for %s; falling back to single-call Tier 2",
-            row["id"],
-        )
-        batch_metrics["tier2_single_fallback_rows"] += 1
-
-        trace_metadata = {
-            "run_id": run_id,
-            "vendor_name": str(row.get("vendor_name") or ""),
-            "review_id": str(row["id"]),
-            "source": str(row.get("source") or ""),
-            "tier": "tier2",
-            "workload": "single_call_fallback",
-            "batch_fallback_reason": "tier2_batch_unavailable",
-        }
-
-        if use_openrouter_tier2:
-            tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
-                _call_openrouter_tier2(
-                    tier1,
-                    row,
-                    cfg,
-                    cfg.review_truncate_length,
-                    include_cache_hit=True,
-                    trace_metadata=trace_metadata,
-                ),
-                timeout=full_extraction_timeout,
-            ))
-        else:
-            if tier2_client is None:
-                tier2_client = _get_tier2_client(cfg)
-            tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
-                _call_vllm_tier2(
-                    tier1,
-                    row,
-                    cfg,
-                    tier2_client,
-                    cfg.review_truncate_length,
-                    include_cache_hit=True,
-                    trace_metadata=trace_metadata,
-                ),
-                timeout=full_extraction_timeout,
-            ))
-
-        if tier2_cache_hit:
-            usage["tier2_exact_cache_hits"] += 1
-            usage["exact_cache_hits"] += 1
-        elif tier2_model is not None:
-            usage["tier2_generated_calls"] += 1
-            usage["generated"] += 1
-
-        if tier2 is not None:
-            model_id = f"hybrid:{tier1_batch_model_id}+{tier2_model}"
-        else:
-            model_id = tier1_batch_model_id
-
-        return await _persist_wrapped(
-            row,
-            _merge_tier1_tier2(tier1, tier2),
-            model_id=model_id,
-            usage=usage,
-        )
-
-    if tier1_batch_llm is None:
-        results = await _run_single_rows(rows)
-    else:
-        tier1_skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
-        tier2_skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
-        if not tier1_skill or not tier2_skill:
-            results = await _run_single_rows(rows)
-        else:
-            direct_rows = [row for row in rows if not _eligible_for_batch(row)]
-            batched_rows = [row for row in rows if _eligible_for_batch(row)]
-            row_results: dict[Any, dict[str, Any] | Exception] = {}
-
-            if direct_rows:
-                direct_results = await _run_single_rows(direct_rows)
-                for row, result in zip(direct_rows, direct_results):
-                    row_results[row["id"]] = result
-
-            tier1_entries: list[dict[str, Any]] = []
-            for row in batched_rows:
-                payload_json = json.dumps(_build_classify_payload(row, cfg.review_truncate_length))
-                messages = [
-                    {"role": "system", "content": tier1_skill.content},
-                    {"role": "user", "content": payload_json},
-                ]
-                request = prepare_b2b_exact_stage_request(
-                    "b2b_enrichment.tier1",
-                    provider="openrouter",
-                    model=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
-                    messages=messages,
-                    max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
-                    temperature=0.0,
-                    response_format={"type": "json_object"},
-                )
-                cached = await lookup_b2b_exact_stage_text(request)
-                tier1_entries.append(
-                    {
-                        "row": row,
-                        "payload_json": payload_json,
-                        "messages": messages,
-                        "request": request,
-                        "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
-                        "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
-                    }
-                )
-
-            existing_tier1_results = await reconcile_existing_batch_artifacts(
-                pool=pool,
-                llm=tier1_batch_llm,
-                task_name="b2b_enrichment",
-                artifact_type="review_enrichment_tier1",
-                artifact_ids=[str(entry["row"]["id"]) for entry in tier1_entries],
-            )
-            tier1_ready_entries: list[dict[str, Any]] = []
-            remaining_tier1_entries: list[dict[str, Any]] = []
-            for entry in tier1_entries:
-                row = entry["row"]
-                existing = existing_tier1_results.get(str(row["id"]))
-                if existing and existing.get("state") == "succeeded":
-                    tier1 = _parse_batch_text(existing.get("response_text"))
-                    if tier1 is not None:
-                        tier1_ready_entries.append(
-                            {
-                                "row": row,
-                                "tier1": tier1,
-                                "cached": bool(existing.get("cached")),
-                                "request": entry["request"],
-                            }
-                        )
-                        batch_metrics["reused_completed_items"] += 1
-                        continue
-                if existing and existing.get("state") == "pending":
-                    row_results[row["id"]] = await _defer_batch_row(
-                        pool,
-                        row,
-                        tier="tier1",
-                        custom_id=str(existing.get("custom_id") or ""),
-                    )
-                    batch_metrics["reused_pending_items"] += 1
-                    batch_metrics["rows_deferred"] += 1
-                    continue
-                remaining_tier1_entries.append(entry)
-            tier1_entries = remaining_tier1_entries
-
-            if tier1_entries:
-                tier1_execution = await run_anthropic_message_batch(
-                    llm=tier1_batch_llm,
-                    stage_id="b2b_enrichment.tier1",
-                    task_name="b2b_enrichment",
-                    items=[
-                        AnthropicBatchItem(
-                            custom_id=_enrichment_batch_custom_id("tier1", entry["row"]["id"]),
-                            artifact_type="review_enrichment_tier1",
-                            artifact_id=str(entry["row"]["id"]),
-                            vendor_name=str(entry["row"].get("vendor_name") or "") or None,
-                            messages=[
-                                Message(role=str(message["role"]), content=str(message["content"]))
-                                for message in entry["messages"]
-                            ],
-                            max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
-                            temperature=0.0,
-                            trace_span_name="task.b2b_enrichment.tier1",
-                            trace_metadata={
-                                "run_id": run_id,
-                                "vendor_name": str(entry["row"].get("vendor_name") or ""),
-                                "review_id": str(entry["row"]["id"]),
-                                "source": str(entry["row"].get("source") or ""),
-                                "tier": "tier1",
-                                "workload": "anthropic_batch",
-                            },
-                            request_metadata={"review_id": str(entry["row"]["id"]), "tier": 1},
-                            cached_response_text=entry["cached_response_text"],
-                            cached_usage=entry["cached_usage"],
-                        )
-                        for entry in tier1_entries
-                    ],
-                    run_id=run_id,
-                    min_batch_size=anthropic_batch_min_items(
-                        task,
-                        default=2,
-                        keys=("enrichment_anthropic_batch_min_items",),
-                    ),
-                    batch_metadata={"stage": "tier1"},
-                    pool=pool,
-                )
-                batch_metrics["jobs"] += 1 if tier1_execution.provider_batch_id else 0
-                batch_metrics["submitted_items"] += int(tier1_execution.submitted_items or 0)
-                batch_metrics["cache_prefiltered_items"] += int(tier1_execution.cache_prefiltered_items or 0)
-                batch_metrics["fallback_single_call_items"] += int(tier1_execution.fallback_single_call_items or 0)
-                batch_metrics["completed_items"] += int(tier1_execution.completed_items or 0)
-                batch_metrics["failed_items"] += int(tier1_execution.failed_items or 0)
-            else:
-                tier1_execution = SimpleNamespace(results_by_custom_id={})
-
-            tier2_entries: list[dict[str, Any]] = []
-            fallback_rows: list[dict[str, Any]] = []
-            per_row_batch_usage: dict[Any, dict[str, int]] = {}
-
-            for ready_entry in tier1_ready_entries:
-                row = ready_entry["row"]
-                usage = _empty_exact_cache_usage()
-                if ready_entry["cached"]:
-                    usage["tier1_exact_cache_hits"] += 1
-                    usage["exact_cache_hits"] += 1
-                else:
-                    usage["tier1_generated_calls"] += 1
-                    usage["generated"] += 1
-                per_row_batch_usage[row["id"]] = usage
-                needs_tier2 = _tier1_has_extraction_gaps(ready_entry["tier1"], source=row.get("source"))
-                if needs_tier2 and tier2_batch_llm is not None:
-                    payload = _build_classify_payload(row, cfg.review_truncate_length)
-                    payload["tier1_specific_complaints"] = ready_entry["tier1"].get("specific_complaints", [])
-                    payload["tier1_quotable_phrases"] = ready_entry["tier1"].get("quotable_phrases", [])
-                    payload_json = json.dumps(payload)
-                    system_prompt = _tier2_system_prompt_for_content_type(
-                        tier2_skill.content,
-                        payload.get("content_type"),
-                    )
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": payload_json},
-                    ]
-                    request = prepare_b2b_exact_stage_request(
-                        "b2b_enrichment.tier2",
-                        provider="openrouter",
-                        model=str(tier2_model_id),
-                        messages=messages,
-                        max_tokens=cfg.enrichment_tier2_max_tokens,
-                        temperature=0.0,
-                        response_format={"type": "json_object"},
-                    )
-                    cached = await lookup_b2b_exact_stage_text(request)
-                    tier2_entries.append(
-                        {
-                            "row": row,
-                            "tier1": ready_entry["tier1"],
-                            "messages": messages,
-                            "request": request,
-                            "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
-                            "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
-                        }
-                    )
-                elif needs_tier2:
-                    row_results[row["id"]] = await _run_single_tier2_fallback(
-                        row,
-                        ready_entry["tier1"],
-                        usage,
-                    )
-                else:
-                    row_results[row["id"]] = await _persist_wrapped(
-                        row,
-                        _merge_tier1_tier2(ready_entry["tier1"], None),
-                        model_id=tier1_batch_model_id,
-                        usage=usage,
-                    )
-
-            for entry in tier1_entries:
-                row = entry["row"]
-                usage = _empty_exact_cache_usage()
-                tier1_custom_id = _enrichment_batch_custom_id("tier1", row["id"])
-                outcome = tier1_execution.results_by_custom_id.get(tier1_custom_id)
-                tier1 = _parse_batch_text(outcome.response_text if outcome is not None else None)
-                if tier1 is None:
-                    fallback_rows.append(row)
-                    if outcome is not None:
-                        await mark_batch_fallback_result(
-                            batch_id=tier1_execution.local_batch_id,
-                            custom_id=tier1_custom_id,
-                            succeeded=False,
-                            error_text=outcome.error_text or "tier1_batch_parse_failed",
-                            pool=pool,
-                        )
-                    continue
-                if outcome is not None and outcome.cached:
-                    usage["tier1_exact_cache_hits"] += 1
-                    usage["exact_cache_hits"] += 1
-                else:
-                    usage["tier1_generated_calls"] += 1
-                    usage["generated"] += 1
-                    await store_b2b_exact_stage_text(
-                        entry["request"],
-                        response_text=clean_llm_output(outcome.response_text or ""),
-                        metadata={"tier": 1, "backend": "anthropic_batch"},
-                    )
-
-                per_row_batch_usage[row["id"]] = usage
-                needs_tier2 = _tier1_has_extraction_gaps(tier1, source=row.get("source"))
-                if needs_tier2 and tier2_batch_llm is not None:
-                    payload = _build_classify_payload(row, cfg.review_truncate_length)
-                    payload["tier1_specific_complaints"] = tier1.get("specific_complaints", [])
-                    payload["tier1_quotable_phrases"] = tier1.get("quotable_phrases", [])
-                    payload_json = json.dumps(payload)
-                    system_prompt = _tier2_system_prompt_for_content_type(
-                        tier2_skill.content,
-                        payload.get("content_type"),
-                    )
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": payload_json},
-                    ]
-                    request = prepare_b2b_exact_stage_request(
-                        "b2b_enrichment.tier2",
-                        provider="openrouter",
-                        model=str(tier2_model_id),
-                        messages=messages,
-                        max_tokens=cfg.enrichment_tier2_max_tokens,
-                        temperature=0.0,
-                        response_format={"type": "json_object"},
-                    )
-                    cached = await lookup_b2b_exact_stage_text(request)
-                    tier2_entries.append(
-                        {
-                            "row": row,
-                            "tier1": tier1,
-                            "messages": messages,
-                            "request": request,
-                            "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
-                            "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
-                        }
-                    )
-                elif needs_tier2:
-                    row_results[row["id"]] = await _run_single_tier2_fallback(row, tier1, usage)
-                else:
-                    row_results[row["id"]] = await _persist_wrapped(
-                        row,
-                        _merge_tier1_tier2(tier1, None),
-                        model_id=tier1_batch_model_id,
-                        usage=usage,
-                    )
-
-            if tier2_entries:
-                existing_tier2_results = await reconcile_existing_batch_artifacts(
-                    pool=pool,
-                    llm=tier2_batch_llm,
-                    task_name="b2b_enrichment",
-                    artifact_type="review_enrichment_tier2",
-                    artifact_ids=[str(entry["row"]["id"]) for entry in tier2_entries],
-                )
-                remaining_tier2_entries: list[dict[str, Any]] = []
-                for entry in tier2_entries:
-                    row = entry["row"]
-                    existing = existing_tier2_results.get(str(row["id"]))
-                    usage = per_row_batch_usage[row["id"]]
-                    if existing and existing.get("state") == "succeeded":
-                        tier2 = _parse_batch_text(existing.get("response_text"))
-                        if tier2 is not None:
-                            if existing.get("cached"):
-                                usage["tier2_exact_cache_hits"] += 1
-                                usage["exact_cache_hits"] += 1
-                            else:
-                                usage["tier2_generated_calls"] += 1
-                                usage["generated"] += 1
-                            row_results[row["id"]] = await _persist_wrapped(
-                                row,
-                                _merge_tier1_tier2(entry["tier1"], tier2),
-                                model_id=f"hybrid:{tier1_batch_model_id}+{tier2_model_id}",
-                                usage=usage,
-                            )
-                            batch_metrics["reused_completed_items"] += 1
-                            continue
-                    if existing and existing.get("state") == "pending":
-                        row_results[row["id"]] = await _defer_batch_row(
-                            pool,
-                            row,
-                            tier="tier2",
-                            usage=usage,
-                            custom_id=str(existing.get("custom_id") or ""),
-                        )
-                        batch_metrics["reused_pending_items"] += 1
-                        batch_metrics["rows_deferred"] += 1
-                        continue
-                    remaining_tier2_entries.append(entry)
-                tier2_entries = remaining_tier2_entries
-
-                if tier2_entries:
-                    tier2_execution = await run_anthropic_message_batch(
-                        llm=tier2_batch_llm,
-                        stage_id="b2b_enrichment.tier2",
-                        task_name="b2b_enrichment",
-                        items=[
-                            AnthropicBatchItem(
-                                custom_id=_enrichment_batch_custom_id("tier2", entry["row"]["id"]),
-                                artifact_type="review_enrichment_tier2",
-                                artifact_id=str(entry["row"]["id"]),
-                                vendor_name=str(entry["row"].get("vendor_name") or "") or None,
-                                messages=[
-                                    Message(role=str(message["role"]), content=str(message["content"]))
-                                    for message in entry["messages"]
-                                ],
-                                max_tokens=cfg.enrichment_tier2_max_tokens,
-                                temperature=0.0,
-                                trace_span_name="task.b2b_enrichment.tier2",
-                                trace_metadata={
-                                    "run_id": run_id,
-                                    "vendor_name": str(entry["row"].get("vendor_name") or ""),
-                                    "review_id": str(entry["row"]["id"]),
-                                    "source": str(entry["row"].get("source") or ""),
-                                    "tier": "tier2",
-                                    "workload": "anthropic_batch",
-                                },
-                                request_metadata={"review_id": str(entry["row"]["id"]), "tier": 2},
-                                cached_response_text=entry["cached_response_text"],
-                                cached_usage=entry["cached_usage"],
-                            )
-                            for entry in tier2_entries
-                        ],
-                        run_id=run_id,
-                        min_batch_size=anthropic_batch_min_items(
-                            task,
-                            default=2,
-                            keys=("enrichment_anthropic_batch_min_items",),
-                        ),
-                        batch_metadata={"stage": "tier2"},
-                        pool=pool,
-                    )
-                    batch_metrics["jobs"] += 1 if tier2_execution.provider_batch_id else 0
-                    batch_metrics["submitted_items"] += int(tier2_execution.submitted_items or 0)
-                    batch_metrics["cache_prefiltered_items"] += int(tier2_execution.cache_prefiltered_items or 0)
-                    batch_metrics["fallback_single_call_items"] += int(tier2_execution.fallback_single_call_items or 0)
-                    batch_metrics["completed_items"] += int(tier2_execution.completed_items or 0)
-                    batch_metrics["failed_items"] += int(tier2_execution.failed_items or 0)
-                else:
-                    tier2_execution = SimpleNamespace(results_by_custom_id={})
-
-                for entry in tier2_entries:
-                    row = entry["row"]
-                    usage = per_row_batch_usage[row["id"]]
-                    tier2_custom_id = _enrichment_batch_custom_id("tier2", row["id"])
-                    outcome = tier2_execution.results_by_custom_id.get(tier2_custom_id)
-                    tier2 = _parse_batch_text(outcome.response_text if outcome is not None else None)
-                    if tier2 is None:
-                        fallback_rows.append(row)
-                        if outcome is not None:
-                            await mark_batch_fallback_result(
-                                batch_id=tier2_execution.local_batch_id,
-                                custom_id=tier2_custom_id,
-                                succeeded=False,
-                                error_text=outcome.error_text or "tier2_batch_parse_failed",
-                                pool=pool,
-                            )
-                        continue
-                    if outcome is not None and outcome.cached:
-                        usage["tier2_exact_cache_hits"] += 1
-                        usage["exact_cache_hits"] += 1
-                    else:
-                        usage["tier2_generated_calls"] += 1
-                        usage["generated"] += 1
-                        await store_b2b_exact_stage_text(
-                            entry["request"],
-                            response_text=clean_llm_output(outcome.response_text or ""),
-                            metadata={"tier": 2, "backend": "anthropic_batch"},
-                        )
-                    row_results[row["id"]] = await _persist_wrapped(
-                        row,
-                        _merge_tier1_tier2(entry["tier1"], tier2),
-                        model_id=f"hybrid:{tier1_batch_model_id}+{tier2_model_id}",
-                        usage=usage,
-                    )
-
-            fallback_results = await _run_single_rows(fallback_rows)
-            for row, result in zip(fallback_rows, fallback_results):
-                row_results[row["id"]] = result
-
-            results = [row_results[row["id"]] for row in rows]
-
-    for row, result in zip(rows, results):
-        if isinstance(result, Exception):
-            logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
-
-    cache_usage = _empty_exact_cache_usage()
-    for result in results:
-        if isinstance(result, Exception):
-            continue
-        if isinstance(result, dict):
-            _accumulate_exact_cache_usage(cache_usage, result)
-
-    batch_ids = [row["id"] for row in rows]
-    status_rows = await pool.fetch(
-        """
-        SELECT enrichment_status, count(*) AS ct
-        FROM b2b_reviews
-        WHERE id = ANY($1::uuid[])
-        GROUP BY enrichment_status
-        """,
-        batch_ids,
-    )
-    status_counts = {r["enrichment_status"]: int(r["ct"]) for r in status_rows}
-    enriched = status_counts.get("enriched", 0)
-    quarantined = status_counts.get("quarantined", 0)
-    no_signal = status_counts.get("no_signal", 0)
-    failed = status_counts.get("failed", 0)
-
-    logger.info(
-        "B2B enrichment: %d enriched, %d quarantined, %d no_signal, %d failed (of %d)",
-        enriched, quarantined, no_signal or 0, failed, len(rows),
-    )
-
-    return {
-        "total": len(rows),
-        "enriched": enriched,
-        "quarantined": quarantined,
-        "no_signal": no_signal or 0,
-        "failed": failed,
-        "anthropic_batch_jobs": batch_metrics["jobs"],
-        "anthropic_batch_items_submitted": batch_metrics["submitted_items"],
-        "anthropic_batch_cache_prefiltered_items": batch_metrics["cache_prefiltered_items"],
-        "anthropic_batch_fallback_single_call_items": batch_metrics["fallback_single_call_items"],
-        "anthropic_batch_completed_items": batch_metrics["completed_items"],
-        "anthropic_batch_failed_items": batch_metrics["failed_items"],
-        "anthropic_batch_reused_completed_items": batch_metrics["reused_completed_items"],
-        "anthropic_batch_reused_pending_items": batch_metrics["reused_pending_items"],
-        "anthropic_batch_rows_deferred": batch_metrics["rows_deferred"],
-        "anthropic_batch_tier2_single_fallback_rows": batch_metrics["tier2_single_fallback_rows"],
-        **cache_usage,
-    }
 
 
 async def _recover_orphaned_enriching(pool, max_attempts: int) -> int:
@@ -4022,215 +2363,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     pool = get_db_pool()
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
-
-    orphaned = await _recover_orphaned_enriching(pool, cfg.enrichment_max_attempts)
-    exhausted = await _mark_exhausted_pending_failed(pool, cfg.enrichment_max_attempts)
-
-    # Auto re-process reviews scraped with outdated parser versions
-    requeued_parser = await _queue_version_upgrades(pool)
-    requeued_model = await _queue_model_upgrades(pool, cfg)
-    requeued = requeued_parser + requeued_model
-
-    task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
-    default_max_batch = min(
-        _coerce_int_value(getattr(cfg, "enrichment_max_per_batch", 10), 10),
-        500,
-    )
-    max_batch = _coerce_int_override(
-        task_metadata.get("enrichment_max_per_batch"),
-        default_max_batch,
-        min_value=1,
-        max_value=500,
-    )
-    max_attempts = _coerce_int_value(getattr(cfg, "enrichment_max_attempts", 3), 3)
-    default_max_rounds = max(
-        1,
-        _coerce_int_value(getattr(cfg, "enrichment_max_rounds_per_run", 1), 1),
-    )
-    max_rounds = _coerce_int_override(
-        task_metadata.get("enrichment_max_rounds_per_run"),
-        default_max_rounds,
-        min_value=1,
-        max_value=100,
-    )
-    effective_concurrency = _coerce_int_override(
-        task_metadata.get("enrichment_concurrency"),
-        max(1, _coerce_int_value(getattr(cfg, "enrichment_concurrency", 10), 10)),
-        min_value=1,
-        max_value=100,
-    )
-    inter_batch_delay = max(
-        0.0,
-        _coerce_float_value(
-            task_metadata.get(
-                "enrichment_inter_batch_delay_seconds",
-                getattr(cfg, "enrichment_inter_batch_delay_seconds", 2.0),
-            ),
-            _coerce_float_value(getattr(cfg, "enrichment_inter_batch_delay_seconds", 2.0), 2.0),
+    return await run_enrichment_task(
+        task=task,
+        cfg=cfg,
+        pool=pool,
+        deps=EnrichmentTaskRunnerDeps(
+            recover_orphaned_enriching=_recover_orphaned_enriching,
+            mark_exhausted_pending_failed=_mark_exhausted_pending_failed,
+            queue_version_upgrades=_queue_version_upgrades,
+            queue_model_upgrades=_queue_model_upgrades,
+            task_run_id=_task_run_id,
+            enrich_rows=_enrich_rows,
+            fetch_review_funnel_audit=_fetch_review_funnel_audit,
+            empty_exact_cache_usage=_empty_exact_cache_usage,
+            accumulate_exact_cache_usage=_accumulate_exact_cache_usage,
+            coerce_int_value=_coerce_int_value,
+            coerce_int_override=_coerce_int_override,
+            coerce_float_value=_coerce_float_value,
         ),
     )
-    priority_sources = [
-        source.strip().lower()
-        for source in str(cfg.enrichment_priority_sources or "").split(",")
-        if source.strip()
-    ]
-    run_id = _task_run_id(task)
-
-    total_enriched = 0
-    total_failed = 0
-    total_no_signal = 0
-    total_quarantined = 0
-    cache_usage = _empty_exact_cache_usage()
-    batch_metrics = {
-        "anthropic_batch_jobs": 0,
-        "anthropic_batch_items_submitted": 0,
-        "anthropic_batch_cache_prefiltered_items": 0,
-        "anthropic_batch_fallback_single_call_items": 0,
-        "anthropic_batch_completed_items": 0,
-        "anthropic_batch_failed_items": 0,
-        "anthropic_batch_rows_deferred": 0,
-        "anthropic_batch_tier2_single_fallback_rows": 0,
-    }
-    rounds = 0
-
-    while rounds < max_rounds:
-        rows = await pool.fetch(
-            """
-            WITH batch AS (
-                SELECT id
-                FROM b2b_reviews
-                WHERE enrichment_status = 'pending'
-                  AND enrichment_attempts < $1
-                ORDER BY CASE
-                    WHEN source = ANY($3::text[]) THEN 0
-                    ELSE 1
-                END,
-                imported_at DESC
-                LIMIT $2
-                FOR UPDATE SKIP LOCKED
-            )
-            UPDATE b2b_reviews r
-            SET enrichment_status = 'enriching'
-            FROM batch
-            WHERE r.id = batch.id
-            RETURNING r.id, r.vendor_name, r.product_name, r.product_category,
-                      r.source, r.raw_metadata,
-                      r.rating, r.rating_max, r.summary, r.review_text, r.pros, r.cons,
-                      r.reviewer_title, r.reviewer_company, r.company_size_raw,
-                      r.reviewer_industry, r.enrichment_attempts, r.content_type
-            """,
-            max_attempts,
-            max_batch,
-            priority_sources,
-        )
-
-        if not rows:
-            break
-
-        result = await _enrich_rows(
-            rows,
-            cfg,
-            pool,
-            concurrency_override=effective_concurrency,
-            run_id=run_id,
-            task=task,
-        )
-        total_enriched += result.get("enriched", 0)
-        batch_failed = result.get("failed", 0)
-        total_failed += batch_failed
-        total_no_signal += result.get("no_signal", 0)
-        total_quarantined += result.get("quarantined", 0)
-        _accumulate_exact_cache_usage(cache_usage, result)
-        for key in batch_metrics:
-            batch_metrics[key] += int(result.get(key, 0) or 0)
-        rounds += 1
-
-        # If most of the batch failed, vLLM is likely overwhelmed -- stop the loop
-        if batch_failed > len(rows) * 0.5:
-            logger.warning("B2B enrichment: >50%% failures in batch (%d/%d), stopping loop",
-                           batch_failed, len(rows))
-            break
-
-        if inter_batch_delay > 0:
-            await asyncio.sleep(inter_batch_delay)
-
-    if rounds == 0:
-        return {"_skip_synthesis": "No B2B reviews to enrich"}
-
-    secondary_write_breakdown = {
-        "company_backfills": int(cache_usage.get("secondary_write_hits", 0) or 0),
-        "orphaned_requeued": int(orphaned or 0),
-        "exhausted_marked_failed": int(exhausted or 0),
-        "version_upgrade_requeued": int(requeued or 0),
-    }
-    secondary_write_hits = sum(secondary_write_breakdown.values())
-    result = {
-        "enriched": total_enriched,
-        "quarantined": total_quarantined,
-        "failed": total_failed,
-        "no_signal": total_no_signal,
-        **cache_usage,
-        "rounds": rounds,
-        "orphaned_requeued": orphaned,
-        "exhausted_marked_failed": exhausted,
-        "witness_rows": int(cache_usage.get("witness_rows", 0) or 0),
-        "witness_count": int(cache_usage.get("witness_count", 0) or 0),
-        "reviews_processed": total_enriched + total_quarantined + total_failed + total_no_signal,
-        "secondary_write_hits": secondary_write_hits,
-        "secondary_write_breakdown": secondary_write_breakdown,
-        **batch_metrics,
-        "_skip_synthesis": "B2B enrichment complete",
-    }
-    result["funnel_audit"] = await _fetch_review_funnel_audit(
-        pool,
-        int(getattr(cfg, "intelligence_window_days", 30) or 30),
-    )
-    if requeued:
-        result["version_upgrade_requeued"] = requeued
-
-    # Record enrichment run summary
-    from ..visibility import record_attempt, emit_event
-    total_processed = total_enriched + total_quarantined + total_failed + total_no_signal
-    await record_attempt(
-        pool, artifact_type="enrichment", artifact_id="batch",
-        run_id=run_id, stage="enrichment",
-        status="succeeded" if total_failed == 0 else "failed",
-        score=total_enriched,
-        blocker_count=total_failed,
-        warning_count=total_quarantined,
-        error_message=f"{total_failed} failed, {total_quarantined} quarantined" if total_failed else None,
-    )
-    if total_failed > 0 or total_quarantined > 0 or secondary_write_hits > 0:
-        if total_failed > 0:
-            reason_code = "enrichment_failures"
-        elif total_quarantined > 0:
-            reason_code = "enrichment_quarantines"
-        else:
-            reason_code = "enrichment_secondary_writes"
-        await emit_event(
-            pool, stage="extraction", event_type="enrichment_run_summary",
-            entity_type="pipeline", entity_id="enrichment",
-            summary=f"Enrichment: {total_enriched} enriched, {total_failed} failed, {total_quarantined} quarantined",
-            severity="warning" if total_failed > 0 else "info",
-            actionable=total_failed > 5,
-            run_id=run_id,
-            reason_code=reason_code,
-            detail={
-                "enriched": total_enriched,
-                "failed": total_failed,
-                "quarantined": total_quarantined,
-                "no_signal": total_no_signal,
-                "processed": total_processed,
-                "witness_rows": int(cache_usage.get("witness_rows", 0) or 0),
-                "witness_count": int(cache_usage.get("witness_count", 0) or 0),
-                "exact_cache_hits": int(cache_usage.get("exact_cache_hits", 0) or 0),
-                "generated": int(cache_usage.get("generated", 0) or 0),
-                "secondary_write_hits": secondary_write_hits,
-                "secondary_write_breakdown": secondary_write_breakdown,
-            },
-        )
-
-    return result
 
 
 _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
@@ -4239,33 +2390,11 @@ _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
 
 
 def _combined_review_text_length(row: dict[str, Any] | None) -> int:
-    row = row or {}
-    return sum(
-        len(str(row.get(field) or ""))
-        for field in ("review_text", "pros", "cons")
-    )
+    return _domain_combined_review_text_length(row)
 
 
 def _effective_min_review_text_length(row: dict[str, Any] | None) -> int:
-    source = str((row or {}).get("source") or "").strip().lower()
-    if source == "capterra":
-        try:
-            return min(
-                _MIN_REVIEW_TEXT_LENGTH,
-                max(
-                    20,
-                    int(
-                        getattr(
-                            settings.b2b_scrape,
-                            "capterra_min_enrichable_text_len",
-                            40,
-                        ) or 40
-                    ),
-                ),
-            )
-        except (TypeError, ValueError):
-            return 40
-    return _MIN_REVIEW_TEXT_LENGTH
+    return _domain_effective_min_review_text_length(row)
 
 
 async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
@@ -4330,6 +2459,18 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             "source": str(row.get("source") or ""),
         }
         client = _get_tier1_client(cfg)
+        from ...skills import get_skill_registry
+
+        registry = get_skill_registry()
+        tier1_skill = registry.get("digest/b2b_churn_extraction_tier1")
+        tier1_request = None
+        tier1_request_fingerprint = None
+        tier1_work_fingerprint = None
+        existing_tier1_stage = None
+        tier1 = None
+        tier1_model = None
+        tier1_cache_hit = False
+        tier1_reused_from_stage = False
 
         # Tier 1: deterministic extraction (base fields). Tier 2: nuance
         # classification. Each tier has its own routing flag so a deployment
@@ -4338,7 +2479,98 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         use_openrouter_tier1, use_openrouter_tier2 = _resolve_tier_routing(
             cfg, local_only_override=local_only,
         )
-        if use_openrouter_tier1:
+        if tier1_skill is not None:
+            tier1_provider = "openrouter" if use_openrouter_tier1 else "vllm"
+            tier1_model_planned = (
+                cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"
+                if use_openrouter_tier1
+                else cfg.enrichment_tier1_model
+            )
+            tier1_plan = build_tier1_stage_plan(
+                row=row,
+                payload_json=payload_json,
+                system_prompt=str(tier1_skill.content or ""),
+                model=str(tier1_model_planned or ""),
+                provider=tier1_provider,
+                batch_enabled=False,
+                run_id=run_id,
+                prepare_stage_request=_prepare_stage_request,
+                max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096)
+                if use_openrouter_tier1 else cfg.enrichment_tier1_max_tokens,
+                guided_json=None if use_openrouter_tier1 else _TIER1_JSON_SCHEMA,
+            )
+            tier1_request = tier1_plan.request
+            tier1_request_fingerprint = tier1_plan.request_fingerprint
+            tier1_work_fingerprint = tier1_plan.work_fingerprint
+            await ensure_stage_run(
+                pool,
+                review_id=review_id,
+                stage_id="b2b_enrichment.tier1",
+                work_fingerprint=str(tier1_plan.work_fingerprint),
+                request_fingerprint=str(tier1_plan.request_fingerprint),
+                provider=tier1_plan.provider,
+                model=tier1_plan.model,
+                backend=tier1_plan.backend,
+                run_id=run_id,
+                metadata=tier1_plan.metadata,
+            )
+            stage_decision = await prepare_stage_execution(
+                pool=pool,
+                llm=None,
+                task_name=None,
+                artifact_type=None,
+                artifact_id=None,
+                review_id=review_id,
+                stage_id="b2b_enrichment.tier1",
+                work_fingerprint=str(tier1_work_fingerprint),
+                request_fingerprint=str(tier1_request_fingerprint),
+                parse_response_text=_parse_stage_row_result,
+                defer_on_submitted=True,
+                reconcile_batch=False,
+            )
+            existing_tier1_stage = stage_decision.stage_row
+            if stage_decision.action == "reuse_stage":
+                applied = await apply_stage_decision(
+                    pool=pool,
+                    decision=stage_decision,
+                    review_id=review_id,
+                    stage_id="b2b_enrichment.tier1",
+                    work_fingerprint=str(tier1_work_fingerprint),
+                    tier=1,
+                    usage_from_stage_row=_stage_usage_from_row,
+                    pending_metadata={"tier": 1, "workload": "direct"},
+                    success_metadata={"tier": 1, "workload": "direct"},
+                    stage_usage_snapshot=_stage_usage_snapshot,
+                )
+                tier1 = applied.parsed_result if applied is not None else stage_decision.parsed_result
+                tier1_model = applied.model if applied is not None else None
+                tier1_cache_hit = bool(applied.cache_hit) if applied is not None else False
+                tier1_reused_from_stage = True
+            elif stage_decision.action == "defer_submitted_stage":
+                applied = await apply_stage_decision(
+                    pool=pool,
+                    decision=stage_decision,
+                    review_id=review_id,
+                    stage_id="b2b_enrichment.tier1",
+                    work_fingerprint=str(tier1_work_fingerprint),
+                    tier=1,
+                    usage_from_stage_row=_stage_usage_from_row,
+                    pending_metadata={"tier": 1, "workload": "direct"},
+                    success_metadata={"tier": 1, "workload": "direct"},
+                    stage_usage_snapshot=_stage_usage_snapshot,
+                )
+                await defer_review_transition(
+                    row=row,
+                    tier="tier1",
+                    custom_id=str((applied.custom_id if applied is not None else "") or ""),
+                    usage=None,
+                    defer_review=lambda target_row, **kwargs: _defer_batch_row(pool, target_row, **kwargs),
+                )
+                return _finish("deferred")
+        if tier1_skill is not None and tier1 is not None:
+            stage_reuse_usage = _stage_usage_from_row(existing_tier1_stage, tier=1)
+            _accumulate_exact_cache_usage(cache_usage, stage_reuse_usage)
+        elif use_openrouter_tier1:
             tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
                 _call_openrouter_tier1(
                     payload_json,
@@ -4348,7 +2580,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 ),
                 timeout=full_extraction_timeout,
             ))
-        else:
+        elif tier1_skill is not None:
             tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
                 _call_vllm_tier1(
                     payload_json,
@@ -4359,24 +2591,164 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 ),
                 timeout=full_extraction_timeout,
             ))
-        if tier1_cache_hit:
+        if tier1_skill is not None and tier1 is not None and existing_tier1_stage is not None and str(existing_tier1_stage.get("state") or "") == "succeeded":
+            pass
+        elif tier1_cache_hit:
             cache_usage["tier1_exact_cache_hits"] += 1
             cache_usage["exact_cache_hits"] += 1
         elif tier1_model is not None:
             cache_usage["tier1_generated_calls"] += 1
             cache_usage["generated"] += 1
+        tier1_stage_usage = _stage_usage_snapshot(
+            tier=1,
+            cache_hit=bool(tier1_cache_hit),
+            generated=tier1 is not None and not bool(tier1_cache_hit),
+        )
         if tier1 is None:
+            if tier1_request_fingerprint is not None:
+                await mark_stage_run(
+                    pool,
+                    review_id=review_id,
+                    stage_id="b2b_enrichment.tier1",
+                    work_fingerprint=str(tier1_work_fingerprint),
+                    state="failed",
+                    backend=_stage_backend_name(
+                        batch_enabled=False,
+                        provider="openrouter" if use_openrouter_tier1 else "vllm",
+                    ),
+                    error_code="tier1_empty_result",
+                    metadata={"tier": 1, "workload": "direct"},
+                    completed=True,
+                )
             logger.debug("Tier 1 returned None for %s, deferring to next cycle", review_id)
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
             return _finish(False)
+        if tier1_request_fingerprint is not None and not tier1_reused_from_stage:
+            await mark_stage_run(
+                pool,
+                review_id=review_id,
+                stage_id="b2b_enrichment.tier1",
+                work_fingerprint=str(tier1_work_fingerprint),
+                state="succeeded",
+                result_source="exact_cache" if tier1_cache_hit else "generated",
+                backend=_stage_backend_name(
+                    batch_enabled=False,
+                    provider="openrouter" if use_openrouter_tier1 else "vllm",
+                ),
+                usage=tier1_stage_usage,
+                response_text=_stage_result_text(tier1),
+                metadata={"tier": 1, "workload": "direct"},
+                completed=True,
+            )
 
         # Tier 2: conditional -- only fire when tier 1 left extraction gaps
         tier2 = None
         tier2_model = None
         tier2_cache_hit = False
-        if _tier1_has_extraction_gaps(tier1, source=row.get("source")):
+        needs_tier2 = _tier1_has_extraction_gaps(tier1, source=row.get("source"))
+        tier2_request_fingerprint = None
+        tier2_work_fingerprint = None
+        existing_tier2_stage = None
+        tier2_reused_from_stage = False
+        if needs_tier2:
+            tier2_skill = registry.get("digest/b2b_churn_extraction_tier2")
+            if tier2_skill is not None:
+                tier2_provider = "openrouter" if use_openrouter_tier2 else "vllm"
+                tier2_model_planned = (
+                    cfg.enrichment_tier2_openrouter_model
+                    or cfg.enrichment_openrouter_model
+                    or "anthropic/claude-haiku-4-5"
+                    if use_openrouter_tier2
+                    else (cfg.enrichment_tier2_model or cfg.enrichment_tier1_model)
+                )
+                tier2_payload = dict(payload)
+                tier2_plan = build_tier2_stage_plan(
+                    row=row,
+                    base_payload=tier2_payload,
+                    tier1_result=tier1,
+                    system_prompt=str(tier2_skill.content or ""),
+                    model=str(tier2_model_planned or ""),
+                    provider=tier2_provider,
+                    batch_enabled=False,
+                    run_id=run_id,
+                    prepare_stage_request=_prepare_stage_request,
+                    prompt_for_content_type=_tier2_system_prompt_for_content_type,
+                    max_tokens=cfg.enrichment_tier2_max_tokens,
+                    workload="direct",
+                )
+                tier2_request_fingerprint = tier2_plan.request_fingerprint
+                tier2_work_fingerprint = tier2_plan.work_fingerprint
+                await ensure_stage_run(
+                    pool,
+                    review_id=review_id,
+                    stage_id="b2b_enrichment.tier2",
+                    work_fingerprint=str(tier2_plan.work_fingerprint),
+                    request_fingerprint=str(tier2_plan.request_fingerprint),
+                    provider=tier2_plan.provider,
+                    model=tier2_plan.model,
+                    backend=tier2_plan.backend,
+                    run_id=run_id,
+                    metadata=tier2_plan.metadata,
+                )
+                stage_decision = await prepare_stage_execution(
+                    pool=pool,
+                    llm=None,
+                    task_name=None,
+                    artifact_type=None,
+                    artifact_id=None,
+                    review_id=review_id,
+                    stage_id="b2b_enrichment.tier2",
+                    work_fingerprint=str(tier2_work_fingerprint),
+                    request_fingerprint=str(tier2_request_fingerprint),
+                    parse_response_text=_parse_stage_row_result,
+                    defer_on_submitted=True,
+                    reconcile_batch=False,
+                )
+                existing_tier2_stage = stage_decision.stage_row
+                if stage_decision.action == "reuse_stage":
+                    applied = await apply_stage_decision(
+                        pool=pool,
+                        decision=stage_decision,
+                        review_id=review_id,
+                        stage_id="b2b_enrichment.tier2",
+                        work_fingerprint=str(tier2_work_fingerprint),
+                        tier=2,
+                        usage_from_stage_row=_stage_usage_from_row,
+                        pending_metadata={"tier": 2, "workload": "direct"},
+                        success_metadata={"tier": 2, "workload": "direct"},
+                        stage_usage_snapshot=_stage_usage_snapshot,
+                    )
+                    tier2 = applied.parsed_result if applied is not None else stage_decision.parsed_result
+                    tier2_model = applied.model if applied is not None else None
+                    tier2_cache_hit = bool(applied.cache_hit) if applied is not None else False
+                    tier2_reused_from_stage = True
+                elif stage_decision.action == "defer_submitted_stage":
+                    applied = await apply_stage_decision(
+                        pool=pool,
+                        decision=stage_decision,
+                        review_id=review_id,
+                        stage_id="b2b_enrichment.tier2",
+                        work_fingerprint=str(tier2_work_fingerprint),
+                        tier=2,
+                        usage_from_stage_row=_stage_usage_from_row,
+                        pending_metadata={"tier": 2, "workload": "direct"},
+                        success_metadata={"tier": 2, "workload": "direct"},
+                        stage_usage_snapshot=_stage_usage_snapshot,
+                    )
+                    await defer_review_transition(
+                        row=row,
+                        tier="tier2",
+                        custom_id=str((applied.custom_id if applied is not None else "") or ""),
+                        usage=cache_usage,
+                        defer_review=lambda target_row, **kwargs: _defer_batch_row(pool, target_row, **kwargs),
+                    )
+                    return _finish("deferred")
+        if needs_tier2:
             try:
-                if use_openrouter_tier2:
+                if tier2 is not None:
+                    stage_reuse_usage = _stage_usage_from_row(existing_tier2_stage, tier=2)
+                    _accumulate_exact_cache_usage(cache_usage, stage_reuse_usage)
+                elif use_openrouter_tier2:
                     tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
                         _call_openrouter_tier2(
                             tier1,
@@ -4408,27 +2780,59 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                     review_id,
                     exc_info=True,
                 )
-        if tier2_cache_hit:
+        if needs_tier2 and tier2 is not None and existing_tier2_stage is not None and str(existing_tier2_stage.get("state") or "") == "succeeded":
+            pass
+        elif tier2_cache_hit:
             cache_usage["tier2_exact_cache_hits"] += 1
             cache_usage["exact_cache_hits"] += 1
         elif tier2_model is not None:
             cache_usage["tier2_generated_calls"] += 1
             cache_usage["generated"] += 1
+        if needs_tier2 and tier2_request_fingerprint is not None and not tier2_reused_from_stage:
+            tier2_stage_usage = _stage_usage_snapshot(
+                tier=2,
+                cache_hit=bool(tier2_cache_hit),
+                generated=tier2 is not None and not bool(tier2_cache_hit),
+            )
+            await mark_stage_run(
+                pool,
+                review_id=review_id,
+                stage_id="b2b_enrichment.tier2",
+                work_fingerprint=str(tier2_work_fingerprint),
+                state="succeeded" if tier2 is not None else "failed",
+                result_source="exact_cache" if tier2_cache_hit else ("generated" if tier2 is not None else None),
+                backend=_stage_backend_name(
+                    batch_enabled=False,
+                    provider="openrouter" if use_openrouter_tier2 else "vllm",
+                ),
+                usage=tier2_stage_usage if tier2 is not None else None,
+                response_text=_stage_result_text(tier2),
+                error_code=None if tier2 is not None else "tier2_empty_result",
+                metadata={"tier": 2, "workload": "direct"},
+                completed=True,
+            )
         if tier2 is not None:
             model_id = f"hybrid:{tier1_model}+{tier2_model}"
         else:
             model_id = tier1_model or ""
 
-        result = _merge_tier1_tier2(tier1, tier2)
         return _finish(
-            await _persist_enrichment_result(
-                pool,
-                row,
-                result,
+            await persist_review_transition(
+                row=row,
+                tier1_result=tier1,
+                tier2_result=tier2,
                 model_id=model_id,
-                max_attempts=max_attempts,
-                run_id=run_id,
-                cache_usage=cache_usage,
+                usage=cache_usage,
+                merge_results=_merge_tier1_tier2,
+                persist_review=lambda target_row, result, *, model_id, usage: _persist_enrichment_result(
+                    pool,
+                    target_row,
+                    result,
+                    model_id=model_id,
+                    max_attempts=max_attempts,
+                    run_id=run_id,
+                    cache_usage=usage,
+                ),
             )
         )
 
@@ -4464,50 +2868,11 @@ def _smart_truncate(text: str, max_len: int = 3000) -> str:
 
 
 def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
-    """Build the JSON payload for the churn extraction skill."""
-    review_text = _smart_truncate(row["review_text"] or "", max_len=truncate_length)
-
-    raw_meta = row.get("raw_metadata") or {}
-    if isinstance(raw_meta, str):
-        try:
-            raw_meta = json.loads(raw_meta)
-        except (json.JSONDecodeError, TypeError):
-            raw_meta = {}
-
-    payload: dict[str, Any] = {
-        "vendor_name": row["vendor_name"],
-        "product_name": row["product_name"] or "",
-        "product_category": row["product_category"] or "",
-        "source_name": row.get("source") or "",
-        "source_weight": raw_meta.get("source_weight", 0.7),
-        "source_type": raw_meta.get("source_type", "unknown"),
-        "content_type": row.get("content_type") or "review",
-        "rating": float(row["rating"]) if row["rating"] is not None else None,
-        "rating_max": int(row["rating_max"]),
-        "summary": row["summary"] or "",
-        "review_text": review_text,
-    }
-    for key, value in (
-        ("pros", row["pros"]),
-        ("cons", row["cons"]),
-        ("reviewer_title", row["reviewer_title"]),
-        ("reviewer_company", row["reviewer_company"]),
-        ("company_size_raw", row["company_size_raw"]),
-        ("reviewer_industry", row["reviewer_industry"]),
-    ):
-        if isinstance(value, str) and value.strip():
-            payload[key] = value
-    if not payload["product_name"]:
-        payload.pop("product_name", None)
-    if not payload["product_category"]:
-        payload.pop("product_category", None)
-    if payload.get("rating") is None:
-        payload.pop("rating", None)
-    if not payload["summary"]:
-        payload.pop("summary", None)
-    if not payload["review_text"]:
-        payload.pop("review_text", None)
-    return payload
+    return _domain_build_classify_payload(
+        row,
+        truncate_length=truncate_length,
+        smart_truncate=_smart_truncate,
+    )
 
 
 _LOW_FIDELITY_TOKEN_STOPWORDS = {
@@ -4567,136 +2932,82 @@ _LOW_FIDELITY_CONSUMER_PATTERNS = (
 
 
 def _normalize_compare_text(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    return _service_normalize_compare_text(value)
 
 
 def _normalized_name_tokens(value: Any) -> list[str]:
-    normalized = _normalize_compare_text(value)
-    if not normalized:
-        return []
-    return [
-        token for token in normalized.split()
-        if len(token) >= 3 and token not in _LOW_FIDELITY_TOKEN_STOPWORDS
-    ]
+    return _service_normalized_name_tokens(
+        value,
+        low_fidelity_token_stopwords=_LOW_FIDELITY_TOKEN_STOPWORDS,
+    )
 
 
 def _text_mentions_name(haystack: str, needle: Any) -> bool:
-    normalized = _normalize_compare_text(needle)
-    if not normalized:
-        return False
-    wrapped = f" {haystack} "
-    if f" {normalized} " in wrapped:
-        return True
-    compact_haystack = haystack.replace(" ", "")
-    compact_needle = normalized.replace(" ", "")
-    if compact_needle and compact_needle in compact_haystack:
-        return True
-    return any(
-        re.search(rf"\b{re.escape(token)}\b", haystack)
-        for token in _normalized_name_tokens(needle)
+    return _service_text_mentions_name(
+        haystack,
+        needle,
+        low_fidelity_token_stopwords=_LOW_FIDELITY_TOKEN_STOPWORDS,
     )
 
 
 def _dedupe_reason_codes(codes: list[str]) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for code in codes:
-        if code and code not in seen:
-            seen.add(code)
-            ordered.append(code)
-    return ordered
+    return _service_dedupe_reason_codes(codes)
 
 
 def _has_commercial_context(text: str) -> bool:
-    return any(marker in text for marker in _LOW_FIDELITY_COMMERCIAL_MARKERS)
+    return _service_has_commercial_context(
+        text,
+        low_fidelity_commercial_markers=_LOW_FIDELITY_COMMERCIAL_MARKERS,
+    )
 
 
 def _has_strong_commercial_context(text: str) -> bool:
-    return any(marker in text for marker in _LOW_FIDELITY_STRONG_COMMERCIAL_MARKERS)
+    return _service_has_strong_commercial_context(
+        text,
+        low_fidelity_strong_commercial_markers=_LOW_FIDELITY_STRONG_COMMERCIAL_MARKERS,
+    )
 
 
 def _has_technical_context(summary_text: str, combined_text: str) -> bool:
-    if summary_text.endswith("?"):
-        return True
-    haystack = f"{summary_text} {combined_text}".strip()
-    return any(re.search(pattern, haystack) for pattern in _LOW_FIDELITY_TECHNICAL_PATTERNS)
+    return _service_has_technical_context(
+        summary_text,
+        combined_text,
+        low_fidelity_technical_patterns=_LOW_FIDELITY_TECHNICAL_PATTERNS,
+    )
 
 
 def _has_consumer_context(text: str) -> bool:
-    return any(re.search(pattern, text) for pattern in _LOW_FIDELITY_CONSUMER_PATTERNS)
+    return _service_has_consumer_context(
+        text,
+        low_fidelity_consumer_patterns=_LOW_FIDELITY_CONSUMER_PATTERNS,
+    )
 
 
 def _normalized_low_fidelity_noisy_sources() -> set[str]:
-    configured = {
-        item.strip().lower()
-        for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
-        if item.strip()
-    }
     default_raw = B2BChurnConfig.model_fields["enrichment_low_fidelity_noisy_sources"].default
-    default_values = {
-        item.strip().lower()
-        for item in str(default_raw or "").split(",")
-        if item.strip()
-    }
-    return configured | default_values
+    return _service_normalized_low_fidelity_noisy_sources(
+        settings.b2b_churn.enrichment_low_fidelity_noisy_sources,
+        default_raw,
+    )
 
 
 def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) -> list[str]:
-    source = str(row.get("source") or "").strip().lower()
-    noisy_sources = _normalized_low_fidelity_noisy_sources()
-    if source not in noisy_sources and source != "trustpilot":
-        return []
-
-    combined_text = " ".join(
-        str(row.get(field) or "")
-        for field in ("summary", "review_text", "pros", "cons")
+    return _service_detect_low_fidelity_reasons(
+        row,
+        result,
+        deps=EnrichmentOutcomePolicyDeps(
+            normalized_low_fidelity_noisy_sources=_normalized_low_fidelity_noisy_sources,
+            normalize_compare_text=_normalize_compare_text,
+            text_mentions_name=_text_mentions_name,
+            normalized_name_tokens=_normalized_name_tokens,
+            has_commercial_context=_has_commercial_context,
+            has_strong_commercial_context=_has_strong_commercial_context,
+            has_technical_context=_has_technical_context,
+            has_consumer_context=_has_consumer_context,
+            dedupe_reason_codes=_dedupe_reason_codes,
+            normalize_company_name=normalize_company_name,
+        ),
     )
-    combined_norm = _normalize_compare_text(combined_text)
-    if not combined_norm:
-        return ["empty_noisy_context"]
-
-    summary_norm = _normalize_compare_text(row.get("summary"))
-    vendor_hit = any(
-        _text_mentions_name(combined_norm, row.get(field))
-        for field in ("vendor_name", "product_name")
-        if row.get(field)
-    )
-    competitor_hit = any(
-        _text_mentions_name(combined_norm, comp.get("name"))
-        for comp in (result.get("competitors_mentioned") or [])
-        if isinstance(comp, dict) and comp.get("name")
-    )
-    summary_tokens = _normalized_name_tokens(row.get("summary"))
-    urgency = float(result.get("urgency_score") or 0)
-    reasons: list[str] = []
-    if source in noisy_sources:
-        if not vendor_hit:
-            reasons.append("vendor_absent_noisy_source")
-        if not vendor_hit and competitor_hit:
-            reasons.append("competitor_only_context")
-        if (
-            source in {"twitter", "quora", "reddit", "hackernews"}
-            and len(combined_norm) < 160
-            and not (vendor_hit and _has_commercial_context(combined_norm))
-        ):
-            reasons.append("thin_social_context")
-        if source == "software_advice" and len(combined_norm) < 140 and not _has_strong_commercial_context(combined_norm):
-            reasons.append("thin_review_platform_context")
-        if source == "quora" and summary_tokens and len(summary_tokens) <= 3 and not vendor_hit:
-            reasons.append("author_style_summary")
-    if source in {"stackoverflow", "github"}:
-        if (
-            urgency <= 5
-            and _has_technical_context(summary_norm, combined_norm)
-            and not _has_commercial_context(combined_norm)
-        ):
-            reasons.append("technical_question_context")
-    if source == "trustpilot":
-        if _has_consumer_context(combined_norm) and not _has_strong_commercial_context(combined_norm):
-            reasons.append("consumer_support_context")
-    return _dedupe_reason_codes(reasons)
 
 
 _KNOWN_PAIN_CATEGORIES = {
@@ -4722,21 +3033,7 @@ def _normalize_pain_category(category: Any) -> str:
 
 
 def _coerce_bool(value: Any) -> bool | None:
-    """Coerce a value to bool. Returns None if unrecognizable.
-    None/null is treated as False (absence of signal).
-    """
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        if value.lower() in ("true", "yes", "1"):
-            return True
-        if value.lower() in ("false", "no", "0", "null", "none"):
-            return False
-    return None
+    return _service_coerce_bool(value)
 
 
 _CHURN_SIGNAL_BOOL_FIELDS = (
@@ -4944,10 +3241,7 @@ _COMMERCIAL_DECISION_TEXT_PATTERN = re.compile(
 
 
 def _canonical_role_type(value: Any) -> str:
-    raw = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
-    if not raw:
-        return "unknown"
-    return _ROLE_TYPE_ALIASES.get(raw, "unknown")
+    return _service_canonical_role_type(value, deps=_buyer_authority_deps())
 
 
 def _normalize_role_title_key(value: Any) -> str:
@@ -4964,48 +3258,103 @@ def _clean_reviewer_title_for_role_inference(value: Any) -> str:
 
 
 def _canonical_role_level(value: Any) -> str:
-    raw = _normalize_role_title_key(value)
-    return _ROLE_LEVEL_ALIASES.get(raw, "unknown")
+    return _service_canonical_role_level(value, deps=_buyer_authority_deps())
 
 
 def _combined_source_text(source_row: dict[str, Any] | None) -> str:
-    if not isinstance(source_row, dict):
-        return ""
-    parts = [
-        str(source_row.get("summary") or ""),
-        str(source_row.get("review_text") or ""),
-        str(source_row.get("pros") or ""),
-        str(source_row.get("cons") or ""),
-    ]
-    return "\n".join(part for part in parts if part).strip()
+    return _service_combined_source_text(source_row)
+
+
+def _buyer_authority_deps() -> EnrichmentBuyerAuthorityDeps:
+    return EnrichmentBuyerAuthorityDeps(
+        sanitize_reviewer_title=sanitize_reviewer_title,
+        coerce_bool=_coerce_bool,
+        coerce_json_dict=_coerce_json_dict,
+        contains_any=_contains_any,
+        role_type_aliases=_ROLE_TYPE_ALIASES,
+        role_level_aliases=_ROLE_LEVEL_ALIASES,
+        champion_reviewer_title_pattern=_CHAMPION_REVIEWER_TITLE_PATTERN,
+        evaluator_reviewer_title_pattern=_EVALUATOR_REVIEWER_TITLE_PATTERN,
+        exec_role_text_pattern=_EXEC_ROLE_TEXT_PATTERN,
+        director_role_text_pattern=_DIRECTOR_ROLE_TEXT_PATTERN,
+        manager_role_text_pattern=_MANAGER_ROLE_TEXT_PATTERN,
+        ic_role_text_pattern=_IC_ROLE_TEXT_PATTERN,
+        commercial_decision_text_pattern=_COMMERCIAL_DECISION_TEXT_PATTERN,
+        exec_reviewer_title_pattern=_EXEC_REVIEWER_TITLE_PATTERN,
+        manager_decision_title_pattern=_MANAGER_DECISION_TITLE_PATTERN,
+        economic_buyer_text_patterns=_ECONOMIC_BUYER_TEXT_PATTERNS,
+        champion_text_patterns=_CHAMPION_TEXT_PATTERNS,
+        evaluator_text_patterns=_EVALUATOR_TEXT_PATTERNS,
+        end_user_text_patterns=_END_USER_TEXT_PATTERNS,
+        post_purchase_review_sources=set(_POST_PURCHASE_REVIEW_SOURCES),
+        post_purchase_usage_patterns=_POST_PURCHASE_USAGE_PATTERNS,
+    )
+
+
+def _timeline_deps() -> EnrichmentTimelineDeps:
+    return EnrichmentTimelineDeps(
+        contains_any=_contains_any,
+        normalize_compare_text=_normalize_compare_text,
+        has_commercial_context=_has_commercial_context,
+        has_strong_commercial_context=_has_strong_commercial_context,
+        has_technical_context=_has_technical_context,
+        has_consumer_context=_has_consumer_context,
+        normalized_low_fidelity_noisy_sources=_normalized_low_fidelity_noisy_sources,
+        text_mentions_name=_text_mentions_name,
+        timeline_month_day_re=_TIMELINE_MONTH_DAY_RE,
+        timeline_slash_date_re=_TIMELINE_SLASH_DATE_RE,
+        timeline_iso_date_re=_TIMELINE_ISO_DATE_RE,
+        timeline_explicit_anchor_phrases=_TIMELINE_EXPLICIT_ANCHOR_PHRASES,
+        timeline_relative_anchor_re=_TIMELINE_RELATIVE_ANCHOR_RE,
+        timeline_contract_event_patterns=_TIMELINE_CONTRACT_EVENT_PATTERNS,
+        timeline_decision_deadline_patterns=_TIMELINE_DECISION_DEADLINE_PATTERNS,
+        timeline_contract_end_patterns=_TIMELINE_CONTRACT_END_PATTERNS,
+        timeline_immediate_patterns=_TIMELINE_IMMEDIATE_PATTERNS,
+        timeline_quarter_patterns=_TIMELINE_QUARTER_PATTERNS,
+        timeline_year_patterns=_TIMELINE_YEAR_PATTERNS,
+        timeline_decision_patterns=_TIMELINE_DECISION_PATTERNS,
+        timeline_ambiguous_vendor_tokens=_TIMELINE_AMBIGUOUS_VENDOR_TOKENS,
+        timeline_ambiguous_vendor_product_context_patterns=_TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS,
+    )
+
+
+def _budget_deps() -> EnrichmentBudgetDeps:
+    return EnrichmentBudgetDeps(
+        contains_any=_contains_any,
+        coerce_bool=_coerce_bool,
+        normalize_compare_text=_normalize_compare_text,
+        normalize_text_list=_normalize_text_list,
+        combined_source_text=_combined_source_text,
+        normalized_low_fidelity_noisy_sources=_normalized_low_fidelity_noisy_sources,
+        text_mentions_name=_text_mentions_name,
+        has_commercial_context=_has_commercial_context,
+        has_strong_commercial_context=_has_strong_commercial_context,
+        has_technical_context=_has_technical_context,
+        has_consumer_context=_has_consumer_context,
+        timeline_ambiguous_vendor_tokens=_TIMELINE_AMBIGUOUS_VENDOR_TOKENS,
+        timeline_ambiguous_vendor_product_context_patterns=_TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS,
+        budget_any_amount_token_re=_BUDGET_ANY_AMOUNT_TOKEN_RE,
+        budget_price_per_seat_re=_BUDGET_PRICE_PER_SEAT_RE,
+        budget_annual_amount_re=_BUDGET_ANNUAL_AMOUNT_RE,
+        budget_currency_token_re=_BUDGET_CURRENCY_TOKEN_RE,
+        budget_seat_count_re=_BUDGET_SEAT_COUNT_RE,
+        budget_price_increase_re=_BUDGET_PRICE_INCREASE_RE,
+        budget_price_increase_detail_re=_BUDGET_PRICE_INCREASE_DETAIL_RE,
+        budget_annual_period_patterns=_BUDGET_ANNUAL_PERIOD_PATTERNS,
+        budget_monthly_period_patterns=_BUDGET_MONTHLY_PERIOD_PATTERNS,
+        budget_noise_patterns=_BUDGET_NOISE_PATTERNS,
+        budget_per_unit_patterns=_BUDGET_PER_UNIT_PATTERNS,
+        budget_annual_context_patterns=_BUDGET_ANNUAL_CONTEXT_PATTERNS,
+        budget_commercial_context_patterns=_BUDGET_COMMERCIAL_CONTEXT_PATTERNS,
+    )
 
 
 def _infer_role_level_from_text(reviewer_title: Any, source_row: dict[str, Any] | None) -> str:
-    title = _clean_reviewer_title_for_role_inference(reviewer_title)
-    if title:
-        canonical = _canonical_role_level(title)
-        if canonical != "unknown":
-            return canonical
-        if re.search(r"\b(cfo|ceo|coo|cio|cto|cro|cmo|chief|founder|owner|president)\b", title, re.I):
-            return "executive"
-        if re.search(r"\b(vp\b|vice president|svp|evp|director|head of)\b", title, re.I):
-            return "director"
-        if _CHAMPION_REVIEWER_TITLE_PATTERN.search(title):
-            return "manager"
-        if _EVALUATOR_REVIEWER_TITLE_PATTERN.search(title):
-            return "ic"
-    source_text = _combined_source_text(source_row)
-    if not source_text:
-        return "unknown"
-    if _EXEC_ROLE_TEXT_PATTERN.search(source_text):
-        return "executive"
-    if _DIRECTOR_ROLE_TEXT_PATTERN.search(source_text):
-        return "director"
-    if _MANAGER_ROLE_TEXT_PATTERN.search(source_text):
-        return "manager"
-    if _IC_ROLE_TEXT_PATTERN.search(source_text):
-        return "ic"
-    return "unknown"
+    return _service_infer_role_level_from_text(
+        reviewer_title,
+        source_row,
+        deps=_buyer_authority_deps(),
+    )
 
 
 def _has_manager_level_decision_context(result: dict[str, Any], source_row: dict[str, Any] | None) -> bool:
@@ -5037,22 +3386,11 @@ def _has_manager_level_decision_context(result: dict[str, Any], source_row: dict
 
 
 def _infer_decision_maker(result: dict[str, Any], source_row: dict[str, Any] | None) -> bool:
-    reviewer_context = _coerce_json_dict(result.get("reviewer_context"))
-    buyer_authority = _coerce_json_dict(result.get("buyer_authority"))
-    role_level = _canonical_role_level(reviewer_context.get("role_level"))
-    if role_level in {"executive", "director"}:
-        return True
-    if _coerce_bool(buyer_authority.get("has_budget_authority")) is True:
-        return True
-    if _canonical_role_type(buyer_authority.get("role_type")) == "economic_buyer":
-        return True
-
-    title = _clean_reviewer_title_for_role_inference((source_row or {}).get("reviewer_title"))
-    if title and _EXEC_REVIEWER_TITLE_PATTERN.search(title):
-        return True
-    if title and _MANAGER_DECISION_TITLE_PATTERN.search(title):
-        return _has_manager_level_decision_context(result, source_row)
-    return False
+    return _service_infer_decision_maker(
+        result,
+        source_row,
+        deps=_buyer_authority_deps(),
+    )
 
 
 def _infer_buyer_role_type_from_text(
@@ -5088,46 +3426,21 @@ def _infer_buyer_role_type(
     reviewer_title: Any,
     source_row: dict[str, Any] | None = None,
 ) -> str:
-    ctx = reviewer_context if isinstance(reviewer_context, dict) else {}
-    role_level = str(ctx.get("role_level") or "").strip().lower()
-    buying_stage = str(buyer_authority.get("buying_stage") or "").strip().lower()
-    if _coerce_bool(buyer_authority.get("has_budget_authority")) is True:
-        return "economic_buyer"
-    if _coerce_bool(ctx.get("decision_maker")) is True:
-        return "economic_buyer"
-    if role_level in {"executive", "director"}:
-        return "economic_buyer"
-    title = _clean_reviewer_title_for_role_inference(reviewer_title)
-    if title and _EXEC_REVIEWER_TITLE_PATTERN.search(title):
-        return "economic_buyer"
-    if role_level == "manager":
-        return "champion"
-    if title and _CHAMPION_REVIEWER_TITLE_PATTERN.search(title):
-        return "champion"
-    if role_level == "ic" and buying_stage in {"evaluation", "active_purchase"}:
-        return "evaluator"
-    if title and _EVALUATOR_REVIEWER_TITLE_PATTERN.search(title):
-        return "evaluator" if buying_stage in {"evaluation", "active_purchase"} else "end_user"
-    if role_level == "ic":
-        return "end_user"
-    return _infer_buyer_role_type_from_text(buyer_authority, source_row)
+    return _service_infer_buyer_role_type(
+        buyer_authority,
+        reviewer_context,
+        reviewer_title,
+        source_row,
+        deps=_buyer_authority_deps(),
+    )
 
 
 def _is_unknownish(value: Any) -> bool:
-    text = str(value or "").strip().lower()
-    return text in {"", "unknown", "none", "null", "n/a", "na"}
+    return _service_is_unknownish(value)
 
 
 def _coerce_json_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+    return _service_coerce_json_dict(value)
 
 
 _REPAIR_NEGATIVE_PATTERNS = (
@@ -5180,16 +3493,7 @@ def _trusted_repair_sources() -> set[str]:
 
 
 def _effective_enrichment_skip_sources() -> set[str]:
-    configured = _config_allowlist(getattr(settings.b2b_churn, "enrichment_skip_sources", ""), "")
-    deprecated = _config_allowlist(
-        getattr(settings.b2b_churn, "deprecated_review_sources", ""),
-        "capterra,software_advice,trustpilot,trustradius",
-    )
-    return {
-        source
-        for source in [*configured, *deprecated]
-        if source
-    }
+    return _domain_effective_enrichment_skip_sources()
 
 
 def _repair_text_blob(source_row: dict[str, Any]) -> str:
@@ -5200,666 +3504,169 @@ def _repair_text_blob(source_row: dict[str, Any]) -> str:
 
 
 def _repair_target_fields(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
-    targets: list[str] = []
-    def _add_target(field: str) -> None:
-        if field not in targets:
-            targets.append(field)
-
-    review_blob = _repair_text_blob(source_row)
-    source = str(source_row.get("source") or "").strip().lower()
-    status = str(source_row.get("enrichment_status") or "").strip().lower()
-
-    complaints = _normalize_text_list(result.get("specific_complaints"))
-    pricing_phrases = _normalize_text_list(result.get("pricing_phrases"))
-    recommendation_language = _normalize_text_list(result.get("recommendation_language"))
-    feature_gaps = _normalize_text_list(result.get("feature_gaps"))
-    event_mentions = result.get("event_mentions") or []
-    competitors = result.get("competitors_mentioned") or []
-    salience_flags = {
-        str(flag or "").strip().lower()
-        for flag in result.get("salience_flags") or []
-        if str(flag or "").strip()
-    }
-    timeline = _coerce_json_dict(result.get("timeline"))
-
-    if _normalize_pain_category(result.get("pain_category")) == "overall_dissatisfaction" and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
-        for field in ("specific_complaints", "pricing_phrases", "recommendation_language"):
-            _add_target(field)
-    if not competitors and _contains_any(review_blob, _REPAIR_COMPETITOR_PATTERNS):
-        _add_target("competitors_mentioned")
-    if not pricing_phrases and _contains_any(review_blob, _REPAIR_PRICING_PATTERNS):
-        _add_target("pricing_phrases")
-    if (
-        str(result.get("pain_category") or "").strip().lower() not in {"pricing", "contract_lock_in"}
-        and (_REPAIR_CURRENCY_RE.search(review_blob) or "explicit_dollar" in salience_flags)
-    ):
-        for field in ("specific_complaints", "pricing_phrases"):
-            _add_target(field)
-    if not complaints and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
-        _add_target("specific_complaints")
-    if not recommendation_language and _contains_any(review_blob, _REPAIR_RECOMMEND_PATTERNS):
-        _add_target("recommendation_language")
-    if not feature_gaps and _contains_any(review_blob, _REPAIR_FEATURE_GAP_PATTERNS):
-        _add_target("feature_gaps")
-    if not event_mentions and _contains_any(review_blob, ("renewal", "migration", "switched", "price increase", "invoice")):
-        _add_target("event_mentions")
-    if (
-        _contains_any(review_blob, _REPAIR_TIMELINE_PATTERNS)
-        and _is_unknownish(timeline.get("decision_timeline"))
-        and not event_mentions
-    ):
-        _add_target("event_mentions")
-    if competitors and all(
-        not str(comp.get("reason_category") or "").strip()
-        for comp in competitors if isinstance(comp, dict)
-    ):
-        _add_target("specific_complaints")
-    if _contains_any(review_blob, _REPAIR_CATEGORY_SHIFT_PATTERNS) and not feature_gaps and not complaints:
-        _add_target("specific_complaints")
-    if status == "no_signal" and source in _trusted_repair_sources() and _contains_any(
-        review_blob, _REPAIR_NEGATIVE_PATTERNS + _REPAIR_COMPETITOR_PATTERNS
-    ):
-        for field in ("specific_complaints", "pricing_phrases", "competitors_mentioned", "recommendation_language"):
-            _add_target(field)
-    return targets
+    return _service_repair_target_fields(
+        result,
+        source_row,
+        deps=EnrichmentRepairDeps(
+            normalize_text_list=_normalize_text_list,
+            normalize_pain_category=_normalize_pain_category,
+            contains_any=_contains_any,
+            coerce_json_dict=_coerce_json_dict,
+            is_unknownish=_is_unknownish,
+            trusted_repair_sources=_trusted_repair_sources,
+            normalize_company_name=normalize_company_name,
+            repair_negative_patterns=_REPAIR_NEGATIVE_PATTERNS,
+            repair_competitor_patterns=_REPAIR_COMPETITOR_PATTERNS,
+            repair_pricing_patterns=_REPAIR_PRICING_PATTERNS,
+            repair_recommend_patterns=_REPAIR_RECOMMEND_PATTERNS,
+            repair_feature_gap_patterns=_REPAIR_FEATURE_GAP_PATTERNS,
+            repair_timeline_patterns=_REPAIR_TIMELINE_PATTERNS,
+            repair_category_shift_patterns=_REPAIR_CATEGORY_SHIFT_PATTERNS,
+            repair_currency_re=_REPAIR_CURRENCY_RE,
+        ),
+    )
 
 
 def _needs_field_repair(result: dict[str, Any], source_row: dict[str, Any]) -> bool:
-    return bool(_repair_target_fields(result, source_row))
+    return _service_needs_field_repair(
+        result,
+        source_row,
+        deps=EnrichmentRepairDeps(
+            normalize_text_list=_normalize_text_list,
+            normalize_pain_category=_normalize_pain_category,
+            contains_any=_contains_any,
+            coerce_json_dict=_coerce_json_dict,
+            is_unknownish=_is_unknownish,
+            trusted_repair_sources=_trusted_repair_sources,
+            normalize_company_name=normalize_company_name,
+            repair_negative_patterns=_REPAIR_NEGATIVE_PATTERNS,
+            repair_competitor_patterns=_REPAIR_COMPETITOR_PATTERNS,
+            repair_pricing_patterns=_REPAIR_PRICING_PATTERNS,
+            repair_recommend_patterns=_REPAIR_RECOMMEND_PATTERNS,
+            repair_feature_gap_patterns=_REPAIR_FEATURE_GAP_PATTERNS,
+            repair_timeline_patterns=_REPAIR_TIMELINE_PATTERNS,
+            repair_category_shift_patterns=_REPAIR_CATEGORY_SHIFT_PATTERNS,
+            repair_currency_re=_REPAIR_CURRENCY_RE,
+        ),
+    )
 
 
 def _has_structural_gap(result: dict[str, Any]) -> bool:
-    buyer_authority = _coerce_json_dict(result.get("buyer_authority"))
-    timeline = _coerce_json_dict(result.get("timeline"))
-    contract = _coerce_json_dict(result.get("contract_context"))
-    return any((
-        _is_unknownish(buyer_authority.get("role_type")),
-        _is_unknownish(timeline.get("decision_timeline")),
-        _is_unknownish(contract.get("contract_value_signal")),
-    ))
+    return _service_has_structural_gap(
+        result,
+        deps=EnrichmentRepairDeps(
+            normalize_text_list=_normalize_text_list,
+            normalize_pain_category=_normalize_pain_category,
+            contains_any=_contains_any,
+            coerce_json_dict=_coerce_json_dict,
+            is_unknownish=_is_unknownish,
+            trusted_repair_sources=_trusted_repair_sources,
+            normalize_company_name=normalize_company_name,
+            repair_negative_patterns=_REPAIR_NEGATIVE_PATTERNS,
+            repair_competitor_patterns=_REPAIR_COMPETITOR_PATTERNS,
+            repair_pricing_patterns=_REPAIR_PRICING_PATTERNS,
+            repair_recommend_patterns=_REPAIR_RECOMMEND_PATTERNS,
+            repair_feature_gap_patterns=_REPAIR_FEATURE_GAP_PATTERNS,
+            repair_timeline_patterns=_REPAIR_TIMELINE_PATTERNS,
+            repair_category_shift_patterns=_REPAIR_CATEGORY_SHIFT_PATTERNS,
+            repair_currency_re=_REPAIR_CURRENCY_RE,
+        ),
+    )
 
 
 def _apply_structural_repair(
     baseline: dict[str, Any],
     repair: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    merged = json.loads(json.dumps(baseline))
-    applied: list[str] = []
-
-    buyer_authority = _coerce_json_dict(merged.get("buyer_authority"))
-    repair_authority = _coerce_json_dict(repair.get("buyer_authority"))
-    if _is_unknownish(buyer_authority.get("role_type")) and not _is_unknownish(repair_authority.get("role_type")):
-        buyer_authority["role_type"] = repair_authority.get("role_type")
-        applied.append("buyer_authority.role_type")
-    if _is_unknownish(buyer_authority.get("buying_stage")) and not _is_unknownish(repair_authority.get("buying_stage")):
-        buyer_authority["buying_stage"] = repair_authority.get("buying_stage")
-        applied.append("buyer_authority.buying_stage")
-    if applied:
-        merged["buyer_authority"] = buyer_authority
-
-    timeline = _coerce_json_dict(merged.get("timeline"))
-    repair_timeline = _coerce_json_dict(repair.get("timeline"))
-    for field in ("decision_timeline", "contract_end", "evaluation_deadline"):
-        if _is_unknownish(timeline.get(field)) and not _is_unknownish(repair_timeline.get(field)):
-            timeline[field] = repair_timeline.get(field)
-            applied.append(f"timeline.{field}")
-    if any(field.startswith("timeline.") for field in applied):
-        merged["timeline"] = timeline
-
-    contract = _coerce_json_dict(merged.get("contract_context"))
-    repair_contract = _coerce_json_dict(repair.get("contract_context"))
-    for field in ("contract_value_signal", "usage_duration", "price_context"):
-        if _is_unknownish(contract.get(field)) and not _is_unknownish(repair_contract.get(field)):
-            contract[field] = repair_contract.get(field)
-            applied.append(f"contract_context.{field}")
-    if any(field.startswith("contract_context.") for field in applied):
-        merged["contract_context"] = contract
-
-    return merged, applied
+    return _service_apply_structural_repair(
+        baseline,
+        repair,
+        deps=EnrichmentRepairDeps(
+            normalize_text_list=_normalize_text_list,
+            normalize_pain_category=_normalize_pain_category,
+            contains_any=_contains_any,
+            coerce_json_dict=_coerce_json_dict,
+            is_unknownish=_is_unknownish,
+            trusted_repair_sources=_trusted_repair_sources,
+            normalize_company_name=normalize_company_name,
+            repair_negative_patterns=_REPAIR_NEGATIVE_PATTERNS,
+            repair_competitor_patterns=_REPAIR_COMPETITOR_PATTERNS,
+            repair_pricing_patterns=_REPAIR_PRICING_PATTERNS,
+            repair_recommend_patterns=_REPAIR_RECOMMEND_PATTERNS,
+            repair_feature_gap_patterns=_REPAIR_FEATURE_GAP_PATTERNS,
+            repair_timeline_patterns=_REPAIR_TIMELINE_PATTERNS,
+            repair_category_shift_patterns=_REPAIR_CATEGORY_SHIFT_PATTERNS,
+            repair_currency_re=_REPAIR_CURRENCY_RE,
+        ),
+    )
 
 
 def _apply_field_repair(
     baseline: dict[str, Any],
     repair: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    merged = json.loads(json.dumps(baseline))
-    applied: list[str] = []
-
-    for field in ("specific_complaints", "pricing_phrases", "recommendation_language", "feature_gaps"):
-        existing_items = _normalize_text_list(merged.get(field))
-        repair_items = _normalize_text_list(repair.get(field))
-        seen = {item.strip().lower() for item in existing_items if item.strip()}
-        appended = False
-        for item in repair_items:
-            key = item.strip().lower()
-            if key and key not in seen:
-                existing_items.append(item)
-                seen.add(key)
-                appended = True
-        if appended:
-            merged[field] = existing_items
-            applied.append(field)
-
-    existing_events = []
-    seen_events: set[tuple[str, str]] = set()
-    for event in merged.get("event_mentions") or []:
-        if not isinstance(event, dict):
-            continue
-        key = (
-            str(event.get("event") or "").strip().lower(),
-            str(event.get("timeframe") or "").strip().lower(),
-        )
-        if key not in seen_events:
-            existing_events.append(dict(event))
-            seen_events.add(key)
-    event_added = False
-    for event in repair.get("event_mentions") or []:
-        if not isinstance(event, dict):
-            continue
-        key = (
-            str(event.get("event") or "").strip().lower(),
-            str(event.get("timeframe") or "").strip().lower(),
-        )
-        if key[0] and key not in seen_events:
-            existing_events.append(dict(event))
-            seen_events.add(key)
-            event_added = True
-    if event_added:
-        merged["event_mentions"] = existing_events
-        applied.append("event_mentions")
-
-    existing_competitors = []
-    seen_competitors: dict[str, dict[str, Any]] = {}
-    for comp in merged.get("competitors_mentioned") or []:
-        if not isinstance(comp, dict):
-            continue
-        name = str(comp.get("name") or "").strip()
-        if not name:
-            continue
-        key = normalize_company_name(name) or name.lower()
-        clone = dict(comp)
-        existing_competitors.append(clone)
-        seen_competitors[key] = clone
-    competitor_changed = False
-    for comp in repair.get("competitors_mentioned") or []:
-        if not isinstance(comp, dict):
-            continue
-        name = str(comp.get("name") or "").strip()
-        if not name:
-            continue
-        key = normalize_company_name(name) or name.lower()
-        if key in seen_competitors:
-            target = seen_competitors[key]
-            for field in ("reason_detail",):
-                if not str(target.get(field) or "").strip() and str(comp.get(field) or "").strip():
-                    target[field] = comp.get(field)
-                    competitor_changed = True
-            existing_features = _normalize_text_list(target.get("features"))
-            feature_seen = {item.strip().lower() for item in existing_features if item.strip()}
-            for item in _normalize_text_list(comp.get("features")):
-                key_feature = item.strip().lower()
-                if key_feature and key_feature not in feature_seen:
-                    existing_features.append(item)
-                    feature_seen.add(key_feature)
-                    competitor_changed = True
-            if existing_features:
-                target["features"] = existing_features
-            continue
-        clone = dict(comp)
-        existing_competitors.append(clone)
-        seen_competitors[key] = clone
-        competitor_changed = True
-    if competitor_changed:
-        merged["competitors_mentioned"] = existing_competitors
-        applied.append("competitors_mentioned")
-
-    return merged, applied
+    return _service_apply_field_repair(
+        baseline,
+        repair,
+        deps=EnrichmentRepairDeps(
+            normalize_text_list=_normalize_text_list,
+            normalize_pain_category=_normalize_pain_category,
+            contains_any=_contains_any,
+            coerce_json_dict=_coerce_json_dict,
+            is_unknownish=_is_unknownish,
+            trusted_repair_sources=_trusted_repair_sources,
+            normalize_company_name=normalize_company_name,
+            repair_negative_patterns=_REPAIR_NEGATIVE_PATTERNS,
+            repair_competitor_patterns=_REPAIR_COMPETITOR_PATTERNS,
+            repair_pricing_patterns=_REPAIR_PRICING_PATTERNS,
+            repair_recommend_patterns=_REPAIR_RECOMMEND_PATTERNS,
+            repair_feature_gap_patterns=_REPAIR_FEATURE_GAP_PATTERNS,
+            repair_timeline_patterns=_REPAIR_TIMELINE_PATTERNS,
+            repair_category_shift_patterns=_REPAIR_CATEGORY_SHIFT_PATTERNS,
+            repair_currency_re=_REPAIR_CURRENCY_RE,
+        ),
+    )
 
 
 def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None) -> bool:
-    """Validate enrichment output structure and data consistency."""
-    if "churn_signals" not in result:
-        return False
-    if "urgency_score" not in result:
-        return False
-    if not isinstance(result.get("churn_signals"), dict):
-        return False
-
-    # Type check: urgency_score must be numeric
-    urgency = result.get("urgency_score")
-    if isinstance(urgency, str):
-        try:
-            urgency = float(urgency)
-            result["urgency_score"] = urgency
-        except (ValueError, TypeError):
-            logger.warning("urgency_score is non-numeric string: %r", urgency)
-            return False
-
-    if not isinstance(urgency, (int, float)):
-        logger.warning("urgency_score has unexpected type: %s", type(urgency).__name__)
-        return False
-
-    # Range check: 0-10
-    if urgency < 0 or urgency > 10:
-        logger.warning("urgency_score out of range [0,10]: %s", urgency)
-        return False
-
-    # Boolean coercion: churn_signals fields used in ::boolean casts
-    signals = result["churn_signals"]
-    for field in _CHURN_SIGNAL_BOOL_FIELDS:
-        if field in signals:
-            coerced = _coerce_bool(signals[field])
-            if coerced is None:
-                logger.warning("churn_signals.%s unrecognizable bool: %r -- rejecting", field, signals[field])
-                return False
-            signals[field] = coerced
-
-    # Consistency warning: high urgency with no intent_to_leave
-    intent = signals.get("intent_to_leave")
-    if urgency >= 9 and intent is False:
-        logger.warning(
-            "Contradictory: urgency=%s but intent_to_leave=false -- accepting with warning",
-            urgency,
-        )
-
-    # Boolean coercion: reviewer_context.decision_maker (used in ::boolean cast)
-    reviewer_ctx = result.get("reviewer_context")
-    if isinstance(reviewer_ctx, dict) and "decision_maker" in reviewer_ctx:
-        coerced = _coerce_bool(reviewer_ctx["decision_maker"])
-        if coerced is None:
-            logger.warning("reviewer_context.decision_maker unrecognizable bool: %r -- rejecting", reviewer_ctx["decision_maker"])
-            return False
-        reviewer_ctx["decision_maker"] = coerced
-
-    # Boolean coercion: would_recommend (used in ::boolean cast in vendor_churn_scores)
-    if "would_recommend" in result:
-        coerced = _coerce_bool(result["would_recommend"])
-        if coerced is None:
-            # null/None is valid (reviewer didn't express preference) -- keep as null
-            result["would_recommend"] = None
-        else:
-            result["would_recommend"] = coerced
-
-    # Type check: competitors_mentioned must be list; items must be dicts with "name"
-    competitors = result.get("competitors_mentioned")
-    if competitors is not None and not isinstance(competitors, list):
-        logger.warning("competitors_mentioned is not a list: %s", type(competitors).__name__)
-        result["competitors_mentioned"] = []
-    elif isinstance(competitors, list):
-        result["competitors_mentioned"] = [
-            c for c in competitors
-            if isinstance(c, dict) and "name" in c
-        ]
-
-    # Validate evidence_type, displacement_confidence, and reason_category on each competitor entry
-    _VALID_EVIDENCE_TYPES = {"explicit_switch", "active_evaluation", "implied_preference", "reverse_flow", "neutral_mention"}
-    _VALID_DISP_CONFIDENCE = {"high", "medium", "low", "none"}
-    _VALID_REASON_CATEGORIES = {"pricing", "features", "reliability", "ux", "support", "integration"}
-    _ET_TO_CONTEXT = {
-        "explicit_switch": "switched_to",
-        "active_evaluation": "considering",
-        "implied_preference": "compared",
-        "reverse_flow": "switched_from",
-        "neutral_mention": "compared",
-    }
-    for comp in result.get("competitors_mentioned", []):
-        # Coerce unknown evidence_type; fall back from legacy context field
-        et = comp.get("evidence_type")
-        if et not in _VALID_EVIDENCE_TYPES:
-            # Map legacy context -> evidence_type
-            legacy = comp.get("context", "")
-            _CONTEXT_TO_ET = {
-                "switched_to": "explicit_switch",
-                "considering": "active_evaluation",
-                "compared": "implied_preference",
-                "switched_from": "reverse_flow",
-            }
-            comp["evidence_type"] = _CONTEXT_TO_ET.get(legacy, "neutral_mention")
-
-        # Coerce unknown displacement_confidence
-        dc = comp.get("displacement_confidence")
-        if dc not in _VALID_DISP_CONFIDENCE:
-            comp["displacement_confidence"] = "low"
-
-        # Consistency: reverse_flow -> confidence "none"
-        if comp["evidence_type"] == "reverse_flow":
-            comp["displacement_confidence"] = "none"
-        # Consistency: neutral_mention -> confidence at most "low"
-        if comp["evidence_type"] == "neutral_mention" and comp.get("displacement_confidence") in ("high", "medium"):
-            comp["displacement_confidence"] = "low"
-
-        # Coerce reason_category to taxonomy
-        rc = comp.get("reason_category")
-        if rc and rc not in _VALID_REASON_CATEGORIES:
-            comp["reason_category"] = None
-
-        # Backward compat: populate context from evidence_type
-        comp["context"] = _ET_TO_CONTEXT.get(comp["evidence_type"], "compared")
-
-        # Backward compat: populate reason from reason_category + reason_detail
-        rc = comp.get("reason_category")
-        rd = comp.get("reason_detail")
-        if rc and rd:
-            comp["reason"] = f"{rc}: {rd}"
-        elif rc:
-            comp["reason"] = rc
-        elif rd:
-            comp["reason"] = rd
-        # else: keep existing reason if any (legacy data)
-
-    # Type check: quotable_phrases must be list if present
-    qp = result.get("quotable_phrases")
-    if qp is not None and not isinstance(qp, list):
-        logger.warning("quotable_phrases is not a list: %s", type(qp).__name__)
-        result["quotable_phrases"] = []
-
-    # Type check: feature_gaps must be list if present
-    fg = result.get("feature_gaps")
-    if fg is not None and not isinstance(fg, list):
-        logger.warning("feature_gaps is not a list: %s", type(fg).__name__)
-        result["feature_gaps"] = []
-
-    # Coerce unknown / legacy generic pain_category to the canonical fallback
-    pain = result.get("pain_category")
-    if pain is not None:
-        normalized_pain = _normalize_pain_category(pain)
-        if normalized_pain != str(pain).strip().lower():
-            logger.warning("Normalizing pain_category %r -> %r", pain, normalized_pain)
-        result["pain_category"] = normalized_pain
-
-    # --- New expanded field validation (permissive: coerce, never reject) ---
-
-    # pain_categories: list of {category, severity}
-    pc = result.get("pain_categories")
-    if pc is not None:
-        if not isinstance(pc, list):
-            result["pain_categories"] = []
-        else:
-            cleaned = []
-            for item in pc:
-                if not isinstance(item, dict):
-                    continue
-                cat = _normalize_pain_category(item.get("category", "overall_dissatisfaction"))
-                sev = item.get("severity", "minor")
-                if sev not in _KNOWN_SEVERITY_LEVELS:
-                    sev = "minor"
-                cleaned.append({"category": cat, "severity": sev})
-            result["pain_categories"] = cleaned
-
-    # budget_signals: dict with known keys
-    bs = result.get("budget_signals")
-    if bs is not None:
-        if not isinstance(bs, dict):
-            result["budget_signals"] = {}
-        else:
-            for field in ("annual_spend_estimate", "price_per_seat"):
-                if field in bs and bs[field] is not None and not isinstance(bs[field], (int, float)):
-                    text = _normalize_budget_value_text(bs[field])
-                    bs[field] = text if text else None
-            if "seat_count" in bs and bs["seat_count"] is not None:
-                try:
-                    seat = int(bs["seat_count"])
-                    bs["seat_count"] = seat if 1 <= seat <= 1_000_000 else None
-                except (ValueError, TypeError):
-                    bs["seat_count"] = None
-            if "price_increase_mentioned" in bs:
-                coerced = _coerce_bool(bs["price_increase_mentioned"])
-                bs["price_increase_mentioned"] = coerced if coerced is not None else False
-            if "price_increase_detail" in bs and bs["price_increase_detail"] is not None:
-                detail = _normalize_budget_detail_text(bs["price_increase_detail"])
-                bs["price_increase_detail"] = detail if detail else None
-                if bs["price_increase_detail"] and not _coerce_bool(bs.get("price_increase_mentioned")):
-                    bs["price_increase_mentioned"] = True
-
-    # use_case: dict with lists and lock_in_level
-    uc = result.get("use_case")
-    if uc is not None:
-        if not isinstance(uc, dict):
-            result["use_case"] = {}
-        else:
-            if "modules_mentioned" in uc and not isinstance(uc["modules_mentioned"], list):
-                uc["modules_mentioned"] = []
-            if "integration_stack" in uc and not isinstance(uc["integration_stack"], list):
-                uc["integration_stack"] = []
-            lil = uc.get("lock_in_level")
-            if lil and lil not in _KNOWN_LOCK_IN_LEVELS:
-                uc["lock_in_level"] = "unknown"
-
-    # reviewer_context: normalize role level and backfill from title/text
-    reviewer_ctx = result.get("reviewer_context")
-    if reviewer_ctx is None or not isinstance(reviewer_ctx, dict):
-        result["reviewer_context"] = {}
-        reviewer_ctx = result["reviewer_context"]
-    role_level = _canonical_role_level(reviewer_ctx.get("role_level"))
-    if role_level == "unknown":
-        role_level = _infer_role_level_from_text(
-            (source_row or {}).get("reviewer_title"),
-            source_row,
-        )
-    reviewer_ctx["role_level"] = role_level
-    decision_maker = _coerce_bool(reviewer_ctx.get("decision_maker"))
-    derived_decision_maker = _infer_decision_maker(result, source_row)
-    if decision_maker is None:
-        decision_maker = derived_decision_maker
-    else:
-        decision_maker = bool(decision_maker or derived_decision_maker)
-    reviewer_ctx["decision_maker"] = decision_maker
-    company_name = str(reviewer_ctx.get("company_name") or "").strip()
-    if company_name:
-        reviewer_ctx["company_name"] = company_name
-    else:
-        trusted_company = _trusted_reviewer_company_name(source_row)
-        if trusted_company:
-            reviewer_ctx["company_name"] = trusted_company
-
-    # sentiment_trajectory: dict with direction
-    st = result.get("sentiment_trajectory")
-    if st is not None:
-        if not isinstance(st, dict):
-            result["sentiment_trajectory"] = {}
-        else:
-            d = st.get("direction")
-            if d and d not in _KNOWN_SENTIMENT_DIRECTIONS:
-                st["direction"] = "unknown"
-
-    # buyer_authority: dict with role_type, booleans, buying_stage
-    ba = result.get("buyer_authority")
-    if ba is not None:
-        if not isinstance(ba, dict):
-            result["buyer_authority"] = {}
-            ba = result["buyer_authority"]
-        reviewer_ctx = (
-            result.get("reviewer_context")
-            if isinstance(result.get("reviewer_context"), dict)
-            else {}
-        )
-        for bool_field in ("has_budget_authority", "executive_sponsor_mentioned"):
-            if bool_field in ba:
-                coerced = _coerce_bool(ba[bool_field])
-                ba[bool_field] = coerced if coerced is not None else False
-        bstage = ba.get("buying_stage")
-        if bstage and bstage not in _KNOWN_BUYING_STAGES:
-            ba["buying_stage"] = "unknown"
-        canonical_rt = _canonical_role_type(ba.get("role_type"))
-        derived_role_type = _infer_buyer_role_type(
-            ba,
-            reviewer_ctx,
-            (source_row or {}).get("reviewer_title"),
-            source_row,
-        )
-        if canonical_rt == "unknown":
-            ba["role_type"] = derived_role_type
-        else:
-            ba["role_type"] = canonical_rt
-        if derived_role_type == "economic_buyer":
-            ba["role_type"] = "economic_buyer"
-        if ba["role_type"] == "economic_buyer":
-            reviewer_ctx["decision_maker"] = True
-
-    # timeline: dict with decision_timeline
-    tl = result.get("timeline")
-    if tl is not None:
-        if not isinstance(tl, dict):
-            result["timeline"] = {}
-        else:
-            dt = tl.get("decision_timeline")
-            if dt and dt not in _KNOWN_DECISION_TIMELINES:
-                tl["decision_timeline"] = "unknown"
-
-    # contract_context: dict with contract_value_signal
-    cc = result.get("contract_context")
-    if cc is not None:
-        if not isinstance(cc, dict):
-            result["contract_context"] = {}
-        else:
-            cvs = cc.get("contract_value_signal")
-            if cvs and cvs not in _KNOWN_CONTRACT_VALUE_SIGNALS:
-                cc["contract_value_signal"] = "unknown"
-
-    # content_classification: pass-through string, coerce to known values
-    cc_val = result.get("content_classification")
-    if cc_val and cc_val not in _KNOWN_CONTENT_TYPES:
-        result["content_classification"] = "review"
-
-    if _schema_version(result) >= 3:
-        missing_fields = _missing_witness_primitives(result)
-        if missing_fields:
-            if source_row is None:
-                logger.warning(
-                    "schema v3 enrichment missing witness primitives without source row: %s",
-                    ", ".join(missing_fields),
-                )
-                return False
-            try:
-                recomputed = _compute_derived_fields(
-                    json.loads(json.dumps(result)),
-                    source_row,
-                )
-            except Exception:
-                logger.warning(
-                    "schema v3 witness primitive recompute failed for %s",
-                    source_row.get("id"),
-                    exc_info=True,
-                )
-                return False
-            result.clear()
-            result.update(recomputed)
-
-    # witness-oriented deterministic evidence fields
-    replacement_mode = str(result.get("replacement_mode") or "").strip()
-    if replacement_mode not in _KNOWN_REPLACEMENT_MODES:
-        result["replacement_mode"] = "none"
-    operating_model_shift = str(result.get("operating_model_shift") or "").strip()
-    if operating_model_shift not in _KNOWN_OPERATING_MODEL_SHIFTS:
-        result["operating_model_shift"] = "none"
-    productivity_delta_claim = str(result.get("productivity_delta_claim") or "").strip()
-    if productivity_delta_claim not in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS:
-        result["productivity_delta_claim"] = "unknown"
-    org_pressure_type = str(result.get("org_pressure_type") or "").strip()
-    if org_pressure_type not in _KNOWN_ORG_PRESSURE_TYPES:
-        result["org_pressure_type"] = "none"
-
-    salience_flags = result.get("salience_flags")
-    if salience_flags is not None:
-        if not isinstance(salience_flags, list):
-            result["salience_flags"] = []
-        else:
-            result["salience_flags"] = [
-                str(flag).strip() for flag in salience_flags if str(flag or "").strip()
-            ]
-
-    evidence_spans = result.get("evidence_spans")
-    if evidence_spans is not None:
-        if not isinstance(evidence_spans, list):
-            result["evidence_spans"] = []
-        else:
-            cleaned_spans: list[dict[str, Any]] = []
-            for idx, span in enumerate(evidence_spans):
-                if not isinstance(span, dict):
-                    continue
-                text = str(span.get("text") or "").strip()
-                if not text:
-                    continue
-                pain_category = str(span.get("pain_category") or "").strip()
-                replacement = str(span.get("replacement_mode") or "").strip()
-                operating_shift = str(span.get("operating_model_shift") or "").strip()
-                productivity = str(span.get("productivity_delta_claim") or "").strip()
-                cleaned_spans.append({
-                    "span_id": str(span.get("span_id") or f"derived:{idx}"),
-                    "_sid": str(span.get("_sid") or span.get("span_id") or f"derived:{idx}"),
-                    "text": text,
-                    "start_char": span.get("start_char"),
-                    "end_char": span.get("end_char"),
-                    "signal_type": str(span.get("signal_type") or "review_context"),
-                    "pain_category": pain_category if pain_category in _KNOWN_PAIN_CATEGORIES else None,
-                    "competitor": str(span.get("competitor") or "").strip() or None,
-                    "company_name": str(span.get("company_name") or "").strip() or None,
-                    "reviewer_title": str(span.get("reviewer_title") or "").strip() or None,
-                    "time_anchor": str(span.get("time_anchor") or "").strip() or None,
-                    "numeric_literals": span.get("numeric_literals") if isinstance(span.get("numeric_literals"), dict) else {},
-                    "flags": [
-                        str(flag).strip() for flag in (span.get("flags") or [])
-                        if str(flag or "").strip()
-                    ],
-                    "replacement_mode": replacement if replacement in _KNOWN_REPLACEMENT_MODES else result.get("replacement_mode"),
-                    "operating_model_shift": operating_shift if operating_shift in _KNOWN_OPERATING_MODEL_SHIFTS else result.get("operating_model_shift"),
-                    "productivity_delta_claim": productivity if productivity in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS else result.get("productivity_delta_claim"),
-                })
-            result["evidence_spans"] = cleaned_spans
-
-    if _schema_version(result) >= 3:
-        remaining_missing = _missing_witness_primitives(result)
-        if remaining_missing:
-            logger.warning(
-                "schema v3 enrichment still missing witness primitives after normalization: %s",
-                ", ".join(remaining_missing),
-            )
-            return False
-
-    # insider_signals: validate structure if present
-    insider = result.get("insider_signals")
-    if insider is not None:
-        if not isinstance(insider, dict):
-            result["insider_signals"] = None
-        else:
-            # org_health: must be dict
-            oh = insider.get("org_health")
-            if oh is not None and not isinstance(oh, dict):
-                insider["org_health"] = {}
-            elif isinstance(oh, dict):
-                # culture_indicators must be list
-                ci = oh.get("culture_indicators")
-                if ci is not None and not isinstance(ci, list):
-                    oh["culture_indicators"] = []
-                # Enum fields: coerce unknowns
-                for field, allowed in (
-                    ("bureaucracy_level", _KNOWN_ORG_HEALTH_LEVELS),
-                    ("leadership_quality", _KNOWN_LEADERSHIP_QUALITIES),
-                    ("innovation_climate", _KNOWN_INNOVATION_CLIMATES),
-                ):
-                    val = oh.get(field)
-                    if val and val not in allowed:
-                        oh[field] = "unknown"
-
-            # talent_drain: must be dict
-            td = insider.get("talent_drain")
-            if td is not None and not isinstance(td, dict):
-                insider["talent_drain"] = {}
-            elif isinstance(td, dict):
-                for bool_field in ("departures_mentioned", "layoff_fear"):
-                    if bool_field in td:
-                        coerced = _coerce_bool(td[bool_field])
-                        td[bool_field] = coerced if coerced is not None else False
-                morale = td.get("morale")
-                if morale and morale not in _KNOWN_MORALE_LEVELS:
-                    td["morale"] = "unknown"
-
-            # departure_type: enum
-            dt = insider.get("departure_type")
-            if dt and dt not in _KNOWN_DEPARTURE_TYPES:
-                insider["departure_type"] = "unknown"
-
-    return True
+    return _service_validate_enrichment(
+        result,
+        source_row,
+        deps=EnrichmentValidationDeps(
+            coerce_bool=_coerce_bool,
+            normalize_pain_category=_normalize_pain_category,
+            normalize_budget_value_text=_normalize_budget_value_text,
+            normalize_budget_detail_text=_normalize_budget_detail_text,
+            canonical_role_type=_canonical_role_type,
+            canonical_role_level=_canonical_role_level,
+            infer_role_level_from_text=_infer_role_level_from_text,
+            infer_decision_maker=_infer_decision_maker,
+            infer_buyer_role_type=_infer_buyer_role_type,
+            coerce_json_dict=_coerce_json_dict,
+            schema_version=_schema_version,
+            missing_witness_primitives=_missing_witness_primitives,
+            compute_derived_fields=_compute_derived_fields,
+            trusted_reviewer_company_name=_trusted_reviewer_company_name,
+            churn_signal_bool_fields=_CHURN_SIGNAL_BOOL_FIELDS,
+            known_severity_levels=_KNOWN_SEVERITY_LEVELS,
+            known_lock_in_levels=_KNOWN_LOCK_IN_LEVELS,
+            known_sentiment_directions=_KNOWN_SENTIMENT_DIRECTIONS,
+            known_buying_stages=_KNOWN_BUYING_STAGES,
+            known_decision_timelines=_KNOWN_DECISION_TIMELINES,
+            known_contract_value_signals=_KNOWN_CONTRACT_VALUE_SIGNALS,
+            known_replacement_modes=_KNOWN_REPLACEMENT_MODES,
+            known_operating_model_shifts=_KNOWN_OPERATING_MODEL_SHIFTS,
+            known_productivity_delta_claims=_KNOWN_PRODUCTIVITY_DELTA_CLAIMS,
+            known_org_pressure_types=_KNOWN_ORG_PRESSURE_TYPES,
+            known_content_types=_KNOWN_CONTENT_TYPES,
+            known_org_health_levels=_KNOWN_ORG_HEALTH_LEVELS,
+            known_leadership_qualities=_KNOWN_LEADERSHIP_QUALITIES,
+            known_innovation_climates=_KNOWN_INNOVATION_CLIMATES,
+            known_morale_levels=_KNOWN_MORALE_LEVELS,
+            known_departure_types=_KNOWN_DEPARTURE_TYPES,
+            known_pain_categories=_KNOWN_PAIN_CATEGORIES,
+        ),
+    )
 
 
 async def _increment_attempts(pool, review_id, current_attempts: int, max_attempts: int) -> None:
