@@ -125,7 +125,7 @@ def _end_crm_trace(
 @router.post("/events")
 async def ingest_crm_event(
     body: CRMEventBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Ingest a CRM event for asynchronous processing.
 
@@ -168,7 +168,7 @@ async def ingest_crm_event(
     span = _start_crm_trace(
         provider=crm_provider,
         event_type=event_type,
-        account_id=str(user.account_id) if user else None,
+        account_id=str(user.account_id),
     )
 
     event_ts = None
@@ -178,7 +178,7 @@ async def ingest_crm_event(
         except (ValueError, AttributeError):
             pass
 
-    account_id = user.account_id if user else None
+    account_id = user.account_id
 
     try:
         event_id = await pool.fetchval(
@@ -257,7 +257,7 @@ async def ingest_crm_event(
 @router.post("/events/batch")
 async def ingest_crm_events_batch(
     request: Request,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Ingest a batch of CRM events. Body: {"events": [...]}."""
     cfg = settings.crm_event
@@ -279,7 +279,7 @@ async def ingest_crm_events_batch(
         raise HTTPException(status_code=400, detail="Maximum 100 events per batch")
 
     pool = _pool_or_503()
-    account_id = str(user.account_id) if user else None
+    account_id = str(user.account_id)
     span = _start_crm_trace(
         provider="batch",
         account_id=account_id,

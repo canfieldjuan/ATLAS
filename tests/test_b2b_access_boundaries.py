@@ -63,6 +63,28 @@ _TARGET_ID = str(uuid4())
         ("POST", "/api/v1/b2b/briefings/bulk-reject", {"briefing_ids": [str(uuid4())]}),
         ("GET", "/api/v1/b2b/briefings/export", None),
         ("GET", "/api/v1/admin/costs/summary", None),
+        (
+            "POST",
+            "/api/v1/b2b/crm/events",
+            {
+                "crm_provider": "generic",
+                "event_type": "deal_won",
+                "company_name": "Boundary Corp",
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/crm/events/batch",
+            {
+                "events": [
+                    {
+                        "crm_provider": "generic",
+                        "event_type": "deal_won",
+                        "company_name": "Boundary Corp",
+                    }
+                ]
+            },
+        ),
         ("GET", "/api/v1/b2b/crm/events", None),
         ("GET", "/api/v1/b2b/crm/events/enrichment-stats", None),
         (
