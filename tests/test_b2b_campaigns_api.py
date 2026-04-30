@@ -16,6 +16,66 @@ def test_campaign_activity_timestamp_sql_uses_real_campaign_columns():
 
 
 @pytest.mark.asyncio
+async def test_campaign_analytics_scope_to_tracked_vendors(monkeypatch):
+    class Pool:
+        def __init__(self):
+            self.calls = []
+
+        async def fetchrow(self, query, *args):
+            self.calls.append(("fetchrow", query, args))
+            return {
+                "total": 0,
+                "sent": 0,
+                "opened": 0,
+                "clicked": 0,
+                "replied": 0,
+                "bounced": 0,
+                "unsubscribed": 0,
+                "completed": 0,
+                "avg_hours_to_open": None,
+                "avg_hours_to_click": None,
+            }
+
+        async def fetch(self, query, *args):
+            self.calls.append(("fetch", query, args))
+            return []
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    account_id = str(uuid4())
+    partner_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    await mod.analytics_funnel(
+        since="2026-04-01",
+        vendor="Zendesk",
+        company="Acme",
+        partner_id=partner_id,
+        user=user,
+    )
+    await mod.analytics_by_vendor(since=None, limit=5, user=user)
+    await mod.analytics_by_company(since=None, limit=6, user=user)
+    await mod.analytics_timeline(since=None, vendor=None, company=None, user=user)
+
+    assert len(pool.calls) == 4
+    for _, query, args in pool.calls:
+        assert "tracked_vendors" in query
+        assert "vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in query
+        assert args[0] == account_id
+
+    _, funnel_query, funnel_args = pool.calls[0]
+    assert "week >= $2::timestamptz" in funnel_query
+    assert "vendor_name ILIKE '%' || $3 || '%'" in funnel_query
+    assert "company_name ILIKE '%' || $4 || '%'" in funnel_query
+    assert "partner_id = $5::uuid" in funnel_query
+    assert funnel_args == (account_id, "2026-04-01", "Zendesk", "Acme", partner_id)
+
+    assert pool.calls[1][2] == (account_id, 5)
+    assert pool.calls[2][2] == (account_id, 6)
+    assert pool.calls[3][2] == (account_id,)
+
+
+@pytest.mark.asyncio
 async def test_review_candidates_endpoint_uses_helper(monkeypatch):
     captured = {}
 

@@ -304,6 +304,10 @@ _TARGET_ID = str(uuid4())
         ("DELETE", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}", None),
         ("GET", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}/plan", None),
         ("POST", f"/api/v1/b2b/tenant/competitive-sets/{_TARGET_ID}/run", {}),
+        ("GET", "/api/v1/b2b/campaigns/analytics/funnel", None),
+        ("GET", "/api/v1/b2b/campaigns/analytics/by-vendor", None),
+        ("GET", "/api/v1/b2b/campaigns/analytics/by-company", None),
+        ("GET", "/api/v1/b2b/campaigns/analytics/timeline", None),
         (
             "POST",
             "/api/v1/b2b/campaigns/suppressions",
@@ -515,11 +519,15 @@ def test_product_tenant_routes_reject_authenticated_underplan_before_service_tou
 @pytest.mark.parametrize(
     ("method", "path", "json_body"),
     [
+        ("GET", "/api/v1/b2b/campaigns/analytics/funnel", None),
+        ("GET", "/api/v1/b2b/campaigns/analytics/by-vendor", None),
+        ("GET", "/api/v1/b2b/campaigns/analytics/by-company", None),
+        ("GET", "/api/v1/b2b/campaigns/analytics/timeline", None),
         ("GET", "/api/v1/b2b/campaigns/suppressions", None),
         ("GET", "/api/v1/b2b/campaigns/suppressions/check?email=boundary@example.com", None),
     ],
 )
-def test_campaign_suppression_reads_reject_authenticated_underplan_before_db_touch(
+def test_campaign_plan_gated_reads_reject_authenticated_underplan_before_db_touch(
     monkeypatch,
     method: str,
     path: str,

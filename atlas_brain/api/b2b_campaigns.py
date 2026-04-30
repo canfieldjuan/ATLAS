@@ -56,6 +56,13 @@ def _campaign_scope_clause(alias: str, user: AuthUser | None) -> tuple[str, list
     )
 
 
+def _tracked_vendor_scope_condition(vendor_expression: str, param_idx: int) -> str:
+    return (
+        f"{vendor_expression} IN (SELECT vendor_name FROM tracked_vendors "
+        f"WHERE account_id = ${param_idx}::uuid)"
+    )
+
+
 def _campaign_activity_timestamp_sql(alias: str) -> str:
     return (
         f"COALESCE({alias}.clicked_at, {alias}.opened_at, {alias}.sent_at, "
@@ -929,6 +936,7 @@ async def analytics_funnel(
     vendor: Optional[str] = Query(None),
     company: Optional[str] = Query(None),
     partner_id: Optional[str] = Query(None),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Overall funnel: sent -> opened -> clicked -> replied -> bounced, with rates."""
     pool = _pool_or_503()
@@ -936,6 +944,10 @@ async def analytics_funnel(
     conditions: list[str] = []
     params: list[Any] = []
     idx = 1
+
+    conditions.append(_tracked_vendor_scope_condition("vendor_name", idx))
+    params.append(user.account_id)
+    idx += 1
 
     if since:
         conditions.append(f"week >= ${idx}::timestamptz")
@@ -993,17 +1005,22 @@ async def analytics_funnel(
 async def analytics_by_vendor(
     since: Optional[str] = Query(None),
     limit: int = Query(20, le=100),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Per-vendor funnel breakdown, ordered by sent DESC."""
     pool = _pool_or_503()
 
     params: list[Any] = []
     idx = 1
-    where = ""
+
+    conditions = [_tracked_vendor_scope_condition("vendor_name", idx)]
+    params.append(user.account_id)
+    idx += 1
     if since:
-        where = f"WHERE week >= ${idx}::timestamptz"
+        conditions.append(f"week >= ${idx}::timestamptz")
         params.append(since)
         idx += 1
+    where = f"WHERE {' AND '.join(conditions)}"
 
     params.append(limit)
 
@@ -1042,17 +1059,22 @@ async def analytics_by_vendor(
 async def analytics_by_company(
     since: Optional[str] = Query(None),
     limit: int = Query(20, le=100),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Per-company engagement summary (best for identifying warm leads)."""
     pool = _pool_or_503()
 
     params: list[Any] = []
     idx = 1
-    where = ""
+
+    conditions = [_tracked_vendor_scope_condition("vendor_name", idx)]
+    params.append(user.account_id)
+    idx += 1
     if since:
-        where = f"WHERE week >= ${idx}::timestamptz"
+        conditions.append(f"week >= ${idx}::timestamptz")
         params.append(since)
         idx += 1
+    where = f"WHERE {' AND '.join(conditions)}"
 
     params.append(limit)
 
@@ -1091,6 +1113,7 @@ async def analytics_timeline(
     since: Optional[str] = Query(None),
     vendor: Optional[str] = Query(None),
     company: Optional[str] = Query(None),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Weekly time-series of sent/opened/clicked/replied for trend visualization."""
     pool = _pool_or_503()
@@ -1098,6 +1121,10 @@ async def analytics_timeline(
     conditions: list[str] = []
     params: list[Any] = []
     idx = 1
+
+    conditions.append(_tracked_vendor_scope_condition("vendor_name", idx))
+    params.append(user.account_id)
+    idx += 1
 
     if since:
         conditions.append(f"week >= ${idx}::timestamptz")
