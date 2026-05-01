@@ -47,6 +47,11 @@
 - `scripts/run_extracted_pipeline_checks.sh` (includes
   `audit_extracted_standalone.py --fail-on-debt`)
 
+The sync, validation, ASCII, and relative-import entry points are stable
+product wrappers over `extracted/_shared/scripts/`. The standalone audit remains
+content-specific because it checks runtime `atlas_brain` coupling across the
+extracted package, not just manifest-relative import resolution.
+
 ## Remaining extraction work
 
 1. Harden minimal local adapters into customer-grade ports for notify/reasoning

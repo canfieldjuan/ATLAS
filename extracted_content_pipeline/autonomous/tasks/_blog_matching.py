@@ -46,25 +46,25 @@ _PIPELINE_TOPIC_TYPES = {
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
-# Maps role keyword fragments → {topic_type: score_boost}.
+# Maps role keyword fragments -> {topic_type: score_boost}.
 # Higher boost = stronger preference for that topic type for this role.
 _ROLE_TOPIC_BOOSTS: list[tuple[tuple[str, ...], dict[str, int]]] = [
-    # Finance, procurement, budget holders → pricing content resonates most
+    # Finance, procurement, budget holders -> pricing content resonates most
     (("cfo", "finance", "controller", "procurement", "budget", "treasurer", "accounting"),
      {"pricing_reality_check": 3, "churn_report": 1}),
-    # Technical buyers → migration feasibility is the key concern
+    # Technical buyers -> migration feasibility is the key concern
     (("cto", "engineer", "developer", "architect", "devops", "platform", "infrastructure", "technical"),
      {"migration_guide": 3, "vendor_deep_dive": 1}),
-    # Operations/IT leadership → churn and market context
+    # Operations/IT leadership -> churn and market context
     (("operations", "coo", "director of ops", "it director", "it manager"),
      {"churn_report": 2, "market_landscape": 1}),
-    # Product/marketing → market landscape and best-fit content
+    # Product/marketing -> market landscape and best-fit content
     (("cmo", "marketing", "product", "growth", "demand gen"),
      {"market_landscape": 2, "best_fit_guide": 2}),
-    # Sales/BD → competitive comparison assets
+    # Sales/BD -> competitive comparison assets
     (("sales", "business development", "bd", "revenue", "account executive", "ae"),
      {"vendor_showdown": 2, "vendor_alternative": 2}),
-    # C-suite generalists → deep dives and landscape
+    # C-suite generalists -> deep dives and landscape
     (("ceo", "president", "founder", "owner", "vp", "vice president", "svp", "evp"),
      {"vendor_deep_dive": 2, "market_landscape": 2}),
 ]
@@ -150,7 +150,7 @@ async def fetch_relevant_blog_posts(
             evaluating.  Matches against ``data_context.vendor_b`` in
             showdown posts.
         contact_role: Contact's job title/role.  Boosts topic types that
-            resonate with the buyer persona (e.g. CFO → pricing_reality_check).
+            resonate with the buyer persona (e.g. CFO -> pricing_reality_check).
         include_drafts: When true, allow ``draft`` posts as a fallback when
             no published matches exist.
         limit: Max posts to return (default 3).
@@ -279,7 +279,7 @@ async def fetch_relevant_blog_posts(
                     score += 5
                     break
 
-        # Role-based topic boost: e.g. CFO contact → pricing_reality_check +3
+        # Role-based topic boost: e.g. CFO contact -> pricing_reality_check +3
         if role_boosts:
             topic_type = str(row.get("topic_type") or "").lower()
             score += role_boosts.get(topic_type, 0)

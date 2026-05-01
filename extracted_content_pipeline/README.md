@@ -21,6 +21,9 @@ To refresh this scaffold from Atlas source of truth:
 bash scripts/sync_extracted_content_pipeline.sh
 ```
 
+This stable product entry point delegates to
+`extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline`.
+
 ## Manifest
 
 Mirror mappings are declared in `extracted_content_pipeline/manifest.json` so sync and validation use one source of truth.
@@ -42,11 +45,17 @@ the sellable workflows.
 bash scripts/validate_extracted_content_pipeline.sh
 ```
 
+This stable product entry point delegates to
+`extracted/_shared/scripts/validate_extracted.sh extracted_content_pipeline`.
+
 ## ASCII compliance check
 
 ```bash
 bash scripts/check_ascii_python.sh
 ```
+
+This stable product entry point delegates to
+`extracted/_shared/scripts/check_ascii_python.sh extracted_content_pipeline`.
 
 ## Import debt check
 
@@ -54,6 +63,8 @@ bash scripts/check_ascii_python.sh
 python scripts/check_extracted_imports.py
 ```
 
+This stable product entry point delegates to
+`extracted/_shared/scripts/check_extracted_imports.py extracted_content_pipeline`.
 Known unresolved relative imports are tracked in `extracted_content_pipeline/import_debt_allowlist.txt`.
 
 ## Standalone readiness audit
