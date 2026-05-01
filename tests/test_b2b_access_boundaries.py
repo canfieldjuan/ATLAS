@@ -88,6 +88,32 @@ _TARGET_ID = str(uuid4())
                 ]
             },
         ),
+        (
+            "POST",
+            "/api/v1/b2b/crm/events/hubspot",
+            {
+                "subscriptionType": "deal.propertyChange",
+                "objectId": 123,
+                "propertyName": "dealstage",
+                "propertyValue": "closedwon",
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/crm/events/salesforce",
+            {
+                "sobject": "Opportunity",
+                "record": {"Id": "sf-1", "StageName": "Closed Won"},
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/b2b/crm/events/pipedrive",
+            {
+                "event": "updated.deal",
+                "current": {"id": 123, "status": "won"},
+            },
+        ),
         ("GET", "/api/v1/b2b/crm/events", None),
         ("GET", "/api/v1/b2b/crm/events/enrichment-stats", None),
         (
