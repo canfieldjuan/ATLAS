@@ -3,6 +3,7 @@ name: Extracted Competitive Intelligence Checks
 on:
   pull_request:
     paths:
+      # Scaffold + script paths
       - "extracted_competitive_intelligence/**"
       - "scripts/sync_extracted_competitive_intelligence.sh"
       - "scripts/validate_extracted_competitive_intelligence.sh"
@@ -10,6 +11,33 @@ on:
       - "scripts/check_extracted_competitive_intelligence_imports.py"
       - "scripts/smoke_extracted_competitive_intelligence_imports.py"
       - "scripts/run_extracted_competitive_intelligence_checks.sh"
+      # Atlas source paths the manifest snapshots from. If any of these
+      # change without a corresponding scaffold sync, the validate step
+      # catches the drift.
+      - "atlas_brain/services/vendor_registry.py"
+      - "atlas_brain/mcp/b2b/vendor_registry.py"
+      - "atlas_brain/mcp/b2b/displacement.py"
+      - "atlas_brain/mcp/b2b/cross_vendor.py"
+      - "atlas_brain/mcp/b2b/write_intelligence.py"
+      - "atlas_brain/services/b2b/source_impact.py"
+      - "atlas_brain/autonomous/tasks/b2b_battle_cards.py"
+      - "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py"
+      - "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py"
+      - "atlas_brain/services/b2b_competitive_sets.py"
+      - "atlas_brain/reasoning/cross_vendor_selection.py"
+      - "atlas_brain/reasoning/single_pass_prompts/cross_vendor_battle.py"
+      - "atlas_brain/reasoning/single_pass_prompts/battle_card_reasoning.py"
+      - "atlas_brain/templates/email/vendor_briefing.py"
+      - "atlas_brain/api/b2b_vendor_briefing.py"
+      - "atlas_brain/storage/migrations/095_b2b_vendor_registry.sql"
+      - "atlas_brain/storage/migrations/099_displacement_edges_and_company_signals.sql"
+      - "atlas_brain/storage/migrations/101_vendor_buyer_profiles.sql"
+      - "atlas_brain/storage/migrations/147_displacement_velocity.sql"
+      - "atlas_brain/storage/migrations/158_cross_vendor_conclusions.sql"
+      - "atlas_brain/storage/migrations/245_cross_vendor_reasoning_synthesis.sql"
+      - "atlas_brain/storage/migrations/261_b2b_competitive_sets.sql"
+      - "atlas_brain/storage/migrations/262_b2b_competitive_set_runs.sql"
+      - "atlas_brain/storage/migrations/263_b2b_competitive_set_run_constraints.sql"
   push:
     paths:
       - "extracted_competitive_intelligence/**"
@@ -19,6 +47,30 @@ on:
       - "scripts/check_extracted_competitive_intelligence_imports.py"
       - "scripts/smoke_extracted_competitive_intelligence_imports.py"
       - "scripts/run_extracted_competitive_intelligence_checks.sh"
+      - "atlas_brain/services/vendor_registry.py"
+      - "atlas_brain/mcp/b2b/vendor_registry.py"
+      - "atlas_brain/mcp/b2b/displacement.py"
+      - "atlas_brain/mcp/b2b/cross_vendor.py"
+      - "atlas_brain/mcp/b2b/write_intelligence.py"
+      - "atlas_brain/services/b2b/source_impact.py"
+      - "atlas_brain/autonomous/tasks/b2b_battle_cards.py"
+      - "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py"
+      - "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py"
+      - "atlas_brain/services/b2b_competitive_sets.py"
+      - "atlas_brain/reasoning/cross_vendor_selection.py"
+      - "atlas_brain/reasoning/single_pass_prompts/cross_vendor_battle.py"
+      - "atlas_brain/reasoning/single_pass_prompts/battle_card_reasoning.py"
+      - "atlas_brain/templates/email/vendor_briefing.py"
+      - "atlas_brain/api/b2b_vendor_briefing.py"
+      - "atlas_brain/storage/migrations/095_b2b_vendor_registry.sql"
+      - "atlas_brain/storage/migrations/099_displacement_edges_and_company_signals.sql"
+      - "atlas_brain/storage/migrations/101_vendor_buyer_profiles.sql"
+      - "atlas_brain/storage/migrations/147_displacement_velocity.sql"
+      - "atlas_brain/storage/migrations/158_cross_vendor_conclusions.sql"
+      - "atlas_brain/storage/migrations/245_cross_vendor_reasoning_synthesis.sql"
+      - "atlas_brain/storage/migrations/261_b2b_competitive_sets.sql"
+      - "atlas_brain/storage/migrations/262_b2b_competitive_set_runs.sql"
+      - "atlas_brain/storage/migrations/263_b2b_competitive_set_run_constraints.sql"
 
 jobs:
   extracted-competitive-intelligence-checks:
@@ -30,7 +82,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
           cache: "pip"
 
       - name: Install runtime dependencies

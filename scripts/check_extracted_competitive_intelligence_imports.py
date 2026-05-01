@@ -38,6 +38,14 @@ def resolve_relative(module_path: Path, level: int, module: str | None) -> list[
     Honors Python relative-import semantics: ``level=1`` means current
     package (sibling of importing file), ``level=2`` means parent
     package, etc. Ascend = ``level - 1`` package components.
+
+    Phase 1 deliberately does NOT fall back to ``atlas_brain`` paths
+    here -- Python's relative-import machinery never falls through to a
+    sibling top-level package at runtime, so a "valid" atlas_brain hit
+    would mask a real scaffold gap that crashes the smoke-import step.
+    Every scaffolded relative import must resolve to a file inside the
+    scaffold itself; missing dependencies become bridge stubs, not
+    silent atlas_brain hits.
     """
     base_parts = list(module_path.relative_to(ROOT).parts)
     package_parts = base_parts[:-1]
@@ -47,16 +55,10 @@ def resolve_relative(module_path: Path, level: int, module: str | None) -> list[
         target_parts.extend(module.split("."))
 
     rel = Path(*target_parts) if target_parts else Path()
-    candidates: list[Path] = []
-
-    candidates.append((ROOT / rel).with_suffix(".py"))
-    candidates.append(ROOT / rel / "__init__.py")
-
-    if target_parts and target_parts[0] == "extracted_competitive_intelligence":
-        atlas_rel = Path("atlas_brain", *target_parts[1:])
-        candidates.append((ROOT / atlas_rel).with_suffix(".py"))
-        candidates.append(ROOT / atlas_rel / "__init__.py")
-
+    candidates: list[Path] = [
+        (ROOT / rel).with_suffix(".py"),
+        ROOT / rel / "__init__.py",
+    ]
     return candidates
 
 
