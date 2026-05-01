@@ -13,6 +13,9 @@ LLM_BRIDGE_PATHS = [
 
 LOCAL_UTILITY_SHIM_PATHS = [
     "extracted_content_pipeline/pipelines/notify.py",
+    "extracted_content_pipeline/reasoning/archetypes.py",
+    "extracted_content_pipeline/reasoning/evidence_engine.py",
+    "extracted_content_pipeline/reasoning/temporal.py",
     "extracted_content_pipeline/reasoning/wedge_registry.py",
     "extracted_content_pipeline/config.py",
     "extracted_content_pipeline/skills/registry.py",
@@ -30,6 +33,7 @@ LOCAL_UTILITY_SHIM_PATHS = [
     "extracted_content_pipeline/services/vendor_registry.py",
     "extracted_content_pipeline/storage/database.py",
     "extracted_content_pipeline/storage/models.py",
+    "extracted_content_pipeline/storage/repositories/scheduled_task.py",
 ]
 
 
