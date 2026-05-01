@@ -1,0 +1,160 @@
+# Extracted Content Pipeline (Staging Copy)
+
+This directory is an additive extraction scaffold copied from `atlas_brain`.
+It is intentionally kept side-by-side with Atlas so pipeline logic can be
+carved out safely without removing or changing production code.
+
+## Current contents
+
+- `autonomous/tasks/`: copied task implementations
+- `services/`: copied support shims and staged service dependencies
+- `skills/digest/`: copied prompt skill contracts
+- `storage/migrations/`: copied persistence migrations
+- `docs/`: extraction maps for productized pipeline slices
+
+## Sync command
+
+To refresh this scaffold from Atlas source of truth:
+
+```bash
+bash scripts/sync_extracted_content_pipeline.sh
+```
+
+## Manifest
+
+Mirror mappings are declared in `extracted_content_pipeline/manifest.json` so sync and validation use one source of truth.
+
+## Scope
+
+This scaffold preserves code exactly as copied so behavior and signatures remain
+unchanged while extraction work continues.
+
+This is not yet the sellable product boundary. A customer-usable module must be
+able to install and run without the Atlas monolith on `PYTHONPATH`. Until the
+standalone audit reaches zero runtime `atlas_brain` imports, this package is a
+staging copy, not a deployable product.
+
+
+## Validation command
+
+```bash
+bash scripts/validate_extracted_content_pipeline.sh
+```
+
+## ASCII compliance check
+
+```bash
+bash scripts/check_ascii_python.sh
+```
+
+## Import debt check
+
+```bash
+python scripts/check_extracted_imports.py
+```
+
+Known unresolved relative imports are tracked in `extracted_content_pipeline/import_debt_allowlist.txt`.
+
+## Standalone readiness audit
+
+```bash
+python scripts/audit_extracted_standalone.py
+python scripts/audit_extracted_standalone.py --fail-on-debt
+```
+
+The first command reports Atlas runtime coupling. The second is the product gate
+we should enable once staged shims have been replaced with product-owned ports
+and adapters.
+
+## One-shot checks
+
+```bash
+bash scripts/run_extracted_pipeline_checks.sh
+```
+
+## Compatibility shims
+
+To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`) that delegate to `atlas_brain` implementations.
+
+B2B helper siblings required by `b2b_blog_post_generation.py` are also copied into `extracted_content_pipeline/autonomous/tasks/`.
+
+These shims are temporary extraction scaffolding. They should not ship in the
+customer product.
+
+The email/campaign generation slice is mapped in `docs/email_campaign_generation_pipeline.md`, with standalone productization requirements in `docs/standalone_productization.md`.
+
+## Import smoke test
+
+```bash
+python scripts/smoke_extracted_pipeline_imports.py
+```
+
+## Status tracker
+
+Current extraction status is tracked in `extracted_content_pipeline/STATUS.md`.
+
+## CI workflow
+
+GitHub Actions workflow: `.github/workflows/extracted_pipeline_checks.yml` runs `bash scripts/run_extracted_pipeline_checks.sh` when extracted scaffold files change.
+
+## File inventory
+
+```bash
+bash scripts/list_extracted_pipeline_files.sh
+```
+
+## Standalone mode toggle
+
+Set `EXTRACTED_PIPELINE_STANDALONE=1` to use `extracted_content_pipeline/settings.py` instead of delegating config to `atlas_brain.config`.
+
+## Standalone pipeline shims
+
+In standalone mode (`EXTRACTED_PIPELINE_STANDALONE=1`), `extracted_content_pipeline/pipelines/llm.py` and `extracted_content_pipeline/pipelines/notify.py` provide local fallback behavior (no-op notifier and safe JSON/cleaning helpers) so task modules can execute without Atlas pipeline services.
+
+## Standalone storage shims
+
+In standalone mode, `extracted_content_pipeline/storage/database.py` and `extracted_content_pipeline/storage/models.py` provide minimal local fallbacks (`get_db_pool`, `ScheduledTask`) so task entrypoints can execute without Atlas storage imports.
+
+## Standalone skill registry
+
+In standalone mode, `extracted_content_pipeline/skills/registry.py` uses local markdown files under `extracted_content_pipeline/skills/` for `get_skill_registry()` lookups.
+
+## Standalone service shims
+
+In standalone mode, `extracted_content_pipeline/services/__init__.py` and `extracted_content_pipeline/services/protocols.py` provide minimal local fallbacks (`llm_registry.get_active()`, `Message`) so task imports do not require Atlas service modules.
+
+## Standalone source shims
+
+In standalone mode, `extracted_content_pipeline/services/scraping/sources.py` provides local `ReviewSource` enums and allowlist helpers used by B2B tasks without requiring Atlas source modules.
+
+## Standalone reasoning shims
+
+In standalone mode, `extracted_content_pipeline/reasoning/wedge_registry.py` provides local `Wedge`, `get_wedge_meta`, and `validate_wedge` fallbacks used by B2B extracted modules.
+
+## Standalone quality shims
+
+In standalone mode, `extracted_content_pipeline/services/blog_quality.py` provides local fallback quality helpers (`blog_quality_summary`, `blog_quality_revalidation`, and `merge_blog_first_pass_quality_data_context`) for B2B blog pipeline paths.
+
+## Standalone normalization shims
+
+In standalone mode, `extracted_content_pipeline/services/company_normalization.py` provides a local `normalize_company_name` fallback used by extracted B2B helpers.
+
+## Standalone vendor registry shims
+
+In standalone mode, `extracted_content_pipeline/services/vendor_registry.py` provides a local `resolve_vendor_name_cached` fallback used by extracted B2B helpers.
+
+## Standalone tracing shims
+
+In standalone mode, `extracted_content_pipeline/services/tracing.py` provides a local `build_business_trace_context` fallback used by extracted B2B helpers.
+
+## Standalone Apollo override shims
+
+In standalone mode, `extracted_content_pipeline/services/apollo_company_overrides.py` provides a local async `fetch_company_override_map` fallback used by extracted B2B helpers.
+
+## Standalone corrections shims
+
+In standalone mode, `extracted_content_pipeline/services/b2b/corrections.py` provides a local `suppress_predicate` fallback for extracted B2B helper logic.
+
+## Standalone B2B contract shims
+
+In standalone mode, `extracted_content_pipeline/services/b2b/enrichment_contract.py` provides local fallbacks (`pain_category_for_bucket`, `quote_grade_phrases`, `resolve_pain_confidence`) used by extracted B2B helpers.
