@@ -1,0 +1,33 @@
+name: Extracted Umbrella Checks
+
+on:
+  pull_request:
+    paths:
+      - "extracted/**"
+  push:
+    paths:
+      - "extracted/**"
+
+jobs:
+  extracted-umbrella-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate shared extraction scripts
+        run: |
+          python -m py_compile extracted/_shared/scripts/check_extracted_imports.py
+          bash extracted/_shared/scripts/validate_extracted.sh extracted_competitive_intelligence
+          bash extracted/_shared/scripts/validate_extracted.sh extracted_llm_infrastructure
+          bash extracted/_shared/scripts/validate_extracted.sh extracted_content_pipeline
+          bash extracted/_shared/scripts/check_ascii_python.sh extracted_competitive_intelligence
+          bash extracted/_shared/scripts/check_ascii_python.sh extracted_llm_infrastructure
+          python extracted/_shared/scripts/check_extracted_imports.py --no-atlas-fallback extracted_competitive_intelligence
+          python extracted/_shared/scripts/check_extracted_imports.py extracted_llm_infrastructure
+          python extracted/_shared/scripts/check_extracted_imports.py extracted_content_pipeline
