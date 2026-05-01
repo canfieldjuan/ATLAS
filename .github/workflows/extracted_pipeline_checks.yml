@@ -1,0 +1,36 @@
+name: Extracted Pipeline Checks
+
+on:
+  pull_request:
+    paths:
+      - "extracted_content_pipeline/**"
+      - "scripts/sync_extracted_content_pipeline.sh"
+      - "scripts/validate_extracted_content_pipeline.sh"
+      - "scripts/check_ascii_python.sh"
+      - "scripts/check_extracted_imports.py"
+      - "scripts/smoke_extracted_pipeline_imports.py"
+      - "scripts/run_extracted_pipeline_checks.sh"
+  push:
+    paths:
+      - "extracted_content_pipeline/**"
+      - "scripts/sync_extracted_content_pipeline.sh"
+      - "scripts/validate_extracted_content_pipeline.sh"
+      - "scripts/check_ascii_python.sh"
+      - "scripts/check_extracted_imports.py"
+      - "scripts/smoke_extracted_pipeline_imports.py"
+      - "scripts/run_extracted_pipeline_checks.sh"
+
+jobs:
+  extracted-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Run extracted pipeline checks
+        run: bash scripts/run_extracted_pipeline_checks.sh

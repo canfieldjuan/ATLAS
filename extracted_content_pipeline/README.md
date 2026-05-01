@@ -69,3 +69,7 @@ python scripts/smoke_extracted_pipeline_imports.py
 ## Status tracker
 
 Current extraction status is tracked in `extracted_content_pipeline/STATUS.md`.
+
+## CI workflow
+
+GitHub Actions workflow: `.github/workflows/extracted_pipeline_checks.yml` runs `bash scripts/run_extracted_pipeline_checks.sh` when extracted scaffold files change.
