@@ -74,7 +74,7 @@ bash scripts/run_extracted_pipeline_checks.sh
 
 ## Compatibility shims
 
-To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`) that delegate to `atlas_brain` implementations.
+To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`). Some remain compatibility delegates to `atlas_brain`; small utility shims now use product-owned local implementations by default.
 
 B2B helper siblings required by `b2b_blog_post_generation.py` are also copied into `extracted_content_pipeline/autonomous/tasks/`.
 
@@ -107,11 +107,11 @@ bash scripts/list_extracted_pipeline_files.sh
 
 Set `EXTRACTED_PIPELINE_STANDALONE=1` to use `extracted_content_pipeline/settings.py` instead of delegating config to `atlas_brain.config`.
 
-## Standalone pipeline shims
+## Pipeline shims
 
-In standalone mode (`EXTRACTED_PIPELINE_STANDALONE=1`), `extracted_content_pipeline/pipelines/llm.py` and `extracted_content_pipeline/pipelines/notify.py` provide local fallback behavior (no-op notifier and safe JSON/cleaning helpers) so task modules can execute without Atlas pipeline services.
+`extracted_content_pipeline/pipelines/notify.py` provides a local no-op notifier so task modules can execute without Atlas pipeline services.
 
-Outside standalone mode, content-pipeline LLM bridge modules delegate to
+Content-pipeline LLM bridge modules delegate to
 `extracted_llm_infrastructure` instead of `atlas_brain`. That keeps the content
 generation product boundary pointed at the extracted LLM/cost-optimization
 product rather than at the monolith.
@@ -124,41 +124,17 @@ In standalone mode, `extracted_content_pipeline/storage/database.py` and `extrac
 
 In standalone mode, `extracted_content_pipeline/skills/registry.py` uses local markdown files under `extracted_content_pipeline/skills/` for `get_skill_registry()` lookups.
 
-## Standalone service shims
+## Local utility shims
 
-In standalone mode, `extracted_content_pipeline/services/__init__.py` and `extracted_content_pipeline/services/protocols.py` provide minimal local fallbacks (`llm_registry.get_active()`, `Message`) so task imports do not require Atlas service modules.
+Several small utility shims provide product-owned local behavior by default so task imports do not require Atlas service modules:
 
-## Standalone source shims
-
-In standalone mode, `extracted_content_pipeline/services/scraping/sources.py` provides local `ReviewSource` enums and allowlist helpers used by B2B tasks without requiring Atlas source modules.
-
-## Standalone reasoning shims
-
-In standalone mode, `extracted_content_pipeline/reasoning/wedge_registry.py` provides local `Wedge`, `get_wedge_meta`, and `validate_wedge` fallbacks used by B2B extracted modules.
-
-## Standalone quality shims
-
-In standalone mode, `extracted_content_pipeline/services/blog_quality.py` provides local fallback quality helpers (`blog_quality_summary`, `blog_quality_revalidation`, and `merge_blog_first_pass_quality_data_context`) for B2B blog pipeline paths.
-
-## Standalone normalization shims
-
-In standalone mode, `extracted_content_pipeline/services/company_normalization.py` provides a local `normalize_company_name` fallback used by extracted B2B helpers.
-
-## Standalone vendor registry shims
-
-In standalone mode, `extracted_content_pipeline/services/vendor_registry.py` provides a local `resolve_vendor_name_cached` fallback used by extracted B2B helpers.
-
-## Standalone tracing shims
-
-In standalone mode, `extracted_content_pipeline/services/tracing.py` provides a local `build_business_trace_context` fallback used by extracted B2B helpers.
-
-## Standalone Apollo override shims
-
-In standalone mode, `extracted_content_pipeline/services/apollo_company_overrides.py` provides a local async `fetch_company_override_map` fallback used by extracted B2B helpers.
-
-## Standalone corrections shims
-
-In standalone mode, `extracted_content_pipeline/services/b2b/corrections.py` provides a local `suppress_predicate` fallback for extracted B2B helper logic.
+- `services/__init__.py` and `services/protocols.py`: `llm_registry.get_active()` and `Message`
+- `services/scraping/sources.py`: `ReviewSource` enums and allowlist helpers
+- `reasoning/wedge_registry.py`: `Wedge`, `get_wedge_meta`, and `validate_wedge`
+- `services/blog_quality.py`: blog quality summary/revalidation helpers
+- `services/company_normalization.py`: `normalize_company_name`
+- `services/vendor_registry.py`: `resolve_vendor_name_cached`
+- `services/apollo_company_overrides.py`, `services/b2b/corrections.py`, `services/tracing.py`, and `services/scraping/universal/html_cleaner.py`: local no-op or lightweight helpers
 
 ## Standalone B2B contract shims
 
