@@ -260,3 +260,32 @@ async def test_provider_registry_defaults_to_resend_when_blank():
 
     provider = resolve("")
     assert provider.name == "resend"
+
+
+@pytest.mark.asyncio
+async def test_webhook_lookup_passes_provider_to_query(monkeypatch):
+    """Migration 311 added esp_provider to b2b_campaigns; the webhook
+    lookup must scope by (esp_message_id, esp_provider) so a Resend
+    webhook cannot match an SES-sent campaign that happens to share an
+    esp_message_id value once a second provider goes live."""
+    from atlas_brain.api import campaign_webhooks as mod
+
+    fetchrow = AsyncMock(return_value=None)
+    pool = SimpleNamespace(is_initialized=True, fetchrow=fetchrow)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.campaign_sequence, "resend_webhook_signing_secret", "")
+
+    await mod.campaign_email_webhook(
+        _request(json.dumps({
+            "type": "email.delivered",
+            "data": {"email_id": "msg-77"},
+        }).encode("utf-8")),
+        provider="resend",
+    )
+
+    fetchrow.assert_awaited_once()
+    args = fetchrow.await_args.args
+    # Args: (sql, message_id, provider)
+    assert args[1] == "msg-77"
+    assert args[2] == "resend"
+    assert "esp_provider" in args[0]

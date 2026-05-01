@@ -139,16 +139,27 @@ async def _apply_canonical_event(pool, event: CanonicalEvent) -> dict[str, str]:
     if not event.message_id:
         return {"status": "ignored", "reason": "missing message_id"}
 
+    # Provider-scoped lookup: two ESPs can legitimately emit the same
+    # esp_message_id format/value, so webhooks must only match campaigns
+    # that were sent through the same provider. esp_provider IS NULL
+    # accommodates legacy rows that escaped the migration 311 backfill --
+    # safe because today only Resend is live, but tighten this to require
+    # a non-NULL match before enabling a second provider in production.
     campaign = await pool.fetchrow(
         """
         SELECT id, sequence_id, step_number, recipient_email
         FROM b2b_campaigns
         WHERE esp_message_id = $1
+          AND (esp_provider = $2 OR esp_provider IS NULL)
         """,
         event.message_id,
+        event.provider,
     )
     if not campaign:
-        logger.debug("Webhook for unknown esp_message_id: %s", event.message_id)
+        logger.debug(
+            "Webhook for unknown esp_message_id: %s (provider=%s)",
+            event.message_id, event.provider,
+        )
         return {"status": "ignored", "reason": "unknown campaign"}
 
     campaign_id = campaign["id"]
