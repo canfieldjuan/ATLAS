@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ..auth.dependencies import AuthUser, optional_auth, require_auth
+from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
 from ..services.tracing import (
     build_business_trace_context,
@@ -382,7 +382,7 @@ async def ingest_crm_events_batch(
 @router.post("/events/hubspot")
 async def ingest_hubspot_webhook(
     request: Request,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Accept HubSpot webhook payloads and normalize to internal format.
 
@@ -393,8 +393,6 @@ async def ingest_hubspot_webhook(
     - propertyName, propertyValue: what changed
     - occurredAt: timestamp in ms
     """
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required for webhook ingestion")
     cfg = settings.crm_event
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
@@ -545,7 +543,7 @@ def _hubspot_stage_to_event_type(stage_value: str) -> str:
 @router.post("/events/salesforce")
 async def ingest_salesforce_webhook(
     request: Request,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Accept Salesforce Outbound Message or Platform Event payloads.
 
@@ -554,8 +552,6 @@ async def ingest_salesforce_webhook(
     - record: dict of field values
     - old: dict of previous field values (for update triggers)
     """
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required for webhook ingestion")
     cfg = settings.crm_event
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
@@ -660,7 +656,7 @@ async def ingest_salesforce_webhook(
                 deal_amount,
                 json.dumps(evt, default=str),
                 event_ts,
-                str(user.account_id) if user else None,
+                str(user.account_id),
             )
             ingested += 1
         except Exception:
@@ -702,7 +698,7 @@ def _salesforce_stage_to_event_type(stage: str, sobject: str) -> str:
 @router.post("/events/pipedrive")
 async def ingest_pipedrive_webhook(
     request: Request,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Accept Pipedrive webhook payloads.
 
@@ -712,8 +708,6 @@ async def ingest_pipedrive_webhook(
     - previous: previous state (for updates)
     - meta: webhook metadata
     """
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required for webhook ingestion")
     cfg = settings.crm_event
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")

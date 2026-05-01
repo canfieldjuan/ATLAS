@@ -9,10 +9,185 @@ import pytest
 from atlas_brain.api import b2b_campaigns as mod
 
 
+def _fake_user(account_id: str | None = None):
+    return type("User", (), {"account_id": account_id or str(uuid4())})()
+
+
 def test_campaign_activity_timestamp_sql_uses_real_campaign_columns():
     assert mod._campaign_activity_timestamp_sql("bc") == (
         "COALESCE(bc.clicked_at, bc.opened_at, bc.sent_at, bc.approved_at, bc.created_at)"
     )
+
+
+@pytest.mark.asyncio
+async def test_campaign_analytics_scope_to_tracked_vendors(monkeypatch):
+    class Pool:
+        def __init__(self):
+            self.calls = []
+
+        async def fetchrow(self, query, *args):
+            self.calls.append(("fetchrow", query, args))
+            return {
+                "total": 0,
+                "sent": 0,
+                "opened": 0,
+                "clicked": 0,
+                "replied": 0,
+                "bounced": 0,
+                "unsubscribed": 0,
+                "completed": 0,
+                "avg_hours_to_open": None,
+                "avg_hours_to_click": None,
+            }
+
+        async def fetch(self, query, *args):
+            self.calls.append(("fetch", query, args))
+            return []
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    account_id = str(uuid4())
+    partner_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    await mod.analytics_funnel(
+        since="2026-04-01",
+        vendor="Zendesk",
+        company="Acme",
+        partner_id=partner_id,
+        user=user,
+    )
+    await mod.analytics_by_vendor(since=None, limit=5, user=user)
+    await mod.analytics_by_company(since=None, limit=6, user=user)
+    await mod.analytics_timeline(since=None, vendor=None, company=None, user=user)
+
+    assert len(pool.calls) == 4
+    for _, query, args in pool.calls:
+        assert "tracked_vendors" in query
+        assert "vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in query
+        assert args[0] == account_id
+
+    _, funnel_query, funnel_args = pool.calls[0]
+    assert "week >= $2::timestamptz" in funnel_query
+    assert "vendor_name ILIKE '%' || $3 || '%'" in funnel_query
+    assert "company_name ILIKE '%' || $4 || '%'" in funnel_query
+    assert "partner_id = $5::uuid" in funnel_query
+    assert funnel_args == (account_id, "2026-04-01", "Zendesk", "Acme", partner_id)
+
+    assert pool.calls[1][2] == (account_id, 5)
+    assert pool.calls[2][2] == (account_id, 6)
+    assert pool.calls[3][2] == (account_id,)
+
+
+@pytest.mark.asyncio
+async def test_list_sequences_scopes_to_tracked_vendors(monkeypatch):
+    captured = {}
+
+    class Pool:
+        async def fetch(self, query, *args):
+            captured["query"] = query
+            captured["args"] = args
+            return []
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    account_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    result = await mod.list_sequences(
+        status="all",
+        outcome="all",
+        company="",
+        limit=7,
+        offset=3,
+        user=user,
+    )
+
+    assert result == {"count": 0, "sequences": []}
+    assert "bc_scope.sequence_id = cs.id" in captured["query"]
+    assert "bc_scope.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in captured["query"]
+    assert captured["args"] == (account_id, 7, 3)
+
+
+@pytest.mark.asyncio
+async def test_get_sequence_scopes_sequence_and_campaign_history(monkeypatch):
+    sequence_id = uuid4()
+    account_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.fetch_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": sequence_id, "company_name": "Acme"}
+
+        async def fetch(self, query, *args):
+            self.fetch_calls.append((query, args))
+            return []
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.get_sequence(sequence_id, user=user)
+
+    assert result["sequence"]["id"] == str(sequence_id)
+    scoped_query, scoped_args = pool.fetchrow_calls[0]
+    assert "FROM campaign_sequences cs" in scoped_query
+    assert "tracked_vendors" in scoped_query
+    assert scoped_args == (sequence_id, account_id)
+
+    campaign_query, campaign_args = pool.fetch_calls[0]
+    assert "FROM b2b_campaigns" in campaign_query
+    assert "tracked_vendors" in campaign_query
+    assert campaign_args == (sequence_id, account_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["set_recipient", "pause", "resume", "record_outcome", "get_outcome"])
+async def test_sequence_actions_reject_unowned_sequence_before_update(monkeypatch, action):
+    sequence_id = uuid4()
+    user = type("User", (), {"account_id": str(uuid4()), "user_id": str(uuid4())})()
+
+    class Pool:
+        def __init__(self):
+            self.execute_calls = []
+
+        async def fetchrow(self, query, *args):
+            assert "tracked_vendors" in query
+            assert args == (sequence_id, user.account_id)
+            return None
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            raise AssertionError("sequence update touched before scope gate")
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        if action == "set_recipient":
+            await mod.set_recipient(
+                sequence_id,
+                mod.SetRecipientBody(recipient_email="owner@example.com"),
+                user=user,
+            )
+        elif action == "pause":
+            await mod.pause_sequence(sequence_id, user=user)
+        elif action == "resume":
+            await mod.resume_sequence(sequence_id, user=user)
+        elif action == "record_outcome":
+            await mod.record_outcome(
+                sequence_id,
+                mod.RecordOutcomeBody(outcome="meeting_booked"),
+                user=user,
+            )
+        else:
+            await mod.get_outcome(sequence_id, user=user)
+
+    assert exc.value.status_code == 404
+    assert pool.execute_calls == []
 
 
 @pytest.mark.asyncio
@@ -27,6 +202,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
         limit,
         vendor_filter=None,
         company_filter=None,
+        account_id=None,
         qualified_only=True,
         ignore_recent_dedup=False,
     ):
@@ -37,6 +213,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
             "limit": limit,
             "vendor_filter": vendor_filter,
             "company_filter": company_filter,
+            "account_id": account_id,
             "qualified_only": qualified_only,
             "ignore_recent_dedup": ignore_recent_dedup,
         })
@@ -48,6 +225,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
         "atlas_brain.autonomous.tasks.b2b_campaign_generation.list_churning_company_review_candidates",
         _fake_list_candidates,
     )
+    user = type("User", (), {"account_id": str(uuid4())})()
 
     result = await mod.review_candidates(
         limit=25,
@@ -57,6 +235,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
         company="Pax8",
         qualified_only=False,
         ignore_recent_dedup=True,
+        user=user,
     )
 
     assert result["count"] == 1
@@ -67,6 +246,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
         "limit": 25,
         "vendor_filter": "CrowdStrike",
         "company_filter": "Pax8",
+        "account_id": user.account_id,
         "qualified_only": False,
         "ignore_recent_dedup": True,
     }
@@ -82,9 +262,11 @@ async def test_review_candidates_summary_returns_summary_only(monkeypatch):
         limit,
         vendor_filter=None,
         company_filter=None,
+        account_id=None,
         qualified_only=True,
         ignore_recent_dedup=False,
     ):
+        assert account_id == user.account_id
         return {
             "count": 3,
             "candidates": [{"company_name": "Acme Co"}],
@@ -96,6 +278,7 @@ async def test_review_candidates_summary_returns_summary_only(monkeypatch):
         "atlas_brain.autonomous.tasks.b2b_campaign_generation.list_churning_company_review_candidates",
         _fake_list_candidates,
     )
+    user = type("User", (), {"account_id": str(uuid4())})()
 
     result = await mod.review_candidates_summary(
         min_score=55,
@@ -103,6 +286,7 @@ async def test_review_candidates_summary_returns_summary_only(monkeypatch):
         vendor=None,
         company=None,
         ignore_recent_dedup=False,
+        user=user,
     )
 
     assert result == {
@@ -114,12 +298,14 @@ async def test_review_candidates_summary_returns_summary_only(monkeypatch):
 class _CampaignPool:
     def __init__(self, campaign_row):
         self.campaign_row = campaign_row
+        self.fetchrow_calls = []
         self.execute_calls = []
 
     async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append((query, args))
         if "SELECT bc.*, cs.company_context" in query:
             return dict(self.campaign_row)
-        if "SELECT bc.id, bc.status" in query:
+        if "bc.id, bc.status" in query:
             return dict(self.campaign_row)
         if "RETURNING id" in query:
             return {"id": self.campaign_row["id"]}
@@ -293,6 +479,166 @@ async def test_export_campaigns_reuses_account_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_campaign_scopes_to_tracked_vendor(monkeypatch):
+    campaign_id = uuid4()
+    account_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {
+                "id": campaign_id,
+                "vendor_name": "Slack",
+                "metadata": {},
+            }
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.get_campaign(str(campaign_id), user=user)
+
+    assert result["id"] == str(campaign_id)
+    query, args = pool.fetchrow_calls[0]
+    assert "FROM b2b_campaigns bc" in query
+    assert "tracked_vendors" in query
+    assert args == (campaign_id, account_id)
+
+
+@pytest.mark.asyncio
+async def test_campaign_audit_log_checks_campaign_scope_before_audit_fetch(monkeypatch):
+    campaign_id = uuid4()
+    account_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.fetch_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": campaign_id}
+
+        async def fetch(self, query, *args):
+            self.fetch_calls.append((query, args))
+            return []
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.campaign_audit_log(str(campaign_id), limit=25, user=user)
+
+    assert result == {"count": 0, "audit_log": []}
+    scoped_query, scoped_args = pool.fetchrow_calls[0]
+    assert "tracked_vendors" in scoped_query
+    assert scoped_args == (campaign_id, account_id)
+    audit_query, audit_args = pool.fetch_calls[0]
+    assert "FROM campaign_audit_log" in audit_query
+    assert audit_args == (campaign_id, 25)
+
+
+@pytest.mark.asyncio
+async def test_update_campaign_scopes_update_to_tracked_vendor(monkeypatch):
+    campaign_id = uuid4()
+    user = _fake_user()
+
+    class Pool:
+        def __init__(self):
+            self.execute_calls = []
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.update_campaign(
+        str(campaign_id),
+        mod.CampaignUpdate(subject="Renewal pressure"),
+        user=user,
+    )
+
+    assert result == {"ok": True}
+    query, args = pool.execute_calls[0]
+    assert "tracked_vendors" in query
+    assert args == ("Renewal pressure", campaign_id, user.account_id)
+
+
+@pytest.mark.asyncio
+async def test_cancel_campaign_scopes_fetch_and_update_to_tracked_vendor(monkeypatch):
+    campaign_id = uuid4()
+    user = _fake_user()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.execute_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": campaign_id, "sequence_id": None, "step_number": 1, "status": "queued"}
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "log_campaign_event", AsyncMock())
+
+    result = await mod.cancel_campaign(str(campaign_id), user=user)
+
+    assert result == {"status": "cancelled", "campaign_id": str(campaign_id)}
+    scoped_query, scoped_args = pool.fetchrow_calls[0]
+    assert "tracked_vendors" in scoped_query
+    assert scoped_args == (campaign_id, user.account_id)
+    update_query, update_args = pool.execute_calls[0]
+    assert "tracked_vendors" in update_query
+    assert update_args == (campaign_id, user.account_id)
+
+
+@pytest.mark.asyncio
+async def test_bulk_reject_scopes_fetch_and_update_to_tracked_vendor(monkeypatch):
+    campaign_id = uuid4()
+    user = _fake_user()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.execute_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": campaign_id, "status": "draft", "sequence_id": None, "step_number": 1}
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "log_campaign_event", AsyncMock())
+
+    result = await mod.bulk_reject(
+        mod.BulkRejectBody(campaign_ids=[str(campaign_id)], reason="bad fit"),
+        user=user,
+    )
+
+    assert result == {"rejected": 1, "failed": []}
+    scoped_query, scoped_args = pool.fetchrow_calls[0]
+    assert "tracked_vendors" in scoped_query
+    assert scoped_args == (campaign_id, user.account_id)
+    update_query, update_args = pool.execute_calls[0]
+    assert "tracked_vendors" in update_query
+    assert update_args == (campaign_id, user.account_id)
+
+
+@pytest.mark.asyncio
 async def test_approve_campaign_blocks_missing_product_claim_gate_before_update(monkeypatch):
     campaign_id = uuid4()
     pool = _CampaignPool({
@@ -307,15 +653,18 @@ async def test_approve_campaign_blocks_missing_product_claim_gate_before_update(
         "metadata": {},
         "company_context": None,
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", False)
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.approve_campaign(str(campaign_id))
+        await mod.approve_campaign(str(campaign_id), user=user)
 
     assert exc.value.status_code == 409
     assert "report-safe ProductClaim gate" in str(exc.value.detail)
+    assert "tracked_vendors" in pool.fetchrow_calls[0][0]
+    assert pool.fetchrow_calls[0][1] == (campaign_id, user.account_id)
     assert pool.execute_calls == []
 
 
@@ -334,15 +683,18 @@ async def test_queue_campaign_for_send_blocks_missing_product_claim_gate_before_
         "metadata": {},
         "company_context": None,
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_queue_send", False)
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.queue_campaign_for_send(str(campaign_id), body=None)
+        await mod.queue_campaign_for_send(str(campaign_id), body=None, user=user)
 
     assert exc.value.status_code == 409
     assert "report-safe ProductClaim gate" in str(exc.value.detail)
+    assert "tracked_vendors" in pool.fetchrow_calls[0][0]
+    assert pool.fetchrow_calls[0][1] == (campaign_id, user.account_id)
     assert pool.execute_calls == []
 
 
@@ -363,6 +715,7 @@ async def test_bulk_approve_blocks_missing_product_claim_gate_before_update(monk
         "metadata": {},
         "company_context": None,
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", False)
@@ -370,6 +723,7 @@ async def test_bulk_approve_blocks_missing_product_claim_gate_before_update(monk
 
     result = await mod.bulk_approve(
         mod.BulkApproveBody(campaign_ids=[str(campaign_id)], action=action),
+        user=user,
     )
 
     assert result["processed"] == 0
@@ -379,6 +733,8 @@ async def test_bulk_approve_blocks_missing_product_claim_gate_before_update(monk
             "reason": f"Campaign is missing a report-safe ProductClaim gate for {'manual_approval' if action == 'approve' else 'queue_send'}",
         }
     ]
+    assert "tracked_vendors" in pool.fetchrow_calls[0][0]
+    assert pool.fetchrow_calls[0][1] == (campaign_id, user.account_id)
     assert pool.execute_calls == []
 
 
@@ -421,6 +777,7 @@ async def test_approve_campaign_blocks_generic_copy_when_revalidation_fails(monk
         }),
         "company_context": {},
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", True)
@@ -429,7 +786,7 @@ async def test_approve_campaign_blocks_generic_copy_when_revalidation_fails(monk
     monkeypatch.setattr(mod, "emit_event", AsyncMock())
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.approve_campaign(str(campaign_id))
+        await mod.approve_campaign(str(campaign_id), user=user)
 
     assert exc.value.status_code == 409
     assert "witness-backed anchor" in str(exc.value.detail)
@@ -476,6 +833,7 @@ async def test_queue_campaign_for_send_blocks_generic_copy_when_revalidation_fai
         }),
         "company_context": {},
     })
+    user = _fake_user()
 
     async def _not_suppressed(pool, email):
         return None
@@ -488,7 +846,11 @@ async def test_queue_campaign_for_send_blocks_generic_copy_when_revalidation_fai
     monkeypatch.setattr(mod, "emit_event", AsyncMock())
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.queue_campaign_for_send(str(campaign_id), body=mod.ApproveQueueBody(recipient_email="owner@example.com"))
+        await mod.queue_campaign_for_send(
+            str(campaign_id),
+            body=mod.ApproveQueueBody(recipient_email="owner@example.com"),
+            user=user,
+        )
 
     assert exc.value.status_code == 409
     assert "timing or numeric anchor" in str(exc.value.detail) or "witness-backed anchor" in str(exc.value.detail)
@@ -514,6 +876,7 @@ async def test_approve_campaign_uses_synthesis_fallback_and_records_success(monk
         }),
         "company_context": None,
     })
+    user = _fake_user()
 
     async def _fake_reasoning_view(pool, vendor_name):
         assert vendor_name == "Slack"
@@ -531,9 +894,12 @@ async def test_approve_campaign_uses_synthesis_fallback_and_records_success(monk
     monkeypatch.setattr(mod, "record_attempt", record_attempt)
     monkeypatch.setattr(mod, "emit_event", AsyncMock())
 
-    result = await mod.approve_campaign(str(campaign_id))
+    result = await mod.approve_campaign(str(campaign_id), user=user)
 
     assert result["ok"] is True
+    approval_update = next(call for call in pool.fetchrow_calls if "UPDATE b2b_campaigns" in call[0])
+    assert "tracked_vendors" in approval_update[0]
+    assert approval_update[1][1:] == (campaign_id, user.account_id)
     assert any("SET metadata = $1::jsonb" in call[0] for call in pool.execute_calls)
     metadata_update = next(call for call in pool.execute_calls if "SET metadata = $1::jsonb" in call[0])
     assert "reasoning_anchor_examples" in metadata_update[1][0]
@@ -565,6 +931,7 @@ async def test_approve_campaign_blocks_report_tier_language(monkeypatch):
         }),
         "company_context": None,
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", True)
@@ -573,7 +940,7 @@ async def test_approve_campaign_blocks_report_tier_language(monkeypatch):
     monkeypatch.setattr(mod, "emit_event", AsyncMock())
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.approve_campaign(str(campaign_id))
+        await mod.approve_campaign(str(campaign_id), user=user)
 
     assert exc.value.status_code == 409
     assert "report_tier_language:dashboard" in str(exc.value.detail)
@@ -584,7 +951,11 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
     created_at = datetime(2026, 3, 30, 20, 0, tzinfo=timezone.utc)
 
     class Pool:
-        async def fetch(self, *_args):
+        def __init__(self):
+            self.fetch_calls = []
+
+        async def fetch(self, query, *args):
+            self.fetch_calls.append((query, args))
             return [{
                 "id": uuid4(),
                 "company_name": "Acme Co",
@@ -663,7 +1034,9 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
                 },
             }]
 
-    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    user = type("User", (), {"account_id": str(uuid4())})()
 
     result = await mod.list_campaigns(
         status=None,
@@ -672,9 +1045,11 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
         channel=None,
         batch_id=None,
         limit=50,
-        user=None,
+        user=user,
     )
 
+    assert "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in pool.fetch_calls[0][0]
+    assert pool.fetch_calls[0][1] == (user.account_id, 50)
     assert result["campaigns"][0]["quality_status"] == "fail"
     assert result["campaigns"][0]["blocker_count"] == 1
     assert result["campaigns"][0]["warning_count"] == 1
@@ -692,7 +1067,11 @@ async def test_review_queue_surfaces_quality_summary_from_metadata(monkeypatch):
     created_at = datetime(2026, 3, 30, 20, 0, tzinfo=timezone.utc)
 
     class Pool:
-        async def fetch(self, *_args):
+        def __init__(self):
+            self.fetch_calls = []
+
+        async def fetch(self, query, *args):
+            self.fetch_calls.append((query, args))
             return [{
                 "id": uuid4(),
                 "company_name": "Acme Co",
@@ -777,15 +1156,20 @@ async def test_review_queue_surfaces_quality_summary_from_metadata(monkeypatch):
                 "prospect_email_status": "valid",
             }]
 
-    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    user = type("User", (), {"account_id": str(uuid4())})()
 
     result = await mod.review_queue(
         limit=50,
         offset=0,
         status="draft",
         include_prospects=True,
+        user=user,
     )
 
+    assert "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in pool.fetch_calls[0][0]
+    assert pool.fetch_calls[0][1][:2] == (user.account_id, "draft")
     assert result["drafts"][0]["quality_status"] == "fail"
     assert result["drafts"][0]["blocker_count"] == 1
     assert result["drafts"][0]["warning_count"] == 1
@@ -826,8 +1210,9 @@ async def test_campaign_stats_returns_quality_rollup(monkeypatch):
             return None
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    user = type("User", (), {"account_id": str(uuid4())})()
 
-    result = await mod.campaign_stats(user=None)
+    result = await mod.campaign_stats(user=user)
 
     assert result["total"] == 3
     assert result["quality"]["pass"] == 1
@@ -857,8 +1242,9 @@ async def test_campaign_quality_trends_returns_series(monkeypatch):
             return []
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    user = type("User", (), {"account_id": str(uuid4())})()
 
-    result = await mod.campaign_quality_trends(days=7, top_n=3, user=None)
+    result = await mod.campaign_quality_trends(days=7, top_n=3, user=user)
 
     assert result["days"] == 7
     assert result["top_n"] == 3
@@ -886,8 +1272,9 @@ async def test_campaign_quality_diagnostics_returns_grouped_failure_explanations
             return []
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    user = type("User", (), {"account_id": str(uuid4())})()
 
-    result = await mod.campaign_quality_diagnostics(days=7, top_n=5, user=None)
+    result = await mod.campaign_quality_diagnostics(days=7, top_n=5, user=user)
 
     assert result["days"] == 7
     assert result["top_n"] == 5
@@ -901,7 +1288,11 @@ async def test_campaign_quality_diagnostics_returns_grouped_failure_explanations
 @pytest.mark.asyncio
 async def test_review_queue_summary_returns_quality_rollup(monkeypatch):
     class Pool:
-        async def fetchrow(self, query, *_args):
+        def __init__(self):
+            self.calls = []
+
+        async def fetchrow(self, query, *args):
+            self.calls.append(("fetchrow", query, args))
             if "pending_review" in query:
                 return {
                     "pending_review": 3,
@@ -916,10 +1307,11 @@ async def test_review_queue_summary_returns_quality_rollup(monkeypatch):
                     "quality_fail": 2,
                     "quality_missing": 0,
                     "blocker_total": 3,
-                }
+            }
             return None
 
-        async def fetch(self, query, *_args):
+        async def fetch(self, query, *args):
+            self.calls.append(("fetch", query, args))
             if "GROUP BY ap.name" in query:
                 return [{"name": "Partner A", "count": 2}]
             if "GROUP BY boundary" in query:
@@ -928,10 +1320,16 @@ async def test_review_queue_summary_returns_quality_rollup(monkeypatch):
                 return [{"reason": "content omits a concrete timing or numeric anchor even though one is available", "count": 1}]
             return []
 
-    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    user = type("User", (), {"account_id": str(uuid4())})()
 
-    result = await mod.review_queue_summary()
+    result = await mod.review_queue_summary(user=user)
 
+    assert len(pool.calls) == 5
+    for _, query, args in pool.calls:
+        assert "tracked_vendors" in query
+        assert args == (user.account_id,)
     assert result["pending_review"] == 3
     assert result["quality_pass"] == 1
     assert result["quality_fail"] == 2

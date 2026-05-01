@@ -963,6 +963,31 @@ def _client(monkeypatch):
     return TestClient(app), pool
 
 
+def test_admin_costs_rejects_member_user_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[require_auth] = lambda: AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(uuid4()),
+        plan="b2b_pro",
+        plan_status="active",
+        role="member",
+        product="b2b_retention",
+        is_admin=False,
+    )
+
+    def _fail_pool():
+        raise AssertionError("db touched before admin gate")
+
+    monkeypatch.setattr("atlas_brain.api.admin_costs.get_db_pool", _fail_pool)
+
+    with TestClient(app) as client:
+        res = client.get("/admin/costs/summary?days=1")
+
+    assert res.status_code == 403
+    assert res.json()["detail"] == "Admin access required"
+
+
 def test_cost_summary_includes_cache_metrics(monkeypatch):
     client, _ = _client(monkeypatch)
     with client:

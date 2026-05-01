@@ -20,7 +20,7 @@ from typing import Any
 import psutil
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..auth.dependencies import require_auth
+from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
 from ..services.b2b.enrichment_repair_policy import (
     ACTIVE_REPAIR_POOL_SQL_TEMPLATE,
@@ -35,10 +35,20 @@ from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.admin_costs")
 
+
+async def require_admin_user(user: AuthUser = Depends(require_auth)) -> AuthUser:
+    """Restrict system/cost telemetry to account admins and platform admins."""
+    if bool(getattr(user, "is_admin", False)):
+        return user
+    if str(getattr(user, "role", "")).lower() in {"owner", "admin"}:
+        return user
+    raise HTTPException(status_code=403, detail="Admin access required")
+
+
 router = APIRouter(
     prefix="/admin/costs",
     tags=["admin-costs"],
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_admin_user)],
 )
 
 _GENERIC_REASONING_SOURCE_EXCLUDES = {"b2b_churn_intelligence"}

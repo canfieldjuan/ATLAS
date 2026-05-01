@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
+from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..autonomous.tasks._b2b_specificity import (
     latest_specificity_audit,
     specificity_quality_summary,
@@ -53,6 +53,13 @@ def _campaign_scope_clause(alias: str, user: AuthUser | None) -> tuple[str, list
     return (
         f" WHERE {alias}.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)",
         [user.account_id],
+    )
+
+
+def _tracked_vendor_scope_condition(vendor_expression: str, param_idx: int) -> str:
+    return (
+        f"{vendor_expression} IN (SELECT vendor_name FROM tracked_vendors "
+        f"WHERE account_id = ${param_idx}::uuid)"
     )
 
 
@@ -172,6 +179,57 @@ async def _fetch_scoped_sequence_row(pool, sequence_id: UUID, account_id: str, s
         sequence_id,
         account_id,
     )
+
+
+async def _scoped_sequence_or_404(
+    pool,
+    sequence_id: UUID,
+    account_id: str,
+    select_fields: str = "cs.id",
+):
+    row = await _fetch_scoped_sequence_row(pool, sequence_id, account_id, select_fields)
+    if not row:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+    return row
+
+
+async def _fetch_scoped_campaign_row(
+    pool,
+    campaign_id: _uuid.UUID,
+    account_id: str,
+    select_fields: str = "bc.*",
+    join_clause: str = "",
+):
+    return await pool.fetchrow(
+        f"""
+        SELECT {select_fields}
+        FROM b2b_campaigns bc
+        {join_clause}
+        WHERE bc.id = $1
+          AND {_tracked_vendor_scope_condition("bc.vendor_name", 2)}
+        """,
+        campaign_id,
+        account_id,
+    )
+
+
+async def _scoped_campaign_or_404(
+    pool,
+    campaign_id: _uuid.UUID,
+    account_id: str,
+    select_fields: str = "bc.*",
+    join_clause: str = "",
+):
+    row = await _fetch_scoped_campaign_row(
+        pool,
+        campaign_id,
+        account_id,
+        select_fields=select_fields,
+        join_clause=join_clause,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return row
 
 
 def _campaign_response_quality(metadata: Any) -> dict[str, Any]:
@@ -350,12 +408,21 @@ async def _persist_campaign_revalidation(
     pool,
     *,
     campaign_id: _uuid.UUID,
+    account_id: str,
     metadata: dict[str, Any],
 ) -> None:
     await pool.execute(
-        "UPDATE b2b_campaigns SET metadata = $1::jsonb WHERE id = $2",
+        """
+        UPDATE b2b_campaigns
+        SET metadata = $1::jsonb
+        WHERE id = $2
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $3::uuid
+          )
+        """,
         json.dumps(metadata, default=str),
         campaign_id,
+        account_id,
     )
 
 
@@ -363,6 +430,7 @@ async def _enforce_campaign_revalidation(
     pool,
     *,
     campaign_id: _uuid.UUID,
+    account_id: str,
     campaign: dict[str, Any],
     company_context: Any,
     action: str,
@@ -379,6 +447,7 @@ async def _enforce_campaign_revalidation(
     await _persist_campaign_revalidation(
         pool,
         campaign_id=campaign_id,
+        account_id=account_id,
         metadata=revalidation["metadata"],
     )
     blocking_issues = list(audit.get("blocking_issues") or [])
@@ -454,7 +523,7 @@ async def list_campaigns(
     channel: Optional[str] = Query(None),
     batch_id: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
 
@@ -462,29 +531,28 @@ async def list_campaigns(
     params: list[Any] = []
     idx = 1
 
-    if user:
-        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
-        params.append(user.account_id)
-        idx += 1
+    conditions.append(_tracked_vendor_scope_condition("bc.vendor_name", idx))
+    params.append(user.account_id)
+    idx += 1
 
     if status:
-        conditions.append(f"status = ${idx}")
+        conditions.append(f"bc.status = ${idx}")
         params.append(status)
         idx += 1
     if company:
-        conditions.append(f"company_name ILIKE '%' || ${idx} || '%'")
+        conditions.append(f"bc.company_name ILIKE '%' || ${idx} || '%'")
         params.append(company)
         idx += 1
     if vendor:
-        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        conditions.append(f"bc.vendor_name ILIKE '%' || ${idx} || '%'")
         params.append(vendor)
         idx += 1
     if channel:
-        conditions.append(f"channel = ${idx}")
+        conditions.append(f"bc.channel = ${idx}")
         params.append(channel)
         idx += 1
     if batch_id:
-        conditions.append(f"batch_id = ${idx}")
+        conditions.append(f"bc.batch_id = ${idx}")
         params.append(batch_id)
         idx += 1
 
@@ -502,7 +570,7 @@ async def list_campaigns(
         FROM b2b_campaigns bc
         LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
         {where}
-        ORDER BY created_at DESC
+        ORDER BY bc.created_at DESC
         LIMIT ${idx}
         """,
         *params,
@@ -553,7 +621,7 @@ async def list_campaigns(
 
 
 @router.get("/stats")
-async def campaign_stats(user: AuthUser | None = Depends(optional_auth)):
+async def campaign_stats(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """KPI summary: counts by status, top vendors, top channels."""
     pool = _pool_or_503()
 
@@ -655,7 +723,7 @@ async def campaign_stats(user: AuthUser | None = Depends(optional_auth)):
 async def campaign_quality_trends(
     days: int = Query(14, ge=1, le=90),
     top_n: int = Query(5, ge=1, le=20),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     scope, scope_params = _campaign_scope_clause("bc", user)
@@ -767,7 +835,7 @@ async def campaign_quality_trends(
 async def campaign_quality_diagnostics(
     days: int = Query(14, ge=1, le=90),
     top_n: int = Query(10, ge=1, le=50),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     scope, scope_params = _campaign_scope_clause("bc", user)
@@ -929,6 +997,7 @@ async def analytics_funnel(
     vendor: Optional[str] = Query(None),
     company: Optional[str] = Query(None),
     partner_id: Optional[str] = Query(None),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Overall funnel: sent -> opened -> clicked -> replied -> bounced, with rates."""
     pool = _pool_or_503()
@@ -936,6 +1005,10 @@ async def analytics_funnel(
     conditions: list[str] = []
     params: list[Any] = []
     idx = 1
+
+    conditions.append(_tracked_vendor_scope_condition("vendor_name", idx))
+    params.append(user.account_id)
+    idx += 1
 
     if since:
         conditions.append(f"week >= ${idx}::timestamptz")
@@ -993,17 +1066,22 @@ async def analytics_funnel(
 async def analytics_by_vendor(
     since: Optional[str] = Query(None),
     limit: int = Query(20, le=100),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Per-vendor funnel breakdown, ordered by sent DESC."""
     pool = _pool_or_503()
 
     params: list[Any] = []
     idx = 1
-    where = ""
+
+    conditions = [_tracked_vendor_scope_condition("vendor_name", idx)]
+    params.append(user.account_id)
+    idx += 1
     if since:
-        where = f"WHERE week >= ${idx}::timestamptz"
+        conditions.append(f"week >= ${idx}::timestamptz")
         params.append(since)
         idx += 1
+    where = f"WHERE {' AND '.join(conditions)}"
 
     params.append(limit)
 
@@ -1042,17 +1120,22 @@ async def analytics_by_vendor(
 async def analytics_by_company(
     since: Optional[str] = Query(None),
     limit: int = Query(20, le=100),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Per-company engagement summary (best for identifying warm leads)."""
     pool = _pool_or_503()
 
     params: list[Any] = []
     idx = 1
-    where = ""
+
+    conditions = [_tracked_vendor_scope_condition("vendor_name", idx)]
+    params.append(user.account_id)
+    idx += 1
     if since:
-        where = f"WHERE week >= ${idx}::timestamptz"
+        conditions.append(f"week >= ${idx}::timestamptz")
         params.append(since)
         idx += 1
+    where = f"WHERE {' AND '.join(conditions)}"
 
     params.append(limit)
 
@@ -1091,6 +1174,7 @@ async def analytics_timeline(
     since: Optional[str] = Query(None),
     vendor: Optional[str] = Query(None),
     company: Optional[str] = Query(None),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Weekly time-series of sent/opened/clicked/replied for trend visualization."""
     pool = _pool_or_503()
@@ -1098,6 +1182,10 @@ async def analytics_timeline(
     conditions: list[str] = []
     params: list[Any] = []
     idx = 1
+
+    conditions.append(_tracked_vendor_scope_condition("vendor_name", idx))
+    params.append(user.account_id)
+    idx += 1
 
     if since:
         conditions.append(f"week >= ${idx}::timestamptz")
@@ -1160,6 +1248,7 @@ async def list_suppressions(
     email: Optional[str] = Query(None),
     domain: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List suppression records with optional filters."""
     pool = _pool_or_503()
@@ -1253,7 +1342,10 @@ async def delete_suppression(
 
 
 @router.get("/suppressions/check")
-async def check_suppression(email: str = Query(...)):
+async def check_suppression(
+    email: str = Query(...),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Check if an email is suppressed."""
     pool = _pool_or_503()
 
@@ -1281,6 +1373,7 @@ async def review_queue(
     offset: int = Query(0, ge=0),
     status: str = Query("draft", description="Filter by status: draft, approved, sent, all"),
     include_prospects: bool = Query(False, description="Join prospect details"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Purpose-built review endpoint: drafts enriched with sequence, partner, suppression info."""
     pool = _pool_or_503()
@@ -1291,14 +1384,19 @@ async def review_queue(
         status = "draft"
 
     # Build parameterized status filter
-    params: list = []
+    params: list[Any] = []
     param_idx = 1
+    conditions = [_tracked_vendor_scope_condition("bc.vendor_name", param_idx)]
+    params.append(user.account_id)
+    param_idx += 1
+
     if status == "all":
-        status_filter = "1=1"
+        pass
     else:
-        status_filter = f"bc.status = ${param_idx}"
+        conditions.append(f"bc.status = ${param_idx}")
         params.append(status)
         param_idx += 1
+    status_filter = " AND ".join(conditions)
 
     params.extend([limit, offset])
 
@@ -1368,6 +1466,7 @@ async def review_candidates(
     company: str | None = Query(None),
     qualified_only: bool = Query(True),
     ignore_recent_dedup: bool = Query(False),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Analyst review queue for mid-band named-account candidates before draft generation."""
     if min_score > max_score:
@@ -1383,6 +1482,7 @@ async def review_candidates(
         limit=limit,
         vendor_filter=vendor,
         company_filter=company,
+        account_id=user.account_id,
         qualified_only=qualified_only,
         ignore_recent_dedup=ignore_recent_dedup,
     )
@@ -1395,6 +1495,7 @@ async def review_candidates_summary(
     vendor: str | None = Query(None),
     company: str | None = Query(None),
     ignore_recent_dedup: bool = Query(False),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Compact summary for the analyst candidate review queue."""
     if min_score > max_score:
@@ -1410,6 +1511,7 @@ async def review_candidates_summary(
         limit=200,
         vendor_filter=vendor,
         company_filter=company,
+        account_id=user.account_id,
         qualified_only=False,
         ignore_recent_dedup=ignore_recent_dedup,
     )
@@ -1439,17 +1541,17 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
             failed.append({"id": cid_str, "reason": "invalid UUID"})
             continue
 
-        campaign = await pool.fetchrow(
-            """
-            SELECT bc.id, bc.status, bc.recipient_email, bc.sequence_id,
-                   bc.step_number, bc.subject, bc.body, bc.channel, bc.metadata,
-                   cs.recipient_email AS seq_recipient,
-                   cs.company_context
-            FROM b2b_campaigns bc
-            LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
-            WHERE bc.id = $1
-            """,
+        campaign = await _fetch_scoped_campaign_row(
+            pool,
             cid,
+            user.account_id,
+            select_fields="""
+                bc.id, bc.status, bc.recipient_email, bc.sequence_id,
+                bc.step_number, bc.subject, bc.body, bc.channel, bc.metadata,
+                cs.recipient_email AS seq_recipient,
+                cs.company_context
+            """,
+            join_clause="LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id",
         )
         if not campaign:
             failed.append({"id": cid_str, "reason": "not found"})
@@ -1462,8 +1564,16 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
 
         if body.action == "reject":
             result = await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1 AND status = 'draft'",
-                cid,
+                """
+                UPDATE b2b_campaigns
+                SET status = 'cancelled'
+                WHERE id = $1
+                  AND status = 'draft'
+                  AND vendor_name IN (
+                      SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+                  )
+                """,
+                cid, user.account_id,
             )
             if result == "UPDATE 0":
                 failed.append({"id": cid_str, "reason": "status changed concurrently"})
@@ -1487,6 +1597,7 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
                     await _enforce_campaign_revalidation(
                         pool,
                         campaign_id=cid,
+                        account_id=user.account_id,
                         campaign=dict(campaign),
                         company_context=campaign.get("company_context"),
                         action="manual_approval",
@@ -1495,8 +1606,16 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
                     failed.append({"id": cid_str, "reason": str(exc.detail)})
                     continue
             result = await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2 AND status = 'draft'",
-                now, cid,
+                """
+                UPDATE b2b_campaigns
+                SET status = 'approved', approved_at = $1
+                WHERE id = $2
+                  AND status = 'draft'
+                  AND vendor_name IN (
+                      SELECT vendor_name FROM tracked_vendors WHERE account_id = $3::uuid
+                  )
+                """,
+                now, cid, user.account_id,
             )
             if result == "UPDATE 0":
                 failed.append({"id": cid_str, "reason": "status changed concurrently"})
@@ -1532,6 +1651,7 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
                 await _enforce_campaign_revalidation(
                     pool,
                     campaign_id=cid,
+                    account_id=user.account_id,
                     campaign=queued_campaign,
                     company_context=campaign.get("company_context"),
                     action="queue_send",
@@ -1544,9 +1664,13 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
             """
             UPDATE b2b_campaigns
             SET status = 'queued', approved_at = $1, recipient_email = $2
-            WHERE id = $3 AND status = 'draft'
+            WHERE id = $3
+              AND status = 'draft'
+              AND vendor_name IN (
+                  SELECT vendor_name FROM tracked_vendors WHERE account_id = $4::uuid
+              )
             """,
-            now, recipient, cid,
+            now, recipient, cid, user.account_id,
         )
         if result == "UPDATE 0":
             failed.append({"id": cid_str, "reason": "status changed concurrently"})
@@ -1578,9 +1702,11 @@ async def bulk_reject(body: BulkRejectBody, user: AuthUser = Depends(require_b2b
             failed.append({"id": cid_str, "reason": "invalid UUID"})
             continue
 
-        campaign = await pool.fetchrow(
-            "SELECT id, status, sequence_id, step_number FROM b2b_campaigns WHERE id = $1",
+        campaign = await _fetch_scoped_campaign_row(
+            pool,
             cid,
+            user.account_id,
+            select_fields="bc.id, bc.status, bc.sequence_id, bc.step_number",
         )
         if not campaign:
             failed.append({"id": cid_str, "reason": "not found"})
@@ -1590,8 +1716,16 @@ async def bulk_reject(body: BulkRejectBody, user: AuthUser = Depends(require_b2b
             continue
 
         result = await pool.execute(
-            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1 AND status IN ('draft', 'approved')",
-            cid,
+            """
+            UPDATE b2b_campaigns
+            SET status = 'cancelled'
+            WHERE id = $1
+              AND status IN ('draft', 'approved')
+              AND vendor_name IN (
+                  SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+              )
+            """,
+            cid, user.account_id,
         )
         if result == "UPDATE 0":
             failed.append({"id": cid_str, "reason": "status changed concurrently"})
@@ -1608,12 +1742,15 @@ async def bulk_reject(body: BulkRejectBody, user: AuthUser = Depends(require_b2b
 
 
 @router.get("/review-queue/summary")
-async def review_queue_summary():
+async def review_queue_summary(
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Dashboard counts for the review queue."""
     pool = _pool_or_503()
+    scope_filter = _tracked_vendor_scope_condition("bc.vendor_name", 1)
 
     row = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*) FILTER (WHERE bc.status = 'draft') AS pending_review,
             COUNT(*) FILTER (
@@ -1647,21 +1784,26 @@ async def review_queue_summary():
                 AS oldest_draft_age_hours
         FROM b2b_campaigns bc
         LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
-        """
+        WHERE {scope_filter}
+        """,
+        user.account_id,
     )
 
     by_partner = await pool.fetch(
-        """
+        f"""
         SELECT ap.name, COUNT(*) AS count
         FROM b2b_campaigns bc
         LEFT JOIN affiliate_partners ap ON ap.id = bc.partner_id
-        WHERE bc.status = 'draft' AND ap.name IS NOT NULL
+        WHERE {scope_filter}
+          AND bc.status = 'draft'
+          AND ap.name IS NOT NULL
         GROUP BY ap.name
         ORDER BY count DESC
-        """
+        """,
+        user.account_id,
     )
     quality_row = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*) FILTER (
                 WHERE bc.status = 'draft'
@@ -1683,31 +1825,37 @@ async def review_queue_summary():
                 END
             ), 0) AS blocker_total
         FROM b2b_campaigns bc
-        """
+        WHERE {scope_filter}
+        """,
+        user.account_id,
     )
     boundary_rows = await pool.fetch(
-        """
+        f"""
         SELECT COALESCE(bc.metadata->'latest_specificity_audit'->>'boundary', 'missing') AS boundary,
                COUNT(*) AS count
         FROM b2b_campaigns bc
-        WHERE bc.status = 'draft'
+        WHERE {scope_filter}
+          AND bc.status = 'draft'
         GROUP BY boundary
         ORDER BY count DESC
         LIMIT 10
-        """
+        """,
+        user.account_id,
     )
     blocker_rows = await pool.fetch(
-        """
+        f"""
         SELECT blocker.reason AS reason, COUNT(*) AS count
         FROM b2b_campaigns bc
         JOIN LATERAL jsonb_array_elements_text(
             COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb)
         ) AS blocker(reason) ON TRUE
-        WHERE bc.status = 'draft'
+        WHERE {scope_filter}
+          AND bc.status = 'draft'
         GROUP BY blocker.reason
         ORDER BY count DESC, blocker.reason ASC
         LIMIT 5
-        """
+        """,
+        user.account_id,
     )
 
     r = dict(row)
@@ -1747,6 +1895,7 @@ async def list_sequences(
     company: str = Query(default="", description="Filter by company name (case-insensitive substring)"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List campaign sequences with optional filters."""
     pool = _pool_or_503()
@@ -1755,8 +1904,18 @@ async def list_sequences(
         raise HTTPException(status_code=400, detail=f"Invalid outcome. Must be one of: {sorted(VALID_OUTCOMES)}")
 
     conditions = []
-    params: list = []
+    params: list[Any] = []
     param_idx = 1
+
+    conditions.append(
+        "EXISTS ("
+        "SELECT 1 FROM b2b_campaigns bc_scope "
+        "WHERE bc_scope.sequence_id = cs.id "
+        f"AND {_tracked_vendor_scope_condition('bc_scope.vendor_name', param_idx)}"
+        ")"
+    )
+    params.append(user.account_id)
+    param_idx += 1
 
     if status != "all":
         conditions.append(f"cs.status = ${param_idx}")
@@ -1795,23 +1954,31 @@ async def list_sequences(
 
 
 @router.get("/sequences/{sequence_id}")
-async def get_sequence(sequence_id: UUID):
+async def get_sequence(
+    sequence_id: UUID,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Get a single sequence with full campaign history."""
     pool = _pool_or_503()
 
-    seq = await pool.fetchrow(
-        "SELECT * FROM campaign_sequences WHERE id = $1", sequence_id
+    seq = await _scoped_sequence_or_404(
+        pool,
+        sequence_id,
+        user.account_id,
+        "cs.*",
     )
-    if not seq:
-        raise HTTPException(status_code=404, detail="Sequence not found")
 
     campaigns = await pool.fetch(
         """
         SELECT * FROM b2b_campaigns
         WHERE sequence_id = $1
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+          )
         ORDER BY step_number ASC
         """,
         sequence_id,
+        user.account_id,
     )
 
     recent_audit = await pool.fetch(
@@ -1834,9 +2001,11 @@ async def get_sequence(sequence_id: UUID):
 async def sequence_audit_log(
     sequence_id: UUID,
     limit: int = Query(default=100, ge=1, le=500),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Get the full audit trail for a sequence."""
     pool = _pool_or_503()
+    await _scoped_sequence_or_404(pool, sequence_id, user.account_id)
 
     rows = await pool.fetch(
         """
@@ -1859,6 +2028,7 @@ async def set_recipient(
 ):
     """Set the recipient email for a sequence."""
     pool = _pool_or_503()
+    await _scoped_sequence_or_404(pool, sequence_id, user.account_id)
 
     result = await pool.execute(
         """
@@ -1876,9 +2046,13 @@ async def set_recipient(
         """
         UPDATE b2b_campaigns
         SET recipient_email = $1
-        WHERE sequence_id = $2 AND recipient_email IS NULL
+        WHERE sequence_id = $2
+          AND recipient_email IS NULL
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $3::uuid
+          )
         """,
-        body.recipient_email, sequence_id,
+        body.recipient_email, sequence_id, user.account_id,
     )
 
     return {"status": "ok", "recipient_email": body.recipient_email}
@@ -1891,6 +2065,7 @@ async def pause_sequence(
 ):
     """Pause an active sequence."""
     pool = _pool_or_503()
+    await _scoped_sequence_or_404(pool, sequence_id, user.account_id)
 
     result = await pool.execute(
         """
@@ -1917,6 +2092,7 @@ async def resume_sequence(
 ):
     """Resume a paused sequence."""
     pool = _pool_or_503()
+    await _scoped_sequence_or_404(pool, sequence_id, user.account_id)
 
     result = await pool.execute(
         """
@@ -2141,26 +2317,17 @@ async def _send_campaign_notification(
 
 
 @router.get("/{campaign_id:uuid}")
-async def get_campaign(campaign_id: str, user: AuthUser | None = Depends(optional_auth)):
+async def get_campaign(
+    campaign_id: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     try:
         cid = _uuid.UUID(campaign_id)
     except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail="Invalid campaign_id")
 
     pool = _pool_or_503()
-    row = await pool.fetchrow(
-        "SELECT * FROM b2b_campaigns WHERE id = $1", cid
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-
-    if user:
-        is_tracked = await pool.fetchval(
-            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
-            user.account_id, row["vendor_name"],
-        )
-        if not is_tracked:
-            raise HTTPException(status_code=403, detail="Campaign vendor not in your tracked list")
+    row = await _scoped_campaign_or_404(pool, cid, user.account_id)
 
     r = dict(row)
     quality = _campaign_response_quality(r.get("metadata"))
@@ -2215,8 +2382,17 @@ async def update_campaign(
         updates.append("latest_error_summary = NULL")
 
     params.append(cid)
+    campaign_idx = idx
+    idx += 1
+    params.append(user.account_id)
+    account_idx = idx
     result = await pool.execute(
-        f"UPDATE b2b_campaigns SET {', '.join(updates)} WHERE id = ${idx}",
+        f"""
+        UPDATE b2b_campaigns
+        SET {', '.join(updates)}
+        WHERE id = ${campaign_idx}
+          AND {_tracked_vendor_scope_condition("vendor_name", account_idx)}
+        """,
         *params,
     )
     if _affected_rows(result) == 0:
@@ -2241,17 +2417,13 @@ async def approve_campaign(
 
     pool = _pool_or_503()
 
-    campaign = await pool.fetchrow(
-        """
-        SELECT bc.*, cs.company_context
-        FROM b2b_campaigns bc
-        LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
-        WHERE bc.id = $1
-        """,
+    campaign = await _scoped_campaign_or_404(
+        pool,
         cid,
+        user.account_id,
+        select_fields="bc.*, cs.company_context",
+        join_clause="LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id",
     )
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
     if campaign["status"] != "draft":
         raise HTTPException(
             status_code=409,
@@ -2262,6 +2434,7 @@ async def approve_campaign(
         await _enforce_campaign_revalidation(
             pool,
             campaign_id=cid,
+            account_id=user.account_id,
             campaign=dict(campaign),
             company_context=campaign.get("company_context"),
             action="manual_approval",
@@ -2272,10 +2445,14 @@ async def approve_campaign(
         """
         UPDATE b2b_campaigns
         SET status = 'approved', approved_at = $1
-        WHERE id = $2 AND status = 'draft'
+        WHERE id = $2
+          AND status = 'draft'
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $3::uuid
+          )
         RETURNING id
         """,
-        now, cid,
+        now, cid, user.account_id,
     )
     if not row:
         raise HTTPException(
@@ -2309,17 +2486,13 @@ async def queue_campaign_for_send(
 
     pool = _pool_or_503()
 
-    campaign = await pool.fetchrow(
-        """
-        SELECT bc.*, cs.company_context
-        FROM b2b_campaigns bc
-        LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
-        WHERE bc.id = $1
-        """,
+    campaign = await _scoped_campaign_or_404(
+        pool,
         cid,
+        user.account_id,
+        select_fields="bc.*, cs.company_context",
+        join_clause="LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id",
     )
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
 
     if campaign["status"] not in ("draft",):
         raise HTTPException(
@@ -2361,6 +2534,7 @@ async def queue_campaign_for_send(
         await _enforce_campaign_revalidation(
             pool,
             campaign_id=cid,
+            account_id=user.account_id,
             campaign=queued_campaign,
             company_context=campaign.get("company_context"),
             action="queue_send",
@@ -2372,9 +2546,13 @@ async def queue_campaign_for_send(
         SET status = 'queued',
             approved_at = $1,
             recipient_email = $2
-        WHERE id = $3 AND status = 'draft'
+        WHERE id = $3
+          AND status = 'draft'
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $4::uuid
+          )
         """,
-        now, recipient, cid,
+        now, recipient, cid, user.account_id,
     )
     if result == "UPDATE 0":
         raise HTTPException(status_code=409, detail="Campaign status changed concurrently")
@@ -2434,12 +2612,12 @@ async def cancel_campaign(
 
     pool = _pool_or_503()
 
-    campaign = await pool.fetchrow(
-        "SELECT id, sequence_id, step_number, status FROM b2b_campaigns WHERE id = $1",
+    campaign = await _scoped_campaign_or_404(
+        pool,
         cid,
+        user.account_id,
+        select_fields="bc.id, bc.sequence_id, bc.step_number, bc.status",
     )
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
 
     if campaign["status"] != "queued":
         raise HTTPException(
@@ -2447,10 +2625,16 @@ async def cancel_campaign(
             detail=f"Cannot cancel campaign with status '{campaign['status']}'"
         )
 
-    now = datetime.now(timezone.utc)
     await pool.execute(
-        "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
-        cid,
+        """
+        UPDATE b2b_campaigns
+        SET status = 'cancelled'
+        WHERE id = $1
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+          )
+        """,
+        cid, user.account_id,
     )
 
     await log_campaign_event(
@@ -2467,6 +2651,7 @@ async def cancel_campaign(
 async def campaign_audit_log(
     campaign_id: str,
     limit: int = Query(default=100, ge=1, le=500),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Get the full audit trail for a campaign."""
     try:
@@ -2475,6 +2660,7 @@ async def campaign_audit_log(
         raise HTTPException(status_code=400, detail="Invalid campaign_id")
 
     pool = _pool_or_503()
+    await _scoped_campaign_or_404(pool, cid, user.account_id, "bc.id")
 
     rows = await pool.fetch(
         """
@@ -2497,7 +2683,7 @@ async def export_campaigns(
     status: str = Query("all"),
     vendor: Optional[str] = Query(None),
     company: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Export campaign queue as CSV."""
     pool = _pool_or_503()

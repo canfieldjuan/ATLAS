@@ -657,8 +657,8 @@ async def test_list_webhooks_applies_vendor_scope_to_summary_rows():
         result = await b2b_dashboard.list_webhooks(vendor_name='Acme Rival', user=user)
 
     query, account_id, vendor_name, company_name = pool.fetch.await_args.args
-    assert 'LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = LOWER($2)' in query
-    assert 'LOWER(COALESCE(cp.vendor_name, cp_signal.vendor_name, cp_report.vendor_filter)) = LOWER($2)' in query
+    assert 'LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = LOWER($2::text)' in query
+    assert 'LOWER(COALESCE(cp.vendor_name, cp_signal.vendor_name, cp_report.vendor_filter)) = LOWER($2::text)' in query
     assert account_id == 'account-1'
     assert vendor_name == 'Acme Rival'
     assert company_name is None
@@ -712,8 +712,8 @@ async def test_list_webhooks_applies_company_scope_to_summary_rows():
         result = await b2b_dashboard.list_webhooks(company_name='Acme Bank', user=user)
 
     query, account_id, vendor_name, company_name = pool.fetch.await_args.args
-    assert 'LOWER(COALESCE(dl.company_name, dl_signal.company_name)) = LOWER($3)' in query
-    assert 'LOWER(COALESCE(cp.company_name, cp_signal.company_name)) = LOWER($3)' in query
+    assert 'LOWER(COALESCE(dl.company_name, dl_signal.company_name)) = LOWER($3::text)' in query
+    assert 'LOWER(COALESCE(cp.company_name, cp_signal.company_name)) = LOWER($3::text)' in query
     assert account_id == 'account-1'
     assert vendor_name is None
     assert company_name == 'Acme Bank'
@@ -840,7 +840,7 @@ async def test_webhook_delivery_summary_applies_vendor_scope():
         result = await b2b_dashboard.webhook_delivery_summary(days=30, vendor_name='Acme Rival', user=user)
 
     query, account_id, days, vendor_name, company_name = pool.fetchrow.await_args.args
-    assert 'LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = LOWER($3)' in query
+    assert 'LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = LOWER($3::text)' in query
     assert account_id == 'account-1'
     assert days == '30'
     assert vendor_name == 'Acme Rival'
@@ -868,7 +868,7 @@ async def test_webhook_delivery_summary_applies_company_scope():
         result = await b2b_dashboard.webhook_delivery_summary(days=30, company_name='Acme Bank', user=user)
 
     query, account_id, days, vendor_name, company_name = pool.fetchrow.await_args.args
-    assert 'LOWER(COALESCE(dl.company_name, dl_signal.company_name)) = LOWER($4)' in query
+    assert 'LOWER(COALESCE(dl.company_name, dl_signal.company_name)) = LOWER($4::text)' in query
     assert account_id == 'account-1'
     assert days == '30'
     assert vendor_name is None

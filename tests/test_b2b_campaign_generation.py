@@ -1394,6 +1394,25 @@ async def test_accounts_in_motion_opportunities_filter_non_report_safe_account_c
 
 
 @pytest.mark.asyncio
+async def test_accounts_in_motion_opportunities_scopes_to_account_tracked_vendors():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+    account_id = "22222222-2222-2222-2222-222222222222"
+
+    result = await mod._fetch_accounts_in_motion_opportunities(
+        pool,
+        min_score=1,
+        limit=10,
+        account_id=account_id,
+    )
+
+    assert result == []
+    query, *args = pool.fetch.await_args.args
+    assert "tracked_vendors" in query
+    assert "account_id = $1::uuid" in query
+    assert args == [account_id]
+
+
+@pytest.mark.asyncio
 async def test_generate_content_appends_signoff_when_missing(monkeypatch):
     async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
         return json.dumps({

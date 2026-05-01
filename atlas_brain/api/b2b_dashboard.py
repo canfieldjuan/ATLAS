@@ -1930,7 +1930,7 @@ async def list_high_intent(
 
 
 @router.get("/vendors/{vendor_name}")
-async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(optional_auth)):
+async def get_vendor_profile(vendor_name: str, user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     vname = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
 
@@ -2280,7 +2280,7 @@ async def refresh_vendor_pipeline(
 async def reason_vendor(
     vendor_name: str,
     force: bool = Query(False, description="Compatibility no-op; returns the best available persisted reasoning"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Return the best available persisted reasoning for a single vendor."""
     _ = force
@@ -2325,7 +2325,7 @@ async def reason_vendor(
 @router.post("/vendors/compare-reasoning")
 async def compare_vendor_reasoning(
     body: dict,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Side-by-side persisted reasoning for multiple vendors (2-5)."""
 
@@ -2602,7 +2602,7 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
 
 
 @router.get("/reports/{report_id}/pdf")
-async def export_report_pdf(report_id: str, user: AuthUser | None = Depends(optional_auth)):
+async def export_report_pdf(report_id: str, user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Download a B2B intelligence report as PDF."""
     try:
         rid = _uuid.UUID(report_id)
@@ -3019,6 +3019,7 @@ def _row_to_source_dict(r) -> dict:
 async def get_source_health(
     window_days: int = Query(7, ge=1, le=30),
     source: Optional[str] = Query(None),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     source = _normalize_source_query(source)
     if source is not None:
@@ -3064,7 +3065,7 @@ async def get_source_health(
 async def get_source_telemetry(
     window_days: int = Query(7, ge=1, le=30),
     source: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """CAPTCHA attempts, solve times, block type distribution, and proxy usage per source."""
     conditions = ["started_at >= NOW() - make_interval(days => $1)"]
@@ -3149,7 +3150,7 @@ async def get_source_telemetry(
 @router.get("/source-capabilities")
 async def list_source_capabilities(
     source: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List source capability profiles (access pattern, anti-bot, proxy tier, fallback chain)."""
     source = _normalize_source_query(source)
@@ -3237,7 +3238,7 @@ async def get_source_impact_ledger(
 
 @router.get("/operational-overview")
 async def get_operational_overview(
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Single endpoint combining pipeline status, source health, telemetry, and recent events."""
     pool = _pool_or_503()
@@ -3367,7 +3368,7 @@ async def get_operational_overview(
 async def get_telemetry_timeline(
     days: int = Query(14, ge=1, le=30),
     source: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Daily time-series of CAPTCHA attempts, blocks, and success rates for trending."""
     conditions = ["started_at >= NOW() - make_interval(days => $1)"]
@@ -3472,7 +3473,7 @@ async def list_displacement_edges(
     min_confidence: Optional[float] = Query(None, ge=0, le=1),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     from_vendor = _optional_query_text(from_vendor)
     to_vendor = _optional_query_text(to_vendor)
@@ -3563,7 +3564,7 @@ async def get_displacement_history(
     from_vendor: str = Query(...),
     to_vendor: str = Query(...),
     window_days: int = Query(365, ge=1, le=730),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Time-series of displacement edge strength for a vendor pair."""
     from_vendor = _required_query_text(from_vendor, "from_vendor")
@@ -3614,7 +3615,7 @@ async def list_company_signals(
     decision_makers_only: bool = Query(False),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     conditions: list[str] = ["last_seen_at > NOW() - make_interval(days => $1)"]
@@ -3706,7 +3707,7 @@ async def list_company_signal_candidate_groups(
     signal_evidence_present: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List grouped company-signal candidates as the primary operator queue."""
     vendor_name = _optional_query_text(vendor_name)
@@ -3781,7 +3782,7 @@ async def get_company_signal_candidate_group_summary(
     signal_evidence_present: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
     top_n: int = Query(10, ge=1, le=25),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Summarize grouped company-signal queue health for analyst review."""
     vendor_name = _optional_query_text(vendor_name)
@@ -3854,7 +3855,7 @@ async def get_company_signal_review_impact_summary(
     rebuild_reason: Optional[str] = Query(None),
     window_days: int = Query(30, ge=1, le=3650),
     top_n: int = Query(10, ge=1, le=25),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Summarize downstream yield from company-signal review actions."""
     vendor_name = _optional_query_text(vendor_name)
@@ -3943,7 +3944,7 @@ async def list_company_signal_candidates(
     signal_evidence_present: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List analyst-assist company-signal candidates without mixing them into canonical signals."""
     vendor_name = _optional_query_text(vendor_name)
@@ -4871,7 +4872,7 @@ async def list_vendor_pain_points(
     min_confidence: float = Query(0, ge=0, le=1),
     min_mentions: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -4958,7 +4959,7 @@ async def list_vendor_use_cases(
     min_confidence: float = Query(0, ge=0, le=1),
     min_mentions: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -5041,7 +5042,7 @@ async def list_vendor_integrations(
     min_confidence: float = Query(0, ge=0, le=1),
     min_mentions: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -5122,7 +5123,7 @@ async def list_vendor_buyer_profiles(
     min_confidence: float = Query(0, ge=0, le=1),
     min_reviews: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -5263,7 +5264,7 @@ async def get_vendor_history(
 @router.get("/product-profile")
 async def get_product_profile(
     vendor_name: str = Query(...),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Fetch pre-computed product profile knowledge card for a vendor."""
     vendor_name = _required_query_text(vendor_name, "vendor_name")
@@ -5319,7 +5320,7 @@ async def get_product_profile_history(
     vendor_name: str = Query(...),
     days: int = Query(90, ge=1, le=365),
     limit: int = Query(90, ge=1, le=365),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     vendor_name = _required_query_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
@@ -5373,7 +5374,7 @@ async def list_change_events(
     event_type: Optional[str] = Query(None),
     days: int = Query(30, ge=1, le=365),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     vendor_name = _optional_query_text(vendor_name)
@@ -5430,7 +5431,7 @@ async def list_change_events(
 @router.get("/change-events/summary")
 async def change_events_summary(
     days: int = Query(7, ge=1, le=90),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
 
@@ -5481,7 +5482,7 @@ async def list_concurrent_events(
     event_type: Optional[str] = Query(None),
     min_vendors: int = Query(2, ge=2, le=50),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Find dates where multiple vendors experienced the same change event type.
 
@@ -5546,6 +5547,7 @@ async def fuzzy_vendor_search(
     q: str = "",
     limit: int = 10,
     min_similarity: float = 0.3,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="q parameter is required")
@@ -5569,6 +5571,7 @@ async def fuzzy_company_search(
     vendor_name: str | None = None,
     limit: int = 10,
     min_similarity: float = 0.3,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="q parameter is required")
@@ -5590,7 +5593,7 @@ async def fuzzy_company_search(
 
 
 @router.get("/parser-version-status")
-async def parser_version_status():
+async def parser_version_status(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Show per-source parser version status and count of reviews needing re-extraction."""
     pool = _pool_or_503()
 
@@ -5637,7 +5640,7 @@ async def get_vendor_correlation(
     vendor_b: str = Query(...),
     days: int = Query(90, ge=7, le=365),
     metric: str = Query("churn_density"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Compare two vendors' metric trends over time and compute correlation.
 
@@ -5950,7 +5953,7 @@ async def signal_effectiveness(
 
 
 @router.get("/parser-health")
-async def get_parser_health(user: AuthUser | None = Depends(optional_auth)):
+async def get_parser_health(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Parser version distribution and stale review counts per source."""
     pool = _pool_or_503()
     rows = await pool.fetch("""
@@ -6015,7 +6018,7 @@ async def get_parser_health(user: AuthUser | None = Depends(optional_auth)):
 async def get_calibration_weights(
     dimension: Optional[str] = Query(None),
     model_version: Optional[int] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """View score calibration weights derived from campaign outcomes."""
     dimension = _optional_query_text(dimension)
@@ -6180,7 +6183,7 @@ async def get_signal_to_outcome(
     vendor_name: Optional[str] = Query(None),
     min_sequences: int = Query(5, ge=1, le=100),
     group_by: str = Query("buying_stage"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Signal effectiveness attribution view: which signal dimensions produce the best outcomes."""
     if group_by not in _ATTRIBUTION_GROUP_EXPRS:
@@ -6277,7 +6280,7 @@ async def get_signal_to_outcome(
 @router.post("/calibration/trigger")
 async def trigger_calibration(
     window_days: int = Query(180, ge=30, le=730),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Trigger score calibration from campaign outcomes (on-demand)."""
     pool = _pool_or_503()
@@ -6289,7 +6292,7 @@ async def trigger_calibration(
         return {
             "triggered": True,
             "window_days": window_days,
-            "triggered_by": f"api:{user.email}" if user else "api",
+            "triggered_by": f"api:{user.email}" if getattr(user, "email", None) else "api",
             **result,
         }
     except Exception as exc:
@@ -6651,7 +6654,7 @@ def _validate_webhook_event_types_for_channel(event_types: list[str], channel: s
 @router.post("/webhooks")
 async def create_webhook(
     body: CreateWebhookBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -6806,7 +6809,7 @@ def _webhook_crm_company_scope_condition(
 async def list_webhooks(
     vendor_name: Optional[str] = Query(None, description="Scope webhook summary activity to a vendor"),
     company_name: Optional[str] = Query(None, description="Scope webhook summary activity to a company"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7146,7 +7149,7 @@ async def webhook_delivery_summary(
     days: int = Query(7, ge=1, le=90),
     vendor_name: Optional[str] = Query(None, description="Scope aggregate delivery health to a vendor"),
     company_name: Optional[str] = Query(None, description="Scope aggregate delivery health to a company"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Aggregate delivery health across all webhooks for the authenticated account."""
     if not user:
@@ -7218,7 +7221,7 @@ async def webhook_delivery_summary(
 @router.get("/webhooks/{webhook_id}")
 async def get_webhook(
     webhook_id: str,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7257,7 +7260,7 @@ async def get_webhook(
 @router.delete("/webhooks/{webhook_id}")
 async def delete_webhook(
     webhook_id: str,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7282,7 +7285,7 @@ async def delete_webhook(
 async def update_webhook(
     webhook_id: str,
     body: UpdateWebhookBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Update webhook subscription fields (enabled, event_types, url, description)."""
     if not user:
@@ -7383,7 +7386,7 @@ async def list_webhook_deliveries(
     vendor_name: Optional[str] = Query(None, description="Filter by vendor context"),
     company_name: Optional[str] = Query(None, description="Filter by company context"),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7560,7 +7563,7 @@ async def list_webhook_deliveries(
 @router.post("/webhooks/{webhook_id}/test")
 async def test_webhook(
     webhook_id: str,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7597,7 +7600,7 @@ async def list_crm_push_log(
     status: Optional[str] = Query(None, description="Filter by normalized CRM push status"),
     vendor_name: Optional[str] = Query(None, description="Filter by vendor context"),
     company_name: Optional[str] = Query(None, description="Filter by company context"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -7625,8 +7628,8 @@ async def list_crm_push_log(
         raise HTTPException(status_code=404, detail="Webhook not found")
 
     normalized_status_sql = (
-        "CASE WHEN lower(coalesce(status, '')) = 'pushed' THEN 'success' "
-        "ELSE lower(coalesce(status, '')) END"
+        "CASE WHEN lower(coalesce(cp.status, '')) = 'pushed' THEN 'success' "
+        "ELSE lower(coalesce(cp.status, '')) END"
     )
     conditions = ["subscription_id = $1"]
     params: list[Any] = [wid]
@@ -7740,7 +7743,7 @@ async def list_crm_push_log(
 @router.post("/corrections")
 async def create_correction(
     body: CreateCorrectionBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     metadata = dict(body.metadata or {})
     metadata_source_name = _optional_query_text(metadata.get("source_name"))
@@ -7753,10 +7756,10 @@ async def create_correction(
     span = tracer.start_span(
         span_name="b2b.correction.create",
         operation_type="business_operation",
-        session_id=str(user.account_id) if user else None,
+        session_id=str(user.account_id),
         metadata={
             "business": build_business_trace_context(
-                account_id=str(user.account_id) if user else None,
+                account_id=str(user.account_id),
                 workflow="analyst_correction",
                 entity_type=body.entity_type,
                 correction_type=body.correction_type,
@@ -7810,7 +7813,7 @@ async def create_correction(
         raise HTTPException(status_code=400, detail="entity_id must be a valid UUID")
 
     pool = _pool_or_503()
-    corrected_by = f"api:{user.user_id}" if user else "analyst"
+    corrected_by = f"api:{user.user_id}"
     meta = json.dumps(metadata) if metadata else "{}"
 
     row = await pool.fetchrow(
@@ -7888,7 +7891,7 @@ async def list_corrections(
     start_date: Optional[str] = Query(None, description="Corrections created on or after (ISO 8601)"),
     end_date: Optional[str] = Query(None, description="Corrections created before (ISO 8601)"),
     limit: int = Query(50, ge=1, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     entity_type = _optional_query_text(entity_type)
     entity_id = _optional_query_text(entity_id)
@@ -8012,7 +8015,7 @@ async def list_corrections(
 @router.get("/corrections/stats")
 async def get_correction_stats(
     days: int = Query(30, ge=1, le=365),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Aggregate correction activity: counts by type, status, and top correctors."""
     pool = _pool_or_503()
@@ -8096,7 +8099,7 @@ async def get_correction_stats(
 @router.get("/corrections/{correction_id}")
 async def get_correction(
     correction_id: str,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     try:
         cid = _uuid.UUID(correction_id)
@@ -8146,7 +8149,7 @@ async def get_correction(
 async def revert_correction(
     correction_id: str,
     body: RevertCorrectionBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     try:
         cid = _uuid.UUID(correction_id)
@@ -8166,7 +8169,7 @@ async def revert_correction(
             detail=f"Cannot revert correction with status '{row['status']}' (must be 'applied')",
         )
 
-    reverted_by = f"api:{user.user_id}" if user else "analyst"
+    reverted_by = f"api:{user.user_id}"
 
     updated = await pool.fetchrow(
         """
@@ -8193,7 +8196,7 @@ async def revert_correction(
 
 @router.get("/source-corrections/impact")
 async def get_source_correction_impact(
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Show impact of active source suppressions: how many reviews are excluded per source."""
     pool = _pool_or_503()
@@ -9473,7 +9476,7 @@ async def list_accounts_in_motion(
     min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
     window_days: int = Query(settings.b2b_churn.intelligence_window_days, ge=1, le=3650),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Ranked list of companies showing churn intent for a specific vendor.
 
@@ -9505,7 +9508,7 @@ async def list_accounts_in_motion_live(
     min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
     window_days: int = Query(settings.b2b_churn.intelligence_window_days, ge=1, le=3650),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Live exploratory accounts-in-motion view rebuilt directly from reviews."""
     vendor_name = _required_query_text(vendor_name, "vendor_name")

@@ -232,7 +232,7 @@ def test_list_crm_events_normalizes_blank_optional_filters(monkeypatch):
 def test_native_crm_webhooks_reject_invalid_json_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(crm_events_api.router)
-    app.dependency_overrides[crm_events_api.optional_auth] = lambda: SimpleNamespace(
+    app.dependency_overrides[crm_events_api.require_auth] = lambda: SimpleNamespace(
         account_id="11111111-1111-1111-1111-111111111111"
     )
 
@@ -310,7 +310,7 @@ def test_get_enrichment_stats_rejects_unauthenticated_before_db_touch(monkeypatc
 def test_ingest_hubspot_webhook_persists_account_id(monkeypatch):
     app = FastAPI()
     app.include_router(crm_events_api.router)
-    app.dependency_overrides[crm_events_api.optional_auth] = lambda: SimpleNamespace(
+    app.dependency_overrides[crm_events_api.require_auth] = lambda: SimpleNamespace(
         account_id="11111111-1111-1111-1111-111111111111"
     )
 
@@ -354,7 +354,7 @@ def test_ingest_hubspot_webhook_persists_account_id(monkeypatch):
 def test_salesforce_and_pipedrive_webhooks_preserve_account_id_on_upsert(monkeypatch):
     app = FastAPI()
     app.include_router(crm_events_api.router)
-    app.dependency_overrides[crm_events_api.optional_auth] = lambda: SimpleNamespace(
+    app.dependency_overrides[crm_events_api.require_auth] = lambda: SimpleNamespace(
         account_id="11111111-1111-1111-1111-111111111111"
     )
 
