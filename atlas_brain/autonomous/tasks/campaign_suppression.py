@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
+import asyncpg
+
 logger = logging.getLogger("atlas.autonomous.tasks.campaign_suppression")
 
 
@@ -138,6 +140,68 @@ async def is_suppressed(pool, *, email: str) -> dict | None:
     return None
 
 
+async def _supersede_sequence(
+    conn,
+    *,
+    sequence_id: UUID,
+    email: str,
+    conflict_with: UUID | None,
+    reason: str,
+) -> None:
+    """Mark a sequence superseded, audit it, and cancel its draft/queued
+    campaigns so they cannot ship after the recipient lost the dedup race.
+
+    Must be called inside an open transaction on ``conn``. Idempotent on
+    sequence status: only flips 'active' -> 'superseded' to avoid
+    overwriting terminal states like 'replied' or 'bounced'. Campaign
+    cancellation runs unconditionally because a campaign linked to a
+    superseded sequence must never be sent regardless of the sequence's
+    prior state when this helper is invoked.
+    """
+    await conn.execute(
+        """
+        UPDATE campaign_sequences
+        SET status = 'superseded', updated_at = NOW()
+        WHERE id = $1 AND status = 'active'
+        """,
+        sequence_id,
+    )
+    cancel_status = await conn.execute(
+        """
+        UPDATE b2b_campaigns
+        SET status = 'cancelled', updated_at = NOW()
+        WHERE sequence_id = $1
+          AND status IN ('draft', 'approved', 'queued')
+        """,
+        sequence_id,
+    )
+    cancelled_count = 0
+    if isinstance(cancel_status, str) and cancel_status.startswith("UPDATE "):
+        try:
+            cancelled_count = int(cancel_status.split()[1])
+        except (ValueError, IndexError):
+            cancelled_count = 0
+    await conn.execute(
+        """
+        INSERT INTO campaign_audit_log
+            (sequence_id, event_type, recipient_email, source, metadata)
+        VALUES ($1, 'recipient_superseded', $2, 'system', $3::jsonb)
+        """,
+        sequence_id,
+        email,
+        json.dumps({
+            "conflict_with_sequence_id": str(conflict_with) if conflict_with else None,
+            "reason": reason,
+            "cancelled_campaigns": cancelled_count,
+        }),
+    )
+    logger.info(
+        "Sequence %s superseded: recipient %s already in active sequence %s "
+        "(reason=%s, cancelled %d campaigns)",
+        sequence_id, email, conflict_with, reason, cancelled_count,
+    )
+
+
 async def assign_recipient_to_sequence(
     pool,
     sequence_id: UUID | str,
@@ -146,13 +210,18 @@ async def assign_recipient_to_sequence(
     """Atomically attach a recipient email to a campaign_sequences row.
 
     If another active sequence already holds this email, the target sequence
-    is marked 'superseded' (when still 'active'), an entry is written to
-    campaign_audit_log, and the email is NOT assigned. Otherwise the email
-    is set on the sequence.
+    is marked 'superseded', any draft/approved/queued b2b_campaigns rows
+    attached to it are cancelled (so they cannot leak past the dedup gate),
+    an entry is written to campaign_audit_log, and the email is NOT
+    assigned.
 
-    The conflict probe + state mutation run in a single transaction. The
-    partial index idx_campaign_seq_active_email (migration 307) makes the
-    probe O(1) for typical recipient cardinalities.
+    Race-safety. Migration 309 enforces a UNIQUE partial index on
+    LOWER(recipient_email) WHERE status='active', so the database is the
+    source of truth. The happy-path SELECT-then-UPDATE handles the common
+    case in one transaction; if a concurrent worker wins the race between
+    our SELECT and UPDATE, the UPDATE raises UniqueViolationError and we
+    fall through to a fresh transaction that re-probes the conflict and
+    supersedes our sequence the same way.
     """
     sid = sequence_id if isinstance(sequence_id, UUID) else UUID(str(sequence_id))
 
@@ -167,6 +236,52 @@ async def assign_recipient_to_sequence(
     email_lower = email_clean.lower()
 
     async with pool.acquire() as conn:
+        try:
+            async with conn.transaction():
+                conflict = await conn.fetchval(
+                    """
+                    SELECT id FROM campaign_sequences
+                    WHERE LOWER(recipient_email) = $1
+                      AND status = 'active'
+                      AND id != $2
+                    LIMIT 1
+                    """,
+                    email_lower,
+                    sid,
+                )
+
+                if conflict:
+                    await _supersede_sequence(
+                        conn,
+                        sequence_id=sid,
+                        email=email_clean,
+                        conflict_with=conflict,
+                        reason="active_sequence_exists_for_recipient",
+                    )
+                    return AssignmentResult(
+                        assigned=False,
+                        sequence_id=sid,
+                        conflict_with_sequence_id=conflict,
+                        reason="active_sequence_exists_for_recipient",
+                    )
+
+                await conn.execute(
+                    """
+                    UPDATE campaign_sequences
+                    SET recipient_email = $1, updated_at = NOW()
+                    WHERE id = $2
+                    """,
+                    email_clean,
+                    sid,
+                )
+                return AssignmentResult(assigned=True, sequence_id=sid)
+        except asyncpg.UniqueViolationError:
+            pass  # fall through to race-recovery path
+
+        # Race lost: a concurrent worker assigned this email between our
+        # SELECT and UPDATE. The unique index rejected our write; the
+        # outer transaction has already rolled back. Open a fresh
+        # transaction, re-probe the winner, and supersede ourselves.
         async with conn.transaction():
             conflict = await conn.fetchval(
                 """
@@ -179,47 +294,16 @@ async def assign_recipient_to_sequence(
                 email_lower,
                 sid,
             )
-
-            if conflict:
-                await conn.execute(
-                    """
-                    UPDATE campaign_sequences
-                    SET status = 'superseded', updated_at = NOW()
-                    WHERE id = $1 AND status = 'active'
-                    """,
-                    sid,
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO campaign_audit_log
-                        (sequence_id, event_type, recipient_email, source, metadata)
-                    VALUES ($1, 'recipient_superseded', $2, 'system', $3::jsonb)
-                    """,
-                    sid,
-                    email_clean,
-                    json.dumps({
-                        "conflict_with_sequence_id": str(conflict),
-                        "reason": "active_sequence_exists_for_recipient",
-                    }),
-                )
-                logger.info(
-                    "Sequence %s superseded: recipient %s already in active sequence %s",
-                    sid, email_clean, conflict,
-                )
-                return AssignmentResult(
-                    assigned=False,
-                    sequence_id=sid,
-                    conflict_with_sequence_id=conflict,
-                    reason="active_sequence_exists_for_recipient",
-                )
-
-            await conn.execute(
-                """
-                UPDATE campaign_sequences
-                SET recipient_email = $1, updated_at = NOW()
-                WHERE id = $2
-                """,
-                email_clean,
-                sid,
+            await _supersede_sequence(
+                conn,
+                sequence_id=sid,
+                email=email_clean,
+                conflict_with=conflict,
+                reason="active_sequence_exists_for_recipient_race",
             )
-            return AssignmentResult(assigned=True, sequence_id=sid)
+            return AssignmentResult(
+                assigned=False,
+                sequence_id=sid,
+                conflict_with_sequence_id=conflict,
+                reason="active_sequence_exists_for_recipient_race",
+            )

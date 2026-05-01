@@ -312,6 +312,10 @@ async def _apply_canonical_event(pool, event: CanonicalEvent) -> dict[str, str]:
         )
 
     elif event_type == "unsubscribed":
+        # Resend reports unsubscribes as 'complained'; SendGrid emits a
+        # distinct 'unsubscribe' event per recipient. This branch is wired
+        # for the SendGrid normalize_event() to map onto when that provider
+        # is implemented (see services/email_webhooks/sendgrid.py).
         if sequence_id:
             await pool.execute(
                 "UPDATE campaign_sequences SET status = 'unsubscribed', updated_at = $1 WHERE id = $2",

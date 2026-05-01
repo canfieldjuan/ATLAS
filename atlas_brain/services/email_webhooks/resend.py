@@ -84,9 +84,15 @@ class ResendProvider:
             return []
         data = payload.get("data") or {}
         message_id = str(data.get("email_id") or "").strip()
-        recipient = str(data.get("to") or data.get("email_to") or "").strip()
-        if isinstance(data.get("to"), list) and data["to"]:
-            recipient = str(data["to"][0]).strip()
+        # Resend's data.to is normally a list[str]; the email_to fallback
+        # covers older payload shapes seen in their docs history.
+        to_field = data.get("to")
+        if isinstance(to_field, list) and to_field:
+            recipient = str(to_field[0]).strip()
+        elif isinstance(to_field, str):
+            recipient = to_field.strip()
+        else:
+            recipient = str(data.get("email_to") or "").strip()
         timestamp = str(payload.get("created_at") or data.get("created_at") or "").strip()
         if not message_id:
             return []
