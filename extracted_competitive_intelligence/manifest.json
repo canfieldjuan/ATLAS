@@ -1,7 +1,6 @@
 {
   "mappings": [
     {"source": "atlas_brain/services/vendor_registry.py", "target": "extracted_competitive_intelligence/services/vendor_registry.py"},
-    {"source": "atlas_brain/mcp/b2b/vendor_registry.py", "target": "extracted_competitive_intelligence/mcp/b2b/vendor_registry.py"},
     {"source": "atlas_brain/mcp/b2b/displacement.py", "target": "extracted_competitive_intelligence/mcp/b2b/displacement.py"},
     {"source": "atlas_brain/mcp/b2b/cross_vendor.py", "target": "extracted_competitive_intelligence/mcp/b2b/cross_vendor.py"},
     {"source": "atlas_brain/mcp/b2b/write_intelligence.py", "target": "extracted_competitive_intelligence/mcp/b2b/write_intelligence.py"},
@@ -24,5 +23,8 @@
     {"source": "atlas_brain/storage/migrations/261_b2b_competitive_sets.sql", "target": "extracted_competitive_intelligence/storage/migrations/261_b2b_competitive_sets.sql"},
     {"source": "atlas_brain/storage/migrations/262_b2b_competitive_set_runs.sql", "target": "extracted_competitive_intelligence/storage/migrations/262_b2b_competitive_set_runs.sql"},
     {"source": "atlas_brain/storage/migrations/263_b2b_competitive_set_run_constraints.sql", "target": "extracted_competitive_intelligence/storage/migrations/263_b2b_competitive_set_run_constraints.sql"}
+  ],
+  "owned": [
+    {"target": "extracted_competitive_intelligence/mcp/b2b/vendor_registry.py"}
   ]
 }

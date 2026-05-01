@@ -11,10 +11,13 @@ import sys
 
 manifest = Path("extracted_competitive_intelligence/manifest.json")
 obj = json.loads(manifest.read_text())
+owned = {entry["target"] for entry in obj.get("owned", [])}
 status = 0
 for mapping in obj["mappings"]:
     src = Path(mapping["source"])
     dst = Path(mapping["target"])
+    if mapping["target"] in owned:
+        continue
     if not src.exists():
         print(f"MISSING SOURCE: {src} (referenced by manifest target {dst})")
         status = 1
@@ -27,5 +30,5 @@ if status:
     print("Validation failed: run scripts/sync_extracted_competitive_intelligence.sh")
     sys.exit(1)
 
-print("Validation passed: extracted_competitive_intelligence matches atlas_brain sources")
+print("Validation passed: extracted_competitive_intelligence mapped files match atlas_brain sources")
 PY
