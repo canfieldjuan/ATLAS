@@ -2591,8 +2591,8 @@ async def _fetch_high_urgency_quotes(
     fields (review_id, source, field) and ``quote_origin='review'``
     for downstream audit -- matches the blog producer convention.
     """
-    from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_quote_evidence
-    from atlas_brain.services.b2b.enrichment_contract import quote_grade_phrases
+    from ._b2b_shared import read_vendor_quote_evidence
+    from ...services.b2b.enrichment_contract import quote_grade_phrases
 
     rows = await read_vendor_quote_evidence(
         pool,

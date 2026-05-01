@@ -29,10 +29,10 @@ Mirror mappings are declared in `extracted_content_pipeline/manifest.json` so sy
 This scaffold preserves code exactly as copied so behavior and signatures remain
 unchanged while extraction work continues.
 
-This is not yet the sellable product boundary. A customer-usable module must be
-able to install and run without the Atlas monolith on `PYTHONPATH`. Until the
-standalone audit reaches zero runtime `atlas_brain` imports, this package is a
-staging copy, not a deployable product.
+The standalone audit now passes with zero runtime `atlas_brain` imports. The
+scaffold is still a staging boundary until the minimal runtime adapters are
+hardened into customer-grade ports and the copied helper surface is trimmed to
+the sellable workflows.
 
 
 ## Validation command
@@ -63,8 +63,7 @@ python scripts/audit_extracted_standalone.py --fail-on-debt
 ```
 
 The first command reports Atlas runtime coupling. The second is the product gate
-we should enable once staged shims have been replaced with product-owned ports
-and adapters.
+for keeping the extracted package free of runtime `atlas_brain` imports.
 
 ## One-shot checks
 
@@ -74,12 +73,12 @@ bash scripts/run_extracted_pipeline_checks.sh
 
 ## Compatibility shims
 
-To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`). Some remain compatibility delegates to `atlas_brain`; small utility shims now use product-owned local implementations by default.
+To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`). Runtime imports no longer delegate to `atlas_brain`; most adapters are intentionally minimal local implementations.
 
 B2B helper siblings required by `b2b_blog_post_generation.py` are also copied into `extracted_content_pipeline/autonomous/tasks/`.
 
-These shims are temporary extraction scaffolding. They should not ship in the
-customer product.
+These minimal adapters are extraction scaffolding. They need hardening before
+shipping in the customer product.
 
 The email/campaign generation slice is mapped in `docs/email_campaign_generation_pipeline.md`, with standalone productization requirements in `docs/standalone_productization.md`.
 

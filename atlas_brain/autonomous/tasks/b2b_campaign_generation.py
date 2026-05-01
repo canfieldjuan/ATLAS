@@ -3769,7 +3769,7 @@ async def _fetch_opportunities(
     dm_only: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch and score top opportunities from enriched b2b_reviews."""
-    from atlas_brain.autonomous.tasks._b2b_shared import read_campaign_opportunities
+    from ._b2b_shared import read_campaign_opportunities
 
     rows = await read_campaign_opportunities(
         pool,
