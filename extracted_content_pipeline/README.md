@@ -111,3 +111,7 @@ In standalone mode, `extracted_content_pipeline/reasoning/wedge_registry.py` pro
 ## Standalone quality shims
 
 In standalone mode, `extracted_content_pipeline/services/blog_quality.py` provides local fallback quality helpers (`blog_quality_summary`, `blog_quality_revalidation`, and `merge_blog_first_pass_quality_data_context`) for B2B blog pipeline paths.
+
+## Standalone normalization shims
+
+In standalone mode, `extracted_content_pipeline/services/company_normalization.py` provides a local `normalize_company_name` fallback used by extracted B2B helpers.
