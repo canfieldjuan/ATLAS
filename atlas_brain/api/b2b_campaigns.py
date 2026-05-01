@@ -193,23 +193,39 @@ async def _scoped_sequence_or_404(
     return row
 
 
+async def _fetch_scoped_campaign_row(
+    pool,
+    campaign_id: _uuid.UUID,
+    account_id: str,
+    select_fields: str = "bc.*",
+    join_clause: str = "",
+):
+    return await pool.fetchrow(
+        f"""
+        SELECT {select_fields}
+        FROM b2b_campaigns bc
+        {join_clause}
+        WHERE bc.id = $1
+          AND {_tracked_vendor_scope_condition("bc.vendor_name", 2)}
+        """,
+        campaign_id,
+        account_id,
+    )
+
+
 async def _scoped_campaign_or_404(
     pool,
     campaign_id: _uuid.UUID,
     account_id: str,
     select_fields: str = "bc.*",
+    join_clause: str = "",
 ):
-    row = await pool.fetchrow(
-        f"""
-        SELECT {select_fields}
-        FROM b2b_campaigns bc
-        WHERE bc.id = $1
-          AND bc.vendor_name IN (
-              SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
-          )
-        """,
+    row = await _fetch_scoped_campaign_row(
+        pool,
         campaign_id,
         account_id,
+        select_fields=select_fields,
+        join_clause=join_clause,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -392,12 +408,21 @@ async def _persist_campaign_revalidation(
     pool,
     *,
     campaign_id: _uuid.UUID,
+    account_id: str,
     metadata: dict[str, Any],
 ) -> None:
     await pool.execute(
-        "UPDATE b2b_campaigns SET metadata = $1::jsonb WHERE id = $2",
+        """
+        UPDATE b2b_campaigns
+        SET metadata = $1::jsonb
+        WHERE id = $2
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $3::uuid
+          )
+        """,
         json.dumps(metadata, default=str),
         campaign_id,
+        account_id,
     )
 
 
@@ -405,6 +430,7 @@ async def _enforce_campaign_revalidation(
     pool,
     *,
     campaign_id: _uuid.UUID,
+    account_id: str,
     campaign: dict[str, Any],
     company_context: Any,
     action: str,
@@ -421,6 +447,7 @@ async def _enforce_campaign_revalidation(
     await _persist_campaign_revalidation(
         pool,
         campaign_id=campaign_id,
+        account_id=account_id,
         metadata=revalidation["metadata"],
     )
     blocking_issues = list(audit.get("blocking_issues") or [])
@@ -1514,17 +1541,17 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
             failed.append({"id": cid_str, "reason": "invalid UUID"})
             continue
 
-        campaign = await pool.fetchrow(
-            """
-            SELECT bc.id, bc.status, bc.recipient_email, bc.sequence_id,
-                   bc.step_number, bc.subject, bc.body, bc.channel, bc.metadata,
-                   cs.recipient_email AS seq_recipient,
-                   cs.company_context
-            FROM b2b_campaigns bc
-            LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
-            WHERE bc.id = $1
-            """,
+        campaign = await _fetch_scoped_campaign_row(
+            pool,
             cid,
+            user.account_id,
+            select_fields="""
+                bc.id, bc.status, bc.recipient_email, bc.sequence_id,
+                bc.step_number, bc.subject, bc.body, bc.channel, bc.metadata,
+                cs.recipient_email AS seq_recipient,
+                cs.company_context
+            """,
+            join_clause="LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id",
         )
         if not campaign:
             failed.append({"id": cid_str, "reason": "not found"})
@@ -1537,8 +1564,16 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
 
         if body.action == "reject":
             result = await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1 AND status = 'draft'",
-                cid,
+                """
+                UPDATE b2b_campaigns
+                SET status = 'cancelled'
+                WHERE id = $1
+                  AND status = 'draft'
+                  AND vendor_name IN (
+                      SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+                  )
+                """,
+                cid, user.account_id,
             )
             if result == "UPDATE 0":
                 failed.append({"id": cid_str, "reason": "status changed concurrently"})
@@ -1562,6 +1597,7 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
                     await _enforce_campaign_revalidation(
                         pool,
                         campaign_id=cid,
+                        account_id=user.account_id,
                         campaign=dict(campaign),
                         company_context=campaign.get("company_context"),
                         action="manual_approval",
@@ -1570,8 +1606,16 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
                     failed.append({"id": cid_str, "reason": str(exc.detail)})
                     continue
             result = await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2 AND status = 'draft'",
-                now, cid,
+                """
+                UPDATE b2b_campaigns
+                SET status = 'approved', approved_at = $1
+                WHERE id = $2
+                  AND status = 'draft'
+                  AND vendor_name IN (
+                      SELECT vendor_name FROM tracked_vendors WHERE account_id = $3::uuid
+                  )
+                """,
+                now, cid, user.account_id,
             )
             if result == "UPDATE 0":
                 failed.append({"id": cid_str, "reason": "status changed concurrently"})
@@ -1607,6 +1651,7 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
                 await _enforce_campaign_revalidation(
                     pool,
                     campaign_id=cid,
+                    account_id=user.account_id,
                     campaign=queued_campaign,
                     company_context=campaign.get("company_context"),
                     action="queue_send",
@@ -1619,9 +1664,13 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b
             """
             UPDATE b2b_campaigns
             SET status = 'queued', approved_at = $1, recipient_email = $2
-            WHERE id = $3 AND status = 'draft'
+            WHERE id = $3
+              AND status = 'draft'
+              AND vendor_name IN (
+                  SELECT vendor_name FROM tracked_vendors WHERE account_id = $4::uuid
+              )
             """,
-            now, recipient, cid,
+            now, recipient, cid, user.account_id,
         )
         if result == "UPDATE 0":
             failed.append({"id": cid_str, "reason": "status changed concurrently"})
@@ -1653,9 +1702,11 @@ async def bulk_reject(body: BulkRejectBody, user: AuthUser = Depends(require_b2b
             failed.append({"id": cid_str, "reason": "invalid UUID"})
             continue
 
-        campaign = await pool.fetchrow(
-            "SELECT id, status, sequence_id, step_number FROM b2b_campaigns WHERE id = $1",
+        campaign = await _fetch_scoped_campaign_row(
+            pool,
             cid,
+            user.account_id,
+            select_fields="bc.id, bc.status, bc.sequence_id, bc.step_number",
         )
         if not campaign:
             failed.append({"id": cid_str, "reason": "not found"})
@@ -1665,8 +1716,16 @@ async def bulk_reject(body: BulkRejectBody, user: AuthUser = Depends(require_b2b
             continue
 
         result = await pool.execute(
-            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1 AND status IN ('draft', 'approved')",
-            cid,
+            """
+            UPDATE b2b_campaigns
+            SET status = 'cancelled'
+            WHERE id = $1
+              AND status IN ('draft', 'approved')
+              AND vendor_name IN (
+                  SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+              )
+            """,
+            cid, user.account_id,
         )
         if result == "UPDATE 0":
             failed.append({"id": cid_str, "reason": "status changed concurrently"})
@@ -2323,8 +2382,17 @@ async def update_campaign(
         updates.append("latest_error_summary = NULL")
 
     params.append(cid)
+    campaign_idx = idx
+    idx += 1
+    params.append(user.account_id)
+    account_idx = idx
     result = await pool.execute(
-        f"UPDATE b2b_campaigns SET {', '.join(updates)} WHERE id = ${idx}",
+        f"""
+        UPDATE b2b_campaigns
+        SET {', '.join(updates)}
+        WHERE id = ${campaign_idx}
+          AND {_tracked_vendor_scope_condition("vendor_name", account_idx)}
+        """,
         *params,
     )
     if _affected_rows(result) == 0:
@@ -2349,17 +2417,13 @@ async def approve_campaign(
 
     pool = _pool_or_503()
 
-    campaign = await pool.fetchrow(
-        """
-        SELECT bc.*, cs.company_context
-        FROM b2b_campaigns bc
-        LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
-        WHERE bc.id = $1
-        """,
+    campaign = await _scoped_campaign_or_404(
+        pool,
         cid,
+        user.account_id,
+        select_fields="bc.*, cs.company_context",
+        join_clause="LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id",
     )
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
     if campaign["status"] != "draft":
         raise HTTPException(
             status_code=409,
@@ -2370,6 +2434,7 @@ async def approve_campaign(
         await _enforce_campaign_revalidation(
             pool,
             campaign_id=cid,
+            account_id=user.account_id,
             campaign=dict(campaign),
             company_context=campaign.get("company_context"),
             action="manual_approval",
@@ -2380,10 +2445,14 @@ async def approve_campaign(
         """
         UPDATE b2b_campaigns
         SET status = 'approved', approved_at = $1
-        WHERE id = $2 AND status = 'draft'
+        WHERE id = $2
+          AND status = 'draft'
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $3::uuid
+          )
         RETURNING id
         """,
-        now, cid,
+        now, cid, user.account_id,
     )
     if not row:
         raise HTTPException(
@@ -2417,17 +2486,13 @@ async def queue_campaign_for_send(
 
     pool = _pool_or_503()
 
-    campaign = await pool.fetchrow(
-        """
-        SELECT bc.*, cs.company_context
-        FROM b2b_campaigns bc
-        LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
-        WHERE bc.id = $1
-        """,
+    campaign = await _scoped_campaign_or_404(
+        pool,
         cid,
+        user.account_id,
+        select_fields="bc.*, cs.company_context",
+        join_clause="LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id",
     )
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
 
     if campaign["status"] not in ("draft",):
         raise HTTPException(
@@ -2469,6 +2534,7 @@ async def queue_campaign_for_send(
         await _enforce_campaign_revalidation(
             pool,
             campaign_id=cid,
+            account_id=user.account_id,
             campaign=queued_campaign,
             company_context=campaign.get("company_context"),
             action="queue_send",
@@ -2480,9 +2546,13 @@ async def queue_campaign_for_send(
         SET status = 'queued',
             approved_at = $1,
             recipient_email = $2
-        WHERE id = $3 AND status = 'draft'
+        WHERE id = $3
+          AND status = 'draft'
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $4::uuid
+          )
         """,
-        now, recipient, cid,
+        now, recipient, cid, user.account_id,
     )
     if result == "UPDATE 0":
         raise HTTPException(status_code=409, detail="Campaign status changed concurrently")
@@ -2542,12 +2612,12 @@ async def cancel_campaign(
 
     pool = _pool_or_503()
 
-    campaign = await pool.fetchrow(
-        "SELECT id, sequence_id, step_number, status FROM b2b_campaigns WHERE id = $1",
+    campaign = await _scoped_campaign_or_404(
+        pool,
         cid,
+        user.account_id,
+        select_fields="bc.id, bc.sequence_id, bc.step_number, bc.status",
     )
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
 
     if campaign["status"] != "queued":
         raise HTTPException(
@@ -2555,10 +2625,16 @@ async def cancel_campaign(
             detail=f"Cannot cancel campaign with status '{campaign['status']}'"
         )
 
-    now = datetime.now(timezone.utc)
     await pool.execute(
-        "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
-        cid,
+        """
+        UPDATE b2b_campaigns
+        SET status = 'cancelled'
+        WHERE id = $1
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+          )
+        """,
+        cid, user.account_id,
     )
 
     await log_campaign_event(

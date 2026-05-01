@@ -9,6 +9,10 @@ import pytest
 from atlas_brain.api import b2b_campaigns as mod
 
 
+def _fake_user(account_id: str | None = None):
+    return type("User", (), {"account_id": account_id or str(uuid4())})()
+
+
 def test_campaign_activity_timestamp_sql_uses_real_campaign_columns():
     assert mod._campaign_activity_timestamp_sql("bc") == (
         "COALESCE(bc.clicked_at, bc.opened_at, bc.sent_at, bc.approved_at, bc.created_at)"
@@ -294,12 +298,14 @@ async def test_review_candidates_summary_returns_summary_only(monkeypatch):
 class _CampaignPool:
     def __init__(self, campaign_row):
         self.campaign_row = campaign_row
+        self.fetchrow_calls = []
         self.execute_calls = []
 
     async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append((query, args))
         if "SELECT bc.*, cs.company_context" in query:
             return dict(self.campaign_row)
-        if "SELECT bc.id, bc.status" in query:
+        if "bc.id, bc.status" in query:
             return dict(self.campaign_row)
         if "RETURNING id" in query:
             return {"id": self.campaign_row["id"]}
@@ -536,6 +542,103 @@ async def test_campaign_audit_log_checks_campaign_scope_before_audit_fetch(monke
 
 
 @pytest.mark.asyncio
+async def test_update_campaign_scopes_update_to_tracked_vendor(monkeypatch):
+    campaign_id = uuid4()
+    user = _fake_user()
+
+    class Pool:
+        def __init__(self):
+            self.execute_calls = []
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.update_campaign(
+        str(campaign_id),
+        mod.CampaignUpdate(subject="Renewal pressure"),
+        user=user,
+    )
+
+    assert result == {"ok": True}
+    query, args = pool.execute_calls[0]
+    assert "tracked_vendors" in query
+    assert args == ("Renewal pressure", campaign_id, user.account_id)
+
+
+@pytest.mark.asyncio
+async def test_cancel_campaign_scopes_fetch_and_update_to_tracked_vendor(monkeypatch):
+    campaign_id = uuid4()
+    user = _fake_user()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.execute_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": campaign_id, "sequence_id": None, "step_number": 1, "status": "queued"}
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "log_campaign_event", AsyncMock())
+
+    result = await mod.cancel_campaign(str(campaign_id), user=user)
+
+    assert result == {"status": "cancelled", "campaign_id": str(campaign_id)}
+    scoped_query, scoped_args = pool.fetchrow_calls[0]
+    assert "tracked_vendors" in scoped_query
+    assert scoped_args == (campaign_id, user.account_id)
+    update_query, update_args = pool.execute_calls[0]
+    assert "tracked_vendors" in update_query
+    assert update_args == (campaign_id, user.account_id)
+
+
+@pytest.mark.asyncio
+async def test_bulk_reject_scopes_fetch_and_update_to_tracked_vendor(monkeypatch):
+    campaign_id = uuid4()
+    user = _fake_user()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.execute_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": campaign_id, "status": "draft", "sequence_id": None, "step_number": 1}
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod, "log_campaign_event", AsyncMock())
+
+    result = await mod.bulk_reject(
+        mod.BulkRejectBody(campaign_ids=[str(campaign_id)], reason="bad fit"),
+        user=user,
+    )
+
+    assert result == {"rejected": 1, "failed": []}
+    scoped_query, scoped_args = pool.fetchrow_calls[0]
+    assert "tracked_vendors" in scoped_query
+    assert scoped_args == (campaign_id, user.account_id)
+    update_query, update_args = pool.execute_calls[0]
+    assert "tracked_vendors" in update_query
+    assert update_args == (campaign_id, user.account_id)
+
+
+@pytest.mark.asyncio
 async def test_approve_campaign_blocks_missing_product_claim_gate_before_update(monkeypatch):
     campaign_id = uuid4()
     pool = _CampaignPool({
@@ -550,15 +653,18 @@ async def test_approve_campaign_blocks_missing_product_claim_gate_before_update(
         "metadata": {},
         "company_context": None,
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", False)
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.approve_campaign(str(campaign_id))
+        await mod.approve_campaign(str(campaign_id), user=user)
 
     assert exc.value.status_code == 409
     assert "report-safe ProductClaim gate" in str(exc.value.detail)
+    assert "tracked_vendors" in pool.fetchrow_calls[0][0]
+    assert pool.fetchrow_calls[0][1] == (campaign_id, user.account_id)
     assert pool.execute_calls == []
 
 
@@ -577,15 +683,18 @@ async def test_queue_campaign_for_send_blocks_missing_product_claim_gate_before_
         "metadata": {},
         "company_context": None,
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_queue_send", False)
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.queue_campaign_for_send(str(campaign_id), body=None)
+        await mod.queue_campaign_for_send(str(campaign_id), body=None, user=user)
 
     assert exc.value.status_code == 409
     assert "report-safe ProductClaim gate" in str(exc.value.detail)
+    assert "tracked_vendors" in pool.fetchrow_calls[0][0]
+    assert pool.fetchrow_calls[0][1] == (campaign_id, user.account_id)
     assert pool.execute_calls == []
 
 
@@ -606,6 +715,7 @@ async def test_bulk_approve_blocks_missing_product_claim_gate_before_update(monk
         "metadata": {},
         "company_context": None,
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", False)
@@ -613,6 +723,7 @@ async def test_bulk_approve_blocks_missing_product_claim_gate_before_update(monk
 
     result = await mod.bulk_approve(
         mod.BulkApproveBody(campaign_ids=[str(campaign_id)], action=action),
+        user=user,
     )
 
     assert result["processed"] == 0
@@ -622,6 +733,8 @@ async def test_bulk_approve_blocks_missing_product_claim_gate_before_update(monk
             "reason": f"Campaign is missing a report-safe ProductClaim gate for {'manual_approval' if action == 'approve' else 'queue_send'}",
         }
     ]
+    assert "tracked_vendors" in pool.fetchrow_calls[0][0]
+    assert pool.fetchrow_calls[0][1] == (campaign_id, user.account_id)
     assert pool.execute_calls == []
 
 
@@ -664,6 +777,7 @@ async def test_approve_campaign_blocks_generic_copy_when_revalidation_fails(monk
         }),
         "company_context": {},
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", True)
@@ -672,7 +786,7 @@ async def test_approve_campaign_blocks_generic_copy_when_revalidation_fails(monk
     monkeypatch.setattr(mod, "emit_event", AsyncMock())
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.approve_campaign(str(campaign_id))
+        await mod.approve_campaign(str(campaign_id), user=user)
 
     assert exc.value.status_code == 409
     assert "witness-backed anchor" in str(exc.value.detail)
@@ -719,6 +833,7 @@ async def test_queue_campaign_for_send_blocks_generic_copy_when_revalidation_fai
         }),
         "company_context": {},
     })
+    user = _fake_user()
 
     async def _not_suppressed(pool, email):
         return None
@@ -731,7 +846,11 @@ async def test_queue_campaign_for_send_blocks_generic_copy_when_revalidation_fai
     monkeypatch.setattr(mod, "emit_event", AsyncMock())
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.queue_campaign_for_send(str(campaign_id), body=mod.ApproveQueueBody(recipient_email="owner@example.com"))
+        await mod.queue_campaign_for_send(
+            str(campaign_id),
+            body=mod.ApproveQueueBody(recipient_email="owner@example.com"),
+            user=user,
+        )
 
     assert exc.value.status_code == 409
     assert "timing or numeric anchor" in str(exc.value.detail) or "witness-backed anchor" in str(exc.value.detail)
@@ -757,6 +876,7 @@ async def test_approve_campaign_uses_synthesis_fallback_and_records_success(monk
         }),
         "company_context": None,
     })
+    user = _fake_user()
 
     async def _fake_reasoning_view(pool, vendor_name):
         assert vendor_name == "Slack"
@@ -774,9 +894,12 @@ async def test_approve_campaign_uses_synthesis_fallback_and_records_success(monk
     monkeypatch.setattr(mod, "record_attempt", record_attempt)
     monkeypatch.setattr(mod, "emit_event", AsyncMock())
 
-    result = await mod.approve_campaign(str(campaign_id))
+    result = await mod.approve_campaign(str(campaign_id), user=user)
 
     assert result["ok"] is True
+    approval_update = next(call for call in pool.fetchrow_calls if "UPDATE b2b_campaigns" in call[0])
+    assert "tracked_vendors" in approval_update[0]
+    assert approval_update[1][1:] == (campaign_id, user.account_id)
     assert any("SET metadata = $1::jsonb" in call[0] for call in pool.execute_calls)
     metadata_update = next(call for call in pool.execute_calls if "SET metadata = $1::jsonb" in call[0])
     assert "reasoning_anchor_examples" in metadata_update[1][0]
@@ -808,6 +931,7 @@ async def test_approve_campaign_blocks_report_tier_language(monkeypatch):
         }),
         "company_context": None,
     })
+    user = _fake_user()
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
     monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", True)
@@ -816,7 +940,7 @@ async def test_approve_campaign_blocks_report_tier_language(monkeypatch):
     monkeypatch.setattr(mod, "emit_event", AsyncMock())
 
     with pytest.raises(mod.HTTPException) as exc:
-        await mod.approve_campaign(str(campaign_id))
+        await mod.approve_campaign(str(campaign_id), user=user)
 
     assert exc.value.status_code == 409
     assert "report_tier_language:dashboard" in str(exc.value.detail)
