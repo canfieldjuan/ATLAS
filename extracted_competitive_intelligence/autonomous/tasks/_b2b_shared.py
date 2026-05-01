@@ -1,21 +1,19 @@
 """Phase 1 bridge: re-exports atlas_brain.autonomous.tasks._b2b_shared.
 
-``from X import *`` does not pull underscore-prefixed names per Python
-semantics, but downstream scaffolded modules (b2b_battle_cards.py,
-b2b_vendor_briefing.py) import private helpers like
-``_align_vendor_intelligence_record_to_scorecard`` directly. We enumerate
-the underscore names explicitly so ``from ._b2b_shared import _foo``
-inside the scaffold resolves at runtime. Phase 2 replaces this bridge
-with a standalone implementation gated on EXTRACTED_COMP_INTEL_STANDALONE=1.
+Programmatically copies every non-dunder name (including underscore-
+prefixed helpers that from X import * would drop). Required because
+many scaffolded modules import private helpers from atlas_brain peers
+via from .X import _foo lazily inside function bodies. Phase 2
+replaces this with a standalone implementation gated on
+EXTRACTED_COMP_INTEL_STANDALONE=1.
 """
-from atlas_brain.autonomous.tasks._b2b_shared import *  # noqa: F401,F403
-from atlas_brain.autonomous.tasks._b2b_shared import (  # noqa: F401
-    _align_vendor_intelligence_record_to_scorecard,
-    _timing_summary_payload,
-    _reasoning_int,
-    read_vendor_company_signal_review_queue,
-    read_vendor_intelligence_record,
-    read_vendor_intelligence,
-    read_vendor_scorecard_detail,
-    read_vendor_quote_evidence,
-)
+from __future__ import annotations
+
+import importlib as _importlib
+
+_src = _importlib.import_module("atlas_brain.autonomous.tasks._b2b_shared")
+_g = globals()
+for _name in dir(_src):
+    if not _name.startswith("__"):
+        _g[_name] = getattr(_src, _name)
+del _importlib, _src, _g, _name  # type: ignore[name-defined]
