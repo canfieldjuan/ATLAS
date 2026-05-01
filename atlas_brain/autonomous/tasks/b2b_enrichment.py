@@ -281,6 +281,13 @@ from ...services.b2b.enrichment_result_contract import (
     missing_witness_primitives as _service_missing_witness_primitives,
     schema_version as _service_schema_version,
 )
+from ...services.b2b.enrichment_task_ops import (
+    coerce_int_override as _service_coerce_int_override,
+    mark_exhausted_pending_failed as _service_mark_exhausted_pending_failed,
+    queue_model_upgrades as _service_queue_model_upgrades,
+    queue_version_upgrades as _service_queue_version_upgrades,
+    recover_orphaned_enriching as _service_recover_orphaned_enriching,
+)
 from ...services.b2b.enrichment_row_runner import EnrichmentRunnerDeps, run_enrichment_rows
 from ...services.b2b.enrichment_task_runner import EnrichmentTaskRunnerDeps, run_enrichment_task
 from ...services.b2b.enrichment_stage_runs import (
@@ -1251,10 +1258,13 @@ def _coerce_int_override(
     min_value: int,
     max_value: int,
 ) -> int:
-    """Return clamped integer override value, or default on parse failure."""
-    default_coerced = _coerce_int_value(default_value, min_value)
-    coerced = _coerce_int_value(raw_value, default_coerced)
-    return max(min_value, min(max_value, coerced))
+    return _service_coerce_int_override(
+        raw_value,
+        default_value,
+        min_value=min_value,
+        max_value=max_value,
+        coerce_int_value=_coerce_int_value,
+    )
 
 
 def _empty_exact_cache_usage() -> dict[str, int]:
@@ -1394,160 +1404,38 @@ async def _enrich_rows(
 
 
 async def _recover_orphaned_enriching(pool, max_attempts: int) -> int:
-    """Reset rows stranded in enriching after an interrupted prior run."""
-    result = await pool.execute(
-        """
-        UPDATE b2b_reviews
-        SET enrichment_attempts = enrichment_attempts + 1,
-            enrichment_status = CASE
-                WHEN enrichment_attempts + 1 >= $1 THEN 'failed'
-                ELSE 'pending'
-            END
-        WHERE enrichment_status = 'enriching'
-        """,
+    return await _service_recover_orphaned_enriching(
+        pool,
         max_attempts,
+        logger=logger,
     )
-    try:
-        count = int(str(result).split()[-1])
-    except (TypeError, ValueError, IndexError):
-        count = 0
-    if count:
-        logger.warning("Recovered %d orphaned B2B enrichment rows", count)
-    return count
 
 
 async def _mark_exhausted_pending_failed(pool, max_attempts: int) -> int:
-    """Mark pending rows as failed when attempts already reached max."""
-    result = await pool.execute(
-        """
-        UPDATE b2b_reviews
-        SET enrichment_status = 'failed'
-        WHERE enrichment_status = 'pending'
-          AND enrichment_attempts >= $1
-        """,
+    return await _service_mark_exhausted_pending_failed(
+        pool,
         max_attempts,
+        logger=logger,
     )
-    try:
-        count = int(str(result).split()[-1])
-    except (TypeError, ValueError, IndexError):
-        count = 0
-    if count:
-        logger.warning("Marked %d exhausted pending rows as failed", count)
-    return count
 
 
 async def _queue_version_upgrades(pool) -> int:
-    """Reset enrichment_status to 'pending' for reviews scraped with outdated parser versions.
+    from ...services.scraping.parsers import get_all_parsers
 
-    Compares each review's parser_version against the currently registered
-    parser version.  Reviews with older versions are re-queued for enrichment.
-    Returns the number of reviews re-queued.
-    """
-    if not settings.b2b_churn.enrichment_auto_requeue_parser_upgrades:
-        logger.info("Parser-version auto requeue disabled; skipping version-upgrade scan")
-        return 0
-    try:
-        from ...services.scraping.parsers import get_all_parsers
-
-        parsers = get_all_parsers()
-        if not parsers:
-            return 0
-
-        total_requeued = 0
-        for source_name, parser in parsers.items():
-            current_version = getattr(parser, "version", None)
-            if not current_version:
-                continue
-
-            # Find enriched reviews with an older parser version
-            count = await pool.fetchval(
-                """
-                WITH updated AS (
-                    UPDATE b2b_reviews
-                    SET enrichment_status = 'pending',
-                        enrichment_attempts = 0,
-                        requeue_reason = 'parser_upgrade',
-                        low_fidelity = false,
-                        low_fidelity_reasons = '[]'::jsonb,
-                        low_fidelity_detected_at = NULL,
-                        enrichment_repair = NULL,
-                        enrichment_repair_status = NULL,
-                        enrichment_repair_attempts = 0,
-                        enrichment_repair_model = NULL,
-                        enrichment_repaired_at = NULL,
-                        enrichment_repair_applied_fields = '[]'::jsonb
-                    WHERE source = $1
-                      AND parser_version IS NOT NULL
-                      AND parser_version != $2
-                      AND enrichment_status IN ('enriched', 'no_signal', 'quarantined')
-                    RETURNING 1
-                )
-                SELECT count(*) FROM updated
-                """,
-                source_name,
-                current_version,
-            )
-            if count and count > 0:
-                logger.info(
-                    "Re-queued %d %s reviews for re-enrichment (parser %s -> %s)",
-                    count, source_name, "old", current_version,
-                )
-                total_requeued += count
-
-        return total_requeued
-    except Exception:
-        logger.debug("Version upgrade check skipped", exc_info=True)
-        return 0
+    return await _service_queue_version_upgrades(
+        pool,
+        enabled=bool(settings.b2b_churn.enrichment_auto_requeue_parser_upgrades),
+        get_all_parsers=get_all_parsers,
+        logger=logger,
+    )
 
 
 async def _queue_model_upgrades(pool, cfg) -> int:
-    """Reset enrichment_status to 'pending' for reviews enriched with outdated model versions.
-
-    Compares the review's enrichment_model signature against the currently
-    active model configuration.
-    Returns the number of reviews re-queued.
-    """
-    if not cfg.enrichment_auto_requeue_model_upgrades:
-        return 0
-
-    current_sig = str(cfg.enrichment_tier1_model or "").strip()
-    if not current_sig:
-        return 0
-
-    try:
-        count = await pool.fetchval(
-            """
-            WITH updated AS (
-                UPDATE b2b_reviews
-                SET enrichment_status = 'pending',
-                    enrichment_attempts = 0,
-                    requeue_reason = 'enrichment_model_outdated',
-                    low_fidelity = false,
-                    low_fidelity_reasons = '[]'::jsonb,
-                    low_fidelity_detected_at = NULL,
-                    enrichment_repair = NULL,
-                    enrichment_repair_status = NULL,
-                    enrichment_repair_attempts = 0,
-                    enrichment_repair_model = NULL,
-                    enrichment_repaired_at = NULL,
-                    enrichment_repair_applied_fields = '[]'::jsonb
-                WHERE enrichment_status IN ('enriched', 'no_signal', 'quarantined')
-                  AND (enrichment_model IS NULL OR enrichment_model != $1)
-                RETURNING 1
-            )
-            SELECT count(*) FROM updated
-            """,
-            current_sig,
-        )
-        if count and count > 0:
-            logger.info(
-                "Re-queued %d reviews for re-enrichment (model drift -> %s)",
-                count, current_sig,
-            )
-        return count
-    except Exception:
-        logger.debug("Model upgrade check skipped", exc_info=True)
-        return 0
+    return await _service_queue_model_upgrades(
+        pool,
+        cfg,
+        logger=logger,
+    )
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
