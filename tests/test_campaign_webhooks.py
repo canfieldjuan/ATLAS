@@ -93,7 +93,8 @@ async def test_campaign_email_webhook_rejects_invalid_signature_before_db_touch(
 
     with pytest.raises(mod.HTTPException) as exc:
         await mod.campaign_email_webhook(
-            _request(b'{"type":"email.delivered","data":{"email_id":"msg-1"}}')
+            _request(b'{"type":"email.delivered","data":{"email_id":"msg-1"}}'),
+            provider="resend",
         )
 
     assert exc.value.status_code == 401
@@ -101,7 +102,49 @@ async def test_campaign_email_webhook_rejects_invalid_signature_before_db_touch(
 
 
 @pytest.mark.asyncio
-async def test_campaign_email_webhook_rejects_invalid_json_before_db_touch(monkeypatch):
+async def test_campaign_email_webhook_rejects_unknown_provider(monkeypatch):
+    from atlas_brain.api import campaign_webhooks as mod
+
+    def _fail_pool():
+        raise AssertionError("db touched")
+
+    monkeypatch.setattr(mod, "get_db_pool", _fail_pool)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.campaign_email_webhook(
+            _request(b'{}'),
+            provider="not-a-real-esp",
+        )
+
+    assert exc.value.status_code == 400
+    assert "unknown email webhook provider" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_campaign_email_webhook_returns_501_for_stubbed_provider(monkeypatch):
+    """SES provider is registered but not yet implemented; route must
+    surface NotImplementedError as HTTP 501 instead of crashing."""
+    from atlas_brain.api import campaign_webhooks as mod
+
+    def _fail_pool():
+        raise AssertionError("db touched")
+
+    monkeypatch.setattr(mod, "get_db_pool", _fail_pool)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.campaign_email_webhook(
+            _request(b'{"Type":"Notification","Message":"{}"}'),
+            provider="ses",
+        )
+
+    assert exc.value.status_code == 501
+    assert "not yet implemented" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_campaign_email_webhook_returns_no_events_for_invalid_json(monkeypatch):
+    """Malformed JSON yields zero canonical events; the route returns 200
+    with status='ignored' so the ESP does not retry indefinitely."""
     from atlas_brain.api import campaign_webhooks as mod
 
     def _fail_pool():
@@ -110,11 +153,10 @@ async def test_campaign_email_webhook_rejects_invalid_json_before_db_touch(monke
     monkeypatch.setattr(mod, "get_db_pool", _fail_pool)
     monkeypatch.setattr(mod.settings.campaign_sequence, "resend_webhook_signing_secret", "")
 
-    with pytest.raises(mod.HTTPException) as exc:
-        await mod.campaign_email_webhook(_request(b"{not-json"))
+    result = await mod.campaign_email_webhook(_request(b"{not-json"), provider="resend")
 
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "Invalid JSON"
+    assert result["status"] == "ignored"
+    assert result["reason"] == "no canonical events parsed"
 
 
 @pytest.mark.asyncio
@@ -128,10 +170,12 @@ async def test_campaign_email_webhook_ignores_missing_email_id_before_db_touch(m
     monkeypatch.setattr(mod.settings.campaign_sequence, "resend_webhook_signing_secret", "")
 
     result = await mod.campaign_email_webhook(
-        _request(json.dumps({"type": "email.delivered", "data": {}}).encode("utf-8"))
+        _request(json.dumps({"type": "email.delivered", "data": {}}).encode("utf-8")),
+        provider="resend",
     )
 
-    assert result == {"status": "ignored", "reason": "no email_id"}
+    assert result["status"] == "ignored"
+    assert result["reason"] == "no canonical events parsed"
 
 
 @pytest.mark.asyncio
@@ -146,8 +190,73 @@ async def test_campaign_email_webhook_uses_db_after_prechecks(monkeypatch):
     monkeypatch.setattr(mod.settings.campaign_sequence, "resend_webhook_signing_secret", "")
 
     result = await mod.campaign_email_webhook(
-        _request(json.dumps({"type": "email.delivered", "data": {"email_id": "msg-1"}}).encode("utf-8"))
+        _request(json.dumps({"type": "email.delivered", "data": {"email_id": "msg-1"}}).encode("utf-8")),
+        provider="resend",
     )
 
     pool.fetchrow.assert_awaited_once()
-    assert result == {"status": "ignored", "reason": "unknown campaign"}
+    assert result["status"] == "ok"
+    assert result["provider"] == "resend"
+    assert result["processed"] == 0
+    assert result["skipped"] == 1
+    assert result["events"][0]["reason"] == "unknown campaign"
+
+
+@pytest.mark.asyncio
+async def test_resend_provider_signature_skipped_when_no_secret():
+    from atlas_brain.services.email_webhooks.resend import ResendProvider
+
+    provider = ResendProvider()
+    assert provider.verify_signature(b"body", {}, secret="") is True
+
+
+@pytest.mark.asyncio
+async def test_resend_provider_normalizes_opened_event():
+    from atlas_brain.services.email_webhooks.resend import ResendProvider
+
+    provider = ResendProvider()
+    payload = json.dumps({
+        "type": "email.opened",
+        "created_at": "2026-04-30T12:00:00Z",
+        "data": {
+            "email_id": "msg-9",
+            "to": ["alice@example.com"],
+        },
+    }).encode("utf-8")
+
+    events = provider.normalize_event(payload)
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type == "opened"
+    assert event.message_id == "msg-9"
+    assert event.recipient_email == "alice@example.com"
+    assert event.provider == "resend"
+
+
+@pytest.mark.asyncio
+async def test_resend_provider_returns_empty_for_unknown_type():
+    from atlas_brain.services.email_webhooks.resend import ResendProvider
+
+    provider = ResendProvider()
+    payload = json.dumps({
+        "type": "email.spammed",
+        "data": {"email_id": "msg-9"},
+    }).encode("utf-8")
+    assert provider.normalize_event(payload) == []
+
+
+@pytest.mark.asyncio
+async def test_provider_registry_resolves_known_names():
+    from atlas_brain.services.email_webhooks import resolve
+
+    for name in ("resend", "ses", "sendgrid", "postmark", "mailgun"):
+        provider = resolve(name)
+        assert provider.name == name
+
+
+@pytest.mark.asyncio
+async def test_provider_registry_defaults_to_resend_when_blank():
+    from atlas_brain.services.email_webhooks import resolve
+
+    provider = resolve("")
+    assert provider.name == "resend"
