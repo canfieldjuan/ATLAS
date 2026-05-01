@@ -473,6 +473,69 @@ async def test_export_campaigns_reuses_account_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_campaign_scopes_to_tracked_vendor(monkeypatch):
+    campaign_id = uuid4()
+    account_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {
+                "id": campaign_id,
+                "vendor_name": "Slack",
+                "metadata": {},
+            }
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.get_campaign(str(campaign_id), user=user)
+
+    assert result["id"] == str(campaign_id)
+    query, args = pool.fetchrow_calls[0]
+    assert "FROM b2b_campaigns bc" in query
+    assert "tracked_vendors" in query
+    assert args == (campaign_id, account_id)
+
+
+@pytest.mark.asyncio
+async def test_campaign_audit_log_checks_campaign_scope_before_audit_fetch(monkeypatch):
+    campaign_id = uuid4()
+    account_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.fetch_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": campaign_id}
+
+        async def fetch(self, query, *args):
+            self.fetch_calls.append((query, args))
+            return []
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.campaign_audit_log(str(campaign_id), limit=25, user=user)
+
+    assert result == {"count": 0, "audit_log": []}
+    scoped_query, scoped_args = pool.fetchrow_calls[0]
+    assert "tracked_vendors" in scoped_query
+    assert scoped_args == (campaign_id, account_id)
+    audit_query, audit_args = pool.fetch_calls[0]
+    assert "FROM campaign_audit_log" in audit_query
+    assert audit_args == (campaign_id, 25)
+
+
+@pytest.mark.asyncio
 async def test_approve_campaign_blocks_missing_product_claim_gate_before_update(monkeypatch):
     campaign_id = uuid4()
     pool = _CampaignPool({
@@ -847,7 +910,9 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
                 },
             }]
 
-    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    user = type("User", (), {"account_id": str(uuid4())})()
 
     result = await mod.list_campaigns(
         status=None,
@@ -856,9 +921,11 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
         channel=None,
         batch_id=None,
         limit=50,
-        user=None,
+        user=user,
     )
 
+    assert "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in pool.fetch_calls[0][0]
+    assert pool.fetch_calls[0][1] == (user.account_id, 50)
     assert result["campaigns"][0]["quality_status"] == "fail"
     assert result["campaigns"][0]["blocker_count"] == 1
     assert result["campaigns"][0]["warning_count"] == 1
@@ -1019,8 +1086,9 @@ async def test_campaign_stats_returns_quality_rollup(monkeypatch):
             return None
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    user = type("User", (), {"account_id": str(uuid4())})()
 
-    result = await mod.campaign_stats(user=None)
+    result = await mod.campaign_stats(user=user)
 
     assert result["total"] == 3
     assert result["quality"]["pass"] == 1
@@ -1050,8 +1118,9 @@ async def test_campaign_quality_trends_returns_series(monkeypatch):
             return []
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    user = type("User", (), {"account_id": str(uuid4())})()
 
-    result = await mod.campaign_quality_trends(days=7, top_n=3, user=None)
+    result = await mod.campaign_quality_trends(days=7, top_n=3, user=user)
 
     assert result["days"] == 7
     assert result["top_n"] == 3
@@ -1079,8 +1148,9 @@ async def test_campaign_quality_diagnostics_returns_grouped_failure_explanations
             return []
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    user = type("User", (), {"account_id": str(uuid4())})()
 
-    result = await mod.campaign_quality_diagnostics(days=7, top_n=5, user=None)
+    result = await mod.campaign_quality_diagnostics(days=7, top_n=5, user=user)
 
     assert result["days"] == 7
     assert result["top_n"] == 5

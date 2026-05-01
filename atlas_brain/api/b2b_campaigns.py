@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
+from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..autonomous.tasks._b2b_specificity import (
     latest_specificity_audit,
     specificity_quality_summary,
@@ -190,6 +190,29 @@ async def _scoped_sequence_or_404(
     row = await _fetch_scoped_sequence_row(pool, sequence_id, account_id, select_fields)
     if not row:
         raise HTTPException(status_code=404, detail="Sequence not found")
+    return row
+
+
+async def _scoped_campaign_or_404(
+    pool,
+    campaign_id: _uuid.UUID,
+    account_id: str,
+    select_fields: str = "bc.*",
+):
+    row = await pool.fetchrow(
+        f"""
+        SELECT {select_fields}
+        FROM b2b_campaigns bc
+        WHERE bc.id = $1
+          AND bc.vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+          )
+        """,
+        campaign_id,
+        account_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Campaign not found")
     return row
 
 
@@ -473,7 +496,7 @@ async def list_campaigns(
     channel: Optional[str] = Query(None),
     batch_id: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
 
@@ -481,29 +504,28 @@ async def list_campaigns(
     params: list[Any] = []
     idx = 1
 
-    if user:
-        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
-        params.append(user.account_id)
-        idx += 1
+    conditions.append(_tracked_vendor_scope_condition("bc.vendor_name", idx))
+    params.append(user.account_id)
+    idx += 1
 
     if status:
-        conditions.append(f"status = ${idx}")
+        conditions.append(f"bc.status = ${idx}")
         params.append(status)
         idx += 1
     if company:
-        conditions.append(f"company_name ILIKE '%' || ${idx} || '%'")
+        conditions.append(f"bc.company_name ILIKE '%' || ${idx} || '%'")
         params.append(company)
         idx += 1
     if vendor:
-        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        conditions.append(f"bc.vendor_name ILIKE '%' || ${idx} || '%'")
         params.append(vendor)
         idx += 1
     if channel:
-        conditions.append(f"channel = ${idx}")
+        conditions.append(f"bc.channel = ${idx}")
         params.append(channel)
         idx += 1
     if batch_id:
-        conditions.append(f"batch_id = ${idx}")
+        conditions.append(f"bc.batch_id = ${idx}")
         params.append(batch_id)
         idx += 1
 
@@ -521,7 +543,7 @@ async def list_campaigns(
         FROM b2b_campaigns bc
         LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
         {where}
-        ORDER BY created_at DESC
+        ORDER BY bc.created_at DESC
         LIMIT ${idx}
         """,
         *params,
@@ -572,7 +594,7 @@ async def list_campaigns(
 
 
 @router.get("/stats")
-async def campaign_stats(user: AuthUser | None = Depends(optional_auth)):
+async def campaign_stats(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """KPI summary: counts by status, top vendors, top channels."""
     pool = _pool_or_503()
 
@@ -674,7 +696,7 @@ async def campaign_stats(user: AuthUser | None = Depends(optional_auth)):
 async def campaign_quality_trends(
     days: int = Query(14, ge=1, le=90),
     top_n: int = Query(5, ge=1, le=20),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     scope, scope_params = _campaign_scope_clause("bc", user)
@@ -786,7 +808,7 @@ async def campaign_quality_trends(
 async def campaign_quality_diagnostics(
     days: int = Query(14, ge=1, le=90),
     top_n: int = Query(10, ge=1, le=50),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     pool = _pool_or_503()
     scope, scope_params = _campaign_scope_clause("bc", user)
@@ -2236,26 +2258,17 @@ async def _send_campaign_notification(
 
 
 @router.get("/{campaign_id:uuid}")
-async def get_campaign(campaign_id: str, user: AuthUser | None = Depends(optional_auth)):
+async def get_campaign(
+    campaign_id: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     try:
         cid = _uuid.UUID(campaign_id)
     except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail="Invalid campaign_id")
 
     pool = _pool_or_503()
-    row = await pool.fetchrow(
-        "SELECT * FROM b2b_campaigns WHERE id = $1", cid
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-
-    if user:
-        is_tracked = await pool.fetchval(
-            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
-            user.account_id, row["vendor_name"],
-        )
-        if not is_tracked:
-            raise HTTPException(status_code=403, detail="Campaign vendor not in your tracked list")
+    row = await _scoped_campaign_or_404(pool, cid, user.account_id)
 
     r = dict(row)
     quality = _campaign_response_quality(r.get("metadata"))
@@ -2562,6 +2575,7 @@ async def cancel_campaign(
 async def campaign_audit_log(
     campaign_id: str,
     limit: int = Query(default=100, ge=1, le=500),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Get the full audit trail for a campaign."""
     try:
@@ -2570,6 +2584,7 @@ async def campaign_audit_log(
         raise HTTPException(status_code=400, detail="Invalid campaign_id")
 
     pool = _pool_or_503()
+    await _scoped_campaign_or_404(pool, cid, user.account_id, "bc.id")
 
     rows = await pool.fetch(
         """
@@ -2592,7 +2607,7 @@ async def export_campaigns(
     status: str = Query("all"),
     vendor: Optional[str] = Query(None),
     company: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Export campaign queue as CSV."""
     pool = _pool_or_503()
