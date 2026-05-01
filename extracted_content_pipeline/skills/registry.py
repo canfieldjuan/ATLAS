@@ -19,7 +19,11 @@ class LocalSkillRegistry:
         path = self.root / f"{rel}.md"
         if not path.exists():
             return None
-        return LocalSkill(name=name, content=path.read_text())
+        return LocalSkill(name=name, content=path.read_text(encoding="utf-8"))
+
+    def get_prompt(self, name: str) -> str | None:
+        skill = self.get(name)
+        return skill.content if skill else None
 
 
 def get_skill_registry():

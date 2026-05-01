@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from extracted_content_pipeline.skills.registry import get_skill_registry
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,3 +61,23 @@ def test_extracted_pipeline_checks_enforce_zero_atlas_runtime_imports() -> None:
     text = _read("scripts/run_extracted_pipeline_checks.sh")
 
     assert "python scripts/audit_extracted_standalone.py --fail-on-debt" in text
+
+
+def test_local_skill_registry_exposes_campaign_prompt_contracts() -> None:
+    registry = get_skill_registry()
+    expected_skills = [
+        "digest/b2b_campaign_generation",
+        "digest/b2b_vendor_outreach",
+        "digest/b2b_challenger_outreach",
+        "digest/b2b_campaign_sequence",
+        "digest/b2b_vendor_sequence",
+        "digest/b2b_challenger_sequence",
+        "digest/b2b_onboarding_sequence",
+        "digest/amazon_seller_campaign_generation",
+        "digest/amazon_seller_campaign_sequence",
+    ]
+
+    for skill_name in expected_skills:
+        prompt = registry.get_prompt(skill_name)
+        assert prompt
+        assert registry.get(skill_name).content == prompt

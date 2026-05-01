@@ -8,7 +8,8 @@ carved out safely without removing or changing production code.
 
 - `autonomous/tasks/`: copied task implementations
 - `services/`: copied support shims and staged service dependencies
-- `skills/digest/`: copied prompt skill contracts
+- `skills/digest/`: copied prompt skill contracts, including campaign and
+  sequence prompts used by the standalone services
 - `storage/migrations/`: copied persistence migrations
 - `docs/`: extraction maps for productized pipeline slices
 
@@ -125,7 +126,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `config.py`: extracted settings from `settings.py`
 - `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
 - `storage/repositories/scheduled_task.py`: local execution metadata updater
-- `skills/registry.py`: local markdown-backed skill registry
+- `skills/registry.py`: local markdown-backed skill registry implementing
+  `.get()` and product `SkillStore.get_prompt()`
 - `reasoning/archetypes.py`, `reasoning/evidence_engine.py`, and `reasoning/temporal.py`: minimal reasoning adapters for extracted report builders
 - `services/__init__.py` and `services/protocols.py`: `llm_registry.get_active()` and `Message`
 - `services/b2b/cache_runner.py`: local exact-cache request helpers and no-op lookup/store

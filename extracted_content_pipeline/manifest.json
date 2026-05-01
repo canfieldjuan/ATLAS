@@ -33,6 +33,42 @@
       "target": "extracted_content_pipeline/skills/digest/complaint_content_generation.md"
     },
     {
+      "source": "atlas_brain/skills/digest/b2b_campaign_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_campaign_generation.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/b2b_vendor_outreach.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_vendor_outreach.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/b2b_challenger_outreach.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_challenger_outreach.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/b2b_campaign_sequence.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_campaign_sequence.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/b2b_vendor_sequence.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_vendor_sequence.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/b2b_challenger_sequence.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_challenger_sequence.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/b2b_onboarding_sequence.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_onboarding_sequence.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/amazon_seller_campaign_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/amazon_seller_campaign_generation.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/amazon_seller_campaign_sequence.md",
+      "target": "extracted_content_pipeline/skills/digest/amazon_seller_campaign_sequence.md"
+    },
+    {
       "source": "atlas_brain/storage/migrations/084_blog_posts.sql",
       "target": "extracted_content_pipeline/storage/migrations/084_blog_posts.sql"
     },

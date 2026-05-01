@@ -10,6 +10,8 @@
   - `complaint_enrichment.py`
   - `article_enrichment.py`
 - B2B helper siblings required by copied blog/campaign flows are present.
+- Campaign and sequence prompt contracts are copied into `skills/digest/`, and
+  the local skill registry implements `SkillStore.get_prompt()`.
 - Compatibility bridge modules no longer map extracted package imports back to
   `atlas_brain` at runtime.
 - LLM-facing content bridges now target `extracted_llm_infrastructure`
@@ -40,7 +42,7 @@
 
 ## Remaining extraction work
 
-1. Harden minimal local adapters into customer-grade ports for DB/LLM/skills/notify/reasoning.
+1. Harden minimal local adapters into customer-grade ports for DB/LLM/notify/reasoning.
 2. Trim copied helper surface to only the modules required by target sellable workflows.
 3. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 4. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).
