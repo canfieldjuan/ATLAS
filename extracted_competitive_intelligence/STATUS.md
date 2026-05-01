@@ -49,8 +49,8 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 |---|---|---|---|
 | `services/vendor_registry.py` | ✅ | 🔲 | 🔲 |
 | `mcp/b2b/vendor_registry.py` | ✅ | ✅ | ✅ |
-| `mcp/b2b/displacement.py` | ✅ | 🔲 | 🔲 |
-| `mcp/b2b/cross_vendor.py` | ✅ | 🔲 | 🔲 |
+| `mcp/b2b/displacement.py` | ✅ | ✅ | ✅ |
+| `mcp/b2b/cross_vendor.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/write_intelligence.py` | ✅ | 🔲 | 🔲 |
 | `mcp/b2b/_shared.py` | n/a | ✅ | 🔲 |
 | `mcp/b2b/server.py` | n/a | ✅ | 🔲 |
