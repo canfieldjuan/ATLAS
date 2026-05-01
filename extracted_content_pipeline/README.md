@@ -111,6 +111,11 @@ Set `EXTRACTED_PIPELINE_STANDALONE=1` to use `extracted_content_pipeline/setting
 
 In standalone mode (`EXTRACTED_PIPELINE_STANDALONE=1`), `extracted_content_pipeline/pipelines/llm.py` and `extracted_content_pipeline/pipelines/notify.py` provide local fallback behavior (no-op notifier and safe JSON/cleaning helpers) so task modules can execute without Atlas pipeline services.
 
+Outside standalone mode, content-pipeline LLM bridge modules delegate to
+`extracted_llm_infrastructure` instead of `atlas_brain`. That keeps the content
+generation product boundary pointed at the extracted LLM/cost-optimization
+product rather than at the monolith.
+
 ## Standalone storage shims
 
 In standalone mode, `extracted_content_pipeline/storage/database.py` and `extracted_content_pipeline/storage/models.py` provide minimal local fallbacks (`get_db_pool`, `ScheduledTask`) so task entrypoints can execute without Atlas storage imports.

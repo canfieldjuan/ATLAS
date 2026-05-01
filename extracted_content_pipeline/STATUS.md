@@ -11,6 +11,9 @@
   - `article_enrichment.py`
 - B2B helper siblings required by copied blog/campaign flows are present.
 - Compatibility bridge modules map extracted package imports back to `atlas_brain` for side-by-side operation.
+- LLM-facing content bridges now target `extracted_llm_infrastructure`
+  (`pipelines.llm`, `services.b2b.anthropic_batch`, `services.llm.anthropic`)
+  instead of pointing directly at `atlas_brain`.
 
 ## Validation gates in repo
 

@@ -12,6 +12,7 @@ python scripts/audit_extracted_standalone.py
 pytest \
   tests/test_extracted_campaign_analytics.py \
   tests/test_extracted_campaign_generation.py \
+  tests/test_extracted_campaign_llm_bridge.py \
   tests/test_extracted_campaign_suppression.py \
   tests/test_extracted_campaign_sequence_context.py \
   tests/test_extracted_campaign_sequence_progression.py \
