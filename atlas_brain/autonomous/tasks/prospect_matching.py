@@ -12,6 +12,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from .campaign_suppression import assign_recipient_to_sequence
 
 logger = logging.getLogger("atlas.autonomous.tasks.prospect_matching")
 
@@ -291,11 +292,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             email = match["email"]
             seq_id = seq["id"]
 
-            # Assign to sequence
-            await pool.execute(
-                "UPDATE campaign_sequences SET recipient_email = $1, updated_at = NOW() WHERE id = $2",
-                email, seq_id,
-            )
+            # Assign to sequence (cross-sequence dedup happens inside the helper)
+            assignment = await assign_recipient_to_sequence(pool, seq_id, email)
+            if not assignment.assigned:
+                logger.info(
+                    "Skipping draft campaign assignment for sequence %s: %s",
+                    seq_id, assignment.reason,
+                )
+                skipped += 1
+                continue
 
             # Update draft campaigns in this sequence
             await pool.execute(

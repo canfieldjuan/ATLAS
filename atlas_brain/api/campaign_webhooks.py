@@ -1,23 +1,31 @@
 """
-Webhook endpoint for campaign email ESP events (Resend).
+Webhook endpoint for campaign email ESP events.
 
-Receives open, click, bounce, and complaint events and updates
-campaign + sequence state accordingly.
+Dispatches by ``?provider=`` query param to one of the WebhookProvider
+plugins in atlas_brain/services/email_webhooks/. Resend remains the
+default for backwards compatibility with existing webhook URLs. The route
+itself is provider-agnostic: it consumes a CanonicalEvent and updates
+b2b_campaigns / campaign_sequences uniformly.
+
+See atlas_brain/services/email_webhooks/__init__.py for the provider
+abstraction and atlas_brain/schemas/campaigns.py for the CanonicalEvent
+schema.
 """
 
-import base64
-import hashlib
-import hmac
-import json
 import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
-from ..config import settings
-from ..storage.database import get_db_pool
 from ..autonomous.tasks.campaign_audit import log_campaign_event
+from ..config import settings
+from ..schemas.campaigns import CanonicalEvent
+from ..services.email_webhooks import (
+    UnknownProviderError,
+    resolve as resolve_provider,
+)
+from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.campaign_webhooks")
 
@@ -29,7 +37,6 @@ def _clean_required_text(value: str, field_name: str) -> str:
     if not text:
         raise HTTPException(status_code=422, detail=f"{field_name} is required")
     return text
-
 
 
 @router.get("/unsubscribe", response_class=HTMLResponse)
@@ -53,106 +60,120 @@ async def unsubscribe(email: str = Query(..., description="Email to unsubscribe"
     )
 
 
-def _verify_svix_signature(
-    payload_bytes: bytes,
-    headers: dict[str, str],
-    secret: str,
-) -> bool:
-    """Verify Resend webhook signature (Svix format).
-
-    Returns True if valid or if no secret is configured (skip verification).
-    """
-    if not secret:
-        logger.warning("Webhook signing secret not configured -- signature verification disabled")
-        return True
-
-    msg_id = headers.get("svix-id", "")
-    timestamp = headers.get("svix-timestamp", "")
-    signature_header = headers.get("svix-signature", "")
-
-    if not msg_id or not timestamp or not signature_header:
-        return False
-
-    # Svix signs: "{msg_id}.{timestamp}.{body}"
-    to_sign = f"{msg_id}.{timestamp}.".encode() + payload_bytes
-
-    # Secret may be prefixed with "whsec_"
-    raw_secret = secret
-    if raw_secret.startswith("whsec_"):
-        raw_secret = raw_secret[6:]
-
-    secret_bytes = base64.b64decode(raw_secret)
-    expected = base64.b64encode(
-        hmac.new(secret_bytes, to_sign, hashlib.sha256).digest()
-    ).decode()
-
-    # signature_header can contain multiple signatures separated by spaces
-    for sig in signature_header.split(" "):
-        # Each signature is "v1,<base64>"
-        parts = sig.split(",", 1)
-        if len(parts) == 2 and parts[0] == "v1" and hmac.compare_digest(parts[1], expected):
-            return True
-    return False
-
-
 @router.post("/campaign-email")
-async def campaign_email_webhook(request: Request):
-    """Receive Resend ESP events: opened, clicked, bounced, complained."""
-    payload_bytes = await request.body()
+async def campaign_email_webhook(
+    request: Request,
+    provider: str = Query(
+        "resend",
+        description="ESP name. One of: resend|ses|sendgrid|postmark|mailgun",
+    ),
+):
+    """Receive ESP engagement events.
 
-    # Verify signature
-    signing_secret = settings.campaign_sequence.resend_webhook_signing_secret
-    svix_headers = {
-        "svix-id": request.headers.get("svix-id", ""),
-        "svix-timestamp": request.headers.get("svix-timestamp", ""),
-        "svix-signature": request.headers.get("svix-signature", ""),
-    }
-    if not _verify_svix_signature(payload_bytes, svix_headers, signing_secret):
-        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    Dispatches by ?provider=. Body parsing and signature verification are
+    delegated to the provider plugin; the table-update logic is canonical.
+    """
+    try:
+        plugin = resolve_provider(provider)
+    except UnknownProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    payload_bytes = await request.body()
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    signing_secret = _signing_secret_for(plugin.name)
 
     try:
-        payload = json.loads(payload_bytes)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+        if not plugin.verify_signature(payload_bytes, headers, signing_secret):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
 
-    event_type = payload.get("type", "")
-    data = payload.get("data", {})
-    esp_message_id = data.get("email_id", "")
+    try:
+        events = plugin.normalize_event(payload_bytes)
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
 
-    if not esp_message_id:
-        return {"status": "ignored", "reason": "no email_id"}
+    if not events:
+        return {"status": "ignored", "reason": "no canonical events parsed"}
 
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    # Look up campaign by ESP message ID
+    processed: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+    for event in events:
+        result = await _apply_canonical_event(pool, event)
+        (processed if result["status"] == "ok" else skipped).append(result)
+
+    return {
+        "status": "ok",
+        "provider": plugin.name,
+        "processed": len(processed),
+        "skipped": len(skipped),
+        "events": processed + skipped,
+    }
+
+
+def _signing_secret_for(provider_name: str) -> str:
+    """Look up the signing secret for the named provider.
+
+    Today only Resend's secret is wired through ``CampaignSequenceConfig``.
+    Other providers will gain their own settings as their plugin lands;
+    until then this returns an empty string and the plugin's
+    verify_signature() falls back to skip-mode (or, for the stubbed
+    providers, raises NotImplementedError before signature checks run).
+    """
+    if provider_name == "resend":
+        return settings.campaign_sequence.resend_webhook_signing_secret or ""
+    return ""
+
+
+async def _apply_canonical_event(pool, event: CanonicalEvent) -> dict[str, str]:
+    """Apply a CanonicalEvent to b2b_campaigns + campaign_sequences.
+
+    Mirrors the pre-Gap-1 Resend handler's table updates verbatim, just
+    keyed off the canonical fields rather than provider-specific shapes.
+    """
+    now = datetime.now(timezone.utc)
+    if not event.message_id:
+        return {"status": "ignored", "reason": "missing message_id"}
+
+    # Provider-scoped lookup: two ESPs can legitimately emit the same
+    # esp_message_id format/value, so webhooks must only match campaigns
+    # that were sent through the same provider. esp_provider IS NULL
+    # accommodates legacy rows that escaped the migration 311 backfill --
+    # safe because today only Resend is live, but tighten this to require
+    # a non-NULL match before enabling a second provider in production.
     campaign = await pool.fetchrow(
         """
         SELECT id, sequence_id, step_number, recipient_email
         FROM b2b_campaigns
         WHERE esp_message_id = $1
+          AND (esp_provider = $2 OR esp_provider IS NULL)
         """,
-        esp_message_id,
+        event.message_id,
+        event.provider,
     )
     if not campaign:
-        logger.debug("Webhook for unknown esp_message_id: %s", esp_message_id)
+        logger.debug(
+            "Webhook for unknown esp_message_id: %s (provider=%s)",
+            event.message_id, event.provider,
+        )
         return {"status": "ignored", "reason": "unknown campaign"}
 
     campaign_id = campaign["id"]
     sequence_id = campaign["sequence_id"]
-    now = datetime.now(timezone.utc)
+    event_type = event.event_type
 
-    if event_type == "email.opened":
-        # Compute hours_to_first_open on the FIRST open event only
-        campaign_detail = await pool.fetchrow(
+    if event_type == "opened":
+        detail = await pool.fetchrow(
             "SELECT sent_at, opened_at FROM b2b_campaigns WHERE id = $1",
             campaign_id,
         )
         hours_to_open = None
-        is_first_open = campaign_detail and campaign_detail["opened_at"] is None
-        if is_first_open and campaign_detail["sent_at"]:
-            delta = (now - campaign_detail["sent_at"]).total_seconds() / 3600
+        if detail and detail["opened_at"] is None and detail["sent_at"]:
+            delta = (now - detail["sent_at"]).total_seconds() / 3600
             hours_to_open = round(delta, 2)
 
         await pool.execute(
@@ -178,20 +199,18 @@ async def campaign_email_webhook(request: Request):
         await log_campaign_event(
             pool, event_type="opened", source="webhook",
             campaign_id=campaign_id, sequence_id=sequence_id,
-            esp_message_id=esp_message_id,
+            esp_message_id=event.message_id,
             step_number=campaign["step_number"],
         )
 
-    elif event_type == "email.clicked":
-        # Compute hours_to_first_click on the FIRST click event only
-        campaign_detail = await pool.fetchrow(
+    elif event_type == "clicked":
+        detail = await pool.fetchrow(
             "SELECT sent_at, clicked_at FROM b2b_campaigns WHERE id = $1",
             campaign_id,
         )
         hours_to_click = None
-        is_first_click = campaign_detail and campaign_detail["clicked_at"] is None
-        if is_first_click and campaign_detail["sent_at"]:
-            delta = (now - campaign_detail["sent_at"]).total_seconds() / 3600
+        if detail and detail["clicked_at"] is None and detail["sent_at"]:
+            delta = (now - detail["sent_at"]).total_seconds() / 3600
             hours_to_click = round(delta, 2)
 
         await pool.execute(
@@ -217,13 +236,13 @@ async def campaign_email_webhook(request: Request):
         await log_campaign_event(
             pool, event_type="clicked", source="webhook",
             campaign_id=campaign_id, sequence_id=sequence_id,
-            esp_message_id=esp_message_id,
+            esp_message_id=event.message_id,
             step_number=campaign["step_number"],
-            metadata={"url": data.get("click", {}).get("link", "")},
+            metadata={"url": event.click_url or ""},
         )
 
-    elif event_type == "email.bounced":
-        bounce_type = data.get("bounce", {}).get("type", "hard")
+    elif event_type == "bounced":
+        bounce_type = event.bounce_type or "hard"
         if sequence_id:
             await pool.execute(
                 """
@@ -239,27 +258,24 @@ async def campaign_email_webhook(request: Request):
         await log_campaign_event(
             pool, event_type="bounced", source="webhook",
             campaign_id=campaign_id, sequence_id=sequence_id,
-            esp_message_id=esp_message_id,
+            esp_message_id=event.message_id,
             step_number=campaign["step_number"],
             metadata={"bounce_type": bounce_type},
         )
 
-        # Mark campaign as cancelled (bounced emails are not valid sends)
         await pool.execute(
             "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
             campaign_id,
         )
-
-        # Cancel any remaining queued campaigns in the sequence
         if sequence_id:
             await pool.execute(
                 "UPDATE b2b_campaigns SET status = 'cancelled' WHERE sequence_id = $1 AND status = 'queued'",
                 sequence_id,
             )
 
-        # Global suppression: prevent future campaigns to this address
-        from ..autonomous.tasks.campaign_suppression import add_suppression
         from datetime import timedelta
+
+        from ..autonomous.tasks.campaign_suppression import add_suppression
 
         await add_suppression(
             pool, email=campaign["recipient_email"],
@@ -268,7 +284,7 @@ async def campaign_email_webhook(request: Request):
             expires_at=now + timedelta(days=30) if bounce_type != "hard" else None,
         )
 
-    elif event_type == "email.complained":
+    elif event_type == "complained":
         if sequence_id:
             await pool.execute(
                 "UPDATE campaign_sequences SET status = 'unsubscribed', updated_at = $1 WHERE id = $2",
@@ -277,11 +293,10 @@ async def campaign_email_webhook(request: Request):
         await log_campaign_event(
             pool, event_type="complained", source="webhook",
             campaign_id=campaign_id, sequence_id=sequence_id,
-            esp_message_id=esp_message_id,
+            esp_message_id=event.message_id,
             step_number=campaign["step_number"],
         )
 
-        # Mark campaign as cancelled and cancel remaining queued campaigns
         await pool.execute(
             "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
             campaign_id,
@@ -292,7 +307,6 @@ async def campaign_email_webhook(request: Request):
                 sequence_id,
             )
 
-        # Global suppression: permanent block on complaint
         from ..autonomous.tasks.campaign_suppression import add_suppression
 
         await add_suppression(
@@ -300,17 +314,57 @@ async def campaign_email_webhook(request: Request):
             reason="complaint", source="webhook", campaign_id=campaign_id,
         )
 
-    elif event_type == "email.delivered":
+    elif event_type == "delivered":
         await log_campaign_event(
             pool, event_type="delivered", source="webhook",
             campaign_id=campaign_id, sequence_id=sequence_id,
-            esp_message_id=esp_message_id,
+            esp_message_id=event.message_id,
             step_number=campaign["step_number"],
         )
 
+    elif event_type == "unsubscribed":
+        # Resend reports unsubscribes as 'complained'; SendGrid emits a
+        # distinct 'unsubscribe' event per recipient. This branch is wired
+        # for the SendGrid normalize_event() to map onto when that provider
+        # is implemented (see services/email_webhooks/sendgrid.py).
+        #
+        # Mirrors the 'complained' cascade: flip the sequence, cancel the
+        # current campaign, cancel any queued follow-ups (campaign_send.py
+        # picks by b2b_campaigns.status='queued' without filtering on
+        # sequence status), and globally suppress the address. Without the
+        # campaign cancels, queued follow-ups would still ship and violate
+        # unsubscribe intent.
+        if sequence_id:
+            await pool.execute(
+                "UPDATE campaign_sequences SET status = 'unsubscribed', updated_at = $1 WHERE id = $2",
+                now, sequence_id,
+            )
+        await log_campaign_event(
+            pool, event_type="unsubscribed", source="webhook",
+            campaign_id=campaign_id, sequence_id=sequence_id,
+            esp_message_id=event.message_id,
+            step_number=campaign["step_number"],
+        )
+
+        await pool.execute(
+            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+            campaign_id,
+        )
+        if sequence_id:
+            await pool.execute(
+                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE sequence_id = $1 AND status = 'queued'",
+                sequence_id,
+            )
+
+        from ..autonomous.tasks.campaign_suppression import add_suppression
+
+        await add_suppression(
+            pool, email=campaign["recipient_email"],
+            reason="unsubscribe", source="webhook", campaign_id=campaign_id,
+        )
+
     else:
-        logger.debug("Unhandled webhook event type: %s", event_type)
-        return {"status": "ignored", "reason": f"unhandled type: {event_type}"}
+        return {"status": "ignored", "reason": f"unhandled event_type: {event_type}"}
 
     logger.info(
         "Webhook %s processed: campaign=%s sequence=%s",

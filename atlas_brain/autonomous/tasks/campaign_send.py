@@ -381,6 +381,7 @@ async def run(task: ScheduledTask) -> dict:
             )
 
             esp_message_id = result.get("id", "")
+            esp_provider = (cfg.sender_type or "").strip().lower() or "resend"
 
             # Update campaign: sent
             await pool.execute(
@@ -388,10 +389,11 @@ async def run(task: ScheduledTask) -> dict:
                 UPDATE b2b_campaigns
                 SET status = 'sent',
                     sent_at = $1,
-                    esp_message_id = $2
-                WHERE id = $3
+                    esp_message_id = $2,
+                    esp_provider = $3
+                WHERE id = $4
                 """,
-                now, esp_message_id, campaign_id,
+                now, esp_message_id, esp_provider, campaign_id,
             )
 
             # Contact fatigue: update total sends across ALL sequences for this recipient

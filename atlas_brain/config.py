@@ -4625,6 +4625,30 @@ class B2BCampaignConfig(BaseSettings):
         default=True,
         description="Re-run deterministic witness-backed specificity checks immediately before campaign auto-send",
     )
+    evidence_gate_shadow_enabled: bool = Field(
+        default=True,
+        description=(
+            "Run evidence-claim confidence gate in shadow mode. Logs the delta "
+            "(would-have-gated count, would-have-kept count) to campaign_audit_log "
+            "with event_type='claim_gate_shadow' but does NOT change generation output. "
+            "Use the soak window to measure volume impact before flipping enforcement."
+        ),
+    )
+    evidence_gate_enforce: bool = Field(
+        default=False,
+        description=(
+            "Enforce the evidence-claim confidence gate. When True, witnesses without "
+            "a backing claim at min_claim_confidence are filtered out of the prompt; "
+            "campaigns left with zero strong-backed witnesses are marked requires_review."
+        ),
+    )
+    min_claim_confidence: str = Field(
+        default="strong",
+        description=(
+            "Minimum pain_confidence tier required for a witness to count as "
+            "evidence-backed. 'strong' is the default; loosen to 'weak' for small corpora."
+        ),
+    )
 
 
 class CampaignSequenceConfig(BaseSettings):
