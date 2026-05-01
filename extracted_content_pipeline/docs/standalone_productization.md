@@ -104,6 +104,12 @@ slice. It reads campaign opportunities through `IntelligenceRepository`, prompts
 through `SkillStore` and `LLMClient`, parses generated draft JSON, and persists
 `CampaignDraft` rows through `CampaignRepository`.
 
+`extracted_content_pipeline/pipelines/notify.py` is the first product-owned
+visibility slice. It preserves the copied task-facing
+`send_pipeline_notification(...)` API but emits through the `VisibilitySink`
+port when a host configures one. With no sink configured it remains a safe
+no-op, so standalone task imports do not require Atlas notification services.
+
 ## Readiness Gate
 
 Run:

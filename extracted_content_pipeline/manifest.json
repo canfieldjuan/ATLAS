@@ -192,5 +192,10 @@
       "source": "atlas_brain/autonomous/tasks/_b2b_batch_utils.py",
       "target": "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py"
     }
+  ],
+  "owned": [
+    {
+      "target": "extracted_content_pipeline/pipelines/notify.py"
+    }
   ]
 }

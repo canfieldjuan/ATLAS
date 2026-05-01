@@ -128,7 +128,10 @@ normalizes `chat()` / `generate()` provider responses into `LLMResponse`.
 
 ## Pipeline shims
 
-`extracted_content_pipeline/pipelines/notify.py` provides a local no-op notifier so task modules can execute without Atlas pipeline services.
+`extracted_content_pipeline/pipelines/notify.py` provides a product-owned
+notification dispatcher over the `VisibilitySink` port. It remains a safe no-op
+when no sink is configured, and host apps can route emitted
+`pipeline_notification` events to ntfy, Slack, dashboards, or audit streams.
 
 Content-pipeline LLM bridge modules delegate to
 `extracted_llm_infrastructure` instead of `atlas_brain`. That keeps the content
@@ -140,6 +143,8 @@ product rather than at the monolith.
 Several small utility shims provide product-owned local behavior by default so task imports do not require Atlas service modules:
 
 - `config.py`: extracted settings from `settings.py`
+- `pipelines/notify.py`: host-visible notification dispatcher backed by the
+  `VisibilitySink` port
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services
 - `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
