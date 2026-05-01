@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -21,6 +22,74 @@ def _default_resolver(**kwargs: Any) -> Any:
     from .pipelines.llm import get_pipeline_llm
 
     return get_pipeline_llm(**kwargs)
+
+
+def _to_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+@dataclass(frozen=True)
+class PipelineLLMClientConfig:
+    """Provider routing config for the product LLM client."""
+
+    workload: str | None = "draft"
+    prefer_cloud: bool = True
+    try_openrouter: bool = True
+    auto_activate_ollama: bool = True
+    openrouter_model: str | None = None
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "PipelineLLMClientConfig":
+        return cls(
+            workload=_optional_text(values.get("workload")) or "draft",
+            prefer_cloud=_to_bool(values.get("prefer_cloud"), True),
+            try_openrouter=_to_bool(values.get("try_openrouter"), True),
+            auto_activate_ollama=_to_bool(values.get("auto_activate_ollama"), True),
+            openrouter_model=_optional_text(values.get("openrouter_model")),
+        )
+
+    @classmethod
+    def from_settings(cls, settings_obj: Any) -> "PipelineLLMClientConfig":
+        return cls(
+            workload=_optional_text(getattr(settings_obj, "workload", None)) or "draft",
+            prefer_cloud=_to_bool(getattr(settings_obj, "prefer_cloud", None), True),
+            try_openrouter=_to_bool(getattr(settings_obj, "try_openrouter", None), True),
+            auto_activate_ollama=_to_bool(
+                getattr(settings_obj, "auto_activate_ollama", None),
+                True,
+            ),
+            openrouter_model=_optional_text(
+                getattr(settings_obj, "openrouter_model", None),
+            ),
+        )
+
+    @classmethod
+    def from_env(
+        cls,
+        environ: Mapping[str, str] | None = None,
+        *,
+        prefix: str = "EXTRACTED_CAMPAIGN_LLM_",
+    ) -> "PipelineLLMClientConfig":
+        env = os.environ if environ is None else environ
+        return cls(
+            workload=_optional_text(env.get(f"{prefix}WORKLOAD")) or "draft",
+            prefer_cloud=_to_bool(env.get(f"{prefix}PREFER_CLOUD"), True),
+            try_openrouter=_to_bool(env.get(f"{prefix}TRY_OPENROUTER"), True),
+            auto_activate_ollama=_to_bool(
+                env.get(f"{prefix}AUTO_ACTIVATE_OLLAMA"),
+                True,
+            ),
+            openrouter_model=_optional_text(env.get(f"{prefix}OPENROUTER_MODEL")),
+        )
 
 
 @dataclass(frozen=True)
@@ -85,6 +154,29 @@ class PipelineLLMClient:
                 temperature=temperature,
             )
         raise LLMUnavailableError("Resolved LLM does not expose chat() or generate()")
+
+
+def create_pipeline_llm_client(
+    config: PipelineLLMClientConfig | Mapping[str, Any] | None = None,
+    *,
+    resolver: LLMResolver = _default_resolver,
+) -> PipelineLLMClient:
+    """Create a campaign LLM client from product-owned provider config."""
+
+    if config is None:
+        resolved = PipelineLLMClientConfig.from_env()
+    elif isinstance(config, PipelineLLMClientConfig):
+        resolved = config
+    else:
+        resolved = PipelineLLMClientConfig.from_mapping(config)
+    return PipelineLLMClient(
+        workload=resolved.workload,
+        prefer_cloud=resolved.prefer_cloud,
+        try_openrouter=resolved.try_openrouter,
+        auto_activate_ollama=resolved.auto_activate_ollama,
+        openrouter_model=resolved.openrouter_model,
+        resolver=resolver,
+    )
 
 
 def _messages_to_prompt(messages: Sequence[LLMMessage]) -> tuple[str | None, str]:
