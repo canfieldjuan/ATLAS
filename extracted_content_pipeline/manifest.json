@@ -1,0 +1,116 @@
+{
+  "mappings": [
+    {
+      "source": "atlas_brain/autonomous/tasks/blog_post_generation.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/blog_post_generation.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/b2b_blog_post_generation.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/b2b_blog_post_generation.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/complaint_content_generation.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/complaint_content_generation.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/article_enrichment.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/article_enrichment.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/complaint_enrichment.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/complaint_enrichment.py"
+    },
+    {
+      "source": "atlas_brain/skills/digest/blog_post_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/blog_post_generation.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/b2b_blog_post_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/b2b_blog_post_generation.md"
+    },
+    {
+      "source": "atlas_brain/skills/digest/complaint_content_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/complaint_content_generation.md"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/084_blog_posts.sql",
+      "target": "extracted_content_pipeline/storage/migrations/084_blog_posts.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/264_blog_post_rejection_count.sql",
+      "target": "extracted_content_pipeline/storage/migrations/264_blog_post_rejection_count.sql"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_execution_progress.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_execution_progress.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_b2b_shared.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_shared.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_b2b_specificity.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_specificity.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_google_news.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_google_news.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/competitive_intelligence.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/competitive_intelligence.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/complaint_analysis.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/complaint_analysis.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_blog_ts.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_blog_ts.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_blog_deploy.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_b2b_synthesis_reader.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_synthesis_reader.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_cross_vendor_synthesis.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/b2b_campaign_generation.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/b2b_campaign_generation.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_b2b_reasoning_contracts.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_reasoning_contracts.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_b2b_pool_compression.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_pool_compression.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_campaign_sequence_context.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/b2b_vendor_briefing.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/campaign_audit.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/campaign_audit.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_blog_matching.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_blog_matching.py"
+    },
+    {
+      "source": "atlas_brain/autonomous/tasks/_b2b_batch_utils.py",
+      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py"
+    }
+  ]
+}
