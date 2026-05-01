@@ -121,6 +121,11 @@ reasoning policy slice. It scores vendor evidence against deterministic churn
 archetypes, returns thresholded matches, and exposes falsification conditions
 without a database, LLM, or Atlas import.
 
+`extracted_content_pipeline/reasoning/temporal.py` is the second product-owned
+reasoning policy slice. It computes velocity, acceleration, long-term trends,
+category percentiles, anomalies, recency weights, and evidence serialization
+from a host-provided async `fetch` interface instead of Atlas helper imports.
+
 ## Readiness Gate
 
 Run:
