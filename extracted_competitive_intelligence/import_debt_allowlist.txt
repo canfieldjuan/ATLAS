@@ -1,0 +1,20 @@
+# Import-debt allowlist for the extracted_competitive_intelligence scaffold.
+#
+# scripts/check_extracted_competitive_intelligence_imports.py walks every
+# Python file in the scaffold's manifest and audits its relative
+# imports. Any unresolved import that does not appear in this file
+# fails the check.
+#
+# The resolver is strict: it honors Python's relative-import semantics
+# (ascending ``level - 1`` package components) and does NOT fall back
+# to atlas_brain. Every relative import in the scaffolded modules must
+# resolve to a file inside the scaffold itself -- typically the
+# original source, or a bridge stub module that re-exports from
+# atlas_brain when the dependency has not been carved out yet.
+#
+# This file is therefore empty by design. Future Phase 2/3 work that
+# builds out a standalone substrate or rewires modules via Protocol-
+# based DI seams may temporarily add intentional debt entries here;
+# each should reference its tracking issue.
+#
+# Format: one entry per line. Lines starting with '#' are comments.
