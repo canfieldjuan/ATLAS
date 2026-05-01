@@ -95,3 +95,7 @@ In standalone mode, `extracted_content_pipeline/storage/database.py` and `extrac
 ## Standalone skill registry
 
 In standalone mode, `extracted_content_pipeline/skills/registry.py` uses local markdown files under `extracted_content_pipeline/skills/` for `get_skill_registry()` lookups.
+
+## Standalone service shims
+
+In standalone mode, `extracted_content_pipeline/services/__init__.py` and `extracted_content_pipeline/services/protocols.py` provide minimal local fallbacks (`llm_registry.get_active()`, `Message`) so task imports do not require Atlas service modules.
