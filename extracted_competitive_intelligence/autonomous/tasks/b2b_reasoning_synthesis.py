@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import importlib as _importlib
 
-_src = _importlib.import_module("atlas_brain.autonomous.tasks.b2b_reasoning_synthesis")
-_g = globals()
-for _name in dir(_src):
-    if not _name.startswith("__"):
-        _g[_name] = getattr(_src, _name)
-del _importlib, _src, _g, _name  # type: ignore[name-defined]
+def _bridge() -> None:
+    src = _importlib.import_module("atlas_brain.autonomous.tasks.b2b_reasoning_synthesis")
+    g = globals()
+    for name in dir(src):
+        if not name.startswith("__"):
+            g[name] = getattr(src, name)
+
+
+_bridge()
+del _bridge, _importlib
