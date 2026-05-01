@@ -17,6 +17,8 @@
 - LLM-facing content bridges now target `extracted_llm_infrastructure`
   (`pipelines.llm`, `services.b2b.anthropic_batch`, `services.llm.anthropic`)
   instead of pointing directly at `atlas_brain`.
+- `campaign_llm_client.PipelineLLMClient` adapts extracted LLM infrastructure
+  services to the standalone campaign `LLMClient` port.
 - Small utility shims now default to local extracted implementations:
   `config`, `pipelines.notify`, `reasoning.wedge_registry`,
   `reasoning.archetypes`, `reasoning.evidence_engine`, `reasoning.temporal`,
@@ -42,7 +44,8 @@
 
 ## Remaining extraction work
 
-1. Harden minimal local adapters into customer-grade ports for DB/LLM/notify/reasoning.
+1. Harden minimal local adapters into customer-grade ports for DB/notify/reasoning
+   and provider-specific LLM configuration.
 2. Trim copied helper surface to only the modules required by target sellable workflows.
 3. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 4. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).

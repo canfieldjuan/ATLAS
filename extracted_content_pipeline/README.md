@@ -110,6 +110,11 @@ bash scripts/list_extracted_pipeline_files.sh
 
 Set `EXTRACTED_PIPELINE_STANDALONE=1` to make the LLM bridge modules use their local no-op fallbacks instead of delegating to `extracted_llm_infrastructure`.
 
+`campaign_llm_client.py` provides the product-owned `PipelineLLMClient`
+adapter for campaign services. It satisfies the `campaign_ports.LLMClient`
+port, resolves an LLM through the extracted LLM bridge when configured, and
+normalizes `chat()` / `generate()` provider responses into `LLMResponse`.
+
 ## Pipeline shims
 
 `extracted_content_pipeline/pipelines/notify.py` provides a local no-op notifier so task modules can execute without Atlas pipeline services.
@@ -124,6 +129,8 @@ product rather than at the monolith.
 Several small utility shims provide product-owned local behavior by default so task imports do not require Atlas service modules:
 
 - `config.py`: extracted settings from `settings.py`
+- `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
+  `LLMClient` port to extracted LLM infrastructure services
 - `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
 - `storage/repositories/scheduled_task.py`: local execution metadata updater
 - `skills/registry.py`: local markdown-backed skill registry implementing
