@@ -5,8 +5,11 @@ import pytest
 from extracted_content_pipeline.campaign_llm_client import (
     LLMUnavailableError,
     PipelineLLMClient,
+    PipelineLLMClientConfig,
+    create_pipeline_llm_client,
 )
 from extracted_content_pipeline.campaign_ports import LLMMessage
+from extracted_content_pipeline.settings import build_settings
 
 
 class _ChatLLM:
@@ -131,6 +134,118 @@ async def test_pipeline_llm_client_normalizes_string_generate_response():
     assert response.content == "plain generated response"
     assert response.model is None
     assert response.raw == "plain generated response"
+
+
+def test_llm_client_config_from_mapping_parses_provider_routing_fields():
+    config = PipelineLLMClientConfig.from_mapping({
+        "workload": "campaign",
+        "prefer_cloud": "false",
+        "try_openrouter": "0",
+        "auto_activate_ollama": "yes",
+        "openrouter_model": "anthropic/claude-haiku-4-5",
+    })
+
+    assert config == PipelineLLMClientConfig(
+        workload="campaign",
+        prefer_cloud=False,
+        try_openrouter=False,
+        auto_activate_ollama=True,
+        openrouter_model="anthropic/claude-haiku-4-5",
+    )
+
+
+def test_llm_client_config_from_env_accepts_custom_prefix_and_blank_model():
+    config = PipelineLLMClientConfig.from_env(
+        {
+            "PIPE_LLM_WORKLOAD": "draft",
+            "PIPE_LLM_PREFER_CLOUD": "off",
+            "PIPE_LLM_TRY_OPENROUTER": "true",
+            "PIPE_LLM_AUTO_ACTIVATE_OLLAMA": "false",
+            "PIPE_LLM_OPENROUTER_MODEL": "  ",
+        },
+        prefix="PIPE_LLM_",
+    )
+
+    assert config == PipelineLLMClientConfig(
+        workload="draft",
+        prefer_cloud=False,
+        try_openrouter=True,
+        auto_activate_ollama=False,
+        openrouter_model=None,
+    )
+
+
+def test_llm_client_config_from_settings_namespace():
+    class _Settings:
+        workload = "campaign"
+        prefer_cloud = False
+        try_openrouter = True
+        auto_activate_ollama = False
+        openrouter_model = "openai/gpt-4o-mini"
+
+    assert PipelineLLMClientConfig.from_settings(_Settings()) == PipelineLLMClientConfig(
+        workload="campaign",
+        prefer_cloud=False,
+        try_openrouter=True,
+        auto_activate_ollama=False,
+        openrouter_model="openai/gpt-4o-mini",
+    )
+
+
+def test_build_settings_exposes_campaign_llm_provider_config(monkeypatch):
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_LLM_WORKLOAD", "campaign")
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_LLM_PREFER_CLOUD", "false")
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_LLM_TRY_OPENROUTER", "true")
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA", "false")
+    monkeypatch.setenv(
+        "EXTRACTED_CAMPAIGN_LLM_OPENROUTER_MODEL",
+        "anthropic/claude-haiku-4-5",
+    )
+
+    config = PipelineLLMClientConfig.from_settings(build_settings().campaign_llm)
+
+    assert config == PipelineLLMClientConfig(
+        workload="campaign",
+        prefer_cloud=False,
+        try_openrouter=True,
+        auto_activate_ollama=False,
+        openrouter_model="anthropic/claude-haiku-4-5",
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_pipeline_llm_client_applies_config_to_resolver():
+    llm = _ChatLLM()
+    resolver_calls = []
+
+    def resolver(**kwargs):
+        resolver_calls.append(kwargs)
+        return llm
+
+    client = create_pipeline_llm_client(
+        {
+            "workload": "campaign",
+            "prefer_cloud": False,
+            "try_openrouter": False,
+            "auto_activate_ollama": False,
+            "openrouter_model": "anthropic/claude-haiku-4-5",
+        },
+        resolver=resolver,
+    )
+
+    await client.complete(
+        [LLMMessage(role="user", content="Write")],
+        max_tokens=50,
+        temperature=0.1,
+    )
+
+    assert resolver_calls == [{
+        "workload": "campaign",
+        "prefer_cloud": False,
+        "try_openrouter": False,
+        "auto_activate_ollama": False,
+        "openrouter_model": "anthropic/claude-haiku-4-5",
+    }]
 
 
 @pytest.mark.asyncio

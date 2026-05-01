@@ -44,4 +44,19 @@ def build_settings() -> SimpleNamespace:
         blog_post_temperature=_to_float(os.getenv("EXTRACTED_B2B_BLOG_POST_TEMPERATURE"), 0.2),
     )
 
-    return SimpleNamespace(external_data=external_data, b2b_churn=b2b_churn)
+    campaign_llm = SimpleNamespace(
+        workload=os.getenv("EXTRACTED_CAMPAIGN_LLM_WORKLOAD") or "draft",
+        prefer_cloud=_to_bool(os.getenv("EXTRACTED_CAMPAIGN_LLM_PREFER_CLOUD"), True),
+        try_openrouter=_to_bool(os.getenv("EXTRACTED_CAMPAIGN_LLM_TRY_OPENROUTER"), True),
+        auto_activate_ollama=_to_bool(
+            os.getenv("EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA"),
+            True,
+        ),
+        openrouter_model=os.getenv("EXTRACTED_CAMPAIGN_LLM_OPENROUTER_MODEL") or None,
+    )
+
+    return SimpleNamespace(
+        external_data=external_data,
+        b2b_churn=b2b_churn,
+        campaign_llm=campaign_llm,
+    )

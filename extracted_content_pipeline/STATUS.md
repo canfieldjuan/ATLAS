@@ -21,7 +21,9 @@
   (`pipelines.llm`, `services.b2b.anthropic_batch`, `services.llm.anthropic`)
   instead of pointing directly at `atlas_brain`.
 - `campaign_llm_client.PipelineLLMClient` adapts extracted LLM infrastructure
-  services to the standalone campaign `LLMClient` port.
+  services to the standalone campaign `LLMClient` port. Its provider-routing
+  config can be built from explicit mappings, settings objects, or
+  `EXTRACTED_CAMPAIGN_LLM_*` environment variables.
 - `campaign_postgres` provides async Postgres adapters for the campaign,
   sequence, suppression, and audit ports against the copied campaign schema.
 - Small utility shims now default to local extracted implementations:
@@ -57,8 +59,8 @@ extracted package, not just manifest-relative import resolution.
 
 ## Remaining extraction work
 
-1. Harden remaining minimal local adapters into customer-grade ports for
-   reasoning and provider-specific LLM configuration.
+1. Harden remaining minimal reasoning adapters into customer-grade policy
+   modules.
 2. Trim copied helper surface to only the modules required by target sellable workflows.
 3. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 4. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).

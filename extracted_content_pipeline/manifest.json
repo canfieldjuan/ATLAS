@@ -195,6 +195,12 @@
   ],
   "owned": [
     {
+      "target": "extracted_content_pipeline/campaign_llm_client.py"
+    },
+    {
+      "target": "extracted_content_pipeline/settings.py"
+    },
+    {
       "target": "extracted_content_pipeline/pipelines/notify.py"
     }
   ]

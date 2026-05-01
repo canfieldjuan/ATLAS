@@ -73,8 +73,9 @@ def test_core_campaign_migrations_define_product_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS seller_targets" in seller_schema
 
 
-def test_manifest_tracks_product_owned_notify_adapter() -> None:
-    assert (
-        "extracted_content_pipeline/pipelines/notify.py"
-        in _owned_targets()
-    )
+def test_manifest_tracks_product_owned_adapter_files() -> None:
+    owned = _owned_targets()
+
+    assert "extracted_content_pipeline/pipelines/notify.py" in owned
+    assert "extracted_content_pipeline/campaign_llm_client.py" in owned
+    assert "extracted_content_pipeline/settings.py" in owned

@@ -104,6 +104,12 @@ slice. It reads campaign opportunities through `IntelligenceRepository`, prompts
 through `SkillStore` and `LLMClient`, parses generated draft JSON, and persists
 `CampaignDraft` rows through `CampaignRepository`.
 
+`extracted_content_pipeline/campaign_llm_client.py` is the provider-routing
+slice for LLM access. It adapts extracted LLM infrastructure services to the
+product `LLMClient` port and exposes `PipelineLLMClientConfig` so hosts can
+wire workload, OpenRouter model, and fallback behavior without importing Atlas
+settings.
+
 `extracted_content_pipeline/pipelines/notify.py` is the first product-owned
 visibility slice. It preserves the copied task-facing
 `send_pipeline_notification(...)` API but emits through the `VisibilitySink`

@@ -125,6 +125,15 @@ Set `EXTRACTED_PIPELINE_STANDALONE=1` to make the LLM bridge modules use their l
 adapter for campaign services. It satisfies the `campaign_ports.LLMClient`
 port, resolves an LLM through the extracted LLM bridge when configured, and
 normalizes `chat()` / `generate()` provider responses into `LLMResponse`.
+`PipelineLLMClientConfig` and `create_pipeline_llm_client()` let a host wire
+provider routing from explicit config, settings objects, or these environment
+variables:
+
+- `EXTRACTED_CAMPAIGN_LLM_WORKLOAD`
+- `EXTRACTED_CAMPAIGN_LLM_PREFER_CLOUD`
+- `EXTRACTED_CAMPAIGN_LLM_TRY_OPENROUTER`
+- `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA`
+- `EXTRACTED_CAMPAIGN_LLM_OPENROUTER_MODEL`
 
 ## Pipeline shims
 
@@ -146,7 +155,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `pipelines/notify.py`: host-visible notification dispatcher backed by the
   `VisibilitySink` port
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
-  `LLMClient` port to extracted LLM infrastructure services
+  `LLMClient` port to extracted LLM infrastructure services, with product-owned
+  provider routing config
 - `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
 - `campaign_postgres.py`: async Postgres adapters for campaign, sequence,
   suppression, and audit ports
