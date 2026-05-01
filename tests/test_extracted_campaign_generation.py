@@ -1,0 +1,284 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from extracted_content_pipeline.campaign_generation import (
+    CampaignGenerationConfig,
+    CampaignGenerationService,
+    opportunity_target_id,
+    parse_campaign_draft_response,
+)
+from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
+
+
+class _Intelligence:
+    def __init__(self, opportunities):
+        self.opportunities = opportunities
+        self.calls = []
+
+    async def read_campaign_opportunities(self, *, scope, target_mode, limit, filters=None):
+        self.calls.append({
+            "scope": scope,
+            "target_mode": target_mode,
+            "limit": limit,
+            "filters": filters,
+        })
+        return self.opportunities
+
+    async def read_vendor_targets(self, *, scope, target_mode, vendor_name=None):  # pragma: no cover
+        raise AssertionError("not used")
+
+
+class _Campaigns:
+    def __init__(self):
+        self.saved = []
+
+    async def save_drafts(self, drafts, *, scope):
+        self.saved.append({"drafts": list(drafts), "scope": scope})
+        return [f"draft-{index + 1}" for index, _ in enumerate(drafts)]
+
+    async def list_due_sends(self, *, limit, now):  # pragma: no cover - protocol filler
+        raise AssertionError("not used")
+
+    async def mark_sent(self, *, campaign_id, result, sent_at):  # pragma: no cover
+        raise AssertionError("not used")
+
+    async def mark_cancelled(self, *, campaign_id, reason, metadata=None):  # pragma: no cover
+        raise AssertionError("not used")
+
+    async def mark_send_failed(self, *, campaign_id, error, metadata=None):  # pragma: no cover
+        raise AssertionError("not used")
+
+    async def record_webhook_event(self, event):  # pragma: no cover
+        raise AssertionError("not used")
+
+    async def refresh_analytics(self):  # pragma: no cover
+        raise AssertionError("not used")
+
+
+class _LLM:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def complete(self, messages, *, max_tokens, temperature, metadata=None):
+        self.calls.append({
+            "messages": list(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "metadata": metadata,
+        })
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return LLMResponse(
+            content=response,
+            model="test-model",
+            usage={"input_tokens": 11, "output_tokens": 7},
+        )
+
+
+class _Skills:
+    def __init__(self, prompts):
+        self.prompts = prompts
+        self.calls = []
+
+    def get_prompt(self, name):
+        self.calls.append(name)
+        return self.prompts.get(name)
+
+
+def _service(opportunities, responses, *, config=None, prompts=None):
+    intelligence = _Intelligence(opportunities)
+    campaigns = _Campaigns()
+    llm = _LLM(responses)
+    default_prompts = {
+        "digest/b2b_campaign_generation": (
+            "Mode={target_mode}; opportunity={opportunity_json}"
+        )
+    }
+    skills = _Skills(default_prompts if prompts is None else prompts)
+    service = CampaignGenerationService(
+        intelligence=intelligence,
+        campaigns=campaigns,
+        llm=llm,
+        skills=skills,
+        config=config,
+    )
+    return service, intelligence, campaigns, llm, skills
+
+
+def test_parse_campaign_draft_response_accepts_fenced_json_and_alias_body():
+    parsed = parse_campaign_draft_response(
+        '```json\n{"subject":"Hi","email_body":"Body","cta":"Reply"}\n```'
+    )
+
+    assert parsed == {
+        "subject": "Hi",
+        "email_body": "Body",
+        "cta": "Reply",
+        "body": "Body",
+    }
+
+
+def test_parse_campaign_draft_response_finds_json_inside_prose():
+    parsed = parse_campaign_draft_response(
+        'Draft: {"subject":"Hi","content":"Body"}'
+    )
+
+    assert parsed == {"subject": "Hi", "content": "Body", "body": "Body"}
+
+
+def test_parse_campaign_draft_response_accepts_first_item_from_array():
+    parsed = parse_campaign_draft_response(
+        '[{"subject":"Hi","body":"Body"},{"subject":"Second","body":"No"}]'
+    )
+
+    assert parsed == {"subject": "Hi", "body": "Body"}
+
+
+def test_opportunity_target_id_prefers_stable_ids_then_names():
+    assert opportunity_target_id({"target_id": "target-1", "company_name": "Acme"}) == "target-1"
+    assert opportunity_target_id({"id": "row-1"}) == "row-1"
+    assert opportunity_target_id({"company_name": "Acme"}) == "Acme"
+    assert opportunity_target_id({}) == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
+    scope = TenantScope(account_id="acct-1")
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "pain": "pricing pressure",
+    }
+    service, intelligence, campaigns, llm, skills = _service(
+        [opportunity],
+        [json.dumps({
+            "subject": "Acme pricing signal",
+            "body": "<p>Pricing note</p>",
+            "cta": "Book time",
+            "angle_reasoning": "Pricing complaints are rising.",
+        })],
+    )
+
+    result = await service.generate(
+        scope=scope,
+        target_mode="churning_company",
+        limit=5,
+        filters={"vendor": "HubSpot"},
+    )
+
+    assert result.as_dict() == {
+        "requested": 1,
+        "generated": 1,
+        "skipped": 0,
+        "saved_ids": ["draft-1"],
+        "errors": [],
+    }
+    assert intelligence.calls == [{
+        "scope": scope,
+        "target_mode": "churning_company",
+        "limit": 5,
+        "filters": {"vendor": "HubSpot"},
+    }]
+    assert skills.calls == ["digest/b2b_campaign_generation"]
+    llm_call = llm.calls[0]
+    assert llm_call["max_tokens"] == 1200
+    assert llm_call["temperature"] == 0.4
+    assert '"company_name":"Acme"' in llm_call["messages"][0].content
+    assert llm_call["metadata"] == {
+        "target_mode": "churning_company",
+        "target_id": "opp-1",
+        "skill_name": "digest/b2b_campaign_generation",
+    }
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.target_id == "opp-1"
+    assert draft.target_mode == "churning_company"
+    assert draft.channel == "email"
+    assert draft.subject == "Acme pricing signal"
+    assert draft.body == "<p>Pricing note</p>"
+    assert draft.metadata["cta"] == "Book time"
+    assert draft.metadata["generation_model"] == "test-model"
+    assert draft.metadata["source_opportunity"] == opportunity
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_custom_config_and_omits_source_opportunity():
+    config = CampaignGenerationConfig(
+        skill_name="custom",
+        channel="linkedin",
+        max_tokens=300,
+        temperature=0.2,
+        include_source_opportunity=False,
+    )
+    service, _, campaigns, llm, skills = _service(
+        [{"company_name": "Acme"}],
+        ['{"subject":"Hi","body":"Body"}'],
+        config=config,
+        prompts={"custom": "custom prompt {target_mode} {opportunity}"},
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 1
+    assert skills.calls == ["custom"]
+    assert llm.calls[0]["max_tokens"] == 300
+    assert llm.calls[0]["temperature"] == 0.2
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.channel == "linkedin"
+    assert "source_opportunity" not in draft.metadata
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_missing_target_and_unparseable_responses():
+    service, _, campaigns, _, _ = _service(
+        [
+            {"pain": "missing id"},
+            {"id": "opp-2"},
+        ],
+        ["not-json"],
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="churning_company")
+
+    assert result.generated == 0
+    assert result.skipped == 2
+    assert result.errors[0]["reason"] == "missing_target_id"
+    assert result.errors[1] == {"target_id": "opp-2", "reason": "unparseable_response"}
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_continues_after_llm_error():
+    service, _, campaigns, _, _ = _service(
+        [
+            {"id": "opp-1"},
+            {"id": "opp-2"},
+        ],
+        [
+            RuntimeError("provider down"),
+            '{"subject":"Hi","body":"Body"}',
+        ],
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="churning_company")
+
+    assert result.generated == 1
+    assert result.skipped == 1
+    assert result.errors == ({"target_id": "opp-1", "reason": "provider down"},)
+    assert campaigns.saved[0]["drafts"][0].target_id == "opp-2"
+
+
+@pytest.mark.asyncio
+async def test_generate_raises_clear_error_when_skill_missing():
+    service, _, _, _, _ = _service(
+        [{"id": "opp-1"}],
+        ['{"subject":"Hi","body":"Body"}'],
+        prompts={},
+    )
+
+    with pytest.raises(ValueError, match="Campaign generation skill not found"):
+        await service.generate(scope=TenantScope(), target_mode="churning_company")

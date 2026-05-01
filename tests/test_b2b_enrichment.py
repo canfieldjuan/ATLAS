@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -82,8 +82,16 @@ from atlas_brain.services.b2b.enrichment_transport_support import (
     maybe_anthropic_cache as service_maybe_anthropic_cache,
     resolve_tier_routing as service_resolve_tier_routing,
 )
+from atlas_brain.services.b2b.enrichment_provider_calls import (
+    EnrichmentProviderCallDeps,
+    call_vllm_tier1 as service_call_vllm_tier1,
+)
 from atlas_brain.services.b2b.enrichment_result_contract import (
     merge_tier1_tier2 as service_merge_tier1_tier2,
+)
+from atlas_brain.services.b2b.enrichment_single_runner import (
+    EnrichmentSingleRunnerDeps,
+    run_single_enrichment_review as service_run_single_enrichment_review,
 )
 from atlas_brain.services.b2b.enrichment_support import (
     coerce_bool as service_coerce_bool,
@@ -102,6 +110,10 @@ from atlas_brain.services.b2b.enrichment_stage_planner import (
     stage_backend_name,
 )
 from atlas_brain.services.b2b.enrichment_stage_runs import StageRunResolution, resolve_stage_run
+from atlas_brain.services.b2b.enrichment_task_ops import (
+    queue_version_upgrades as service_queue_version_upgrades,
+    recover_orphaned_enriching as service_recover_orphaned_enriching,
+)
 from atlas_brain.storage.models import ScheduledTask
 
 
@@ -1348,6 +1360,37 @@ async def test_recover_orphaned_enriching_parses_update_count():
 
 
 @pytest.mark.asyncio
+async def test_service_recover_orphaned_enriching_logs_count():
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 5"))
+    logger = SimpleNamespace(warning=Mock())
+
+    count = await service_recover_orphaned_enriching(pool, 3, logger=logger)
+
+    assert count == 5
+    logger.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_service_queue_version_upgrades_requeues_outdated_rows():
+    pool = SimpleNamespace(fetchval=AsyncMock(side_effect=[2]))
+    logger = SimpleNamespace(info=Mock(), debug=Mock())
+    parser = SimpleNamespace(version="parser-v3")
+
+    count = await service_queue_version_upgrades(
+        pool,
+        enabled=True,
+        get_all_parsers=lambda: {"g2": parser},
+        logger=logger,
+    )
+
+    assert count == 2
+    call = pool.fetchval.await_args_list[0]
+    assert call.args[1] == "g2"
+    assert call.args[2] == "parser-v3"
+    logger.info.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_enrich_rows_uses_configured_concurrency(monkeypatch):
     active = 0
     max_seen = 0
@@ -2033,6 +2076,58 @@ async def test_call_vllm_tier1_uses_exact_cache_hit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_service_call_vllm_tier1_uses_exact_cache_hit_without_http(monkeypatch):
+    class _Registry:
+        def get(self, name):
+            if name == "digest/b2b_churn_extraction_tier1":
+                return SimpleNamespace(content="tier1")
+            return None
+
+    cache_lookup = AsyncMock(
+        return_value=(
+            {"specific_complaints": ["support delays"], "churn_signals": {"actively_evaluating": True}},
+            {"messages": [{"role": "user", "content": "cached"}]},
+            True,
+        )
+    )
+    client = SimpleNamespace(
+        post=AsyncMock(side_effect=AssertionError("tier1 HTTP should not run on exact-cache hit"))
+    )
+    deps = EnrichmentProviderCallDeps(
+        unpack_cached_lookup_result=b2b_enrichment._unpack_cached_lookup_result,
+        pack_stage_result=b2b_enrichment._pack_stage_result,
+        maybe_anthropic_cache=service_maybe_anthropic_cache,
+        trace_enrichment_llm_call=Mock(),
+        build_classify_payload=b2b_enrichment._build_classify_payload,
+        tier2_system_prompt_for_content_type=b2b_enrichment._tier2_system_prompt_for_content_type,
+        lookup_cached_json_response=cache_lookup,
+        store_cached_json_response=AsyncMock(),
+        tier1_json_schema={},
+    )
+    cfg = SimpleNamespace(
+        enrichment_tier1_model="qwen3-30b",
+        enrichment_tier1_max_tokens=512,
+    )
+
+    monkeypatch.setattr("atlas_brain.skills.get_skill_registry", lambda: _Registry())
+
+    parsed, model, cache_hit = await service_call_vllm_tier1(
+        json.dumps({"vendor_name": "Zendesk"}),
+        cfg,
+        client,
+        include_cache_hit=True,
+        deps=deps,
+    )
+
+    assert parsed["specific_complaints"] == ["support delays"]
+    assert parsed["churn_signals"]["actively_evaluating"] is True
+    assert model == "qwen3-30b"
+    assert cache_hit is True
+    client.post.assert_not_awaited()
+    deps.store_cached_json_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_call_openrouter_tier2_uses_exact_cache_hit(monkeypatch):
     prompt = (
         "## Intro\n"
@@ -2462,6 +2557,131 @@ async def test_enrich_single_defers_when_stage_run_is_submitted(monkeypatch):
 
     assert status == "deferred"
     tier1_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_service_run_single_enrichment_review_uses_vllm_tier1_contract(monkeypatch):
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
+    row = {
+        "id": uuid4(),
+        "source": "g2",
+        "enrichment_attempts": 0,
+        "vendor_name": "Example",
+        "product_name": "Example Product",
+        "product_category": "CRM",
+        "raw_metadata": {},
+        "rating_max": 5,
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Sales",
+        "reviewer_company": "Acme",
+        "company_size_raw": "1001-5000",
+        "reviewer_industry": "Technology",
+        "content_type": "review",
+        "summary": "Switching evaluation",
+        "review_text": "We are actively evaluating alternatives after support issues." * 4,
+        "rating": 2.0,
+    }
+    tier1_result = {
+        "specific_complaints": ["support issues"],
+        "quotable_phrases": ["actively evaluating alternatives"],
+    }
+    client_obj = object()
+    persist_transition = AsyncMock(return_value=True)
+
+    class _Registry:
+        def get(self, name):
+            if name == "digest/b2b_churn_extraction_tier1":
+                return SimpleNamespace(content="tier1 prompt")
+            return None
+
+    async def _call_vllm_tier1(payload_json, cfg, client, *, include_cache_hit=False, trace_metadata=None):
+        assert client is client_obj
+        assert include_cache_hit is True
+        assert trace_metadata["tier"] == "tier1"
+        return (tier1_result, "vllm-tier1")
+
+    monkeypatch.setattr("atlas_brain.skills.get_skill_registry", lambda: _Registry())
+
+    deps = EnrichmentSingleRunnerDeps(
+        empty_exact_cache_usage=b2b_enrichment._empty_exact_cache_usage,
+        combined_review_text_length=b2b_enrichment._combined_review_text_length,
+        effective_min_review_text_length=lambda _row: 1,
+        effective_enrichment_skip_sources=lambda: set(),
+        coerce_float_value=b2b_enrichment._coerce_float_value,
+        build_classify_payload=b2b_enrichment._build_classify_payload,
+        get_tier1_client=lambda _cfg: client_obj,
+        resolve_tier_routing=lambda _cfg, local_only_override=False: (False, False),
+        prepare_stage_request=b2b_enrichment._prepare_stage_request,
+        parse_stage_row_result=b2b_enrichment._parse_stage_row_result,
+        stage_usage_from_row=b2b_enrichment._stage_usage_from_row,
+        accumulate_exact_cache_usage=b2b_enrichment._accumulate_exact_cache_usage,
+        unpack_stage_result=b2b_enrichment._unpack_stage_result,
+        stage_usage_snapshot=b2b_enrichment._stage_usage_snapshot,
+        stage_result_text=b2b_enrichment._stage_result_text,
+        stage_backend_name=b2b_enrichment._stage_backend_name,
+        tier1_has_extraction_gaps=lambda *_args, **_kwargs: False,
+        get_tier2_client=lambda _cfg: object(),
+        merge_tier1_tier2=service_merge_tier1_tier2,
+        persist_enrichment_result=AsyncMock(return_value=True),
+        defer_batch_row=AsyncMock(),
+        increment_attempts=AsyncMock(),
+        ensure_stage_run=AsyncMock(return_value=None),
+        mark_stage_run=AsyncMock(return_value=None),
+        prepare_stage_execution=AsyncMock(
+            return_value=StageExecutionDecision("execute", None, None, None)
+        ),
+        apply_stage_decision=AsyncMock(return_value=None),
+        defer_review_transition=AsyncMock(return_value="deferred"),
+        persist_review_transition=persist_transition,
+        build_tier1_stage_plan=lambda **_kwargs: SimpleNamespace(
+            request_fingerprint="tier1-rfp",
+            work_fingerprint="tier1-wfp",
+            provider="vllm",
+            model="vllm-tier1",
+            backend="direct_vllm",
+            metadata={},
+        ),
+        build_tier2_stage_plan=lambda **_kwargs: SimpleNamespace(
+            request_fingerprint="tier2-rfp",
+            work_fingerprint="tier2-wfp",
+            provider="vllm",
+            model="vllm-tier2",
+            backend="direct_vllm",
+            metadata={},
+        ),
+        tier2_system_prompt_for_content_type=b2b_enrichment._tier2_system_prompt_for_content_type,
+        call_openrouter_tier1=AsyncMock(),
+        call_vllm_tier1=_call_vllm_tier1,
+        call_openrouter_tier2=AsyncMock(),
+        call_vllm_tier2=AsyncMock(),
+        tier1_json_schema=b2b_enrichment._TIER1_JSON_SCHEMA,
+    )
+    cfg = SimpleNamespace(
+        enrichment_full_extraction_timeout_seconds=30.0,
+        enrichment_tier1_model="qwen3-30b",
+        enrichment_tier1_max_tokens=512,
+        enrichment_tier2_max_tokens=512,
+        enrichment_openrouter_model="",
+    )
+
+    ok = await service_run_single_enrichment_review(
+        pool,
+        row,
+        max_attempts=3,
+        local_only=True,
+        max_tokens=512,
+        truncate_length=3000,
+        run_id="run-1",
+        usage_out={},
+        cfg=cfg,
+        deps=deps,
+    )
+
+    assert ok is True
+    deps.ensure_stage_run.assert_awaited_once()
+    deps.mark_stage_run.assert_awaited_once()
+    persist_transition.assert_awaited_once()
 
 
 @pytest.mark.asyncio
