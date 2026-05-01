@@ -38,13 +38,15 @@ MODULES = [
 
 
 def main() -> int:
+    import traceback
     failed: list[str] = []
     for module in MODULES:
         try:
             importlib.import_module(module)
-            print(f"OK {module}")
+            print(f"OK {module}", flush=True)
         except Exception as exc:
-            print(f"FAIL {module}: {exc}")
+            print(f"FAIL {module}: {type(exc).__name__}: {exc}", flush=True)
+            traceback.print_exc()
             failed.append(module)
 
     if failed:
