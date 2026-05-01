@@ -116,6 +116,11 @@ visibility slice. It preserves the copied task-facing
 port when a host configures one. With no sink configured it remains a safe
 no-op, so standalone task imports do not require Atlas notification services.
 
+`extracted_content_pipeline/reasoning/archetypes.py` is the first product-owned
+reasoning policy slice. It scores vendor evidence against deterministic churn
+archetypes, returns thresholded matches, and exposes falsification conditions
+without a database, LLM, or Atlas import.
+
 ## Readiness Gate
 
 Run:
