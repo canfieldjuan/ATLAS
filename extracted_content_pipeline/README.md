@@ -119,3 +119,7 @@ In standalone mode, `extracted_content_pipeline/services/company_normalization.p
 ## Standalone vendor registry shims
 
 In standalone mode, `extracted_content_pipeline/services/vendor_registry.py` provides a local `resolve_vendor_name_cached` fallback used by extracted B2B helpers.
+
+## Standalone tracing shims
+
+In standalone mode, `extracted_content_pipeline/services/tracing.py` provides a local `build_business_trace_context` fallback used by extracted B2B helpers.
