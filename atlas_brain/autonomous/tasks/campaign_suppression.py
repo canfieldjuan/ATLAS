@@ -202,6 +202,33 @@ async def _supersede_sequence(
     )
 
 
+async def _try_set_active_recipient(conn, *, sequence_id: UUID, email: str) -> bool:
+    """Attempt to set recipient_email on a sequence that is still active.
+
+    Returns True iff the UPDATE matched exactly the target row; False when
+    the row no longer exists or has transitioned out of 'active' (e.g. it
+    was just superseded/bounced/unsubscribed/replied by another worker
+    between caller selection and assignment). Raises UniqueViolationError
+    when the partial unique index rejects the write -- the caller decides
+    whether to enter race-recovery.
+    """
+    status = await conn.execute(
+        """
+        UPDATE campaign_sequences
+        SET recipient_email = $1, updated_at = NOW()
+        WHERE id = $2 AND status = 'active'
+        """,
+        email,
+        sequence_id,
+    )
+    if isinstance(status, str) and status.startswith("UPDATE "):
+        try:
+            return int(status.split()[1]) > 0
+        except (ValueError, IndexError):
+            return False
+    return False
+
+
 async def assign_recipient_to_sequence(
     pool,
     sequence_id: UUID | str,
@@ -265,15 +292,15 @@ async def assign_recipient_to_sequence(
                         reason="active_sequence_exists_for_recipient",
                     )
 
-                await conn.execute(
-                    """
-                    UPDATE campaign_sequences
-                    SET recipient_email = $1, updated_at = NOW()
-                    WHERE id = $2
-                    """,
-                    email_clean,
-                    sid,
+                updated = await _try_set_active_recipient(
+                    conn, sequence_id=sid, email=email_clean,
                 )
+                if not updated:
+                    return AssignmentResult(
+                        assigned=False,
+                        sequence_id=sid,
+                        reason="sequence_not_active",
+                    )
                 return AssignmentResult(assigned=True, sequence_id=sid)
         except asyncpg.UniqueViolationError:
             pass  # fall through to race-recovery path
@@ -308,16 +335,19 @@ async def assign_recipient_to_sequence(
                 # write, so a brand-new race is detected and re-probed.
                 try:
                     async with conn.transaction():  # savepoint
-                        await conn.execute(
-                            """
-                            UPDATE campaign_sequences
-                            SET recipient_email = $1, updated_at = NOW()
-                            WHERE id = $2
-                            """,
-                            email_clean,
-                            sid,
+                        updated = await _try_set_active_recipient(
+                            conn, sequence_id=sid, email=email_clean,
                         )
-                    return AssignmentResult(assigned=True, sequence_id=sid)
+                    if updated:
+                        return AssignmentResult(assigned=True, sequence_id=sid)
+                    # Our own sequence has transitioned out of 'active'
+                    # since the caller selected it. No write happened; no
+                    # need to supersede a row that's already terminal.
+                    return AssignmentResult(
+                        assigned=False,
+                        sequence_id=sid,
+                        reason="sequence_not_active",
+                    )
                 except asyncpg.UniqueViolationError:
                     conflict = await conn.fetchval(
                         """

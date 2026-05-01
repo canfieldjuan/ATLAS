@@ -372,3 +372,38 @@ async def test_race_recovery_retries_when_competitor_left_active(monkeypatch, db
     )
     assert target_row["recipient_email"] == email
     assert target_row["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_assignment_fails_when_target_sequence_not_active(db_pool, cleanup_sequences):
+    """If the target sequence has transitioned out of 'active' between
+    caller selection and the helper's UPDATE, the helper must report
+    assigned=False with reason='sequence_not_active' rather than blindly
+    writing recipient_email and returning success. This prevents callers
+    from marking prospects as contacted when the sequence is no longer
+    sendable."""
+    batch_id = f"dedup-test-{uuid4().hex[:8]}"
+    seq_id = await _create_sequence(db_pool, batch_id)
+    cleanup_sequences.append(seq_id)
+
+    # Simulate a concurrent worker terminating the sequence between the
+    # caller's read and our UPDATE.
+    await db_pool.execute(
+        "UPDATE campaign_sequences SET status = 'replied' WHERE id = $1",
+        seq_id,
+    )
+
+    result = await assign_recipient_to_sequence(
+        db_pool, seq_id, "kai@example.com",
+    )
+
+    assert result.assigned is False
+    assert result.reason == "sequence_not_active"
+
+    row = await db_pool.fetchrow(
+        "SELECT recipient_email, status FROM campaign_sequences WHERE id = $1",
+        seq_id,
+    )
+    # Must NOT have written recipient_email onto a non-active row.
+    assert row["recipient_email"] is None
+    assert row["status"] == "replied"
