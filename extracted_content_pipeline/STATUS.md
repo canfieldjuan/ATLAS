@@ -15,14 +15,16 @@
   (`pipelines.llm`, `services.b2b.anthropic_batch`, `services.llm.anthropic`)
   instead of pointing directly at `atlas_brain`.
 - Small utility shims now default to local extracted implementations:
-  `pipelines.notify`, `reasoning.wedge_registry`, `services.__init__`,
-  `services.protocols`, `services.blog_quality`,
+  `config`, `pipelines.notify`, `reasoning.wedge_registry`,
+  `skills.registry`, `storage.database`, `storage.models`,
+  `services.__init__`, `services.protocols`, `services.blog_quality`,
+  `services.b2b.cache_runner`, `services.b2b.enrichment_contract`,
   `services.company_normalization`, `services.vendor_registry`,
   `services.apollo_company_overrides`, `services.b2b.corrections`,
   `services.tracing`, `services.scraping.sources`, and
   `services.scraping.universal.html_cleaner`.
-- Standalone readiness audit is down to 19 Atlas runtime import findings
-  (15 hard imports, 4 bridge shims).
+- Standalone readiness audit is down to 13 Atlas runtime import findings
+  (9 hard imports, 4 bridge shims).
 
 ## Validation gates in repo
 

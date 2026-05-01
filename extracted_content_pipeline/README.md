@@ -103,9 +103,9 @@ GitHub Actions workflow: `.github/workflows/extracted_pipeline_checks.yml` runs 
 bash scripts/list_extracted_pipeline_files.sh
 ```
 
-## Standalone mode toggle
+## LLM offline fallback
 
-Set `EXTRACTED_PIPELINE_STANDALONE=1` to use `extracted_content_pipeline/settings.py` instead of delegating config to `atlas_brain.config`.
+Set `EXTRACTED_PIPELINE_STANDALONE=1` to make the LLM bridge modules use their local no-op fallbacks instead of delegating to `extracted_llm_infrastructure`.
 
 ## Pipeline shims
 
@@ -116,26 +116,19 @@ Content-pipeline LLM bridge modules delegate to
 generation product boundary pointed at the extracted LLM/cost-optimization
 product rather than at the monolith.
 
-## Standalone storage shims
-
-In standalone mode, `extracted_content_pipeline/storage/database.py` and `extracted_content_pipeline/storage/models.py` provide minimal local fallbacks (`get_db_pool`, `ScheduledTask`) so task entrypoints can execute without Atlas storage imports.
-
-## Standalone skill registry
-
-In standalone mode, `extracted_content_pipeline/skills/registry.py` uses local markdown files under `extracted_content_pipeline/skills/` for `get_skill_registry()` lookups.
-
 ## Local utility shims
 
 Several small utility shims provide product-owned local behavior by default so task imports do not require Atlas service modules:
 
+- `config.py`: extracted settings from `settings.py`
+- `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
+- `skills/registry.py`: local markdown-backed skill registry
 - `services/__init__.py` and `services/protocols.py`: `llm_registry.get_active()` and `Message`
+- `services/b2b/cache_runner.py`: local exact-cache request helpers and no-op lookup/store
+- `services/b2b/enrichment_contract.py`: local enrichment contract fallbacks
 - `services/scraping/sources.py`: `ReviewSource` enums and allowlist helpers
 - `reasoning/wedge_registry.py`: `Wedge`, `get_wedge_meta`, and `validate_wedge`
 - `services/blog_quality.py`: blog quality summary/revalidation helpers
 - `services/company_normalization.py`: `normalize_company_name`
 - `services/vendor_registry.py`: `resolve_vendor_name_cached`
 - `services/apollo_company_overrides.py`, `services/b2b/corrections.py`, `services/tracing.py`, and `services/scraping/universal/html_cleaner.py`: local no-op or lightweight helpers
-
-## Standalone B2B contract shims
-
-In standalone mode, `extracted_content_pipeline/services/b2b/enrichment_contract.py` provides local fallbacks (`pain_category_for_bucket`, `quote_grade_phrases`, `resolve_pain_confidence`) used by extracted B2B helpers.

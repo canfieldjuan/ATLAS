@@ -14,9 +14,13 @@ LLM_BRIDGE_PATHS = [
 LOCAL_UTILITY_SHIM_PATHS = [
     "extracted_content_pipeline/pipelines/notify.py",
     "extracted_content_pipeline/reasoning/wedge_registry.py",
+    "extracted_content_pipeline/config.py",
+    "extracted_content_pipeline/skills/registry.py",
     "extracted_content_pipeline/services/__init__.py",
     "extracted_content_pipeline/services/apollo_company_overrides.py",
     "extracted_content_pipeline/services/b2b/corrections.py",
+    "extracted_content_pipeline/services/b2b/cache_runner.py",
+    "extracted_content_pipeline/services/b2b/enrichment_contract.py",
     "extracted_content_pipeline/services/blog_quality.py",
     "extracted_content_pipeline/services/company_normalization.py",
     "extracted_content_pipeline/services/protocols.py",
@@ -24,6 +28,8 @@ LOCAL_UTILITY_SHIM_PATHS = [
     "extracted_content_pipeline/services/scraping/universal/html_cleaner.py",
     "extracted_content_pipeline/services/tracing.py",
     "extracted_content_pipeline/services/vendor_registry.py",
+    "extracted_content_pipeline/storage/database.py",
+    "extracted_content_pipeline/storage/models.py",
 ]
 
 
