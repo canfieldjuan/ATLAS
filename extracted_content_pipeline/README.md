@@ -107,3 +107,7 @@ In standalone mode, `extracted_content_pipeline/services/scraping/sources.py` pr
 ## Standalone reasoning shims
 
 In standalone mode, `extracted_content_pipeline/reasoning/wedge_registry.py` provides local `Wedge`, `get_wedge_meta`, and `validate_wedge` fallbacks used by B2B extracted modules.
+
+## Standalone quality shims
+
+In standalone mode, `extracted_content_pipeline/services/blog_quality.py` provides local fallback quality helpers (`blog_quality_summary`, `blog_quality_revalidation`, and `merge_blog_first_pass_quality_data_context`) for B2B blog pipeline paths.
