@@ -19,6 +19,7 @@ import pytest_asyncio
 
 from atlas_brain.autonomous.tasks.campaign_suppression import (
     assign_recipient_to_sequence,
+    attach_recipient_strict,
 )
 
 
@@ -407,3 +408,94 @@ async def test_assignment_fails_when_target_sequence_not_active(db_pool, cleanup
     # Must NOT have written recipient_email onto a non-active row.
     assert row["recipient_email"] is None
     assert row["status"] == "replied"
+
+
+
+@pytest.mark.asyncio
+async def test_strict_helper_assigns_when_no_conflict(db_pool, cleanup_sequences):
+    """attach_recipient_strict mirrors the happy path of the regular
+    helper but never supersedes."""
+    batch_id = f"strict-test-{uuid4().hex[:8]}"
+    seq_id = await _create_sequence(db_pool, batch_id)
+    cleanup_sequences.append(seq_id)
+
+    result = await attach_recipient_strict(db_pool, seq_id, "lou@example.com")
+
+    assert result.assigned is True
+
+    row = await db_pool.fetchrow(
+        "SELECT recipient_email, status FROM campaign_sequences WHERE id = $1",
+        seq_id,
+    )
+    assert row["recipient_email"] == "lou@example.com"
+    assert row["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_strict_helper_returns_conflict_without_superseding(db_pool, cleanup_sequences):
+    """When the email is already in another active sequence, the strict
+    helper must return assigned=False with the conflict id but must NOT
+    flip the target sequence to 'superseded' or cancel its campaigns.
+    This is the PR #36 P2 fix for the API set-recipient endpoint."""
+    batch_id = f"strict-test-{uuid4().hex[:8]}"
+    email = f"mac-{uuid4().hex[:6]}@example.com"
+
+    winner = await _create_sequence(db_pool, batch_id, recipient_email=email)
+    target = await _create_sequence(db_pool, batch_id)
+    cleanup_sequences.extend([winner, target])
+
+    # Pre-create a draft campaign on the target. The strict helper must
+    # NOT cancel it (the route handler should report 409 and let the
+    # caller decide; we don't want a side-effect cancel on an explicit
+    # API call).
+    draft_id = await _create_draft_campaign(db_pool, target, batch_id, email)
+
+    result = await attach_recipient_strict(db_pool, target, email)
+
+    assert result.assigned is False
+    assert result.reason == "active_sequence_exists_for_recipient"
+    assert str(result.conflict_with_sequence_id) == winner
+
+    target_row = await db_pool.fetchrow(
+        "SELECT recipient_email, status FROM campaign_sequences WHERE id = $1",
+        target,
+    )
+    # Target was NOT superseded.
+    assert target_row["status"] == "active"
+    assert target_row["recipient_email"] is None
+
+    draft_status = await db_pool.fetchval(
+        "SELECT status FROM b2b_campaigns WHERE id = $1::uuid",
+        draft_id,
+    )
+    # Draft was NOT cancelled.
+    assert draft_status == "draft"
+
+
+@pytest.mark.asyncio
+async def test_strict_helper_reports_sequence_not_active(db_pool, cleanup_sequences):
+    batch_id = f"strict-test-{uuid4().hex[:8]}"
+    seq_id = await _create_sequence(db_pool, batch_id)
+    cleanup_sequences.append(seq_id)
+
+    await db_pool.execute(
+        "UPDATE campaign_sequences SET status = 'replied' WHERE id = $1",
+        seq_id,
+    )
+
+    result = await attach_recipient_strict(db_pool, seq_id, "nora@example.com")
+
+    assert result.assigned is False
+    assert result.reason == "sequence_not_active"
+
+
+@pytest.mark.asyncio
+async def test_strict_helper_rejects_empty_email(db_pool, cleanup_sequences):
+    batch_id = f"strict-test-{uuid4().hex[:8]}"
+    seq_id = await _create_sequence(db_pool, batch_id)
+    cleanup_sequences.append(seq_id)
+
+    result = await attach_recipient_strict(db_pool, seq_id, "   ")
+
+    assert result.assigned is False
+    assert result.reason == "empty_email"

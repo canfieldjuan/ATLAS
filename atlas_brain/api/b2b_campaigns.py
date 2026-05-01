@@ -1857,31 +1857,69 @@ async def set_recipient(
     body: SetRecipientBody,
     user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
-    """Set the recipient email for a sequence."""
+    """Set the recipient email for a sequence.
+
+    Routes through ``attach_recipient_strict`` so the new UNIQUE active-
+    recipient index (migration 309) cannot surface as an HTTP 500. The
+    helper returns a structured ``AssignmentResult`` which we map to:
+      * 200 OK on success
+      * 409 Conflict when the email is already in another active sequence
+      * 404 Not Found when the sequence is missing or no longer active
+      * 422 when the email is blank
+    """
+    from ..autonomous.tasks.campaign_suppression import attach_recipient_strict
+
     pool = _pool_or_503()
 
-    result = await pool.execute(
-        """
-        UPDATE campaign_sequences
-        SET recipient_email = $1, updated_at = NOW()
-        WHERE id = $2
-        """,
-        body.recipient_email, sequence_id,
+    result = await attach_recipient_strict(pool, sequence_id, body.recipient_email)
+
+    if result.assigned:
+        await pool.execute(
+            """
+            UPDATE b2b_campaigns
+            SET recipient_email = $1
+            WHERE sequence_id = $2 AND recipient_email IS NULL
+            """,
+            body.recipient_email.strip(), sequence_id,
+        )
+        return {"status": "ok", "recipient_email": body.recipient_email.strip()}
+
+    if result.reason in (
+        "active_sequence_exists_for_recipient",
+        "active_sequence_exists_for_recipient_race",
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "recipient_already_in_active_sequence",
+                "message": (
+                    f"{body.recipient_email!r} is already attached to another "
+                    "active sequence"
+                ),
+                "conflict_with_sequence_id": (
+                    str(result.conflict_with_sequence_id)
+                    if result.conflict_with_sequence_id
+                    else None
+                ),
+            },
+        )
+
+    if result.reason == "sequence_not_active":
+        raise HTTPException(
+            status_code=404,
+            detail="Sequence not found or no longer active",
+        )
+
+    if result.reason == "empty_email":
+        raise HTTPException(
+            status_code=422,
+            detail="recipient_email is required",
+        )
+
+    raise HTTPException(
+        status_code=500,
+        detail=f"Recipient assignment failed: {result.reason}",
     )
-
-    if _affected_rows(result) == 0:
-        raise HTTPException(status_code=404, detail="Sequence not found")
-
-    await pool.execute(
-        """
-        UPDATE b2b_campaigns
-        SET recipient_email = $1
-        WHERE sequence_id = $2 AND recipient_email IS NULL
-        """,
-        body.recipient_email, sequence_id,
-    )
-
-    return {"status": "ok", "recipient_email": body.recipient_email}
 
 
 @router.post("/sequences/{sequence_id}/pause")

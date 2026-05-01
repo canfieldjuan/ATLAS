@@ -229,6 +229,97 @@ async def _try_set_active_recipient(conn, *, sequence_id: UUID, email: str) -> b
     return False
 
 
+_PROBE_ACTIVE_CONFLICT_SQL = """
+SELECT id FROM campaign_sequences
+WHERE LOWER(recipient_email) = $1
+  AND status = 'active'
+  AND id != $2
+LIMIT 1
+"""
+
+
+async def attach_recipient_strict(
+    pool,
+    sequence_id: UUID | str,
+    email: str,
+) -> AssignmentResult:
+    """Strict variant of ``assign_recipient_to_sequence`` for explicit
+    callers (REST APIs, manual admin tools) that want a deterministic
+    conflict result without the side effect of superseding their own
+    sequence.
+
+    Behaviour:
+
+      * No conflict -> UPDATE the recipient on the active sequence and
+        return ``assigned=True``.
+      * Active conflict (visible at probe time *or* surfaced as
+        ``UniqueViolationError`` when a worker raced us) -> return
+        ``assigned=False`` with reason
+        ``'active_sequence_exists_for_recipient'`` (probe-detected) or
+        ``'active_sequence_exists_for_recipient_race'`` (race-detected)
+        and ``conflict_with_sequence_id`` set to the winner's id when
+        re-probable.
+      * Target sequence not active (already terminal, or row missing) ->
+        ``assigned=False`` with reason ``'sequence_not_active'``.
+      * Empty email -> ``assigned=False`` with reason ``'empty_email'``.
+
+    The strict variant never modifies any row other than the target
+    sequence's recipient_email, so a 409 mapper in the route handler can
+    safely retry or report back to the caller without unwinding state.
+    """
+    sid = sequence_id if isinstance(sequence_id, UUID) else UUID(str(sequence_id))
+
+    if not email or not email.strip():
+        return AssignmentResult(
+            assigned=False,
+            sequence_id=sid,
+            reason="empty_email",
+        )
+
+    email_clean = email.strip()
+    email_lower = email_clean.lower()
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            conflict = await conn.fetchval(
+                _PROBE_ACTIVE_CONFLICT_SQL, email_lower, sid,
+            )
+            if conflict:
+                return AssignmentResult(
+                    assigned=False,
+                    sequence_id=sid,
+                    conflict_with_sequence_id=conflict,
+                    reason="active_sequence_exists_for_recipient",
+                )
+
+            try:
+                updated = await _try_set_active_recipient(
+                    conn, sequence_id=sid, email=email_clean,
+                )
+            except asyncpg.UniqueViolationError:
+                # Race: a concurrent worker just assigned this email.
+                # Re-probe so we can hand the winner's id back to the
+                # caller for a deterministic 409 response.
+                conflict = await conn.fetchval(
+                    _PROBE_ACTIVE_CONFLICT_SQL, email_lower, sid,
+                )
+                return AssignmentResult(
+                    assigned=False,
+                    sequence_id=sid,
+                    conflict_with_sequence_id=conflict,
+                    reason="active_sequence_exists_for_recipient_race",
+                )
+
+            if not updated:
+                return AssignmentResult(
+                    assigned=False,
+                    sequence_id=sid,
+                    reason="sequence_not_active",
+                )
+
+            return AssignmentResult(assigned=True, sequence_id=sid)
+
+
 async def assign_recipient_to_sequence(
     pool,
     sequence_id: UUID | str,
