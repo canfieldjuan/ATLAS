@@ -81,3 +81,4 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/settings.py" in owned
     assert "extracted_content_pipeline/reasoning/archetypes.py" in owned
     assert "extracted_content_pipeline/reasoning/temporal.py" in owned
+    assert "extracted_content_pipeline/reasoning/evidence_engine.py" in owned
