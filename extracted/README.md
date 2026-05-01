@@ -3,7 +3,7 @@
 This directory is the coordination layer for sellable systems being extracted
 from Atlas. It does not replace the current `extracted_*` package directories
 yet. Physical package moves should happen only after active product PRs are
-merged and compatibility wrappers are planned.
+merged and compatibility wrappers are in place.
 
 ## Current Products
 
@@ -11,7 +11,7 @@ merged and compatibility wrappers are planned.
 |---|---|---|---|
 | LLM Infrastructure | `extracted_llm_infrastructure/` | Phase 2 | Standalone substrate landed; provider-level decoupling remains Phase 3. |
 | Competitive Intelligence | `extracted_competitive_intelligence/` | Phase 2 | Standalone substrate landed; selected MCP read surfaces are product-owned. |
-| Content Pipeline | `extracted_content_pipeline/` | Phase 2 in progress | Active PR work exists; do not physically move while PR #43 is active. |
+| Content Pipeline | `extracted_content_pipeline/` | Phase 2 in progress | Standalone runtime audit is clean; adapter hardening and scope trimming remain. |
 | Quality Gate | planned | Not started | ProductClaim engine and frontend approval gate candidate. |
 | Intent Router | planned | Not started | Semantic routing, memory quality, and tool registry candidate. |
 
@@ -32,8 +32,9 @@ extracted/
   intent_router/
 ```
 
-The current PR only adds the coordination layer and shared tooling. Existing
-package import paths stay unchanged.
+This directory provides the coordination layer and shared tooling. Existing
+package import paths stay unchanged until product moves are handled one at a
+time.
 
 ## Shared Tooling
 
@@ -51,5 +52,5 @@ have moved to strict extracted-only relative import resolution. Products still
 in early scaffold mode can omit the flag to match the current LLM-infrastructure
 transition behavior.
 
-Existing per-product scripts remain the CI entry points until a later migration
-switches them to call the shared scripts.
+Existing per-product scripts remain the CI entry points and delegate to the
+shared scripts.

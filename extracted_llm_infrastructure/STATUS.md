@@ -30,7 +30,12 @@ Goal: the package's substrate (settings, base class, protocols, registry, db poo
 | Standalone smoke script + CI integration | ✅ `scripts/smoke_extracted_llm_infrastructure_standalone.py` |
 | README documents the toggle and env-var layout | ✅ |
 
-**Empirical result**: the standalone substrate landed in this PR turns out to be sufficient to unblock the import contract for all 14 provider modules. They consume the substrate transitively through the bridge stubs, so when `EXTRACTED_LLM_INFRA_STANDALONE=1` is set, every provider sees the local `_standalone/*` copies of `BaseModelService`, `LLMService` Protocol, `Message`, `ModelInfo`, `ServiceRegistry`, `llm_registry`, `settings`, and `DatabasePool`.
+**Empirical result**: the standalone substrate is sufficient to unblock the
+import contract for all 14 provider modules. They consume the substrate
+transitively through the bridge stubs, so when
+`EXTRACTED_LLM_INFRA_STANDALONE=1` is set, every provider sees the local
+`_standalone/*` copies of `BaseModelService`, `LLMService` Protocol, `Message`,
+`ModelInfo`, `ServiceRegistry`, `llm_registry`, `settings`, and `DatabasePool`.
 
 The standalone smoke (`scripts/smoke_extracted_llm_infrastructure_standalone.py`) verifies this end-to-end: it sets the env var, imports every provider, and asserts (via `__module__` walk on `AnthropicLLM.__mro__`) that providers transitively consume the standalone substrate rather than silently falling back to atlas_brain.
 

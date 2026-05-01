@@ -17,7 +17,8 @@ runtime import map yet; it is the source of truth for extraction direction.
 
 - Competitive Intelligence already uses extracted LLM substrate in standalone
   mode for protocols and LLM bridge wiring.
-- Content Pipeline is active in PR #43; avoid physical package moves until that
-  work lands.
+- Content Pipeline has a clean standalone runtime-import audit and now uses
+  shared extraction wrappers; avoid physical package moves until its adapters
+  and sellable workflow boundaries are narrower.
 - Shared scripts under `extracted/_shared/scripts/` are safe to use before the
   physical package consolidation.

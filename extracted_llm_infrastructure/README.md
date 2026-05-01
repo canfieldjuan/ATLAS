@@ -8,7 +8,8 @@ A byte-for-byte snapshot of the LLM-infrastructure surface inside `atlas_brain/`
 
 The scaffold is **purely additive**. Atlas continues to import from its own paths; this directory is parallel infrastructure.
 
-The pattern mirrors the content-pipeline scaffold under `extracted_content_pipeline/` (open PRs #35, #37, #38, #39).
+The pattern mirrors the content-pipeline scaffold under
+`extracted_content_pipeline/`.
 
 ## What's in scope (Phase 1)
 
@@ -30,7 +31,7 @@ The pattern mirrors the content-pipeline scaffold under `extracted_content_pipel
 
 ## What's out of scope (Phase 3)
 
-Phase 2 (standalone substrate) **landed in this PR**. Remaining work:
+Phase 2 (standalone substrate) has landed. Remaining work:
 
 - DB pool / Tracer / LLM `Protocol`-based DI seams across the scaffolded provider modules (Phase 3)
 - Replacing `isinstance(AnthropicLLM)` checks throughout `services/b2b/anthropic_batch.py` and `services/llm_router.py` (Phase 3)
@@ -45,7 +46,7 @@ Set `EXTRACTED_LLM_INFRA_STANDALONE=1` and the package's substrate
 (settings, base class, protocols, registry, db pool) loads from the
 local `_standalone/` subpackage instead of delegating to atlas_brain.
 The provider modules (`services/llm/*.py`, `services/b2b/anthropic_batch.py`,
-etc.) still import from atlas_brain in this PR — Phase 3 closes that
+etc.) still import from atlas_brain in this scaffold — Phase 3 closes that
 loop.
 
 ```bash
@@ -112,9 +113,15 @@ Phase 2 shrinks this list to zero by either (a) copying the dependency module in
 
 ## Why a separate scaffold from `extracted_content_pipeline/`?
 
-PRs #35/#37/#38/#39 already include `pipelines/llm.py` and `services/b2b/anthropic_batch.py` inside the content-pipeline scaffold as snapshotted siblings. That's intentional during the transition.
+The content-pipeline scaffold includes `pipelines/llm.py` and
+`services/b2b/anthropic_batch.py` as snapshotted siblings for transition
+traceability.
 
-The LLM-infrastructure scaffold lives separately because the LLM-infra subsystem is a **distinct sellable product** (cost optimization for teams running Claude/GPT at scale) — not a content-pipeline implementation detail. Once one of #35/#37/#38/#39 merges, a follow-up PR can rebase the content-pipeline scaffold to depend on `extracted_llm_infrastructure/` instead of carrying its own copies.
+The LLM-infrastructure scaffold lives separately because the LLM-infra subsystem
+is a **distinct sellable product** (cost optimization for teams running
+Claude/GPT at scale), not a content-pipeline implementation detail. The content
+pipeline now points its LLM-facing bridges at `extracted_llm_infrastructure/`;
+future scope trimming can remove duplicated transitional copies.
 
 ## Status
 

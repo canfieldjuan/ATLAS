@@ -39,7 +39,9 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 
 ## What's out of scope (remaining Phase 3)
 
-- Decoupling battle-card LLM calls so they consume `extracted_llm_infrastructure/` directly (LLM-infra extraction is in PR #40)
+- Deep runtime decoupling for battle-card LLM calls; standalone mode routes the
+  LLM bridge through `extracted_llm_infrastructure/`, but task-level LLM seams
+  still need Phase 3 hardening.
 - API endpoint extraction beyond the briefing endpoints (`/b2b/win-loss`, dashboard endpoints stay in atlas_brain)
 - Full runtime exercise without `atlas_brain` on `sys.path`; this slice adds the standalone substrate and smoke coverage, but deep task modules still carry Atlas-owned domain dependencies.
 
@@ -47,7 +49,7 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 
 | Dependency | Status | Notes |
 |---|---|---|
-| **LLM Infrastructure** | extracted via PR #40 | `b2b_battle_cards.py:260` calls `pipelines.llm.call_llm_with_skill`; will rebase once PR #40 merges |
+| **LLM Infrastructure** | extracted package available | Standalone bridge delegates to `extracted_llm_infrastructure`; task-level LLM seams remain Phase 3 work |
 | **Evidence claims** | atlas-core | `services/b2b/evidence_claim_*.py` is shared with churn intel — keep central |
 | **Campaign suppression** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured `SuppressionPolicy` |
 | **Campaign sender (Resend)** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured campaign sender |
@@ -112,7 +114,10 @@ Runs five checks in sequence:
 
 The Competitive Intel platform is a distinct product with a different audience: it sells to sales / RevOps teams, not ML platform teams. Customer-facing artifacts (battle cards, vendor briefings) are fundamentally different from cost-optimization infrastructure. Keeping the scaffolds separate lets either be priced, packaged, and shipped independently.
 
-The Competitive Intel modules **consume** the LLM-infra package at runtime (battle card overlays use `call_llm_with_skill`, vendor briefings use `clean_llm_output`), so the two extractions are sequenced: LLM-infra first (PR #40), then Competitive Intel here, then a Phase 2/3 follow-up to rewire LLM imports to consume the extracted package directly.
+The Competitive Intel modules **consume** the LLM-infra package in standalone
+mode through the local bridge modules. Deep task-level runtime seams still need
+Phase 3 follow-up before the package is publishable without Atlas host
+dependencies.
 
 ## Status
 
