@@ -78,6 +78,10 @@ from atlas_brain.services.b2b.enrichment_urgency import (
     EnrichmentUrgencyDeps,
     derive_urgency_indicators as service_derive_urgency_indicators,
 )
+from atlas_brain.services.b2b.enrichment_transport_support import (
+    maybe_anthropic_cache as service_maybe_anthropic_cache,
+    resolve_tier_routing as service_resolve_tier_routing,
+)
 from atlas_brain.services.b2b.enrichment_support import (
     coerce_bool as service_coerce_bool,
     coerce_json_dict as service_coerce_json_dict,
@@ -136,6 +140,33 @@ def test_stage_backend_name_maps_batch_and_provider():
     assert stage_backend_name(batch_enabled=True, provider="openrouter") == "anthropic_batch"
     assert stage_backend_name(batch_enabled=False, provider="openrouter") == "direct_openrouter"
     assert stage_backend_name(batch_enabled=False, provider="vllm") == "direct_vllm"
+
+
+def test_service_resolve_tier_routing_supports_tier2_openrouter_override():
+    cfg = SimpleNamespace(
+        enrichment_local_only=True,
+        enrichment_openrouter_model="anthropic/claude-sonnet-4-5",
+        openrouter_api_key="test-key",
+        enrichment_tier2_force_openrouter=True,
+    )
+
+    assert service_resolve_tier_routing(cfg) == (False, True)
+
+
+def test_service_maybe_anthropic_cache_only_rewrites_large_system_blocks():
+    long_prompt = "x" * 1024
+    messages = [
+        {"role": "system", "content": long_prompt},
+        {"role": "user", "content": "hello"},
+    ]
+
+    converted = service_maybe_anthropic_cache("anthropic/claude-haiku-4-5", messages)
+
+    assert converted[0]["role"] == "system"
+    assert converted[0]["content"][0]["text"] == long_prompt
+    assert converted[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert converted[1] == messages[1]
+    assert service_maybe_anthropic_cache("openai/gpt-5", messages) == messages
 
 
 def test_build_tier1_stage_plan_captures_request_identity():
