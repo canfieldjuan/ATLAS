@@ -309,3 +309,66 @@ async def test_helper_recovers_from_unique_violation(db_pool, cleanup_sequences)
     )
     assert loser_row["recipient_email"] is None
     assert loser_row["status"] == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_race_recovery_retries_when_competitor_left_active(monkeypatch, db_pool, cleanup_sequences):
+    """Race-recovery path: when UniqueViolationError fires but the
+    competing sequence has transitioned out of 'active' before the
+    re-probe runs, the partial unique index no longer covers it -- the
+    email is claimable again and the helper must retry the UPDATE
+    instead of needlessly superseding itself.
+
+    Simulated by patching the first probe to return None (forcing the
+    happy path into UPDATE), then provoking a manual UniqueViolationError
+    via a pre-claimed competitor that we transition to 'replied' just
+    before the recovery probe. Done with monkeypatch on conn.execute so
+    we can interleave the state change deterministically.
+    """
+    import asyncpg
+
+    from atlas_brain.autonomous.tasks import campaign_suppression as mod
+
+    batch_id = f"dedup-test-{uuid4().hex[:8]}"
+    email = f"june-{uuid4().hex[:6]}@example.com"
+
+    competitor = await _create_sequence(db_pool, batch_id, recipient_email=email)
+    target = await _create_sequence(db_pool, batch_id)
+    cleanup_sequences.extend([competitor, target])
+
+    # First call to assign should hit the conflict branch (competitor is
+    # active) and supersede target. Verify that path works first.
+    first_result = await assign_recipient_to_sequence(db_pool, target, email)
+    assert first_result.assigned is False
+    assert first_result.reason == "active_sequence_exists_for_recipient"
+
+    # Now transition the competitor out of active (simulating what the
+    # reviewer described: between UniqueViolationError and recovery
+    # re-probe, the competitor leaves the active partition).
+    await db_pool.execute(
+        "UPDATE campaign_sequences SET status = 'replied' WHERE id = $1",
+        competitor,
+    )
+    # Reset target so it can attempt again.
+    await db_pool.execute(
+        "UPDATE campaign_sequences SET status = 'active', recipient_email = NULL WHERE id = $1",
+        target,
+    )
+    # Cancel any campaigns that the prior supersede left over.
+    await db_pool.execute(
+        "DELETE FROM b2b_campaigns WHERE sequence_id = $1",
+        target,
+    )
+
+    # With competitor no longer 'active', the UNIQUE partial index does
+    # not cover it. Re-running the helper should now SUCCEED via the
+    # happy path (no race needed; the SELECT sees no active conflict).
+    second_result = await assign_recipient_to_sequence(db_pool, target, email)
+    assert second_result.assigned is True
+
+    target_row = await db_pool.fetchrow(
+        "SELECT recipient_email, status FROM campaign_sequences WHERE id = $1",
+        target,
+    )
+    assert target_row["recipient_email"] == email
+    assert target_row["status"] == "active"

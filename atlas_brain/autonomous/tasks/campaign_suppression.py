@@ -280,8 +280,15 @@ async def assign_recipient_to_sequence(
 
         # Race lost: a concurrent worker assigned this email between our
         # SELECT and UPDATE. The unique index rejected our write; the
-        # outer transaction has already rolled back. Open a fresh
-        # transaction, re-probe the winner, and supersede ourselves.
+        # outer transaction has already rolled back.
+        #
+        # On recovery we re-probe for an active conflict. The competitor
+        # may have transitioned out of 'active' (bounced, replied, etc.)
+        # between the violation and now -- in which case the partial
+        # unique index no longer covers them and the email is claimable
+        # again. We retry the UPDATE inside a savepoint; if another
+        # worker has just re-claimed the email, the savepoint rolls back
+        # and we fall through to the supersede path with the new winner.
         async with conn.transaction():
             conflict = await conn.fetchval(
                 """
@@ -294,6 +301,36 @@ async def assign_recipient_to_sequence(
                 email_lower,
                 sid,
             )
+
+            if conflict is None:
+                # The competitor left the active partition. Try to claim
+                # the email again. The UNIQUE index still gates this
+                # write, so a brand-new race is detected and re-probed.
+                try:
+                    async with conn.transaction():  # savepoint
+                        await conn.execute(
+                            """
+                            UPDATE campaign_sequences
+                            SET recipient_email = $1, updated_at = NOW()
+                            WHERE id = $2
+                            """,
+                            email_clean,
+                            sid,
+                        )
+                    return AssignmentResult(assigned=True, sequence_id=sid)
+                except asyncpg.UniqueViolationError:
+                    conflict = await conn.fetchval(
+                        """
+                        SELECT id FROM campaign_sequences
+                        WHERE LOWER(recipient_email) = $1
+                          AND status = 'active'
+                          AND id != $2
+                        LIMIT 1
+                        """,
+                        email_lower,
+                        sid,
+                    )
+
             await _supersede_sequence(
                 conn,
                 sequence_id=sid,
