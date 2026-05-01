@@ -71,6 +71,9 @@ for keeping the extracted package free of runtime `atlas_brain` imports.
 bash scripts/run_extracted_pipeline_checks.sh
 ```
 
+The one-shot runner enforces the standalone readiness audit with
+`--fail-on-debt`; any new runtime `atlas_brain` import fails CI.
+
 ## Compatibility shims
 
 To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`). Runtime imports no longer delegate to `atlas_brain`; most adapters are intentionally minimal local implementations.

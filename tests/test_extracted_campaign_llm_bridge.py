@@ -53,3 +53,9 @@ def test_local_utility_shims_do_not_delegate_to_atlas_brain() -> None:
         text = _read(path)
         assert "from atlas_brain" not in text
         assert "import atlas_brain" not in text
+
+
+def test_extracted_pipeline_checks_enforce_zero_atlas_runtime_imports() -> None:
+    text = _read("scripts/run_extracted_pipeline_checks.sh")
+
+    assert "python scripts/audit_extracted_standalone.py --fail-on-debt" in text

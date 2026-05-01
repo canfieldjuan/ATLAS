@@ -35,7 +35,8 @@
 - `scripts/check_ascii_python.sh`
 - `scripts/check_extracted_imports.py`
 - `scripts/smoke_extracted_pipeline_imports.py`
-- `scripts/run_extracted_pipeline_checks.sh`
+- `scripts/run_extracted_pipeline_checks.sh` (includes
+  `audit_extracted_standalone.py --fail-on-debt`)
 
 ## Remaining extraction work
 
