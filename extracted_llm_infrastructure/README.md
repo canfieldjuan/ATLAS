@@ -73,7 +73,8 @@ Env vars match atlas_brain (`ATLAS_LLM_*`, `ATLAS_B2B_CHURN_*`,
 
 ## Sync workflow
 
-The scaffold must stay byte-equal with the `atlas_brain/` source. Two scripts maintain that invariant:
+The scaffold must stay byte-equal with the `atlas_brain/` source. Two scripts
+maintain that invariant while preserving the stable per-product entry points:
 
 ```bash
 # Re-copy from atlas_brain into the scaffold (idempotent; safe to re-run)
@@ -85,18 +86,23 @@ bash scripts/validate_extracted_llm_infrastructure.sh
 
 When you change a source file under `atlas_brain/`, run the sync afterward and commit the scaffold update in the same PR. The CI workflow `.github/workflows/extracted_llm_infrastructure_checks.yml` enforces zero-drift on every PR that touches the scaffold.
 
+These per-product scripts are thin wrappers over the shared extraction tooling
+in `extracted/_shared/scripts/`.
+
 ## Local checks
 
 ```bash
 bash scripts/run_extracted_llm_infrastructure_checks.sh
 ```
 
-Runs four checks in sequence:
+Runs five checks in sequence:
 
 1. `validate_extracted_llm_infrastructure.sh` — byte-diff scaffold vs source
 2. `check_ascii_python_llm_infrastructure.sh` — every scaffolded `.py` is ASCII-only
 3. `check_extracted_llm_infrastructure_imports.py` — relative imports either resolve inside the scaffold or are listed in `import_debt_allowlist.txt`
 4. `smoke_extracted_llm_infrastructure_imports.py` — every public module imports without raising
+5. `smoke_extracted_llm_infrastructure_standalone.py` — standalone substrate
+   imports use `extracted_llm_infrastructure._standalone`
 
 ## Import debt
 
