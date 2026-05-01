@@ -28,6 +28,8 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 | Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM bridge, and service package fallback |
 | Standalone smoke script + CI | ✅ `smoke_extracted_competitive_intelligence_standalone.py` runs in the local check driver |
 | MCP package import boundary | ✅ extracted MCP server/shared helpers no longer import `atlas_brain.mcp.b2b` just to import tool modules |
+| Source registry support module | ✅ `services.scraping.sources` is extracted-owned instead of an Atlas bridge |
+| Package-level Atlas fallbacks | ✅ standalone mode fails closed for lazy package access in services, B2B services, templates, reasoning, autonomous, and autonomous tasks |
 
 ## Phase 3 — Decoupling 🔲 (later PRs)
 
@@ -52,6 +54,7 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 | `mcp/b2b/_shared.py` | n/a | ✅ | 🔲 |
 | `mcp/b2b/server.py` | n/a | ✅ | 🔲 |
 | `services/b2b/source_impact.py` | ✅ | 🔲 (mostly pure data; should be easy) | 🔲 |
+| `services/scraping/sources.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | 🔲 | 🔲 |

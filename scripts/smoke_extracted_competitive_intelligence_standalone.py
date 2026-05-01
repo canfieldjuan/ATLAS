@@ -22,7 +22,9 @@ MODULES = [
     "extracted_competitive_intelligence.auth.dependencies",
     "extracted_competitive_intelligence.services.protocols",
     "extracted_competitive_intelligence.services.campaign_sender",
+    "extracted_competitive_intelligence.services.scraping.sources",
     "extracted_competitive_intelligence.autonomous.tasks.campaign_suppression",
+    "extracted_competitive_intelligence.mcp.b2b.vendor_registry",
     "extracted_competitive_intelligence.pipelines.llm",
     "extracted_competitive_intelligence.templates.email.vendor_briefing",
     "extracted_competitive_intelligence.services.b2b.source_impact",
@@ -71,6 +73,11 @@ def main() -> int:
             "Message",
             "extracted_llm_infrastructure._standalone.protocols",
         ),
+        (
+            "extracted_competitive_intelligence.services.scraping.sources",
+            "ReviewSource",
+            "extracted_competitive_intelligence.services.scraping.sources",
+        ),
     ]
     for module_name, attr_name, expected_prefix in checks:
         try:
@@ -78,6 +85,22 @@ def main() -> int:
         except Exception as exc:
             print(f"FAIL {module_name}.{attr_name}: {exc}", flush=True)
             failed.append(f"{module_name}.{attr_name}")
+
+    for module_name in (
+        "extracted_competitive_intelligence.services",
+        "extracted_competitive_intelligence.services.b2b",
+        "extracted_competitive_intelligence.templates.email",
+        "extracted_competitive_intelligence.reasoning",
+        "extracted_competitive_intelligence.autonomous",
+        "extracted_competitive_intelligence.autonomous.tasks",
+    ):
+        module = importlib.import_module(module_name)
+        try:
+            getattr(module, "__atlas_fallback_probe__")
+        except AttributeError:
+            continue
+        print(f"FAIL {module_name}: Atlas fallback did not fail closed", flush=True)
+        failed.append(module_name)
 
     if failed:
         print(f"Standalone smoke failed for {len(failed)} check(s)")
@@ -89,4 +112,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

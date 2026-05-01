@@ -19,10 +19,16 @@ EXTRACTED_COMP_INTEL_STANDALONE=1.
 from __future__ import annotations
 
 import importlib
+import os
 from typing import Any
 
 
 def __getattr__(name: str) -> Any:
+    if os.environ.get("EXTRACTED_COMP_INTEL_STANDALONE") == "1":
+        raise AttributeError(
+            f"module {__name__!r} has no standalone attribute {name!r}; "
+            "import an extracted reasoning module explicitly"
+        )
     src = importlib.import_module("atlas_brain.reasoning")
     try:
         return getattr(src, name)
