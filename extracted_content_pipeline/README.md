@@ -79,3 +79,7 @@ GitHub Actions workflow: `.github/workflows/extracted_pipeline_checks.yml` runs 
 ```bash
 bash scripts/list_extracted_pipeline_files.sh
 ```
+
+## Standalone mode toggle
+
+Set `EXTRACTED_PIPELINE_STANDALONE=1` to use `extracted_content_pipeline/settings.py` instead of delegating config to `atlas_brain.config`.
