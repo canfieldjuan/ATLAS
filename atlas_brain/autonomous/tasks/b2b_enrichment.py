@@ -267,6 +267,15 @@ from ...services.b2b.enrichment_transport_support import (
     resolve_tier_routing as _service_resolve_tier_routing,
     trace_enrichment_llm_call as _service_trace_enrichment_llm_call,
 )
+from ...services.b2b.enrichment_provider_calls import (
+    EnrichmentProviderCallDeps,
+    call_openrouter_tier1 as _service_call_openrouter_tier1,
+    call_openrouter_tier2 as _service_call_openrouter_tier2,
+    call_vllm_tier1 as _service_call_vllm_tier1,
+    call_vllm_tier2 as _service_call_vllm_tier2,
+    lookup_cached_json_response as _service_lookup_cached_json_response,
+    store_cached_json_response as _service_store_cached_json_response,
+)
 from ...services.b2b.enrichment_row_runner import EnrichmentRunnerDeps, run_enrichment_rows
 from ...services.b2b.enrichment_task_runner import EnrichmentTaskRunnerDeps, run_enrichment_task
 from ...services.b2b.enrichment_stage_runs import (
@@ -388,35 +397,17 @@ async def _lookup_cached_json_response(
     response_format: dict[str, Any] | None = None,
     guided_json: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any], bool]:
-    """Lookup a cached structured response and return the envelope either way."""
-    from ...pipelines.llm import clean_llm_output, parse_json_response
-    from ...services.b2b.cache_runner import (
-        lookup_b2b_exact_stage_text,
-        prepare_b2b_exact_stage_request,
-    )
-
-    request = prepare_b2b_exact_stage_request(
+    return await _service_lookup_cached_json_response(
         namespace,
         provider=provider,
         model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
+        system_prompt=system_prompt,
+        user_content=user_content,
         max_tokens=max_tokens,
         temperature=temperature,
         response_format=response_format,
         guided_json=guided_json,
     )
-    cached = await lookup_b2b_exact_stage_text(request)
-    if cached is None:
-        return None, request.request_envelope, False
-
-    text = clean_llm_output(cached["response_text"])
-    parsed = parse_json_response(text, recover_truncated=True)
-    if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-        return parsed, request.request_envelope, True
-    return None, request.request_envelope, False
 
 
 def _unpack_cached_lookup_result(
@@ -516,6 +507,20 @@ def _trace_enrichment_llm_call(
     )
 
 
+def _provider_call_deps() -> EnrichmentProviderCallDeps:
+    return EnrichmentProviderCallDeps(
+        unpack_cached_lookup_result=_unpack_cached_lookup_result,
+        pack_stage_result=_pack_stage_result,
+        maybe_anthropic_cache=_maybe_anthropic_cache,
+        trace_enrichment_llm_call=_trace_enrichment_llm_call,
+        build_classify_payload=_build_classify_payload,
+        tier2_system_prompt_for_content_type=_tier2_system_prompt_for_content_type,
+        lookup_cached_json_response=_lookup_cached_json_response,
+        store_cached_json_response=_store_cached_json_response,
+        tier1_json_schema=_TIER1_JSON_SCHEMA,
+    )
+
+
 async def _store_cached_json_response(
     namespace: str,
     request_envelope: dict[str, Any],
@@ -525,20 +530,11 @@ async def _store_cached_json_response(
     response_text: str,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    """Store a validated structured response for later exact reuse."""
-    from ...services.b2b.cache_runner import (
-        bind_b2b_exact_stage_request,
-        store_b2b_exact_stage_text,
-    )
-
-    request = bind_b2b_exact_stage_request(
+    await _service_store_cached_json_response(
         namespace,
+        request_envelope,
         provider=provider,
         model=model,
-        request_envelope=request_envelope,
-    )
-    await store_b2b_exact_stage_text(
-        request,
         response_text=response_text,
         metadata=metadata,
     )
@@ -552,89 +548,14 @@ async def _call_vllm_tier1(
     include_cache_hit: bool = False,
     trace_metadata: dict[str, Any] | None = None,
 ) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
-    """Tier 1 extraction: deterministic fields via local vLLM.
-
-    Returns (result_dict, model_id, cache_hit) or (None, None, False) on failure.
-    """
-    from ...skills import get_skill_registry
-
-    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
-    if not skill:
-        logger.warning("Skill 'digest/b2b_churn_extraction_tier1' not found")
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
-
-    model_id = cfg.enrichment_tier1_model
-    request_envelope: dict[str, Any] | None = None
-    messages = [
-        {"role": "system", "content": skill.content},
-        {"role": "user", "content": payload_json},
-    ]
-    try:
-        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
-            await _lookup_cached_json_response(
-            "b2b_enrichment.tier1",
-            provider="vllm",
-            model=model_id,
-            system_prompt=skill.content,
-            user_content=payload_json,
-            max_tokens=cfg.enrichment_tier1_max_tokens,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            guided_json=_TIER1_JSON_SCHEMA,
-            )
-        )
-        if cached is not None:
-            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
-
-        call_started = time.monotonic()
-        resp = await client.post(
-            "/v1/chat/completions",
-            json={
-                "model": cfg.enrichment_tier1_model,
-                "messages": messages,
-                "max_tokens": cfg.enrichment_tier1_max_tokens,
-                "temperature": 0.0,
-                "guided_json": _TIER1_JSON_SCHEMA,
-                "response_format": {"type": "json_object"},
-            },
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        _trace_enrichment_llm_call(
-            "task.b2b_enrichment.tier1",
-            provider="vllm",
-            model=model_id,
-            messages=messages,
-            usage=body.get("usage", {}),
-            metadata=trace_metadata,
-            duration_ms=(time.monotonic() - call_started) * 1000,
-            api_endpoint=f"{str(getattr(client, 'base_url', '')).rstrip('/')}/v1/chat/completions",
-        )
-        text = body["choices"][0]["message"]["content"].strip()
-        if not text:
-            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-
-        from ...pipelines.llm import clean_llm_output, parse_json_response
-        text = clean_llm_output(text)
-        parsed = parse_json_response(text, recover_truncated=True)
-        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-            if request_envelope is not None:
-                await _store_cached_json_response(
-                    "b2b_enrichment.tier1",
-                    request_envelope,
-                    provider="vllm",
-                    model=model_id,
-                    response_text=text,
-                    metadata={"tier": 1, "backend": "vllm"},
-                )
-            return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
-        return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("Tier 1 vLLM returned invalid JSON")
-        return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-    except Exception:
-        logger.exception("Tier 1 vLLM call failed")
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
+    return await _service_call_vllm_tier1(
+        payload_json,
+        cfg,
+        client,
+        include_cache_hit=include_cache_hit,
+        trace_metadata=trace_metadata,
+        deps=_provider_call_deps(),
+    )
 
 
 async def _call_openrouter_tier1(
@@ -644,109 +565,13 @@ async def _call_openrouter_tier1(
     include_cache_hit: bool = False,
     trace_metadata: dict[str, Any] | None = None,
 ) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
-    """Tier 1 extraction via OpenRouter (cloud model, no guided_json)."""
-    import httpx
-    from ...skills import get_skill_registry
-
-    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
-    if not skill:
-        logger.warning("Skill 'digest/b2b_churn_extraction_tier1' not found")
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
-
-    api_key = cfg.openrouter_api_key
-    if not api_key:
-        logger.warning("OpenRouter API key not configured for enrichment")
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
-
-    model_id = cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"
-    request_envelope: dict[str, Any] | None = None
-    messages = [
-        {"role": "system", "content": skill.content},
-        {"role": "user", "content": payload_json},
-    ]
-    try:
-        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
-            await _lookup_cached_json_response(
-            "b2b_enrichment.tier1",
-            provider="openrouter",
-            model=model_id,
-            system_prompt=skill.content,
-            user_content=payload_json,
-            max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            )
-        )
-        if cached is not None:
-            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
-
-        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=10.0)) as client:
-            call_started = time.monotonic()
-            resp = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model_id,
-                    "messages": _maybe_anthropic_cache(model_id, messages),
-                    "max_tokens": max(cfg.enrichment_tier1_max_tokens, 4096),
-                    "temperature": 0.0,
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            _trace_enrichment_llm_call(
-                "task.b2b_enrichment.tier1",
-                provider="openrouter",
-                model=model_id,
-                messages=messages,
-                usage=body.get("usage", {}),
-                metadata=trace_metadata,
-                duration_ms=(time.monotonic() - call_started) * 1000,
-                api_endpoint="https://openrouter.ai/api/v1/chat/completions",
-                provider_request_id=resp.headers.get("x-request-id") or body.get("id"),
-            )
-            choices = body.get("choices") or []
-            if not choices:
-                logger.warning("OpenRouter returned no choices")
-                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-            msg = choices[0].get("message") or {}
-            text = msg.get("content") or ""
-            # Reasoning models (o1/o3/gpt-oss) may put output in reasoning field
-            if not text and msg.get("reasoning"):
-                # Try to extract JSON from the reasoning
-                reasoning = msg["reasoning"]
-                import re as _re
-                json_match = _re.search(r"\{[\s\S]*\}", reasoning)
-                if json_match:
-                    text = json_match.group(0)
-            text = text.strip()
-            if not text:
-                logger.warning("OpenRouter returned empty content")
-                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-
-            from ...pipelines.llm import clean_llm_output, parse_json_response
-            text = clean_llm_output(text)
-            parsed = parse_json_response(text, recover_truncated=True)
-            if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-                if request_envelope is not None:
-                    await _store_cached_json_response(
-                        "b2b_enrichment.tier1",
-                        request_envelope,
-                        provider="openrouter",
-                        model=model_id,
-                        response_text=text,
-                        metadata={"tier": 1, "backend": "openrouter"},
-                    )
-                return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
-            logger.warning("OpenRouter tier 1 returned unparseable JSON")
-            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-    except Exception:
-        logger.exception("OpenRouter tier 1 call failed")
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
+    return await _service_call_openrouter_tier1(
+        payload_json,
+        cfg,
+        include_cache_hit=include_cache_hit,
+        trace_metadata=trace_metadata,
+        deps=_provider_call_deps(),
+    )
 
 
 def _tier1_has_extraction_gaps(tier1: dict, *, source: str | None = None) -> bool:
@@ -763,96 +588,16 @@ async def _call_vllm_tier2(
     include_cache_hit: bool = False,
     trace_metadata: dict[str, Any] | None = None,
 ) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
-    """Tier 2 extraction: classify + extract via local vLLM.
-
-    Receives Tier 1 output as context so it can reference extracted complaints
-    and quotes when classifying pain and detecting indicators.
-    Returns (result_dict, model_id, cache_hit) or (None, None, False) on failure.
-    """
-    from ...skills import get_skill_registry
-
-    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
-    if not skill:
-        logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found")
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
-
-    tier2_model = cfg.enrichment_tier2_model or cfg.enrichment_tier1_model
-    payload = _build_classify_payload(row, truncate_length)
-    # Inject Tier 1 extractions for Tier 2 to reference
-    payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
-    payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
-    payload_json = json.dumps(payload)
-    system_prompt = _tier2_system_prompt_for_content_type(
-        skill.content,
-        payload.get("content_type"),
+    return await _service_call_vllm_tier2(
+        tier1_result,
+        row,
+        cfg,
+        client,
+        truncate_length,
+        include_cache_hit=include_cache_hit,
+        trace_metadata=trace_metadata,
+        deps=_provider_call_deps(),
     )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": payload_json},
-    ]
-
-    try:
-        request_envelope: dict[str, Any] | None
-        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
-            await _lookup_cached_json_response(
-            "b2b_enrichment.tier2",
-            provider="vllm",
-            model=tier2_model,
-            system_prompt=system_prompt,
-            user_content=payload_json,
-            max_tokens=cfg.enrichment_tier2_max_tokens,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            )
-        )
-        if cached is not None:
-            return _pack_stage_result(cached, tier2_model, cache_hit, include_cache_hit=include_cache_hit)
-
-        call_started = time.monotonic()
-        resp = await client.post(
-            "/v1/chat/completions",
-            json={
-                "model": tier2_model,
-                "messages": messages,
-                "max_tokens": cfg.enrichment_tier2_max_tokens,
-                "temperature": 0.0,
-                "response_format": {"type": "json_object"},
-            },
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        _trace_enrichment_llm_call(
-            "task.b2b_enrichment.tier2",
-            provider="vllm",
-            model=tier2_model,
-            messages=messages,
-            usage=body.get("usage", {}),
-            metadata=trace_metadata,
-            duration_ms=(time.monotonic() - call_started) * 1000,
-            api_endpoint=f"{str(getattr(client, 'base_url', '')).rstrip('/')}/v1/chat/completions",
-        )
-        text = body["choices"][0]["message"]["content"].strip()
-        if not text:
-            return _pack_stage_result(None, tier2_model, False, include_cache_hit=include_cache_hit)
-
-        from ...pipelines.llm import clean_llm_output, parse_json_response
-        text = clean_llm_output(text)
-        parsed = parse_json_response(text, recover_truncated=True)
-        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-            if request_envelope is not None:
-                await _store_cached_json_response(
-                    "b2b_enrichment.tier2",
-                    request_envelope,
-                    provider="vllm",
-                    model=tier2_model,
-                    response_text=text,
-                    metadata={"tier": 2, "backend": "vllm"},
-                )
-            return _pack_stage_result(parsed, tier2_model, False, include_cache_hit=include_cache_hit)
-        return _pack_stage_result(None, tier2_model, False, include_cache_hit=include_cache_hit)
-    except Exception:
-        logger.warning("Tier 2 vLLM call failed", exc_info=True)
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
 def _get_tier2_client(cfg: Any) -> Any:
@@ -872,117 +617,15 @@ async def _call_openrouter_tier2(
     include_cache_hit: bool = False,
     trace_metadata: dict[str, Any] | None = None,
 ) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
-    """Tier 2 extraction via OpenRouter (cloud model).
-
-    Mirrors _call_openrouter_tier1 but uses the tier2 skill and injects
-    Tier 1 extractions for context so the model can classify pain categories
-    and evidence types against already-extracted complaints and quotes.
-    """
-    import httpx
-    from ...skills import get_skill_registry
-
-    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
-    if not skill:
-        logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found for OpenRouter tier 2")
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
-
-    api_key = cfg.openrouter_api_key
-    if not api_key:
-        logger.warning("OpenRouter API key not configured for tier 2 enrichment")
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
-
-    model_id = (
-        cfg.enrichment_tier2_openrouter_model
-        or cfg.enrichment_openrouter_model
-        or "anthropic/claude-haiku-4-5"
+    return await _service_call_openrouter_tier2(
+        tier1_result,
+        row,
+        cfg,
+        truncate_length,
+        include_cache_hit=include_cache_hit,
+        trace_metadata=trace_metadata,
+        deps=_provider_call_deps(),
     )
-    payload = _build_classify_payload(row, truncate_length)
-    payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
-    payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
-    payload_json = json.dumps(payload)
-    system_prompt = _tier2_system_prompt_for_content_type(
-        skill.content,
-        payload.get("content_type"),
-    )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": payload_json},
-    ]
-
-    try:
-        request_envelope: dict[str, Any] | None
-        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
-            await _lookup_cached_json_response(
-            "b2b_enrichment.tier2",
-            provider="openrouter",
-            model=model_id,
-            system_prompt=system_prompt,
-            user_content=payload_json,
-            max_tokens=cfg.enrichment_tier2_max_tokens,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            )
-        )
-        if cached is not None:
-            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
-
-        async with httpx.AsyncClient(timeout=httpx.Timeout(cfg.enrichment_tier2_timeout_seconds, connect=10.0)) as client:
-            call_started = time.monotonic()
-            resp = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model_id,
-                    "messages": _maybe_anthropic_cache(model_id, messages),
-                    "max_tokens": cfg.enrichment_tier2_max_tokens,
-                    "temperature": 0.0,
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            _trace_enrichment_llm_call(
-                "task.b2b_enrichment.tier2",
-                provider="openrouter",
-                model=model_id,
-                messages=messages,
-                usage=body.get("usage", {}),
-                metadata=trace_metadata,
-                duration_ms=(time.monotonic() - call_started) * 1000,
-                api_endpoint="https://openrouter.ai/api/v1/chat/completions",
-                provider_request_id=resp.headers.get("x-request-id") or body.get("id"),
-            )
-            choices = body.get("choices") or []
-            if not choices:
-                logger.warning("OpenRouter tier 2 returned no choices")
-                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-            text = (choices[0].get("message") or {}).get("content") or ""
-            text = text.strip()
-            if not text:
-                logger.warning("OpenRouter tier 2 returned empty content")
-                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-            from ...pipelines.llm import clean_llm_output, parse_json_response
-            text = clean_llm_output(text)
-            parsed = parse_json_response(text, recover_truncated=True)
-            if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-                if request_envelope is not None:
-                    await _store_cached_json_response(
-                        "b2b_enrichment.tier2",
-                        request_envelope,
-                        provider="openrouter",
-                        model=model_id,
-                        response_text=text,
-                        metadata={"tier": 2, "backend": "openrouter"},
-                    )
-                return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
-            logger.warning("OpenRouter tier 2 returned unparseable JSON")
-            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
-    except Exception:
-        logger.warning("OpenRouter tier 2 call failed", exc_info=True)
-        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
 def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
