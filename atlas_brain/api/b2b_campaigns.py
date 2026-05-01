@@ -1324,6 +1324,7 @@ async def review_queue(
     offset: int = Query(0, ge=0),
     status: str = Query("draft", description="Filter by status: draft, approved, sent, all"),
     include_prospects: bool = Query(False, description="Join prospect details"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Purpose-built review endpoint: drafts enriched with sequence, partner, suppression info."""
     pool = _pool_or_503()
@@ -1334,14 +1335,19 @@ async def review_queue(
         status = "draft"
 
     # Build parameterized status filter
-    params: list = []
+    params: list[Any] = []
     param_idx = 1
+    conditions = [_tracked_vendor_scope_condition("bc.vendor_name", param_idx)]
+    params.append(user.account_id)
+    param_idx += 1
+
     if status == "all":
-        status_filter = "1=1"
+        pass
     else:
-        status_filter = f"bc.status = ${param_idx}"
+        conditions.append(f"bc.status = ${param_idx}")
         params.append(status)
         param_idx += 1
+    status_filter = " AND ".join(conditions)
 
     params.extend([limit, offset])
 
@@ -1411,6 +1417,7 @@ async def review_candidates(
     company: str | None = Query(None),
     qualified_only: bool = Query(True),
     ignore_recent_dedup: bool = Query(False),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Analyst review queue for mid-band named-account candidates before draft generation."""
     if min_score > max_score:
@@ -1426,6 +1433,7 @@ async def review_candidates(
         limit=limit,
         vendor_filter=vendor,
         company_filter=company,
+        account_id=user.account_id,
         qualified_only=qualified_only,
         ignore_recent_dedup=ignore_recent_dedup,
     )
@@ -1438,6 +1446,7 @@ async def review_candidates_summary(
     vendor: str | None = Query(None),
     company: str | None = Query(None),
     ignore_recent_dedup: bool = Query(False),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Compact summary for the analyst candidate review queue."""
     if min_score > max_score:
@@ -1453,6 +1462,7 @@ async def review_candidates_summary(
         limit=200,
         vendor_filter=vendor,
         company_filter=company,
+        account_id=user.account_id,
         qualified_only=False,
         ignore_recent_dedup=ignore_recent_dedup,
     )
@@ -1651,12 +1661,15 @@ async def bulk_reject(body: BulkRejectBody, user: AuthUser = Depends(require_b2b
 
 
 @router.get("/review-queue/summary")
-async def review_queue_summary():
+async def review_queue_summary(
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Dashboard counts for the review queue."""
     pool = _pool_or_503()
+    scope_filter = _tracked_vendor_scope_condition("bc.vendor_name", 1)
 
     row = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*) FILTER (WHERE bc.status = 'draft') AS pending_review,
             COUNT(*) FILTER (
@@ -1690,21 +1703,26 @@ async def review_queue_summary():
                 AS oldest_draft_age_hours
         FROM b2b_campaigns bc
         LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
-        """
+        WHERE {scope_filter}
+        """,
+        user.account_id,
     )
 
     by_partner = await pool.fetch(
-        """
+        f"""
         SELECT ap.name, COUNT(*) AS count
         FROM b2b_campaigns bc
         LEFT JOIN affiliate_partners ap ON ap.id = bc.partner_id
-        WHERE bc.status = 'draft' AND ap.name IS NOT NULL
+        WHERE {scope_filter}
+          AND bc.status = 'draft'
+          AND ap.name IS NOT NULL
         GROUP BY ap.name
         ORDER BY count DESC
-        """
+        """,
+        user.account_id,
     )
     quality_row = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*) FILTER (
                 WHERE bc.status = 'draft'
@@ -1726,31 +1744,37 @@ async def review_queue_summary():
                 END
             ), 0) AS blocker_total
         FROM b2b_campaigns bc
-        """
+        WHERE {scope_filter}
+        """,
+        user.account_id,
     )
     boundary_rows = await pool.fetch(
-        """
+        f"""
         SELECT COALESCE(bc.metadata->'latest_specificity_audit'->>'boundary', 'missing') AS boundary,
                COUNT(*) AS count
         FROM b2b_campaigns bc
-        WHERE bc.status = 'draft'
+        WHERE {scope_filter}
+          AND bc.status = 'draft'
         GROUP BY boundary
         ORDER BY count DESC
         LIMIT 10
-        """
+        """,
+        user.account_id,
     )
     blocker_rows = await pool.fetch(
-        """
+        f"""
         SELECT blocker.reason AS reason, COUNT(*) AS count
         FROM b2b_campaigns bc
         JOIN LATERAL jsonb_array_elements_text(
             COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb)
         ) AS blocker(reason) ON TRUE
-        WHERE bc.status = 'draft'
+        WHERE {scope_filter}
+          AND bc.status = 'draft'
         GROUP BY blocker.reason
         ORDER BY count DESC, blocker.reason ASC
         LIMIT 5
-        """
+        """,
+        user.account_id,
     )
 
     r = dict(row)

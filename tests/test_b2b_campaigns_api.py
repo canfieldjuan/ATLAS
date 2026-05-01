@@ -198,6 +198,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
         limit,
         vendor_filter=None,
         company_filter=None,
+        account_id=None,
         qualified_only=True,
         ignore_recent_dedup=False,
     ):
@@ -208,6 +209,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
             "limit": limit,
             "vendor_filter": vendor_filter,
             "company_filter": company_filter,
+            "account_id": account_id,
             "qualified_only": qualified_only,
             "ignore_recent_dedup": ignore_recent_dedup,
         })
@@ -219,6 +221,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
         "atlas_brain.autonomous.tasks.b2b_campaign_generation.list_churning_company_review_candidates",
         _fake_list_candidates,
     )
+    user = type("User", (), {"account_id": str(uuid4())})()
 
     result = await mod.review_candidates(
         limit=25,
@@ -228,6 +231,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
         company="Pax8",
         qualified_only=False,
         ignore_recent_dedup=True,
+        user=user,
     )
 
     assert result["count"] == 1
@@ -238,6 +242,7 @@ async def test_review_candidates_endpoint_uses_helper(monkeypatch):
         "limit": 25,
         "vendor_filter": "CrowdStrike",
         "company_filter": "Pax8",
+        "account_id": user.account_id,
         "qualified_only": False,
         "ignore_recent_dedup": True,
     }
@@ -253,9 +258,11 @@ async def test_review_candidates_summary_returns_summary_only(monkeypatch):
         limit,
         vendor_filter=None,
         company_filter=None,
+        account_id=None,
         qualified_only=True,
         ignore_recent_dedup=False,
     ):
+        assert account_id == user.account_id
         return {
             "count": 3,
             "candidates": [{"company_name": "Acme Co"}],
@@ -267,6 +274,7 @@ async def test_review_candidates_summary_returns_summary_only(monkeypatch):
         "atlas_brain.autonomous.tasks.b2b_campaign_generation.list_churning_company_review_candidates",
         _fake_list_candidates,
     )
+    user = type("User", (), {"account_id": str(uuid4())})()
 
     result = await mod.review_candidates_summary(
         min_score=55,
@@ -274,6 +282,7 @@ async def test_review_candidates_summary_returns_summary_only(monkeypatch):
         vendor=None,
         company=None,
         ignore_recent_dedup=False,
+        user=user,
     )
 
     assert result == {
@@ -755,7 +764,11 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
     created_at = datetime(2026, 3, 30, 20, 0, tzinfo=timezone.utc)
 
     class Pool:
-        async def fetch(self, *_args):
+        def __init__(self):
+            self.fetch_calls = []
+
+        async def fetch(self, query, *args):
+            self.fetch_calls.append((query, args))
             return [{
                 "id": uuid4(),
                 "company_name": "Acme Co",
@@ -863,7 +876,11 @@ async def test_review_queue_surfaces_quality_summary_from_metadata(monkeypatch):
     created_at = datetime(2026, 3, 30, 20, 0, tzinfo=timezone.utc)
 
     class Pool:
-        async def fetch(self, *_args):
+        def __init__(self):
+            self.fetch_calls = []
+
+        async def fetch(self, query, *args):
+            self.fetch_calls.append((query, args))
             return [{
                 "id": uuid4(),
                 "company_name": "Acme Co",
@@ -948,15 +965,20 @@ async def test_review_queue_surfaces_quality_summary_from_metadata(monkeypatch):
                 "prospect_email_status": "valid",
             }]
 
-    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    user = type("User", (), {"account_id": str(uuid4())})()
 
     result = await mod.review_queue(
         limit=50,
         offset=0,
         status="draft",
         include_prospects=True,
+        user=user,
     )
 
+    assert "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in pool.fetch_calls[0][0]
+    assert pool.fetch_calls[0][1][:2] == (user.account_id, "draft")
     assert result["drafts"][0]["quality_status"] == "fail"
     assert result["drafts"][0]["blocker_count"] == 1
     assert result["drafts"][0]["warning_count"] == 1
@@ -1072,7 +1094,11 @@ async def test_campaign_quality_diagnostics_returns_grouped_failure_explanations
 @pytest.mark.asyncio
 async def test_review_queue_summary_returns_quality_rollup(monkeypatch):
     class Pool:
-        async def fetchrow(self, query, *_args):
+        def __init__(self):
+            self.calls = []
+
+        async def fetchrow(self, query, *args):
+            self.calls.append(("fetchrow", query, args))
             if "pending_review" in query:
                 return {
                     "pending_review": 3,
@@ -1087,10 +1113,11 @@ async def test_review_queue_summary_returns_quality_rollup(monkeypatch):
                     "quality_fail": 2,
                     "quality_missing": 0,
                     "blocker_total": 3,
-                }
+            }
             return None
 
-        async def fetch(self, query, *_args):
+        async def fetch(self, query, *args):
+            self.calls.append(("fetch", query, args))
             if "GROUP BY ap.name" in query:
                 return [{"name": "Partner A", "count": 2}]
             if "GROUP BY boundary" in query:
@@ -1099,10 +1126,16 @@ async def test_review_queue_summary_returns_quality_rollup(monkeypatch):
                 return [{"reason": "content omits a concrete timing or numeric anchor even though one is available", "count": 1}]
             return []
 
-    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    user = type("User", (), {"account_id": str(uuid4())})()
 
-    result = await mod.review_queue_summary()
+    result = await mod.review_queue_summary(user=user)
 
+    assert len(pool.calls) == 5
+    for _, query, args in pool.calls:
+        assert "tracked_vendors" in query
+        assert args == (user.account_id,)
     assert result["pending_review"] == 3
     assert result["quality_pass"] == 1
     assert result["quality_fail"] == 2

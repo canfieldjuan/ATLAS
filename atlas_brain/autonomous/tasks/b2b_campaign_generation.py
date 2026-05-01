@@ -1548,6 +1548,7 @@ async def list_churning_company_review_candidates(
     limit: int,
     vendor_filter: str | None = None,
     company_filter: str | None = None,
+    account_id: str | None = None,
     qualified_only: bool = True,
     ignore_recent_dedup: bool = False,
 ) -> dict[str, Any]:
@@ -1558,6 +1559,7 @@ async def list_churning_company_review_candidates(
         limit=min(max(limit * 5, limit), 500),
         vendor_filter=vendor_filter,
         company_filter=company_filter,
+        account_id=account_id,
     )
     by_company: dict[str, list[dict[str, Any]]] = {}
     for row in fetched:
@@ -3842,17 +3844,30 @@ async def _fetch_accounts_in_motion_opportunities(
     limit: int,
     vendor_filter: str | None = None,
     company_filter: str | None = None,
+    account_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch named company targets from the latest accounts-in-motion reports."""
-    rows = await pool.fetch(
+    params: list[Any] = []
+    account_scope_sql = ""
+    if account_id:
+        params.append(account_id)
+        account_scope_sql = """
+          AND vendor_filter IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid
+          )
         """
+
+    rows = await pool.fetch(
+        f"""
         SELECT DISTINCT ON (LOWER(vendor_filter))
                vendor_filter, intelligence_data
         FROM b2b_intelligence
         WHERE report_type = 'accounts_in_motion'
           AND vendor_filter IS NOT NULL
+          {account_scope_sql}
         ORDER BY LOWER(vendor_filter), report_date DESC, created_at DESC
-        """
+        """,
+        *params,
     )
     results: list[dict[str, Any]] = []
     vendor_filter_lc = str(vendor_filter or "").lower()
