@@ -7,8 +7,10 @@ carved out safely without removing or changing production code.
 ## Current contents
 
 - `autonomous/tasks/`: copied task implementations
+- `services/`: copied support shims and staged service dependencies
 - `skills/digest/`: copied prompt skill contracts
-- `storage/migrations/`: copied blog persistence migrations
+- `storage/migrations/`: copied persistence migrations
+- `docs/`: extraction maps for productized pipeline slices
 
 ## Sync command
 
@@ -26,6 +28,11 @@ Mirror mappings are declared in `extracted_content_pipeline/manifest.json` so sy
 
 This scaffold preserves code exactly as copied so behavior and signatures remain
 unchanged while extraction work continues.
+
+This is not yet the sellable product boundary. A customer-usable module must be
+able to install and run without the Atlas monolith on `PYTHONPATH`. Until the
+standalone audit reaches zero runtime `atlas_brain` imports, this package is a
+staging copy, not a deployable product.
 
 
 ## Validation command
@@ -48,6 +55,17 @@ python scripts/check_extracted_imports.py
 
 Known unresolved relative imports are tracked in `extracted_content_pipeline/import_debt_allowlist.txt`.
 
+## Standalone readiness audit
+
+```bash
+python scripts/audit_extracted_standalone.py
+python scripts/audit_extracted_standalone.py --fail-on-debt
+```
+
+The first command reports Atlas runtime coupling. The second is the product gate
+we should enable once staged shims have been replaced with product-owned ports
+and adapters.
+
 ## One-shot checks
 
 ```bash
@@ -59,6 +77,11 @@ bash scripts/run_extracted_pipeline_checks.sh
 To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`) that delegate to `atlas_brain` implementations.
 
 B2B helper siblings required by `b2b_blog_post_generation.py` are also copied into `extracted_content_pipeline/autonomous/tasks/`.
+
+These shims are temporary extraction scaffolding. They should not ship in the
+customer product.
+
+The email/campaign generation slice is mapped in `docs/email_campaign_generation_pipeline.md`, with standalone productization requirements in `docs/standalone_productization.md`.
 
 ## Import smoke test
 
