@@ -37,14 +37,11 @@ Differentiator: every output is grounded in real switching signals and uses the 
 
 Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_company_signals.sql`, `101_vendor_buyer_profiles.sql`, `147_displacement_velocity.sql`, `158_cross_vendor_conclusions.sql`, `245_cross_vendor_reasoning_synthesis.sql`, `261_b2b_competitive_sets.sql`, `262_b2b_competitive_set_runs.sql`, `263_b2b_competitive_set_run_constraints.sql`.
 
-## What's out of scope (Phase 2 / Phase 3)
+## What's out of scope (remaining Phase 3)
 
-- Standalone toggle (`EXTRACTED_COMP_INTEL_STANDALONE=1`) — no atlas_brain on `sys.path`
-- Slim settings carve-out from `atlas_brain.config`
 - Decoupling battle-card LLM calls so they consume `extracted_llm_infrastructure/` directly (LLM-infra extraction is in PR #40)
-- Decoupling email rendering / send from `atlas_brain.services.campaign_sender`
-- Replacing `is_suppressed()` callbacks to atlas_brain.autonomous.tasks.campaign_suppression with a Protocol
 - API endpoint extraction beyond the briefing endpoints (`/b2b/win-loss`, dashboard endpoints stay in atlas_brain)
+- Full runtime exercise without `atlas_brain` on `sys.path`; this slice adds the standalone substrate and smoke coverage, but deep task modules still carry Atlas-owned domain dependencies.
 
 ## Cross-product dependencies (acknowledged)
 
@@ -52,10 +49,25 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 |---|---|---|
 | **LLM Infrastructure** | extracted via PR #40 | `b2b_battle_cards.py:260` calls `pipelines.llm.call_llm_with_skill`; will rebase once PR #40 merges |
 | **Evidence claims** | atlas-core | `services/b2b/evidence_claim_*.py` is shared with churn intel — keep central |
-| **Campaign suppression** | atlas-core | `is_suppressed()` cross-call kept |
-| **Campaign sender (Resend)** | atlas-core | Email send infra stays in atlas_brain; Phase 3 introduces a provider Protocol |
+| **Campaign suppression** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured `SuppressionPolicy` |
+| **Campaign sender (Resend)** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured campaign sender |
 | **`_b2b_shared.py`** | atlas-core | Circular-import risk; not extracted |
 | **`challenger_dashboard_claims.py`** | atlas-core | Bridge module aggregating displacement claims |
+
+## Standalone toggle
+
+Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away from Atlas:
+
+- `config.py` uses `extracted_competitive_intelligence._standalone.config`
+- `storage/database.py` uses `extracted_llm_infrastructure.storage.database`
+- `auth/dependencies.py` uses fail-closed standalone auth hooks
+- `services/campaign_sender.py` and `autonomous/tasks/campaign_suppression.py` use injectable product-owned ports
+- `services/protocols.py` and `pipelines/llm.py` use `extracted_llm_infrastructure`
+- `services/scraping/sources.py` owns the source enum and classification sets locally
+- MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed
+- Lazy package fallbacks fail closed in standalone mode instead of silently importing Atlas package namespaces
+
+Standalone adapters that require a host application fail closed until configured.
 
 ## Sync workflow
 
@@ -75,12 +87,13 @@ When you change a source file under `atlas_brain/`, run the sync afterward and c
 bash scripts/run_extracted_competitive_intelligence_checks.sh
 ```
 
-Runs four checks in sequence:
+Runs five checks in sequence:
 
 1. `validate_*.sh` — byte-diff scaffold vs source (with explicit missing-source reporting)
 2. `check_ascii_python_*.sh` — every scaffolded `.py` is ASCII-only (true 0-based offsets on failure)
 3. `check_extracted_competitive_intelligence_imports.py` — relative imports either resolve inside the scaffold or are listed in `import_debt_allowlist.txt` (resolver honors `level - 1` Python semantics)
 4. `smoke_extracted_competitive_intelligence_imports.py` — every public module imports without raising
+5. `smoke_extracted_competitive_intelligence_standalone.py` — standalone-mode substrate imports resolve to extracted-owned or extracted-LLM modules
 
 ## Import debt
 

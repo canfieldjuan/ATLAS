@@ -1,23 +1,30 @@
-"""Phase 1 bridge: re-exports atlas_brain.services.protocols.
+"""Protocol bridge for extracted competitive intelligence.
 
-Programmatically copies every non-dunder name (including underscore-
-prefixed helpers that from X import * would drop). Required because
-many scaffolded modules import private helpers from atlas_brain peers
-via from .X import _foo lazily inside function bodies. Phase 2
-replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
+Default mode re-exports atlas_brain.services.protocols. Standalone mode
+reuses the extracted LLM infrastructure protocol definitions.
 """
 from __future__ import annotations
 
 import importlib as _importlib
+import os as _os
 
-def _bridge() -> None:
-    src = _importlib.import_module("atlas_brain.services.protocols")
-    g = globals()
-    for name in dir(src):
-        if not name.startswith("__"):
-            g[name] = getattr(src, name)
+if _os.environ.get("EXTRACTED_COMP_INTEL_STANDALONE") == "1":
+    from .._standalone.protocols import (  # noqa: F401
+        InferenceMetrics,
+        LLMService,
+        Message,
+        ModelInfo,
+    )
+else:
+    def _bridge() -> None:
+        src = _importlib.import_module("atlas_brain.services.protocols")
+        g = globals()
+        for name in dir(src):
+            if not name.startswith("__"):
+                g[name] = getattr(src, name)
 
 
-_bridge()
-del _bridge, _importlib
+    _bridge()
+    del _bridge
+
+del _importlib, _os
