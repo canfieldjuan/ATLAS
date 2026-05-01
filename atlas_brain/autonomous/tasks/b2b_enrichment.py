@@ -288,6 +288,13 @@ from ...services.b2b.enrichment_task_ops import (
     queue_version_upgrades as _service_queue_version_upgrades,
     recover_orphaned_enriching as _service_recover_orphaned_enriching,
 )
+from ...services.b2b.enrichment_notifications import (
+    notify_high_urgency as _service_notify_high_urgency,
+)
+from ...services.b2b.enrichment_single_runner import (
+    EnrichmentSingleRunnerDeps,
+    run_single_enrichment_review as _service_run_single_enrichment_review,
+)
 from ...services.b2b.enrichment_row_runner import EnrichmentRunnerDeps, run_enrichment_rows
 from ...services.b2b.enrichment_task_runner import EnrichmentTaskRunnerDeps, run_enrichment_task
 from ...services.b2b.enrichment_stage_runs import (
@@ -1174,35 +1181,15 @@ async def _notify_high_urgency(
     pain_category: str,
     intent_to_leave: bool,
 ) -> None:
-    """Send ntfy push when a newly enriched review exceeds the urgency threshold."""
-    if not settings.alerts.ntfy_enabled:
-        return
-
-    import httpx
-
-    url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
-    company_part = f" at {reviewer_company}" if reviewer_company else ""
-    intent_part = " | Intent to leave" if intent_to_leave else ""
-    pain_part = f" | Pain: {pain_category}" if pain_category else ""
-
-    message = (
-        f"Urgency {urgency:.0f}/10{company_part}\n"
-        f"Vendor: {vendor_name}{pain_part}{intent_part}"
+    await _service_notify_high_urgency(
+        alerts=settings.alerts,
+        logger=logger,
+        vendor_name=vendor_name,
+        reviewer_company=reviewer_company,
+        urgency=urgency,
+        pain_category=pain_category,
+        intent_to_leave=intent_to_leave,
     )
-
-    headers: dict[str, str] = {
-        "Title": f"High-Urgency Signal: {vendor_name}",
-        "Priority": "high",
-        "Tags": "rotating_light,b2b,churn",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, content=message, headers=headers)
-            resp.raise_for_status()
-        logger.info("ntfy high-urgency alert sent for %s (urgency=%s)", vendor_name, urgency)
-    except Exception as exc:
-        logger.warning("ntfy high-urgency alert failed for %s: %s", vendor_name, exc)
 
 
 async def enrich_batch(batch_id: str) -> dict[str, Any]:
@@ -1479,458 +1466,55 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                          max_tokens: int, truncate_length: int = 3000,
                          run_id: str | None = None,
                          usage_out: dict[str, int] | None = None) -> bool | str:
-    """Enrich a single B2B review and optionally report exact-cache usage."""
-    review_id = row["id"]
-    cache_usage = _empty_exact_cache_usage()
-
-    def _finish(status: bool | str) -> bool | str:
-        if usage_out is not None:
-            usage_out.clear()
-            usage_out.update(cache_usage)
-        return status
-
-    # Skip reviews with insufficient text -- title-only scrapes can't yield 47 fields
-    combined_text_len = _combined_review_text_length(row)
-    if combined_text_len < _effective_min_review_text_length(row):
-        await pool.execute(
-            "UPDATE b2b_reviews SET enrichment_status = 'not_applicable' WHERE id = $1",
-            review_id,
-        )
-        return _finish(False)
-
-    source = str(row.get("source") or "").strip().lower()
-    skip_sources = _effective_enrichment_skip_sources()
-    if source in skip_sources:
-        await pool.execute(
-            """
-            UPDATE b2b_reviews
-            SET enrichment_status = 'not_applicable',
-                low_fidelity = false,
-                low_fidelity_reasons = '[]'::jsonb,
-                low_fidelity_detected_at = NULL
-            WHERE id = $1
-            """,
-            review_id,
-        )
-        logger.debug(
-            "Skipping unsupported churn-enrichment source %s for review %s",
-            source,
-            review_id,
-        )
-        return _finish(False)
-
-    try:
-        cfg = settings.b2b_churn
-        full_extraction_timeout = max(
-            0.0,
-            _coerce_float_value(
-                getattr(cfg, "enrichment_full_extraction_timeout_seconds", 120.0),
-                120.0,
-            ),
-        )
-        payload = _build_classify_payload(row, truncate_length)
-        payload_json = json.dumps(payload)
-        trace_metadata = {
-            "run_id": run_id,
-            "vendor_name": str(row.get("vendor_name") or ""),
-            "review_id": str(review_id),
-            "source": str(row.get("source") or ""),
-        }
-        client = _get_tier1_client(cfg)
-        from ...skills import get_skill_registry
-
-        registry = get_skill_registry()
-        tier1_skill = registry.get("digest/b2b_churn_extraction_tier1")
-        tier1_request = None
-        tier1_request_fingerprint = None
-        tier1_work_fingerprint = None
-        existing_tier1_stage = None
-        tier1 = None
-        tier1_model = None
-        tier1_cache_hit = False
-        tier1_reused_from_stage = False
-
-        # Tier 1: deterministic extraction (base fields). Tier 2: nuance
-        # classification. Each tier has its own routing flag so a deployment
-        # can keep Tier 1 on local vLLM (cheap, large pool) while routing
-        # Tier 2 to a frontier OpenRouter model (better at the nuance work).
-        use_openrouter_tier1, use_openrouter_tier2 = _resolve_tier_routing(
-            cfg, local_only_override=local_only,
-        )
-        if tier1_skill is not None:
-            tier1_provider = "openrouter" if use_openrouter_tier1 else "vllm"
-            tier1_model_planned = (
-                cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"
-                if use_openrouter_tier1
-                else cfg.enrichment_tier1_model
-            )
-            tier1_plan = build_tier1_stage_plan(
-                row=row,
-                payload_json=payload_json,
-                system_prompt=str(tier1_skill.content or ""),
-                model=str(tier1_model_planned or ""),
-                provider=tier1_provider,
-                batch_enabled=False,
-                run_id=run_id,
-                prepare_stage_request=_prepare_stage_request,
-                max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096)
-                if use_openrouter_tier1 else cfg.enrichment_tier1_max_tokens,
-                guided_json=None if use_openrouter_tier1 else _TIER1_JSON_SCHEMA,
-            )
-            tier1_request = tier1_plan.request
-            tier1_request_fingerprint = tier1_plan.request_fingerprint
-            tier1_work_fingerprint = tier1_plan.work_fingerprint
-            await ensure_stage_run(
-                pool,
-                review_id=review_id,
-                stage_id="b2b_enrichment.tier1",
-                work_fingerprint=str(tier1_plan.work_fingerprint),
-                request_fingerprint=str(tier1_plan.request_fingerprint),
-                provider=tier1_plan.provider,
-                model=tier1_plan.model,
-                backend=tier1_plan.backend,
-                run_id=run_id,
-                metadata=tier1_plan.metadata,
-            )
-            stage_decision = await prepare_stage_execution(
-                pool=pool,
-                llm=None,
-                task_name=None,
-                artifact_type=None,
-                artifact_id=None,
-                review_id=review_id,
-                stage_id="b2b_enrichment.tier1",
-                work_fingerprint=str(tier1_work_fingerprint),
-                request_fingerprint=str(tier1_request_fingerprint),
-                parse_response_text=_parse_stage_row_result,
-                defer_on_submitted=True,
-                reconcile_batch=False,
-            )
-            existing_tier1_stage = stage_decision.stage_row
-            if stage_decision.action == "reuse_stage":
-                applied = await apply_stage_decision(
-                    pool=pool,
-                    decision=stage_decision,
-                    review_id=review_id,
-                    stage_id="b2b_enrichment.tier1",
-                    work_fingerprint=str(tier1_work_fingerprint),
-                    tier=1,
-                    usage_from_stage_row=_stage_usage_from_row,
-                    pending_metadata={"tier": 1, "workload": "direct"},
-                    success_metadata={"tier": 1, "workload": "direct"},
-                    stage_usage_snapshot=_stage_usage_snapshot,
-                )
-                tier1 = applied.parsed_result if applied is not None else stage_decision.parsed_result
-                tier1_model = applied.model if applied is not None else None
-                tier1_cache_hit = bool(applied.cache_hit) if applied is not None else False
-                tier1_reused_from_stage = True
-            elif stage_decision.action == "defer_submitted_stage":
-                applied = await apply_stage_decision(
-                    pool=pool,
-                    decision=stage_decision,
-                    review_id=review_id,
-                    stage_id="b2b_enrichment.tier1",
-                    work_fingerprint=str(tier1_work_fingerprint),
-                    tier=1,
-                    usage_from_stage_row=_stage_usage_from_row,
-                    pending_metadata={"tier": 1, "workload": "direct"},
-                    success_metadata={"tier": 1, "workload": "direct"},
-                    stage_usage_snapshot=_stage_usage_snapshot,
-                )
-                await defer_review_transition(
-                    row=row,
-                    tier="tier1",
-                    custom_id=str((applied.custom_id if applied is not None else "") or ""),
-                    usage=None,
-                    defer_review=lambda target_row, **kwargs: _defer_batch_row(pool, target_row, **kwargs),
-                )
-                return _finish("deferred")
-        if tier1_skill is not None and tier1 is not None:
-            stage_reuse_usage = _stage_usage_from_row(existing_tier1_stage, tier=1)
-            _accumulate_exact_cache_usage(cache_usage, stage_reuse_usage)
-        elif use_openrouter_tier1:
-            tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
-                _call_openrouter_tier1(
-                    payload_json,
-                    cfg,
-                    include_cache_hit=True,
-                    trace_metadata=trace_metadata | {"tier": "tier1"},
-                ),
-                timeout=full_extraction_timeout,
-            ))
-        elif tier1_skill is not None:
-            tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
-                _call_vllm_tier1(
-                    payload_json,
-                    cfg,
-                    client,
-                    include_cache_hit=True,
-                    trace_metadata=trace_metadata | {"tier": "tier1"},
-                ),
-                timeout=full_extraction_timeout,
-            ))
-        if tier1_skill is not None and tier1 is not None and existing_tier1_stage is not None and str(existing_tier1_stage.get("state") or "") == "succeeded":
-            pass
-        elif tier1_cache_hit:
-            cache_usage["tier1_exact_cache_hits"] += 1
-            cache_usage["exact_cache_hits"] += 1
-        elif tier1_model is not None:
-            cache_usage["tier1_generated_calls"] += 1
-            cache_usage["generated"] += 1
-        tier1_stage_usage = _stage_usage_snapshot(
-            tier=1,
-            cache_hit=bool(tier1_cache_hit),
-            generated=tier1 is not None and not bool(tier1_cache_hit),
-        )
-        if tier1 is None:
-            if tier1_request_fingerprint is not None:
-                await mark_stage_run(
-                    pool,
-                    review_id=review_id,
-                    stage_id="b2b_enrichment.tier1",
-                    work_fingerprint=str(tier1_work_fingerprint),
-                    state="failed",
-                    backend=_stage_backend_name(
-                        batch_enabled=False,
-                        provider="openrouter" if use_openrouter_tier1 else "vllm",
-                    ),
-                    error_code="tier1_empty_result",
-                    metadata={"tier": 1, "workload": "direct"},
-                    completed=True,
-                )
-            logger.debug("Tier 1 returned None for %s, deferring to next cycle", review_id)
-            await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-            return _finish(False)
-        if tier1_request_fingerprint is not None and not tier1_reused_from_stage:
-            await mark_stage_run(
-                pool,
-                review_id=review_id,
-                stage_id="b2b_enrichment.tier1",
-                work_fingerprint=str(tier1_work_fingerprint),
-                state="succeeded",
-                result_source="exact_cache" if tier1_cache_hit else "generated",
-                backend=_stage_backend_name(
-                    batch_enabled=False,
-                    provider="openrouter" if use_openrouter_tier1 else "vllm",
-                ),
-                usage=tier1_stage_usage,
-                response_text=_stage_result_text(tier1),
-                metadata={"tier": 1, "workload": "direct"},
-                completed=True,
-            )
-
-        # Tier 2: conditional -- only fire when tier 1 left extraction gaps
-        tier2 = None
-        tier2_model = None
-        tier2_cache_hit = False
-        needs_tier2 = _tier1_has_extraction_gaps(tier1, source=row.get("source"))
-        tier2_request_fingerprint = None
-        tier2_work_fingerprint = None
-        existing_tier2_stage = None
-        tier2_reused_from_stage = False
-        if needs_tier2:
-            tier2_skill = registry.get("digest/b2b_churn_extraction_tier2")
-            if tier2_skill is not None:
-                tier2_provider = "openrouter" if use_openrouter_tier2 else "vllm"
-                tier2_model_planned = (
-                    cfg.enrichment_tier2_openrouter_model
-                    or cfg.enrichment_openrouter_model
-                    or "anthropic/claude-haiku-4-5"
-                    if use_openrouter_tier2
-                    else (cfg.enrichment_tier2_model or cfg.enrichment_tier1_model)
-                )
-                tier2_payload = dict(payload)
-                tier2_plan = build_tier2_stage_plan(
-                    row=row,
-                    base_payload=tier2_payload,
-                    tier1_result=tier1,
-                    system_prompt=str(tier2_skill.content or ""),
-                    model=str(tier2_model_planned or ""),
-                    provider=tier2_provider,
-                    batch_enabled=False,
-                    run_id=run_id,
-                    prepare_stage_request=_prepare_stage_request,
-                    prompt_for_content_type=_tier2_system_prompt_for_content_type,
-                    max_tokens=cfg.enrichment_tier2_max_tokens,
-                    workload="direct",
-                )
-                tier2_request_fingerprint = tier2_plan.request_fingerprint
-                tier2_work_fingerprint = tier2_plan.work_fingerprint
-                await ensure_stage_run(
-                    pool,
-                    review_id=review_id,
-                    stage_id="b2b_enrichment.tier2",
-                    work_fingerprint=str(tier2_plan.work_fingerprint),
-                    request_fingerprint=str(tier2_plan.request_fingerprint),
-                    provider=tier2_plan.provider,
-                    model=tier2_plan.model,
-                    backend=tier2_plan.backend,
-                    run_id=run_id,
-                    metadata=tier2_plan.metadata,
-                )
-                stage_decision = await prepare_stage_execution(
-                    pool=pool,
-                    llm=None,
-                    task_name=None,
-                    artifact_type=None,
-                    artifact_id=None,
-                    review_id=review_id,
-                    stage_id="b2b_enrichment.tier2",
-                    work_fingerprint=str(tier2_work_fingerprint),
-                    request_fingerprint=str(tier2_request_fingerprint),
-                    parse_response_text=_parse_stage_row_result,
-                    defer_on_submitted=True,
-                    reconcile_batch=False,
-                )
-                existing_tier2_stage = stage_decision.stage_row
-                if stage_decision.action == "reuse_stage":
-                    applied = await apply_stage_decision(
-                        pool=pool,
-                        decision=stage_decision,
-                        review_id=review_id,
-                        stage_id="b2b_enrichment.tier2",
-                        work_fingerprint=str(tier2_work_fingerprint),
-                        tier=2,
-                        usage_from_stage_row=_stage_usage_from_row,
-                        pending_metadata={"tier": 2, "workload": "direct"},
-                        success_metadata={"tier": 2, "workload": "direct"},
-                        stage_usage_snapshot=_stage_usage_snapshot,
-                    )
-                    tier2 = applied.parsed_result if applied is not None else stage_decision.parsed_result
-                    tier2_model = applied.model if applied is not None else None
-                    tier2_cache_hit = bool(applied.cache_hit) if applied is not None else False
-                    tier2_reused_from_stage = True
-                elif stage_decision.action == "defer_submitted_stage":
-                    applied = await apply_stage_decision(
-                        pool=pool,
-                        decision=stage_decision,
-                        review_id=review_id,
-                        stage_id="b2b_enrichment.tier2",
-                        work_fingerprint=str(tier2_work_fingerprint),
-                        tier=2,
-                        usage_from_stage_row=_stage_usage_from_row,
-                        pending_metadata={"tier": 2, "workload": "direct"},
-                        success_metadata={"tier": 2, "workload": "direct"},
-                        stage_usage_snapshot=_stage_usage_snapshot,
-                    )
-                    await defer_review_transition(
-                        row=row,
-                        tier="tier2",
-                        custom_id=str((applied.custom_id if applied is not None else "") or ""),
-                        usage=cache_usage,
-                        defer_review=lambda target_row, **kwargs: _defer_batch_row(pool, target_row, **kwargs),
-                    )
-                    return _finish("deferred")
-        if needs_tier2:
-            try:
-                if tier2 is not None:
-                    stage_reuse_usage = _stage_usage_from_row(existing_tier2_stage, tier=2)
-                    _accumulate_exact_cache_usage(cache_usage, stage_reuse_usage)
-                elif use_openrouter_tier2:
-                    tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
-                        _call_openrouter_tier2(
-                            tier1,
-                            row,
-                            cfg,
-                            truncate_length,
-                            include_cache_hit=True,
-                            trace_metadata=trace_metadata | {"tier": "tier2"},
-                        ),
-                        timeout=full_extraction_timeout,
-                    ))
-                else:
-                    tier2_client = _get_tier2_client(cfg)
-                    tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
-                        _call_vllm_tier2(
-                            tier1,
-                            row,
-                            cfg,
-                            tier2_client,
-                            truncate_length,
-                            include_cache_hit=True,
-                            trace_metadata=trace_metadata | {"tier": "tier2"},
-                        ),
-                        timeout=full_extraction_timeout,
-                    ))
-            except Exception:
-                logger.warning(
-                    "Tier 2 enrichment failed for review %s; persisting tier 1 result only",
-                    review_id,
-                    exc_info=True,
-                )
-        if needs_tier2 and tier2 is not None and existing_tier2_stage is not None and str(existing_tier2_stage.get("state") or "") == "succeeded":
-            pass
-        elif tier2_cache_hit:
-            cache_usage["tier2_exact_cache_hits"] += 1
-            cache_usage["exact_cache_hits"] += 1
-        elif tier2_model is not None:
-            cache_usage["tier2_generated_calls"] += 1
-            cache_usage["generated"] += 1
-        if needs_tier2 and tier2_request_fingerprint is not None and not tier2_reused_from_stage:
-            tier2_stage_usage = _stage_usage_snapshot(
-                tier=2,
-                cache_hit=bool(tier2_cache_hit),
-                generated=tier2 is not None and not bool(tier2_cache_hit),
-            )
-            await mark_stage_run(
-                pool,
-                review_id=review_id,
-                stage_id="b2b_enrichment.tier2",
-                work_fingerprint=str(tier2_work_fingerprint),
-                state="succeeded" if tier2 is not None else "failed",
-                result_source="exact_cache" if tier2_cache_hit else ("generated" if tier2 is not None else None),
-                backend=_stage_backend_name(
-                    batch_enabled=False,
-                    provider="openrouter" if use_openrouter_tier2 else "vllm",
-                ),
-                usage=tier2_stage_usage if tier2 is not None else None,
-                response_text=_stage_result_text(tier2),
-                error_code=None if tier2 is not None else "tier2_empty_result",
-                metadata={"tier": 2, "workload": "direct"},
-                completed=True,
-            )
-        if tier2 is not None:
-            model_id = f"hybrid:{tier1_model}+{tier2_model}"
-        else:
-            model_id = tier1_model or ""
-
-        return _finish(
-            await persist_review_transition(
-                row=row,
-                tier1_result=tier1,
-                tier2_result=tier2,
-                model_id=model_id,
-                usage=cache_usage,
-                merge_results=_merge_tier1_tier2,
-                persist_review=lambda target_row, result, *, model_id, usage: _persist_enrichment_result(
-                    pool,
-                    target_row,
-                    result,
-                    model_id=model_id,
-                    max_attempts=max_attempts,
-                    run_id=run_id,
-                    cache_usage=usage,
-                ),
-            )
-        )
-
-    except Exception:
-        logger.exception("Failed to enrich B2B review %s", review_id)
-        try:
-            # Reset from 'enriching' back to 'pending' (or 'failed' if exhausted)
-            new_status = "failed" if (row["enrichment_attempts"] + 1) >= max_attempts else "pending"
-            await pool.execute(
-                """
-                UPDATE b2b_reviews
-                SET enrichment_attempts = enrichment_attempts + 1,
-                    enrichment_status = $1
-                WHERE id = $2
-                """,
-                new_status, review_id,
-            )
-        except Exception:
-            pass
-        return _finish(False)
+    return await _service_run_single_enrichment_review(
+        pool,
+        row,
+        max_attempts=max_attempts,
+        local_only=local_only,
+        max_tokens=max_tokens,
+        truncate_length=truncate_length,
+        run_id=run_id,
+        usage_out=usage_out,
+        cfg=settings.b2b_churn,
+        deps=EnrichmentSingleRunnerDeps(
+            empty_exact_cache_usage=_empty_exact_cache_usage,
+            combined_review_text_length=_combined_review_text_length,
+            effective_min_review_text_length=_effective_min_review_text_length,
+            effective_enrichment_skip_sources=_effective_enrichment_skip_sources,
+            coerce_float_value=_coerce_float_value,
+            build_classify_payload=_build_classify_payload,
+            get_tier1_client=_get_tier1_client,
+            resolve_tier_routing=_resolve_tier_routing,
+            prepare_stage_request=_prepare_stage_request,
+            parse_stage_row_result=_parse_stage_row_result,
+            stage_usage_from_row=_stage_usage_from_row,
+            accumulate_exact_cache_usage=_accumulate_exact_cache_usage,
+            unpack_stage_result=_unpack_stage_result,
+            stage_usage_snapshot=_stage_usage_snapshot,
+            stage_result_text=_stage_result_text,
+            stage_backend_name=_stage_backend_name,
+            tier1_has_extraction_gaps=_tier1_has_extraction_gaps,
+            get_tier2_client=_get_tier2_client,
+            merge_tier1_tier2=_merge_tier1_tier2,
+            persist_enrichment_result=_persist_enrichment_result,
+            defer_batch_row=_defer_batch_row,
+            increment_attempts=_increment_attempts,
+            ensure_stage_run=ensure_stage_run,
+            mark_stage_run=mark_stage_run,
+            prepare_stage_execution=prepare_stage_execution,
+            apply_stage_decision=apply_stage_decision,
+            defer_review_transition=defer_review_transition,
+            persist_review_transition=persist_review_transition,
+            build_tier1_stage_plan=build_tier1_stage_plan,
+            build_tier2_stage_plan=build_tier2_stage_plan,
+            tier2_system_prompt_for_content_type=_tier2_system_prompt_for_content_type,
+            call_openrouter_tier1=_call_openrouter_tier1,
+            call_vllm_tier1=_call_vllm_tier1,
+            call_openrouter_tier2=_call_openrouter_tier2,
+            call_vllm_tier2=_call_vllm_tier2,
+            tier1_json_schema=_TIER1_JSON_SCHEMA,
+        ),
+    )
 
 
 def _smart_truncate(text: str, max_len: int = 3000) -> str:
