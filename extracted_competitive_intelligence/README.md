@@ -86,6 +86,10 @@ sync and byte-drift validation skip them, while ASCII and import checks still
 cover them. This is the handoff path for moving a scaffolded module from Atlas
 snapshot to extracted implementation.
 
+The first owned MCP modules are `vendor_registry.py`, `displacement.py`, and
+`cross_vendor.py`; they are read-oriented surfaces with extracted-owned support
+dependencies.
+
 ## Local checks
 
 ```bash
