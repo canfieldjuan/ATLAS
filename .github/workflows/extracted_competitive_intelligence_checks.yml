@@ -1,0 +1,46 @@
+name: Extracted Competitive Intelligence Checks
+
+on:
+  pull_request:
+    paths:
+      - "extracted_competitive_intelligence/**"
+      - "scripts/sync_extracted_competitive_intelligence.sh"
+      - "scripts/validate_extracted_competitive_intelligence.sh"
+      - "scripts/check_ascii_python_competitive_intelligence.sh"
+      - "scripts/check_extracted_competitive_intelligence_imports.py"
+      - "scripts/smoke_extracted_competitive_intelligence_imports.py"
+      - "scripts/run_extracted_competitive_intelligence_checks.sh"
+  push:
+    paths:
+      - "extracted_competitive_intelligence/**"
+      - "scripts/sync_extracted_competitive_intelligence.sh"
+      - "scripts/validate_extracted_competitive_intelligence.sh"
+      - "scripts/check_ascii_python_competitive_intelligence.sh"
+      - "scripts/check_extracted_competitive_intelligence_imports.py"
+      - "scripts/smoke_extracted_competitive_intelligence_imports.py"
+      - "scripts/run_extracted_competitive_intelligence_checks.sh"
+
+jobs:
+  extracted-competitive-intelligence-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        # Smoke imports execute the full module body (which pulls
+        # httpx, pydantic, asyncpg, anthropic, etc.). Without these,
+        # the check would fail on third-party ModuleNotFoundError
+        # instead of on actual scaffold issues.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run extracted competitive intelligence checks
+        run: bash scripts/run_extracted_competitive_intelligence_checks.sh
