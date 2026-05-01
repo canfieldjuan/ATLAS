@@ -112,7 +112,7 @@ Prompt contracts:
 - `skills/digest/amazon_seller_campaign_generation.md`
 - `skills/digest/amazon_seller_campaign_sequence.md`
 
-Campaign schema:
+Campaign schema copied into this scaffold:
 
 - `storage/migrations/066_b2b_campaigns.sql`
 - `storage/migrations/068_campaign_sequences.sql`
@@ -121,14 +121,19 @@ Campaign schema:
 - `storage/migrations/073_campaign_sequence_fixes.sql`
 - `storage/migrations/074_campaign_target_modes.sql`
 - `storage/migrations/075_amazon_seller_campaigns.sql`
-- `storage/migrations/080_b2b_alert_baselines.sql`
 - `storage/migrations/090_audit_log_metadata_index.sql`
 - `storage/migrations/104_campaign_outcomes.sql`
-- `storage/migrations/106_score_calibration.sql`
 - `storage/migrations/146_campaign_score_components.sql`
 - `storage/migrations/150_campaign_engagement_timing.sql`
+
+Campaign-adjacent migrations intentionally deferred from the core scaffold:
+
+- `storage/migrations/080_b2b_alert_baselines.sql` (also depends on tenant
+  alert tables and `saas_accounts`)
+- `storage/migrations/106_score_calibration.sql` (model calibration slice)
 - `storage/migrations/235_vendor_targets_account_scope.sql`
-- `storage/migrations/255_anthropic_message_batches.sql`
+- `storage/migrations/255_anthropic_message_batches.sql` (batch LLM replay
+  infrastructure)
 
 ## External Providers And Env
 

@@ -12,6 +12,9 @@
 - B2B helper siblings required by copied blog/campaign flows are present.
 - Campaign and sequence prompt contracts are copied into `skills/digest/`, and
   the local skill registry implements `SkillStore.get_prompt()`.
+- Core campaign schema migrations are copied into `storage/migrations/`
+  (`b2b_campaigns`, `campaign_sequences`, suppressions, analytics, vendor and
+  seller targets, outcomes, score components, and engagement timing).
 - Compatibility bridge modules no longer map extracted package imports back to
   `atlas_brain` at runtime.
 - LLM-facing content bridges now target `extracted_llm_infrastructure`

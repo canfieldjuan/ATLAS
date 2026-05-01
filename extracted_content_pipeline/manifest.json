@@ -77,6 +77,50 @@
       "target": "extracted_content_pipeline/storage/migrations/264_blog_post_rejection_count.sql"
     },
     {
+      "source": "atlas_brain/storage/migrations/066_b2b_campaigns.sql",
+      "target": "extracted_content_pipeline/storage/migrations/066_b2b_campaigns.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/068_campaign_sequences.sql",
+      "target": "extracted_content_pipeline/storage/migrations/068_campaign_sequences.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/069_campaign_analytics.sql",
+      "target": "extracted_content_pipeline/storage/migrations/069_campaign_analytics.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/070_campaign_suppressions.sql",
+      "target": "extracted_content_pipeline/storage/migrations/070_campaign_suppressions.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/073_campaign_sequence_fixes.sql",
+      "target": "extracted_content_pipeline/storage/migrations/073_campaign_sequence_fixes.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/074_campaign_target_modes.sql",
+      "target": "extracted_content_pipeline/storage/migrations/074_campaign_target_modes.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/075_amazon_seller_campaigns.sql",
+      "target": "extracted_content_pipeline/storage/migrations/075_amazon_seller_campaigns.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/090_audit_log_metadata_index.sql",
+      "target": "extracted_content_pipeline/storage/migrations/090_audit_log_metadata_index.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/104_campaign_outcomes.sql",
+      "target": "extracted_content_pipeline/storage/migrations/104_campaign_outcomes.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/146_campaign_score_components.sql",
+      "target": "extracted_content_pipeline/storage/migrations/146_campaign_score_components.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/150_campaign_engagement_timing.sql",
+      "target": "extracted_content_pipeline/storage/migrations/150_campaign_engagement_timing.sql"
+    },
+    {
       "source": "atlas_brain/autonomous/tasks/_execution_progress.py",
       "target": "extracted_content_pipeline/autonomous/tasks/_execution_progress.py"
     },

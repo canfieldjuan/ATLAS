@@ -11,6 +11,7 @@ python scripts/smoke_extracted_pipeline_imports.py
 python scripts/audit_extracted_standalone.py --fail-on-debt
 pytest \
   tests/test_extracted_campaign_analytics.py \
+  tests/test_extracted_campaign_manifest.py \
   tests/test_extracted_campaign_generation.py \
   tests/test_extracted_campaign_llm_client.py \
   tests/test_extracted_campaign_llm_bridge.py \
