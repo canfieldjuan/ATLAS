@@ -33,6 +33,10 @@ def manifest_python_targets() -> list[Path]:
         ROOT / mapping["target"]
         for mapping in obj["mappings"]
         if mapping["target"].endswith(".py")
+    ] + [
+        ROOT / entry["target"]
+        for entry in obj.get("owned", [])
+        if entry["target"].endswith(".py")
     ]
 
 

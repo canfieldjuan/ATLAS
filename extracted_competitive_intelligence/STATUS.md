@@ -30,6 +30,7 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 | MCP package import boundary | ✅ extracted MCP server/shared helpers no longer import `atlas_brain.mcp.b2b` just to import tool modules |
 | Source registry support module | ✅ `services.scraping.sources` is extracted-owned instead of an Atlas bridge |
 | Package-level Atlas fallbacks | ✅ standalone mode fails closed for lazy package access in services, B2B services, templates, reasoning, autonomous, and autonomous tasks |
+| Product-owned manifest entries | ✅ `manifest.json` supports `owned` modules that stay in ASCII/import checks but are skipped by byte-sync validation |
 
 ## Phase 3 — Decoupling 🔲 (later PRs)
 
@@ -47,7 +48,7 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 | Scaffold file | Phase 1 (snapshot) | Phase 2 (standalone-ready) | Phase 3 (decoupled) |
 |---|---|---|---|
 | `services/vendor_registry.py` | ✅ | 🔲 | 🔲 |
-| `mcp/b2b/vendor_registry.py` | ✅ | 🔲 | 🔲 |
+| `mcp/b2b/vendor_registry.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/displacement.py` | ✅ | 🔲 | 🔲 |
 | `mcp/b2b/cross_vendor.py` | ✅ | 🔲 | 🔲 |
 | `mcp/b2b/write_intelligence.py` | ✅ | 🔲 | 🔲 |

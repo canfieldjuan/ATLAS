@@ -35,7 +35,7 @@ async def list_vendors_registry(limit: int = 100) -> str:
     """
     limit = max(1, min(limit, 500))
     try:
-        from atlas_brain.services.vendor_registry import list_vendors
+        from ...services.vendor_registry import list_vendors
 
         vendors = await list_vendors()
         result = [
@@ -73,7 +73,7 @@ async def fuzzy_vendor_search(
     if clean_query is None:
         return json.dumps({"error": "query is required"})
     try:
-        from atlas_brain.services.vendor_registry import fuzzy_search_vendors
+        from ...services.vendor_registry import fuzzy_search_vendors
 
         results = await fuzzy_search_vendors(
             clean_query, limit=limit, min_similarity=min_similarity,
@@ -106,7 +106,7 @@ async def fuzzy_company_search(
         return json.dumps({"error": "query is required"})
     clean_vendor_name = _clean_optional_text(vendor_name)
     try:
-        from atlas_brain.services.vendor_registry import fuzzy_search_companies
+        from ...services.vendor_registry import fuzzy_search_companies
 
         results = await fuzzy_search_companies(
             clean_query, vendor_name=clean_vendor_name, limit=limit, min_similarity=min_similarity,
@@ -137,7 +137,7 @@ async def add_vendor_to_registry(
     if clean_canonical_name is None:
         return json.dumps({"success": False, "error": "canonical_name is required"})
     try:
-        from atlas_brain.services.vendor_registry import add_vendor
+        from ...services.vendor_registry import add_vendor
 
         alias_list = _clean_alias_csv(aliases)
 
@@ -175,7 +175,7 @@ async def add_vendor_alias(
     if clean_alias is None:
         return json.dumps({"success": False, "error": "alias is required"})
     try:
-        from atlas_brain.services.vendor_registry import add_alias
+        from ...services.vendor_registry import add_alias
 
         row = await add_alias(clean_canonical_name, clean_alias)
         if row is None:

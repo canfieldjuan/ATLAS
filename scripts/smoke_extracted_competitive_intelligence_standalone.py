@@ -102,6 +102,18 @@ def main() -> int:
         print(f"FAIL {module_name}: Atlas fallback did not fail closed", flush=True)
         failed.append(module_name)
 
+    vendor_registry_path = (
+        ROOT
+        / "extracted_competitive_intelligence"
+        / "mcp"
+        / "b2b"
+        / "vendor_registry.py"
+    )
+    vendor_registry_source = vendor_registry_path.read_text()
+    if "atlas_brain.services.vendor_registry" in vendor_registry_source:
+        print("FAIL mcp.b2b.vendor_registry: still imports Atlas vendor registry", flush=True)
+        failed.append("mcp.b2b.vendor_registry")
+
     if failed:
         print(f"Standalone smoke failed for {len(failed)} check(s)")
         return 1

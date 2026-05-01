@@ -81,6 +81,11 @@ bash scripts/validate_extracted_competitive_intelligence.sh
 
 When you change a source file under `atlas_brain/`, run the sync afterward and commit the scaffold update in the same PR. The CI workflow at `.github/workflows/extracted_competitive_intelligence_checks.yml` enforces zero-drift on every PR that touches the scaffold.
 
+Modules listed under `owned` in `manifest.json` are intentionally product-owned:
+sync and byte-drift validation skip them, while ASCII and import checks still
+cover them. This is the handoff path for moving a scaffolded module from Atlas
+snapshot to extracted implementation.
+
 ## Local checks
 
 ```bash
@@ -89,7 +94,7 @@ bash scripts/run_extracted_competitive_intelligence_checks.sh
 
 Runs five checks in sequence:
 
-1. `validate_*.sh` — byte-diff scaffold vs source (with explicit missing-source reporting)
+1. `validate_*.sh` — byte-diff mapped scaffold files vs source, excluding product-owned manifest entries
 2. `check_ascii_python_*.sh` — every scaffolded `.py` is ASCII-only (true 0-based offsets on failure)
 3. `check_extracted_competitive_intelligence_imports.py` — relative imports either resolve inside the scaffold or are listed in `import_debt_allowlist.txt` (resolver honors `level - 1` Python semantics)
 4. `smoke_extracted_competitive_intelligence_imports.py` — every public module imports without raising

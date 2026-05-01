@@ -13,6 +13,10 @@ for mapping in obj["mappings"]:
     target = mapping["target"]
     if target.endswith(".py"):
         print(target)
+for entry in obj.get("owned", []):
+    target = entry["target"]
+    if target.endswith(".py"):
+        print(target)
 PY
 )
 

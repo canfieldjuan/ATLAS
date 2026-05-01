@@ -11,11 +11,14 @@ from pathlib import Path
 
 manifest = Path("extracted_competitive_intelligence/manifest.json")
 obj = json.loads(manifest.read_text())
+owned = {entry["target"] for entry in obj.get("owned", [])}
 errors: list[str] = []
 copied = 0
 for mapping in obj["mappings"]:
     src = Path(mapping["source"])
     dst = Path(mapping["target"])
+    if mapping["target"] in owned:
+        continue
     if not src.exists():
         errors.append(
             f"missing source: {src} (target would be {dst}); "
