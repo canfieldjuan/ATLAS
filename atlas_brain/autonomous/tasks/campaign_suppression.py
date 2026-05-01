@@ -312,27 +312,46 @@ async def assign_recipient_to_sequence(
         # On recovery we re-probe for an active conflict. The competitor
         # may have transitioned out of 'active' (bounced, replied, etc.)
         # between the violation and now -- in which case the partial
-        # unique index no longer covers them and the email is claimable
-        # again. We retry the UPDATE inside a savepoint; if another
-        # worker has just re-claimed the email, the savepoint rolls back
-        # and we fall through to the supersede path with the new winner.
+        # unique index no longer covers them and the email is claimable.
+        # We try the UPDATE inside a savepoint up to _MAX_RACE_RETRIES
+        # times; each retry begins with a fresh probe, so if a *new*
+        # winner has settled into 'active' we'll see it and supersede.
+        # If both probes show no winner but the UPDATE still raises
+        # UniqueViolationError, the email is in an unstable state (a
+        # competitor entered and left 'active' rapidly between our
+        # probe and write); we return assigned=False with reason
+        # 'concurrent_state_unstable' rather than supersede ourselves
+        # against a phantom winner.
+        _MAX_RACE_RETRIES = 2
         async with conn.transaction():
-            conflict = await conn.fetchval(
-                """
-                SELECT id FROM campaign_sequences
-                WHERE LOWER(recipient_email) = $1
-                  AND status = 'active'
-                  AND id != $2
-                LIMIT 1
-                """,
-                email_lower,
-                sid,
-            )
+            for _attempt in range(_MAX_RACE_RETRIES):
+                conflict = await conn.fetchval(
+                    """
+                    SELECT id FROM campaign_sequences
+                    WHERE LOWER(recipient_email) = $1
+                      AND status = 'active'
+                      AND id != $2
+                    LIMIT 1
+                    """,
+                    email_lower,
+                    sid,
+                )
+                if conflict is not None:
+                    await _supersede_sequence(
+                        conn,
+                        sequence_id=sid,
+                        email=email_clean,
+                        conflict_with=conflict,
+                        reason="active_sequence_exists_for_recipient_race",
+                    )
+                    return AssignmentResult(
+                        assigned=False,
+                        sequence_id=sid,
+                        conflict_with_sequence_id=conflict,
+                        reason="active_sequence_exists_for_recipient_race",
+                    )
 
-            if conflict is None:
-                # The competitor left the active partition. Try to claim
-                # the email again. The UNIQUE index still gates this
-                # write, so a brand-new race is detected and re-probed.
+                # No active competitor visible. Try to claim the email.
                 try:
                     async with conn.transaction():  # savepoint
                         updated = await _try_set_active_recipient(
@@ -341,36 +360,24 @@ async def assign_recipient_to_sequence(
                     if updated:
                         return AssignmentResult(assigned=True, sequence_id=sid)
                     # Our own sequence has transitioned out of 'active'
-                    # since the caller selected it. No write happened; no
-                    # need to supersede a row that's already terminal.
+                    # since the caller selected it. Don't supersede --
+                    # the row is already terminal and any cascade is
+                    # owned by the path that moved it there.
                     return AssignmentResult(
                         assigned=False,
                         sequence_id=sid,
                         reason="sequence_not_active",
                     )
                 except asyncpg.UniqueViolationError:
-                    conflict = await conn.fetchval(
-                        """
-                        SELECT id FROM campaign_sequences
-                        WHERE LOWER(recipient_email) = $1
-                          AND status = 'active'
-                          AND id != $2
-                        LIMIT 1
-                        """,
-                        email_lower,
-                        sid,
-                    )
+                    # A new competitor just claimed the email during
+                    # our retry. Loop back to re-probe -- if it's still
+                    # active we supersede ourselves against the new
+                    # winner; if it has already transitioned out we
+                    # try one more UPDATE before giving up.
+                    continue
 
-            await _supersede_sequence(
-                conn,
-                sequence_id=sid,
-                email=email_clean,
-                conflict_with=conflict,
-                reason="active_sequence_exists_for_recipient_race",
-            )
             return AssignmentResult(
                 assigned=False,
                 sequence_id=sid,
-                conflict_with_sequence_id=conflict,
-                reason="active_sequence_exists_for_recipient_race",
+                reason="concurrent_state_unstable",
             )
