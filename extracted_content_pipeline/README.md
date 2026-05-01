@@ -65,3 +65,7 @@ B2B helper siblings required by `b2b_blog_post_generation.py` are also copied in
 ```bash
 python scripts/smoke_extracted_pipeline_imports.py
 ```
+
+## Status tracker
+
+Current extraction status is tracked in `extracted_content_pipeline/STATUS.md`.
