@@ -126,6 +126,11 @@ reasoning policy slice. It computes velocity, acceleration, long-term trends,
 category percentiles, anomalies, recency weights, and evidence serialization
 from a host-provided async `fetch` interface instead of Atlas helper imports.
 
+`extracted_content_pipeline/reasoning/evidence_engine.py` is the third
+product-owned reasoning policy slice. It evaluates conclusion gates, section
+suppression gates, and confidence labels from built-in product defaults or an
+optional host-provided JSON/YAML evidence map.
+
 ## Readiness Gate
 
 Run:
