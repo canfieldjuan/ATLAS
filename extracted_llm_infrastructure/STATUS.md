@@ -8,8 +8,8 @@
 | Verbatim byte-snapshot of 14 Python files | ✅ done |
 | Verbatim byte-snapshot of 6 migration SQL files | ✅ done |
 | Package `__init__.py` files at every level | ✅ done |
-| Sync + validate scripts | ✅ done |
-| ASCII / smoke-import / import-debt checks | ✅ done |
+| Sync + validate scripts | ✅ done via shared tooling wrappers |
+| ASCII / smoke-import / import-debt checks | ✅ done via shared tooling wrappers |
 | Driver script `run_extracted_llm_infrastructure_checks.sh` | ✅ done |
 | GitHub Actions workflow | ✅ done |
 | README + this STATUS file | ✅ done |
