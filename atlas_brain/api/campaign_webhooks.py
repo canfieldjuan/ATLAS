@@ -316,22 +316,40 @@ async def _apply_canonical_event(pool, event: CanonicalEvent) -> dict[str, str]:
         # distinct 'unsubscribe' event per recipient. This branch is wired
         # for the SendGrid normalize_event() to map onto when that provider
         # is implemented (see services/email_webhooks/sendgrid.py).
+        #
+        # Mirrors the 'complained' cascade: flip the sequence, cancel the
+        # current campaign, cancel any queued follow-ups (campaign_send.py
+        # picks by b2b_campaigns.status='queued' without filtering on
+        # sequence status), and globally suppress the address. Without the
+        # campaign cancels, queued follow-ups would still ship and violate
+        # unsubscribe intent.
         if sequence_id:
             await pool.execute(
                 "UPDATE campaign_sequences SET status = 'unsubscribed', updated_at = $1 WHERE id = $2",
                 now, sequence_id,
             )
-        from ..autonomous.tasks.campaign_suppression import add_suppression
-
-        await add_suppression(
-            pool, email=campaign["recipient_email"],
-            reason="unsubscribe", source="webhook", campaign_id=campaign_id,
-        )
         await log_campaign_event(
             pool, event_type="unsubscribed", source="webhook",
             campaign_id=campaign_id, sequence_id=sequence_id,
             esp_message_id=event.message_id,
             step_number=campaign["step_number"],
+        )
+
+        await pool.execute(
+            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+            campaign_id,
+        )
+        if sequence_id:
+            await pool.execute(
+                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE sequence_id = $1 AND status = 'queued'",
+                sequence_id,
+            )
+
+        from ..autonomous.tasks.campaign_suppression import add_suppression
+
+        await add_suppression(
+            pool, email=campaign["recipient_email"],
+            reason="unsubscribe", source="webhook", campaign_id=campaign_id,
         )
 
     else:
