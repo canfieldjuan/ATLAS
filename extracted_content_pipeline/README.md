@@ -165,7 +165,10 @@ Several small utility shims provide product-owned local behavior by default so t
   `.get()` and product `SkillStore.get_prompt()`
 - `reasoning/archetypes.py`: product-owned deterministic churn-archetype scorer
   for extracted report builders
-- `reasoning/evidence_engine.py` and `reasoning/temporal.py`: minimal reasoning adapters for extracted report builders
+- `reasoning/temporal.py`: product-owned temporal analytics over vendor
+  snapshot rows, including velocities, trends, category baselines, and
+  anomaly serialization
+- `reasoning/evidence_engine.py`: minimal reasoning adapter for extracted report builders
 - `services/__init__.py` and `services/protocols.py`: `llm_registry.get_active()` and `Message`
 - `services/b2b/cache_runner.py`: local exact-cache request helpers and no-op lookup/store
 - `services/b2b/enrichment_contract.py`: local enrichment contract fallbacks

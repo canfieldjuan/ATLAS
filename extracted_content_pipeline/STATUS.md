@@ -44,6 +44,9 @@
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.
+- `reasoning.temporal` is product-owned and computes snapshot velocity,
+  acceleration, trend, category-baseline, anomaly, and recency-weight outputs
+  through a host-provided async `fetch` interface.
 
 ## Validation gates in repo
 
@@ -62,8 +65,8 @@ extracted package, not just manifest-relative import resolution.
 
 ## Remaining extraction work
 
-1. Harden remaining minimal reasoning adapters (`evidence_engine`, `temporal`)
-   into customer-grade policy modules.
+1. Harden remaining minimal reasoning adapters (`evidence_engine`) into
+   customer-grade policy modules.
 2. Trim copied helper surface to only the modules required by target sellable workflows.
 3. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 4. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).

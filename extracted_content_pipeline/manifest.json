@@ -205,6 +205,9 @@
     },
     {
       "target": "extracted_content_pipeline/reasoning/archetypes.py"
+    },
+    {
+      "target": "extracted_content_pipeline/reasoning/temporal.py"
     }
   ]
 }
