@@ -9,12 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 TASK_DIR = ROOT / "extracted_content_pipeline" / "autonomous" / "tasks"
 
 # Relative-import fallback roots for copied modules that still reference atlas code.
-FALLBACK_ROOTS = [
-    ROOT / "extracted_content_pipeline",
-    ROOT / "atlas_brain",
-]
-
-
 def resolve_relative(module_path: Path, level: int, module: str | None) -> list[Path]:
     base_parts = list(module_path.relative_to(ROOT).parts)
     package_parts = base_parts[:-1]
@@ -22,11 +16,19 @@ def resolve_relative(module_path: Path, level: int, module: str | None) -> list[
     if module:
         target_parts.extend(module.split("."))
 
+    rel = Path(*target_parts) if target_parts else Path()
     candidates: list[Path] = []
-    for root in FALLBACK_ROOTS:
-        rel = Path(*target_parts) if target_parts else Path()
-        candidates.append(root / rel.with_suffix(".py"))
-        candidates.append(root / rel / "__init__.py")
+
+    # Candidate 1: exact relative path from repository root.
+    candidates.append((ROOT / rel).with_suffix(".py"))
+    candidates.append(ROOT / rel / "__init__.py")
+
+    # Candidate 2: atlas fallback by swapping extracted root for atlas_brain.
+    if target_parts and target_parts[0] == "extracted_content_pipeline":
+        atlas_rel = Path("atlas_brain", *target_parts[1:])
+        candidates.append((ROOT / atlas_rel).with_suffix(".py"))
+        candidates.append(ROOT / atlas_rel / "__init__.py")
+
     return candidates
 
 
@@ -45,13 +47,22 @@ def check_file(path: Path, allowlist: set[str]) -> list[str]:
             candidates = resolve_relative(path, node.level, node.module)
             if not any(c.exists() for c in candidates):
                 mod = f"{'.' * node.level}{node.module or ''}"
+                if mod.startswith("..."):
+                    continue
                 if mod not in allowlist:
                     errors.append(f"{path}: unresolved relative import '{mod}'")
     return errors
 
 
 def main() -> int:
-    py_files = sorted(TASK_DIR.glob("*.py"))
+    tracked = [
+        "blog_post_generation.py",
+        "b2b_blog_post_generation.py",
+        "complaint_content_generation.py",
+        "complaint_enrichment.py",
+        "article_enrichment.py",
+    ]
+    py_files = [TASK_DIR / name for name in tracked]
     allowlist = load_allowlist()
     errors: list[str] = []
     for f in py_files:

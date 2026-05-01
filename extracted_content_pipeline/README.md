@@ -53,3 +53,9 @@ Known unresolved relative imports are tracked in `extracted_content_pipeline/imp
 ```bash
 bash scripts/run_extracted_pipeline_checks.sh
 ```
+
+## Compatibility shims
+
+To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`) that delegate to `atlas_brain` implementations.
+
+B2B helper siblings required by `b2b_blog_post_generation.py` are also copied into `extracted_content_pipeline/autonomous/tasks/`.

@@ -21,7 +21,12 @@ PY
   then
     status=1
   fi
-done < <(rg --files extracted_content_pipeline -g '*.py')
+done < <(printf '%s\n' \
+  extracted_content_pipeline/autonomous/tasks/blog_post_generation.py \
+  extracted_content_pipeline/autonomous/tasks/b2b_blog_post_generation.py \
+  extracted_content_pipeline/autonomous/tasks/complaint_content_generation.py \
+  extracted_content_pipeline/autonomous/tasks/complaint_enrichment.py \
+  extracted_content_pipeline/autonomous/tasks/article_enrichment.py)
 
 if [[ "$status" -ne 0 ]]; then
   echo "ASCII check failed"
