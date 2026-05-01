@@ -202,6 +202,9 @@
     },
     {
       "target": "extracted_content_pipeline/pipelines/notify.py"
+    },
+    {
+      "target": "extracted_content_pipeline/reasoning/archetypes.py"
     }
   ]
 }
