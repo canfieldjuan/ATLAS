@@ -36,6 +36,9 @@
   `services.tracing`, `services.scraping.sources`, and
   `services.scraping.universal.html_cleaner`.
 - Standalone readiness audit reports 0 Atlas runtime import findings.
+- `pipelines.notify` is product-owned and dispatches through the
+  `VisibilitySink` port when configured, while staying a no-op when no host
+  visibility adapter is installed.
 
 ## Validation gates in repo
 
@@ -54,8 +57,8 @@ extracted package, not just manifest-relative import resolution.
 
 ## Remaining extraction work
 
-1. Harden minimal local adapters into customer-grade ports for notify/reasoning
-   and provider-specific LLM configuration.
+1. Harden remaining minimal local adapters into customer-grade ports for
+   reasoning and provider-specific LLM configuration.
 2. Trim copied helper surface to only the modules required by target sellable workflows.
 3. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 4. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).

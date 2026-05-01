@@ -37,6 +37,11 @@ def _manifest_targets() -> set[str]:
     }
 
 
+def _owned_targets() -> set[str]:
+    data = json.loads((ROOT / "extracted_content_pipeline/manifest.json").read_text())
+    return {entry["target"] for entry in data.get("owned", [])}
+
+
 def test_manifest_syncs_core_campaign_schema_migrations() -> None:
     targets = _manifest_targets()
 
@@ -66,3 +71,10 @@ def test_core_campaign_migrations_define_product_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS campaign_suppressions" in suppression_schema
     assert "CREATE TABLE IF NOT EXISTS vendor_targets" in target_schema
     assert "CREATE TABLE IF NOT EXISTS seller_targets" in seller_schema
+
+
+def test_manifest_tracks_product_owned_notify_adapter() -> None:
+    assert (
+        "extracted_content_pipeline/pipelines/notify.py"
+        in _owned_targets()
+    )
