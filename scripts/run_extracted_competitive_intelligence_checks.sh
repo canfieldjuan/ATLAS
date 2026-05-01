@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+bash scripts/validate_extracted_competitive_intelligence.sh
+bash scripts/check_ascii_python_competitive_intelligence.sh
+python scripts/check_extracted_competitive_intelligence_imports.py
+python scripts/smoke_extracted_competitive_intelligence_imports.py
+
+echo "All extracted_competitive_intelligence checks passed"

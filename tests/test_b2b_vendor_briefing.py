@@ -237,6 +237,93 @@ def test_report_data_redacts_preview_account_identity(monkeypatch):
     assert "account_reasoning" not in report_preview
 
 
+def test_report_data_strips_unvalidated_dangerous_sections(monkeypatch):
+    monkeypatch.setattr(
+        briefing_api,
+        "decode_gate_token",
+        lambda _token: {"vendor_name": "Salesforce"},
+    )
+    report_safe_claim = {
+        "claim_type": "direct_displacement",
+        "claim_scope": "competitor_pair",
+        "evidence_posture": "usable",
+        "confidence": "medium",
+        "render_allowed": True,
+        "report_allowed": True,
+    }
+    suppressed_claim = {
+        "claim_type": "direct_displacement",
+        "claim_scope": "competitor_pair",
+        "evidence_posture": "unverified",
+        "confidence": "low",
+        "render_allowed": False,
+        "report_allowed": False,
+    }
+
+    class Pool:
+        async def fetchrow(self, query, *args):
+            if "FROM b2b_vendor_briefings" in query:
+                return {
+                    "briefing_data": {
+                        "vendor_name": "Salesforce",
+                        "evidence": [],
+                        "recommended_plays": [{"title": "unsafe play"}],
+                    }
+                }
+            if "FROM b2b_product_profiles" in query:
+                return {
+                    "profile_summary": "Salesforce CRM profile.",
+                    "strengths": ["Strong ecosystem"],
+                    "weaknesses": ["Complex implementation"],
+                    "commonly_compared_to": ["HubSpot"],
+                    "commonly_switched_from": ["Legacy CRM"],
+                    "product_category": "CRM",
+                }
+            return None
+
+        async def fetch(self, query, *args):
+            return [
+                {
+                    "report_type": "vendor_scorecard",
+                    "executive_summary": "Summary",
+                    "intelligence_data": {
+                        "cross_vendor_battles": [
+                            {"winner": "Salesforce", "loser": "HubSpot"},
+                        ],
+                        "recommended_plays": [
+                            {"title": "safe play", "product_claim": report_safe_claim},
+                            {"title": "unsafe play", "product_claim": suppressed_claim},
+                            {"title": "legacy play"},
+                        ],
+                    },
+                    "report_date": None,
+                    "created_at": None,
+                }
+            ]
+
+    monkeypatch.setattr(briefing_api, "_pool_or_503", lambda: Pool())
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/briefings/report-data?token=abcdefghij")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "recommended_plays" not in body["briefing"]
+    report_data = body["intelligence_reports"][0]["data"]
+    assert "cross_vendor_battles" not in report_data
+    assert report_data["recommended_plays"] == [
+        {"title": "safe play", "product_claim": report_safe_claim}
+    ]
+    profile = body["product_profile"]
+    assert profile["profile_summary"] == "Salesforce CRM profile."
+    assert profile["product_category"] == "CRM"
+    assert "strengths" not in profile
+    assert "weaknesses" not in profile
+    assert "commonly_compared_to" not in profile
+    assert "commonly_switched_from" not in profile
+
+
 def test_default_pain_label_maps_generic_buckets_to_overall_dissatisfaction():
     assert briefing_mod._default_pain_label("other") == "Overall Dissatisfaction"
     assert briefing_mod._default_pain_label("general_dissatisfaction") == "Overall Dissatisfaction"

@@ -196,11 +196,12 @@ async def _create_draft_campaign(pool, sequence_id: str, batch_id: str, recipien
     row = await pool.fetchrow(
         """
         INSERT INTO b2b_campaigns
-            (vendor_name, batch_id, channel, subject, body, status,
+            (company_name, vendor_name, batch_id, channel, subject, body, status,
              sequence_id, recipient_email)
-        VALUES ($1, $2, 'email_cold', 'subj', 'body', 'draft', $3, $4)
+        VALUES ($1, $2, $3, 'email_cold', 'subj', 'body', 'draft', $4, $5)
         RETURNING id
         """,
+        f"test-co-{uuid4().hex[:8]}",
         f"vendor-{uuid4().hex[:6]}",
         batch_id,
         sequence_id,

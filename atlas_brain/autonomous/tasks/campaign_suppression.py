@@ -8,8 +8,10 @@ for cross-sequence person dedup at recipient-attachment time.
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import AsyncIterator
 from uuid import UUID
 
 import asyncpg
@@ -238,6 +240,23 @@ LIMIT 1
 """
 
 
+@asynccontextmanager
+async def _acquire_connection(pool) -> AsyncIterator:
+    acquired = pool.acquire()
+    if hasattr(acquired, "__aenter__"):
+        async with acquired as conn:
+            yield conn
+        return
+
+    conn = await acquired
+    try:
+        yield conn
+    finally:
+        release = getattr(pool, "release", None)
+        if release is not None:
+            await release(conn)
+
+
 async def attach_recipient_strict(
     pool,
     sequence_id: UUID | str,
@@ -279,7 +298,7 @@ async def attach_recipient_strict(
     email_clean = email.strip()
     email_lower = email_clean.lower()
 
-    async with pool.acquire() as conn:
+    async with _acquire_connection(pool) as conn:
         async with conn.transaction():
             conflict = await conn.fetchval(
                 _PROBE_ACTIVE_CONFLICT_SQL, email_lower, sid,
@@ -355,7 +374,7 @@ async def assign_recipient_to_sequence(
     email_clean = email.strip()
     email_lower = email_clean.lower()
 
-    async with pool.acquire() as conn:
+    async with _acquire_connection(pool) as conn:
         try:
             async with conn.transaction():
                 conflict = await conn.fetchval(

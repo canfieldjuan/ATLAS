@@ -1174,7 +1174,7 @@ class WatchlistAlertEmailRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("/vendors")
-async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
+async def list_tracked_vendors(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """List tracked vendors with inline signal summary."""
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -1267,7 +1267,10 @@ async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
 
 
 @router.post("/vendors")
-async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(require_auth)):
+async def add_tracked_vendor(
+    req: AddVendorRequest,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Add a vendor to track. Enforces vendor_limit in a transaction."""
     _require_b2b_product(user)
     vendor_name = _clean_required_text(req.vendor_name, "vendor_name")
@@ -1381,7 +1384,10 @@ async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(req
 
 
 @router.delete("/vendors/{vendor_name}")
-async def remove_tracked_vendor(vendor_name: str, user: AuthUser = Depends(require_auth)):
+async def remove_tracked_vendor(
+    vendor_name: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Remove a tracked vendor."""
     _require_b2b_product(user)
     vname = _clean_required_text(vendor_name, "vendor_name")
@@ -1419,7 +1425,7 @@ async def remove_tracked_vendor(vendor_name: str, user: AuthUser = Depends(requi
 async def search_available_vendors(
     q: str = Query(..., min_length=1, max_length=256),
     limit: int = Query(20, ge=1, le=50),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Search b2b_churn_signals for vendors matching query (for onboarding)."""
     _require_b2b_product(user)
@@ -1456,7 +1462,7 @@ async def search_available_vendors(
 @router.post("/push-to-crm")
 async def push_to_crm(
     body: PushToCrmBody,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Push selected high-intent opportunities to configured CRM webhooks."""
     _require_b2b_product(user)
@@ -1548,7 +1554,7 @@ async def push_to_crm(
 @router.get("/competitive-sets")
 async def list_competitive_sets(
     include_inactive: bool = Query(False),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     repo = get_competitive_set_repo()
@@ -1566,7 +1572,7 @@ async def list_competitive_sets(
 @router.post("/competitive-sets", status_code=201)
 async def create_competitive_set(
     req: CompetitiveSetRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     repo = get_competitive_set_repo()
@@ -1603,7 +1609,7 @@ async def create_competitive_set(
 async def update_competitive_set(
     competitive_set_id: _uuid.UUID,
     req: CompetitiveSetUpdateRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     next_name = _clean_required_text(req.name, "name") if req.name is not None else None
@@ -1655,7 +1661,7 @@ async def update_competitive_set(
 @router.delete("/competitive-sets/{competitive_set_id}")
 async def delete_competitive_set(
     competitive_set_id: _uuid.UUID,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     repo = get_competitive_set_repo()
@@ -1669,7 +1675,7 @@ async def delete_competitive_set(
 @router.get("/competitive-sets/{competitive_set_id}/plan")
 async def preview_competitive_set_plan(
     competitive_set_id: _uuid.UUID,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -1694,7 +1700,7 @@ async def preview_competitive_set_plan(
 async def run_competitive_set_now(
     competitive_set_id: _uuid.UUID,
     req: CompetitiveSetRunRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -1758,7 +1764,7 @@ def _tenant_params(user: AuthUser) -> list:
 # ---------------------------------------------------------------------------
 
 @router.get("/overview")
-async def dashboard_overview(user: AuthUser = Depends(require_auth)):
+async def dashboard_overview(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Dashboard overview stats for tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -1828,7 +1834,7 @@ async def list_tenant_signals(
     min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Churn signals for tracked vendors."""
     _require_b2b_product(user)
@@ -1911,7 +1917,7 @@ async def list_tenant_slow_burn_watchlist(
     vendor_alert_threshold: float | None = Query(None, ge=0, le=10),
     stale_days_threshold: int | None = Query(None, ge=0, le=365),
     limit: int = Query(10, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Slow-burn watchlist for tracked vendors."""
     _require_b2b_product(user)
@@ -1998,7 +2004,10 @@ async def list_tenant_slow_burn_watchlist(
 
 
 @router.get("/signals/{vendor_name}")
-async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_auth)):
+async def get_vendor_detail(
+    vendor_name: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Full vendor detail: signal + pain + competitors + evidence."""
     _require_b2b_product(user)
     vname = _clean_required_text(vendor_name, "vendor_name")
@@ -2142,7 +2151,7 @@ async def list_tenant_accounts_in_motion_feed(
     stale_days_threshold: int | None = Query(None, ge=0, le=365),
     per_vendor_limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_feed_max_total, ge=1, le=200),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Aggregated persisted accounts-in-motion feed across tracked vendors."""
     _require_b2b_product(user)
@@ -2299,7 +2308,7 @@ async def list_tenant_accounts_in_motion_feed(
 
 
 @router.get("/watchlist-views")
-async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
+async def list_watchlist_views(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     _require_b2b_product(user)
     pool = _pool_or_503()
     rows = await pool.fetch(
@@ -2332,7 +2341,7 @@ async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
 @router.post("/watchlist-views", status_code=201)
 async def create_watchlist_view(
     req: WatchlistViewRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     account_id = _uuid.UUID(user.account_id)
@@ -2412,7 +2421,7 @@ async def create_watchlist_view(
 async def update_watchlist_view(
     view_id: _uuid.UUID,
     req: WatchlistViewRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     name = _clean_required_watchlist_view_name(req.name)
@@ -2591,7 +2600,7 @@ async def update_watchlist_view(
 @router.delete("/watchlist-views/{view_id}")
 async def delete_watchlist_view(
     view_id: _uuid.UUID,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -2615,7 +2624,7 @@ async def list_watchlist_alert_events(
     view_id: _uuid.UUID,
     status: str = Query("open"),
     limit: int = Query(25, ge=1, le=200),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     status_text = _clean_optional_text(status)
@@ -2663,7 +2672,7 @@ async def list_watchlist_alert_events(
 @router.post("/watchlist-views/{view_id}/alert-events/evaluate")
 async def evaluate_watchlist_alert_events(
     view_id: _uuid.UUID,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -2686,7 +2695,7 @@ async def evaluate_watchlist_alert_events(
 async def list_watchlist_alert_email_log(
     view_id: _uuid.UUID,
     limit: int = Query(10, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -2740,7 +2749,7 @@ async def list_watchlist_alert_email_log(
 async def deliver_watchlist_alert_email(
     view_id: _uuid.UUID,
     body: WatchlistAlertEmailRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -3018,7 +3027,7 @@ async def get_tenant_vendor_history(
     vendor_name: str = Query(...),
     days: int = Query(90, ge=1, le=365),
     limit: int = Query(90, ge=1, le=365),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Snapshot history for a tracked vendor."""
     _require_b2b_product(user)
@@ -3081,7 +3090,7 @@ async def compare_tenant_vendor_periods(
     vendor_name: str = Query(...),
     period_a_days_ago: int = Query(30, ge=0, le=365),
     period_b_days_ago: int = Query(0, ge=0, le=365),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Compare two snapshot periods for a tracked vendor."""
     _require_b2b_product(user)
@@ -3168,7 +3177,7 @@ async def compare_tenant_vendor_periods(
 @router.get("/pain-trends")
 async def pain_trends(
     window_days: int = Query(90, ge=1, le=3650),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Pain categories over time for tracked vendors."""
     _require_b2b_product(user)
@@ -3225,7 +3234,7 @@ async def pain_trends(
 @router.get("/displacement")
 async def competitor_displacement(
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Competitor displacement flows for tracked vendors."""
     _require_b2b_product(user)
@@ -3281,7 +3290,7 @@ async def competitor_displacement(
 
 
 @router.get("/pipeline")
-async def get_tenant_pipeline_status(user: AuthUser = Depends(require_auth)):
+async def get_tenant_pipeline_status(user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Pipeline status for tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
@@ -3358,7 +3367,7 @@ async def list_leads(
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(30, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """High-intent companies leaving tracked vendors."""
     _require_b2b_product(user)
@@ -3429,7 +3438,7 @@ async def list_tenant_high_intent(
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(30, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Compatibility alias for legacy high-intent payload shape."""
     _require_b2b_product(user)
@@ -3445,7 +3454,10 @@ async def list_tenant_high_intent(
 
 
 @router.get("/leads/{company}")
-async def get_lead_detail(company: str, user: AuthUser = Depends(require_auth)):
+async def get_lead_detail(
+    company: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Company drill-down: all reviews, signals, buying stage."""
     _require_b2b_product(user)
     company_name = _clean_required_text(company, "company")
@@ -3506,7 +3518,7 @@ async def get_lead_detail(company: str, user: AuthUser = Depends(require_auth)):
 @router.post("/reports/compare")
 async def generate_tenant_comparison_report(
     body: VendorComparisonRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Generate a vendor comparison report from tenant-scoped dashboard."""
     _require_b2b_product(user)
@@ -3542,7 +3554,7 @@ async def generate_tenant_comparison_report(
 @router.post("/reports/compare-companies")
 async def generate_tenant_account_comparison_report(
     body: AccountComparisonRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Generate a company comparison report from tenant-scoped dashboard."""
     _require_b2b_product(user)
@@ -3569,7 +3581,7 @@ async def generate_tenant_account_comparison_report(
 @router.post("/reports/company-deep-dive")
 async def generate_tenant_account_deep_dive_report(
     body: AccountDeepDiveRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Generate a company deep-dive report from tenant-scoped dashboard."""
     _require_b2b_product(user)
@@ -3592,7 +3604,7 @@ async def generate_tenant_account_deep_dive_report(
 @router.post("/reports/battle-card")
 async def generate_tenant_battle_card_report(
     body: BattleCardRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Return a persisted battle card artifact for a tracked vendor."""
     _require_b2b_product(user)
@@ -3662,7 +3674,7 @@ async def generate_tenant_battle_card_report(
 async def refresh_tenant_vendor_pipeline(
     vendor_name: str,
     body: VendorRefreshRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Refresh one tracked vendor across core intelligence and key outputs."""
     _require_b2b_product(user)
@@ -3772,7 +3784,7 @@ async def list_tenant_reports(
     review_state: Optional[str] = None,
     include_stale: bool = Query(False),
     limit: int = Query(10, ge=1, le=200),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Reports scoped to tracked vendors."""
     _require_b2b_product(user)
@@ -3962,7 +3974,10 @@ async def list_tenant_reports(
 
 
 @router.get("/reports/{report_id}")
-async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_auth)):
+async def get_tenant_report(
+    report_id: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Report detail (verify vendor in tracked)."""
     _require_b2b_product(user)
     report_id = _clean_optional_text(report_id)
@@ -4071,7 +4086,7 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
 async def get_report_subscription(
     scope_type: str,
     scope_key: str,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Load the saved recurring-delivery policy for the library or a specific report."""
     _require_b2b_product(user)
@@ -4105,7 +4120,7 @@ async def upsert_report_subscription(
     scope_type: str,
     scope_key: str,
     body: ReportSubscriptionUpsertRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Create or update the saved recurring-delivery policy for the library or a specific report."""
     _require_b2b_product(user)
@@ -4238,7 +4253,7 @@ async def list_tenant_reviews(
     has_churn_intent: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Reviews scoped to tracked vendors."""
     _require_b2b_product(user)
@@ -4292,7 +4307,10 @@ async def list_tenant_reviews(
 
 
 @router.get("/reviews/{review_id}")
-async def get_tenant_review(review_id: str, user: AuthUser = Depends(require_auth)):
+async def get_tenant_review(
+    review_id: str,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Review detail (verify vendor in tracked)."""
     _require_b2b_product(user)
     review_id = _clean_optional_text(review_id)
@@ -4376,7 +4394,7 @@ async def export_tenant_signals(
     vendor_name: Optional[str] = Query(None),
     min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     from .b2b_dashboard import export_signals
@@ -4396,7 +4414,7 @@ async def export_tenant_reviews(
     company: Optional[str] = Query(None),
     has_churn_intent: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     from .b2b_dashboard import export_reviews
@@ -4417,7 +4435,7 @@ async def export_tenant_high_intent(
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(90, ge=1, le=3650),
     report_safe_only: bool = Query(True),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     from .b2b_dashboard import export_high_intent
@@ -4434,7 +4452,7 @@ async def export_tenant_high_intent(
 async def export_tenant_source_health(
     window_days: int = Query(7, ge=1, le=30),
     source: Optional[str] = Query(None),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     _require_b2b_product(user)
     from .b2b_dashboard import export_source_health
@@ -4649,7 +4667,7 @@ def _validate_disposition(disposition: str, snoozed_until: str | None) -> dateti
 @router.get("/opportunity-dispositions")
 async def list_opportunity_dispositions(
     disposition: str | None = Query(None, description="Filter: snoozed, dismissed, saved"),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List persisted opportunity dispositions for this account."""
     _require_b2b_product(user)
@@ -4697,7 +4715,7 @@ async def list_opportunity_dispositions(
 @router.post("/opportunity-dispositions", status_code=200)
 async def set_opportunity_disposition(
     req: SetDispositionRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Upsert a single opportunity disposition (save, snooze, or dismiss)."""
     _require_b2b_product(user)
@@ -4738,7 +4756,7 @@ async def set_opportunity_disposition(
 @router.post("/opportunity-dispositions/bulk", status_code=200)
 async def bulk_set_opportunity_dispositions(
     req: BulkSetDispositionRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Bulk upsert opportunity dispositions."""
     _require_b2b_product(user)
@@ -4786,7 +4804,7 @@ async def bulk_set_opportunity_dispositions(
 @router.post("/opportunity-dispositions/remove", status_code=200)
 async def remove_opportunity_dispositions(
     req: RemoveDispositionsRequest,
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Remove dispositions (restore opportunities to active)."""
     _require_b2b_product(user)

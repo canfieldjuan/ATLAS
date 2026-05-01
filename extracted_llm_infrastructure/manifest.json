@@ -1,0 +1,84 @@
+{
+  "mappings": [
+    {
+      "source": "atlas_brain/services/b2b/anthropic_batch.py",
+      "target": "extracted_llm_infrastructure/services/b2b/anthropic_batch.py"
+    },
+    {
+      "source": "atlas_brain/services/b2b/cache_strategy.py",
+      "target": "extracted_llm_infrastructure/services/b2b/cache_strategy.py"
+    },
+    {
+      "source": "atlas_brain/pipelines/llm.py",
+      "target": "extracted_llm_infrastructure/pipelines/llm.py"
+    },
+    {
+      "source": "atlas_brain/reasoning/semantic_cache.py",
+      "target": "extracted_llm_infrastructure/reasoning/semantic_cache.py"
+    },
+    {
+      "source": "atlas_brain/services/llm_router.py",
+      "target": "extracted_llm_infrastructure/services/llm_router.py"
+    },
+    {
+      "source": "atlas_brain/services/llm/anthropic.py",
+      "target": "extracted_llm_infrastructure/services/llm/anthropic.py"
+    },
+    {
+      "source": "atlas_brain/services/llm/openrouter.py",
+      "target": "extracted_llm_infrastructure/services/llm/openrouter.py"
+    },
+    {
+      "source": "atlas_brain/services/llm/ollama.py",
+      "target": "extracted_llm_infrastructure/services/llm/ollama.py"
+    },
+    {
+      "source": "atlas_brain/services/llm/vllm.py",
+      "target": "extracted_llm_infrastructure/services/llm/vllm.py"
+    },
+    {
+      "source": "atlas_brain/services/llm/groq.py",
+      "target": "extracted_llm_infrastructure/services/llm/groq.py"
+    },
+    {
+      "source": "atlas_brain/services/llm/together.py",
+      "target": "extracted_llm_infrastructure/services/llm/together.py"
+    },
+    {
+      "source": "atlas_brain/services/llm/hybrid.py",
+      "target": "extracted_llm_infrastructure/services/llm/hybrid.py"
+    },
+    {
+      "source": "atlas_brain/services/llm/cloud.py",
+      "target": "extracted_llm_infrastructure/services/llm/cloud.py"
+    },
+    {
+      "source": "atlas_brain/services/tracing.py",
+      "target": "extracted_llm_infrastructure/services/tracing.py"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/127_llm_usage.sql",
+      "target": "extracted_llm_infrastructure/storage/migrations/127_llm_usage.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/130_reasoning_semantic_cache.sql",
+      "target": "extracted_llm_infrastructure/storage/migrations/130_reasoning_semantic_cache.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/252_llm_usage_cache_breakdown.sql",
+      "target": "extracted_llm_infrastructure/storage/migrations/252_llm_usage_cache_breakdown.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/253_llm_usage_vendor_and_run_id.sql",
+      "target": "extracted_llm_infrastructure/storage/migrations/253_llm_usage_vendor_and_run_id.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/255_anthropic_message_batches.sql",
+      "target": "extracted_llm_infrastructure/storage/migrations/255_anthropic_message_batches.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/257_llm_usage_reasoning_attribution.sql",
+      "target": "extracted_llm_infrastructure/storage/migrations/257_llm_usage_reasoning_attribution.sql"
+    }
+  ]
+}

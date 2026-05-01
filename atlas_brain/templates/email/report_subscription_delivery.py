@@ -132,6 +132,12 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
             "</div>"
         )
 
+    freshness_detail_block = (
+        f"<br><span style=\"color:#64748b;\">{freshness_detail}</span>"
+        if freshness_detail
+        else ""
+    )
+
     return f"""<tr>
   <td style="padding:18px 20px;border:1px solid #e2e8f0;border-radius:16px;background:#ffffff;">
     <div style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#0891b2;">{type_label}</div>
@@ -141,7 +147,7 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
       <strong>Artifact:</strong> {artifact_label}<br>
       <strong>Review:</strong> {review_label}<br>
       <strong>Freshness:</strong> {freshness_label}
-      {"<br><span style=\"color:#64748b;\">" + freshness_detail + "</span>" if freshness_detail else ""}
+      {freshness_detail_block}
     </div>
     <p style="margin:14px 0 0;font-size:14px;color:#334155;line-height:1.7;">{executive_summary}</p>
     {account_pressure_block}

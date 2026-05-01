@@ -1,0 +1,23 @@
+# Import-debt allowlist for the extracted_llm_infrastructure scaffold.
+#
+# scripts/check_extracted_llm_infrastructure_imports.py walks every
+# Python file in the scaffold's manifest and audits its relative
+# imports. Any unresolved import that does not appear in this file
+# fails the check.
+#
+# As of the current commit, the resolver honors Python's relative-
+# import semantics correctly (ascending ``level - 1`` package
+# components rather than ``level``), so every relative import in the
+# scaffolded modules either:
+#
+#   - resolves inside the scaffold itself (e.g. ``from ..base``
+#     resolves to ``services/base.py``, the Phase 2 bridge stub), or
+#   - resolves via the atlas_brain fallback path because the scaffold
+#     has not yet copied that module (none currently in this state).
+#
+# This file is therefore empty by design. Future Phase 3 work that
+# rewires providers to consume the standalone substrate via Protocol-
+# based DI seams may temporarily add intentional debt entries here;
+# each should reference its tracking issue.
+#
+# Format: one entry per line. Lines starting with '#' are comments.

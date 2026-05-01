@@ -13,6 +13,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from atlas_brain.auth.dependencies import AuthUser, require_auth
+
 _asyncpg_mock = MagicMock()
 _asyncpg_exceptions = MagicMock()
 _asyncpg_exceptions.UndefinedTableError = type("UndefinedTableError", (Exception,), {})
@@ -43,6 +45,17 @@ for _mod in (
     sys.modules.setdefault(_mod, MagicMock())
 
 b2b_dashboard = importlib.import_module("atlas_brain.api.b2b_dashboard")
+
+
+def _b2b_auth_user() -> AuthUser:
+    return AuthUser(
+        user_id="11111111-1111-1111-1111-111111111111",
+        account_id="22222222-2222-2222-2222-222222222222",
+        plan="b2b_growth",
+        plan_status="active",
+        role="admin",
+        product="b2b_retention",
+    )
 
 
 def _transaction_context(conn):
@@ -2849,6 +2862,7 @@ async def test_export_high_intent_can_include_monitor_and_suppressed_with_claim_
 def test_create_correction_rejects_invalid_entity_id_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(b2b_dashboard.router)
+    app.dependency_overrides[require_auth] = _b2b_auth_user
 
     def fail_pool():
         raise AssertionError("DB pool should not be acquired for invalid correction entity_id")
@@ -2875,6 +2889,7 @@ def test_create_correction_rejects_invalid_entity_id_before_db_touch(monkeypatch
 def test_create_correction_rejects_blank_reason_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(b2b_dashboard.router)
+    app.dependency_overrides[require_auth] = _b2b_auth_user
 
     def fail_pool():
         raise AssertionError("DB pool should not be acquired for blank correction reason")
@@ -2923,10 +2938,11 @@ async def test_create_correction_trims_body_text_before_insert_and_merge():
     )
 
     merge_mock = AsyncMock(return_value={'total_affected': 7})
+    user = _b2b_auth_user()
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch('atlas_brain.services.b2b.vendor_merge.execute_vendor_merge', merge_mock):
-            result = await b2b_dashboard.create_correction(body, user=None)
+            result = await b2b_dashboard.create_correction(body, user=user)
 
     assert result == {
         'id': correction_id,
@@ -2943,6 +2959,7 @@ async def test_create_correction_trims_body_text_before_insert_and_merge():
     assert fetch_args[5] == 'Salesforce'
     assert fetch_args[6] == 'HubSpot'
     assert fetch_args[7] == 'duplicate vendor'
+    assert fetch_args[8] == f"api:{user.user_id}"
     merge_mock.assert_awaited_once_with(pool, 'Salesforce', 'HubSpot')
 
 
@@ -2968,9 +2985,10 @@ async def test_create_correction_trims_suppress_source_metadata_before_validatio
         reason='  noisy source  ',
         metadata={'source_name': '  reddit  '},
     )
+    user = _b2b_auth_user()
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
-        result = await b2b_dashboard.create_correction(body, user=None)
+        result = await b2b_dashboard.create_correction(body, user=user)
 
     assert result == {
         'id': correction_id,
@@ -2985,12 +3003,14 @@ async def test_create_correction_trims_suppress_source_metadata_before_validatio
     assert str(fetch_args[2]) == entity_id
     assert fetch_args[3] == 'suppress_source'
     assert fetch_args[7] == 'noisy source'
+    assert fetch_args[8] == f"api:{user.user_id}"
     assert fetch_args[9] == '{"source_name": "reddit"}'
 
 
 def test_get_correction_rejects_invalid_uuid_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(b2b_dashboard.router)
+    app.dependency_overrides[require_auth] = _b2b_auth_user
 
     def fail_pool():
         raise AssertionError("DB pool should not be acquired for invalid correction_id")
@@ -3007,6 +3027,7 @@ def test_get_correction_rejects_invalid_uuid_before_db_touch(monkeypatch):
 def test_revert_correction_rejects_invalid_uuid_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(b2b_dashboard.router)
+    app.dependency_overrides[require_auth] = _b2b_auth_user
 
     def fail_pool():
         raise AssertionError("DB pool should not be acquired for invalid correction revert id")
@@ -3026,6 +3047,7 @@ def test_revert_correction_rejects_invalid_uuid_before_db_touch(monkeypatch):
 def test_list_corrections_rejects_invalid_entity_type_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(b2b_dashboard.router)
+    app.dependency_overrides[require_auth] = _b2b_auth_user
 
     def fail_pool():
         raise AssertionError("DB pool should not be acquired for invalid correction filters")
@@ -3042,6 +3064,7 @@ def test_list_corrections_rejects_invalid_entity_type_before_db_touch(monkeypatc
 def test_list_corrections_rejects_invalid_start_date_before_db_touch(monkeypatch):
     app = FastAPI()
     app.include_router(b2b_dashboard.router)
+    app.dependency_overrides[require_auth] = _b2b_auth_user
 
     def fail_pool():
         raise AssertionError("DB pool should not be acquired for invalid correction dates")
@@ -3070,7 +3093,7 @@ async def test_list_corrections_normalizes_blank_filters():
             start_date="  ",
             end_date="	",
             limit=50,
-            user=None,
+            user=_b2b_auth_user(),
         )
 
     assert result == {"corrections": [], "count": 0}

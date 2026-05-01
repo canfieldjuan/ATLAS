@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ..auth.dependencies import AuthUser, optional_auth
+from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
 from ..services.tracing import (
     build_business_trace_context,
@@ -125,7 +125,7 @@ def _end_crm_trace(
 @router.post("/events")
 async def ingest_crm_event(
     body: CRMEventBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Ingest a CRM event for asynchronous processing.
 
@@ -168,7 +168,7 @@ async def ingest_crm_event(
     span = _start_crm_trace(
         provider=crm_provider,
         event_type=event_type,
-        account_id=str(user.account_id) if user else None,
+        account_id=str(user.account_id),
     )
 
     event_ts = None
@@ -178,7 +178,7 @@ async def ingest_crm_event(
         except (ValueError, AttributeError):
             pass
 
-    account_id = user.account_id if user else None
+    account_id = user.account_id
 
     try:
         event_id = await pool.fetchval(
@@ -257,7 +257,7 @@ async def ingest_crm_event(
 @router.post("/events/batch")
 async def ingest_crm_events_batch(
     request: Request,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Ingest a batch of CRM events. Body: {"events": [...]}."""
     cfg = settings.crm_event
@@ -279,7 +279,7 @@ async def ingest_crm_events_batch(
         raise HTTPException(status_code=400, detail="Maximum 100 events per batch")
 
     pool = _pool_or_503()
-    account_id = str(user.account_id) if user else None
+    account_id = str(user.account_id)
     span = _start_crm_trace(
         provider="batch",
         account_id=account_id,
@@ -382,7 +382,7 @@ async def ingest_crm_events_batch(
 @router.post("/events/hubspot")
 async def ingest_hubspot_webhook(
     request: Request,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Accept HubSpot webhook payloads and normalize to internal format.
 
@@ -393,8 +393,6 @@ async def ingest_hubspot_webhook(
     - propertyName, propertyValue: what changed
     - occurredAt: timestamp in ms
     """
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required for webhook ingestion")
     cfg = settings.crm_event
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
@@ -545,7 +543,7 @@ def _hubspot_stage_to_event_type(stage_value: str) -> str:
 @router.post("/events/salesforce")
 async def ingest_salesforce_webhook(
     request: Request,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Accept Salesforce Outbound Message or Platform Event payloads.
 
@@ -554,8 +552,6 @@ async def ingest_salesforce_webhook(
     - record: dict of field values
     - old: dict of previous field values (for update triggers)
     """
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required for webhook ingestion")
     cfg = settings.crm_event
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
@@ -660,7 +656,7 @@ async def ingest_salesforce_webhook(
                 deal_amount,
                 json.dumps(evt, default=str),
                 event_ts,
-                str(user.account_id) if user else None,
+                str(user.account_id),
             )
             ingested += 1
         except Exception:
@@ -702,7 +698,7 @@ def _salesforce_stage_to_event_type(stage: str, sobject: str) -> str:
 @router.post("/events/pipedrive")
 async def ingest_pipedrive_webhook(
     request: Request,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Accept Pipedrive webhook payloads.
 
@@ -712,8 +708,6 @@ async def ingest_pipedrive_webhook(
     - previous: previous state (for updates)
     - meta: webhook metadata
     """
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required for webhook ingestion")
     cfg = settings.crm_event
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
@@ -866,7 +860,7 @@ async def list_crm_events(
     end_date: Optional[str] = Query(None, description="Filter events received before (ISO 8601)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """List ingested CRM events with optional filters."""
     status = (_clean_optional_text(status) or "").lower() or None
@@ -901,14 +895,9 @@ async def list_crm_events(
             raise HTTPException(status_code=400, detail="Invalid end_date (ISO 8601 expected)") from exc
 
     pool = _pool_or_503()
-    conditions = ["1=1"]
-    params: list = []
-    idx = 1
-
-    if user:
-        conditions.append(f"account_id = ${idx}::uuid")
-        params.append(str(user.account_id))
-        idx += 1
+    conditions = ["account_id = $1::uuid"]
+    params: list = [str(user.account_id)]
+    idx = 2
 
     if status:
         conditions.append(f"status = ${idx}")
@@ -985,16 +974,13 @@ async def list_crm_events(
 
 @router.get("/events/enrichment-stats")
 async def get_enrichment_stats(
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Show enrichment coverage and effectiveness stats for CRM events."""
     pool = _pool_or_503()
 
-    where = ""
-    params: list[str] = []
-    if user:
-        where = "WHERE account_id = $1::uuid"
-        params.append(str(user.account_id))
+    where = "WHERE account_id = $1::uuid"
+    params: list[str] = [str(user.account_id)]
 
     row = await pool.fetchrow(
         f"""
