@@ -8,7 +8,8 @@ carved out safely without removing or changing production code.
 
 - `autonomous/tasks/`: copied task implementations
 - `services/`: copied support shims and staged service dependencies
-- `skills/digest/`: copied prompt skill contracts
+- `skills/digest/`: copied prompt skill contracts, including campaign and
+  sequence prompts used by the standalone services
 - `storage/migrations/`: copied persistence migrations
 - `docs/`: extraction maps for productized pipeline slices
 
@@ -29,10 +30,10 @@ Mirror mappings are declared in `extracted_content_pipeline/manifest.json` so sy
 This scaffold preserves code exactly as copied so behavior and signatures remain
 unchanged while extraction work continues.
 
-This is not yet the sellable product boundary. A customer-usable module must be
-able to install and run without the Atlas monolith on `PYTHONPATH`. Until the
-standalone audit reaches zero runtime `atlas_brain` imports, this package is a
-staging copy, not a deployable product.
+The standalone audit now passes with zero runtime `atlas_brain` imports. The
+scaffold is still a staging boundary until the minimal runtime adapters are
+hardened into customer-grade ports and the copied helper surface is trimmed to
+the sellable workflows.
 
 
 ## Validation command
@@ -63,8 +64,7 @@ python scripts/audit_extracted_standalone.py --fail-on-debt
 ```
 
 The first command reports Atlas runtime coupling. The second is the product gate
-we should enable once staged shims have been replaced with product-owned ports
-and adapters.
+for keeping the extracted package free of runtime `atlas_brain` imports.
 
 ## One-shot checks
 
@@ -72,14 +72,17 @@ and adapters.
 bash scripts/run_extracted_pipeline_checks.sh
 ```
 
+The one-shot runner enforces the standalone readiness audit with
+`--fail-on-debt`; any new runtime `atlas_brain` import fails CI.
+
 ## Compatibility shims
 
-To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`) that delegate to `atlas_brain` implementations.
+To keep copied task modules importable inside this repo, package-level bridge modules are provided under `extracted_content_pipeline/` (for example `config.py`, `storage/database.py`, `pipelines/llm.py`, and `services/*`). Runtime imports no longer delegate to `atlas_brain`; most adapters are intentionally minimal local implementations.
 
 B2B helper siblings required by `b2b_blog_post_generation.py` are also copied into `extracted_content_pipeline/autonomous/tasks/`.
 
-These shims are temporary extraction scaffolding. They should not ship in the
-customer product.
+These minimal adapters are extraction scaffolding. They need hardening before
+shipping in the customer product.
 
 The email/campaign generation slice is mapped in `docs/email_campaign_generation_pipeline.md`, with standalone productization requirements in `docs/standalone_productization.md`.
 
@@ -103,58 +106,44 @@ GitHub Actions workflow: `.github/workflows/extracted_pipeline_checks.yml` runs 
 bash scripts/list_extracted_pipeline_files.sh
 ```
 
-## Standalone mode toggle
+## LLM offline fallback
 
-Set `EXTRACTED_PIPELINE_STANDALONE=1` to use `extracted_content_pipeline/settings.py` instead of delegating config to `atlas_brain.config`.
+Set `EXTRACTED_PIPELINE_STANDALONE=1` to make the LLM bridge modules use their local no-op fallbacks instead of delegating to `extracted_llm_infrastructure`.
 
-## Standalone pipeline shims
+`campaign_llm_client.py` provides the product-owned `PipelineLLMClient`
+adapter for campaign services. It satisfies the `campaign_ports.LLMClient`
+port, resolves an LLM through the extracted LLM bridge when configured, and
+normalizes `chat()` / `generate()` provider responses into `LLMResponse`.
 
-In standalone mode (`EXTRACTED_PIPELINE_STANDALONE=1`), `extracted_content_pipeline/pipelines/llm.py` and `extracted_content_pipeline/pipelines/notify.py` provide local fallback behavior (no-op notifier and safe JSON/cleaning helpers) so task modules can execute without Atlas pipeline services.
+## Pipeline shims
 
-## Standalone storage shims
+`extracted_content_pipeline/pipelines/notify.py` provides a local no-op notifier so task modules can execute without Atlas pipeline services.
 
-In standalone mode, `extracted_content_pipeline/storage/database.py` and `extracted_content_pipeline/storage/models.py` provide minimal local fallbacks (`get_db_pool`, `ScheduledTask`) so task entrypoints can execute without Atlas storage imports.
+Content-pipeline LLM bridge modules delegate to
+`extracted_llm_infrastructure` instead of `atlas_brain`. That keeps the content
+generation product boundary pointed at the extracted LLM/cost-optimization
+product rather than at the monolith.
 
-## Standalone skill registry
+## Local utility shims
 
-In standalone mode, `extracted_content_pipeline/skills/registry.py` uses local markdown files under `extracted_content_pipeline/skills/` for `get_skill_registry()` lookups.
+Several small utility shims provide product-owned local behavior by default so task imports do not require Atlas service modules:
 
-## Standalone service shims
-
-In standalone mode, `extracted_content_pipeline/services/__init__.py` and `extracted_content_pipeline/services/protocols.py` provide minimal local fallbacks (`llm_registry.get_active()`, `Message`) so task imports do not require Atlas service modules.
-
-## Standalone source shims
-
-In standalone mode, `extracted_content_pipeline/services/scraping/sources.py` provides local `ReviewSource` enums and allowlist helpers used by B2B tasks without requiring Atlas source modules.
-
-## Standalone reasoning shims
-
-In standalone mode, `extracted_content_pipeline/reasoning/wedge_registry.py` provides local `Wedge`, `get_wedge_meta`, and `validate_wedge` fallbacks used by B2B extracted modules.
-
-## Standalone quality shims
-
-In standalone mode, `extracted_content_pipeline/services/blog_quality.py` provides local fallback quality helpers (`blog_quality_summary`, `blog_quality_revalidation`, and `merge_blog_first_pass_quality_data_context`) for B2B blog pipeline paths.
-
-## Standalone normalization shims
-
-In standalone mode, `extracted_content_pipeline/services/company_normalization.py` provides a local `normalize_company_name` fallback used by extracted B2B helpers.
-
-## Standalone vendor registry shims
-
-In standalone mode, `extracted_content_pipeline/services/vendor_registry.py` provides a local `resolve_vendor_name_cached` fallback used by extracted B2B helpers.
-
-## Standalone tracing shims
-
-In standalone mode, `extracted_content_pipeline/services/tracing.py` provides a local `build_business_trace_context` fallback used by extracted B2B helpers.
-
-## Standalone Apollo override shims
-
-In standalone mode, `extracted_content_pipeline/services/apollo_company_overrides.py` provides a local async `fetch_company_override_map` fallback used by extracted B2B helpers.
-
-## Standalone corrections shims
-
-In standalone mode, `extracted_content_pipeline/services/b2b/corrections.py` provides a local `suppress_predicate` fallback for extracted B2B helper logic.
-
-## Standalone B2B contract shims
-
-In standalone mode, `extracted_content_pipeline/services/b2b/enrichment_contract.py` provides local fallbacks (`pain_category_for_bucket`, `quote_grade_phrases`, `resolve_pain_confidence`) used by extracted B2B helpers.
+- `config.py`: extracted settings from `settings.py`
+- `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
+  `LLMClient` port to extracted LLM infrastructure services
+- `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
+- `campaign_postgres.py`: async Postgres adapters for campaign, sequence,
+  suppression, and audit ports
+- `storage/repositories/scheduled_task.py`: local execution metadata updater
+- `skills/registry.py`: local markdown-backed skill registry implementing
+  `.get()` and product `SkillStore.get_prompt()`
+- `reasoning/archetypes.py`, `reasoning/evidence_engine.py`, and `reasoning/temporal.py`: minimal reasoning adapters for extracted report builders
+- `services/__init__.py` and `services/protocols.py`: `llm_registry.get_active()` and `Message`
+- `services/b2b/cache_runner.py`: local exact-cache request helpers and no-op lookup/store
+- `services/b2b/enrichment_contract.py`: local enrichment contract fallbacks
+- `services/scraping/sources.py`: `ReviewSource` enums and allowlist helpers
+- `reasoning/wedge_registry.py`: `Wedge`, `get_wedge_meta`, and `validate_wedge`
+- `services/blog_quality.py`: blog quality summary/revalidation helpers
+- `services/company_normalization.py`: `normalize_company_name`
+- `services/vendor_registry.py`: `resolve_vendor_name_cached`
+- `services/apollo_company_overrides.py`, `services/b2b/corrections.py`, `services/tracing.py`, and `services/scraping/universal/html_cleaner.py`: local no-op or lightweight helpers

@@ -16185,7 +16185,7 @@ async def read_review_details(
     specific_complaints, relevance_score, author_churn_score,
     low_fidelity, low_fidelity_reasons.
     """
-    from atlas_brain.services.b2b.corrections import suppress_predicate
+    from ...services.b2b.corrections import suppress_predicate
 
     if recency_column == "enriched_at":
         recency_expr = "r.enriched_at"
@@ -16347,7 +16347,7 @@ async def read_campaign_opportunities(
     context, pain categories, and quotable phrases extracted from enrichment.
     Consumers add domain-specific logic (scoring, affiliate matching, etc.).
     """
-    from atlas_brain.services.b2b.corrections import suppress_predicate
+    from ...services.b2b.corrections import suppress_predicate
 
     conditions = [
         "r.enrichment_status = 'enriched'",
@@ -16489,7 +16489,7 @@ def _vendor_evidence_base_filters(
     Centralizes enrichment status check, recency semantics, and suppression.
     Returns a SQL fragment with $<window_param> as the window_days placeholder.
     """
-    from atlas_brain.services.b2b.corrections import suppress_predicate
+    from ...services.b2b.corrections import suppress_predicate
 
     if recency_column == "enriched_at":
         recency = f"{alias}.enriched_at"
@@ -16556,7 +16556,7 @@ async def read_vendor_quote_evidence(
     Returns dicts with: vendor_name, source, reviewer_company, reviewer_title,
     role_level, pain_category, urgency, review_text, quotable_phrases, rating.
     """
-    from atlas_brain.services.b2b.corrections import suppress_predicate
+    from ...services.b2b.corrections import suppress_predicate
 
     if recency_column == "imported_at":
         recency_expr = "r.imported_at"
@@ -16662,7 +16662,7 @@ async def read_category_quote_evidence(
 
     Same return shape as read_vendor_quote_evidence.
     """
-    from atlas_brain.services.b2b.corrections import suppress_predicate
+    from ...services.b2b.corrections import suppress_predicate
 
     conditions = [
         "r.enrichment_status = 'enriched'",

@@ -5558,7 +5558,7 @@ async def _gather_data(
             evidence_vault_lookup.get(vendor),
         )
         # Pull actual pricing complaint reviews directly
-        from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_quote_evidence
+        from ._b2b_shared import read_vendor_quote_evidence
         sources = _blog_source_allowlist()
         pricing_rows = await read_vendor_quote_evidence(
             pool,

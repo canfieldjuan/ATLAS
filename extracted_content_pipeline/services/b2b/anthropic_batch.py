@@ -31,4 +31,4 @@ if os.getenv("EXTRACTED_PIPELINE_STANDALONE", "0") == "1":
     async def mark_batch_fallback_result(*args: Any, **kwargs: Any) -> None:
         return None
 else:
-    from atlas_brain.services.b2b.anthropic_batch import *
+    from extracted_llm_infrastructure.services.b2b.anthropic_batch import *

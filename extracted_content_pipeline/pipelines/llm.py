@@ -26,4 +26,4 @@ if os.getenv("EXTRACTED_PIPELINE_STANDALONE", "0") == "1":
     def call_llm_with_skill(*args: Any, **kwargs: Any):
         return None
 else:
-    from atlas_brain.pipelines.llm import *
+    from extracted_llm_infrastructure.pipelines.llm import *

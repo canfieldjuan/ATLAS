@@ -10,7 +10,32 @@
   - `complaint_enrichment.py`
   - `article_enrichment.py`
 - B2B helper siblings required by copied blog/campaign flows are present.
-- Compatibility bridge modules map extracted package imports back to `atlas_brain` for side-by-side operation.
+- Campaign and sequence prompt contracts are copied into `skills/digest/`, and
+  the local skill registry implements `SkillStore.get_prompt()`.
+- Core campaign schema migrations are copied into `storage/migrations/`
+  (`b2b_campaigns`, `campaign_sequences`, suppressions, analytics, vendor and
+  seller targets, outcomes, score components, and engagement timing).
+- Compatibility bridge modules no longer map extracted package imports back to
+  `atlas_brain` at runtime.
+- LLM-facing content bridges now target `extracted_llm_infrastructure`
+  (`pipelines.llm`, `services.b2b.anthropic_batch`, `services.llm.anthropic`)
+  instead of pointing directly at `atlas_brain`.
+- `campaign_llm_client.PipelineLLMClient` adapts extracted LLM infrastructure
+  services to the standalone campaign `LLMClient` port.
+- `campaign_postgres` provides async Postgres adapters for the campaign,
+  sequence, suppression, and audit ports against the copied campaign schema.
+- Small utility shims now default to local extracted implementations:
+  `config`, `pipelines.notify`, `reasoning.wedge_registry`,
+  `reasoning.archetypes`, `reasoning.evidence_engine`, `reasoning.temporal`,
+  `skills.registry`, `storage.database`, `storage.models`,
+  `storage.repositories.scheduled_task`,
+  `services.__init__`, `services.protocols`, `services.blog_quality`,
+  `services.b2b.cache_runner`, `services.b2b.enrichment_contract`,
+  `services.company_normalization`, `services.vendor_registry`,
+  `services.apollo_company_overrides`, `services.b2b.corrections`,
+  `services.tracing`, `services.scraping.sources`, and
+  `services.scraping.universal.html_cleaner`.
+- Standalone readiness audit reports 0 Atlas runtime import findings.
 
 ## Validation gates in repo
 
@@ -19,15 +44,17 @@
 - `scripts/check_ascii_python.sh`
 - `scripts/check_extracted_imports.py`
 - `scripts/smoke_extracted_pipeline_imports.py`
-- `scripts/run_extracted_pipeline_checks.sh`
+- `scripts/run_extracted_pipeline_checks.sh` (includes
+  `audit_extracted_standalone.py --fail-on-debt`)
 
 ## Remaining extraction work
 
-1. Replace bridge-module delegation (`from atlas_brain...`) with native extracted implementations package by package.
+1. Harden minimal local adapters into customer-grade ports for notify/reasoning
+   and provider-specific LLM configuration.
 2. Trim copied helper surface to only the modules required by target sellable workflows.
-3. Introduce standalone config and runtime wiring for DB/LLM/skills/notify.
+3. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 4. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).
 
 ## Operational note
 
-Until bridge-module delegation is removed, this scaffold remains an in-repo extraction staging area (not yet a fully detached standalone runtime).
+The runtime import gate is clean, but this scaffold remains an in-repo extraction staging area until adapters are productionized and copied helper scope is narrowed.
