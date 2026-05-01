@@ -499,3 +499,49 @@ async def test_strict_helper_rejects_empty_email(db_pool, cleanup_sequences):
 
     assert result.assigned is False
     assert result.reason == "empty_email"
+
+
+@pytest.mark.asyncio
+async def test_unique_index_blocks_whitespace_padded_recipient(db_pool, cleanup_sequences):
+    """Migration 310 widens the dedup invariant to canonical form: a
+    trailing space on a stored recipient_email must not let a second
+    active sequence claim the same person."""
+    import asyncpg
+
+    batch_id = f"canon-test-{uuid4().hex[:8]}"
+    email = f"omar-{uuid4().hex[:6]}@example.com"
+
+    first = await _create_sequence(db_pool, batch_id, recipient_email=email)
+    second = await _create_sequence(db_pool, batch_id)
+    cleanup_sequences.extend([first, second])
+
+    # Bypass the helper. The CHECK constraint added in migration 310
+    # blocks the whitespace-padded write at the storage boundary -- so
+    # the dedup invariant cannot be defeated via non-helper writers.
+    with pytest.raises(asyncpg.IntegrityConstraintViolationError):
+        await db_pool.execute(
+            "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+            f"{email} ", second,  # trailing space
+        )
+
+
+@pytest.mark.asyncio
+async def test_helper_canonicalizes_whitespace_emails(db_pool, cleanup_sequences):
+    """The assignment helper must continue accepting whitespace-padded
+    inputs (callers don't always pre-trim) and store them in canonical
+    form, so the CHECK constraint from migration 310 doesn't reject
+    legitimate calls."""
+    batch_id = f"canon-test-{uuid4().hex[:8]}"
+    seq_id = await _create_sequence(db_pool, batch_id)
+    cleanup_sequences.append(seq_id)
+
+    result = await assign_recipient_to_sequence(
+        db_pool, seq_id, "  pat@example.com  ",
+    )
+
+    assert result.assigned is True
+    row = await db_pool.fetchrow(
+        "SELECT recipient_email FROM campaign_sequences WHERE id = $1",
+        seq_id,
+    )
+    assert row["recipient_email"] == "pat@example.com"

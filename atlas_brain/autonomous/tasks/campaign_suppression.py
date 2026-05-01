@@ -231,7 +231,7 @@ async def _try_set_active_recipient(conn, *, sequence_id: UUID, email: str) -> b
 
 _PROBE_ACTIVE_CONFLICT_SQL = """
 SELECT id FROM campaign_sequences
-WHERE LOWER(recipient_email) = $1
+WHERE LOWER(BTRIM(recipient_email)) = $1
   AND status = 'active'
   AND id != $2
 LIMIT 1
@@ -333,10 +333,12 @@ async def assign_recipient_to_sequence(
     an entry is written to campaign_audit_log, and the email is NOT
     assigned.
 
-    Race-safety. Migration 309 enforces a UNIQUE partial index on
-    LOWER(recipient_email) WHERE status='active', so the database is the
-    source of truth. The happy-path SELECT-then-UPDATE handles the common
-    case in one transaction; if a concurrent worker wins the race between
+    Race-safety. Migrations 309 and 310 enforce a UNIQUE partial index on
+    LOWER(BTRIM(recipient_email)) WHERE status='active' plus a CHECK
+    constraint requiring stored values to already be trimmed, so the
+    database is the source of truth. The happy-path SELECT-then-UPDATE
+    handles the common case in one transaction; if a concurrent worker
+    wins the race between
     our SELECT and UPDATE, the UPDATE raises UniqueViolationError and we
     fall through to a fresh transaction that re-probes the conflict and
     supersedes our sequence the same way.
@@ -359,7 +361,7 @@ async def assign_recipient_to_sequence(
                 conflict = await conn.fetchval(
                     """
                     SELECT id FROM campaign_sequences
-                    WHERE LOWER(recipient_email) = $1
+                    WHERE LOWER(BTRIM(recipient_email)) = $1
                       AND status = 'active'
                       AND id != $2
                     LIMIT 1
@@ -419,7 +421,7 @@ async def assign_recipient_to_sequence(
                 conflict = await conn.fetchval(
                     """
                     SELECT id FROM campaign_sequences
-                    WHERE LOWER(recipient_email) = $1
+                    WHERE LOWER(BTRIM(recipient_email)) = $1
                       AND status = 'active'
                       AND id != $2
                     LIMIT 1
