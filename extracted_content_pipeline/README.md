@@ -132,6 +132,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services
 - `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
+- `campaign_postgres.py`: async Postgres adapters for campaign, sequence,
+  suppression, and audit ports
 - `storage/repositories/scheduled_task.py`: local execution metadata updater
 - `skills/registry.py`: local markdown-backed skill registry implementing
   `.get()` and product `SkillStore.get_prompt()`
