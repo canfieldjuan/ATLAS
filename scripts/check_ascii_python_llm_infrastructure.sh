@@ -26,7 +26,9 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 data = path.read_bytes()
-violations = [(idx + 1, b) for idx, b in enumerate(data) if b > 0x7F]
+# Report 0-based byte offsets so editors / hex tools (which seek to a
+# zero-based index) point to the right byte without an off-by-one.
+violations = [(idx, b) for idx, b in enumerate(data) if b > 0x7F]
 if violations:
     print(path)
     for idx, b in violations[:20]:

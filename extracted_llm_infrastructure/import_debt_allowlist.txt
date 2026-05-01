@@ -1,62 +1,23 @@
 # Import-debt allowlist for the extracted_llm_infrastructure scaffold.
 #
-# The scaffold is a verbatim byte-snapshot of atlas_brain sources. The
-# resolver in scripts/check_extracted_llm_infrastructure_imports.py
-# (mirrored from the content-pipeline pattern) flags every relative
-# import that does not literally resolve inside the scaffold's
-# directory. Each entry below names a relative import target that lives
-# in atlas_brain at the equivalent path, so this file documents which
-# atlas_brain modules the scaffold currently leans on.
+# scripts/check_extracted_llm_infrastructure_imports.py walks every
+# Python file in the scaffold's manifest and audits its relative
+# imports. Any unresolved import that does not appear in this file
+# fails the check.
 #
-# Phase 2 (standalone substrate) landed five bridge stubs gated on
-# EXTRACTED_LLM_INFRA_STANDALONE=1: config, services/{base,protocols,
-# registry}, storage/database. The relative-import targets below still
-# resolve through atlas_brain by default; with the toggle on they
-# resolve to local _standalone/* copies instead.
+# As of the current commit, the resolver honors Python's relative-
+# import semantics correctly (ascending ``level - 1`` package
+# components rather than ``level``), so every relative import in the
+# scaffolded modules either:
 #
-# Phase 3 shrinks this list further by rewiring the scaffolded provider
-# modules (services/llm/*, services/b2b/anthropic_batch.py,
-# pipelines/llm.py, reasoning/semantic_cache.py, services/llm_router.py,
-# services/tracing.py) to consume the standalone substrate via
-# Protocol-based DI seams.
+#   - resolves inside the scaffold itself (e.g. ``from ..base``
+#     resolves to ``services/base.py``, the Phase 2 bridge stub), or
+#   - resolves via the atlas_brain fallback path because the scaffold
+#     has not yet copied that module (none currently in this state).
+#
+# This file is therefore empty by design. Future Phase 3 work that
+# rewires providers to consume the standalone substrate via Protocol-
+# based DI seams may temporarily add intentional debt entries here;
+# each should reference its tracking issue.
 #
 # Format: one entry per line. Lines starting with '#' are comments.
-
-# atlas_brain.config (Pydantic settings: LLM keys, models, pricing)
-..config
-
-# atlas_brain.services.protocols / .protocols (Message, ModelInfo, LLMService)
-..protocols
-.protocols
-..services.protocols
-
-# atlas_brain.services.base (BaseModelService)
-..base
-
-# atlas_brain.services.registry (llm_registry singleton + @register_llm)
-..registry
-
-# atlas_brain.services.llm_router (workflow-based routing singleton)
-..services.llm_router
-
-# atlas_brain.services.* package + specific siblings
-..services
-..services.tracing
-..services.llm.openrouter
-
-# atlas_brain.skills (skill registry used by call_llm_with_skill)
-..skills
-
-# atlas_brain.storage.database (get_db_pool for asyncpg.Pool)
-..storage.database
-
-# Sibling LLM provider imports inside services/llm
-.cloud
-.groq
-.ollama
-.together
-.llm.anthropic
-.llm.ollama
-
-# Parent .llm.anthropic from services/b2b/anthropic_batch.py
-..llm.anthropic

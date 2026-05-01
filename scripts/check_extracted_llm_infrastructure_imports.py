@@ -35,15 +35,21 @@ def manifest_python_targets() -> list[Path]:
 def resolve_relative(module_path: Path, level: int, module: str | None) -> list[Path]:
     """Return candidate filesystem locations for a relative import.
 
-    Same shape as the content-pipeline equivalent: try inside the scaffold
-    first, then fall back to the atlas_brain root. The scaffold and
-    atlas_brain mirror the same package hierarchy under their root, so a
-    `from ..config import settings` in a copied file resolves to
-    `atlas_brain/config.py` during Phase 1.
+    Honors Python's actual relative-import semantics: ``level=1`` means
+    "current package" (sibling of the importing file), ``level=2`` means
+    "parent package", ``level=3`` means "grandparent", etc. The ascend
+    is therefore ``level - 1`` package components, not ``level``.
+
+    Tries inside the scaffold first, then falls back to the atlas_brain
+    root. The scaffold and atlas_brain mirror the same package
+    hierarchy under their root, so a `from ..config import settings` in
+    a copied file resolves to ``atlas_brain.config`` only when the
+    scaffold lacks the equivalent path.
     """
     base_parts = list(module_path.relative_to(ROOT).parts)
     package_parts = base_parts[:-1]
-    target_parts = package_parts[: max(0, len(package_parts) - level)]
+    ascend = max(0, level - 1)
+    target_parts = package_parts[: max(0, len(package_parts) - ascend)]
     if module:
         target_parts.extend(module.split("."))
 
@@ -80,8 +86,6 @@ def check_file(path: Path, allowlist: set[str]) -> list[str]:
             candidates = resolve_relative(path, node.level, node.module)
             if not any(c.exists() for c in candidates):
                 mod = f"{'.' * node.level}{node.module or ''}"
-                if mod.startswith("..."):
-                    continue
                 if mod not in allowlist:
                     errors.append(f"{path}: unresolved relative import '{mod}'")
     return errors

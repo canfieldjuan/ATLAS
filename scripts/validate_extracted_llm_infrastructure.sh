@@ -15,6 +15,10 @@ status = 0
 for mapping in obj["mappings"]:
     src = Path(mapping["source"])
     dst = Path(mapping["target"])
+    if not src.exists():
+        print(f"MISSING SOURCE: {src} (referenced by manifest target {dst})")
+        status = 1
+        continue
     if not dst.exists() or src.read_bytes() != dst.read_bytes():
         print(f"OUT OF SYNC: {dst}")
         status = 1
