@@ -1,9 +1,10 @@
 # Standalone Productization Contract
 
 The extracted package must be installable and runnable without the Atlas
-monolith. The current PR is a staging mirror, so it still contains Atlas bridge
-imports. That is acceptable for extraction traceability, but it is not the
-customer product.
+monolith. The scaffold began as a staging mirror for extraction traceability;
+the runtime import gate is now clean, but the package is not the customer
+product until the minimal adapters are hardened and copied helper scope is
+trimmed.
 
 ## Non-Negotiable Product Rule
 
