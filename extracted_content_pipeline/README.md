@@ -115,3 +115,7 @@ In standalone mode, `extracted_content_pipeline/services/blog_quality.py` provid
 ## Standalone normalization shims
 
 In standalone mode, `extracted_content_pipeline/services/company_normalization.py` provides a local `normalize_company_name` fallback used by extracted B2B helpers.
+
+## Standalone vendor registry shims
+
+In standalone mode, `extracted_content_pipeline/services/vendor_registry.py` provides a local `resolve_vendor_name_cached` fallback used by extracted B2B helpers.
