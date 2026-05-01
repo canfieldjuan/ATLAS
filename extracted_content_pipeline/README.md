@@ -99,3 +99,7 @@ In standalone mode, `extracted_content_pipeline/skills/registry.py` uses local m
 ## Standalone service shims
 
 In standalone mode, `extracted_content_pipeline/services/__init__.py` and `extracted_content_pipeline/services/protocols.py` provide minimal local fallbacks (`llm_registry.get_active()`, `Message`) so task imports do not require Atlas service modules.
+
+## Standalone source shims
+
+In standalone mode, `extracted_content_pipeline/services/scraping/sources.py` provides local `ReviewSource` enums and allowlist helpers used by B2B tasks without requiring Atlas source modules.
