@@ -1,17 +1,24 @@
-# Import-debt allowlist for the extracted_llm_infrastructure scaffold (Phase 1).
+# Import-debt allowlist for the extracted_llm_infrastructure scaffold.
 #
 # The scaffold is a verbatim byte-snapshot of atlas_brain sources. The
-# Phase 1 resolver in scripts/check_extracted_llm_infrastructure_imports.py
-# (which mirrors the content-pipeline scaffold's pattern) flags every
-# relative import that does not literally resolve inside the scaffold's
+# resolver in scripts/check_extracted_llm_infrastructure_imports.py
+# (mirrored from the content-pipeline pattern) flags every relative
+# import that does not literally resolve inside the scaffold's
 # directory. Each entry below names a relative import target that lives
 # in atlas_brain at the equivalent path, so this file documents which
-# atlas_brain modules the scaffold currently leans on at runtime.
+# atlas_brain modules the scaffold currently leans on.
 #
-# Phase 2 work (separate PR) shrinks this list by either:
-#   - copying the dependency module into the scaffold, or
-#   - replacing the import with a Protocol-based DI seam that accepts
-#     the dependency from the caller.
+# Phase 2 (standalone substrate) landed five bridge stubs gated on
+# EXTRACTED_LLM_INFRA_STANDALONE=1: config, services/{base,protocols,
+# registry}, storage/database. The relative-import targets below still
+# resolve through atlas_brain by default; with the toggle on they
+# resolve to local _standalone/* copies instead.
+#
+# Phase 3 shrinks this list further by rewiring the scaffolded provider
+# modules (services/llm/*, services/b2b/anthropic_batch.py,
+# pipelines/llm.py, reasoning/semantic_cache.py, services/llm_router.py,
+# services/tracing.py) to consume the standalone substrate via
+# Protocol-based DI seams.
 #
 # Format: one entry per line. Lines starting with '#' are comments.
 

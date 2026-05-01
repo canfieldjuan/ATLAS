@@ -1,11 +1,23 @@
-"""Phase 1 bridge: re-exports atlas_brain.storage.database so scaffolded
-modules with `from ...storage.database import get_db_pool` resolve
-cleanly. The ``DatabasePool`` global is shared with atlas_brain by virtue
-of this re-export.
+"""Phase 2 bridge: database entry point for the LLM-infrastructure scaffold.
 
-Phase 3 work introduces a ``LLMInfraStorage`` Protocol so the scaffold
-can run against any asyncpg-compatible pool, not just atlas_brain's
-singleton.
+Default mode: re-export from ``atlas_brain.storage.database``. The
+``DatabasePool`` global singleton is shared with atlas_brain.
+
+Standalone mode (``EXTRACTED_LLM_INFRA_STANDALONE=1``): use the slim
+asyncpg wrapper under ``_standalone/database.py``. Configuration via
+``ATLAS_DB_*`` environment variables (matches atlas_brain for
+compatibility).
 """
-from atlas_brain.storage.database import *  # noqa: F401,F403
-from atlas_brain.storage.database import get_db_pool  # noqa: F401
+
+from __future__ import annotations
+
+import os as _os
+
+if _os.environ.get("EXTRACTED_LLM_INFRA_STANDALONE") == "1":
+    from .._standalone.database import (  # noqa: F401
+        DatabasePool,
+        get_db_pool,
+    )
+else:
+    from atlas_brain.storage.database import *  # noqa: F401,F403
+    from atlas_brain.storage.database import get_db_pool  # noqa: F401

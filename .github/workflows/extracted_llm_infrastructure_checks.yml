@@ -9,6 +9,7 @@ on:
       - "scripts/check_ascii_python_llm_infrastructure.sh"
       - "scripts/check_extracted_llm_infrastructure_imports.py"
       - "scripts/smoke_extracted_llm_infrastructure_imports.py"
+      - "scripts/smoke_extracted_llm_infrastructure_standalone.py"
       - "scripts/run_extracted_llm_infrastructure_checks.sh"
   push:
     paths:
@@ -18,6 +19,7 @@ on:
       - "scripts/check_ascii_python_llm_infrastructure.sh"
       - "scripts/check_extracted_llm_infrastructure_imports.py"
       - "scripts/smoke_extracted_llm_infrastructure_imports.py"
+      - "scripts/smoke_extracted_llm_infrastructure_standalone.py"
       - "scripts/run_extracted_llm_infrastructure_checks.sh"
 
 jobs:

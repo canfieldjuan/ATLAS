@@ -15,17 +15,22 @@
 | README + this STATUS file | ✅ done |
 | `import_debt_allowlist.txt` documenting atlas_brain dependencies | ✅ done |
 
-## Phase 2 — Standalone toggle 🔲 (separate PR)
+## Phase 2 — Standalone substrate ✅ (landed)
 
-Goal: every scaffolded module is importable and runnable without `atlas_brain` on `sys.path`, gated by `EXTRACTED_LLM_INFRA_STANDALONE=1`.
+Goal: the package's substrate (settings, base class, protocols, registry, db pool) loads its own implementation instead of delegating to atlas_brain when `EXTRACTED_LLM_INFRA_STANDALONE=1` is set.
 
-| Task | Notes |
+| Task | Status |
 |---|---|
-| Carve a slim `LLMInfraConfig` Pydantic class out of `atlas_brain/config.py` | Mix-in fields from `LLMConfig`, `B2BChurnConfig.openrouter_*`, `B2BChurnConfig.anthropic_batch_*`, `FTLTracingConfig.*`, `ModelPricingConfig.*` |
-| Local DB pool abstraction | `LLMInfraStorage` Protocol + asyncpg adapter for standalone, atlas adapter for delegate |
-| No-op tracer fallback | `LLMInfraTracer` Protocol with `start_span`/`end_span`; standalone defaults to no-op |
-| Standalone migration runner | Apply the six SQL files under `storage/migrations/` to a fresh Postgres |
-| Per-file extraction state column (below) | Track which files are still "delegate-only" vs "standalone-ready" |
+| Carve `LLMInfraSettings` (LLMSubConfig + B2BChurnSubConfig + ReasoningSubConfig + FTLTracingSubConfig + ModelPricingConfig) | ✅ `_standalone/config.py` |
+| Standalone Message / ModelInfo / InferenceMetrics / LLMService Protocol | ✅ `_standalone/protocols.py` |
+| Torch-free `BaseModelService` ABC | ✅ `_standalone/base.py` |
+| `ServiceRegistry` + `llm_registry` singleton + `@register_llm` | ✅ `_standalone/registry.py` |
+| Slim `DatabasePool` wrapper around asyncpg | ✅ `_standalone/database.py` |
+| Bridge stubs gate on `EXTRACTED_LLM_INFRA_STANDALONE=1` | ✅ five bridges updated |
+| Standalone smoke script + CI integration | ✅ `scripts/smoke_extracted_llm_infrastructure_standalone.py` |
+| README documents the toggle and env-var layout | ✅ |
+
+**Not yet in scope** (deferred to Phase 3): the scaffolded provider modules (`services/llm/*.py`, `services/b2b/anthropic_batch.py`, `pipelines/llm.py`, `reasoning/semantic_cache.py`, `services/llm_router.py`, `services/tracing.py`) still contain top-level relative imports that target atlas_brain. The standalone substrate is in place; Phase 3 rewires the providers to consume it.
 
 ## Phase 3 — Decoupling 🔲 (later PRs)
 
@@ -40,10 +45,20 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 
 ## Per-file extraction state
 
-| Scaffold file | Phase 1 (snapshot) | Phase 2 (standalone-ready) | Phase 3 (decoupled) |
+| Scaffold file | Phase 1 (snapshot) | Phase 2 (substrate) | Phase 3 (decoupled) |
 |---|---|---|---|
-| `services/b2b/anthropic_batch.py` | ✅ | 🔲 | 🔲 |
-| `services/b2b/cache_strategy.py` | ✅ | 🔲 (pure data; trivial) | 🔲 |
+| `_standalone/config.py` (new) | n/a | ✅ standalone settings | 🔲 |
+| `_standalone/protocols.py` (new) | n/a | ✅ standalone protocols | 🔲 |
+| `_standalone/base.py` (new) | n/a | ✅ torch-free BaseModelService | 🔲 |
+| `_standalone/registry.py` (new) | n/a | ✅ standalone ServiceRegistry | 🔲 |
+| `_standalone/database.py` (new) | n/a | ✅ slim DatabasePool | 🔲 |
+| `config.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
+| `services/base.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
+| `services/protocols.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
+| `services/registry.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
+| `storage/database.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
+| `services/b2b/anthropic_batch.py` | ✅ | 🔲 (still imports atlas peers) | 🔲 |
+| `services/b2b/cache_strategy.py` | ✅ | ✅ (pure data; no atlas imports) | 🔲 |
 | `pipelines/llm.py` | ✅ | 🔲 | 🔲 |
 | `reasoning/semantic_cache.py` | ✅ | 🔲 | 🔲 |
 | `services/llm_router.py` | ✅ | 🔲 | 🔲 |

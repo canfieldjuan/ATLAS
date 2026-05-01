@@ -28,14 +28,48 @@ The pattern mirrors the content-pipeline scaffold under `extracted_content_pipel
 | `storage/migrations/255_anthropic_message_batches.sql` | mig 255 | Anthropic batch + items tables |
 | `storage/migrations/257_llm_usage_reasoning_attribution.sql` | mig 257 | Reasoning attribution column |
 
-## What's out of scope (Phase 2 / Phase 3)
+## What's out of scope (Phase 3)
 
-- `EXTRACTED_LLM_INFRA_STANDALONE=1` toggle (Phase 2) — make modules runnable without `atlas_brain` on `sys.path`
-- Standalone Pydantic settings class carved out of `atlas_brain/config.py` (Phase 2)
-- DB pool / Tracer / LLM `Protocol`-based DI seams (Phase 3)
-- Replacing `isinstance(AnthropicLLM)` checks (Phase 3)
+Phase 2 (standalone substrate) **landed in this PR**. Remaining work:
+
+- DB pool / Tracer / LLM `Protocol`-based DI seams across the scaffolded provider modules (Phase 3)
+- Replacing `isinstance(AnthropicLLM)` checks throughout `services/b2b/anthropic_batch.py` and `services/llm_router.py` (Phase 3)
+- Extracting the private `_convert_messages` from `AnthropicLLM` so batch code does not call a private method (Phase 3)
 - Decoupling `SemanticCache` from `asyncpg.Pool` (Phase 3)
+- Moving `evidence_hash` computation to a single owner (Phase 3)
 - `atlas_brain/api/admin_costs.py` extraction (deferred — admin UI, not core infra)
+
+## Standalone toggle (Phase 2)
+
+Set `EXTRACTED_LLM_INFRA_STANDALONE=1` and the package's substrate
+(settings, base class, protocols, registry, db pool) loads from the
+local `_standalone/` subpackage instead of delegating to atlas_brain.
+The provider modules (`services/llm/*.py`, `services/b2b/anthropic_batch.py`,
+etc.) still import from atlas_brain in this PR — Phase 3 closes that
+loop.
+
+```bash
+EXTRACTED_LLM_INFRA_STANDALONE=1 python -c "
+from extracted_llm_infrastructure.config import settings
+print(settings.llm.anthropic_model)            # claude-haiku-4-5
+print(settings.ftl_tracing.pricing.cost_usd(   # 0.001125
+    'anthropic', 'claude-haiku-4-5', 1000, 500
+))
+"
+```
+
+The standalone copies live under `extracted_llm_infrastructure/_standalone/`:
+
+| File | Replaces |
+|---|---|
+| `_standalone/config.py` | atlas_brain.config (slim — only LLM-infra fields) |
+| `_standalone/protocols.py` | atlas_brain.services.protocols (verbatim) |
+| `_standalone/base.py` | atlas_brain.services.base (torch-free) |
+| `_standalone/registry.py` | atlas_brain.services.registry (verbatim) |
+| `_standalone/database.py` | atlas_brain.storage.database (slim asyncpg wrapper) |
+
+Env vars match atlas_brain (`ATLAS_LLM_*`, `ATLAS_B2B_CHURN_*`,
+`ATLAS_DB_*`) so a single .env file works in both modes.
 
 ## Sync workflow
 
