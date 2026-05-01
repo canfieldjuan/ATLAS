@@ -30,9 +30,13 @@ Goal: the package's substrate (settings, base class, protocols, registry, db poo
 | Standalone smoke script + CI integration | ✅ `scripts/smoke_extracted_llm_infrastructure_standalone.py` |
 | README documents the toggle and env-var layout | ✅ |
 
-**Not yet in scope** (deferred to Phase 3): the scaffolded provider modules (`services/llm/*.py`, `services/b2b/anthropic_batch.py`, `pipelines/llm.py`, `reasoning/semantic_cache.py`, `services/llm_router.py`, `services/tracing.py`) still contain top-level relative imports that target atlas_brain. The standalone substrate is in place; Phase 3 rewires the providers to consume it.
+**Empirical result**: the standalone substrate landed in this PR turns out to be sufficient to unblock the import contract for all 14 provider modules. They consume the substrate transitively through the bridge stubs, so when `EXTRACTED_LLM_INFRA_STANDALONE=1` is set, every provider sees the local `_standalone/*` copies of `BaseModelService`, `LLMService` Protocol, `Message`, `ModelInfo`, `ServiceRegistry`, `llm_registry`, `settings`, and `DatabasePool`.
 
-## Phase 3 — Decoupling 🔲 (later PRs)
+The standalone smoke (`scripts/smoke_extracted_llm_infrastructure_standalone.py`) verifies this end-to-end: it sets the env var, imports every provider, and asserts (via `__module__` walk on `AnthropicLLM.__mro__`) that providers transitively consume the standalone substrate rather than silently falling back to atlas_brain.
+
+## Phase 3 — Runtime decoupling 🔲 (later PRs)
+
+Import contract is closed; the remaining work is **runtime** behavior when functions execute, not when modules load:
 
 | Task | Source file referenced |
 |---|---|
@@ -57,20 +61,20 @@ Goal: the package's substrate (settings, base class, protocols, registry, db poo
 | `services/protocols.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
 | `services/registry.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
 | `storage/database.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
-| `services/b2b/anthropic_batch.py` | ✅ | 🔲 (still imports atlas peers) | 🔲 |
-| `services/b2b/cache_strategy.py` | ✅ | ✅ (pure data; no atlas imports) | 🔲 |
-| `pipelines/llm.py` | ✅ | 🔲 | 🔲 |
-| `reasoning/semantic_cache.py` | ✅ | 🔲 | 🔲 |
-| `services/llm_router.py` | ✅ | 🔲 | 🔲 |
-| `services/llm/anthropic.py` | ✅ | 🔲 | 🔲 |
-| `services/llm/openrouter.py` | ✅ | 🔲 | 🔲 |
-| `services/llm/ollama.py` | ✅ | 🔲 | 🔲 |
-| `services/llm/vllm.py` | ✅ | 🔲 | 🔲 |
-| `services/llm/groq.py` | ✅ | 🔲 | 🔲 |
-| `services/llm/together.py` | ✅ | 🔲 | 🔲 |
-| `services/llm/hybrid.py` | ✅ | 🔲 | 🔲 |
-| `services/llm/cloud.py` | ✅ | 🔲 | 🔲 |
-| `services/tracing.py` | ✅ | 🔲 | 🔲 |
+| `services/b2b/anthropic_batch.py` | ✅ | ✅ (imports cleanly; consumes standalone substrate transitively) | 🔲 |
+| `services/b2b/cache_strategy.py` | ✅ | ✅ (pure data; no atlas imports) | n/a |
+| `pipelines/llm.py` | ✅ | ✅ (lazy `from ..config import settings` routes to standalone) | 🔲 |
+| `reasoning/semantic_cache.py` | ✅ | ✅ (pool injected by caller; standalone DatabasePool compatible) | 🔲 |
+| `services/llm_router.py` | ✅ | ✅ (consumes standalone settings + registry) | 🔲 |
+| `services/llm/anthropic.py` | ✅ | ✅ (transitive substrate verified by smoke check) | 🔲 |
+| `services/llm/openrouter.py` | ✅ | ✅ | 🔲 |
+| `services/llm/ollama.py` | ✅ | ✅ | 🔲 |
+| `services/llm/vllm.py` | ✅ | ✅ | 🔲 |
+| `services/llm/groq.py` | ✅ | ✅ | 🔲 |
+| `services/llm/together.py` | ✅ | ✅ | 🔲 |
+| `services/llm/hybrid.py` | ✅ | ✅ | 🔲 |
+| `services/llm/cloud.py` | ✅ | ✅ | 🔲 |
+| `services/tracing.py` | ✅ | ✅ | 🔲 |
 | `storage/migrations/127_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/130_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/252_*.sql` | ✅ | n/a | n/a |

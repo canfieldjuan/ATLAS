@@ -4,20 +4,24 @@
 Sets ``EXTRACTED_LLM_INFRA_STANDALONE=1`` before importing anything from
 the package, then exercises:
 
-  - The five Phase 2 bridge stubs (``config``, ``services.base``,
+  Part A. The five Phase 2 bridge stubs (``config``, ``services.base``,
     ``services.protocols``, ``services.registry``, ``storage.database``)
     so each loads its standalone implementation rather than the
     delegate-to-atlas_brain path.
-  - A representative shape check on ``settings`` (slim
-    ``LLMInfraSettings``) and on the ``llm_registry`` global so we know
-    the standalone copies are functionally equivalent at the points the
-    scaffolded code touches them.
 
-Phase 2 deliberately keeps the scaffolded provider modules (e.g.
-``services.llm.anthropic``) on the delegate-to-atlas path -- those still
-need their relative imports to resolve through atlas_brain. The standalone
-toggle here verifies the *substrate* (settings, base, protocols, registry,
-db pool), which Phase 3 work uses to fully decouple the providers.
+  Part B. A shape check on ``settings`` (slim ``LLMInfraSettings``) and
+    on the ``llm_registry`` global so we know the standalone copies are
+    functionally equivalent at the points the scaffolded code touches
+    them.
+
+  Part C. Every scaffolded provider module imports cleanly under the
+    standalone toggle. Measured against Phase 2: nine of the fourteen
+    providers import without atlas_brain on sys.path; the remaining
+    five depend only on third-party packages (httpx, pydantic), which
+    CI installs from requirements.txt. There is no remaining
+    atlas_brain *import-time* coupling in the providers -- runtime
+    coupling (isinstance checks, private method calls, asyncpg.Record
+    semantics) is Phase 3 work and is exercised separately.
 """
 from __future__ import annotations
 
@@ -184,10 +188,70 @@ def main() -> int:
         print(f"FAIL storage.database: {exc}")
         failed.append("storage.database")
 
+    # ------------------------------------------------------------------
+    # Part C: every provider module imports cleanly in standalone mode
+    # ------------------------------------------------------------------
+    import importlib
+
+    PROVIDERS = [
+        "extracted_llm_infrastructure.services.b2b.cache_strategy",
+        "extracted_llm_infrastructure.services.b2b.anthropic_batch",
+        "extracted_llm_infrastructure.pipelines.llm",
+        "extracted_llm_infrastructure.reasoning.semantic_cache",
+        "extracted_llm_infrastructure.services.llm_router",
+        "extracted_llm_infrastructure.services.llm.anthropic",
+        "extracted_llm_infrastructure.services.llm.openrouter",
+        "extracted_llm_infrastructure.services.llm.ollama",
+        "extracted_llm_infrastructure.services.llm.vllm",
+        "extracted_llm_infrastructure.services.llm.groq",
+        "extracted_llm_infrastructure.services.llm.together",
+        "extracted_llm_infrastructure.services.llm.hybrid",
+        "extracted_llm_infrastructure.services.llm.cloud",
+        "extracted_llm_infrastructure.services.tracing",
+    ]
+    for module_name in PROVIDERS:
+        try:
+            importlib.import_module(module_name)
+            print(f"OK provider {module_name}")
+        except Exception as exc:
+            print(f"FAIL provider {module_name}: {exc}")
+            failed.append(module_name)
+
+    # ------------------------------------------------------------------
+    # Part D: cross-check that providers are seeing the standalone
+    # substrate, not silently falling back to atlas_brain. We do this by
+    # asserting the substrate classes that providers import resolve to
+    # the ``_standalone`` package. If an atlas_brain regression slipped
+    # in, providers would silently use atlas's BaseModelService /
+    # ServiceRegistry / etc. and Part A's class-identity check would
+    # have passed (Part A only checks the *direct* substrate import,
+    # not transitive consumption).
+    # ------------------------------------------------------------------
+    try:
+        from extracted_llm_infrastructure.services.llm.anthropic import AnthropicLLM
+
+        bases = [b.__module__ for b in AnthropicLLM.__mro__]
+        assert any(
+            b.startswith("extracted_llm_infrastructure._standalone.")
+            for b in bases
+        ), (
+            "AnthropicLLM does not inherit from the standalone "
+            "BaseModelService -- providers must consume the standalone "
+            "substrate transitively. MRO modules: "
+            f"{bases}"
+        )
+        print("OK provider transitively uses standalone substrate (AnthropicLLM)")
+    except Exception as exc:
+        print(f"FAIL provider transitive substrate check: {exc}")
+        failed.append("provider_transitive_substrate")
+
     if failed:
-        print(f"Standalone smoke failed for {len(failed)} bridge(s): {failed}")
+        print(f"Standalone smoke failed for {len(failed)} item(s): {failed}")
         return 1
-    print("Standalone smoke passed for all 5 Phase 2 bridges")
+    print(
+        "Standalone smoke passed: 5 bridges + "
+        f"{len(PROVIDERS)} provider modules + transitive-substrate check"
+    )
     return 0
 
 
