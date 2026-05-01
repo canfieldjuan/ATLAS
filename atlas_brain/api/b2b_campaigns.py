@@ -181,6 +181,18 @@ async def _fetch_scoped_sequence_row(pool, sequence_id: UUID, account_id: str, s
     )
 
 
+async def _scoped_sequence_or_404(
+    pool,
+    sequence_id: UUID,
+    account_id: str,
+    select_fields: str = "cs.id",
+):
+    row = await _fetch_scoped_sequence_row(pool, sequence_id, account_id, select_fields)
+    if not row:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+    return row
+
+
 def _campaign_response_quality(metadata: Any) -> dict[str, Any]:
     resolved_metadata = _coerce_json_dict(metadata)
     summary = specificity_quality_summary(resolved_metadata)
@@ -1778,6 +1790,7 @@ async def list_sequences(
     company: str = Query(default="", description="Filter by company name (case-insensitive substring)"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """List campaign sequences with optional filters."""
     pool = _pool_or_503()
@@ -1786,8 +1799,18 @@ async def list_sequences(
         raise HTTPException(status_code=400, detail=f"Invalid outcome. Must be one of: {sorted(VALID_OUTCOMES)}")
 
     conditions = []
-    params: list = []
+    params: list[Any] = []
     param_idx = 1
+
+    conditions.append(
+        "EXISTS ("
+        "SELECT 1 FROM b2b_campaigns bc_scope "
+        "WHERE bc_scope.sequence_id = cs.id "
+        f"AND {_tracked_vendor_scope_condition('bc_scope.vendor_name', param_idx)}"
+        ")"
+    )
+    params.append(user.account_id)
+    param_idx += 1
 
     if status != "all":
         conditions.append(f"cs.status = ${param_idx}")
@@ -1826,23 +1849,31 @@ async def list_sequences(
 
 
 @router.get("/sequences/{sequence_id}")
-async def get_sequence(sequence_id: UUID):
+async def get_sequence(
+    sequence_id: UUID,
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
     """Get a single sequence with full campaign history."""
     pool = _pool_or_503()
 
-    seq = await pool.fetchrow(
-        "SELECT * FROM campaign_sequences WHERE id = $1", sequence_id
+    seq = await _scoped_sequence_or_404(
+        pool,
+        sequence_id,
+        user.account_id,
+        "cs.*",
     )
-    if not seq:
-        raise HTTPException(status_code=404, detail="Sequence not found")
 
     campaigns = await pool.fetch(
         """
         SELECT * FROM b2b_campaigns
         WHERE sequence_id = $1
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid
+          )
         ORDER BY step_number ASC
         """,
         sequence_id,
+        user.account_id,
     )
 
     recent_audit = await pool.fetch(
@@ -1865,9 +1896,11 @@ async def get_sequence(sequence_id: UUID):
 async def sequence_audit_log(
     sequence_id: UUID,
     limit: int = Query(default=100, ge=1, le=500),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Get the full audit trail for a sequence."""
     pool = _pool_or_503()
+    await _scoped_sequence_or_404(pool, sequence_id, user.account_id)
 
     rows = await pool.fetch(
         """
@@ -1890,6 +1923,7 @@ async def set_recipient(
 ):
     """Set the recipient email for a sequence."""
     pool = _pool_or_503()
+    await _scoped_sequence_or_404(pool, sequence_id, user.account_id)
 
     result = await pool.execute(
         """
@@ -1907,9 +1941,13 @@ async def set_recipient(
         """
         UPDATE b2b_campaigns
         SET recipient_email = $1
-        WHERE sequence_id = $2 AND recipient_email IS NULL
+        WHERE sequence_id = $2
+          AND recipient_email IS NULL
+          AND vendor_name IN (
+              SELECT vendor_name FROM tracked_vendors WHERE account_id = $3::uuid
+          )
         """,
-        body.recipient_email, sequence_id,
+        body.recipient_email, sequence_id, user.account_id,
     )
 
     return {"status": "ok", "recipient_email": body.recipient_email}
@@ -1922,6 +1960,7 @@ async def pause_sequence(
 ):
     """Pause an active sequence."""
     pool = _pool_or_503()
+    await _scoped_sequence_or_404(pool, sequence_id, user.account_id)
 
     result = await pool.execute(
         """
@@ -1948,6 +1987,7 @@ async def resume_sequence(
 ):
     """Resume a paused sequence."""
     pool = _pool_or_503()
+    await _scoped_sequence_or_404(pool, sequence_id, user.account_id)
 
     result = await pool.execute(
         """

@@ -76,6 +76,117 @@ async def test_campaign_analytics_scope_to_tracked_vendors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_sequences_scopes_to_tracked_vendors(monkeypatch):
+    captured = {}
+
+    class Pool:
+        async def fetch(self, query, *args):
+            captured["query"] = query
+            captured["args"] = args
+            return []
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    account_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    result = await mod.list_sequences(
+        status="all",
+        outcome="all",
+        company="",
+        limit=7,
+        offset=3,
+        user=user,
+    )
+
+    assert result == {"count": 0, "sequences": []}
+    assert "bc_scope.sequence_id = cs.id" in captured["query"]
+    assert "bc_scope.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in captured["query"]
+    assert captured["args"] == (account_id, 7, 3)
+
+
+@pytest.mark.asyncio
+async def test_get_sequence_scopes_sequence_and_campaign_history(monkeypatch):
+    sequence_id = uuid4()
+    account_id = str(uuid4())
+    user = type("User", (), {"account_id": account_id})()
+
+    class Pool:
+        def __init__(self):
+            self.fetchrow_calls = []
+            self.fetch_calls = []
+
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append((query, args))
+            return {"id": sequence_id, "company_name": "Acme"}
+
+        async def fetch(self, query, *args):
+            self.fetch_calls.append((query, args))
+            return []
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.get_sequence(sequence_id, user=user)
+
+    assert result["sequence"]["id"] == str(sequence_id)
+    scoped_query, scoped_args = pool.fetchrow_calls[0]
+    assert "FROM campaign_sequences cs" in scoped_query
+    assert "tracked_vendors" in scoped_query
+    assert scoped_args == (sequence_id, account_id)
+
+    campaign_query, campaign_args = pool.fetch_calls[0]
+    assert "FROM b2b_campaigns" in campaign_query
+    assert "tracked_vendors" in campaign_query
+    assert campaign_args == (sequence_id, account_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["set_recipient", "pause", "resume", "record_outcome", "get_outcome"])
+async def test_sequence_actions_reject_unowned_sequence_before_update(monkeypatch, action):
+    sequence_id = uuid4()
+    user = type("User", (), {"account_id": str(uuid4()), "user_id": str(uuid4())})()
+
+    class Pool:
+        def __init__(self):
+            self.execute_calls = []
+
+        async def fetchrow(self, query, *args):
+            assert "tracked_vendors" in query
+            assert args == (sequence_id, user.account_id)
+            return None
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            raise AssertionError("sequence update touched before scope gate")
+
+    pool = Pool()
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    with pytest.raises(mod.HTTPException) as exc:
+        if action == "set_recipient":
+            await mod.set_recipient(
+                sequence_id,
+                mod.SetRecipientBody(recipient_email="owner@example.com"),
+                user=user,
+            )
+        elif action == "pause":
+            await mod.pause_sequence(sequence_id, user=user)
+        elif action == "resume":
+            await mod.resume_sequence(sequence_id, user=user)
+        elif action == "record_outcome":
+            await mod.record_outcome(
+                sequence_id,
+                mod.RecordOutcomeBody(outcome="meeting_booked"),
+                user=user,
+            )
+        else:
+            await mod.get_outcome(sequence_id, user=user)
+
+    assert exc.value.status_code == 404
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
 async def test_review_candidates_endpoint_uses_helper(monkeypatch):
     captured = {}
 

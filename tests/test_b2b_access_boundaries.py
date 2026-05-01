@@ -316,6 +316,9 @@ _TARGET_ID = str(uuid4())
         ("DELETE", f"/api/v1/b2b/campaigns/suppressions/{_TARGET_ID}", None),
         ("GET", "/api/v1/b2b/campaigns/suppressions", None),
         ("GET", "/api/v1/b2b/campaigns/suppressions/check?email=boundary@example.com", None),
+        ("GET", "/api/v1/b2b/campaigns/sequences", None),
+        ("GET", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}", None),
+        ("GET", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/audit-log", None),
         (
             "POST",
             f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/set-recipient",
@@ -323,6 +326,12 @@ _TARGET_ID = str(uuid4())
         ),
         ("POST", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/pause", None),
         ("POST", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/resume", None),
+        (
+            "POST",
+            f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/outcome",
+            {"outcome": "meeting_booked"},
+        ),
+        ("GET", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/outcome", None),
         ("GET", "/api/v1/seller/targets", None),
         (
             "POST",
@@ -525,9 +534,25 @@ def test_product_tenant_routes_reject_authenticated_underplan_before_service_tou
         ("GET", "/api/v1/b2b/campaigns/analytics/timeline", None),
         ("GET", "/api/v1/b2b/campaigns/suppressions", None),
         ("GET", "/api/v1/b2b/campaigns/suppressions/check?email=boundary@example.com", None),
+        ("GET", "/api/v1/b2b/campaigns/sequences", None),
+        ("GET", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}", None),
+        ("GET", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/audit-log", None),
+        (
+            "POST",
+            f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/set-recipient",
+            {"recipient_email": "boundary@example.com"},
+        ),
+        ("POST", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/pause", None),
+        ("POST", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/resume", None),
+        (
+            "POST",
+            f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/outcome",
+            {"outcome": "meeting_booked"},
+        ),
+        ("GET", f"/api/v1/b2b/campaigns/sequences/{_TARGET_ID}/outcome", None),
     ],
 )
-def test_campaign_plan_gated_reads_reject_authenticated_underplan_before_db_touch(
+def test_campaign_plan_gated_routes_reject_authenticated_underplan_before_db_touch(
     monkeypatch,
     method: str,
     path: str,
