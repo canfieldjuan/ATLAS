@@ -276,6 +276,11 @@ from ...services.b2b.enrichment_provider_calls import (
     lookup_cached_json_response as _service_lookup_cached_json_response,
     store_cached_json_response as _service_store_cached_json_response,
 )
+from ...services.b2b.enrichment_result_contract import (
+    merge_tier1_tier2 as _service_merge_tier1_tier2,
+    missing_witness_primitives as _service_missing_witness_primitives,
+    schema_version as _service_schema_version,
+)
 from ...services.b2b.enrichment_row_runner import EnrichmentRunnerDeps, run_enrichment_rows
 from ...services.b2b.enrichment_task_runner import EnrichmentTaskRunnerDeps, run_enrichment_task
 from ...services.b2b.enrichment_stage_runs import (
@@ -629,86 +634,7 @@ async def _call_openrouter_tier2(
 
 
 def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
-    """Merge Tier 1 + Tier 2 deterministic extraction into a single 47-field JSONB.
-
-    Tier 1 provides the base. Tier 2 keys are overlaid on top.
-    competitors_mentioned is merged by name (case-insensitive).
-    If tier2 is None (failed), apply safe defaults for Tier 2 fields.
-    """
-    result = dict(tier1)
-
-    if tier2 is None:
-        # Tier 2 failed -- apply minimal defaults for CLASSIFY fields only.
-        # INFER-derived fields (urgency_score, would_recommend, pain_category,
-        # has_budget_authority, price_complaint, price_context, sentiment direction)
-        # will be computed by _compute_derived_fields() downstream.
-        result.setdefault("pain_categories", [])
-        result.setdefault("sentiment_trajectory", {})
-        result.setdefault("buyer_authority", {"role_type": "unknown", "buying_stage": "unknown",
-                                              "executive_sponsor_mentioned": False})
-        result.setdefault("timeline", {"decision_timeline": "unknown"})
-        result.setdefault("contract_context", {"contract_value_signal": "unknown"})
-        result.setdefault("insider_signals", None)
-        result.setdefault("positive_aspects", [])
-        result.setdefault("feature_gaps", [])
-        result.setdefault("recommendation_language", [])
-        result.setdefault("pricing_phrases", [])
-        result.setdefault("event_mentions", [])
-        result.setdefault("urgency_indicators", {})
-        # Leave competitors_mentioned as-is from Tier 1 (partial data)
-        for comp in result.get("competitors_mentioned", []):
-            comp.setdefault("evidence_type", "neutral_mention")
-            comp.setdefault("displacement_confidence", "low")
-            comp.setdefault("reason_category", None)
-        return result
-
-    # --- Tier 2 succeeded: overlay CLASSIFY + EXTRACT fields ---
-    _TIER2_TOP_LEVEL_KEYS = {
-        "pain_categories",
-        "sentiment_trajectory", "buyer_authority", "timeline",
-        "contract_context", "insider_signals",
-        "positive_aspects", "feature_gaps",
-        # New v2 EXTRACT fields
-        "recommendation_language", "pricing_phrases",
-        "event_mentions", "urgency_indicators",
-    }
-    # Also accept legacy INFER keys if a v1 Tier 2 model returns them
-    _LEGACY_TIER2_KEYS = {"urgency_score", "pain_category", "would_recommend"}
-    for key in _TIER2_TOP_LEVEL_KEYS | _LEGACY_TIER2_KEYS:
-        if key in tier2:
-            result[key] = tier2[key]
-
-    # Merge competitors_mentioned by name (case-insensitive)
-    tier1_comps = {c["name"].lower(): c for c in result.get("competitors_mentioned", []) if isinstance(c, dict) and "name" in c}
-    tier2_comps = tier2.get("competitors_mentioned", []) or []
-
-    merged_comps = []
-    seen = set()
-    for t2_comp in tier2_comps:
-        if not isinstance(t2_comp, dict) or "name" not in t2_comp:
-            continue
-        key = t2_comp["name"].lower()
-        seen.add(key)
-        base = dict(tier1_comps.get(key, {"name": t2_comp["name"]}))
-        # Overlay Tier 2 fields
-        for field in ("evidence_type", "displacement_confidence", "reason_category"):
-            if field in t2_comp:
-                base[field] = t2_comp[field]
-        # Ensure name comes from Tier 1 if available (preserves original casing)
-        if key in tier1_comps:
-            base["name"] = tier1_comps[key]["name"]
-        merged_comps.append(base)
-
-    # Append Tier 1 competitors not in Tier 2 (with defaults)
-    for key, t1_comp in tier1_comps.items():
-        if key not in seen:
-            t1_comp.setdefault("evidence_type", "neutral_mention")
-            t1_comp.setdefault("displacement_confidence", "low")
-            t1_comp.setdefault("reason_category", None)
-            merged_comps.append(t1_comp)
-
-    result["competitors_mentioned"] = merged_comps
-    return result
+    return _service_merge_tier1_tier2(tier1, tier2)
 
 
 def _normalize_text_list(values: Any) -> list[str]:
@@ -1189,36 +1115,17 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
 
 
 def _missing_witness_primitives(result: dict[str, Any]) -> list[str]:
-    missing: list[str] = []
-
-    if str(result.get("replacement_mode") or "").strip() not in _KNOWN_REPLACEMENT_MODES:
-        missing.append("replacement_mode")
-    if str(result.get("operating_model_shift") or "").strip() not in _KNOWN_OPERATING_MODEL_SHIFTS:
-        missing.append("operating_model_shift")
-    if str(result.get("productivity_delta_claim") or "").strip() not in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS:
-        missing.append("productivity_delta_claim")
-    if str(result.get("org_pressure_type") or "").strip() not in _KNOWN_ORG_PRESSURE_TYPES:
-        missing.append("org_pressure_type")
-
-    salience_flags = result.get("salience_flags")
-    if not isinstance(salience_flags, list):
-        missing.append("salience_flags")
-
-    evidence_spans = result.get("evidence_spans")
-    if not isinstance(evidence_spans, list):
-        missing.append("evidence_spans")
-
-    if not str(result.get("evidence_map_hash") or "").strip():
-        missing.append("evidence_map_hash")
-
-    return missing
+    return _service_missing_witness_primitives(
+        result,
+        known_replacement_modes=_KNOWN_REPLACEMENT_MODES,
+        known_operating_model_shifts=_KNOWN_OPERATING_MODEL_SHIFTS,
+        known_productivity_delta_claims=_KNOWN_PRODUCTIVITY_DELTA_CLAIMS,
+        known_org_pressure_types=_KNOWN_ORG_PRESSURE_TYPES,
+    )
 
 
 def _schema_version(result: dict[str, Any]) -> int:
-    try:
-        return int(result.get("enrichment_schema_version") or 0)
-    except (TypeError, ValueError):
-        return 0
+    return _service_schema_version(result)
 
 
 def _finalize_enrichment_for_persist(

@@ -82,6 +82,9 @@ from atlas_brain.services.b2b.enrichment_transport_support import (
     maybe_anthropic_cache as service_maybe_anthropic_cache,
     resolve_tier_routing as service_resolve_tier_routing,
 )
+from atlas_brain.services.b2b.enrichment_result_contract import (
+    merge_tier1_tier2 as service_merge_tier1_tier2,
+)
 from atlas_brain.services.b2b.enrichment_support import (
     coerce_bool as service_coerce_bool,
     coerce_json_dict as service_coerce_json_dict,
@@ -167,6 +170,33 @@ def test_service_maybe_anthropic_cache_only_rewrites_large_system_blocks():
     assert converted[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert converted[1] == messages[1]
     assert service_maybe_anthropic_cache("openai/gpt-5", messages) == messages
+
+
+def test_service_merge_tier1_tier2_merges_competitors_by_name():
+    tier1 = {
+        "competitors_mentioned": [
+            {"name": "HubSpot"},
+            {"name": "Salesforce", "evidence_type": "neutral_mention"},
+        ]
+    }
+    tier2 = {
+        "competitors_mentioned": [
+            {
+                "name": "hubspot",
+                "evidence_type": "replacement_candidate",
+                "displacement_confidence": "high",
+                "reason_category": "pricing",
+            }
+        ]
+    }
+
+    merged = service_merge_tier1_tier2(tier1, tier2)
+
+    assert merged["competitors_mentioned"][0]["name"] == "HubSpot"
+    assert merged["competitors_mentioned"][0]["evidence_type"] == "replacement_candidate"
+    assert merged["competitors_mentioned"][0]["displacement_confidence"] == "high"
+    assert merged["competitors_mentioned"][1]["name"] == "Salesforce"
+    assert merged["competitors_mentioned"][1]["reason_category"] is None
 
 
 def test_build_tier1_stage_plan_captures_request_identity():
