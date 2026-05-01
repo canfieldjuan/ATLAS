@@ -4,44 +4,4 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-mapfile -t files < <(python - <<'PY'
-import json
-from pathlib import Path
-manifest = Path("extracted_competitive_intelligence/manifest.json")
-obj = json.loads(manifest.read_text())
-for mapping in obj["mappings"]:
-    target = mapping["target"]
-    if target.endswith(".py"):
-        print(target)
-for entry in obj.get("owned", []):
-    target = entry["target"]
-    if target.endswith(".py"):
-        print(target)
-PY
-)
-
-status=0
-for file in "${files[@]}"; do
-  if ! python - "$file" <<'PY'
-import sys
-from pathlib import Path
-path = Path(sys.argv[1])
-data = path.read_bytes()
-violations = [(idx, b) for idx, b in enumerate(data) if b > 0x7F]
-if violations:
-    print(path)
-    for idx, b in violations[:20]:
-        print(f"  byte_offset={idx} value=0x{b:02X}")
-    sys.exit(1)
-PY
-  then
-    status=1
-  fi
-done
-
-if [[ "$status" -ne 0 ]]; then
-  echo "ASCII check failed"
-  exit 1
-fi
-
-echo "ASCII check passed for extracted_competitive_intelligence Python files"
+bash extracted/_shared/scripts/check_ascii_python.sh extracted_competitive_intelligence
