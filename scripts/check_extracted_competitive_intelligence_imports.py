@@ -3,11 +3,15 @@
 scaffold.
 
 For each Python file in the manifest, walk its AST and verify that every
-``from .x import y`` style import resolves to a real path -- either inside
-the scaffold itself, or via the parallel ``atlas_brain`` path. Imports
-that cannot be resolved must be listed in
-``extracted_competitive_intelligence/import_debt_allowlist.txt`` or this
-script fails.
+``from .x import y`` style import resolves to a real path inside the
+scaffold itself. The resolver is strict: it does NOT fall back to the
+parallel ``atlas_brain`` tree, because Python's relative-import
+machinery does not either. Missing scaffold dependencies must be
+materialized as bridge stub modules (which re-export from atlas_brain),
+not papered over via fallback. Imports that genuinely cannot be
+resolved must be listed in
+``extracted_competitive_intelligence/import_debt_allowlist.txt`` or
+this script fails.
 
 Mirrors the LLM-infra checker (PR #40) including the resolver fix:
 ascends ``level - 1`` package components rather than ``level``.

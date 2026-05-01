@@ -4,9 +4,18 @@ scaffold.
 
 The scaffold is a verbatim snapshot of atlas_brain sources, so an
 ImportError here means the manifest pulled in a module whose imports
-are not resolvable in the scaffold's package layout. Phase 1 accepts
-that some modules import from atlas_brain directly (those go into
-import_debt_allowlist.txt). Phase 2 will eliminate that debt.
+are not resolvable in the scaffold's package layout. Phase 1 satisfies
+absolute ``atlas_brain.*`` imports by relying on the parent atlas_brain
+package being importable (the scaffold sits alongside it on
+``sys.path``); Phase 2 replaces those absolute imports with seams that
+let the scaffold run without atlas_brain on the path.
+
+The import-debt allowlist consumed by
+``check_extracted_competitive_intelligence_imports.py`` is unrelated to
+those absolute imports -- it tracks unresolved *relative* imports the
+strict resolver chooses not to fail on. As of this commit the
+allowlist is empty by design; bridge stub modules cover every relative
+dependency.
 """
 from __future__ import annotations
 
