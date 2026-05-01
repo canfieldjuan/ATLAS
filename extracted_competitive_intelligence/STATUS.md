@@ -21,12 +21,13 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 
 | Task | Notes |
 |---|---|
-| Carve a slim `CompIntelSettings` Pydantic class out of `atlas_brain/config.py` | Mix-in fields from b2b_churn (vendor_briefing_*, cross_vendor_*, competitive_intelligence_*) |
-| Local DB pool abstraction | Either share `extracted_llm_infrastructure/_standalone/database.py` from PR #40, or create a thin local wrapper |
-| Email-send provider Protocol | Replace `atlas_brain.services.campaign_sender:get_campaign_sender()` with an injectable `EmailSender` Protocol so the scaffold does not require the Resend singleton |
-| Suppression-callback Protocol | Replace `atlas_brain.autonomous.tasks.campaign_suppression:is_suppressed()` with an injectable `SuppressionPolicy` Protocol |
-| Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | Mirror the LLM-infra Phase 2 pattern from PR #40 |
-| Standalone smoke script + CI | Add a second smoke that exercises the standalone path |
+| Carve a slim `CompIntelSettings` Pydantic class out of `atlas_brain/config.py` | ✅ done for config fields used by current scaffold |
+| Local DB pool abstraction | ✅ uses `extracted_llm_infrastructure.storage.database` in standalone mode |
+| Email-send provider Protocol | ✅ `services.campaign_sender` routes to injectable standalone campaign sender |
+| Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
+| Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM bridge, and service package fallback |
+| Standalone smoke script + CI | ✅ `smoke_extracted_competitive_intelligence_standalone.py` runs in the local check driver |
+| MCP package import boundary | ✅ extracted MCP server/shared helpers no longer import `atlas_brain.mcp.b2b` just to import tool modules |
 
 ## Phase 3 — Decoupling 🔲 (later PRs)
 
@@ -48,6 +49,8 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 | `mcp/b2b/displacement.py` | ✅ | 🔲 | 🔲 |
 | `mcp/b2b/cross_vendor.py` | ✅ | 🔲 | 🔲 |
 | `mcp/b2b/write_intelligence.py` | ✅ | 🔲 | 🔲 |
+| `mcp/b2b/_shared.py` | n/a | ✅ | 🔲 |
+| `mcp/b2b/server.py` | n/a | ✅ | 🔲 |
 | `services/b2b/source_impact.py` | ✅ | 🔲 (mostly pure data; should be easy) | 🔲 |
 | `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
