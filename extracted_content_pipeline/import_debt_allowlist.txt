@@ -1,0 +1,12 @@
+._google_news
+._execution_progress
+._b2b_shared
+._b2b_specificity
+.b2b_campaign_generation
+._b2b_synthesis_reader
+._blog_ts
+._b2b_cross_vendor_synthesis
+..visibility
+._blog_deploy
+.competitive_intelligence
+.complaint_analysis
