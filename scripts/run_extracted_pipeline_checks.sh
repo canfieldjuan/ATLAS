@@ -7,5 +7,6 @@ cd "$ROOT_DIR"
 bash scripts/validate_extracted_content_pipeline.sh
 bash scripts/check_ascii_python.sh
 python scripts/check_extracted_imports.py
+python scripts/smoke_extracted_pipeline_imports.py
 
 echo "All extracted_content_pipeline checks passed"
