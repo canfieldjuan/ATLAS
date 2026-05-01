@@ -1214,7 +1214,7 @@ async def _shadow_log_evidence_coverage(
     Vendor name and full coverage payload live in the metadata column so the
     audit is queryable by `metadata->>'vendor_name'` during the soak window.
 
-    Failures here MUST NOT break campaign generation — the shadow audit is
+    Failures here MUST NOT break campaign generation -- the shadow audit is
     measurement infra, not a load-bearing component.
     """
     if not vendor_name or not opps:
