@@ -158,6 +158,9 @@ Several small utility shims provide product-owned local behavior by default so t
   `autonomous/tasks/_google_news.py`, `autonomous/tasks/_blog_ts.py`, and
   `autonomous/tasks/_blog_deploy.py`: product-owned utility helpers used by
   copied blog and campaign tasks
+- `autonomous/tasks/_b2b_batch_utils.py`: product-owned Anthropic batch helper
+  functions for metadata gates, request fingerprints, LLM slot resolution, and
+  existing batch artifact reconciliation
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services, with product-owned
   provider routing config

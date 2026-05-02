@@ -91,6 +91,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/autonomous/tasks/_google_news.py" in owned
     assert "extracted_content_pipeline/autonomous/tasks/_blog_ts.py" in owned
     assert "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py" in owned
+    assert "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py" in owned
 
 
 def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
@@ -100,3 +101,4 @@ def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
     assert "extracted_content_pipeline/autonomous/tasks/_google_news.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_blog_ts.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py" not in mapped
+    assert "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py" not in mapped

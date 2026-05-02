@@ -121,6 +121,12 @@ The first helper-surface trim moved `_execution_progress`, `_google_news`,
 These are still used by copied task modules, but future changes now happen in
 the extracted product boundary instead of being pulled from Atlas.
 
+`extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py` is now
+product-owned as the Anthropic batch utility boundary. It preserves the copied
+task-facing helpers for metadata flags, request fingerprints, LLM resolution,
+and existing artifact reconciliation, but resolves product environment keys and
+fails safe when a standalone host has not installed an activatable LLM registry.
+
 `extracted_content_pipeline/reasoning/archetypes.py` is the first product-owned
 reasoning policy slice. It scores vendor evidence against deterministic churn
 archetypes, returns thresholded matches, and exposes falsification conditions
