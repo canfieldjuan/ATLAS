@@ -83,6 +83,8 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
 
     assert "extracted_content_pipeline/pipelines/notify.py" in owned
     assert "extracted_content_pipeline/campaign_llm_client.py" in owned
+    assert "extracted_content_pipeline/campaign_ports.py" in owned
+    assert "extracted_content_pipeline/campaign_generation.py" in owned
     assert "extracted_content_pipeline/settings.py" in owned
     assert "extracted_content_pipeline/reasoning/archetypes.py" in owned
     assert "extracted_content_pipeline/reasoning/temporal.py" in owned
@@ -110,6 +112,8 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
 def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
     mapped = _mapped_targets()
 
+    assert "extracted_content_pipeline/campaign_ports.py" not in mapped
+    assert "extracted_content_pipeline/campaign_generation.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_execution_progress.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_google_news.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_blog_ts.py" not in mapped
