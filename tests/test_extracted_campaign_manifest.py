@@ -96,6 +96,11 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/campaign_sequence_context.py" in owned
     assert "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py" in owned
     assert "extracted_content_pipeline/autonomous/tasks/campaign_audit.py" in owned
+    assert "extracted_content_pipeline/services/campaign_sender.py" in owned
+    assert "extracted_content_pipeline/services/vendor_target_selection.py" in owned
+    assert "extracted_content_pipeline/services/vendor_registry.py" in owned
+    assert "extracted_content_pipeline/autonomous/tasks/campaign_suppression.py" in owned
+    assert "extracted_content_pipeline/templates/email/vendor_briefing.py" in owned
 
 
 def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
@@ -110,3 +115,8 @@ def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
     assert "extracted_content_pipeline/campaign_sequence_context.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/campaign_audit.py" not in mapped
+    assert "extracted_content_pipeline/services/campaign_sender.py" not in mapped
+    assert "extracted_content_pipeline/services/vendor_target_selection.py" not in mapped
+    assert "extracted_content_pipeline/services/vendor_registry.py" not in mapped
+    assert "extracted_content_pipeline/autonomous/tasks/campaign_suppression.py" not in mapped
+    assert "extracted_content_pipeline/templates/email/vendor_briefing.py" not in mapped

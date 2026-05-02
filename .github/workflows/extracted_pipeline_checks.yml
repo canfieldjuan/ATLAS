@@ -12,6 +12,7 @@ on:
       - "scripts/smoke_extracted_pipeline_imports.py"
       - "scripts/run_extracted_pipeline_checks.sh"
       - "tests/test_extracted_campaign_*.py"
+      - "tests/test_extracted_vendor_briefing_*.py"
   push:
     paths:
       - "extracted_content_pipeline/**"
@@ -23,6 +24,7 @@ on:
       - "scripts/smoke_extracted_pipeline_imports.py"
       - "scripts/run_extracted_pipeline_checks.sh"
       - "tests/test_extracted_campaign_*.py"
+      - "tests/test_extracted_vendor_briefing_*.py"
 
 jobs:
   extracted-checks:
@@ -41,7 +43,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio beautifulsoup4 httpx
+          python -m pip install pytest pytest-asyncio beautifulsoup4 httpx PyJWT
 
       - name: Run extracted pipeline checks
         run: bash scripts/run_extracted_pipeline_checks.sh

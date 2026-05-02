@@ -22,14 +22,14 @@ EXTRACTED_PIPELINE_STANDALONE=1 bash scripts/run_extracted_pipeline_checks.sh
 # 177 passed
 ```
 
-The current smoke import script does not import the core campaign task modules.
-Direct import of all remaining manifest-mapped Python files shows four failing
-surfaces:
+The smoke import script now includes the vendor briefing task after the PR 1
+seams made it importable. Direct import of all remaining manifest-mapped Python
+files still shows three failing surfaces:
 
 | Module | Standalone import | First blocker |
 | --- | --- | --- |
 | `autonomous.tasks.b2b_campaign_generation` | Fails | missing `services.b2b.account_opportunity_claims` |
-| `autonomous.tasks.b2b_vendor_briefing` | Fails | missing `services.campaign_sender` |
+| `autonomous.tasks.b2b_vendor_briefing` | Passes | PR 1 seams present |
 | `autonomous.tasks._b2b_pool_compression` | Fails | missing `autonomous.tasks._b2b_witnesses` |
 | `autonomous.tasks.competitive_intelligence` | Fails | missing `services.brand_registry` |
 
@@ -67,7 +67,8 @@ files remain Atlas-shaped and should not be product-owned as-is.
 - `autonomous.visibility`
 - `autonomous.tasks.campaign_suppression`
 
-`b2b_vendor_briefing.py` has these missing top-level dependencies:
+`b2b_vendor_briefing.py` had these missing top-level dependencies, now covered
+by product-owned compatibility seams:
 
 - `services.campaign_sender`
 - `services.vendor_target_selection`
@@ -107,6 +108,9 @@ into the product-owned spine in smaller slices.
 
 ### PR 1: Vendor Briefing Import Seams
 
+Status: implemented. `b2b_vendor_briefing.py` imports in standalone mode, and
+the smoke script now covers it.
+
 Goal: make `b2b_vendor_briefing.py` import in standalone mode without claiming
 the copied 3,222-line task is product-owned.
 
@@ -130,8 +134,9 @@ Acceptance criteria:
 - `EXTRACTED_PIPELINE_STANDALONE=1 python -c "import extracted_content_pipeline.autonomous.tasks.b2b_vendor_briefing"`
 - Local tests for each compatibility shim.
 
-Do not expand the smoke script yet; `b2b_campaign_generation.py` still has
-separate missing imports.
+This slice may expand the smoke script to include `b2b_vendor_briefing.py`
+once the direct import passes. Keep `b2b_campaign_generation.py` out of the
+smoke list until PR 2 handles its separate missing imports.
 
 ### PR 2: Campaign Generation Import Seams
 

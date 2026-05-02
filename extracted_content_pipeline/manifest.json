@@ -206,6 +206,27 @@
     },
     {
       "target": "extracted_content_pipeline/autonomous/tasks/campaign_audit.py"
+    },
+    {
+      "target": "extracted_content_pipeline/services/campaign_sender.py"
+    },
+    {
+      "target": "extracted_content_pipeline/services/vendor_target_selection.py"
+    },
+    {
+      "target": "extracted_content_pipeline/services/vendor_registry.py"
+    },
+    {
+      "target": "extracted_content_pipeline/autonomous/tasks/campaign_suppression.py"
+    },
+    {
+      "target": "extracted_content_pipeline/templates/__init__.py"
+    },
+    {
+      "target": "extracted_content_pipeline/templates/email/__init__.py"
+    },
+    {
+      "target": "extracted_content_pipeline/templates/email/vendor_briefing.py"
     }
   ]
 }
