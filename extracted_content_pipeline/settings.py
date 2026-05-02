@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from types import SimpleNamespace
 
 
@@ -116,7 +117,8 @@ def build_settings() -> SimpleNamespace:
     )
 
     saas_auth = SimpleNamespace(
-        jwt_secret=os.getenv("EXTRACTED_VENDOR_BRIEFING_JWT_SECRET") or "dev-secret",
+        jwt_secret=os.getenv("EXTRACTED_VENDOR_BRIEFING_JWT_SECRET")
+        or secrets.token_urlsafe(32),
         jwt_algorithm=os.getenv("EXTRACTED_VENDOR_BRIEFING_JWT_ALGORITHM") or "HS256",
     )
 

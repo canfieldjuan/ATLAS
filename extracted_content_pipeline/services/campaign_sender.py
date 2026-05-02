@@ -74,7 +74,10 @@ def _sender_config_from_settings() -> tuple[str, dict[str, Any]]:
     api_key = getattr(cfg, "resend_api_key", "") or ""
     if not api_key:
         raise RuntimeError(
-            "EXTRACTED_CAMPAIGN_RESEND_API_KEY is required when sender_type=resend"
+            "settings.campaign_sequence.resend_api_key is required when "
+            "sender_type=resend; set EXTRACTED_RESEND_API_KEY, "
+            "EXTRACTED_CAMPAIGN_RESEND_API_KEY, or "
+            "EXTRACTED_CAMPAIGN_SEQ_RESEND_API_KEY"
         )
     return (
         "resend",

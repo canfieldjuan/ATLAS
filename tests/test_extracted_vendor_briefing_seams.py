@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,11 +11,13 @@ from extracted_content_pipeline.autonomous.tasks.campaign_suppression import (
     assign_recipient_to_sequence,
     is_suppressed,
 )
+from extracted_content_pipeline.services import campaign_sender as campaign_sender_module
 from extracted_content_pipeline.services.campaign_sender import CampaignSenderAdapter
 from extracted_content_pipeline.services.vendor_registry import resolve_vendor_name
 from extracted_content_pipeline.services.vendor_target_selection import (
     dedupe_vendor_target_rows,
 )
+from extracted_content_pipeline.settings import build_settings
 from extracted_content_pipeline.templates.email.vendor_briefing import (
     render_vendor_briefing_html,
 )
@@ -63,6 +66,19 @@ def test_vendor_briefing_module_imports_in_standalone_mode(monkeypatch: pytest.M
     )
 
     assert hasattr(module, "send_vendor_briefing")
+
+
+def test_vendor_briefing_jwt_secret_uses_env_or_ephemeral_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("EXTRACTED_VENDOR_BRIEFING_JWT_SECRET", raising=False)
+
+    generated_secret = build_settings().saas_auth.jwt_secret
+
+    assert generated_secret
+    assert generated_secret != "dev-secret"
+    monkeypatch.setenv("EXTRACTED_VENDOR_BRIEFING_JWT_SECRET", "configured-secret")
+    assert build_settings().saas_auth.jwt_secret == "configured-secret"
 
 
 def test_dedupe_vendor_target_rows_keeps_best_row_per_company_and_mode() -> None:
@@ -118,6 +134,30 @@ async def test_campaign_sender_adapter_converts_legacy_kwargs_to_send_request() 
         tags=({"name": "type", "value": "vendor_briefing"},),
         metadata={"campaign_id": "cmp-1"},
     )
+
+
+def test_campaign_sender_resend_error_lists_accepted_configuration_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        campaign_sender_module,
+        "settings",
+        SimpleNamespace(
+            campaign_sequence=SimpleNamespace(
+                sender_type="resend",
+                resend_api_key="",
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        campaign_sender_module._sender_config_from_settings()
+
+    message = str(exc.value)
+    assert "settings.campaign_sequence.resend_api_key" in message
+    assert "EXTRACTED_RESEND_API_KEY" in message
+    assert "EXTRACTED_CAMPAIGN_RESEND_API_KEY" in message
+    assert "EXTRACTED_CAMPAIGN_SEQ_RESEND_API_KEY" in message
 
 
 @pytest.mark.asyncio
