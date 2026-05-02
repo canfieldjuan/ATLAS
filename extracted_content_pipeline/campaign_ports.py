@@ -56,33 +56,42 @@ class CampaignReasoningContext:
     anchor_examples: Mapping[str, Sequence[Mapping[str, Any]]] = field(default_factory=dict)
     witness_highlights: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     reference_ids: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    top_theses: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     account_signals: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     timing_windows: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     proof_points: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     coverage_limits: Sequence[str] = field(default_factory=tuple)
+    canonical_reasoning: Mapping[str, Any] = field(default_factory=dict)
     scope_summary: Mapping[str, Any] = field(default_factory=dict)
     delta_summary: Mapping[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> JsonDict:
+        data = {
+            str(key): value
+            for key, value in self.canonical_reasoning.items()
+            if value not in (None, "", [], {})
+        }
+        data.update({
+            "anchor_examples": {
+                str(label): [dict(row) for row in rows]
+                for label, rows in self.anchor_examples.items()
+            },
+            "witness_highlights": [dict(row) for row in self.witness_highlights],
+            "reference_ids": {
+                str(key): [str(item) for item in values]
+                for key, values in self.reference_ids.items()
+            },
+            "top_theses": [dict(row) for row in self.top_theses],
+            "account_signals": [dict(row) for row in self.account_signals],
+            "timing_windows": [dict(row) for row in self.timing_windows],
+            "proof_points": [dict(row) for row in self.proof_points],
+            "coverage_limits": [str(item) for item in self.coverage_limits],
+            "scope_summary": dict(self.scope_summary),
+            "delta_summary": dict(self.delta_summary),
+        })
         return {
             key: value
-            for key, value in {
-                "anchor_examples": {
-                    str(label): [dict(row) for row in rows]
-                    for label, rows in self.anchor_examples.items()
-                },
-                "witness_highlights": [dict(row) for row in self.witness_highlights],
-                "reference_ids": {
-                    str(key): [str(item) for item in values]
-                    for key, values in self.reference_ids.items()
-                },
-                "account_signals": [dict(row) for row in self.account_signals],
-                "timing_windows": [dict(row) for row in self.timing_windows],
-                "proof_points": [dict(row) for row in self.proof_points],
-                "coverage_limits": [str(item) for item in self.coverage_limits],
-                "scope_summary": dict(self.scope_summary),
-                "delta_summary": dict(self.delta_summary),
-            }.items()
+            for key, value in data.items()
             if value not in ({}, [], (), None)
         }
 
