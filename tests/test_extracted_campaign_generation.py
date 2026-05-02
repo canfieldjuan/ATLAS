@@ -334,6 +334,8 @@ async def test_generate_uses_provider_canonical_reasoning_context_without_other_
                 "wedge": "renewal pressure",
                 "confidence": "high",
                 "summary": "Acme is reviewing vendors before renewal.",
+                "key_signals": ["pricing_mentions", "renewal_window"],
+                "falsification": {"missing": ["fresh account signals"]},
             }
         }
     )
@@ -352,8 +354,18 @@ async def test_generate_uses_provider_canonical_reasoning_context_without_other_
     prompt = llm.calls[0]["messages"][0].content
     assert "renewal pressure" in prompt
     assert "Acme is reviewing vendors before renewal." in prompt
+    assert "pricing_mentions" in prompt
     source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    metadata_context = campaigns.saved[0]["drafts"][0].metadata["reasoning_context"]
     assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert source["reasoning_context"]["key_signals"] == [
+        "pricing_mentions",
+        "renewal_window",
+    ]
+    assert source["reasoning_context"]["falsification"] == {
+        "missing": ["fresh account signals"]
+    }
+    assert metadata_context["key_signals"] == ["pricing_mentions", "renewal_window"]
     assert source["campaign_reasoning_context"]["confidence"] == "high"
 
 

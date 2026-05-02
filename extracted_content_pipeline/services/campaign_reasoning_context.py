@@ -24,6 +24,32 @@ _CANONICAL_REASONING_KEYS = (
     "primary_driver",
     "recommended_action",
 )
+_REASONING_STRUCTURE_KEYS = {
+    "reasoning_context",
+    "campaign_reasoning_context",
+    "reasoning_atom_context",
+    "atom_context",
+    "reasoning_scope_summary",
+    "scope_summary",
+    "reasoning_delta_summary",
+    "delta_summary",
+    "reasoning_anchor_examples",
+    "anchor_examples",
+    "reasoning_witness_highlights",
+    "witness_highlights",
+    "reasoning_reference_ids",
+    "reference_ids",
+    "reasoning_top_theses",
+    "top_theses",
+    "reasoning_account_signals",
+    "account_signals",
+    "reasoning_timing_windows",
+    "timing_windows",
+    "reasoning_proof_points",
+    "proof_points",
+    "reasoning_coverage_limits",
+    "coverage_limits",
+}
 
 
 def _copy_list(value: Any) -> list[Any]:
@@ -115,15 +141,24 @@ def _clean_scalar_list(value: Any, *, limit: int | None = None) -> tuple[str, ..
     )
 
 
-def _clean_canonical_reasoning(*values: Any) -> dict[str, Any]:
+def _clean_reasoning_fields(value: Any, *, include_all: bool) -> dict[str, Any]:
     reasoning: dict[str, Any] = {}
-    for value in values:
-        if not isinstance(value, Mapping):
+    if not isinstance(value, Mapping):
+        return reasoning
+    keys = value.keys() if include_all else _CANONICAL_REASONING_KEYS
+    for key in keys:
+        if key in _REASONING_STRUCTURE_KEYS:
             continue
-        for key in _CANONICAL_REASONING_KEYS:
-            item = value.get(key)
-            if item not in (None, "", [], {}):
-                reasoning[key] = item
+        item = value.get(key)
+        if item not in (None, "", [], {}):
+            reasoning[str(key)] = item
+    return reasoning
+
+
+def _clean_canonical_reasoning(*values: tuple[Any, bool]) -> dict[str, Any]:
+    reasoning: dict[str, Any] = {}
+    for value, include_all in values:
+        reasoning.update(_clean_reasoning_fields(value, include_all=include_all))
     return reasoning
 
 
@@ -281,10 +316,10 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
             limit=_COVERAGE_LIMIT_LIMIT,
         ),
         canonical_reasoning=_clean_canonical_reasoning(
-            campaign_context,
-            atom_context,
-            payload,
-            nested,
+            (campaign_context, True),
+            (atom_context, True),
+            (payload, False),
+            (nested, True),
         ),
         scope_summary=campaign_reasoning_scope_summary(scope_summary),
         delta_summary=normalized_delta,

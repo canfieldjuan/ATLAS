@@ -195,6 +195,8 @@ def test_normalize_campaign_reasoning_context_preserves_canonical_reasoning_fiel
                 "wedge": "renewal pressure",
                 "confidence": "high",
                 "summary": "Acme is reviewing vendors before renewal.",
+                "key_signals": ["pricing_mentions", "renewal_window"],
+                "falsification": {"missing": ["fresh account signals"]},
             }
         }
     )
@@ -203,6 +205,8 @@ def test_normalize_campaign_reasoning_context_preserves_canonical_reasoning_fiel
     assert context.as_dict()["wedge"] == "renewal pressure"
     assert context.as_dict()["confidence"] == "high"
     assert context.as_dict()["summary"] == "Acme is reviewing vendors before renewal."
+    assert context.as_dict()["key_signals"] == ["pricing_mentions", "renewal_window"]
+    assert context.as_dict()["falsification"] == {"missing": ["fresh account signals"]}
 
 
 def test_normalize_campaign_reasoning_context_keeps_atom_top_theses() -> None:
