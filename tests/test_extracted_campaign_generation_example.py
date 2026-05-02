@@ -10,6 +10,7 @@ import pytest
 from extracted_content_pipeline.campaign_example import (
     generate_campaign_drafts_from_payload,
 )
+from extracted_content_pipeline.campaign_ports import LLMResponse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,31 @@ EXAMPLE_PAYLOAD = (
     ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.json"
 )
 CLI = ROOT / "scripts/run_extracted_campaign_generation_example.py"
+
+
+class _InjectedLLM:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def complete(self, messages, *, max_tokens, temperature, metadata=None):
+        self.calls.append({
+            "messages": list(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "metadata": dict(metadata or {}),
+        })
+        return LLMResponse(
+            content=json.dumps({
+                "subject": "Injected subject",
+                "body": "<p>Injected body</p>",
+            }),
+            model="injected-model",
+        )
+
+
+class _InjectedSkills:
+    def get_prompt(self, name):
+        return f"Injected prompt for {name} without payload placeholders."
 
 
 @pytest.mark.asyncio
@@ -67,6 +93,31 @@ async def test_example_generates_drafts_from_customer_opportunity_payload() -> N
 
 
 @pytest.mark.asyncio
+async def test_example_accepts_host_llm_and_skill_store_overrides() -> None:
+    llm = _InjectedLLM()
+    payload = {
+        "target_mode": "vendor_retention",
+        "limit": 1,
+        "opportunities": [
+            {"id": "opp-1", "company": "Acme Logistics", "vendor": "HubSpot"}
+        ],
+    }
+
+    result = await generate_campaign_drafts_from_payload(
+        payload,
+        llm=llm,
+        skills=_InjectedSkills(),
+    )
+
+    assert result["llm_model"] == "injected-model"
+    assert result["drafts"][0]["subject"] == "Injected subject"
+    assert "without payload placeholders" in llm.calls[0]["messages"][0].content
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "target_mode=vendor_retention" in user_prompt
+    assert '"company_name":"Acme Logistics"' in user_prompt
+
+
+@pytest.mark.asyncio
 async def test_example_respects_limit_and_normalizes_multiple_rows() -> None:
     payload = json.loads(EXAMPLE_PAYLOAD.read_text(encoding="utf-8"))
 
@@ -86,7 +137,7 @@ async def test_example_rejects_payload_without_opportunities_array() -> None:
 
 def test_campaign_generation_example_cli_outputs_draft_json() -> None:
     completed = subprocess.run(
-        [sys.executable, str(CLI), str(EXAMPLE_PAYLOAD), "--limit", "1"],
+        [sys.executable, str(CLI), str(EXAMPLE_PAYLOAD), "--limit", "1", "--llm", "offline"],
         check=True,
         capture_output=True,
         text=True,

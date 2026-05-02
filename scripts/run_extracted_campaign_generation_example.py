@@ -60,7 +60,31 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         help="Write generated draft JSON to this file instead of stdout.",
     )
+    parser.add_argument(
+        "--llm",
+        choices=("offline", "pipeline"),
+        default="offline",
+        help=(
+            "Use the deterministic offline LLM or the product PipelineLLMClient "
+            "configured through EXTRACTED_CAMPAIGN_LLM_* environment variables."
+        ),
+    )
     return parser.parse_args()
+
+
+def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    if args.llm == "offline":
+        return {}
+
+    from extracted_content_pipeline.campaign_llm_client import (  # noqa: PLC0415
+        create_pipeline_llm_client,
+    )
+    from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: PLC0415
+
+    return {
+        "llm": create_pipeline_llm_client(),
+        "skills": get_skill_registry(),
+    }
 
 
 async def _main() -> int:
@@ -71,7 +95,10 @@ async def _main() -> int:
     if args.limit is not None:
         payload["limit"] = args.limit
 
-    result = await generate_campaign_drafts_from_payload(payload)
+    result = await generate_campaign_drafts_from_payload(
+        payload,
+        **_dependency_overrides(args),
+    )
     output = json.dumps(result, indent=2, sort_keys=True)
     if args.output:
         args.output.write_text(f"{output}\n", encoding="utf-8")

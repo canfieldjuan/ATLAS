@@ -121,6 +121,13 @@ The example uses in-memory product ports and an offline deterministic LLM stand
 in, so it does not need Atlas, a database, or provider credentials. It proves
 the customer-data path: JSON opportunities in, normalized campaign drafts out.
 
+To run the same example through the product LLM adapter, configure the
+`EXTRACTED_CAMPAIGN_LLM_*` environment variables and pass `--llm pipeline`:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py --llm pipeline
+```
+
 ## Import smoke test
 
 ```bash
