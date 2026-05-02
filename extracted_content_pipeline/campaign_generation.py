@@ -255,7 +255,14 @@ class CampaignGenerationService:
         response = await self._llm.complete(
             [
                 LLMMessage(role="system", content=system_prompt),
-                LLMMessage(role="user", content="Generate one campaign draft."),
+                LLMMessage(
+                    role="user",
+                    content=(
+                        "Generate one campaign draft from this normalized "
+                        f"opportunity.\ntarget_mode={target_mode}\n"
+                        f"opportunity={opportunity_json}"
+                    ),
+                ),
             ],
             max_tokens=self._config.max_tokens,
             temperature=self._config.temperature,

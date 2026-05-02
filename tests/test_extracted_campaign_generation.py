@@ -256,6 +256,8 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
     assert '"company_name":"Acme"' in llm_call["messages"][0].content
     assert '"target_id":"opp-1"' in llm_call["messages"][0].content
     assert '"target_mode":"churning_company"' in llm_call["messages"][0].content
+    assert '"company_name":"Acme"' in llm_call["messages"][1].content
+    assert "target_mode=churning_company" in llm_call["messages"][1].content
     assert llm_call["metadata"] == {
         "target_mode": "churning_company",
         "target_id": "opp-1",
@@ -273,6 +275,32 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
     assert draft.metadata["source_opportunity"]["target_mode"] == "churning_company"
     assert draft.metadata["source_opportunity"]["company_name"] == "Acme"
     assert draft.metadata["source_opportunity"]["pain"] == "pricing pressure"
+
+
+@pytest.mark.asyncio
+async def test_generate_includes_opportunity_payload_when_skill_has_no_placeholders():
+    service, _, _, llm, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme", "pain": "pricing pressure"}],
+        ['{"subject":"Hi","body":"Body"}'],
+        prompts={
+            "digest/b2b_campaign_generation": (
+                "You receive normalized opportunity JSON and return a draft."
+            )
+        },
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 1
+    assert "opportunity=" not in llm.calls[0]["messages"][0].content
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "target_mode=vendor_retention" in user_prompt
+    assert '"target_id":"opp-1"' in user_prompt
+    assert '"company_name":"Acme"' in user_prompt
+    assert '"target_mode":"vendor_retention"' in user_prompt
 
 
 @pytest.mark.asyncio
