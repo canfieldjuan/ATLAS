@@ -94,8 +94,10 @@ def build_settings() -> SimpleNamespace:
             False,
         ),
         vendor_briefing_scheduled_account_cards_reasoning_depth=_to_int(
-            os.getenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_REASONING_DEPTH"),
-            2,
+            os.getenv(
+                "EXTRACTED_VENDOR_BRIEFING_SCHEDULED_ACCOUNT_CARDS_REASONING_DEPTH"
+            ),
+            0,
         ),
     )
 

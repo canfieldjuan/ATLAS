@@ -150,6 +150,10 @@ def test_build_settings_includes_vendor_briefing_runtime_fields(
         raising=False,
     )
     monkeypatch.delenv(
+        "EXTRACTED_VENDOR_BRIEFING_SCHEDULED_ACCOUNT_CARDS_REASONING_DEPTH",
+        raising=False,
+    )
+    monkeypatch.delenv(
         "EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_ADAPTIVE_DEPTH",
         raising=False,
     )
@@ -160,8 +164,28 @@ def test_build_settings_includes_vendor_briefing_runtime_fields(
     assert cfg.vendor_briefing_account_cards_enabled is True
     assert cfg.vendor_briefing_account_cards_max == 3
     assert cfg.vendor_briefing_account_cards_reasoning_depth == 2
-    assert cfg.vendor_briefing_scheduled_account_cards_reasoning_depth == 2
+    assert cfg.vendor_briefing_scheduled_account_cards_reasoning_depth == 0
     assert cfg.vendor_briefing_account_cards_adaptive_depth is True
+
+    monkeypatch.setenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_REASONING_DEPTH", "1")
+    assert build_settings().b2b_churn.vendor_briefing_account_cards_reasoning_depth == 1
+    assert (
+        build_settings()
+        .b2b_churn
+        .vendor_briefing_scheduled_account_cards_reasoning_depth
+        == 0
+    )
+
+    monkeypatch.setenv(
+        "EXTRACTED_VENDOR_BRIEFING_SCHEDULED_ACCOUNT_CARDS_REASONING_DEPTH",
+        "2",
+    )
+    assert (
+        build_settings()
+        .b2b_churn
+        .vendor_briefing_scheduled_account_cards_reasoning_depth
+        == 2
+    )
 
 
 def test_dedupe_vendor_target_rows_keeps_best_row_per_company_and_mode() -> None:
