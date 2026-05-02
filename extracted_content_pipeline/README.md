@@ -216,8 +216,9 @@ Several small utility shims provide product-owned local behavior by default so t
   `LLMClient` port to extracted LLM infrastructure services, with product-owned
   provider routing config
 - `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
-- `campaign_postgres.py`: async Postgres adapters for campaign, sequence,
-  suppression, and audit ports
+- `campaign_postgres.py`: async Postgres adapters for intelligence,
+  campaign, sequence, suppression, and audit ports, including the product-owned
+  `campaign_opportunities` source table
 - `storage/repositories/scheduled_task.py`: local execution metadata updater
 - `skills/registry.py`: local markdown-backed skill registry implementing
   `.get()` and product `SkillStore.get_prompt()`

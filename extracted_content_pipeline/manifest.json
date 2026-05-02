@@ -184,6 +184,9 @@
       "target": "extracted_content_pipeline/settings.py"
     },
     {
+      "target": "extracted_content_pipeline/storage/migrations/151_campaign_opportunities.sql"
+    },
+    {
       "target": "extracted_content_pipeline/pipelines/notify.py"
     },
     {
