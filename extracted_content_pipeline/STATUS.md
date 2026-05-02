@@ -52,6 +52,8 @@
 - `campaign_sequence_context` is product-owned, and the copied task-local
   `_campaign_sequence_context` module now exports that standalone
   implementation for Atlas-compatible task imports.
+- `campaign_audit` is product-owned and writes campaign state-change audit
+  rows without importing Atlas logging or task helpers.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.

@@ -76,6 +76,11 @@ The copied task-local `_campaign_sequence_context.py` now exports this
 product-owned module so Atlas-compatible campaign task imports use the same
 standalone limits path.
 
+`extracted_content_pipeline/autonomous/tasks/campaign_audit.py` is product-owned
+as the copied task-facing audit writer. It keeps the small never-raise
+`log_campaign_event(...)` contract while using extracted logger naming and local
+coverage for UUID coercion, metadata serialization, and failure handling.
+
 `extracted_content_pipeline/campaign_sender.py` is the third standalone slice.
 It keeps Resend and SES provider behavior but uses explicit provider config and
 the product `SendRequest`/`SendResult` dataclasses.
