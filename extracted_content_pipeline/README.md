@@ -154,6 +154,10 @@ Several small utility shims provide product-owned local behavior by default so t
 - `config.py`: extracted settings from `settings.py`
 - `pipelines/notify.py`: host-visible notification dispatcher backed by the
   `VisibilitySink` port
+- `autonomous/tasks/_execution_progress.py`,
+  `autonomous/tasks/_google_news.py`, `autonomous/tasks/_blog_ts.py`, and
+  `autonomous/tasks/_blog_deploy.py`: product-owned utility helpers used by
+  copied blog and campaign tasks
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services, with product-owned
   provider routing config

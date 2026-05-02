@@ -116,6 +116,11 @@ visibility slice. It preserves the copied task-facing
 port when a host configures one. With no sink configured it remains a safe
 no-op, so standalone task imports do not require Atlas notification services.
 
+The first helper-surface trim moved `_execution_progress`, `_google_news`,
+`_blog_ts`, and `_blog_deploy` out of manifest sync and into product ownership.
+These are still used by copied task modules, but future changes now happen in
+the extracted product boundary instead of being pulled from Atlas.
+
 `extracted_content_pipeline/reasoning/archetypes.py` is the first product-owned
 reasoning policy slice. It scores vendor evidence against deterministic churn
 archetypes, returns thresholded matches, and exposes falsification conditions

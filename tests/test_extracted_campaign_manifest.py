@@ -42,6 +42,11 @@ def _owned_targets() -> set[str]:
     return {entry["target"] for entry in data.get("owned", [])}
 
 
+def _mapped_targets() -> set[str]:
+    data = json.loads((ROOT / "extracted_content_pipeline/manifest.json").read_text())
+    return {entry["target"] for entry in data.get("mappings", [])}
+
+
 def test_manifest_syncs_core_campaign_schema_migrations() -> None:
     targets = _manifest_targets()
 
@@ -82,3 +87,16 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/reasoning/archetypes.py" in owned
     assert "extracted_content_pipeline/reasoning/temporal.py" in owned
     assert "extracted_content_pipeline/reasoning/evidence_engine.py" in owned
+    assert "extracted_content_pipeline/autonomous/tasks/_execution_progress.py" in owned
+    assert "extracted_content_pipeline/autonomous/tasks/_google_news.py" in owned
+    assert "extracted_content_pipeline/autonomous/tasks/_blog_ts.py" in owned
+    assert "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py" in owned
+
+
+def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
+    mapped = _mapped_targets()
+
+    assert "extracted_content_pipeline/autonomous/tasks/_execution_progress.py" not in mapped
+    assert "extracted_content_pipeline/autonomous/tasks/_google_news.py" not in mapped
+    assert "extracted_content_pipeline/autonomous/tasks/_blog_ts.py" not in mapped
+    assert "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py" not in mapped

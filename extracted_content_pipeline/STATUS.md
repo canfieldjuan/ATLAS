@@ -41,6 +41,8 @@
 - `pipelines.notify` is product-owned and dispatches through the
   `VisibilitySink` port when configured, while staying a no-op when no host
   visibility adapter is installed.
+- Small task utility helpers are product-owned rather than Atlas-synced:
+  `_execution_progress`, `_google_news`, `_blog_ts`, and `_blog_deploy`.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.
@@ -68,7 +70,9 @@ extracted package, not just manifest-relative import resolution.
 
 ## Remaining extraction work
 
-1. Trim copied helper surface to only the modules required by target sellable workflows.
+1. Continue trimming copied helper surface to only the modules required by
+   target sellable workflows. The first utility group is no longer
+   manifest-synced from Atlas.
 2. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 3. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).
 
