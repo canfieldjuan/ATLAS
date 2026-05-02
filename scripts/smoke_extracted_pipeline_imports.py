@@ -16,6 +16,7 @@ MODULES = [
     "extracted_content_pipeline.autonomous.tasks.complaint_enrichment",
     "extracted_content_pipeline.autonomous.tasks.article_enrichment",
     "extracted_content_pipeline.autonomous.tasks.b2b_vendor_briefing",
+    "extracted_content_pipeline.autonomous.tasks.b2b_campaign_generation",
 ]
 
 

@@ -220,6 +220,18 @@
       "target": "extracted_content_pipeline/autonomous/tasks/campaign_suppression.py"
     },
     {
+      "target": "extracted_content_pipeline/autonomous/visibility.py"
+    },
+    {
+      "target": "extracted_content_pipeline/services/b2b/account_opportunity_claims.py"
+    },
+    {
+      "target": "extracted_content_pipeline/services/campaign_reasoning_context.py"
+    },
+    {
+      "target": "extracted_content_pipeline/services/campaign_quality.py"
+    },
+    {
       "target": "extracted_content_pipeline/templates/__init__.py"
     },
     {
