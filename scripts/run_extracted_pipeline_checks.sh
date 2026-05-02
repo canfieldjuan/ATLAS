@@ -23,6 +23,7 @@ pytest \
   tests/test_extracted_campaign_audit.py \
   tests/test_extracted_campaign_llm_client.py \
   tests/test_extracted_campaign_llm_bridge.py \
+  tests/test_extracted_vendor_briefing_seams.py \
   tests/test_extracted_campaign_postgres.py \
   tests/test_extracted_campaign_suppression.py \
   tests/test_extracted_campaign_sequence_context.py \
