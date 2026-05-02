@@ -406,6 +406,31 @@ def test_campaign_quality_revalidation_blocks_missing_required_anchor_support() 
     assert result["metadata"]["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
 
 
+def test_campaign_quality_revalidation_enforces_specificity_defaults_when_flags_omitted() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Account pressure",
+            "body": "We should talk about the account.",
+            "metadata": {},
+        },
+        boundary="generation",
+        specificity_context={
+            "anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "The Q2 renewal now carries a $200k/year issue.",
+                    }
+                ]
+            }
+        },
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "missing_anchor_support" in result["audit"]["blocking_issues"]
+    assert "missing_timing_or_numeric" in result["audit"]["blocking_issues"]
+
+
 def test_campaign_quality_revalidation_passes_with_anchor_and_preserves_metadata() -> None:
     result = campaign_quality_revalidation(
         campaign={

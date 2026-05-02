@@ -132,11 +132,17 @@ def campaign_quality_revalidation(
         for key in ("subject", "body", "cta")
     )
     min_hits = int(min_anchor_hits or 1)
+    require_anchor = True if require_anchor_support is None else bool(require_anchor_support)
+    require_timing = (
+        True
+        if require_timing_or_numeric_when_available is None
+        else bool(require_timing_or_numeric_when_available)
+    )
     matched_terms = _matched_terms(content, proof_terms, limit=proof_term_limit)
-    if require_anchor_support and anchor_rows and len(matched_terms) < min_hits:
+    if require_anchor and anchor_rows and len(matched_terms) < min_hits:
         blocking_issues.append("missing_anchor_support")
     if (
-        require_timing_or_numeric_when_available
+        require_timing
         and _timing_or_numeric_available(resolved_context, proof_terms)
         and not _has_timing_or_numeric(content)
     ):
