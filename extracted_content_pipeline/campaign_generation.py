@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import json
 import re
-from typing import Any, Mapping
+from typing import Any
 
 from .campaign_ports import (
     CampaignDraft,
@@ -163,13 +164,13 @@ class CampaignGenerationService:
                 skipped += 1
                 errors.append({"reason": "missing_target_id", "opportunity": opportunity})
                 continue
-            opportunity = await self._opportunity_with_reasoning_context(
-                scope=scope,
-                target_mode=target_mode,
-                target_id=target_id,
-                opportunity=opportunity,
-            )
             try:
+                opportunity = await self._opportunity_with_reasoning_context(
+                    scope=scope,
+                    target_mode=target_mode,
+                    target_id=target_id,
+                    opportunity=opportunity,
+                )
                 parsed = await self._generate_one(
                     prompt_template,
                     opportunity=opportunity,
@@ -231,8 +232,17 @@ class CampaignGenerationService:
         if not context.has_content():
             return dict(opportunity)
         enriched = dict(opportunity)
-        enriched["reasoning_context"] = campaign_reasoning_context_payload(context)
+        payload = campaign_reasoning_context_payload(context)
         enriched.update(campaign_reasoning_context_metadata(context))
+        existing_reasoning_context = opportunity.get("reasoning_context")
+        if isinstance(existing_reasoning_context, Mapping):
+            enriched["reasoning_context"] = {
+                **dict(existing_reasoning_context),
+                "campaign_reasoning_context": payload,
+            }
+        else:
+            enriched["reasoning_context"] = payload
+        enriched["campaign_reasoning_context"] = payload
         return enriched
 
     async def _generate_one(
