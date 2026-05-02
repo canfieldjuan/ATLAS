@@ -87,6 +87,9 @@ extracted package, not just manifest-relative import resolution.
 2. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 3. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).
 
+See `docs/remaining_productization_audit.md` for the current campaign-core
+import blockers and the recommended next PR sequence.
+
 ## Operational note
 
 The runtime import gate is clean, but this scaffold remains an in-repo extraction staging area until adapters are productionized and copied helper scope is narrowed.
