@@ -58,6 +58,64 @@ class FakeAssignmentPool:
         return self.result
 
 
+class FakeTransaction:
+    def __init__(self, conn: "FakeAssignmentConnection") -> None:
+        self.conn = conn
+
+    async def __aenter__(self) -> None:
+        self.conn.transaction_entered = True
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.conn.transaction_exited = True
+
+
+class FakeAcquireContext:
+    def __init__(self, conn: "FakeAssignmentConnection") -> None:
+        self.conn = conn
+
+    async def __aenter__(self) -> "FakeAssignmentConnection":
+        self.conn.acquired = True
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.conn.released = True
+
+
+class FakeAssignmentConnection:
+    def __init__(self, *, conflict_id: UUID | None = None, result: str = "UPDATE 1") -> None:
+        self.conflict_id = conflict_id
+        self.result = result
+        self.acquired = False
+        self.released = False
+        self.transaction_entered = False
+        self.transaction_exited = False
+        self.fetchval_args: tuple[object, ...] | None = None
+        self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.assignment_args: tuple[object, ...] | None = None
+
+    def transaction(self) -> FakeTransaction:
+        return FakeTransaction(self)
+
+    async def fetchval(self, query: str, *args: object) -> UUID | None:
+        self.fetchval_args = args
+        return self.conflict_id
+
+    async def execute(self, query: str, *args: object) -> str:
+        self.execute_calls.append((query, args))
+        if "pg_advisory_xact_lock" not in query:
+            self.assignment_args = args
+            return self.result
+        return "SELECT 1"
+
+
+class FakeAssignmentAcquirePool:
+    def __init__(self, conn: FakeAssignmentConnection) -> None:
+        self.conn = conn
+
+    def acquire(self) -> FakeAcquireContext:
+        return FakeAcquireContext(self.conn)
+
+
 def test_vendor_briefing_module_imports_in_standalone_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EXTRACTED_PIPELINE_STANDALONE", "1")
 
@@ -102,6 +160,7 @@ def test_build_settings_includes_vendor_briefing_runtime_fields(
     assert cfg.vendor_briefing_account_cards_enabled is True
     assert cfg.vendor_briefing_account_cards_max == 3
     assert cfg.vendor_briefing_account_cards_reasoning_depth == 2
+    assert cfg.vendor_briefing_scheduled_account_cards_reasoning_depth == 2
     assert cfg.vendor_briefing_account_cards_adaptive_depth is True
 
 
@@ -240,6 +299,24 @@ async def test_assign_recipient_to_sequence_updates_active_sequence() -> None:
     assert result.assigned is True
     assert result.reason is None
     assert pool.executed == (sequence_id, "buyer@example.com")
+
+
+@pytest.mark.asyncio
+async def test_assign_recipient_to_sequence_uses_transaction_scoped_advisory_lock() -> None:
+    sequence_id = UUID("11111111-1111-1111-1111-111111111111")
+    conn = FakeAssignmentConnection()
+    pool = FakeAssignmentAcquirePool(conn)
+
+    result = await assign_recipient_to_sequence(pool, sequence_id, " Buyer@Example.com ")
+
+    assert result.assigned is True
+    assert conn.acquired is True
+    assert conn.released is True
+    assert conn.transaction_entered is True
+    assert conn.transaction_exited is True
+    assert any("pg_advisory_xact_lock" in query for query, _ in conn.execute_calls)
+    assert conn.fetchval_args == ("buyer@example.com", sequence_id)
+    assert conn.assignment_args == (sequence_id, "buyer@example.com")
 
 
 @pytest.mark.asyncio

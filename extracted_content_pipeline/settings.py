@@ -93,10 +93,10 @@ def build_settings() -> SimpleNamespace:
             os.getenv("EXTRACTED_VENDOR_BRIEFING_ANALYST_ENRICHMENT_ENABLED"),
             False,
         ),
-        vendor_briefing_scheduled_account_cards_reasoning_depth=os.getenv(
-            "EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_REASONING_DEPTH"
-        )
-        or "standard",
+        vendor_briefing_scheduled_account_cards_reasoning_depth=_to_int(
+            os.getenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_REASONING_DEPTH"),
+            2,
+        ),
     )
 
     campaign_llm = SimpleNamespace(
