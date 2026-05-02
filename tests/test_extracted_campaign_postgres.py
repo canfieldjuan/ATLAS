@@ -15,6 +15,7 @@ from extracted_content_pipeline.campaign_postgres import (
     PostgresCampaignAuditSink,
     PostgresCampaignRepository,
     PostgresCampaignSequenceRepository,
+    PostgresIntelligenceRepository,
     PostgresSuppressionRepository,
 )
 
@@ -44,6 +45,137 @@ class _Pool:
     async def execute(self, query, *args):
         self.execute_calls.append({"query": query, "args": args})
         return "OK"
+
+
+@pytest.mark.asyncio
+async def test_intelligence_repository_reads_customer_opportunities_with_scope_and_filters():
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "id": "row-1",
+            "account_id": "acct-1",
+            "target_id": "opp-1",
+            "company_name": "Acme",
+            "vendor_name": "HubSpot",
+            "contact_email": "buyer@example.com",
+            "contact_title": "VP Revenue",
+            "opportunity_score": 84,
+            "urgency_score": 8,
+            "pain_points": ["pricing"],
+            "competitors": ["Salesforce", "Zoho"],
+            "evidence": [{"quote": "Too expensive"}],
+            "raw_payload": {
+                "custom_segment": "enterprise",
+                "source_system": "warehouse",
+            },
+        }
+    ]
+    repo = PostgresIntelligenceRepository(pool)
+
+    rows = await repo.read_campaign_opportunities(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        limit=10,
+        filters={"vendor_name": "HubSpot", "custom_segment": "enterprise"},
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["target_id"] == "opp-1"
+    assert row["target_mode"] == "vendor_retention"
+    assert row["company_name"] == "Acme"
+    assert row["vendor_name"] == "HubSpot"
+    assert row["contact_email"] == "buyer@example.com"
+    assert row["contact_title"] == "VP Revenue"
+    assert row["pain_points"] == ["pricing"]
+    assert row["competitors"] == ["Salesforce", "Zoho"]
+    assert row["evidence"] == [{"quote": "Too expensive"}]
+    assert row["custom_segment"] == "enterprise"
+    call = pool.fetch_calls[0]
+    assert 'FROM "campaign_opportunities"' in call["query"]
+    assert "account_id = $2" in call["query"]
+    assert "LOWER(vendor_name) = LOWER($3)" in call["query"]
+    assert "LOWER(raw_payload ->> $4) = LOWER($5)" in call["query"]
+    assert call["args"] == ("vendor_retention", "acct-1", "HubSpot", "custom_segment", "enterprise", 10)
+
+
+@pytest.mark.asyncio
+async def test_intelligence_repository_accepts_json_string_payloads():
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "target_id": "opp-1",
+            "company_name": "",
+            "vendor_name": "",
+            "pain_points": '["pricing", "support"]',
+            "competitors": '["Salesforce"]',
+            "evidence": '[{"quote":"Too expensive"}]',
+            "raw_payload": json.dumps({
+                "company": "Acme",
+                "vendor": "HubSpot",
+                "email": "buyer@example.com",
+                "custom_segment": "midmarket",
+            }),
+        }
+    ]
+    repo = PostgresIntelligenceRepository(pool)
+
+    rows = await repo.read_campaign_opportunities(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=5,
+    )
+
+    assert rows[0]["company_name"] == "Acme"
+    assert rows[0]["vendor_name"] == "HubSpot"
+    assert rows[0]["contact_email"] == "buyer@example.com"
+    assert rows[0]["pain_points"] == ["pricing", "support"]
+    assert rows[0]["competitors"] == ["Salesforce"]
+    assert rows[0]["evidence"] == [{"quote": "Too expensive"}]
+    assert rows[0]["custom_segment"] == "midmarket"
+
+
+@pytest.mark.asyncio
+async def test_intelligence_repository_rejects_unsafe_table_and_filter_identifiers():
+    pool = _Pool()
+    repo = PostgresIntelligenceRepository(pool, opportunity_table="campaign_opportunities;drop")
+
+    with pytest.raises(ValueError, match="invalid SQL identifier"):
+        await repo.read_campaign_opportunities(
+            scope=TenantScope(),
+            target_mode="vendor_retention",
+            limit=5,
+        )
+
+    repo = PostgresIntelligenceRepository(pool)
+    with pytest.raises(ValueError, match="unsupported filter key"):
+        await repo.read_campaign_opportunities(
+            scope=TenantScope(),
+            target_mode="vendor_retention",
+            limit=5,
+            filters={"bad-key": "value"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_intelligence_repository_reads_vendor_targets():
+    pool = _Pool()
+    pool.fetch_rows = [{"id": "target-1", "company_name": "Acme"}]
+    repo = PostgresIntelligenceRepository(pool)
+
+    rows = await repo.read_vendor_targets(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        vendor_name="Acme",
+    )
+
+    assert rows == ({"id": "target-1", "company_name": "Acme"},)
+    call = pool.fetch_calls[0]
+    assert 'FROM "vendor_targets"' in call["query"]
+    assert "target_mode = $1" in call["query"]
+    assert "LOWER(company_name) = LOWER($2)" in call["query"]
+    assert "account_id" not in call["query"]
+    assert call["args"] == ("vendor_retention", "Acme")
 
 
 @pytest.mark.asyncio

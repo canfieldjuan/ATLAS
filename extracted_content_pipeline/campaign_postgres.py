@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 from typing import Any, Mapping, Sequence
 
+from .campaign_opportunities import normalize_campaign_opportunity
 from .campaign_ports import (
     CampaignDraft,
     SendResult,
@@ -56,6 +57,184 @@ def _campaign_vendor_name(draft: CampaignDraft, opportunity: Mapping[str, Any]) 
         or _clean(draft.metadata.get("vendor_name"))
         or None
     )
+
+
+def _json_mapping(value: Any) -> JsonDict:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return {}
+
+
+def _json_sequence(value: Any) -> list[Any]:
+    if isinstance(value, str) and value.strip():
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return [value]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return list(value)
+    if value in (None, ""):
+        return []
+    return [value]
+
+
+def _opportunity_from_row(row: Mapping[str, Any], *, target_mode: str) -> JsonDict:
+    raw = _json_mapping(row.get("raw_payload"))
+    opportunity = dict(raw)
+    for key in (
+        "target_id",
+        "company_name",
+        "vendor_name",
+        "contact_name",
+        "contact_email",
+        "contact_title",
+        "opportunity_score",
+        "urgency_score",
+    ):
+        value = row.get(key)
+        if value not in (None, "", [], {}):
+            opportunity[key] = value
+    if row.get("pain_points") not in (None, "", [], {}):
+        opportunity["pain_points"] = _json_sequence(row.get("pain_points"))
+    if row.get("competitors") not in (None, "", [], {}):
+        opportunity["competitors"] = _json_sequence(row.get("competitors"))
+    if row.get("evidence") not in (None, "", [], {}):
+        opportunity["evidence"] = _json_sequence(row.get("evidence"))
+    if row.get("account_id"):
+        opportunity["account_id"] = row.get("account_id")
+    return normalize_campaign_opportunity(opportunity, target_mode=target_mode)
+
+
+def _safe_json_key(value: Any) -> str:
+    key = _clean(value)
+    if not key:
+        raise ValueError("filter key cannot be empty")
+    if not all(char.isalnum() or char == "_" for char in key):
+        raise ValueError(f"unsupported filter key: {key}")
+    return key
+
+
+@dataclass(frozen=True)
+class PostgresIntelligenceRepository:
+    """Async Postgres adapter for customer campaign opportunity rows."""
+
+    pool: Any
+    opportunity_table: str = "campaign_opportunities"
+    vendor_targets_table: str = "vendor_targets"
+
+    async def read_campaign_opportunities(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        limit: int,
+        filters: Mapping[str, Any] | None = None,
+    ) -> Sequence[JsonDict]:
+        params: list[Any] = [target_mode]
+        where = [
+            "status = 'active'",
+            "(target_mode = $1 OR target_mode IS NULL)",
+        ]
+        if scope.account_id:
+            params.append(scope.account_id)
+            where.append(f"account_id = ${len(params)}")
+        self._append_filters(where, params, filters)
+        params.append(int(limit))
+        rows = await self.pool.fetch(
+            f"""
+            SELECT
+                id, account_id, target_id, target_mode, company_name, vendor_name,
+                contact_name, contact_email, contact_title, opportunity_score,
+                urgency_score, pain_points, competitors, evidence, raw_payload
+              FROM {self._identifier(self.opportunity_table)}
+             WHERE {' AND '.join(where)}
+             ORDER BY urgency_score DESC NULLS LAST,
+                      opportunity_score DESC NULLS LAST,
+                      updated_at DESC NULLS LAST,
+                      created_at DESC NULLS LAST
+             LIMIT ${len(params)}
+            """,
+            *params,
+        )
+        return tuple(
+            _opportunity_from_row(_row_dict(row), target_mode=target_mode)
+            for row in rows
+        )
+
+    async def read_vendor_targets(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        vendor_name: str | None = None,
+    ) -> Sequence[JsonDict]:
+        del scope
+        params: list[Any] = [target_mode]
+        where = ["status = 'active'", "target_mode = $1"]
+        if vendor_name:
+            params.append(vendor_name)
+            where.append(f"LOWER(company_name) = LOWER(${len(params)})")
+        rows = await self.pool.fetch(
+            f"""
+            SELECT *
+              FROM {self._identifier(self.vendor_targets_table)}
+             WHERE {' AND '.join(where)}
+             ORDER BY company_name ASC
+            """,
+            *params,
+        )
+        return tuple(_row_dict(row) for row in rows)
+
+    def _append_filters(
+        self,
+        where: list[str],
+        params: list[Any],
+        filters: Mapping[str, Any] | None,
+    ) -> None:
+        for key, value in (filters or {}).items():
+            if value in (None, "", [], {}):
+                continue
+            if key == "vendor_name":
+                params.append(value)
+                where.append(f"LOWER(vendor_name) = LOWER(${len(params)})")
+            elif key == "company_name":
+                params.append(value)
+                where.append(f"LOWER(company_name) = LOWER(${len(params)})")
+            elif key == "contact_email":
+                params.append(value)
+                where.append(f"LOWER(contact_email) = LOWER(${len(params)})")
+            elif key == "target_id":
+                params.append(value)
+                where.append(f"target_id = ${len(params)}")
+            elif key == "min_urgency":
+                params.append(value)
+                where.append(f"urgency_score >= ${len(params)}")
+            elif key == "min_opportunity_score":
+                params.append(value)
+                where.append(f"opportunity_score >= ${len(params)}")
+            else:
+                json_key = _safe_json_key(key)
+                params.append(json_key)
+                key_position = len(params)
+                params.append(value)
+                where.append(
+                    f"LOWER(raw_payload ->> ${key_position}) = LOWER(${len(params)})"
+                )
+
+    def _identifier(self, value: str) -> str:
+        parts = value.split(".")
+        if not parts or any(not part for part in parts):
+            raise ValueError(f"invalid SQL identifier: {value}")
+        for part in parts:
+            if not all(char.isalnum() or char == "_" for char in part):
+                raise ValueError(f"invalid SQL identifier: {value}")
+        return ".".join(f'"{part}"' for part in parts)
 
 
 @dataclass(frozen=True)

@@ -122,6 +122,11 @@ adapter slice. It loads JSON or CSV opportunity rows, normalizes them through
 the product opportunity contract, returns non-fatal data-quality warnings, and
 exposes `FileIntelligenceRepository` for running generation from customer files.
 
+`extracted_content_pipeline/campaign_postgres.py` owns the Postgres adapter path
+for customer opportunity reads through `PostgresIntelligenceRepository`. It
+reads the product-owned `campaign_opportunities` table and normalizes rows
+through the same contract as the JSON/CSV adapters before generation.
+
 `extracted_content_pipeline/campaign_opportunities.py` owns the host/customer
 opportunity input contract. It accepts loose customer rows, preserves custom
 fields, and adds stable prompt/storage keys (`target_id`, `company_name`,

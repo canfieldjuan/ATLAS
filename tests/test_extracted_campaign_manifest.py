@@ -20,6 +20,10 @@ CORE_CAMPAIGN_MIGRATIONS = {
     "150_campaign_engagement_timing.sql",
 }
 
+PRODUCT_OWNED_CAMPAIGN_MIGRATIONS = {
+    "151_campaign_opportunities.sql",
+}
+
 DEFERRED_CROSS_PRODUCT_MIGRATIONS = {
     "080_b2b_alert_baselines.sql",
     "106_score_calibration.sql",
@@ -61,6 +65,15 @@ def test_deferred_cross_product_migrations_stay_out_of_core_manifest() -> None:
     assert not (DEFERRED_CROSS_PRODUCT_MIGRATIONS & targets)
 
 
+def test_manifest_tracks_product_owned_campaign_schema_migrations() -> None:
+    owned = _owned_targets()
+
+    for migration in PRODUCT_OWNED_CAMPAIGN_MIGRATIONS:
+        target = f"extracted_content_pipeline/storage/migrations/{migration}"
+        assert target in owned
+        assert (ROOT / target).exists()
+
+
 def test_core_campaign_migrations_define_product_tables() -> None:
     migrations_dir = ROOT / "extracted_content_pipeline/storage/migrations"
 
@@ -78,6 +91,15 @@ def test_core_campaign_migrations_define_product_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS seller_targets" in seller_schema
 
 
+def test_product_owned_campaign_migrations_define_product_tables() -> None:
+    migrations_dir = ROOT / "extracted_content_pipeline/storage/migrations"
+
+    opportunity_schema = (migrations_dir / "151_campaign_opportunities.sql").read_text()
+
+    assert "CREATE TABLE IF NOT EXISTS campaign_opportunities" in opportunity_schema
+    assert "idx_campaign_opportunities_account_mode" in opportunity_schema
+
+
 def test_manifest_tracks_product_owned_adapter_files() -> None:
     owned = _owned_targets()
 
@@ -89,6 +111,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/campaign_customer_data.py" in owned
     assert "extracted_content_pipeline/campaign_opportunities.py" in owned
     assert "extracted_content_pipeline/settings.py" in owned
+    assert "extracted_content_pipeline/storage/migrations/151_campaign_opportunities.sql" in owned
     assert "extracted_content_pipeline/reasoning/archetypes.py" in owned
     assert "extracted_content_pipeline/reasoning/temporal.py" in owned
     assert "extracted_content_pipeline/reasoning/evidence_engine.py" in owned
