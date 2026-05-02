@@ -323,6 +323,37 @@ async def test_generate_preserves_existing_canonical_reasoning_context():
 
 
 @pytest.mark.asyncio
+async def test_generate_uses_provider_canonical_reasoning_context_without_other_evidence():
+    provider = _ReasoningProvider(
+        {
+            "reasoning_context": {
+                "wedge": "renewal pressure",
+                "confidence": "high",
+                "summary": "Acme is reviewing vendors before renewal.",
+            }
+        }
+    )
+    service, _, campaigns, llm, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert "renewal pressure" in prompt
+    assert "Acme is reviewing vendors before renewal." in prompt
+    source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert source["campaign_reasoning_context"]["confidence"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_generate_uses_custom_config_and_omits_source_opportunity():
     config = CampaignGenerationConfig(
         skill_name="custom",

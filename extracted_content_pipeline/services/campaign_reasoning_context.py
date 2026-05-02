@@ -14,6 +14,14 @@ _PROOF_POINT_LIMIT = 2
 _ACCOUNT_SIGNAL_LIMIT = 2
 _COVERAGE_LIMIT_LIMIT = 3
 _DELTA_ITEM_LIMIT = 3
+_CANONICAL_REASONING_KEYS = (
+    "wedge",
+    "confidence",
+    "summary",
+    "why_now",
+    "primary_driver",
+    "recommended_action",
+)
 
 
 def _copy_list(value: Any) -> list[Any]:
@@ -105,6 +113,18 @@ def _clean_scalar_list(value: Any) -> tuple[str, ...]:
     )
 
 
+def _clean_canonical_reasoning(*values: Any) -> dict[str, Any]:
+    reasoning: dict[str, Any] = {}
+    for value in values:
+        if not isinstance(value, Mapping):
+            continue
+        for key in _CANONICAL_REASONING_KEYS:
+            item = value.get(key)
+            if item not in (None, "", [], {}):
+                reasoning[key] = item
+    return reasoning
+
+
 def campaign_reasoning_scope_summary(
     scope_manifest: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -180,10 +200,22 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 nested.get("reference_ids"),
             )
         ),
+        top_theses=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_top_theses"),
+                payload.get("top_theses"),
+                nested.get("reasoning_top_theses"),
+                nested.get("top_theses"),
+                atom_context.get("top_theses"),
+                atom_context.get("theses"),
+            ),
+            limit=_THESIS_LIMIT,
+        ),
         account_signals=_clean_mapping_list(atom_context.get("account_signals")),
         timing_windows=_clean_mapping_list(atom_context.get("timing_windows")),
         proof_points=_clean_mapping_list(atom_context.get("proof_points")),
         coverage_limits=_clean_scalar_list(atom_context.get("coverage_limits")),
+        canonical_reasoning=_clean_canonical_reasoning(payload, nested, atom_context),
         scope_summary=campaign_reasoning_scope_summary(scope_summary),
         delta_summary=normalized_delta,
     )
