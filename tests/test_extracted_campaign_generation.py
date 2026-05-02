@@ -113,7 +113,12 @@ class _ReasoningProvider:
             "target_mode": target_mode,
             "opportunity": dict(opportunity),
         })
-        return self.context
+        context = self.context
+        if isinstance(context, list):
+            context = context.pop(0)
+        if isinstance(context, Exception):
+            raise context
+        return context
 
 
 def _service(opportunities, responses, *, config=None, prompts=None, reasoning_context=None):
@@ -277,6 +282,47 @@ async def test_generate_uses_host_reasoning_context_without_pool_compression_imp
 
 
 @pytest.mark.asyncio
+async def test_generate_preserves_existing_canonical_reasoning_context():
+    scope = TenantScope(account_id="acct-1")
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "reasoning_context": {
+            "wedge": "renewal pressure",
+            "confidence": "high",
+            "summary": "Acme is reviewing vendors before renewal.",
+        },
+    }
+    provider = _ReasoningProvider(
+        CampaignReasoningContext(
+            witness_highlights=(
+                {"witness_id": "w1", "excerpt_text": "Pricing drove evaluation."},
+            ),
+            proof_points=({"label": "pricing_mentions", "value": 12},),
+        )
+    )
+    service, _, campaigns, llm, _ = _service(
+        [opportunity],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(scope=scope, target_mode="vendor_retention")
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert "renewal pressure" in prompt
+    assert "campaign_reasoning_context" in prompt
+    source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert (
+        source["reasoning_context"]["campaign_reasoning_context"]["proof_points"][0]["label"]
+        == "pricing_mentions"
+    )
+    assert source["campaign_reasoning_context"]["witness_highlights"][0]["witness_id"] == "w1"
+
+
+@pytest.mark.asyncio
 async def test_generate_uses_custom_config_and_omits_source_opportunity():
     config = CampaignGenerationConfig(
         skill_name="custom",
@@ -340,6 +386,29 @@ async def test_generate_continues_after_llm_error():
     assert result.generated == 1
     assert result.skipped == 1
     assert result.errors == ({"target_id": "opp-1", "reason": "provider down"},)
+    assert campaigns.saved[0]["drafts"][0].target_id == "opp-2"
+
+
+@pytest.mark.asyncio
+async def test_generate_continues_after_reasoning_context_provider_error():
+    provider = _ReasoningProvider([RuntimeError("reasoning provider down"), None])
+    service, _, campaigns, llm, _ = _service(
+        [
+            {"id": "opp-1"},
+            {"id": "opp-2"},
+        ],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="churning_company")
+
+    assert result.generated == 1
+    assert result.skipped == 1
+    assert result.errors == (
+        {"target_id": "opp-1", "reason": "reasoning provider down"},
+    )
+    assert len(llm.calls) == 1
     assert campaigns.saved[0]["drafts"][0].target_id == "opp-2"
 
 
