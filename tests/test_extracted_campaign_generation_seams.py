@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import UserDict
+from collections.abc import Sequence
 from datetime import date
 from types import MappingProxyType
 
@@ -316,6 +317,39 @@ def test_normalize_campaign_reasoning_context_caps_wrapped_prompt_material() -> 
     assert [row["anchor"] for row in context.timing_windows] == ["Q0", "Q1"]
     assert [row["label"] for row in context.proof_points] == ["proof_0", "proof_1"]
     assert context.coverage_limits == ("limit_0", "limit_1", "limit_2")
+
+
+def test_normalize_campaign_reasoning_context_applies_caps_before_copying_sequences() -> None:
+    class CountingSequence(Sequence):
+        def __init__(self, rows):
+            self.rows = rows
+            self.accessed = 0
+
+        def __len__(self):
+            return len(self.rows)
+
+        def __getitem__(self, index):
+            if isinstance(index, slice):
+                raise AssertionError("normalizer should not slice the source sequence")
+            self.accessed += 1
+            return self.rows[index]
+
+    account_signals = CountingSequence(
+        [
+            {"company": f"Company {index}"}
+            for index in range(10)
+        ]
+    )
+
+    context = normalize_campaign_reasoning_context(
+        {"campaign_reasoning_context": {"account_signals": account_signals}}
+    )
+
+    assert [row["company"] for row in context.account_signals] == [
+        "Company 0",
+        "Company 1",
+    ]
+    assert account_signals.accessed == 2
 
 
 def test_campaign_reasoning_context_metadata_uses_campaign_storage_keys() -> None:

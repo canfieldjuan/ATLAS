@@ -217,8 +217,7 @@ class CampaignGenerationService:
         target_id: str,
         opportunity: Mapping[str, Any],
     ) -> dict[str, Any]:
-        base_context = normalize_campaign_reasoning_context(opportunity)
-        context = base_context
+        context = None
         if self._reasoning_context is not None:
             provided = await self._reasoning_context.read_campaign_reasoning_context(
                 scope=scope,
@@ -229,6 +228,8 @@ class CampaignGenerationService:
             provided_context = normalize_campaign_reasoning_context(provided)
             if provided_context.has_content():
                 context = provided_context
+        if context is None:
+            context = normalize_campaign_reasoning_context(opportunity)
         if not context.has_content():
             return dict(opportunity)
         enriched = dict(opportunity)

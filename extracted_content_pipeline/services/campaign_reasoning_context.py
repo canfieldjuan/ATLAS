@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from itertools import islice
 from typing import Any
 
 from ..campaign_ports import CampaignReasoningContext
@@ -52,9 +53,11 @@ _REASONING_STRUCTURE_KEYS = {
 }
 
 
-def _copy_list(value: Any) -> list[Any]:
+def _copy_list(value: Any, *, limit: int | None = None) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return list(value)
+        if limit is None:
+            return list(value)
+        return list(islice(value, max(0, limit)))
     return []
 
 
@@ -68,7 +71,7 @@ def _clean_text(value: Any) -> str:
 
 def _clean_mapping_list(value: Any, *, limit: int | None = None) -> tuple[dict[str, Any], ...]:
     rows: list[dict[str, Any]] = []
-    for item in _copy_list(value):
+    for item in _copy_list(value, limit=limit):
         if not isinstance(item, Mapping):
             continue
         row = {
@@ -122,21 +125,21 @@ def _first_dict(*values: Any) -> dict[str, Any]:
     return {}
 
 
-def _first_list(*values: Any) -> list[Any]:
+def _first_list(*values: Any, limit: int | None = None) -> list[Any]:
     for value in values:
         if (
             isinstance(value, Sequence)
             and not isinstance(value, (str, bytes, bytearray))
             and value
         ):
-            return list(value)
+            return _copy_list(value, limit=limit)
     return []
 
 
 def _clean_scalar_list(value: Any, *, limit: int | None = None) -> tuple[str, ...]:
     return tuple(
         _clean_text(item)
-        for item in _copy_list(value)[:limit]
+        for item in _copy_list(value, limit=limit)
         if _clean_text(item)
     )
 
@@ -264,6 +267,7 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 campaign_context.get("top_theses"),
                 atom_context.get("top_theses"),
                 atom_context.get("theses"),
+                limit=_THESIS_LIMIT,
             ),
             limit=_THESIS_LIMIT,
         ),
@@ -276,6 +280,7 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 campaign_context.get("reasoning_account_signals"),
                 campaign_context.get("account_signals"),
                 atom_context.get("account_signals"),
+                limit=_ACCOUNT_SIGNAL_LIMIT,
             ),
             limit=_ACCOUNT_SIGNAL_LIMIT,
         ),
@@ -288,6 +293,7 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 campaign_context.get("reasoning_timing_windows"),
                 campaign_context.get("timing_windows"),
                 atom_context.get("timing_windows"),
+                limit=_TIMING_WINDOW_LIMIT,
             ),
             limit=_TIMING_WINDOW_LIMIT,
         ),
@@ -300,6 +306,7 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 campaign_context.get("reasoning_proof_points"),
                 campaign_context.get("proof_points"),
                 atom_context.get("proof_points"),
+                limit=_PROOF_POINT_LIMIT,
             ),
             limit=_PROOF_POINT_LIMIT,
         ),
@@ -312,6 +319,7 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 campaign_context.get("reasoning_coverage_limits"),
                 campaign_context.get("coverage_limits"),
                 atom_context.get("coverage_limits"),
+                limit=_COVERAGE_LIMIT_LIMIT,
             ),
             limit=_COVERAGE_LIMIT_LIMIT,
         ),
@@ -370,7 +378,10 @@ def campaign_reasoning_atom_context(
             "why_now": _clean_text(item.get("why_now")),
             "confidence": _clean_text(item.get("confidence")),
         }
-        for item in _copy_list(consumer_context.get("theses"))[:_THESIS_LIMIT]
+        for item in _copy_list(
+            consumer_context.get("theses"),
+            limit=_THESIS_LIMIT,
+        )
         if isinstance(item, Mapping)
     ]
     theses = [item for item in theses if item["summary"] or item["why_now"]]
@@ -384,9 +395,10 @@ def campaign_reasoning_atom_context(
             "urgency": _clean_text(item.get("urgency")),
             "recommended_action": _clean_text(item.get("recommended_action")),
         }
-        for item in _copy_list(consumer_context.get("timing_windows"))[
-            :_TIMING_WINDOW_LIMIT
-        ]
+        for item in _copy_list(
+            consumer_context.get("timing_windows"),
+            limit=_TIMING_WINDOW_LIMIT,
+        )
         if isinstance(item, Mapping)
     ]
     timing_windows = [item for item in timing_windows if item["anchor"]]
@@ -399,9 +411,10 @@ def campaign_reasoning_atom_context(
             "value": item.get("value"),
             "interpretation": _clean_text(item.get("interpretation")),
         }
-        for item in _copy_list(consumer_context.get("proof_points"))[
-            :_PROOF_POINT_LIMIT
-        ]
+        for item in _copy_list(
+            consumer_context.get("proof_points"),
+            limit=_PROOF_POINT_LIMIT,
+        )
         if isinstance(item, Mapping)
     ]
     proof_points = [item for item in proof_points if item["label"]]
@@ -415,9 +428,10 @@ def campaign_reasoning_atom_context(
             "competitor_context": _clean_text(item.get("competitor_context")),
             "primary_pain": _clean_text(item.get("primary_pain")),
         }
-        for item in _copy_list(consumer_context.get("account_signals"))[
-            :_ACCOUNT_SIGNAL_LIMIT
-        ]
+        for item in _copy_list(
+            consumer_context.get("account_signals"),
+            limit=_ACCOUNT_SIGNAL_LIMIT,
+        )
         if isinstance(item, Mapping)
     ]
     account_signals = [
@@ -430,9 +444,10 @@ def campaign_reasoning_atom_context(
 
     coverage_limits = [
         _clean_text(item.get("label"))
-        for item in _copy_list(consumer_context.get("coverage_limits"))[
-            :_COVERAGE_LIMIT_LIMIT
-        ]
+        for item in _copy_list(
+            consumer_context.get("coverage_limits"),
+            limit=_COVERAGE_LIMIT_LIMIT,
+        )
         if isinstance(item, Mapping) and _clean_text(item.get("label"))
     ]
     if coverage_limits:
@@ -456,7 +471,7 @@ def campaign_reasoning_delta_summary(
     for key in ("theses_added", "new_timing_windows", "new_account_signals"):
         value = reasoning_delta.get(key)
         if isinstance(value, list) and value:
-            summary[key] = value[:_DELTA_ITEM_LIMIT]
+            summary[key] = _copy_list(value, limit=_DELTA_ITEM_LIMIT)
     return summary
 
 

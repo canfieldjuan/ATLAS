@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import extracted_content_pipeline.campaign_generation as campaign_generation_module
 from extracted_content_pipeline.campaign_generation import (
     CampaignGenerationConfig,
     CampaignGenerationService,
@@ -279,6 +280,50 @@ async def test_generate_uses_host_reasoning_context_without_pool_compression_imp
     assert draft.metadata["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
     assert draft.metadata["reasoning_context"]["account_signals"][0]["company"] == "Acme"
     assert draft.metadata["source_opportunity"]["reasoning_context"]["proof_points"][0]["label"] == "pricing_mentions"
+
+
+@pytest.mark.asyncio
+async def test_generate_defers_base_reasoning_normalization_when_provider_returns_context(
+    monkeypatch,
+):
+    scope = TenantScope(account_id="acct-1")
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "reasoning_context": {"wedge": "base context should not be read first"},
+    }
+    provider = _ReasoningProvider(
+        CampaignReasoningContext(
+            proof_points=({"label": "pricing_mentions", "value": 12},),
+        )
+    )
+    real_normalize = campaign_generation_module.normalize_campaign_reasoning_context
+
+    def normalize_spy(value):
+        if (
+            isinstance(value, dict)
+            and value.get("id") == "opp-1"
+            and "campaign_reasoning_context" not in value
+        ):
+            raise AssertionError("base opportunity normalized before provider context")
+        return real_normalize(value)
+
+    monkeypatch.setattr(
+        campaign_generation_module,
+        "normalize_campaign_reasoning_context",
+        normalize_spy,
+    )
+    service, _, campaigns, _, _ = _service(
+        [opportunity],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(scope=scope, target_mode="vendor_retention")
+
+    assert result.generated == 1
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.metadata["reasoning_context"]["proof_points"][0]["label"] == "pricing_mentions"
 
 
 @pytest.mark.asyncio
