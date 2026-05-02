@@ -117,6 +117,11 @@ for campaign generation. It wires in-memory ports, a static prompt store, and an
 offline deterministic LLM so customer opportunity JSON can be converted into
 drafts without Atlas, a database, or provider credentials.
 
+`extracted_content_pipeline/campaign_customer_data.py` is the customer-export
+adapter slice. It loads JSON or CSV opportunity rows, normalizes them through
+the product opportunity contract, returns non-fatal data-quality warnings, and
+exposes `FileIntelligenceRepository` for running generation from customer files.
+
 `extracted_content_pipeline/campaign_opportunities.py` owns the host/customer
 opportunity input contract. It accepts loose customer rows, preserves custom
 fields, and adds stable prompt/storage keys (`target_id`, `company_name`,

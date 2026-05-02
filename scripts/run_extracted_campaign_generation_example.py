@@ -18,6 +18,9 @@ if str(ROOT) not in sys.path:
 from extracted_content_pipeline.campaign_example import (  # noqa: E402
     generate_campaign_drafts_from_payload,
 )
+from extracted_content_pipeline.campaign_customer_data import (  # noqa: E402
+    load_campaign_opportunities_from_file,
+)
 
 
 DEFAULT_PAYLOAD = (
@@ -25,10 +28,15 @@ DEFAULT_PAYLOAD = (
 )
 
 
-def _load_payload(path: Path) -> dict[str, Any]:
+def _load_payload(path: Path, *, file_format: str = "auto") -> dict[str, Any]:
+    if file_format == "csv" or (file_format == "auto" and path.suffix.lower() == ".csv"):
+        loaded = load_campaign_opportunities_from_file(path, file_format="csv")
+        return loaded.as_payload()
+
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        raise ValueError("campaign generation payload must be a JSON object")
+        loaded = load_campaign_opportunities_from_file(path, file_format="json")
+        return loaded.as_payload()
     return data
 
 
@@ -49,6 +57,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-mode",
         help="Override the payload target_mode.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("auto", "json", "csv"),
+        default="auto",
+        help="Customer data input format. Defaults to suffix-based auto detection.",
     )
     parser.add_argument(
         "--limit",
@@ -89,7 +103,7 @@ def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
 
 async def _main() -> int:
     args = _parse_args()
-    payload = _load_payload(args.payload)
+    payload = _load_payload(args.payload, file_format=args.format)
     if args.target_mode:
         payload["target_mode"] = args.target_mode
     if args.limit is not None:

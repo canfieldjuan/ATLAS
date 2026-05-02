@@ -1,0 +1,3 @@
+id,company,vendor,email,title,pain_category,competitor,opportunity_score,urgency_score,custom_segment
+opp-acme-hubspot,Acme Logistics,HubSpot,revenue.ops@example.com,VP Revenue Operations,pricing pressure,"Salesforce, Zoho",84,8,enterprise logistics
+opp-northstar-crm,Northstar Health,LegacyCRM,it.lead@example.com,Director of IT,integration gaps,Pipedrive,76,7,healthcare

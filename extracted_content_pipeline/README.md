@@ -102,6 +102,10 @@ generation. Hosts can pass loose opportunity rows from a CRM, warehouse, or
 vendor-intelligence feed; the product normalizes them into stable prompt and
 draft metadata fields while preserving custom columns.
 
+`campaign_customer_data.py` adds JSON/CSV file adapters and a
+`FileIntelligenceRepository` so hosts can run the generator directly from
+customer exports before wiring a database integration.
+
 ## Campaign generation example
 
 Run the standalone campaign generator against the included customer-data
@@ -115,6 +119,15 @@ Or run it against a customer JSON file and write drafts to disk:
 
 ```bash
 python scripts/run_extracted_campaign_generation_example.py customer_payload.json --output campaign_drafts.json
+```
+
+CSV exports work too. The loader normalizes common CRM/warehouse columns such
+as `company`, `vendor`, `email`, `title`, `pain_category`, `competitor`,
+`opportunity_score`, and `urgency_score`, while preserving custom columns in
+draft metadata:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py customer_opportunities.csv --format csv
 ```
 
 The example uses in-memory product ports and an offline deterministic LLM stand
