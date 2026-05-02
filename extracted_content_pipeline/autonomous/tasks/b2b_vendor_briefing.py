@@ -2700,31 +2700,6 @@ def _compute_pressure(signals: dict) -> float:
 # Sender
 # ---------------------------------------------------------------------------
 
-def _briefing_sender_email() -> str:
-    cfg = settings.campaign_sequence
-    sender_type = str(getattr(cfg, "sender_type", "resend") or "resend").lower()
-    if sender_type == "ses":
-        return str(
-            getattr(cfg, "ses_from_email", "")
-            or getattr(cfg, "resend_from_email", "")
-            or ""
-        ).strip()
-    return str(
-        getattr(cfg, "resend_from_email", "")
-        or getattr(cfg, "ses_from_email", "")
-        or ""
-    ).strip()
-
-
-def _briefing_sender_configured() -> bool:
-    cfg = settings.campaign_sequence
-    sender_type = str(getattr(cfg, "sender_type", "resend") or "resend").lower()
-    from_email = _briefing_sender_email()
-    if sender_type == "ses":
-        return bool(from_email)
-    return bool(getattr(cfg, "resend_api_key", "") and from_email)
-
-
 async def send_vendor_briefing(
     *,
     to_email: str,
@@ -2733,8 +2708,9 @@ async def send_vendor_briefing(
     briefing_data: dict,
 ) -> dict | None:
     """Send a vendor briefing email via CampaignSender and persist to DB."""
-    if not _briefing_sender_configured():
-        logger.warning("Campaign sender not configured -- cannot send briefing")
+    cfg = settings.campaign_sequence
+    if not cfg.resend_api_key or not cfg.resend_from_email:
+        logger.warning("Resend not configured -- cannot send briefing")
         return None
 
     # Canonicalize vendor name for consistent DB storage
@@ -2771,7 +2747,7 @@ async def send_vendor_briefing(
             return None
 
     sender_name = settings.b2b_churn.vendor_briefing_sender_name
-    from_addr = f"{sender_name} <{_briefing_sender_email()}>"
+    from_addr = f"{sender_name} <{cfg.resend_from_email}>"
 
     if briefing_data.get("prospect_mode"):
         if challenger_mode:
@@ -2867,11 +2843,12 @@ async def send_approved_briefing(briefing_id: str) -> dict[str, Any]:
         return {"error": "No rendered HTML stored for this briefing"}
 
     # Send via CampaignSender
-    if not _briefing_sender_configured():
-        return {"error": "Campaign sender not configured"}
+    cfg = settings.campaign_sequence
+    if not cfg.resend_api_key or not cfg.resend_from_email:
+        return {"error": "Resend not configured"}
 
     sender_name = settings.b2b_churn.vendor_briefing_sender_name
-    from_addr = f"{sender_name} <{_briefing_sender_email()}>"
+    from_addr = f"{sender_name} <{cfg.resend_from_email}>"
 
     resend_id: str | None = None
     status = "sent"

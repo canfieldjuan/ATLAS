@@ -110,19 +110,32 @@ def build_settings() -> SimpleNamespace:
         openrouter_model=os.getenv("EXTRACTED_CAMPAIGN_LLM_OPENROUTER_MODEL") or None,
     )
 
-    campaign_sequence = SimpleNamespace(
-        enabled=_to_bool(os.getenv("EXTRACTED_CAMPAIGN_SEQUENCE_ENABLED"), True),
-        sender_type=os.getenv("EXTRACTED_CAMPAIGN_SEQUENCE_SENDER_TYPE")
+    campaign_sender_type = (
+        os.getenv("EXTRACTED_CAMPAIGN_SEQUENCE_SENDER_TYPE")
         or os.getenv("EXTRACTED_CAMPAIGN_SENDER_TYPE")
-        or "resend",
-        resend_api_key=os.getenv("EXTRACTED_RESEND_API_KEY")
-        or os.getenv("EXTRACTED_CAMPAIGN_RESEND_API_KEY")
-        or os.getenv("EXTRACTED_CAMPAIGN_SEQ_RESEND_API_KEY")
-        or "",
-        resend_from_email=os.getenv("EXTRACTED_RESEND_FROM_EMAIL")
+        or "resend"
+    )
+    ses_from_email = os.getenv("EXTRACTED_SES_FROM_EMAIL") or ""
+    resend_from_email = (
+        os.getenv("EXTRACTED_RESEND_FROM_EMAIL")
         or os.getenv("EXTRACTED_CAMPAIGN_RESEND_FROM_EMAIL")
         or os.getenv("EXTRACTED_CAMPAIGN_SEQ_RESEND_FROM_EMAIL")
-        or "",
+        or (ses_from_email if campaign_sender_type.lower() == "ses" else "")
+        or ""
+    )
+    resend_api_key = (
+        os.getenv("EXTRACTED_RESEND_API_KEY")
+        or os.getenv("EXTRACTED_CAMPAIGN_RESEND_API_KEY")
+        or os.getenv("EXTRACTED_CAMPAIGN_SEQ_RESEND_API_KEY")
+        or ("ses-configured" if campaign_sender_type.lower() == "ses" and ses_from_email else "")
+        or ""
+    )
+
+    campaign_sequence = SimpleNamespace(
+        enabled=_to_bool(os.getenv("EXTRACTED_CAMPAIGN_SEQUENCE_ENABLED"), True),
+        sender_type=campaign_sender_type,
+        resend_api_key=resend_api_key,
+        resend_from_email=resend_from_email,
         resend_api_url=os.getenv("EXTRACTED_RESEND_API_URL") or "https://api.resend.com/emails",
         sender_timeout_seconds=_to_float(
             os.getenv("EXTRACTED_CAMPAIGN_SENDER_TIMEOUT_SECONDS")
@@ -133,7 +146,7 @@ def build_settings() -> SimpleNamespace:
         ses_access_key_id=os.getenv("EXTRACTED_SES_ACCESS_KEY_ID") or "",
         ses_secret_access_key=os.getenv("EXTRACTED_SES_SECRET_ACCESS_KEY") or "",
         ses_configuration_set=os.getenv("EXTRACTED_SES_CONFIGURATION_SET") or "",
-        ses_from_email=os.getenv("EXTRACTED_SES_FROM_EMAIL") or "",
+        ses_from_email=ses_from_email,
     )
 
     saas_auth = SimpleNamespace(

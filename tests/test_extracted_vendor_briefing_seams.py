@@ -184,51 +184,24 @@ def test_campaign_sender_resend_error_lists_accepted_configuration_sources(
     assert "EXTRACTED_CAMPAIGN_SEQ_RESEND_API_KEY" in message
 
 
-def test_vendor_briefing_sender_helpers_accept_ses_configuration(
+def test_build_settings_aliases_ses_sender_for_copied_vendor_briefing_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    module = importlib.import_module(
-        "extracted_content_pipeline.autonomous.tasks.b2b_vendor_briefing"
-    )
-    monkeypatch.setattr(
-        module,
-        "settings",
-        SimpleNamespace(
-            campaign_sequence=SimpleNamespace(
-                sender_type="ses",
-                resend_api_key="",
-                resend_from_email="",
-                ses_from_email="briefings@example.com",
-            ),
-            b2b_churn=SimpleNamespace(vendor_briefing_sender_name="Atlas"),
-        ),
-    )
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_SEQUENCE_SENDER_TYPE", "ses")
+    monkeypatch.setenv("EXTRACTED_SES_FROM_EMAIL", "briefings@example.com")
+    monkeypatch.delenv("EXTRACTED_RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("EXTRACTED_CAMPAIGN_RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("EXTRACTED_CAMPAIGN_SEQ_RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("EXTRACTED_RESEND_FROM_EMAIL", raising=False)
+    monkeypatch.delenv("EXTRACTED_CAMPAIGN_RESEND_FROM_EMAIL", raising=False)
+    monkeypatch.delenv("EXTRACTED_CAMPAIGN_SEQ_RESEND_FROM_EMAIL", raising=False)
 
-    assert module._briefing_sender_configured() is True
-    assert module._briefing_sender_email() == "briefings@example.com"
+    cfg = build_settings().campaign_sequence
 
-
-def test_vendor_briefing_sender_helpers_require_resend_key_for_resend(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = importlib.import_module(
-        "extracted_content_pipeline.autonomous.tasks.b2b_vendor_briefing"
-    )
-    monkeypatch.setattr(
-        module,
-        "settings",
-        SimpleNamespace(
-            campaign_sequence=SimpleNamespace(
-                sender_type="resend",
-                resend_api_key="",
-                resend_from_email="briefings@example.com",
-                ses_from_email="",
-            ),
-            b2b_churn=SimpleNamespace(vendor_briefing_sender_name="Atlas"),
-        ),
-    )
-
-    assert module._briefing_sender_configured() is False
+    assert cfg.sender_type == "ses"
+    assert cfg.ses_from_email == "briefings@example.com"
+    assert cfg.resend_from_email == "briefings@example.com"
+    assert cfg.resend_api_key == "ses-configured"
 
 
 @pytest.mark.asyncio
