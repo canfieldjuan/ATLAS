@@ -72,6 +72,9 @@ product package, and push persistence/provider concerns behind ports.
 `extracted_content_pipeline/campaign_sequence_context.py` is the second
 standalone slice. It keeps the sequence prompt/storage compaction behavior but
 replaces Atlas settings reads with explicit `SequenceContextLimits`.
+The copied task-local `_campaign_sequence_context.py` now exports this
+product-owned module so Atlas-compatible campaign task imports use the same
+standalone limits path.
 
 `extracted_content_pipeline/campaign_sender.py` is the third standalone slice.
 It keeps Resend and SES provider behavior but uses explicit provider config and

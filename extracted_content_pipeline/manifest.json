@@ -157,10 +157,6 @@
       "target": "extracted_content_pipeline/autonomous/tasks/_b2b_pool_compression.py"
     },
     {
-      "source": "atlas_brain/autonomous/tasks/_campaign_sequence_context.py",
-      "target": "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py"
-    },
-    {
       "source": "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py",
       "target": "extracted_content_pipeline/autonomous/tasks/b2b_vendor_briefing.py"
     },
@@ -205,6 +201,12 @@
     },
     {
       "target": "extracted_content_pipeline/autonomous/tasks/_blog_matching.py"
+    },
+    {
+      "target": "extracted_content_pipeline/campaign_sequence_context.py"
+    },
+    {
+      "target": "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py"
     }
   ]
 }

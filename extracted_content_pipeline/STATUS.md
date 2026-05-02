@@ -49,6 +49,9 @@
   reconciliation inside the extracted boundary.
 - `_blog_matching` is product-owned and matches campaign targets to generated
   blog posts with extracted base URL configuration.
+- `campaign_sequence_context` is product-owned, and the copied task-local
+  `_campaign_sequence_context` module now exports that standalone
+  implementation for Atlas-compatible task imports.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.

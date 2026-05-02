@@ -163,6 +163,9 @@ Several small utility shims provide product-owned local behavior by default so t
   existing batch artifact reconciliation
 - `autonomous/tasks/_blog_matching.py`: product-owned campaign-to-blog matcher
   with extracted base URL environment fallbacks
+- `campaign_sequence_context.py` and
+  `autonomous/tasks/_campaign_sequence_context.py`: product-owned sequence
+  prompt/storage compaction helpers plus compatibility exports for copied tasks
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services, with product-owned
   provider routing config

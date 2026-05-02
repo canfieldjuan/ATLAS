@@ -10,6 +10,17 @@ from extracted_content_pipeline.campaign_sequence_context import (
     prompt_email_body_preview_chars,
     prompt_max_tokens,
 )
+from extracted_content_pipeline.autonomous.tasks import _campaign_sequence_context as task_context
+from extracted_content_pipeline import campaign_sequence_context as product_context
+
+
+def test_task_sequence_context_exports_product_owned_helpers():
+    assert task_context.SequenceContextLimits is product_context.SequenceContextLimits
+    assert task_context.prompt_max_tokens is product_context.prompt_max_tokens
+    assert task_context.prompt_email_body_preview_chars is product_context.prompt_email_body_preview_chars
+    assert task_context.prepare_sequence_prompt_contexts is product_context.prepare_sequence_prompt_contexts
+    assert task_context.prepare_sequence_storage_contexts is product_context.prepare_sequence_storage_contexts
+    assert task_context.plain_text_preview is product_context.plain_text_preview
 
 
 def test_prepare_prompt_contexts_removes_duplicate_and_heavy_fields():

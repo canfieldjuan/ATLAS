@@ -93,6 +93,8 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py" in owned
     assert "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py" in owned
     assert "extracted_content_pipeline/autonomous/tasks/_blog_matching.py" in owned
+    assert "extracted_content_pipeline/campaign_sequence_context.py" in owned
+    assert "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py" in owned
 
 
 def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
@@ -104,3 +106,5 @@ def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
     assert "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_blog_matching.py" not in mapped
+    assert "extracted_content_pipeline/campaign_sequence_context.py" not in mapped
+    assert "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py" not in mapped

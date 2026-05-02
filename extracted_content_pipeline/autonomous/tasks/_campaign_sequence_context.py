@@ -1,4 +1,10 @@
-"""Shared compaction helpers for campaign sequence storage and prompt assembly."""
+"""Compatibility exports for campaign sequence storage and prompt assembly.
+
+The product-owned implementation lives in
+``extracted_content_pipeline.campaign_sequence_context``. This task-local module
+keeps copied Atlas task imports stable while routing public helpers through the
+standalone implementation with explicit ``SequenceContextLimits`` defaults.
+"""
 
 from __future__ import annotations
 
@@ -419,3 +425,26 @@ def plain_text_preview(body: str, *, limit: int | None = None) -> str:
     if len(text) <= max_chars:
         return text
     return f"{text[:max_chars].rstrip()}..."
+
+
+from ...campaign_sequence_context import (  # noqa: E402
+    DEFAULT_LIMITS,
+    SequenceContextLimits,
+    compact_sequence_contexts,
+    plain_text_preview,
+    prepare_sequence_prompt_contexts,
+    prepare_sequence_storage_contexts,
+    prompt_email_body_preview_chars,
+    prompt_max_tokens,
+)
+
+__all__ = [
+    "DEFAULT_LIMITS",
+    "SequenceContextLimits",
+    "compact_sequence_contexts",
+    "plain_text_preview",
+    "prepare_sequence_prompt_contexts",
+    "prepare_sequence_storage_contexts",
+    "prompt_email_body_preview_chars",
+    "prompt_max_tokens",
+]
