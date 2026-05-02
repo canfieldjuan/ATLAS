@@ -10,7 +10,11 @@ from extracted_content_pipeline.campaign_generation import (
     opportunity_target_id,
     parse_campaign_draft_response,
 )
-from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
+from extracted_content_pipeline.campaign_ports import (
+    CampaignReasoningContext,
+    LLMResponse,
+    TenantScope,
+)
 
 
 class _Intelligence:
@@ -90,7 +94,29 @@ class _Skills:
         return self.prompts.get(name)
 
 
-def _service(opportunities, responses, *, config=None, prompts=None):
+class _ReasoningProvider:
+    def __init__(self, context):
+        self.context = context
+        self.calls = []
+
+    async def read_campaign_reasoning_context(
+        self,
+        *,
+        scope,
+        target_id,
+        target_mode,
+        opportunity,
+    ):
+        self.calls.append({
+            "scope": scope,
+            "target_id": target_id,
+            "target_mode": target_mode,
+            "opportunity": dict(opportunity),
+        })
+        return self.context
+
+
+def _service(opportunities, responses, *, config=None, prompts=None, reasoning_context=None):
     intelligence = _Intelligence(opportunities)
     campaigns = _Campaigns()
     llm = _LLM(responses)
@@ -105,6 +131,7 @@ def _service(opportunities, responses, *, config=None, prompts=None):
         campaigns=campaigns,
         llm=llm,
         skills=skills,
+        reasoning_context=reasoning_context,
         config=config,
     )
     return service, intelligence, campaigns, llm, skills
@@ -203,6 +230,50 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
     assert draft.metadata["cta"] == "Book time"
     assert draft.metadata["generation_model"] == "test-model"
     assert draft.metadata["source_opportunity"] == opportunity
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_host_reasoning_context_without_pool_compression_import():
+    scope = TenantScope(account_id="acct-1")
+    opportunity = {"id": "opp-1", "company_name": "Acme"}
+    provider = _ReasoningProvider(
+        CampaignReasoningContext(
+            anchor_examples={
+                "outlier_or_named_account": (
+                    {"witness_id": "w1", "excerpt_text": "Pricing drove evaluation."},
+                )
+            },
+            witness_highlights=(
+                {"witness_id": "w1", "excerpt_text": "Pricing drove evaluation."},
+            ),
+            reference_ids={"witness_ids": ("w1",)},
+            account_signals=({"company": "Acme", "primary_pain": "pricing"},),
+            timing_windows=({"window_type": "renewal", "anchor": "Q3"},),
+            proof_points=({"label": "pricing_mentions", "value": 12},),
+        )
+    )
+    service, _, campaigns, llm, _ = _service(
+        [opportunity],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(scope=scope, target_mode="vendor_retention")
+
+    assert result.generated == 1
+    assert provider.calls == [{
+        "scope": scope,
+        "target_id": "opp-1",
+        "target_mode": "vendor_retention",
+        "opportunity": opportunity,
+    }]
+    prompt = llm.calls[0]["messages"][0].content
+    assert "reasoning_context" in prompt
+    assert "Pricing drove evaluation." in prompt
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.metadata["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
+    assert draft.metadata["reasoning_context"]["account_signals"][0]["company"] == "Acme"
+    assert draft.metadata["source_opportunity"]["reasoning_context"]["proof_points"][0]["label"] == "pricing_mentions"
 
 
 @pytest.mark.asyncio

@@ -42,9 +42,9 @@ files remain Atlas-shaped and should not be product-owned as-is.
 | --- | ---: | --- |
 | `_b2b_shared.py` | 19,875 | Monolith; split by required product seams |
 | `b2b_blog_post_generation.py` | 9,613 | Blog product surface, not campaign-core |
-| `b2b_campaign_generation.py` | 6,043 | Campaign-core copied task; currently not importable |
-| `b2b_vendor_briefing.py` | 3,222 | Campaign/email adjacent; currently not importable |
-| `_b2b_pool_compression.py` | 2,319 | Reasoning pool; blocked on witness extraction |
+| `b2b_campaign_generation.py` | 6,043 | Campaign-core copied task; importable through product seams |
+| `b2b_vendor_briefing.py` | 3,222 | Campaign/email adjacent; importable through product seams |
+| `_b2b_pool_compression.py` | 2,319 | Upstream reasoning pool; deliberately outside campaign-core |
 | `_b2b_reasoning_contracts.py` | 1,773 | Reasoning policy; importable but large |
 | `_b2b_synthesis_reader.py` | 1,767 | Reasoning read model; importable but large |
 | `blog_post_generation.py` | 1,758 | Consumer/blog sidecar |
@@ -177,14 +177,21 @@ Acceptance criteria:
 
 ### PR 3: Pool Compression Decision
 
+Status: implemented. `_b2b_pool_compression.py` remains outside the campaign
+product boundary. The product-owned generator now accepts normalized
+host-provided reasoning context through `CampaignReasoningContextProvider`
+instead.
+
 Goal: decide whether `_b2b_pool_compression.py` is part of the sellable campaign
 product or a reasoning-product dependency.
 
-The smoke script can add campaign-core modules after PR 2, but should not add
-`_b2b_pool_compression.py` until this decision is made:
+The smoke script includes campaign-core modules after PR 2, but intentionally
+does not add `_b2b_pool_compression.py`:
 
-- `_b2b_pool_compression` only after witness extraction, or explicitly leave it
-  out with a TODO in the smoke script.
+- `_b2b_pool_compression` is upstream/host-owned reasoning infrastructure.
+- Campaign-core accepts already-compressed `anchor_examples`,
+  `witness_highlights`, `reference_ids`, `account_signals`, `timing_windows`,
+  and `proof_points` instead of importing Atlas compression internals.
 
 Options:
 
@@ -196,6 +203,19 @@ Options:
 Recommendation: option 2 unless a campaign-core test requires pool compression
 directly. It keeps the campaign product from owning the whole B2B reasoning
 stack.
+
+Implemented contract:
+
+- `campaign_ports.CampaignReasoningContext`
+- `campaign_ports.CampaignReasoningContextProvider`
+- `services.campaign_reasoning_context.normalize_campaign_reasoning_context(...)`
+- `services.campaign_reasoning_context.campaign_reasoning_context_metadata(...)`
+
+`CampaignGenerationService` can now accept an optional
+`reasoning_context=CampaignReasoningContextProvider` dependency. The provider
+receives `(scope, target_id, target_mode, opportunity)` and returns compressed
+context for the prompt and draft metadata. With no provider configured, embedded
+context already present on the opportunity row is normalized defensively.
 
 ## Explicit Deferrals
 
@@ -213,13 +233,18 @@ These remain outside the immediate campaign-core import path:
 
 ## Next Concrete Slice
 
-Start with PR 1: vendor briefing import seams. It is smaller than
-`b2b_campaign_generation.py`, exercises the same delivery-side compatibility
-surface (`campaign_sender`, suppression, template rendering), and avoids the
-campaign reasoning/claim seams until the next PR.
+With the campaign-core import path and reasoning-context boundary settled, the
+next slice should move behavior from copied Atlas task files into the
+product-owned spine instead of expanding import coverage sideways.
+
+Recommended next slice: migrate one concrete producer flow from the copied
+`b2b_campaign_generation.py` reference into `CampaignGenerationService` using
+the normalized ports:
 
 Acceptance criteria:
 
-- `EXTRACTED_PIPELINE_STANDALONE=1 python -c "import extracted_content_pipeline.autonomous.tasks.b2b_vendor_briefing"`
-- New tests for each shim's local behavior.
-- Full extracted pipeline checks still pass.
+- Use `IntelligenceRepository.read_campaign_opportunities(...)` as the source.
+- Optionally enrich with `CampaignReasoningContextProvider`.
+- Generate and persist drafts through `CampaignRepository`.
+- Keep `_b2b_pool_compression.py`, `_b2b_witnesses.py`, and `_b2b_shared.py`
+  out of the product-owned path.
