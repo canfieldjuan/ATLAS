@@ -188,6 +188,53 @@ def test_normalize_campaign_reasoning_context_accepts_mapping_and_sequence_input
     assert context.coverage_limits == ("thin_account_signals",)
 
 
+def test_normalize_campaign_reasoning_context_preserves_canonical_reasoning_fields() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "reasoning_context": {
+                "wedge": "renewal pressure",
+                "confidence": "high",
+                "summary": "Acme is reviewing vendors before renewal.",
+            }
+        }
+    )
+
+    assert context.has_content() is True
+    assert context.as_dict()["wedge"] == "renewal pressure"
+    assert context.as_dict()["confidence"] == "high"
+    assert context.as_dict()["summary"] == "Acme is reviewing vendors before renewal."
+
+
+def test_normalize_campaign_reasoning_context_keeps_atom_top_theses() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "reasoning_atom_context": {
+                "top_theses": [
+                    {
+                        "wedge": "pricing pressure",
+                        "summary": "Pricing objections are rising.",
+                        "confidence": "medium",
+                    },
+                    {
+                        "wedge": "workflow risk",
+                        "summary": "Workflow gaps are visible.",
+                    },
+                    {
+                        "wedge": "third",
+                        "summary": "Should be capped.",
+                    },
+                ]
+            }
+        }
+    )
+
+    assert [item["wedge"] for item in context.top_theses] == [
+        "pricing pressure",
+        "workflow risk",
+    ]
+    assert context.as_dict()["top_theses"][0]["summary"] == "Pricing objections are rising."
+
+
 def test_campaign_reasoning_context_metadata_uses_campaign_storage_keys() -> None:
     context = normalize_campaign_reasoning_context(
         {
