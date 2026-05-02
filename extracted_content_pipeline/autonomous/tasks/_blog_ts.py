@@ -5,11 +5,19 @@ from __future__ import annotations
 import json
 import logging
 import re
+from html import escape as _escape_html
 from pathlib import Path
 
-import markdown as _md
+try:
+    import markdown as _md
+except ModuleNotFoundError:
+    _md = None
 
-_md_converter = _md.Markdown(extensions=["tables", "fenced_code", "toc"])
+_md_converter = (
+    _md.Markdown(extensions=["tables", "fenced_code", "toc"])
+    if _md is not None
+    else None
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +58,28 @@ def slug_to_var_name(slug: str) -> str:
     if var_name and var_name[0].isdigit():
         var_name = "post" + var_name[0].upper() + var_name[1:]
     return var_name
+
+
+def _render_markdown(content: str) -> str:
+    """Render markdown when available, otherwise emit safe minimal HTML."""
+    if _md_converter is not None:
+        _md_converter.reset()
+        return _md_converter.convert(content)
+
+    blocks = []
+    for raw in str(content or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("### "):
+            blocks.append(f"<h3>{_escape_html(line[4:])}</h3>")
+        elif line.startswith("## "):
+            blocks.append(f"<h2>{_escape_html(line[3:])}</h2>")
+        elif line.startswith("# "):
+            blocks.append(f"<h1>{_escape_html(line[2:])}</h1>")
+        else:
+            blocks.append(f"<p>{_escape_html(line)}</p>")
+    return "\n".join(blocks)
 
 
 def update_blog_index(index_path: Path, slug: str, var_name: str) -> bool:
@@ -137,9 +167,8 @@ def build_post_ts(
     """
     var_name = slug_to_var_name(slug)
     charts_str = json.dumps(charts_json, indent=2, default=str)
-    # Render markdown to HTML at deploy time so the frontend never parses markdown
-    _md_converter.reset()
-    html_content = _md_converter.convert(content)
+    # Render markdown to HTML at deploy time so the frontend never parses markdown.
+    html_content = _render_markdown(content)
     escaped_content = escape_template_literal(html_content)
     escaped_title = escape_js_single(title)
     escaped_desc = escape_js_single(description)

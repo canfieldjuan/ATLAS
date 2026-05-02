@@ -121,10 +121,6 @@
       "target": "extracted_content_pipeline/storage/migrations/150_campaign_engagement_timing.sql"
     },
     {
-      "source": "atlas_brain/autonomous/tasks/_execution_progress.py",
-      "target": "extracted_content_pipeline/autonomous/tasks/_execution_progress.py"
-    },
-    {
       "source": "atlas_brain/autonomous/tasks/_b2b_shared.py",
       "target": "extracted_content_pipeline/autonomous/tasks/_b2b_shared.py"
     },
@@ -133,24 +129,12 @@
       "target": "extracted_content_pipeline/autonomous/tasks/_b2b_specificity.py"
     },
     {
-      "source": "atlas_brain/autonomous/tasks/_google_news.py",
-      "target": "extracted_content_pipeline/autonomous/tasks/_google_news.py"
-    },
-    {
       "source": "atlas_brain/autonomous/tasks/competitive_intelligence.py",
       "target": "extracted_content_pipeline/autonomous/tasks/competitive_intelligence.py"
     },
     {
       "source": "atlas_brain/autonomous/tasks/complaint_analysis.py",
       "target": "extracted_content_pipeline/autonomous/tasks/complaint_analysis.py"
-    },
-    {
-      "source": "atlas_brain/autonomous/tasks/_blog_ts.py",
-      "target": "extracted_content_pipeline/autonomous/tasks/_blog_ts.py"
-    },
-    {
-      "source": "atlas_brain/autonomous/tasks/_blog_deploy.py",
-      "target": "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py"
     },
     {
       "source": "atlas_brain/autonomous/tasks/_b2b_synthesis_reader.py",
@@ -211,6 +195,18 @@
     },
     {
       "target": "extracted_content_pipeline/reasoning/evidence_engine.py"
+    },
+    {
+      "target": "extracted_content_pipeline/autonomous/tasks/_execution_progress.py"
+    },
+    {
+      "target": "extracted_content_pipeline/autonomous/tasks/_google_news.py"
+    },
+    {
+      "target": "extracted_content_pipeline/autonomous/tasks/_blog_ts.py"
+    },
+    {
+      "target": "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py"
     }
   ]
 }

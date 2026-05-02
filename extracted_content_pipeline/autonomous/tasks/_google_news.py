@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunsplit, u
 
 from bs4 import BeautifulSoup
 
-logger = logging.getLogger("atlas.autonomous.tasks.google_news")
+logger = logging.getLogger("extracted_content_pipeline.autonomous.tasks.google_news")
 
 _GOOGLE_NEWS_HOST = "news.google.com"
 _GOOGLE_NEWS_PATH_PREFIX = "/rss/articles/"
@@ -18,7 +18,7 @@ _GOOGLE_NEWS_DECODE_URL = (
     "?rpcids=Fbv4je"
 )
 _GOOGLE_NEWS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; AtlasBot/1.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; ExtractedContentPipelineBot/1.0)",
     "Accept": "text/html,application/xhtml+xml",
 }
 _GOOGLE_NEWS_FORM_HEADERS = {

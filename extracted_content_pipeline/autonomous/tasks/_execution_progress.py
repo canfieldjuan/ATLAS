@@ -1,4 +1,6 @@
-"""Shared helpers for reporting live autonomous task execution progress."""
+"""Product-owned helpers for reporting live task execution progress."""
+
+from __future__ import annotations
 
 from typing import Any
 from uuid import UUID
