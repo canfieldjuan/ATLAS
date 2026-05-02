@@ -22,13 +22,13 @@ EXTRACTED_PIPELINE_STANDALONE=1 bash scripts/run_extracted_pipeline_checks.sh
 # 177 passed
 ```
 
-The smoke import script now includes the vendor briefing task after the PR 1
-seams made it importable. Direct import of all remaining manifest-mapped Python
-files still shows three failing surfaces:
+The smoke import script now includes both campaign-core copied tasks after the
+PR 1 and PR 2 seams made them importable. Direct import of all remaining
+manifest-mapped Python files still shows two failing surfaces:
 
 | Module | Standalone import | First blocker |
 | --- | --- | --- |
-| `autonomous.tasks.b2b_campaign_generation` | Fails | missing `services.b2b.account_opportunity_claims` |
+| `autonomous.tasks.b2b_campaign_generation` | Passes | PR 2 seams present |
 | `autonomous.tasks.b2b_vendor_briefing` | Passes | PR 1 seams present |
 | `autonomous.tasks._b2b_pool_compression` | Fails | missing `autonomous.tasks._b2b_witnesses` |
 | `autonomous.tasks.competitive_intelligence` | Fails | missing `services.brand_registry` |
@@ -58,7 +58,8 @@ files remain Atlas-shaped and should not be product-owned as-is.
 
 ## Missing Seams For Campaign-Core Imports
 
-`b2b_campaign_generation.py` has these missing top-level dependencies:
+`b2b_campaign_generation.py` had these missing top-level dependencies, now
+covered by product-owned compatibility seams:
 
 - `services.b2b.account_opportunity_claims`
 - `services.campaign_reasoning_context`
@@ -139,6 +140,9 @@ once the direct import passes. Keep `b2b_campaign_generation.py` out of the
 smoke list until PR 2 handles its separate missing imports.
 
 ### PR 2: Campaign Generation Import Seams
+
+Status: implemented. `b2b_campaign_generation.py` imports in standalone mode,
+and the smoke script now covers both campaign-core copied tasks.
 
 Goal: make `b2b_campaign_generation.py` import in standalone mode without
 claiming the copied 6,043-line task is product-owned.

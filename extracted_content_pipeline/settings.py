@@ -110,6 +110,44 @@ def build_settings() -> SimpleNamespace:
         openrouter_model=os.getenv("EXTRACTED_CAMPAIGN_LLM_OPENROUTER_MODEL") or None,
     )
 
+    b2b_campaign = SimpleNamespace(
+        max_tokens=_to_int(os.getenv("EXTRACTED_B2B_CAMPAIGN_MAX_TOKENS"), 1400),
+        temperature=_to_float(os.getenv("EXTRACTED_B2B_CAMPAIGN_TEMPERATURE"), 0.2),
+        llm_timeout_seconds=_to_float(
+            os.getenv("EXTRACTED_B2B_CAMPAIGN_LLM_TIMEOUT_SECONDS"),
+            120.0,
+        ),
+        anthropic_batch_detached_enabled=_to_bool(
+            os.getenv("EXTRACTED_B2B_CAMPAIGN_ANTHROPIC_BATCH_DETACHED_ENABLED"),
+            False,
+        ),
+        specificity_min_anchor_hits=_to_int(
+            os.getenv("EXTRACTED_B2B_CAMPAIGN_SPECIFICITY_MIN_ANCHOR_HITS"),
+            1,
+        ),
+        specificity_require_anchor_support=_to_bool(
+            os.getenv("EXTRACTED_B2B_CAMPAIGN_SPECIFICITY_REQUIRE_ANCHOR_SUPPORT"),
+            False,
+        ),
+        specificity_require_timing_or_numeric_when_available=_to_bool(
+            os.getenv(
+                "EXTRACTED_B2B_CAMPAIGN_SPECIFICITY_REQUIRE_TIMING_OR_NUMERIC"
+            ),
+            False,
+        ),
+        specificity_revision_term_limit=_to_int(
+            os.getenv("EXTRACTED_B2B_CAMPAIGN_SPECIFICITY_REVISION_TERM_LIMIT"),
+            5,
+        ),
+        word_limits={
+            "default": {
+                "email_cold": [80, 160],
+                "email_followup": [60, 140],
+                "linkedin": [40, 90],
+            }
+        },
+    )
+
     campaign_sender_type = (
         os.getenv("EXTRACTED_CAMPAIGN_SEQUENCE_SENDER_TYPE")
         or os.getenv("EXTRACTED_CAMPAIGN_SENDER_TYPE")
@@ -159,6 +197,7 @@ def build_settings() -> SimpleNamespace:
         external_data=external_data,
         b2b_churn=b2b_churn,
         campaign_llm=campaign_llm,
+        b2b_campaign=b2b_campaign,
         campaign_sequence=campaign_sequence,
         saas_auth=saas_auth,
     )
