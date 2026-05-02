@@ -1,0 +1,43 @@
+{
+  "scope": {
+    "account_id": "demo-account",
+    "user_id": "demo-user",
+    "allowed_vendors": ["HubSpot"],
+    "roles": ["admin"]
+  },
+  "target_mode": "vendor_retention",
+  "channel": "email",
+  "limit": 2,
+  "opportunities": [
+    {
+      "id": "opp-acme-hubspot",
+      "company": "Acme Logistics",
+      "vendor": "HubSpot",
+      "email": "revenue.ops@example.com",
+      "title": "VP Revenue Operations",
+      "pain_category": "pricing pressure",
+      "competitor": "Salesforce, Zoho",
+      "opportunity_score": 84,
+      "urgency_score": 8,
+      "custom_segment": "enterprise logistics",
+      "evidence": [
+        {
+          "quote": "The CRM cost keeps climbing as our team grows.",
+          "phrase_verbatim": true
+        }
+      ]
+    },
+    {
+      "id": "opp-northstar-crm",
+      "company": "Northstar Health",
+      "vendor": "LegacyCRM",
+      "email": "it.lead@example.com",
+      "title": "Director of IT",
+      "pain_category": "integration gaps",
+      "competitor": "Pipedrive",
+      "opportunity_score": 76,
+      "urgency_score": 7,
+      "custom_segment": "healthcare"
+    }
+  ]
+}

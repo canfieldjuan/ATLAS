@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from extracted_content_pipeline.campaign_example import (
+    generate_campaign_drafts_from_payload,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE_PAYLOAD = (
+    ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.json"
+)
+CLI = ROOT / "scripts/run_extracted_campaign_generation_example.py"
+
+
+@pytest.mark.asyncio
+async def test_example_generates_drafts_from_customer_opportunity_payload() -> None:
+    payload = {
+        "scope": {"account_id": "acct-1", "allowed_vendors": ["HubSpot"]},
+        "target_mode": "vendor_retention",
+        "limit": 1,
+        "opportunities": [
+            {
+                "id": "opp-1",
+                "company": "Acme Logistics",
+                "vendor": "HubSpot",
+                "email": "ops@example.com",
+                "title": "VP Revenue Operations",
+                "pain_category": "pricing pressure",
+                "competitor": "Salesforce, Zoho",
+                "custom_segment": "enterprise logistics",
+            }
+        ],
+    }
+
+    result = await generate_campaign_drafts_from_payload(payload)
+
+    assert result["result"] == {
+        "requested": 1,
+        "generated": 1,
+        "skipped": 0,
+        "saved_ids": ["draft-1"],
+        "errors": [],
+    }
+    assert result["llm_model"] == "offline-deterministic"
+    draft = result["drafts"][0]
+    assert draft["id"] == "draft-1"
+    assert draft["target_id"] == "opp-1"
+    assert draft["target_mode"] == "vendor_retention"
+    assert draft["channel"] == "email"
+    assert draft["subject"] == "Acme Logistics: pricing pressure"
+    assert "Acme Logistics appears to be weighing HubSpot" in draft["body"]
+    source = draft["metadata"]["source_opportunity"]
+    assert source["company_name"] == "Acme Logistics"
+    assert source["vendor_name"] == "HubSpot"
+    assert source["contact_email"] == "ops@example.com"
+    assert source["contact_title"] == "VP Revenue Operations"
+    assert source["pain_points"] == ["pricing pressure"]
+    assert source["competitors"] == ["Salesforce", "Zoho"]
+    assert source["custom_segment"] == "enterprise logistics"
+
+
+@pytest.mark.asyncio
+async def test_example_respects_limit_and_normalizes_multiple_rows() -> None:
+    payload = json.loads(EXAMPLE_PAYLOAD.read_text(encoding="utf-8"))
+
+    result = await generate_campaign_drafts_from_payload({**payload, "limit": 1})
+
+    assert result["result"]["requested"] == 1
+    assert result["result"]["generated"] == 1
+    assert len(result["drafts"]) == 1
+    assert result["drafts"][0]["target_id"] == "opp-acme-hubspot"
+
+
+@pytest.mark.asyncio
+async def test_example_rejects_payload_without_opportunities_array() -> None:
+    with pytest.raises(ValueError, match="opportunities array"):
+        await generate_campaign_drafts_from_payload({"opportunities": "not-an-array"})
+
+
+def test_campaign_generation_example_cli_outputs_draft_json() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(CLI), str(EXAMPLE_PAYLOAD), "--limit", "1"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+
+    assert result["result"]["generated"] == 1
+    assert result["result"]["saved_ids"] == ["draft-1"]
+    assert result["drafts"][0]["target_id"] == "opp-acme-hubspot"
+    assert result["drafts"][0]["metadata"]["generation_model"] == "offline-deterministic"

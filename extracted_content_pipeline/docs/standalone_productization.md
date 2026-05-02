@@ -112,6 +112,11 @@ slice. It reads campaign opportunities through `IntelligenceRepository`, prompts
 through `SkillStore` and `LLMClient`, parses generated draft JSON, and persists
 `CampaignDraft` rows through `CampaignRepository`.
 
+`extracted_content_pipeline/campaign_example.py` is the runnable product example
+for campaign generation. It wires in-memory ports, a static prompt store, and an
+offline deterministic LLM so customer opportunity JSON can be converted into
+drafts without Atlas, a database, or provider credentials.
+
 `extracted_content_pipeline/campaign_opportunities.py` owns the host/customer
 opportunity input contract. It accepts loose customer rows, preserves custom
 fields, and adds stable prompt/storage keys (`target_id`, `company_name`,
