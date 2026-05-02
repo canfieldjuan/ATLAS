@@ -9,8 +9,10 @@ from typing import Any
 from .campaign_generation import CampaignGenerationConfig, CampaignGenerationService
 from .campaign_ports import (
     CampaignDraft,
+    LLMClient,
     LLMMessage,
     LLMResponse,
+    SkillStore,
     TenantScope,
 )
 
@@ -215,8 +217,24 @@ def _draft_to_dict(draft: CampaignDraft, campaign_id: str) -> dict[str, Any]:
     }
 
 
+def _llm_model_label(llm: LLMClient, drafts: Sequence[CampaignDraft]) -> str:
+    for draft in drafts:
+        metadata = draft.metadata
+        model = str(metadata.get("generation_model") or "").strip()
+        if model:
+            return model
+    for attr in ("model", "model_id", "name", "openrouter_model", "workload"):
+        model = str(getattr(llm, attr, "") or "").strip()
+        if model:
+            return model
+    return llm.__class__.__name__
+
+
 async def generate_campaign_drafts_from_payload(
     payload: Mapping[str, Any],
+    *,
+    llm: LLMClient | None = None,
+    skills: SkillStore | None = None,
 ) -> dict[str, Any]:
     """Run campaign generation from a portable JSON-compatible payload."""
     opportunities = payload.get("opportunities")
@@ -230,12 +248,13 @@ async def generate_campaign_drafts_from_payload(
         [row for row in opportunities if isinstance(row, Mapping)]
     )
     campaigns = InMemoryCampaignRepository()
-    llm = DeterministicCampaignLLM()
+    llm_client = llm or DeterministicCampaignLLM()
+    skill_store = skills or StaticCampaignSkillStore()
     service = CampaignGenerationService(
         intelligence=intelligence,
         campaigns=campaigns,
-        llm=llm,
-        skills=StaticCampaignSkillStore(),
+        llm=llm_client,
+        skills=skill_store,
         config=CampaignGenerationConfig(channel=channel, limit=limit),
     )
 
@@ -251,7 +270,7 @@ async def generate_campaign_drafts_from_payload(
             _draft_to_dict(draft, campaign_id)
             for draft, campaign_id in zip(campaigns.drafts, result.saved_ids, strict=False)
         ],
-        "llm_model": "offline-deterministic",
+        "llm_model": _llm_model_label(llm_client, campaigns.drafts),
     }
 
 
