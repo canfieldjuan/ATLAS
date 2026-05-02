@@ -69,7 +69,7 @@ def _first_text(row: Mapping[str, Any], keys: Sequence[str]) -> str:
 def _clean_number(value: Any) -> int | float | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         return value
     text = _clean_text(value)
     if not text:
