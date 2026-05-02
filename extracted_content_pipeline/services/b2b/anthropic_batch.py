@@ -30,5 +30,8 @@ if os.getenv("EXTRACTED_PIPELINE_STANDALONE", "0") == "1":
 
     async def mark_batch_fallback_result(*args: Any, **kwargs: Any) -> None:
         return None
+
+    async def reconcile_anthropic_message_batch(*args: Any, **kwargs: Any) -> AnthropicBatchExecution:
+        return AnthropicBatchExecution()
 else:
     from extracted_llm_infrastructure.services.b2b.anthropic_batch import *

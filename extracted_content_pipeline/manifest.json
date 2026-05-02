@@ -171,10 +171,6 @@
     {
       "source": "atlas_brain/autonomous/tasks/_blog_matching.py",
       "target": "extracted_content_pipeline/autonomous/tasks/_blog_matching.py"
-    },
-    {
-      "source": "atlas_brain/autonomous/tasks/_b2b_batch_utils.py",
-      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py"
     }
   ],
   "owned": [
@@ -207,6 +203,9 @@
     },
     {
       "target": "extracted_content_pipeline/autonomous/tasks/_blog_deploy.py"
+    },
+    {
+      "target": "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py"
     }
   ]
 }

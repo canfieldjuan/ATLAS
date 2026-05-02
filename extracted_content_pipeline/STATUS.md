@@ -42,7 +42,11 @@
   `VisibilitySink` port when configured, while staying a no-op when no host
   visibility adapter is installed.
 - Small task utility helpers are product-owned rather than Atlas-synced:
-  `_execution_progress`, `_google_news`, `_blog_ts`, and `_blog_deploy`.
+  `_execution_progress`, `_google_news`, `_blog_ts`, `_blog_deploy`, and
+  `_b2b_batch_utils`.
+- `_b2b_batch_utils` is product-owned and keeps Anthropic batch metadata gates,
+  request fingerprints, LLM slot resolution, and existing artifact
+  reconciliation inside the extracted boundary.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.

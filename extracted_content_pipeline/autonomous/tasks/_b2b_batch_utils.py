@@ -1,4 +1,4 @@
-"""Shared helpers for B2B Anthropic batch enablement."""
+"""Product-owned helpers for optional Anthropic batch execution."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 import os
 from typing import Any
 
-logger = logging.getLogger("atlas.autonomous.tasks._b2b_batch_utils")
+logger = logging.getLogger("extracted_content_pipeline.autonomous.tasks._b2b_batch_utils")
 
 _ANTHROPIC_BATCH_SUCCESS_STATUSES = {
     "cache_hit",
@@ -183,8 +183,10 @@ def resolve_anthropic_batch_llm(
     if not target_model:
         return batch_llm if is_anthropic_llm(batch_llm) else None
 
+    llm_settings = getattr(settings, "llm", None)
     api_key = (
-        settings.llm.anthropic_api_key
+        getattr(llm_settings, "anthropic_api_key", None)
+        or os.environ.get("EXTRACTED_LLM_ANTHROPIC_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
         or os.environ.get("ATLAS_LLM_ANTHROPIC_API_KEY", "")
     )
@@ -196,14 +198,24 @@ def resolve_anthropic_batch_llm(
         return batch_llm if is_anthropic_llm(batch_llm) else None
 
     slot_name = f"b2b_batch_anthropic::{target_model}"
-    existing_slot = llm_registry.get_slot(slot_name)
+    get_slot = getattr(llm_registry, "get_slot", None)
+    existing_slot = get_slot(slot_name) if callable(get_slot) else None
     if is_anthropic_llm(existing_slot):
         existing_model = anthropic_model_name(getattr(existing_slot, "model", ""))
         if existing_model == target_model:
             return existing_slot
 
+    activate_slot = getattr(llm_registry, "activate_slot", None)
+    if not callable(activate_slot):
+        logger.warning(
+            "Anthropic batch requested for %s but the configured LLM registry "
+            "does not support slot activation",
+            target_model,
+        )
+        return batch_llm if is_anthropic_llm(batch_llm) else None
+
     try:
-        return llm_registry.activate_slot(
+        return activate_slot(
             slot_name,
             "anthropic",
             model=target_model,
