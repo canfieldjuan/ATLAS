@@ -4,13 +4,18 @@ import json
 
 import pytest
 
+import extracted_content_pipeline.campaign_generation as campaign_generation_module
 from extracted_content_pipeline.campaign_generation import (
     CampaignGenerationConfig,
     CampaignGenerationService,
     opportunity_target_id,
     parse_campaign_draft_response,
 )
-from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
+from extracted_content_pipeline.campaign_ports import (
+    CampaignReasoningContext,
+    LLMResponse,
+    TenantScope,
+)
 
 
 class _Intelligence:
@@ -90,7 +95,34 @@ class _Skills:
         return self.prompts.get(name)
 
 
-def _service(opportunities, responses, *, config=None, prompts=None):
+class _ReasoningProvider:
+    def __init__(self, context):
+        self.context = context
+        self.calls = []
+
+    async def read_campaign_reasoning_context(
+        self,
+        *,
+        scope,
+        target_id,
+        target_mode,
+        opportunity,
+    ):
+        self.calls.append({
+            "scope": scope,
+            "target_id": target_id,
+            "target_mode": target_mode,
+            "opportunity": dict(opportunity),
+        })
+        context = self.context
+        if isinstance(context, list):
+            context = context.pop(0)
+        if isinstance(context, Exception):
+            raise context
+        return context
+
+
+def _service(opportunities, responses, *, config=None, prompts=None, reasoning_context=None):
     intelligence = _Intelligence(opportunities)
     campaigns = _Campaigns()
     llm = _LLM(responses)
@@ -105,6 +137,7 @@ def _service(opportunities, responses, *, config=None, prompts=None):
         campaigns=campaigns,
         llm=llm,
         skills=skills,
+        reasoning_context=reasoning_context,
         config=config,
     )
     return service, intelligence, campaigns, llm, skills
@@ -206,6 +239,182 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
 
 
 @pytest.mark.asyncio
+async def test_generate_uses_host_reasoning_context_without_pool_compression_import():
+    scope = TenantScope(account_id="acct-1")
+    opportunity = {"id": "opp-1", "company_name": "Acme"}
+    provider = _ReasoningProvider(
+        CampaignReasoningContext(
+            anchor_examples={
+                "outlier_or_named_account": (
+                    {"witness_id": "w1", "excerpt_text": "Pricing drove evaluation."},
+                )
+            },
+            witness_highlights=(
+                {"witness_id": "w1", "excerpt_text": "Pricing drove evaluation."},
+            ),
+            reference_ids={"witness_ids": ("w1",)},
+            account_signals=({"company": "Acme", "primary_pain": "pricing"},),
+            timing_windows=({"window_type": "renewal", "anchor": "Q3"},),
+            proof_points=({"label": "pricing_mentions", "value": 12},),
+        )
+    )
+    service, _, campaigns, llm, _ = _service(
+        [opportunity],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(scope=scope, target_mode="vendor_retention")
+
+    assert result.generated == 1
+    assert provider.calls == [{
+        "scope": scope,
+        "target_id": "opp-1",
+        "target_mode": "vendor_retention",
+        "opportunity": opportunity,
+    }]
+    prompt = llm.calls[0]["messages"][0].content
+    assert "reasoning_context" in prompt
+    assert "Pricing drove evaluation." in prompt
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.metadata["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
+    assert draft.metadata["reasoning_context"]["account_signals"][0]["company"] == "Acme"
+    assert draft.metadata["source_opportunity"]["reasoning_context"]["proof_points"][0]["label"] == "pricing_mentions"
+
+
+@pytest.mark.asyncio
+async def test_generate_defers_base_reasoning_normalization_when_provider_returns_context(
+    monkeypatch,
+):
+    scope = TenantScope(account_id="acct-1")
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "reasoning_context": {"wedge": "base context should not be read first"},
+    }
+    provider = _ReasoningProvider(
+        CampaignReasoningContext(
+            proof_points=({"label": "pricing_mentions", "value": 12},),
+        )
+    )
+    real_normalize = campaign_generation_module.normalize_campaign_reasoning_context
+
+    def normalize_spy(value):
+        if (
+            isinstance(value, dict)
+            and value.get("id") == "opp-1"
+            and "campaign_reasoning_context" not in value
+        ):
+            raise AssertionError("base opportunity normalized before provider context")
+        return real_normalize(value)
+
+    monkeypatch.setattr(
+        campaign_generation_module,
+        "normalize_campaign_reasoning_context",
+        normalize_spy,
+    )
+    service, _, campaigns, _, _ = _service(
+        [opportunity],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(scope=scope, target_mode="vendor_retention")
+
+    assert result.generated == 1
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.metadata["reasoning_context"]["proof_points"][0]["label"] == "pricing_mentions"
+
+
+@pytest.mark.asyncio
+async def test_generate_preserves_existing_canonical_reasoning_context():
+    scope = TenantScope(account_id="acct-1")
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "reasoning_context": {
+            "wedge": "renewal pressure",
+            "confidence": "high",
+            "summary": "Acme is reviewing vendors before renewal.",
+        },
+    }
+    provider = _ReasoningProvider(
+        CampaignReasoningContext(
+            witness_highlights=(
+                {"witness_id": "w1", "excerpt_text": "Pricing drove evaluation."},
+            ),
+            proof_points=({"label": "pricing_mentions", "value": 12},),
+        )
+    )
+    service, _, campaigns, llm, _ = _service(
+        [opportunity],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(scope=scope, target_mode="vendor_retention")
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert "renewal pressure" in prompt
+    assert "campaign_reasoning_context" in prompt
+    source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    metadata_context = campaigns.saved[0]["drafts"][0].metadata["reasoning_context"]
+    assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert metadata_context["wedge"] == "renewal pressure"
+    assert metadata_context["proof_points"][0]["label"] == "pricing_mentions"
+    assert metadata_context["witness_highlights"][0]["witness_id"] == "w1"
+    assert (
+        source["reasoning_context"]["campaign_reasoning_context"]["proof_points"][0]["label"]
+        == "pricing_mentions"
+    )
+    assert source["campaign_reasoning_context"]["witness_highlights"][0]["witness_id"] == "w1"
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_provider_canonical_reasoning_context_without_other_evidence():
+    provider = _ReasoningProvider(
+        {
+            "reasoning_context": {
+                "wedge": "renewal pressure",
+                "confidence": "high",
+                "summary": "Acme is reviewing vendors before renewal.",
+                "key_signals": ["pricing_mentions", "renewal_window"],
+                "falsification": {"missing": ["fresh account signals"]},
+            }
+        }
+    )
+    service, _, campaigns, llm, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert "renewal pressure" in prompt
+    assert "Acme is reviewing vendors before renewal." in prompt
+    assert "pricing_mentions" in prompt
+    source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    metadata_context = campaigns.saved[0]["drafts"][0].metadata["reasoning_context"]
+    assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert source["reasoning_context"]["key_signals"] == [
+        "pricing_mentions",
+        "renewal_window",
+    ]
+    assert source["reasoning_context"]["falsification"] == {
+        "missing": ["fresh account signals"]
+    }
+    assert metadata_context["key_signals"] == ["pricing_mentions", "renewal_window"]
+    assert source["campaign_reasoning_context"]["confidence"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_generate_uses_custom_config_and_omits_source_opportunity():
     config = CampaignGenerationConfig(
         skill_name="custom",
@@ -269,6 +478,29 @@ async def test_generate_continues_after_llm_error():
     assert result.generated == 1
     assert result.skipped == 1
     assert result.errors == ({"target_id": "opp-1", "reason": "provider down"},)
+    assert campaigns.saved[0]["drafts"][0].target_id == "opp-2"
+
+
+@pytest.mark.asyncio
+async def test_generate_continues_after_reasoning_context_provider_error():
+    provider = _ReasoningProvider([RuntimeError("reasoning provider down"), None])
+    service, _, campaigns, llm, _ = _service(
+        [
+            {"id": "opp-1"},
+            {"id": "opp-2"},
+        ],
+        ['{"subject":"Hi","body":"Body"}'],
+        reasoning_context=provider,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="churning_company")
+
+    assert result.generated == 1
+    assert result.skipped == 1
+    assert result.errors == (
+        {"target_id": "opp-1", "reason": "reasoning provider down"},
+    )
+    assert len(llm.calls) == 1
     assert campaigns.saved[0]["drafts"][0].target_id == "opp-2"
 
 

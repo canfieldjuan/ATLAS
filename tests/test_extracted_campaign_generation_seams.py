@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections import UserDict
+from collections.abc import Sequence
 from datetime import date
+from types import MappingProxyType
 
 import pytest
 
@@ -14,9 +17,11 @@ from extracted_content_pipeline.services.b2b.account_opportunity_claims import (
 )
 from extracted_content_pipeline.services.campaign_quality import campaign_quality_revalidation
 from extracted_content_pipeline.services.campaign_reasoning_context import (
+    campaign_reasoning_context_metadata,
     campaign_reasoning_atom_context,
     campaign_reasoning_delta_summary,
     campaign_reasoning_scope_summary,
+    normalize_campaign_reasoning_context,
 )
 from extracted_content_pipeline.settings import build_settings
 
@@ -105,6 +110,263 @@ def test_campaign_reasoning_context_extracts_bounded_prompt_material() -> None:
     ]
     assert context["timing_windows"][0]["anchor"] == "Q3"
     assert [item["company"] for item in context["account_signals"]] == ["Acme", "Beta"]
+
+
+def test_normalize_campaign_reasoning_context_accepts_host_compressed_fields() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "reasoning_anchor_examples": {
+                "named_account": [
+                    {"witness_id": "w1", "excerpt_text": "Pricing came up."},
+                    "invalid",
+                ]
+            },
+            "reasoning_witness_highlights": [
+                {"witness_id": "w1", "excerpt_text": "Pricing came up."}
+            ],
+            "reasoning_reference_ids": {"witness_ids": ["w1", ""]},
+            "reasoning_context": {
+                "account_signals": [{"company": "Acme", "primary_pain": "pricing"}],
+                "timing_windows": [{"window_type": "renewal", "anchor": "Q3"}],
+                "proof_points": [{"label": "pricing_mentions", "value": 12}],
+                "coverage_limits": ["thin_account_signals", ""],
+            },
+            "reasoning_scope_summary": {"selection_strategy": "host_compressed"},
+        }
+    )
+
+    assert context.anchor_examples["named_account"][0]["witness_id"] == "w1"
+    assert context.witness_highlights[0]["excerpt_text"] == "Pricing came up."
+    assert context.reference_ids == {"witness_ids": ("w1",)}
+    assert context.account_signals[0]["company"] == "Acme"
+    assert context.timing_windows[0]["anchor"] == "Q3"
+    assert context.proof_points[0]["label"] == "pricing_mentions"
+    assert context.coverage_limits == ("thin_account_signals",)
+    assert context.scope_summary == {"selection_strategy": "host_compressed"}
+
+
+def test_normalize_campaign_reasoning_context_accepts_mapping_and_sequence_inputs() -> None:
+    context = normalize_campaign_reasoning_context(
+        UserDict({
+            "reasoning_anchor_examples": MappingProxyType({
+                "named_account": (
+                    MappingProxyType({
+                        "witness_id": "w1",
+                        "excerpt_text": "Pricing came up.",
+                    }),
+                )
+            }),
+            "reasoning_witness_highlights": (
+                MappingProxyType({
+                    "witness_id": "w1",
+                    "excerpt_text": "Pricing came up.",
+                }),
+            ),
+            "reasoning_reference_ids": MappingProxyType({
+                "witness_ids": ("w1", ""),
+            }),
+            "reasoning_context": MappingProxyType({
+                "account_signals": (
+                    MappingProxyType({"company": "Acme", "primary_pain": "pricing"}),
+                ),
+                "timing_windows": (
+                    MappingProxyType({"window_type": "renewal", "anchor": "Q3"}),
+                ),
+                "proof_points": (
+                    MappingProxyType({"label": "pricing_mentions", "value": 12}),
+                ),
+                "coverage_limits": ("thin_account_signals", ""),
+            }),
+        })
+    )
+
+    assert context.anchor_examples["named_account"][0]["witness_id"] == "w1"
+    assert context.witness_highlights[0]["excerpt_text"] == "Pricing came up."
+    assert context.reference_ids == {"witness_ids": ("w1",)}
+    assert context.account_signals[0]["company"] == "Acme"
+    assert context.timing_windows[0]["anchor"] == "Q3"
+    assert context.proof_points[0]["value"] == 12
+    assert context.coverage_limits == ("thin_account_signals",)
+
+
+def test_normalize_campaign_reasoning_context_preserves_canonical_reasoning_fields() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "reasoning_context": {
+                "wedge": "renewal pressure",
+                "confidence": "high",
+                "summary": "Acme is reviewing vendors before renewal.",
+                "key_signals": ["pricing_mentions", "renewal_window"],
+                "falsification": {"missing": ["fresh account signals"]},
+            }
+        }
+    )
+
+    assert context.has_content() is True
+    assert context.as_dict()["wedge"] == "renewal pressure"
+    assert context.as_dict()["confidence"] == "high"
+    assert context.as_dict()["summary"] == "Acme is reviewing vendors before renewal."
+    assert context.as_dict()["key_signals"] == ["pricing_mentions", "renewal_window"]
+    assert context.as_dict()["falsification"] == {"missing": ["fresh account signals"]}
+
+
+def test_normalize_campaign_reasoning_context_keeps_atom_top_theses() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "reasoning_atom_context": {
+                "top_theses": [
+                    {
+                        "wedge": "pricing pressure",
+                        "summary": "Pricing objections are rising.",
+                        "confidence": "medium",
+                    },
+                    {
+                        "wedge": "workflow risk",
+                        "summary": "Workflow gaps are visible.",
+                    },
+                    {
+                        "wedge": "third",
+                        "summary": "Should be capped.",
+                    },
+                ]
+            }
+        }
+    )
+
+    assert [item["wedge"] for item in context.top_theses] == [
+        "pricing pressure",
+        "workflow risk",
+    ]
+    assert context.as_dict()["top_theses"][0]["summary"] == "Pricing objections are rising."
+
+
+def test_normalize_campaign_reasoning_context_accepts_campaign_context_wrapper() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "reasoning_context": {
+                "wedge": "renewal pressure",
+                "campaign_reasoning_context": {
+                    "proof_points": [
+                        {"label": "pricing_mentions", "value": 12},
+                    ],
+                    "witness_highlights": [
+                        {"witness_id": "w1", "excerpt_text": "Pricing drove evaluation."},
+                    ],
+                },
+            }
+        }
+    )
+
+    assert context.canonical_reasoning["wedge"] == "renewal pressure"
+    assert context.proof_points[0]["label"] == "pricing_mentions"
+    assert context.witness_highlights[0]["witness_id"] == "w1"
+
+
+def test_normalize_campaign_reasoning_context_caps_wrapped_prompt_material() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "campaign_reasoning_context": {
+                "anchor_examples": {
+                    "proof": [
+                        {"witness_id": f"w{index}", "excerpt_text": "Pricing."}
+                        for index in range(7)
+                    ]
+                },
+                "witness_highlights": [
+                    {"witness_id": f"w{index}"}
+                    for index in range(7)
+                ],
+                "account_signals": [
+                    {"company": f"Company {index}"}
+                    for index in range(4)
+                ],
+                "timing_windows": [
+                    {"window_type": "renewal", "anchor": f"Q{index}"}
+                    for index in range(4)
+                ],
+                "proof_points": [
+                    {"label": f"proof_{index}", "value": index}
+                    for index in range(4)
+                ],
+                "coverage_limits": [
+                    f"limit_{index}"
+                    for index in range(5)
+                ],
+            }
+        }
+    )
+
+    assert [row["witness_id"] for row in context.anchor_examples["proof"]] == [
+        "w0",
+        "w1",
+        "w2",
+        "w3",
+        "w4",
+    ]
+    assert [row["witness_id"] for row in context.witness_highlights] == [
+        "w0",
+        "w1",
+        "w2",
+        "w3",
+        "w4",
+    ]
+    assert [row["company"] for row in context.account_signals] == [
+        "Company 0",
+        "Company 1",
+    ]
+    assert [row["anchor"] for row in context.timing_windows] == ["Q0", "Q1"]
+    assert [row["label"] for row in context.proof_points] == ["proof_0", "proof_1"]
+    assert context.coverage_limits == ("limit_0", "limit_1", "limit_2")
+
+
+def test_normalize_campaign_reasoning_context_applies_caps_before_copying_sequences() -> None:
+    class CountingSequence(Sequence):
+        def __init__(self, rows):
+            self.rows = rows
+            self.accessed = 0
+
+        def __len__(self):
+            return len(self.rows)
+
+        def __getitem__(self, index):
+            if isinstance(index, slice):
+                raise AssertionError("normalizer should not slice the source sequence")
+            self.accessed += 1
+            return self.rows[index]
+
+    account_signals = CountingSequence(
+        [
+            {"company": f"Company {index}"}
+            for index in range(10)
+        ]
+    )
+
+    context = normalize_campaign_reasoning_context(
+        {"campaign_reasoning_context": {"account_signals": account_signals}}
+    )
+
+    assert [row["company"] for row in context.account_signals] == [
+        "Company 0",
+        "Company 1",
+    ]
+    assert account_signals.accessed == 2
+
+
+def test_campaign_reasoning_context_metadata_uses_campaign_storage_keys() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "anchor_examples": {"proof": [{"witness_id": "w1"}]},
+            "witness_highlights": [{"witness_id": "w1"}],
+            "reference_ids": {"witness_ids": ["w1"]},
+        }
+    )
+
+    metadata = campaign_reasoning_context_metadata(context)
+
+    assert metadata["reasoning_anchor_examples"]["proof"][0]["witness_id"] == "w1"
+    assert metadata["reasoning_witness_highlights"][0]["witness_id"] == "w1"
+    assert metadata["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
+    assert metadata["reasoning_context"]["anchor_examples"]["proof"][0]["witness_id"] == "w1"
 
 
 def test_campaign_reasoning_scope_and_delta_summaries_are_defensive() -> None:

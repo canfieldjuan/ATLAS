@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import json
 import re
-from typing import Any, Mapping
+from typing import Any
 
 from .campaign_ports import (
     CampaignDraft,
@@ -13,8 +14,14 @@ from .campaign_ports import (
     IntelligenceRepository,
     LLMClient,
     LLMMessage,
+    CampaignReasoningContextProvider,
     SkillStore,
     TenantScope,
+)
+from .services.campaign_reasoning_context import (
+    campaign_reasoning_context_metadata,
+    campaign_reasoning_context_payload,
+    normalize_campaign_reasoning_context,
 )
 
 
@@ -115,12 +122,14 @@ class CampaignGenerationService:
         campaigns: CampaignRepository,
         llm: LLMClient,
         skills: SkillStore,
+        reasoning_context: CampaignReasoningContextProvider | None = None,
         config: CampaignGenerationConfig | None = None,
     ):
         self._intelligence = intelligence
         self._campaigns = campaigns
         self._llm = llm
         self._skills = skills
+        self._reasoning_context = reasoning_context
         self._config = config or CampaignGenerationConfig()
 
     async def generate(
@@ -156,6 +165,12 @@ class CampaignGenerationService:
                 errors.append({"reason": "missing_target_id", "opportunity": opportunity})
                 continue
             try:
+                opportunity = await self._opportunity_with_reasoning_context(
+                    scope=scope,
+                    target_mode=target_mode,
+                    target_id=target_id,
+                    opportunity=opportunity,
+                )
                 parsed = await self._generate_one(
                     prompt_template,
                     opportunity=opportunity,
@@ -193,6 +208,43 @@ class CampaignGenerationService:
             saved_ids=saved_ids,
             errors=tuple(errors),
         )
+
+    async def _opportunity_with_reasoning_context(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        target_id: str,
+        opportunity: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        context = None
+        if self._reasoning_context is not None:
+            provided = await self._reasoning_context.read_campaign_reasoning_context(
+                scope=scope,
+                target_id=target_id,
+                target_mode=target_mode,
+                opportunity=opportunity,
+            )
+            provided_context = normalize_campaign_reasoning_context(provided)
+            if provided_context.has_content():
+                context = provided_context
+        if context is None:
+            context = normalize_campaign_reasoning_context(opportunity)
+        if not context.has_content():
+            return dict(opportunity)
+        enriched = dict(opportunity)
+        payload = campaign_reasoning_context_payload(context)
+        enriched.update(campaign_reasoning_context_metadata(context))
+        existing_reasoning_context = opportunity.get("reasoning_context")
+        if isinstance(existing_reasoning_context, Mapping):
+            enriched["reasoning_context"] = {
+                **dict(existing_reasoning_context),
+                "campaign_reasoning_context": payload,
+            }
+        else:
+            enriched["reasoning_context"] = payload
+        enriched["campaign_reasoning_context"] = payload
+        return enriched
 
     async def _generate_one(
         self,
@@ -241,6 +293,8 @@ class CampaignGenerationService:
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
         }
+        context = normalize_campaign_reasoning_context(opportunity)
+        metadata.update(campaign_reasoning_context_metadata(context))
         if self._config.include_source_opportunity:
             metadata["source_opportunity"] = dict(opportunity)
         return {key: value for key, value in metadata.items() if value not in (None, "", {})}

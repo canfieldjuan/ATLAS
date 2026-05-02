@@ -19,6 +19,8 @@ LOCAL_UTILITY_SHIM_PATHS = [
     "extracted_content_pipeline/reasoning/evidence_engine.py",
     "extracted_content_pipeline/reasoning/temporal.py",
     "extracted_content_pipeline/reasoning/wedge_registry.py",
+    "extracted_content_pipeline/campaign_generation.py",
+    "extracted_content_pipeline/campaign_ports.py",
     "extracted_content_pipeline/config.py",
     "extracted_content_pipeline/autonomous/tasks/_blog_matching.py",
     "extracted_content_pipeline/autonomous/tasks/_campaign_sequence_context.py",

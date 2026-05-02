@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from itertools import islice
 from typing import Any
+
+from ..campaign_ports import CampaignReasoningContext
 
 
 _THESIS_LIMIT = 2
@@ -10,21 +14,161 @@ _TIMING_WINDOW_LIMIT = 2
 _PROOF_POINT_LIMIT = 2
 _ACCOUNT_SIGNAL_LIMIT = 2
 _COVERAGE_LIMIT_LIMIT = 3
+_ANCHOR_ROW_LIMIT = 5
+_WITNESS_HIGHLIGHT_LIMIT = 5
 _DELTA_ITEM_LIMIT = 3
+_CANONICAL_REASONING_KEYS = (
+    "wedge",
+    "confidence",
+    "summary",
+    "why_now",
+    "primary_driver",
+    "recommended_action",
+)
+_REASONING_STRUCTURE_KEYS = {
+    "reasoning_context",
+    "campaign_reasoning_context",
+    "reasoning_atom_context",
+    "atom_context",
+    "reasoning_scope_summary",
+    "scope_summary",
+    "reasoning_delta_summary",
+    "delta_summary",
+    "reasoning_anchor_examples",
+    "anchor_examples",
+    "reasoning_witness_highlights",
+    "witness_highlights",
+    "reasoning_reference_ids",
+    "reference_ids",
+    "reasoning_top_theses",
+    "top_theses",
+    "reasoning_account_signals",
+    "account_signals",
+    "reasoning_timing_windows",
+    "timing_windows",
+    "reasoning_proof_points",
+    "proof_points",
+    "reasoning_coverage_limits",
+    "coverage_limits",
+}
 
 
-def _copy_list(value: Any) -> list[Any]:
-    return list(value) if isinstance(value, list) else []
+def _copy_list(value: Any, *, limit: int | None = None) -> list[Any]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if limit is None:
+            return list(value)
+        return list(islice(value, max(0, limit)))
+    return []
+
+
+def _copy_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _clean_mapping_list(value: Any, *, limit: int | None = None) -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    for item in _copy_list(value, limit=limit):
+        if not isinstance(item, Mapping):
+            continue
+        row = {
+            str(key): item_value
+            for key, item_value in item.items()
+            if item_value not in (None, "", [], {})
+        }
+        if row:
+            rows.append(row)
+        if limit is not None and len(rows) >= limit:
+            break
+    return tuple(rows)
+
+
+def _clean_reference_ids(value: Any) -> dict[str, tuple[str, ...]]:
+    refs: dict[str, tuple[str, ...]] = {}
+    if not isinstance(value, Mapping):
+        return refs
+    for key, raw_values in value.items():
+        if isinstance(raw_values, Sequence) and not isinstance(
+            raw_values, (str, bytes, bytearray)
+        ):
+            values = tuple(
+                _clean_text(item)
+                for item in raw_values
+                if _clean_text(item)
+            )
+        else:
+            text = _clean_text(raw_values)
+            values = (text,) if text else ()
+        if values:
+            refs[str(key)] = values
+    return refs
+
+
+def _clean_anchor_examples(value: Any) -> dict[str, tuple[dict[str, Any], ...]]:
+    anchors: dict[str, tuple[dict[str, Any], ...]] = {}
+    if not isinstance(value, Mapping):
+        return anchors
+    for label, rows in value.items():
+        cleaned = _clean_mapping_list(rows, limit=_ANCHOR_ROW_LIMIT)
+        if cleaned:
+            anchors[_clean_text(label) or "default"] = cleaned
+    return anchors
+
+
+def _first_dict(*values: Any) -> dict[str, Any]:
+    for value in values:
+        if isinstance(value, Mapping) and value:
+            return dict(value)
+    return {}
+
+
+def _first_list(*values: Any, limit: int | None = None) -> list[Any]:
+    for value in values:
+        if (
+            isinstance(value, Sequence)
+            and not isinstance(value, (str, bytes, bytearray))
+            and value
+        ):
+            return _copy_list(value, limit=limit)
+    return []
+
+
+def _clean_scalar_list(value: Any, *, limit: int | None = None) -> tuple[str, ...]:
+    return tuple(
+        _clean_text(item)
+        for item in _copy_list(value, limit=limit)
+        if _clean_text(item)
+    )
+
+
+def _clean_reasoning_fields(value: Any, *, include_all: bool) -> dict[str, Any]:
+    reasoning: dict[str, Any] = {}
+    if not isinstance(value, Mapping):
+        return reasoning
+    keys = value.keys() if include_all else _CANONICAL_REASONING_KEYS
+    for key in keys:
+        if key in _REASONING_STRUCTURE_KEYS:
+            continue
+        item = value.get(key)
+        if item not in (None, "", [], {}):
+            reasoning[str(key)] = item
+    return reasoning
+
+
+def _clean_canonical_reasoning(*values: tuple[Any, bool]) -> dict[str, Any]:
+    reasoning: dict[str, Any] = {}
+    for value, include_all in values:
+        reasoning.update(_clean_reasoning_fields(value, include_all=include_all))
+    return reasoning
+
+
 def campaign_reasoning_scope_summary(
     scope_manifest: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not isinstance(scope_manifest, dict):
+    if not isinstance(scope_manifest, Mapping):
         return {}
     summary: dict[str, Any] = {}
     for key in (
@@ -40,10 +184,191 @@ def campaign_reasoning_scope_summary(
     return summary
 
 
+def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext:
+    """Normalize host-provided compressed context into the campaign contract.
+
+    Accepts already-normalized context, Atlas-style ``reasoning_*`` keys, or a
+    nested ``reasoning_context`` blob. It intentionally does not import
+    ``_b2b_pool_compression``; the host owns compression and passes the
+    resulting evidence here.
+    """
+    if isinstance(value, CampaignReasoningContext):
+        return value
+    payload = _copy_dict(value)
+    nested = _copy_dict(payload.get("reasoning_context"))
+    campaign_context = _first_dict(
+        payload.get("campaign_reasoning_context"),
+        nested.get("campaign_reasoning_context"),
+    )
+    atom_context = _first_dict(
+        payload.get("reasoning_atom_context"),
+        nested.get("reasoning_atom_context"),
+        nested.get("atom_context"),
+        campaign_context.get("reasoning_atom_context"),
+        campaign_context.get("atom_context"),
+        nested,
+    )
+    scope_summary = _first_dict(
+        payload.get("reasoning_scope_summary"),
+        nested.get("reasoning_scope_summary"),
+        campaign_context.get("reasoning_scope_summary"),
+        campaign_context.get("scope_summary"),
+        nested.get("scope_summary"),
+    )
+    delta_summary = _first_dict(
+        payload.get("reasoning_delta_summary"),
+        nested.get("reasoning_delta_summary"),
+        campaign_context.get("reasoning_delta_summary"),
+        campaign_context.get("delta_summary"),
+        nested.get("delta_summary"),
+    )
+    normalized_delta = (
+        campaign_reasoning_delta_summary(delta_summary) if delta_summary else {}
+    )
+    return CampaignReasoningContext(
+        anchor_examples=_clean_anchor_examples(
+            _first_dict(
+                payload.get("reasoning_anchor_examples"),
+                payload.get("anchor_examples"),
+                nested.get("reasoning_anchor_examples"),
+                nested.get("anchor_examples"),
+                campaign_context.get("reasoning_anchor_examples"),
+                campaign_context.get("anchor_examples"),
+            )
+        ),
+        witness_highlights=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_witness_highlights"),
+                payload.get("witness_highlights"),
+                nested.get("reasoning_witness_highlights"),
+                nested.get("witness_highlights"),
+                campaign_context.get("reasoning_witness_highlights"),
+                campaign_context.get("witness_highlights"),
+            ),
+            limit=_WITNESS_HIGHLIGHT_LIMIT,
+        ),
+        reference_ids=_clean_reference_ids(
+            _first_dict(
+                payload.get("reasoning_reference_ids"),
+                payload.get("reference_ids"),
+                nested.get("reasoning_reference_ids"),
+                nested.get("reference_ids"),
+                campaign_context.get("reasoning_reference_ids"),
+                campaign_context.get("reference_ids"),
+            )
+        ),
+        top_theses=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_top_theses"),
+                payload.get("top_theses"),
+                nested.get("reasoning_top_theses"),
+                nested.get("top_theses"),
+                campaign_context.get("reasoning_top_theses"),
+                campaign_context.get("top_theses"),
+                atom_context.get("top_theses"),
+                atom_context.get("theses"),
+                limit=_THESIS_LIMIT,
+            ),
+            limit=_THESIS_LIMIT,
+        ),
+        account_signals=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_account_signals"),
+                payload.get("account_signals"),
+                nested.get("reasoning_account_signals"),
+                nested.get("account_signals"),
+                campaign_context.get("reasoning_account_signals"),
+                campaign_context.get("account_signals"),
+                atom_context.get("account_signals"),
+                limit=_ACCOUNT_SIGNAL_LIMIT,
+            ),
+            limit=_ACCOUNT_SIGNAL_LIMIT,
+        ),
+        timing_windows=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_timing_windows"),
+                payload.get("timing_windows"),
+                nested.get("reasoning_timing_windows"),
+                nested.get("timing_windows"),
+                campaign_context.get("reasoning_timing_windows"),
+                campaign_context.get("timing_windows"),
+                atom_context.get("timing_windows"),
+                limit=_TIMING_WINDOW_LIMIT,
+            ),
+            limit=_TIMING_WINDOW_LIMIT,
+        ),
+        proof_points=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_proof_points"),
+                payload.get("proof_points"),
+                nested.get("reasoning_proof_points"),
+                nested.get("proof_points"),
+                campaign_context.get("reasoning_proof_points"),
+                campaign_context.get("proof_points"),
+                atom_context.get("proof_points"),
+                limit=_PROOF_POINT_LIMIT,
+            ),
+            limit=_PROOF_POINT_LIMIT,
+        ),
+        coverage_limits=_clean_scalar_list(
+            _first_list(
+                payload.get("reasoning_coverage_limits"),
+                payload.get("coverage_limits"),
+                nested.get("reasoning_coverage_limits"),
+                nested.get("coverage_limits"),
+                campaign_context.get("reasoning_coverage_limits"),
+                campaign_context.get("coverage_limits"),
+                atom_context.get("coverage_limits"),
+                limit=_COVERAGE_LIMIT_LIMIT,
+            ),
+            limit=_COVERAGE_LIMIT_LIMIT,
+        ),
+        canonical_reasoning=_clean_canonical_reasoning(
+            (campaign_context, True),
+            (atom_context, True),
+            (payload, False),
+            (nested, True),
+        ),
+        scope_summary=campaign_reasoning_scope_summary(scope_summary),
+        delta_summary=normalized_delta,
+    )
+
+
+def campaign_reasoning_context_payload(
+    context: CampaignReasoningContext,
+) -> dict[str, Any]:
+    """Return prompt-visible normalized context."""
+    return context.as_dict()
+
+
+def campaign_reasoning_context_metadata(
+    context: CampaignReasoningContext,
+) -> dict[str, Any]:
+    """Return storage metadata fields expected by campaign consumers."""
+    if not context.has_content():
+        return {}
+    metadata: dict[str, Any] = {"reasoning_context": context.as_dict()}
+    if context.anchor_examples:
+        metadata["reasoning_anchor_examples"] = {
+            str(label): [dict(row) for row in rows]
+            for label, rows in context.anchor_examples.items()
+        }
+    if context.witness_highlights:
+        metadata["reasoning_witness_highlights"] = [
+            dict(row) for row in context.witness_highlights
+        ]
+    if context.reference_ids:
+        metadata["reasoning_reference_ids"] = {
+            str(key): [str(item) for item in values]
+            for key, values in context.reference_ids.items()
+        }
+    return metadata
+
+
 def campaign_reasoning_atom_context(
     consumer_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not isinstance(consumer_context, dict):
+    if not isinstance(consumer_context, Mapping):
         return {}
     context: dict[str, Any] = {}
     theses = [
@@ -53,8 +378,11 @@ def campaign_reasoning_atom_context(
             "why_now": _clean_text(item.get("why_now")),
             "confidence": _clean_text(item.get("confidence")),
         }
-        for item in _copy_list(consumer_context.get("theses"))[:_THESIS_LIMIT]
-        if isinstance(item, dict)
+        for item in _copy_list(
+            consumer_context.get("theses"),
+            limit=_THESIS_LIMIT,
+        )
+        if isinstance(item, Mapping)
     ]
     theses = [item for item in theses if item["summary"] or item["why_now"]]
     if theses:
@@ -67,10 +395,11 @@ def campaign_reasoning_atom_context(
             "urgency": _clean_text(item.get("urgency")),
             "recommended_action": _clean_text(item.get("recommended_action")),
         }
-        for item in _copy_list(consumer_context.get("timing_windows"))[
-            :_TIMING_WINDOW_LIMIT
-        ]
-        if isinstance(item, dict)
+        for item in _copy_list(
+            consumer_context.get("timing_windows"),
+            limit=_TIMING_WINDOW_LIMIT,
+        )
+        if isinstance(item, Mapping)
     ]
     timing_windows = [item for item in timing_windows if item["anchor"]]
     if timing_windows:
@@ -82,10 +411,11 @@ def campaign_reasoning_atom_context(
             "value": item.get("value"),
             "interpretation": _clean_text(item.get("interpretation")),
         }
-        for item in _copy_list(consumer_context.get("proof_points"))[
-            :_PROOF_POINT_LIMIT
-        ]
-        if isinstance(item, dict)
+        for item in _copy_list(
+            consumer_context.get("proof_points"),
+            limit=_PROOF_POINT_LIMIT,
+        )
+        if isinstance(item, Mapping)
     ]
     proof_points = [item for item in proof_points if item["label"]]
     if proof_points:
@@ -98,10 +428,11 @@ def campaign_reasoning_atom_context(
             "competitor_context": _clean_text(item.get("competitor_context")),
             "primary_pain": _clean_text(item.get("primary_pain")),
         }
-        for item in _copy_list(consumer_context.get("account_signals"))[
-            :_ACCOUNT_SIGNAL_LIMIT
-        ]
-        if isinstance(item, dict)
+        for item in _copy_list(
+            consumer_context.get("account_signals"),
+            limit=_ACCOUNT_SIGNAL_LIMIT,
+        )
+        if isinstance(item, Mapping)
     ]
     account_signals = [
         item
@@ -113,10 +444,11 @@ def campaign_reasoning_atom_context(
 
     coverage_limits = [
         _clean_text(item.get("label"))
-        for item in _copy_list(consumer_context.get("coverage_limits"))[
-            :_COVERAGE_LIMIT_LIMIT
-        ]
-        if isinstance(item, dict) and _clean_text(item.get("label"))
+        for item in _copy_list(
+            consumer_context.get("coverage_limits"),
+            limit=_COVERAGE_LIMIT_LIMIT,
+        )
+        if isinstance(item, Mapping) and _clean_text(item.get("label"))
     ]
     if coverage_limits:
         context["coverage_limits"] = coverage_limits
@@ -126,7 +458,7 @@ def campaign_reasoning_atom_context(
 def campaign_reasoning_delta_summary(
     reasoning_delta: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not isinstance(reasoning_delta, dict):
+    if not isinstance(reasoning_delta, Mapping):
         return {}
     summary: dict[str, Any] = {"changed": bool(reasoning_delta.get("changed"))}
     for key in (
@@ -139,12 +471,15 @@ def campaign_reasoning_delta_summary(
     for key in ("theses_added", "new_timing_windows", "new_account_signals"):
         value = reasoning_delta.get(key)
         if isinstance(value, list) and value:
-            summary[key] = value[:_DELTA_ITEM_LIMIT]
+            summary[key] = _copy_list(value, limit=_DELTA_ITEM_LIMIT)
     return summary
 
 
 __all__ = [
+    "campaign_reasoning_context_metadata",
+    "campaign_reasoning_context_payload",
     "campaign_reasoning_atom_context",
     "campaign_reasoning_delta_summary",
     "campaign_reasoning_scope_summary",
+    "normalize_campaign_reasoning_context",
 ]
