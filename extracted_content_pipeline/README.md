@@ -141,6 +141,15 @@ To run the same example through the product LLM adapter, configure the
 python scripts/run_extracted_campaign_generation_example.py --llm pipeline
 ```
 
+For database-backed runs, apply the product migrations, set
+`EXTRACTED_DATABASE_URL`, and run the Postgres generation runner. It reads
+`campaign_opportunities`, generates drafts, and persists them into
+`b2b_campaigns`:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --limit 10
+```
+
 ## Import smoke test
 
 ```bash
@@ -219,6 +228,10 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_postgres.py`: async Postgres adapters for intelligence,
   campaign, sequence, suppression, and audit ports, including the product-owned
   `campaign_opportunities` source table
+- `campaign_postgres_generation.py`: product runner wiring
+  `PostgresIntelligenceRepository`, `PostgresCampaignRepository`,
+  `PipelineLLMClient`, and the local skill registry for DB-backed draft
+  generation
 - `storage/repositories/scheduled_task.py`: local execution metadata updater
 - `skills/registry.py`: local markdown-backed skill registry implementing
   `.get()` and product `SkillStore.get_prompt()`

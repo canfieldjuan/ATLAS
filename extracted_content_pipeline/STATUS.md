@@ -29,6 +29,9 @@
 - `campaign_postgres` provides async Postgres adapters for the intelligence,
   campaign, sequence, suppression, and audit ports against the copied campaign
   schema plus the product-owned `campaign_opportunities` source table.
+- `campaign_postgres_generation` wires the DB-backed generation path from
+  `campaign_opportunities` to saved `b2b_campaigns` drafts through product
+  ports.
 - Small utility shims now default to local extracted implementations:
   `config`, `pipelines.notify`, `reasoning.wedge_registry`,
   `reasoning.archetypes`, `reasoning.evidence_engine`, `reasoning.temporal`,

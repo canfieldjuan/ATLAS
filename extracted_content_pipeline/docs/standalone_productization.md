@@ -112,6 +112,12 @@ slice. It reads campaign opportunities through `IntelligenceRepository`, prompts
 through `SkillStore` and `LLMClient`, parses generated draft JSON, and persists
 `CampaignDraft` rows through `CampaignRepository`.
 
+`extracted_content_pipeline/campaign_postgres_generation.py` wires the
+database-backed product path. Hosts pass an async Postgres pool and the runner
+combines `PostgresIntelligenceRepository`, `PostgresCampaignRepository`,
+`PipelineLLMClient`, and the local skill registry to read opportunities,
+generate drafts, and save them back to Postgres.
+
 `extracted_content_pipeline/campaign_example.py` is the runnable product example
 for campaign generation. It wires in-memory ports, a static prompt store, and an
 offline deterministic LLM so customer opportunity JSON can be converted into
