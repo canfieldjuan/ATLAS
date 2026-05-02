@@ -167,10 +167,6 @@
     {
       "source": "atlas_brain/autonomous/tasks/campaign_audit.py",
       "target": "extracted_content_pipeline/autonomous/tasks/campaign_audit.py"
-    },
-    {
-      "source": "atlas_brain/autonomous/tasks/_blog_matching.py",
-      "target": "extracted_content_pipeline/autonomous/tasks/_blog_matching.py"
     }
   ],
   "owned": [
@@ -206,6 +202,9 @@
     },
     {
       "target": "extracted_content_pipeline/autonomous/tasks/_b2b_batch_utils.py"
+    },
+    {
+      "target": "extracted_content_pipeline/autonomous/tasks/_blog_matching.py"
     }
   ]
 }

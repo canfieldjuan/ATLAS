@@ -161,6 +161,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `autonomous/tasks/_b2b_batch_utils.py`: product-owned Anthropic batch helper
   functions for metadata gates, request fingerprints, LLM slot resolution, and
   existing batch artifact reconciliation
+- `autonomous/tasks/_blog_matching.py`: product-owned campaign-to-blog matcher
+  with extracted base URL environment fallbacks
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services, with product-owned
   provider routing config

@@ -19,6 +19,7 @@ pytest \
   tests/test_extracted_reasoning_evidence_engine.py \
   tests/test_extracted_product_utilities.py \
   tests/test_extracted_b2b_batch_utils.py \
+  tests/test_extracted_blog_matching.py \
   tests/test_extracted_campaign_llm_client.py \
   tests/test_extracted_campaign_llm_bridge.py \
   tests/test_extracted_campaign_postgres.py \

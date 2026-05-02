@@ -127,6 +127,11 @@ task-facing helpers for metadata flags, request fingerprints, LLM resolution,
 and existing artifact reconciliation, but resolves product environment keys and
 fails safe when a standalone host has not installed an activatable LLM registry.
 
+`extracted_content_pipeline/autonomous/tasks/_blog_matching.py` is now
+product-owned for campaign-to-blog matching. It preserves the copied relevance
+scoring rules while resolving blog URLs from extracted settings or
+`EXTRACTED_*_BLOG_BASE_URL` environment variables instead of Atlas settings.
+
 `extracted_content_pipeline/reasoning/archetypes.py` is the first product-owned
 reasoning policy slice. It scores vendor evidence against deterministic churn
 archetypes, returns thresholded matches, and exposes falsification conditions
