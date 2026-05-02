@@ -166,6 +166,12 @@
       "target": "extracted_content_pipeline/campaign_llm_client.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_ports.py"
+    },
+    {
+      "target": "extracted_content_pipeline/campaign_generation.py"
+    },
+    {
       "target": "extracted_content_pipeline/settings.py"
     },
     {

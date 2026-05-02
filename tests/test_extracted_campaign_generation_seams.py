@@ -14,9 +14,11 @@ from extracted_content_pipeline.services.b2b.account_opportunity_claims import (
 )
 from extracted_content_pipeline.services.campaign_quality import campaign_quality_revalidation
 from extracted_content_pipeline.services.campaign_reasoning_context import (
+    campaign_reasoning_context_metadata,
     campaign_reasoning_atom_context,
     campaign_reasoning_delta_summary,
     campaign_reasoning_scope_summary,
+    normalize_campaign_reasoning_context,
 )
 
 
@@ -104,6 +106,56 @@ def test_campaign_reasoning_context_extracts_bounded_prompt_material() -> None:
     ]
     assert context["timing_windows"][0]["anchor"] == "Q3"
     assert [item["company"] for item in context["account_signals"]] == ["Acme", "Beta"]
+
+
+def test_normalize_campaign_reasoning_context_accepts_host_compressed_fields() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "reasoning_anchor_examples": {
+                "named_account": [
+                    {"witness_id": "w1", "excerpt_text": "Pricing came up."},
+                    "invalid",
+                ]
+            },
+            "reasoning_witness_highlights": [
+                {"witness_id": "w1", "excerpt_text": "Pricing came up."}
+            ],
+            "reasoning_reference_ids": {"witness_ids": ["w1", ""]},
+            "reasoning_context": {
+                "account_signals": [{"company": "Acme", "primary_pain": "pricing"}],
+                "timing_windows": [{"window_type": "renewal", "anchor": "Q3"}],
+                "proof_points": [{"label": "pricing_mentions", "value": 12}],
+                "coverage_limits": ["thin_account_signals", ""],
+            },
+            "reasoning_scope_summary": {"selection_strategy": "host_compressed"},
+        }
+    )
+
+    assert context.anchor_examples["named_account"][0]["witness_id"] == "w1"
+    assert context.witness_highlights[0]["excerpt_text"] == "Pricing came up."
+    assert context.reference_ids == {"witness_ids": ("w1",)}
+    assert context.account_signals[0]["company"] == "Acme"
+    assert context.timing_windows[0]["anchor"] == "Q3"
+    assert context.proof_points[0]["label"] == "pricing_mentions"
+    assert context.coverage_limits == ("thin_account_signals",)
+    assert context.scope_summary == {"selection_strategy": "host_compressed"}
+
+
+def test_campaign_reasoning_context_metadata_uses_campaign_storage_keys() -> None:
+    context = normalize_campaign_reasoning_context(
+        {
+            "anchor_examples": {"proof": [{"witness_id": "w1"}]},
+            "witness_highlights": [{"witness_id": "w1"}],
+            "reference_ids": {"witness_ids": ["w1"]},
+        }
+    )
+
+    metadata = campaign_reasoning_context_metadata(context)
+
+    assert metadata["reasoning_anchor_examples"]["proof"][0]["witness_id"] == "w1"
+    assert metadata["reasoning_witness_highlights"][0]["witness_id"] == "w1"
+    assert metadata["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
+    assert metadata["reasoning_context"]["anchor_examples"]["proof"][0]["witness_id"] == "w1"
 
 
 def test_campaign_reasoning_scope_and_delta_summaries_are_defensive() -> None:

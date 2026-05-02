@@ -6,6 +6,8 @@
 - Primary task modules are copied and import-smokeable:
   - `blog_post_generation.py`
   - `b2b_blog_post_generation.py`
+  - `b2b_campaign_generation.py`
+  - `b2b_vendor_briefing.py`
   - `complaint_content_generation.py`
   - `complaint_enrichment.py`
   - `article_enrichment.py`
@@ -54,6 +56,15 @@
   implementation for Atlas-compatible task imports.
 - `campaign_audit` is product-owned and writes campaign state-change audit
   rows without importing Atlas logging or task helpers.
+- Vendor briefing and campaign generation import seams are product-owned:
+  `services.campaign_sender`, `services.vendor_target_selection`,
+  `autonomous.tasks.campaign_suppression`, `templates.email.vendor_briefing`,
+  `services.b2b.account_opportunity_claims`, `services.campaign_quality`,
+  `services.campaign_reasoning_context`, and `autonomous.visibility`.
+- `CampaignReasoningContextProvider` is the campaign-core boundary for
+  upstream reasoning. Hosts pass already-compressed witness/anchor/account
+  context into the generator; `_b2b_pool_compression.py` stays outside the
+  standalone campaign product.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.
