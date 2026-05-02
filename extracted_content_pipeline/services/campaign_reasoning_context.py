@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..campaign_ports import CampaignReasoningContext
@@ -16,11 +17,13 @@ _DELTA_ITEM_LIMIT = 3
 
 
 def _copy_list(value: Any) -> list[Any]:
-    return list(value) if isinstance(value, list) else []
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return list(value)
+    return []
 
 
 def _copy_dict(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _clean_text(value: Any) -> str:
@@ -30,7 +33,7 @@ def _clean_text(value: Any) -> str:
 def _clean_mapping_list(value: Any, *, limit: int | None = None) -> tuple[dict[str, Any], ...]:
     rows: list[dict[str, Any]] = []
     for item in _copy_list(value):
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             continue
         row = {
             str(key): item_value
@@ -46,10 +49,12 @@ def _clean_mapping_list(value: Any, *, limit: int | None = None) -> tuple[dict[s
 
 def _clean_reference_ids(value: Any) -> dict[str, tuple[str, ...]]:
     refs: dict[str, tuple[str, ...]] = {}
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         return refs
     for key, raw_values in value.items():
-        if isinstance(raw_values, list):
+        if isinstance(raw_values, Sequence) and not isinstance(
+            raw_values, (str, bytes, bytearray)
+        ):
             values = tuple(
                 _clean_text(item)
                 for item in raw_values
@@ -65,7 +70,7 @@ def _clean_reference_ids(value: Any) -> dict[str, tuple[str, ...]]:
 
 def _clean_anchor_examples(value: Any) -> dict[str, tuple[dict[str, Any], ...]]:
     anchors: dict[str, tuple[dict[str, Any], ...]] = {}
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         return anchors
     for label, rows in value.items():
         cleaned = _clean_mapping_list(rows)
@@ -76,15 +81,19 @@ def _clean_anchor_examples(value: Any) -> dict[str, tuple[dict[str, Any], ...]]:
 
 def _first_dict(*values: Any) -> dict[str, Any]:
     for value in values:
-        if isinstance(value, dict) and value:
-            return value
+        if isinstance(value, Mapping) and value:
+            return dict(value)
     return {}
 
 
 def _first_list(*values: Any) -> list[Any]:
     for value in values:
-        if isinstance(value, list) and value:
-            return value
+        if (
+            isinstance(value, Sequence)
+            and not isinstance(value, (str, bytes, bytearray))
+            and value
+        ):
+            return list(value)
     return []
 
 
@@ -99,7 +108,7 @@ def _clean_scalar_list(value: Any) -> tuple[str, ...]:
 def campaign_reasoning_scope_summary(
     scope_manifest: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not isinstance(scope_manifest, dict):
+    if not isinstance(scope_manifest, Mapping):
         return {}
     summary: dict[str, Any] = {}
     for key in (
@@ -214,7 +223,7 @@ def campaign_reasoning_context_metadata(
 def campaign_reasoning_atom_context(
     consumer_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not isinstance(consumer_context, dict):
+    if not isinstance(consumer_context, Mapping):
         return {}
     context: dict[str, Any] = {}
     theses = [
@@ -225,7 +234,7 @@ def campaign_reasoning_atom_context(
             "confidence": _clean_text(item.get("confidence")),
         }
         for item in _copy_list(consumer_context.get("theses"))[:_THESIS_LIMIT]
-        if isinstance(item, dict)
+        if isinstance(item, Mapping)
     ]
     theses = [item for item in theses if item["summary"] or item["why_now"]]
     if theses:
@@ -241,7 +250,7 @@ def campaign_reasoning_atom_context(
         for item in _copy_list(consumer_context.get("timing_windows"))[
             :_TIMING_WINDOW_LIMIT
         ]
-        if isinstance(item, dict)
+        if isinstance(item, Mapping)
     ]
     timing_windows = [item for item in timing_windows if item["anchor"]]
     if timing_windows:
@@ -256,7 +265,7 @@ def campaign_reasoning_atom_context(
         for item in _copy_list(consumer_context.get("proof_points"))[
             :_PROOF_POINT_LIMIT
         ]
-        if isinstance(item, dict)
+        if isinstance(item, Mapping)
     ]
     proof_points = [item for item in proof_points if item["label"]]
     if proof_points:
@@ -272,7 +281,7 @@ def campaign_reasoning_atom_context(
         for item in _copy_list(consumer_context.get("account_signals"))[
             :_ACCOUNT_SIGNAL_LIMIT
         ]
-        if isinstance(item, dict)
+        if isinstance(item, Mapping)
     ]
     account_signals = [
         item
@@ -287,7 +296,7 @@ def campaign_reasoning_atom_context(
         for item in _copy_list(consumer_context.get("coverage_limits"))[
             :_COVERAGE_LIMIT_LIMIT
         ]
-        if isinstance(item, dict) and _clean_text(item.get("label"))
+        if isinstance(item, Mapping) and _clean_text(item.get("label"))
     ]
     if coverage_limits:
         context["coverage_limits"] = coverage_limits
@@ -297,7 +306,7 @@ def campaign_reasoning_atom_context(
 def campaign_reasoning_delta_summary(
     reasoning_delta: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not isinstance(reasoning_delta, dict):
+    if not isinstance(reasoning_delta, Mapping):
         return {}
     summary: dict[str, Any] = {"changed": bool(reasoning_delta.get("changed"))}
     for key in (

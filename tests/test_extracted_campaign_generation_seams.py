@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import UserDict
 from datetime import date
+from types import MappingProxyType
 
 import pytest
 
@@ -140,6 +142,50 @@ def test_normalize_campaign_reasoning_context_accepts_host_compressed_fields() -
     assert context.proof_points[0]["label"] == "pricing_mentions"
     assert context.coverage_limits == ("thin_account_signals",)
     assert context.scope_summary == {"selection_strategy": "host_compressed"}
+
+
+def test_normalize_campaign_reasoning_context_accepts_mapping_and_sequence_inputs() -> None:
+    context = normalize_campaign_reasoning_context(
+        UserDict({
+            "reasoning_anchor_examples": MappingProxyType({
+                "named_account": (
+                    MappingProxyType({
+                        "witness_id": "w1",
+                        "excerpt_text": "Pricing came up.",
+                    }),
+                )
+            }),
+            "reasoning_witness_highlights": (
+                MappingProxyType({
+                    "witness_id": "w1",
+                    "excerpt_text": "Pricing came up.",
+                }),
+            ),
+            "reasoning_reference_ids": MappingProxyType({
+                "witness_ids": ("w1", ""),
+            }),
+            "reasoning_context": MappingProxyType({
+                "account_signals": (
+                    MappingProxyType({"company": "Acme", "primary_pain": "pricing"}),
+                ),
+                "timing_windows": (
+                    MappingProxyType({"window_type": "renewal", "anchor": "Q3"}),
+                ),
+                "proof_points": (
+                    MappingProxyType({"label": "pricing_mentions", "value": 12}),
+                ),
+                "coverage_limits": ("thin_account_signals", ""),
+            }),
+        })
+    )
+
+    assert context.anchor_examples["named_account"][0]["witness_id"] == "w1"
+    assert context.witness_highlights[0]["excerpt_text"] == "Pricing came up."
+    assert context.reference_ids == {"witness_ids": ("w1",)}
+    assert context.account_signals[0]["company"] == "Acme"
+    assert context.timing_windows[0]["anchor"] == "Q3"
+    assert context.proof_points[0]["value"] == 12
+    assert context.coverage_limits == ("thin_account_signals",)
 
 
 def test_campaign_reasoning_context_metadata_uses_campaign_storage_keys() -> None:
