@@ -97,6 +97,11 @@ shipping in the customer product.
 
 The email/campaign generation slice is mapped in `docs/email_campaign_generation_pipeline.md`, with standalone productization requirements in `docs/standalone_productization.md`.
 
+`campaign_opportunities.py` defines the customer-data contract for campaign
+generation. Hosts can pass loose opportunity rows from a CRM, warehouse, or
+vendor-intelligence feed; the product normalizes them into stable prompt and
+draft metadata fields while preserving custom columns.
+
 ## Import smoke test
 
 ```bash

@@ -11,6 +11,9 @@ from extracted_content_pipeline.campaign_generation import (
     opportunity_target_id,
     parse_campaign_draft_response,
 )
+from extracted_content_pipeline.campaign_opportunities import (
+    normalize_campaign_opportunity,
+)
 from extracted_content_pipeline.campaign_ports import (
     CampaignReasoningContext,
     LLMResponse,
@@ -176,7 +179,36 @@ def test_opportunity_target_id_prefers_stable_ids_then_names():
     assert opportunity_target_id({"target_id": "target-1", "company_name": "Acme"}) == "target-1"
     assert opportunity_target_id({"id": "row-1"}) == "row-1"
     assert opportunity_target_id({"company_name": "Acme"}) == "Acme"
+    assert opportunity_target_id({"company": "Acme"}) == "Acme"
     assert opportunity_target_id({}) == ""
+
+
+def test_normalize_campaign_opportunity_adds_customer_data_contract_fields():
+    normalized = normalize_campaign_opportunity(
+        {
+            "id": "opp-1",
+            "company": " Acme ",
+            "vendor": "HubSpot",
+            "email": "buyer@example.com",
+            "title": "VP Revenue",
+            "pain_category": "pricing",
+            "competitor": "Salesforce, Zoho",
+            "opportunity_score": "84.0",
+            "custom_segment": "enterprise",
+        },
+        target_mode="vendor_retention",
+    )
+
+    assert normalized["target_id"] == "opp-1"
+    assert normalized["company_name"] == "Acme"
+    assert normalized["vendor_name"] == "HubSpot"
+    assert normalized["contact_email"] == "buyer@example.com"
+    assert normalized["contact_title"] == "VP Revenue"
+    assert normalized["target_mode"] == "vendor_retention"
+    assert normalized["pain_points"] == ["pricing"]
+    assert normalized["competitors"] == ["Salesforce", "Zoho"]
+    assert normalized["opportunity_score"] == 84
+    assert normalized["custom_segment"] == "enterprise"
 
 
 @pytest.mark.asyncio
@@ -222,6 +254,8 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
     assert llm_call["max_tokens"] == 1200
     assert llm_call["temperature"] == 0.4
     assert '"company_name":"Acme"' in llm_call["messages"][0].content
+    assert '"target_id":"opp-1"' in llm_call["messages"][0].content
+    assert '"target_mode":"churning_company"' in llm_call["messages"][0].content
     assert llm_call["metadata"] == {
         "target_mode": "churning_company",
         "target_id": "opp-1",
@@ -235,7 +269,10 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
     assert draft.body == "<p>Pricing note</p>"
     assert draft.metadata["cta"] == "Book time"
     assert draft.metadata["generation_model"] == "test-model"
-    assert draft.metadata["source_opportunity"] == opportunity
+    assert draft.metadata["source_opportunity"]["target_id"] == "opp-1"
+    assert draft.metadata["source_opportunity"]["target_mode"] == "churning_company"
+    assert draft.metadata["source_opportunity"]["company_name"] == "Acme"
+    assert draft.metadata["source_opportunity"]["pain"] == "pricing pressure"
 
 
 @pytest.mark.asyncio
@@ -267,12 +304,12 @@ async def test_generate_uses_host_reasoning_context_without_pool_compression_imp
     result = await service.generate(scope=scope, target_mode="vendor_retention")
 
     assert result.generated == 1
-    assert provider.calls == [{
-        "scope": scope,
-        "target_id": "opp-1",
-        "target_mode": "vendor_retention",
-        "opportunity": opportunity,
-    }]
+    assert provider.calls[0]["scope"] == scope
+    assert provider.calls[0]["target_id"] == "opp-1"
+    assert provider.calls[0]["target_mode"] == "vendor_retention"
+    assert provider.calls[0]["opportunity"]["target_id"] == "opp-1"
+    assert provider.calls[0]["opportunity"]["target_mode"] == "vendor_retention"
+    assert provider.calls[0]["opportunity"]["company_name"] == "Acme"
     prompt = llm.calls[0]["messages"][0].content
     assert "reasoning_context" in prompt
     assert "Pricing drove evaluation." in prompt

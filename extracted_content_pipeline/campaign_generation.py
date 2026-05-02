@@ -8,6 +8,10 @@ import json
 import re
 from typing import Any
 
+from .campaign_opportunities import (
+    normalize_campaign_opportunity,
+    opportunity_target_id,
+)
 from .campaign_ports import (
     CampaignDraft,
     CampaignRepository,
@@ -100,18 +104,6 @@ def parse_campaign_draft_response(text: str) -> dict[str, Any] | None:
     return None
 
 
-def opportunity_target_id(opportunity: Mapping[str, Any]) -> str:
-    for key in ("target_id", "id", "company_id", "vendor_id", "email"):
-        value = str(opportunity.get(key) or "").strip()
-        if value:
-            return value
-    for key in ("company_name", "vendor_name", "name"):
-        value = str(opportunity.get(key) or "").strip()
-        if value:
-            return value
-    return ""
-
-
 class CampaignGenerationService:
     """Generate campaign drafts through product-owned ports."""
 
@@ -146,7 +138,7 @@ class CampaignGenerationService:
 
         requested = int(limit or self._config.limit)
         opportunities = [
-            dict(row)
+            normalize_campaign_opportunity(row, target_mode=target_mode)
             for row in await self._intelligence.read_campaign_opportunities(
                 scope=scope,
                 target_mode=target_mode,

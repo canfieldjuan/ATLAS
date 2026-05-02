@@ -112,6 +112,12 @@ slice. It reads campaign opportunities through `IntelligenceRepository`, prompts
 through `SkillStore` and `LLMClient`, parses generated draft JSON, and persists
 `CampaignDraft` rows through `CampaignRepository`.
 
+`extracted_content_pipeline/campaign_opportunities.py` owns the host/customer
+opportunity input contract. It accepts loose customer rows, preserves custom
+fields, and adds stable prompt/storage keys (`target_id`, `company_name`,
+`vendor_name`, contact fields, scores, pain points, competitors, and evidence)
+before `CampaignGenerationService` calls reasoning providers or the LLM.
+
 `extracted_content_pipeline/campaign_llm_client.py` is the provider-routing
 slice for LLM access. It adapts extracted LLM infrastructure services to the
 product `LLMClient` port and exposes `PipelineLLMClientConfig` so hosts can
