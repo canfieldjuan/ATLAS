@@ -53,6 +53,10 @@ def build_settings() -> SimpleNamespace:
         openrouter_api_key=os.getenv("EXTRACTED_OPENROUTER_API_KEY") or "",
         briefing_analyst_model=os.getenv("EXTRACTED_VENDOR_BRIEFING_ANALYST_MODEL")
         or "openai/gpt-4o-mini",
+        vendor_briefing_enabled=_to_bool(
+            os.getenv("EXTRACTED_VENDOR_BRIEFING_ENABLED"),
+            True,
+        ),
         vendor_briefing_sender_name=os.getenv("EXTRACTED_VENDOR_BRIEFING_SENDER_NAME")
         or "Atlas",
         vendor_briefing_gate_base_url=os.getenv("EXTRACTED_VENDOR_BRIEFING_GATE_BASE_URL")
@@ -68,6 +72,22 @@ def build_settings() -> SimpleNamespace:
         vendor_briefing_cooldown_days=_to_int(
             os.getenv("EXTRACTED_VENDOR_BRIEFING_COOLDOWN_DAYS"),
             7,
+        ),
+        vendor_briefing_account_cards_enabled=_to_bool(
+            os.getenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_ENABLED"),
+            True,
+        ),
+        vendor_briefing_account_cards_max=_to_int(
+            os.getenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_MAX"),
+            3,
+        ),
+        vendor_briefing_account_cards_reasoning_depth=_to_int(
+            os.getenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_REASONING_DEPTH"),
+            2,
+        ),
+        vendor_briefing_account_cards_adaptive_depth=_to_bool(
+            os.getenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_ADAPTIVE_DEPTH"),
+            True,
         ),
         vendor_briefing_scheduled_analyst_enrichment_enabled=_to_bool(
             os.getenv("EXTRACTED_VENDOR_BRIEFING_ANALYST_ENRICHMENT_ENABLED"),

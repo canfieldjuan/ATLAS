@@ -81,6 +81,30 @@ def test_vendor_briefing_jwt_secret_uses_env_or_ephemeral_secret(
     assert build_settings().saas_auth.jwt_secret == "configured-secret"
 
 
+def test_build_settings_includes_vendor_briefing_runtime_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("EXTRACTED_VENDOR_BRIEFING_ENABLED", raising=False)
+    monkeypatch.delenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_ENABLED", raising=False)
+    monkeypatch.delenv("EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_MAX", raising=False)
+    monkeypatch.delenv(
+        "EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_REASONING_DEPTH",
+        raising=False,
+    )
+    monkeypatch.delenv(
+        "EXTRACTED_VENDOR_BRIEFING_ACCOUNT_CARDS_ADAPTIVE_DEPTH",
+        raising=False,
+    )
+
+    cfg = build_settings().b2b_churn
+
+    assert cfg.vendor_briefing_enabled is True
+    assert cfg.vendor_briefing_account_cards_enabled is True
+    assert cfg.vendor_briefing_account_cards_max == 3
+    assert cfg.vendor_briefing_account_cards_reasoning_depth == 2
+    assert cfg.vendor_briefing_account_cards_adaptive_depth is True
+
+
 def test_dedupe_vendor_target_rows_keeps_best_row_per_company_and_mode() -> None:
     rows = [
         {
@@ -160,6 +184,53 @@ def test_campaign_sender_resend_error_lists_accepted_configuration_sources(
     assert "EXTRACTED_CAMPAIGN_SEQ_RESEND_API_KEY" in message
 
 
+def test_vendor_briefing_sender_helpers_accept_ses_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = importlib.import_module(
+        "extracted_content_pipeline.autonomous.tasks.b2b_vendor_briefing"
+    )
+    monkeypatch.setattr(
+        module,
+        "settings",
+        SimpleNamespace(
+            campaign_sequence=SimpleNamespace(
+                sender_type="ses",
+                resend_api_key="",
+                resend_from_email="",
+                ses_from_email="briefings@example.com",
+            ),
+            b2b_churn=SimpleNamespace(vendor_briefing_sender_name="Atlas"),
+        ),
+    )
+
+    assert module._briefing_sender_configured() is True
+    assert module._briefing_sender_email() == "briefings@example.com"
+
+
+def test_vendor_briefing_sender_helpers_require_resend_key_for_resend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = importlib.import_module(
+        "extracted_content_pipeline.autonomous.tasks.b2b_vendor_briefing"
+    )
+    monkeypatch.setattr(
+        module,
+        "settings",
+        SimpleNamespace(
+            campaign_sequence=SimpleNamespace(
+                sender_type="resend",
+                resend_api_key="",
+                resend_from_email="briefings@example.com",
+                ses_from_email="",
+            ),
+            b2b_churn=SimpleNamespace(vendor_briefing_sender_name="Atlas"),
+        ),
+    )
+
+    assert module._briefing_sender_configured() is False
+
+
 @pytest.mark.asyncio
 async def test_is_suppressed_checks_email_before_domain() -> None:
     pool = FakeSuppressionPool(None, {"domain": "example.com", "reason": "manual"})
@@ -201,6 +272,8 @@ async def test_assign_recipient_to_sequence_updates_active_sequence() -> None:
 @pytest.mark.asyncio
 async def test_resolve_vendor_name_async_alias_uses_local_normalizer() -> None:
     assert await resolve_vendor_name("  Acme  ") == "Acme"
+    assert await resolve_vendor_name("aws") == "Amazon Web Services"
+    assert await resolve_vendor_name("salesforce.com") == "Salesforce"
 
 
 def test_render_vendor_briefing_html_escapes_and_gates_quotes() -> None:
