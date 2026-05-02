@@ -166,6 +166,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_sequence_context.py` and
   `autonomous/tasks/_campaign_sequence_context.py`: product-owned sequence
   prompt/storage compaction helpers plus compatibility exports for copied tasks
+- `autonomous/tasks/campaign_audit.py`: product-owned audit-log writer for
+  campaign state changes
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services, with product-owned
   provider routing config

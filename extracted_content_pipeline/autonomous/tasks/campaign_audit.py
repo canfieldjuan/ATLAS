@@ -10,7 +10,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-logger = logging.getLogger("atlas.autonomous.tasks.campaign_audit")
+logger = logging.getLogger("extracted_content_pipeline.autonomous.tasks.campaign_audit")
 
 
 async def log_campaign_event(
