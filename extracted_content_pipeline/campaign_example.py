@@ -264,7 +264,7 @@ async def generate_campaign_drafts_from_payload(
         limit=limit,
         filters=payload.get("filters") if isinstance(payload.get("filters"), Mapping) else None,
     )
-    return {
+    output = {
         "result": result.as_dict(),
         "drafts": [
             _draft_to_dict(draft, campaign_id)
@@ -272,6 +272,13 @@ async def generate_campaign_drafts_from_payload(
         ],
         "llm_model": _llm_model_label(llm_client, campaigns.drafts),
     }
+    warnings = payload.get("opportunity_warnings")
+    if isinstance(warnings, Sequence) and not isinstance(warnings, (str, bytes, bytearray)):
+        output["opportunity_warnings"] = list(warnings)
+    source = str(payload.get("source") or "").strip()
+    if source:
+        output["source"] = source
+    return output
 
 
 __all__ = [
