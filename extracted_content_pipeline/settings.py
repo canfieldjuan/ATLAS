@@ -127,24 +127,37 @@ def build_settings() -> SimpleNamespace:
         ),
         specificity_require_anchor_support=_to_bool(
             os.getenv("EXTRACTED_B2B_CAMPAIGN_SPECIFICITY_REQUIRE_ANCHOR_SUPPORT"),
-            False,
+            True,
         ),
         specificity_require_timing_or_numeric_when_available=_to_bool(
             os.getenv(
                 "EXTRACTED_B2B_CAMPAIGN_SPECIFICITY_REQUIRE_TIMING_OR_NUMERIC"
             ),
-            False,
+            True,
         ),
         specificity_revision_term_limit=_to_int(
             os.getenv("EXTRACTED_B2B_CAMPAIGN_SPECIFICITY_REVISION_TERM_LIMIT"),
-            5,
+            3,
         ),
         word_limits={
             "default": {
-                "email_cold": [80, 160],
-                "email_followup": [60, 140],
-                "linkedin": [40, 90],
-            }
+                "email_cold": [50, 150],
+                "email_followup": [75, 150],
+                "linkedin": [0, 100],
+            },
+            "vendor_retention": {
+                "email_cold": [50, 125],
+                "email_followup": [75, 150],
+            },
+            "challenger_intel": {
+                "email_cold": [50, 125],
+                "email_followup": [75, 150],
+            },
+            "churning_company": {
+                "email_cold": [75, 150],
+                "email_followup": [75, 125],
+                "linkedin": [0, 100],
+            },
         },
     )
 

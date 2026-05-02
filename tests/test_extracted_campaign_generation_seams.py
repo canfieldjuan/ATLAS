@@ -18,6 +18,7 @@ from extracted_content_pipeline.services.campaign_reasoning_context import (
     campaign_reasoning_delta_summary,
     campaign_reasoning_scope_summary,
 )
+from extracted_content_pipeline.settings import build_settings
 
 
 class FakeVisibilitySink(VisibilitySink):
@@ -145,6 +146,86 @@ def test_campaign_quality_revalidation_returns_expected_envelope() -> None:
     assert result["audit"]["campaign_proof_terms"] == ["pricing pressure"]
     assert result["metadata"]["latest_specificity_audit"] == result["audit"]
     assert result["specificity_context"] == {"anchor_examples": {"pricing": []}}
+
+
+def test_campaign_quality_revalidation_blocks_missing_required_anchor_support() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Account pressure",
+            "body": "We should talk about the account.",
+            "tier": "report",
+            "target_mode": "vendor_retention",
+            "metadata": {},
+        },
+        boundary="generation",
+        specificity_context={
+            "anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "The Q2 renewal now carries a $200k/year issue.",
+                    }
+                ]
+            },
+            "witness_highlights": [{"witness_id": "w1"}],
+            "reference_ids": {"witness_ids": ["w1"]},
+        },
+        require_anchor_support=True,
+        require_timing_or_numeric_when_available=True,
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "missing_anchor_support" in result["audit"]["blocking_issues"]
+    assert "missing_timing_or_numeric" in result["audit"]["blocking_issues"]
+    assert result["metadata"]["tier"] == "report"
+    assert result["metadata"]["target_mode"] == "vendor_retention"
+    assert result["metadata"]["reasoning_reference_ids"] == {"witness_ids": ["w1"]}
+
+
+def test_campaign_quality_revalidation_passes_with_anchor_and_preserves_metadata() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Renewal pressure",
+            "body": "The Q2 renewal now carries a $200k/year issue.",
+            "tier": "report",
+            "target_mode": "vendor_retention",
+            "metadata": {"existing": True},
+        },
+        boundary="manual_approval",
+        specificity_context={
+            "anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "The Q2 renewal now carries a $200k/year issue.",
+                    }
+                ]
+            },
+            "reference_ids": {"witness_ids": ["w1"]},
+        },
+        require_anchor_support=True,
+        require_timing_or_numeric_when_available=True,
+    )
+
+    assert result["audit"]["status"] == "pass"
+    assert result["audit"]["blocking_issues"] == []
+    assert result["audit"]["used_proof_terms"] == [
+        "The Q2 renewal now carries a $200k/year issue."
+    ]
+    assert result["metadata"]["existing"] is True
+    assert result["metadata"]["reasoning_anchor_examples"]["outlier_or_named_account"][0]["witness_id"] == "w1"
+    assert result["metadata"]["latest_specificity_audit"]["failure_explanation"]["anchor_count"] == 1
+
+
+def test_extracted_b2b_campaign_defaults_match_copied_task_contract() -> None:
+    cfg = build_settings().b2b_campaign
+
+    assert cfg.specificity_require_anchor_support is True
+    assert cfg.specificity_require_timing_or_numeric_when_available is True
+    assert cfg.specificity_revision_term_limit == 3
+    assert cfg.word_limits["default"]["email_cold"] == [50, 150]
+    assert cfg.word_limits["vendor_retention"]["email_cold"] == [50, 125]
+    assert cfg.word_limits["churning_company"]["linkedin"] == [0, 100]
 
 
 @pytest.mark.asyncio
