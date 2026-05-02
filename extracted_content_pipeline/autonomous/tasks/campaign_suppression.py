@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Any
 from uuid import UUID
 
@@ -22,6 +23,11 @@ def _normalize_email(email: str | None) -> str:
 def _email_domain(email: str) -> str:
     _, _, domain = email.partition("@")
     return domain.strip().lower()
+
+
+def _recipient_lock_key(email: str) -> int:
+    digest = hashlib.blake2b(email.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
 
 
 async def is_suppressed(pool: Any, *, email: str) -> dict[str, Any] | None:
@@ -60,6 +66,52 @@ async def is_suppressed(pool: Any, *, email: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+async def _assign_recipient_to_sequence_locked(
+    conn: Any,
+    *,
+    sequence_id: UUID,
+    email: str,
+) -> AssignmentResult:
+    conflict_id = await conn.fetchval(
+        """
+        SELECT id
+        FROM campaign_sequences
+        WHERE LOWER(BTRIM(recipient_email)) = $1
+          AND status = 'active'
+          AND id != $2
+        LIMIT 1
+        """,
+        email,
+        sequence_id,
+    )
+    if conflict_id:
+        return AssignmentResult(
+            False,
+            sequence_id,
+            conflict_with_sequence_id=(
+                conflict_id if isinstance(conflict_id, UUID) else UUID(str(conflict_id))
+            ),
+            reason="recipient_already_assigned",
+        )
+
+    result = await conn.execute(
+        """
+        UPDATE campaign_sequences
+        SET recipient_email = $2,
+            updated_at = NOW()
+        WHERE id = $1
+          AND status = 'active'
+        """,
+        sequence_id,
+        email,
+    )
+    return AssignmentResult(
+        str(result).upper() == "UPDATE 1",
+        sequence_id,
+        reason=None if str(result).upper() == "UPDATE 1" else "sequence_not_active",
+    )
+
+
 async def assign_recipient_to_sequence(
     pool: Any,
     sequence_id: UUID | str,
@@ -71,41 +123,21 @@ async def assign_recipient_to_sequence(
     if not normalized:
         return AssignmentResult(False, sid, reason="empty_email")
 
-    conflict_id = await pool.fetchval(
-        """
-        SELECT id
-        FROM campaign_sequences
-        WHERE LOWER(BTRIM(recipient_email)) = $1
-          AND status = 'active'
-          AND id != $2
-        LIMIT 1
-        """,
-        normalized,
-        sid,
-    )
-    if conflict_id:
-        return AssignmentResult(
-            False,
-            sid,
-            conflict_with_sequence_id=(
-                conflict_id if isinstance(conflict_id, UUID) else UUID(str(conflict_id))
-            ),
-            reason="recipient_already_assigned",
-        )
+    if hasattr(pool, "acquire"):
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    _recipient_lock_key(normalized),
+                )
+                return await _assign_recipient_to_sequence_locked(
+                    conn,
+                    sequence_id=sid,
+                    email=normalized,
+                )
 
-    result = await pool.execute(
-        """
-        UPDATE campaign_sequences
-        SET recipient_email = $2,
-            updated_at = NOW()
-        WHERE id = $1
-          AND status = 'active'
-        """,
-        sid,
-        normalized,
-    )
-    return AssignmentResult(
-        str(result).upper() == "UPDATE 1",
-        sid,
-        reason=None if str(result).upper() == "UPDATE 1" else "sequence_not_active",
+    return await _assign_recipient_to_sequence_locked(
+        pool,
+        sequence_id=sid,
+        email=normalized,
     )
