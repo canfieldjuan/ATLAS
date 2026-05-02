@@ -20,6 +20,7 @@ LOCAL_UTILITY_SHIM_PATHS = [
     "extracted_content_pipeline/reasoning/temporal.py",
     "extracted_content_pipeline/reasoning/wedge_registry.py",
     "extracted_content_pipeline/config.py",
+    "extracted_content_pipeline/autonomous/tasks/_blog_matching.py",
     "extracted_content_pipeline/skills/registry.py",
     "extracted_content_pipeline/services/__init__.py",
     "extracted_content_pipeline/services/apollo_company_overrides.py",

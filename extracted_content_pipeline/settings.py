@@ -35,6 +35,9 @@ def build_settings() -> SimpleNamespace:
         blog_post_max_tokens=_to_int(os.getenv("EXTRACTED_BLOG_POST_MAX_TOKENS"), 2800),
         complaint_content_max_per_run=_to_int(os.getenv("EXTRACTED_COMPLAINT_CONTENT_MAX_PER_RUN"), 10),
         complaint_content_max_tokens=_to_int(os.getenv("EXTRACTED_COMPLAINT_CONTENT_MAX_TOKENS"), 1200),
+        blog_base_url=os.getenv("EXTRACTED_CONSUMER_BLOG_BASE_URL")
+        or os.getenv("EXTRACTED_BLOG_BASE_URL")
+        or "https://example.com",
     )
 
     b2b_churn = SimpleNamespace(
@@ -42,6 +45,9 @@ def build_settings() -> SimpleNamespace:
         blog_post_max_per_run=_to_int(os.getenv("EXTRACTED_B2B_BLOG_POST_MAX_PER_RUN"), 1),
         blog_post_max_tokens=_to_int(os.getenv("EXTRACTED_B2B_BLOG_POST_MAX_TOKENS"), 3200),
         blog_post_temperature=_to_float(os.getenv("EXTRACTED_B2B_BLOG_POST_TEMPERATURE"), 0.2),
+        blog_base_url=os.getenv("EXTRACTED_B2B_BLOG_BASE_URL")
+        or os.getenv("EXTRACTED_BLOG_BASE_URL")
+        or "https://example.com",
     )
 
     campaign_llm = SimpleNamespace(

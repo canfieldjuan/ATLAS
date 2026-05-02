@@ -1,5 +1,5 @@
 """
-Shared blog post matching for campaign pipelines.
+Product-owned blog post matching for campaign pipelines.
 
 Fetches published blog posts relevant to a vendor/category/brand,
 returning full URLs for injection into campaign selling context.
@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any
 
-logger = logging.getLogger("atlas.autonomous.tasks._blog_matching")
+logger = logging.getLogger("extracted_content_pipeline.autonomous.tasks._blog_matching")
 
 # B2B blog topic types (b2b_blog_post_generation.py)
 _B2B_TOPIC_TYPES = (
@@ -121,6 +122,22 @@ def _normalized_post_dedupe_key(
     return f"{topic_type}:{str(row.get('title') or '').strip().lower()}"
 
 
+def _blog_base_url(pipeline: str) -> str:
+    from ...config import settings
+
+    if pipeline == "b2b":
+        configured = getattr(getattr(settings, "b2b_churn", None), "blog_base_url", None)
+        env_value = os.environ.get("EXTRACTED_B2B_BLOG_BASE_URL") or os.environ.get(
+            "EXTRACTED_BLOG_BASE_URL"
+        )
+    else:
+        configured = getattr(getattr(settings, "external_data", None), "blog_base_url", None)
+        env_value = os.environ.get("EXTRACTED_CONSUMER_BLOG_BASE_URL") or os.environ.get(
+            "EXTRACTED_BLOG_BASE_URL"
+        )
+    return str(env_value or configured or "https://example.com").rstrip("/")
+
+
 async def fetch_relevant_blog_posts(
     pool,
     *,
@@ -164,13 +181,7 @@ async def fetch_relevant_blog_posts(
         logger.warning("Unknown pipeline %r, returning empty blog list", pipeline)
         return []
 
-    # Resolve base URL from config
-    from ...config import settings
-
-    if pipeline == "b2b":
-        base_url = settings.b2b_churn.blog_base_url.rstrip("/")
-    else:
-        base_url = settings.external_data.blog_base_url.rstrip("/")
+    base_url = _blog_base_url(pipeline)
 
     # Build search terms for name matching
     search_terms: list[str] = []
