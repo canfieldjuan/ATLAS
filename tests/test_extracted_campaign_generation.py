@@ -314,7 +314,11 @@ async def test_generate_preserves_existing_canonical_reasoning_context():
     assert "renewal pressure" in prompt
     assert "campaign_reasoning_context" in prompt
     source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    metadata_context = campaigns.saved[0]["drafts"][0].metadata["reasoning_context"]
     assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert metadata_context["wedge"] == "renewal pressure"
+    assert metadata_context["proof_points"][0]["label"] == "pricing_mentions"
+    assert metadata_context["witness_highlights"][0]["witness_id"] == "w1"
     assert (
         source["reasoning_context"]["campaign_reasoning_context"]["proof_points"][0]["label"]
         == "pricing_mentions"

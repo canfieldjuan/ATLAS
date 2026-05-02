@@ -13,6 +13,8 @@ _TIMING_WINDOW_LIMIT = 2
 _PROOF_POINT_LIMIT = 2
 _ACCOUNT_SIGNAL_LIMIT = 2
 _COVERAGE_LIMIT_LIMIT = 3
+_ANCHOR_ROW_LIMIT = 5
+_WITNESS_HIGHLIGHT_LIMIT = 5
 _DELTA_ITEM_LIMIT = 3
 _CANONICAL_REASONING_KEYS = (
     "wedge",
@@ -81,7 +83,7 @@ def _clean_anchor_examples(value: Any) -> dict[str, tuple[dict[str, Any], ...]]:
     if not isinstance(value, Mapping):
         return anchors
     for label, rows in value.items():
-        cleaned = _clean_mapping_list(rows)
+        cleaned = _clean_mapping_list(rows, limit=_ANCHOR_ROW_LIMIT)
         if cleaned:
             anchors[_clean_text(label) or "default"] = cleaned
     return anchors
@@ -105,10 +107,10 @@ def _first_list(*values: Any) -> list[Any]:
     return []
 
 
-def _clean_scalar_list(value: Any) -> tuple[str, ...]:
+def _clean_scalar_list(value: Any, *, limit: int | None = None) -> tuple[str, ...]:
     return tuple(
         _clean_text(item)
-        for item in _copy_list(value)
+        for item in _copy_list(value)[:limit]
         if _clean_text(item)
     )
 
@@ -156,20 +158,30 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
         return value
     payload = _copy_dict(value)
     nested = _copy_dict(payload.get("reasoning_context"))
+    campaign_context = _first_dict(
+        payload.get("campaign_reasoning_context"),
+        nested.get("campaign_reasoning_context"),
+    )
     atom_context = _first_dict(
         payload.get("reasoning_atom_context"),
         nested.get("reasoning_atom_context"),
         nested.get("atom_context"),
+        campaign_context.get("reasoning_atom_context"),
+        campaign_context.get("atom_context"),
         nested,
     )
     scope_summary = _first_dict(
         payload.get("reasoning_scope_summary"),
         nested.get("reasoning_scope_summary"),
+        campaign_context.get("reasoning_scope_summary"),
+        campaign_context.get("scope_summary"),
         nested.get("scope_summary"),
     )
     delta_summary = _first_dict(
         payload.get("reasoning_delta_summary"),
         nested.get("reasoning_delta_summary"),
+        campaign_context.get("reasoning_delta_summary"),
+        campaign_context.get("delta_summary"),
         nested.get("delta_summary"),
     )
     normalized_delta = (
@@ -182,6 +194,8 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 payload.get("anchor_examples"),
                 nested.get("reasoning_anchor_examples"),
                 nested.get("anchor_examples"),
+                campaign_context.get("reasoning_anchor_examples"),
+                campaign_context.get("anchor_examples"),
             )
         ),
         witness_highlights=_clean_mapping_list(
@@ -190,7 +204,10 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 payload.get("witness_highlights"),
                 nested.get("reasoning_witness_highlights"),
                 nested.get("witness_highlights"),
-            )
+                campaign_context.get("reasoning_witness_highlights"),
+                campaign_context.get("witness_highlights"),
+            ),
+            limit=_WITNESS_HIGHLIGHT_LIMIT,
         ),
         reference_ids=_clean_reference_ids(
             _first_dict(
@@ -198,6 +215,8 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 payload.get("reference_ids"),
                 nested.get("reasoning_reference_ids"),
                 nested.get("reference_ids"),
+                campaign_context.get("reasoning_reference_ids"),
+                campaign_context.get("reference_ids"),
             )
         ),
         top_theses=_clean_mapping_list(
@@ -206,16 +225,67 @@ def normalize_campaign_reasoning_context(value: Any) -> CampaignReasoningContext
                 payload.get("top_theses"),
                 nested.get("reasoning_top_theses"),
                 nested.get("top_theses"),
+                campaign_context.get("reasoning_top_theses"),
+                campaign_context.get("top_theses"),
                 atom_context.get("top_theses"),
                 atom_context.get("theses"),
             ),
             limit=_THESIS_LIMIT,
         ),
-        account_signals=_clean_mapping_list(atom_context.get("account_signals")),
-        timing_windows=_clean_mapping_list(atom_context.get("timing_windows")),
-        proof_points=_clean_mapping_list(atom_context.get("proof_points")),
-        coverage_limits=_clean_scalar_list(atom_context.get("coverage_limits")),
-        canonical_reasoning=_clean_canonical_reasoning(payload, nested, atom_context),
+        account_signals=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_account_signals"),
+                payload.get("account_signals"),
+                nested.get("reasoning_account_signals"),
+                nested.get("account_signals"),
+                campaign_context.get("reasoning_account_signals"),
+                campaign_context.get("account_signals"),
+                atom_context.get("account_signals"),
+            ),
+            limit=_ACCOUNT_SIGNAL_LIMIT,
+        ),
+        timing_windows=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_timing_windows"),
+                payload.get("timing_windows"),
+                nested.get("reasoning_timing_windows"),
+                nested.get("timing_windows"),
+                campaign_context.get("reasoning_timing_windows"),
+                campaign_context.get("timing_windows"),
+                atom_context.get("timing_windows"),
+            ),
+            limit=_TIMING_WINDOW_LIMIT,
+        ),
+        proof_points=_clean_mapping_list(
+            _first_list(
+                payload.get("reasoning_proof_points"),
+                payload.get("proof_points"),
+                nested.get("reasoning_proof_points"),
+                nested.get("proof_points"),
+                campaign_context.get("reasoning_proof_points"),
+                campaign_context.get("proof_points"),
+                atom_context.get("proof_points"),
+            ),
+            limit=_PROOF_POINT_LIMIT,
+        ),
+        coverage_limits=_clean_scalar_list(
+            _first_list(
+                payload.get("reasoning_coverage_limits"),
+                payload.get("coverage_limits"),
+                nested.get("reasoning_coverage_limits"),
+                nested.get("coverage_limits"),
+                campaign_context.get("reasoning_coverage_limits"),
+                campaign_context.get("coverage_limits"),
+                atom_context.get("coverage_limits"),
+            ),
+            limit=_COVERAGE_LIMIT_LIMIT,
+        ),
+        canonical_reasoning=_clean_canonical_reasoning(
+            campaign_context,
+            atom_context,
+            payload,
+            nested,
+        ),
         scope_summary=campaign_reasoning_scope_summary(scope_summary),
         delta_summary=normalized_delta,
     )
