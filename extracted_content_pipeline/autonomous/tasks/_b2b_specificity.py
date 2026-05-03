@@ -629,16 +629,28 @@ def campaign_policy_audit_snapshot(
     require_timing_or_numeric_when_available: bool = False,
     proof_term_limit: int = 3,
 ) -> dict[str, Any]:
+    """Atlas-side adapter for campaign quality validation.
+
+    The deterministic policy validators (proof-term coverage,
+    report-tier banned language, forbidden competitor / incumbent
+    names in cold email, private-account leak) live in
+    ``extracted_quality_gate.campaign_pack.evaluate_campaign``. This
+    wrapper:
+
+      * runs the atlas-side specificity audit
+      * resolves the campaign proof-terms (caller-provided override
+        / metadata fallback / regen-from-audit)
+      * builds a ``QualityInput`` with the audit's blocking issues
+        and warnings as pass-through context
+      * calls the pack
+      * merges the pack's findings with the rest of the legacy
+        ``audit`` dict so existing callers see the same shape.
+    """
+    from extracted_quality_gate.campaign_pack import evaluate_campaign
+    from extracted_quality_gate.types import QualityInput, QualityPolicy
+
     payload = campaign if isinstance(campaign, dict) else {}
     channel = str(payload.get("channel") or "").strip()
-    target_mode = str(payload.get("target_mode") or "").strip()
-    tier = str(payload.get("tier") or "").strip()
-    metadata = payload.get("metadata")
-    if isinstance(metadata, dict):
-        if not tier:
-            tier = str(metadata.get("tier") or "").strip()
-        if not target_mode:
-            target_mode = str(metadata.get("target_mode") or "").strip()
 
     audit = specificity_audit_snapshot(
         body,
@@ -651,9 +663,8 @@ def campaign_policy_audit_snapshot(
         require_timing_or_numeric_when_available=require_timing_or_numeric_when_available,
         include_competitor_terms=channel != "email_cold",
     )
-    blocking_issues = list(audit.get("blocking_issues") or [])
-    warnings = list(audit.get("warnings") or [])
 
+    # Resolve proof terms with the same fallback chain as the legacy.
     proof_terms = _dedupe_strings(
         [str(term or "").strip() for term in (campaign_proof_terms or []) if str(term or "").strip()]
     )
@@ -672,59 +683,31 @@ def campaign_policy_audit_snapshot(
             limit=proof_term_limit,
         )
 
-    normalized_body = _normalize_text(body)
-    normalized_message = _normalize_text(" ".join(part for part in (subject, body, cta) if part))
-    normalized_report = _normalize_text(" ".join(part for part in (body, cta) if part))
-    used_proof_terms = [
-        term for term in proof_terms if _contains_term(normalized_body, term)
-    ]
+    pack_input = QualityInput(
+        artifact_type="campaign_email",
+        artifact_id=None,
+        content=body,
+        context={
+            "subject": subject,
+            "body": body,
+            "cta": cta,
+            "campaign": payload,
+            "required_proof_terms": tuple(proof_terms),
+            "anchor_examples": anchor_examples or {},
+            "witness_highlights": tuple(witness_highlights or ()),
+            "specificity_blocking_issues": tuple(audit.get("blocking_issues") or ()),
+            "specificity_warnings": tuple(audit.get("warnings") or ()),
+        },
+    )
+    pack_policy = QualityPolicy(
+        name="campaign_email",
+        thresholds={"require_anchor_support": require_anchor_support},
+    )
+    pack_report = evaluate_campaign(pack_input, policy=pack_policy)
 
-    if proof_terms and require_anchor_support and (anchor_examples or witness_highlights):
-        if not used_proof_terms:
-            blocking_issues.append("missing_exact_proof_term")
-
-    if tier.lower() == "report":
-        report_match = _REPORT_TIER_BANNED.search(normalized_report)
-        if report_match:
-            blocking_issues.append(f"report_tier_language:{report_match.group(1)}")
-
-    forbidden_label = ""
-    forbidden_terms: list[str] = []
-    if channel == "email_cold":
-        if target_mode == "vendor_retention":
-            forbidden_label = "competitor_name_in_email_cold"
-            forbidden_terms.extend(
-                _campaign_name_terms(_campaign_collection(payload, "competitors_considering"))
-            )
-            signal_summary = payload.get("signal_summary")
-            if isinstance(signal_summary, dict):
-                forbidden_terms.extend(
-                    _campaign_name_terms(signal_summary.get("competitor_distribution"))
-                )
-        elif target_mode == "challenger_intel":
-            forbidden_label = "incumbent_name_in_email_cold"
-            forbidden_terms.extend(
-                _campaign_name_terms(_campaign_collection(payload, "competitors_considering"))
-            )
-            signal_summary = payload.get("signal_summary")
-            if isinstance(signal_summary, dict):
-                forbidden_terms.extend(
-                    _campaign_name_terms(signal_summary.get("incumbents_losing"))
-                )
-            incumbent_archetypes = payload.get("incumbent_archetypes")
-            if isinstance(incumbent_archetypes, dict):
-                for rows in incumbent_archetypes.values():
-                    forbidden_terms.extend(_campaign_name_terms(rows))
-    for term in _dedupe_strings(forbidden_terms):
-        if _contains_term(normalized_message, term):
-            blocking_issues.append(f"{forbidden_label}:{term}")
-
-    for company in _campaign_private_company_terms(anchor_examples, witness_highlights):
-        if _contains_term(normalized_message, company):
-            blocking_issues.append(f"private_account_name_leak:{company}")
-
-    deduped_blockers = _dedupe_strings(blocking_issues)
-    deduped_warnings = _dedupe_strings(warnings)
+    deduped_blockers = list(pack_report.metadata.get("blocking_issues") or ())
+    deduped_warnings = list(pack_report.metadata.get("warnings") or ())
+    used_proof_terms = list(pack_report.metadata.get("used_proof_terms") or ())
     return {
         **audit,
         "status": "fail" if deduped_blockers else "pass",
