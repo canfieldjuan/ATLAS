@@ -1,0 +1,28 @@
+{
+  "contexts": [
+    {
+      "target_id": "opp-acme-hubspot",
+      "reasoning_context": {
+        "wedge": "renewal pressure",
+        "confidence": "high",
+        "summary": "Acme is reviewing CRM costs before renewal.",
+        "key_signals": ["pricing_mentions", "renewal_window"]
+      },
+      "campaign_reasoning_context": {
+        "proof_points": [
+          {"label": "pricing_mentions", "value": 12}
+        ],
+        "timing_windows": [
+          {"window_type": "renewal", "anchor": "Q3"}
+        ],
+        "account_signals": [
+          {
+            "company": "Acme Logistics",
+            "primary_pain": "pricing pressure"
+          }
+        ],
+        "coverage_limits": ["thin_account_signals"]
+      }
+    }
+  ]
+}
