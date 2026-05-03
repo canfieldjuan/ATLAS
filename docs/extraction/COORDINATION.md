@@ -1,12 +1,12 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T19:00Z by claude-2026-05-03-b
+Last updated: 2026-05-03T18:42Z by codex-2026-05-03
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
 The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitHub usernames for human work and agent-stamped session IDs for AI work (`{agent}-YYYY-MM-DD[-suffix]`, e.g. `claude-2026-05-03`, `codex-2026-05-03`). The first session for an agent on a calendar day is unsuffixed; subsequent same-agent sessions claim alphabetical suffixes from `-b` (`claude-2026-05-03-b`, `codex-2026-05-03-b`, …) in the same commit that claims a slice. Timestamps in this doc use ISO 8601 UTC (`YYYY-MM-DDTHH:MMZ`).
 
-**Active session aliases (2026-05-03)** — for conversational shorthand: `A` = `claude-2026-05-03-b` (this session, PR #81), `B` = `codex-2026-05-03` (reviewed PR #81), `C` = `claude-2026-05-03` (PRs #79, #80, #82). Aliases re-anchor each calendar day. Agent-date IDs remain canonical in all tables; aliases are for in-conversation reference only.
+**Active session aliases (2026-05-03)** — for conversational shorthand: `A` = `claude-2026-05-03-b` (PR #81 authoring / PR-A0 claim), `B` = `codex-2026-05-03` (PR #81 review + PR #82 coordination update), `C` = `claude-2026-05-03` (PRs #79, #80, #82). Aliases re-anchor each calendar day. Agent-date IDs remain canonical in all tables; aliases are for in-conversation reference only.
 
 ---
 
@@ -17,7 +17,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 | `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | — | Cost-closure additions (PR-A1 → A4) | none |
 | `extracted_competitive_intelligence` | 1 (scaffold) | #48 | #80 | Stabilize after #80 wedge migration | `reasoning/wedge_registry.py` |
 | `extracted_content_pipeline` | 1 → 2 (productization seams in flight) | #76 | #77, #78 | Standalone runner without `atlas_brain` on path | `campaign_generation.py`, `*_postgres_*`, `README.md`, `STATUS.md`, `docs/remaining_productization_audit.md` |
-| `extracted_reasoning_core` | 0 → 1 (kickoff) | — | #79, #80 | First scaffold + wedge registry land | `extracted_reasoning_core/**` |
+| `extracted_reasoning_core` | 0 → 1 (kickoff) | — | #79, #80, #82 | First scaffold + wedge registry land; evidence/temporal/archetypes audit queued via #82 | `extracted_reasoning_core/**`, `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md` |
 | `extracted_quality_gate` | not started | — | — | Boundary audit (deferred behind cost-closure) | — |
 
 Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle (`EXTRACTED_X_STANDALONE=1`) loads local substrate. 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
@@ -32,7 +32,7 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 | #78 | Add multi-channel campaign generation flow | `extracted_content_pipeline/campaign_generation.py`, postgres runners, README, STATUS, tests | (unknown — confirm) | `extracted_content_pipeline/{campaign_generation.py, campaign_postgres_generation.py, campaign_example.py, README.md, STATUS.md, docs/remaining_productization_audit.md, docs/standalone_productization.md}`; `scripts/run_extracted_campaign_generation_*.py`; `tests/test_extracted_campaign_*.py` |
 | #79 | Document reasoning core extraction boundary | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
 | #80 | Add shared reasoning core wedge registry | `extracted_reasoning_core/**`, `extracted_competitive_intelligence/reasoning/wedge_registry.py`, `extracted_content_pipeline/reasoning/wedge_registry.py`, tests | claude-2026-05-03 | `extracted_reasoning_core/**`, the migrated `wedge_registry.py` files |
-| #81 | Add extraction coordination doc | `docs/extraction/COORDINATION.md` | claude-2026-05-03-b (drafted), codex-2026-05-03 (reviewed) | coordination-doc edits; claim before touching `docs/extraction/COORDINATION.md` |
+| #81 | Add extraction coordination doc | `docs/extraction/COORDINATION.md` | claude-2026-05-03-b (drafted), codex-2026-05-03 (reviewed + #82 coordination update) | coordination-doc edits; claim before touching `docs/extraction/COORDINATION.md` |
 | #82 | Document reasoning evidence-temporal-archetypes consolidation | `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
@@ -50,6 +50,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 | PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
 | PR-A4 | `extracted_llm_infrastructure` | unclaimed | PR-A2, PR-A3 | New code: drift report (local vs invoiced), budget gate, OpenAI provider adapter. May split if too large. |
 | PR-B1 | `extracted_quality_gate` | unclaimed | (independent of A) | Boundary audit doc. Mirrors PR #79. Can run in parallel with cost-closure if a second session opens. |
+| PR-C1 | `extracted_reasoning_core` | unclaimed | PR #80, PR #82 | Consolidate evidence/temporal/archetypes after #82 lands: `archetypes.py`, `evidence_engine.py`, `temporal.py`, `evidence_map.yaml`, plus PR #79 contract amendment. |
 
 ---
 
@@ -67,7 +68,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 
 ## Open questions / blockers
 
-- Owners for in-flight PRs #77, #78 — separate AI sessions; pending session-ID confirmation from `@canfieldjuan`. PRs #79 and #80 confirmed as `claude-2026-05-03`.
+- Owners for in-flight PRs #77, #78 — separate AI sessions; pending session-ID confirmation from `@canfieldjuan`. PRs #79, #80, and #82 confirmed as `claude-2026-05-03`.
 - **Future hardening (deferred)**: a CI check that requires any merged PR touching `extracted_*/` to also modify `COORDINATION.md`. Forces the protocol mechanically instead of relying on convention. Land as a follow-up PR-Coord-2 once the doc has hit real friction (i.e. someone has demonstrably forgotten to update).
 
 ---
