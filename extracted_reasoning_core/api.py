@@ -75,10 +75,74 @@ def evaluate_evidence(
     *,
     policy: EvidencePolicy | None = None,
 ) -> EvidenceDecision:
-    """Evaluate evidence against a shared policy."""
-    del evidence
-    del policy
-    raise NotImplementedError("evaluate_evidence lands with evidence consolidation")
+    """Evaluate evidence against a shared policy.
+
+    Public helper that returns the simple "is this evidence allowed
+    through" decision. Routes vendor evidence through the slim
+    `EvidenceEngine` (PR-C1d) and reduces the per-conclusion outcomes
+    to a single `EvidenceDecision`:
+
+      * `allowed=False` if the engine returns the `insufficient_data`
+        short-circuit OR if no conclusion fires (`met=True`); in that
+        case the engine's fallback labels feed the `reasons` field.
+      * `allowed=True` when at least one conclusion is met. `confidence`
+        is the highest-tier confidence string the met conclusions
+        carry, mapped through the optional `policy.confidence_labels`
+        when provided.
+
+    Callers that need the richer per-conclusion / per-suppression
+    outputs should use `EvidenceEngine` directly via
+    `extracted_reasoning_core.evidence_engine.get_evidence_engine`.
+    """
+    from . import evidence_engine as _ee
+
+    engine = _ee.get_evidence_engine()
+    results = engine.evaluate_conclusions(dict(evidence))
+
+    # insufficient_data short-circuit -> single result with met=True,
+    # confidence="insufficient". Translate to allowed=False.
+    if (
+        len(results) == 1
+        and results[0].conclusion_id == "insufficient_data"
+        and results[0].met
+    ):
+        reasons = tuple(
+            x for x in (results[0].fallback_label,) if x
+        )
+        return EvidenceDecision(
+            allowed=False,
+            confidence=0.0,
+            reasons=reasons or ("insufficient_data",),
+        )
+
+    met = [r for r in results if r.met]
+    if not met:
+        # No conclusion fired; surface fallback reasons from any
+        # not-met results that carried fallback_label hints.
+        reasons = tuple(r.fallback_label for r in results if r.fallback_label)
+        return EvidenceDecision(
+            allowed=False,
+            confidence=0.0,
+            reasons=reasons,
+        )
+
+    # Pick the strongest met-confidence string and translate to a
+    # numeric score. Policy can override the mapping.
+    rank = {"high": 0.9, "medium": 0.6, "low": 0.3, "insufficient": 0.0}
+    if policy and policy.confidence_labels:
+        rank = {**rank, **{k: float(v) for k, v in policy.confidence_labels.items()}}
+    confidence = max(rank.get(r.confidence, 0.0) for r in met)
+    if policy and confidence < policy.min_confidence:
+        return EvidenceDecision(
+            allowed=False,
+            confidence=confidence,
+            reasons=("confidence_below_policy_min",),
+        )
+    return EvidenceDecision(
+        allowed=True,
+        confidence=confidence,
+        reasons=tuple(r.conclusion_id for r in met),
+    )
 
 
 def build_temporal_evidence(

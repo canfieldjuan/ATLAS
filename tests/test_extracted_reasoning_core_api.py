@@ -109,11 +109,10 @@ def test_stubbed_public_entry_points_fail_closed_until_consolidated() -> None:
         state={},
     )
 
-    # PR-C1g wired `score_archetypes` and `build_temporal_evidence`; both
-    # are removed from this fail-closed list. `evaluate_evidence` stays
-    # until PR-C1d's slim `EvidenceEngine` lands.
+    # PR-C1g wired `score_archetypes` and `build_temporal_evidence`;
+    # PR-C1d wired `evaluate_evidence` to the slim `EvidenceEngine`.
+    # All three originally NotImplementedError stubs are now functional.
     sync_calls = [
-        lambda: api.evaluate_evidence({}),
         lambda: api.build_narrative_plan({}, pack=ReasoningPack(name="default")),
         lambda: api.compute_evidence_hash({}),
         lambda: api.build_semantic_cache_key(reasoning_input, tier="L1"),
