@@ -1,6 +1,6 @@
 # Decisions Log
 
-Last updated: 2026-05-03T23:39Z by codex-2026-05-03
+Last updated: 2026-05-04T00:01Z by codex-2026-05-03
 
 Append-only chronological log. Never edit historical entries; supersede with a newer entry instead. See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -24,3 +24,4 @@ Append-only chronological log. Never edit historical entries; supersede with a n
 - **2026-05-03** — PR-D3 merged as #99. The Postgres campaign generation runner now accepts the same file-backed reasoning JSON as the offline example, so host-provided reasoning works on demo and DB-backed AI Content Ops paths.
 - **2026-05-03** — PR-D4 merged as #101. AI Content Ops now has a host-configurable markdown skill registry; offline and Postgres campaign CLIs accept `--skills-root` so buyer/customer prompt contracts can override packaged prompts without importing Atlas skills.
 - **2026-05-03** — PR-D5 merged as #105. AI Content Ops now has a product-owned SQL migration runner and CLI, so hosts can apply copied campaign/content migrations through `EXTRACTED_DATABASE_URL`, `DATABASE_URL`, or an explicit DSN without Atlas migration tooling.
+- **2026-05-04** — PR-D6 merged as #110. AI Content Ops now has a product-owned JSON/CSV opportunity importer and CLI, so hosts can load customer rows into `campaign_opportunities` before running DB-backed campaign generation.
