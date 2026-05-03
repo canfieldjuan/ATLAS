@@ -1,3 +1,3 @@
-from .registry import get_skill_registry
+from .registry import LocalSkill, LocalSkillRegistry, get_skill_registry
 
-__all__ = ["get_skill_registry"]
+__all__ = ["LocalSkill", "LocalSkillRegistry", "get_skill_registry"]

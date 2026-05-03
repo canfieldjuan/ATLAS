@@ -187,6 +187,12 @@
       "target": "extracted_content_pipeline/campaign_opportunities.py"
     },
     {
+      "target": "extracted_content_pipeline/skills/__init__.py"
+    },
+    {
+      "target": "extracted_content_pipeline/skills/registry.py"
+    },
+    {
       "target": "extracted_content_pipeline/settings.py"
     },
     {

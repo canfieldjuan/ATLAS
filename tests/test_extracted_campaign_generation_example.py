@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -21,6 +22,18 @@ EXAMPLE_PAYLOAD = (
     ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.json"
 )
 CLI = ROOT / "scripts/run_extracted_campaign_generation_example.py"
+
+
+def _load_example_cli_module():
+    spec = importlib.util.spec_from_file_location(
+        "run_extracted_campaign_generation_example",
+        CLI,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class _InjectedLLM:
@@ -253,3 +266,21 @@ def test_campaign_generation_example_cli_accepts_reasoning_context_file(tmp_path
     source = result["drafts"][0]["metadata"]["source_opportunity"]
     assert source["reasoning_context"]["wedge"] == "renewal pressure"
     assert source["reasoning_context"]["confidence"] == "high"
+
+
+def test_campaign_generation_example_cli_accepts_skills_root(tmp_path) -> None:
+    example_cli = _load_example_cli_module()
+    skill_path = tmp_path / "digest" / "b2b_campaign_generation.md"
+    skill_path.parent.mkdir()
+    skill_path.write_text("Custom host prompt {opportunity_json}", encoding="utf-8")
+    args = example_cli._parse_args([
+        str(EXAMPLE_PAYLOAD),
+        "--skills-root",
+        str(tmp_path),
+    ])
+
+    overrides = example_cli._dependency_overrides(args)
+
+    assert overrides["skills"].get_prompt("digest/b2b_campaign_generation") == (
+        "Custom host prompt {opportunity_json}"
+    )

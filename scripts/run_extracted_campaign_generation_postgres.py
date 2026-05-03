@@ -26,6 +26,7 @@ from extracted_content_pipeline.campaign_postgres_generation import (  # noqa: E
 from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
     load_campaign_reasoning_context_provider,
 )
+from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: E402
 
 
 def _json_object(value: str | None) -> dict[str, Any]:
@@ -37,7 +38,7 @@ def _json_object(value: str | None) -> dict[str, Any]:
     return parsed
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Generate campaign drafts from campaign_opportunities and persist "
@@ -74,6 +75,14 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--skills-root",
+        type=Path,
+        help=(
+            "Optional directory of host-provided markdown skill prompts. "
+            "Custom prompts override packaged prompts with the same name."
+        ),
+    )
+    parser.add_argument(
         "--llm",
         choices=("pipeline", "offline"),
         default="pipeline",
@@ -84,7 +93,7 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         help="Write result JSON to this path instead of stdout.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 async def _create_pool(database_url: str):
@@ -103,12 +112,14 @@ def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
         overrides["reasoning_context"] = load_campaign_reasoning_context_provider(
             args.reasoning_context
         )
+    if args.skills_root:
+        overrides["skills"] = get_skill_registry(root=args.skills_root)
     if args.llm == "pipeline":
         return overrides
     overrides.update({
         "llm": DeterministicCampaignLLM(),
-        "skills": StaticCampaignSkillStore(),
     })
+    overrides.setdefault("skills", StaticCampaignSkillStore())
     return overrides
 
 

@@ -30,6 +30,7 @@ LOCAL_UTILITY_SHIM_PATHS = [
     "extracted_content_pipeline/autonomous/tasks/campaign_suppression.py",
     "extracted_content_pipeline/autonomous/visibility.py",
     "extracted_content_pipeline/campaign_sequence_context.py",
+    "extracted_content_pipeline/skills/__init__.py",
     "extracted_content_pipeline/skills/registry.py",
     "extracted_content_pipeline/services/__init__.py",
     "extracted_content_pipeline/services/apollo_company_overrides.py",
