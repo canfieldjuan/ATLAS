@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T20:00Z by claude-2026-05-03-b
+Last updated: 2026-05-03T19:30Z by claude-2026-05-03
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -17,7 +17,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 | `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | — | Cost-closure additions (PR-A1 → A4) | none |
 | `extracted_competitive_intelligence` | 1 (scaffold) | #48 | #80 | Stabilize after #80 wedge migration | `reasoning/wedge_registry.py` |
 | `extracted_content_pipeline` | 1 → 2 (productization seams in flight) | #76 | #77, #78 | Standalone runner without `atlas_brain` on path | `campaign_generation.py`, `*_postgres_*`, `README.md`, `STATUS.md`, `docs/remaining_productization_audit.md` |
-| `extracted_reasoning_core` | 0 → 1 (kickoff) | — | #79, #80, #82 | First scaffold + wedge registry land; evidence/temporal/archetypes audit queued via #82 | `extracted_reasoning_core/**`, `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md` |
+| `extracted_reasoning_core` | 1 (scaffold + wedge consolidated; PR-C1 claimed) | #82 | PR-C1 (claimed; claude-2026-05-03) | Evidence/temporal/archetypes consolidation per merged PR #82 audit | `extracted_reasoning_core/**` (api/types/archetypes/evidence_engine/evidence_map.yaml/temporal); `atlas_brain/reasoning/{evidence_engine.py, review_enrichment.py}`; `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py`; `tests/test_extracted_reasoning_*.py` |
 | `extracted_quality_gate` | not started | — | — | Boundary audit claimed by PR-B1 | `docs/extraction/quality_gate_boundary_audit_2026-05-03.md` |
 
 Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle loads local substrate (per-product env var: `EXTRACTED_LLM_INFRA_STANDALONE`, `EXTRACTED_COMP_INTEL_STANDALONE`, `EXTRACTED_PIPELINE_STANDALONE`, etc.; see `extracted/METHODOLOGY.md` for the canonical list). 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
@@ -30,11 +30,7 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 |---|---|---|---|---|
 | #77 | docs: park product strategy notes | `extracted_content_pipeline/docs/long_form_creative_backlog.md`, `extracted_content_pipeline/docs/podcast_repurposing_landing_page_strategy.md`, `extracted_content_pipeline/docs/remaining_productization_audit.md` | (unknown — confirm) | #78 on `extracted_content_pipeline/docs/remaining_productization_audit.md` |
 | #78 | Add multi-channel campaign generation flow | `extracted_content_pipeline/campaign_generation.py`, postgres runners, README, STATUS, tests | (unknown — confirm) | `extracted_content_pipeline/{campaign_generation.py, campaign_postgres_generation.py, campaign_example.py, README.md, STATUS.md, docs/remaining_productization_audit.md, docs/standalone_productization.md}`; `scripts/run_extracted_campaign_generation_*.py`; `tests/test_extracted_campaign_*.py` |
-| #79 | Document reasoning core extraction boundary | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
-| #80 | Add shared reasoning core wedge registry | `extracted_reasoning_core/**`, `extracted_competitive_intelligence/reasoning/wedge_registry.py`, `extracted_content_pipeline/reasoning/wedge_registry.py`, tests | claude-2026-05-03 | `extracted_reasoning_core/**`, the migrated `wedge_registry.py` files |
-| #81 | Add extraction coordination doc | `docs/extraction/COORDINATION.md` | claude-2026-05-03-b (drafted), codex-2026-05-03 (reviewed + #82 coordination update) | coordination-doc edits; claim before touching `docs/extraction/COORDINATION.md` |
-| #82 | Document reasoning evidence-temporal-archetypes consolidation | `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
-| #83 | Document cost-closure boundary | `docs/extraction/cost_closure_audit_2026-05-03.md` + COORDINATION update | claude-2026-05-03-b | (docs only) |
+_(Rows for merged PRs #79, #80, #81, #82, #83, #84, #85 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 
@@ -51,7 +47,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 | PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
 | PR-A4 | `extracted_llm_infrastructure` | unclaimed | PR-A2, PR-A3 | New code: drift report (local vs invoiced), budget gate, OpenAI provider adapter. May split if too large. |
 | PR-B1 | `extracted_quality_gate` | codex-2026-05-03 | (independent of A) | Boundary audit doc: `docs/extraction/quality_gate_boundary_audit_2026-05-03.md`. Mirrors PR #79. Docs only; avoid code until audit lands. |
-| PR-C1 | `extracted_reasoning_core` | unclaimed | PR #80, PR #82 | Consolidate evidence/temporal/archetypes after #82 lands: `archetypes.py`, `evidence_engine.py`, `temporal.py`, `evidence_map.yaml`, plus PR #79 contract amendment. |
+| PR-C1 | `extracted_reasoning_core` | claude-2026-05-03 | PR #80, PR #82 (both merged) | Consolidate evidence/temporal/archetypes per merged PR #82 audit. NEW in core: `archetypes.py`, `evidence_engine.py` (slim conclusions+suppression surface), `evidence_map.yaml`, `temporal.py` (with `_numeric_value` / `_row_get` helpers + parameterized `MIN_DAYS_FOR_PERCENTILES`). Atlas-side: NEW `atlas_brain/reasoning/review_enrichment.py`; slim `atlas_brain/reasoning/evidence_engine.py`. Convert `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py` to re-export wrappers. EDIT `extracted_reasoning_core/api.py` (impl 3 stubs) and `extracted_reasoning_core/types.py` (rich `TemporalEvidence` + 4 sub-types + `ConclusionResult` + `SuppressionResult`). Rename + redirect `tests/test_extracted_reasoning_*.py`. PR #79 contract amendment lands in the same commit. |
 
 ---
 
