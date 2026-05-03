@@ -124,7 +124,7 @@ class ReasoningResult:
     summary: str
     claims: Sequence[Mapping[str, Any]]
     confidence: float
-    tier: str
+    tier: ReasoningDepth
     state: Mapping[str, Any]
     trace: Mapping[str, Any] = field(default_factory=dict)
 
@@ -151,7 +151,7 @@ Supporting types defined in PR 2:
 | `FalsificationPolicy` | Product or pack rules for deciding which fresh evidence can invalidate a prior claim. |
 | `FalsificationResult` | Triggered and non-triggered falsification conditions plus invalidation recommendation. |
 | `OutputPolicy` | Validation policy for reasoned outputs, including required claims, citations, confidence, and blocked phrasing. |
-| `ValidationReport` | Structured validation result with blockers, warnings, repaired fields, and audit trace. |
+| `ValidationReport` | Structured validation result with explicit `passed` verdict, blockers, warnings, repaired fields, and audit trace. |
 | `LLMClient` | Port for chat/completion calls; provider routing stays outside reasoning core. |
 | `SemanticCacheStore` | Port for lookup/store/validate/invalidate of semantic-cache entries. |
 | `ReasoningStateStore` | Port for reading/writing long-running reasoning state and continuation checkpoints. |
@@ -184,7 +184,7 @@ def build_narrative_plan(
     pack: ReasoningPack,
 ) -> NarrativePlan: ...
 async def run_reasoning(
-    input: ReasoningInput,
+    reasoning_input: ReasoningInput,
     *,
     depth: ReasoningDepth = "L2",
     pack: ReasoningPack | None = None,
@@ -205,7 +205,7 @@ async def check_falsification(
 ) -> FalsificationResult: ...
 def compute_evidence_hash(evidence: Mapping[str, Any]) -> str: ...
 def build_semantic_cache_key(
-    input: ReasoningInput,
+    reasoning_input: ReasoningInput,
     *,
     tier: str,
     pack_name: str | None = None,
@@ -228,7 +228,7 @@ Deprecation policy:
 
 Graph prompt policy:
 
-- `run_reasoning(input, ports=ports)` without a product pack is valid.
+- `run_reasoning(reasoning_input, ports=ports)` without a product pack is valid.
 - Core ships a minimal default pack for generic triage, synthesis, and
   validation.
 - Product packs override or extend default graph prompts for battle cards,
