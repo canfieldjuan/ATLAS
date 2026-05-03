@@ -171,6 +171,11 @@ host async pool or direct connection. The
 through `EXTRACTED_DATABASE_URL`, `DATABASE_URL`, or an explicit
 `--database-url` argument.
 
+`extracted_content_pipeline/docs/host_install_runbook.md` ties the standalone
+DB-backed path together for hosts: configure a DSN, apply migrations, validate
+and import customer opportunity data, optionally attach reasoning JSON and
+custom skill roots, run Postgres-backed generation, and verify saved drafts.
+
 `extracted_content_pipeline/campaign_opportunities.py` owns the host/customer
 opportunity input contract. It accepts loose customer rows, preserves custom
 fields, and adds stable prompt/storage keys (`target_id`, `company_name`,
@@ -243,5 +248,5 @@ The command must pass before this package is considered customer-usable.
   `api/campaign_webhooks.py` need an app-factory boundary and host-provided
   auth/tenant dependencies.
 - SQL migrations and customer opportunity imports now have product-owned
-  runners, but customer installation still needs a host-facing runbook and
+  runners and a host install runbook, but customer installation still needs
   final base-schema hardening.

@@ -104,6 +104,9 @@
   contract documented in `docs/reasoning_handoff_contract.md`; it does not
   import Atlas synthesis, pool compression, or extracted reasoning-core
   internals.
+- `docs/host_install_runbook.md` documents the end-to-end host path for
+  database-backed installs: migrations, opportunity import, optional reasoning
+  JSON, optional skill roots, generation, and output verification.
 
 ## Validation gates in repo
 
