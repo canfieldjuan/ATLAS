@@ -12,7 +12,7 @@ The wedge -- and the reason this is sellable -- is **invoice reconciliation agai
 
 ## Verified Current State
 
-The `extracted_llm_infrastructure/` manifest contains 14 file mappings + 7 migrations across:
+The `extracted_llm_infrastructure/` manifest contains 14 file mappings + 6 migration mappings (127, 130, 252, 253, 255, 257) across:
 
 | Surface | Files |
 |---|---|

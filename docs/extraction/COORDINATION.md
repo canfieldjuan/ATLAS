@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T19:45Z by claude-2026-05-03-b
+Last updated: 2026-05-03T20:00Z by claude-2026-05-03-b
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -20,7 +20,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 | `extracted_reasoning_core` | 0 → 1 (kickoff) | — | #79, #80, #82 | First scaffold + wedge registry land; evidence/temporal/archetypes audit queued via #82 | `extracted_reasoning_core/**`, `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md` |
 | `extracted_quality_gate` | not started | — | — | Boundary audit claimed by PR-B1 | `docs/extraction/quality_gate_boundary_audit_2026-05-03.md` |
 
-Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle (`EXTRACTED_X_STANDALONE=1`) loads local substrate. 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
+Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle loads local substrate (per-product env var: `EXTRACTED_LLM_INFRA_STANDALONE`, `EXTRACTED_COMP_INTEL_STANDALONE`, `EXTRACTED_PIPELINE_STANDALONE`, etc.; see `extracted/METHODOLOGY.md` for the canonical list). 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
 
 ---
 
@@ -92,7 +92,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 - **Owner format** — GitHub username (`@canfieldjuan`) for human work; `{agent}-YYYY-MM-DD[-suffix]` for AI session work, e.g. `claude-2026-05-03`, `codex-2026-05-03-b`.
 - **Unknown-owner fallback** — if an in-flight PR's Owner is `(unknown — confirm)`, treat its listed file paths as locked until the owner is filled in. Safer default than racing on an unattributed PR.
 - **PR title verbs** — match the established pattern: `Add X`, `Own X`, `Route X through Y`, `Document X`, `Harden X`, `Refresh X`. The verb signals intent (Phase 1 add vs Phase 2 ownership vs Phase 3 decoupling vs docs).
-- **Boundary audit docs** — land in `docs/extraction/<product>_boundary_audit_<date>.md` BEFORE the first scaffold PR. PR #79 is the template.
+- **Boundary / consolidation audit docs** — land in `docs/extraction/<slug>_audit_<date>.md` (with optional `_boundary` infix for first-PR boundary audits) BEFORE the first scaffold PR. `<slug>` is the slice or topic, not the full product name (examples: `reasoning_boundary_audit_2026-05-03.md`, `quality_gate_boundary_audit_2026-05-03.md`, `cost_closure_audit_2026-05-03.md`, `evidence_temporal_archetypes_audit_2026-05-03.md`). PR #79 is the template.
 - **Per-product status** — STATUS.md inside each `extracted_*/` folder is the product-internal state. This doc is the cross-product state. Don't duplicate detail; link.
 
 ## What this doc is NOT for
