@@ -39,6 +39,10 @@ must be replaced with product-owned interfaces:
 - `WebhookVerifier`: provider signature verification and event normalization.
 - `AuditSink`: immutable campaign lifecycle events.
 - `VisibilitySink`: progress/events for hosted dashboards.
+- `CampaignReasoningContextProvider`: host-owned reasoning handoff. The
+  content product consumes already-compressed context through this port; it
+  does not import Atlas synthesis, pool compression, graph state, or
+  `extracted_reasoning_core` internals directly.
 - `TenantScope`: account ownership and permission filtering.
 - `Clock`: deterministic send-window and delay calculations.
 
@@ -118,6 +122,15 @@ multi-channel expansion for one normalized opportunity. Hosts can request
 receives the generated cold-email context through the product opportunity
 payload. This keeps the cold/follow-up flow inside the product-owned ports
 instead of calling the copied `b2b_campaign_generation.py` task.
+
+Reasoning remains a host/product boundary for this slice. The generator accepts
+pre-compressed reasoning through `CampaignReasoningContextProvider` and
+normalizes it with `services.campaign_reasoning_context`; it must not reach into
+Atlas reasoning producers or the extracted reasoning-core internals. The
+contract is documented in `docs/reasoning_handoff_contract.md`. The
+file-backed reference adapter in `campaign_reasoning_data.py` lets standalone
+examples consume host-generated reasoning JSON through that same port without
+adding a reasoning runtime dependency.
 
 `extracted_content_pipeline/campaign_postgres_generation.py` wires the
 database-backed product path. Hosts pass an async Postgres pool and the runner

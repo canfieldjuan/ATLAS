@@ -5,8 +5,8 @@
 | Step | Status |
 |---|---|
 | Manifest of source → scaffold mappings | ✅ done |
-| Verbatim byte-snapshot of 15 Python files | ✅ done (added `services/b2b/llm_exact_cache.py` in PR-A1) |
-| Verbatim byte-snapshot of 7 migration SQL files | ✅ done (added migration 251 in PR-A1) |
+| Verbatim byte-snapshot of 16 Python files | ✅ done (added `services/b2b/llm_exact_cache.py` in PR-A1, `services/provider_cost_sync.py` in PR-A2) |
+| Verbatim byte-snapshot of 8 migration SQL files | ✅ done (added migration 251 in PR-A1, 258 in PR-A2) |
 | Owned (not synced) Python files: 2 (PR-A3) | ✅ done (`services/cost/__init__.py`, `services/cost/cache_savings.py`) |
 | Owned (not synced) migration SQL files: 1 (PR-A3) | ✅ done (`storage/migrations/259_llm_cache_savings.sql`) |
 | Package `__init__.py` files at every level | ✅ done |
@@ -82,6 +82,7 @@ Import contract is closed; the remaining work is **runtime** behavior when funct
 | `services/llm/hybrid.py` | ✅ | ✅ | 🔲 |
 | `services/llm/cloud.py` | ✅ | ✅ | 🔲 |
 | `services/tracing.py` | ✅ | ✅ | 🔲 |
+| `services/provider_cost_sync.py` (PR-A2) | ✅ | 🔲 (Phase 2 follow-up: standalone substrate for provider settings + db pool wrapper for snapshot/daily-cost upserts; lift uses default Atlas mode for now) | 🔲 |
 | `services/cost/__init__.py` (OWNED, PR-A3) | n/a | ✅ (no atlas imports; owned by extraction) | n/a |
 | `services/cost/cache_savings.py` (OWNED, PR-A3) | n/a | ✅ (asyncpg-pool-shaped; runs standalone with the local DatabasePool) | n/a |
 | `storage/migrations/127_*.sql` | ✅ | n/a | n/a |
@@ -90,4 +91,5 @@ Import contract is closed; the remaining work is **runtime** behavior when funct
 | `storage/migrations/253_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/255_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/257_*.sql` | ✅ | n/a | n/a |
+| `storage/migrations/258_*.sql` (PR-A2) | ✅ | n/a | n/a |
 | `storage/migrations/259_*.sql` (OWNED, PR-A3) | n/a | n/a | n/a |

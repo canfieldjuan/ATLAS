@@ -11,6 +11,9 @@ from extracted_content_pipeline.campaign_example import (
     generate_campaign_drafts_from_payload,
 )
 from extracted_content_pipeline.campaign_ports import LLMResponse
+from extracted_content_pipeline.campaign_reasoning_data import (
+    FileCampaignReasoningContextProvider,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,6 +147,42 @@ async def test_example_generates_cold_and_followup_channels_from_payload() -> No
 
 
 @pytest.mark.asyncio
+async def test_example_accepts_file_backed_reasoning_provider() -> None:
+    provider = FileCampaignReasoningContextProvider.from_payload({
+        "contexts": [
+            {
+                "target_id": "opp-1",
+                "reasoning_context": {
+                    "wedge": "renewal pressure",
+                    "confidence": "high",
+                },
+                "campaign_reasoning_context": {
+                    "proof_points": [{"label": "pricing_mentions", "value": 12}]
+                },
+            }
+        ]
+    })
+    payload = {
+        "target_mode": "vendor_retention",
+        "limit": 1,
+        "opportunities": [
+            {"id": "opp-1", "company": "Acme Logistics", "vendor": "HubSpot"}
+        ],
+    }
+
+    result = await generate_campaign_drafts_from_payload(
+        payload,
+        reasoning_context=provider,
+    )
+
+    source = result["drafts"][0]["metadata"]["source_opportunity"]
+    assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert source["campaign_reasoning_context"]["proof_points"][0]["label"] == (
+        "pricing_mentions"
+    )
+
+
+@pytest.mark.asyncio
 async def test_example_respects_limit_and_normalizes_multiple_rows() -> None:
     payload = json.loads(EXAMPLE_PAYLOAD.read_text(encoding="utf-8"))
 
@@ -175,3 +214,42 @@ def test_campaign_generation_example_cli_outputs_draft_json() -> None:
     assert result["result"]["saved_ids"] == ["draft-1"]
     assert result["drafts"][0]["target_id"] == "opp-acme-hubspot"
     assert result["drafts"][0]["metadata"]["generation_model"] == "offline-deterministic"
+
+
+def test_campaign_generation_example_cli_accepts_reasoning_context_file(tmp_path) -> None:
+    reasoning_path = tmp_path / "reasoning.json"
+    reasoning_path.write_text(
+        json.dumps({
+            "contexts": [
+                {
+                    "target_id": "opp-acme-hubspot",
+                    "reasoning_context": {
+                        "wedge": "renewal pressure",
+                        "confidence": "high",
+                    },
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(EXAMPLE_PAYLOAD),
+            "--limit",
+            "1",
+            "--llm",
+            "offline",
+            "--reasoning-context",
+            str(reasoning_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    source = result["drafts"][0]["metadata"]["source_opportunity"]
+    assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert source["reasoning_context"]["confidence"] == "high"
