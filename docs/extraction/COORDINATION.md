@@ -1,22 +1,22 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T22:30Z by claude-2026-05-03-b
+Last updated: 2026-05-03T18:26Z by codex-2026-05-03
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
-The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitHub usernames for human work and date-stamped session IDs for AI work. The first AI session of a calendar day is unsuffixed (e.g. `claude-2026-05-03`); subsequent sessions claim alphabetical suffixes from `-b` (`claude-2026-05-03-b`, `-c`, …) in the same commit that claims a slice. Timestamps in this doc use ISO 8601 UTC (`YYYY-MM-DDTHH:MMZ`).
+The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitHub usernames for human work and agent-stamped session IDs for AI work (`{agent}-YYYY-MM-DD[-suffix]`, e.g. `claude-2026-05-03`, `codex-2026-05-03`). The first session for an agent on a calendar day is unsuffixed; subsequent same-agent sessions claim alphabetical suffixes from `-b` (`claude-2026-05-03-b`, `codex-2026-05-03-b`, …) in the same commit that claims a slice. Timestamps in this doc use ISO 8601 UTC (`YYYY-MM-DDTHH:MMZ`).
 
 ---
 
 ## Per-product state
 
-| Product | Phase | Most recent merged PR | Next milestone | Active hot zone |
-|---|---|---|---|---|
-| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | Cost-closure additions (PR-A1 → A4) | none |
-| `extracted_competitive_intelligence` | 1 (scaffold) | #48 / #80 (open) | Stabilize after #80 wedge migration | `reasoning/wedge_registry.py` |
-| `extracted_content_pipeline` | 1 → 2 (productization seams in flight) | #76 | Standalone runner without `atlas_brain` on path | `campaign_generation.py`, `*_postgres_*`, `README.md`, `STATUS.md` |
-| `extracted_reasoning_core` | 0 → 1 (kickoff) | — (#79 + #80 open) | First scaffold + wedge registry land | `extracted_reasoning_core/**` |
-| `extracted_quality_gate` | not started | — | Boundary audit (deferred behind cost-closure) | — |
+| Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
+|---|---|---|---|---|---|
+| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | — | Cost-closure additions (PR-A1 → A4) | none |
+| `extracted_competitive_intelligence` | 1 (scaffold) | #48 | #80 | Stabilize after #80 wedge migration | `reasoning/wedge_registry.py` |
+| `extracted_content_pipeline` | 1 → 2 (productization seams in flight) | #76 | #77, #78 | Standalone runner without `atlas_brain` on path | `campaign_generation.py`, `*_postgres_*`, `README.md`, `STATUS.md`, `docs/remaining_productization_audit.md` |
+| `extracted_reasoning_core` | 0 → 1 (kickoff) | — | #79, #80 | First scaffold + wedge registry land | `extracted_reasoning_core/**` |
+| `extracted_quality_gate` | not started | — | — | Boundary audit (deferred behind cost-closure) | — |
 
 Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle (`EXTRACTED_X_STANDALONE=1`) loads local substrate. 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
 
@@ -26,7 +26,7 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| #77 | docs: park product strategy notes | docs only | (unknown — confirm) | — |
+| #77 | docs: park product strategy notes | `extracted_content_pipeline/docs/long_form_creative_backlog.md`, `extracted_content_pipeline/docs/podcast_repurposing_landing_page_strategy.md`, `extracted_content_pipeline/docs/remaining_productization_audit.md` | (unknown — confirm) | #78 on `extracted_content_pipeline/docs/remaining_productization_audit.md` |
 | #78 | Add multi-channel campaign generation flow | `extracted_content_pipeline/campaign_generation.py`, postgres runners, README, STATUS, tests | (unknown — confirm) | `extracted_content_pipeline/{campaign_generation.py, campaign_postgres_generation.py, campaign_example.py, README.md, STATUS.md, docs/remaining_productization_audit.md, docs/standalone_productization.md}`; `scripts/run_extracted_campaign_generation_*.py`; `tests/test_extracted_campaign_*.py` |
 | #79 | Document reasoning core extraction boundary | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
 | #80 | Add shared reasoning core wedge registry | `extracted_reasoning_core/**`, `extracted_competitive_intelligence/reasoning/wedge_registry.py`, `extracted_content_pipeline/reasoning/wedge_registry.py`, tests | claude-2026-05-03 | `extracted_reasoning_core/**`, the migrated `wedge_registry.py` files |
@@ -82,7 +82,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 
 ## Conventions
 
-- **Owner format** — GitHub username (`@canfieldjuan`) for human work; `claude-YYYY-MM-DD[-suffix]` for AI session work.
+- **Owner format** — GitHub username (`@canfieldjuan`) for human work; `{agent}-YYYY-MM-DD[-suffix]` for AI session work, e.g. `claude-2026-05-03`, `codex-2026-05-03-b`.
 - **Unknown-owner fallback** — if an in-flight PR's Owner is `(unknown — confirm)`, treat its listed file paths as locked until the owner is filled in. Safer default than racing on an unattributed PR.
 - **PR title verbs** — match the established pattern: `Add X`, `Own X`, `Route X through Y`, `Document X`, `Harden X`, `Refresh X`. The verb signals intent (Phase 1 add vs Phase 2 ownership vs Phase 3 decoupling vs docs).
 - **Boundary audit docs** — land in `docs/extraction/<product>_boundary_audit_<date>.md` BEFORE the first scaffold PR. PR #79 is the template.
