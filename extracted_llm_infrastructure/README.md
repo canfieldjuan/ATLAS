@@ -26,6 +26,7 @@ The pattern mirrors the content-pipeline scaffold under
 | `services/provider_cost_sync.py` | `atlas_brain/services/provider_cost_sync.py` | Provider billing reconciliation (~286 LOC). Fetches OpenRouter credits + Anthropic admin daily costs, persists snapshots and daily rows for local-vs-invoiced drift reporting. |
 | `services/cost/cache_savings.py` (OWNED, PR-A3) | (new code) | Cache-savings persistence: one row per cache hit + ``daily_cache_savings`` rollup with per-namespace and per-attribution-dim breakdowns. Closes the "cache hits in memory only" telemetry gap. |
 | `services/cost/openai_billing.py` (OWNED, PR-A4c) | (new code) | OpenAI Costs API fetcher. Sibling of ``services/provider_cost_sync.py`` (OpenRouter + Anthropic). Persists daily org-cost totals to the same ``llm_provider_daily_costs`` table for drift reconciliation. |
+| `services/cost/drift.py` (OWNED, PR-A4a) | (new code) | Local-vs-invoiced cost drift report. ``compute_drift`` joins ``llm_usage`` daily sums with ``llm_provider_daily_costs`` invoiced amounts (FULL OUTER) and tags each row with explanatory chips (``stale_pricing``, ``missing_local_rows``, ``missing_invoice``, ``high_drift``). The differentiated cost-closure wedge. |
 | `storage/migrations/127_llm_usage.sql` | mig 127 | Initial llm_usage table |
 | `storage/migrations/130_reasoning_semantic_cache.sql` | mig 130 | Semantic cache + metacognition tables |
 | `storage/migrations/251_b2b_llm_exact_cache.sql` | mig 251 | b2b_llm_exact_cache table (cost-closure: cached LLM responses + usage_json) |

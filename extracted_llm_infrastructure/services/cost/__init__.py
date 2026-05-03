@@ -9,11 +9,14 @@ Owned modules in this package (not synced from atlas_brain):
   lifted ``services/provider_cost_sync.py`` (which covers OpenRouter
   + Anthropic). Persists daily costs to the same
   ``llm_provider_daily_costs`` table.
+- ``drift`` -- per-day reconciliation between locally-tracked spend
+  (``llm_usage``) and invoiced spend (``llm_provider_daily_costs``).
+  Returns ``DriftRow`` objects with explanatory chips
+  (``stale_pricing``, ``missing_local_rows``, ``high_drift``, etc.).
+  The differentiated cost-closure wedge.
 
 Future siblings (queued in ``docs/extraction/cost_closure_audit_2026-05-03.md``):
 
-- ``drift`` (PR-A4): local-vs-invoiced reconciliation per (provider,
-  model, day, attribution).
-- ``budget`` (PR-A4): runtime budget gate with daily and per-attribution
-  caps.
+- ``budget`` (PR-A4b): runtime budget gate with daily and
+  per-attribution caps.
 """
