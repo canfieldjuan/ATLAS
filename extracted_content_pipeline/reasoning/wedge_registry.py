@@ -1,28 +1,26 @@
+"""Compatibility wrapper for the shared extracted reasoning wedge registry."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
+from extracted_reasoning_core.api import (
+    WEDGE_ENUM_VALUES,
+    Wedge,
+    WedgeMeta,
+    get_required_pools,
+    get_sales_motion,
+    get_wedge_meta,
+    validate_wedge,
+    wedge_from_archetype,
+)
 
 
-class Wedge(str, Enum):
-    PRICING = "pricing"
-    SUPPORT = "support"
-    RELIABILITY = "reliability"
-    FEATURES = "features"
-    INTEGRATIONS = "integrations"
-
-
-@dataclass
-class WedgeMeta:
-    label: str
-
-
-def get_wedge_meta(wedge: Wedge) -> WedgeMeta:
-    return WedgeMeta(label=str(wedge.value).replace("_", " ").title())
-
-
-def validate_wedge(value: str) -> str:
-    norm = str(value or "").strip().lower()
-    if norm in {w.value for w in Wedge}:
-        return norm
-    return Wedge.SUPPORT.value
+__all__ = [
+    "WEDGE_ENUM_VALUES",
+    "Wedge",
+    "WedgeMeta",
+    "get_required_pools",
+    "get_sales_motion",
+    "get_wedge_meta",
+    "validate_wedge",
+    "wedge_from_archetype",
+]
