@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T19:31Z by codex-2026-05-03
+Last updated: 2026-05-03T21:30Z by claude-2026-05-03-b
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
