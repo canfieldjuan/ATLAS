@@ -60,7 +60,16 @@ def test_reasoning_public_dataclasses_instantiate_with_defaults() -> None:
     assert result.state["wedge"] == "price_squeeze"
     assert ReasoningPorts() == ReasoningPorts()
     assert ReasoningPack(name="content_pipeline").version == "v1"
-    assert TemporalEvidence().velocity == {}
+    # PR-C1c amended PR #79's TemporalEvidence from a coarse
+    # `Mapping[str, Any]` placeholder to the rich shape with the four
+    # public sub-types. The contract now requires `vendor_name` and
+    # `snapshot_days`; collections default to empty lists.
+    te = TemporalEvidence(vendor_name="acme", snapshot_days=30)
+    assert te.velocities == []
+    assert te.trends == []
+    assert te.anomalies == []
+    assert te.category_baselines == []
+    assert te.insufficient_data is False
     assert NarrativePlan().sections == ()
     assert FalsificationResult().should_invalidate is False
     assert OutputPolicy().require_citations is True

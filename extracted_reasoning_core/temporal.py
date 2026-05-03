@@ -38,76 +38,22 @@ temporal engine and the content_pipeline fork. Documented decisions
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
+
+from .types import (
+    AnomalyScore,
+    CategoryPercentile,
+    LongTermTrend,
+    TemporalEvidence,
+    VendorVelocity,
+)
 
 MIN_DAYS_FOR_VELOCITY = 2
 MIN_DAYS_FOR_ACCELERATION = 3
 MIN_DAYS_FOR_PERCENTILES = 3  # Was atlas's constant=7 / hardcoded gate=3; canonicalized to 3 (atlas's actual behavior)
 MIN_DAYS_FOR_TREND = 14  # Relaxed from 30 to allow shorter history
 RECENCY_HALF_LIFE_DAYS = 14
-
-
-@dataclass(frozen=True)
-class VendorVelocity:
-    """Rate-of-change metrics for a vendor."""
-
-    vendor_name: str
-    metric: str
-    current_value: float
-    previous_value: float
-    velocity: float          # change per day
-    days_between: int
-    acceleration: float | None = None  # change in velocity (needs 3+ points)
-
-
-@dataclass(frozen=True)
-class LongTermTrend:
-    """Long-term trend analysis (30-90 days)."""
-
-    metric: str
-    slope_30d: float | None = None
-    slope_90d: float | None = None
-    volatility: float | None = None  # standard deviation of changes
-    data_points: int = 0
-
-
-@dataclass(frozen=True)
-class CategoryPercentile:
-    """Rolling percentile baselines for a metric within a category."""
-
-    product_category: str
-    metric: str
-    p25: float
-    p50: float
-    p75: float
-    sample_count: int
-
-
-@dataclass(frozen=True)
-class AnomalyScore:
-    """Z-score anomaly detection for a vendor metric."""
-
-    vendor_name: str
-    metric: str
-    value: float
-    z_score: float
-    p_value: float | None = None
-    is_anomaly: bool = False    # |z| > 2.0
-
-
-@dataclass(frozen=True)
-class TemporalEvidence:
-    """Complete temporal analysis for a vendor, used as evidence in reasoning."""
-
-    vendor_name: str
-    snapshot_days: int
-    velocities: list[VendorVelocity] = field(default_factory=list)
-    trends: list[LongTermTrend] = field(default_factory=list)
-    anomalies: list[AnomalyScore] = field(default_factory=list)
-    category_baselines: list[CategoryPercentile] = field(default_factory=list)
-    insufficient_data: bool = False
 
 
 # Metrics to track velocity on
