@@ -1596,7 +1596,19 @@ def _apply_blog_quality_gate(
     Run deterministic quality checks and cleanup.
 
     Returns (possibly cleaned content, quality report).
+
+    The deterministic validators live in
+    ``extracted_quality_gate.blog_pack.evaluate_blog_post``. This
+    wrapper is responsible for:
+      * sanitization (markdown cleanup + unmatched-quote removal)
+      * building the ``QualityInput`` + ``QualityPolicy`` for the pack
+      * running the atlas-side specificity check (PR-B5 territory)
+      * merging pack findings + specificity findings + sanitization
+        diagnostics into the legacy dict shape callers expect.
     """
+    from extracted_quality_gate.blog_pack import evaluate_blog_post
+    from extracted_quality_gate.types import QualityInput, QualityPolicy
+
     cleaned = dict(content or {})
     body = str(cleaned.get("content") or "")
     body, sanitize_counts = _sanitize_blog_markdown(body)
@@ -1605,64 +1617,68 @@ def _apply_blog_quality_gate(
     body, removed_quotes = _remove_unmatched_quote_lines(body, source_quotes)
     cleaned["content"] = body
 
-    blocking_issues: list[str] = []
-    warnings: list[str] = []
     fixes_applied: list[str] = []
-
     if sanitize_counts.get("answer_prefix_removed", 0) > 0:
         fixes_applied.append(f"removed_answer_prefix:{sanitize_counts['answer_prefix_removed']}")
     if removed_quotes > 0:
         fixes_applied.append(f"removed_unmatched_quotes:{removed_quotes}")
 
+    # ---- Build QualityInput for the deterministic pack ----
     length_policy = _blog_length_policy(blueprint.topic_type)
     min_words = int(length_policy["min_words"])
     target_words = int(length_policy["target_words"])
-    word_count = len(body.split())
-    if word_count < min_words:
-        blocking_issues.append(f"content_too_short:{word_count}_words_need_{min_words}")
-    elif word_count < target_words:
-        warnings.append(f"content_below_seo_target_{target_words}_words")
+    pass_score = int(settings.b2b_churn.blog_quality_pass_score)
 
-    chart_ids = [c.chart_id for c in blueprint.charts]
-    chart_mentions = re.findall(r"\{\{chart:([a-zA-Z0-9\-_]+)\}\}", body)
-    chart_counts = {chart_id: chart_mentions.count(chart_id) for chart_id in chart_ids}
-    for chart_id in chart_ids:
-        count = chart_counts.get(chart_id, 0)
-        if count == 0:
-            blocking_issues.append(f"missing_chart_placeholder:{chart_id}")
-        elif count > 1:
-            blocking_issues.append(f"duplicate_chart_placeholder:{chart_id}")
-    unknown_chart_ids = sorted({cid for cid in chart_mentions if cid not in set(chart_ids)})
-    if unknown_chart_ids:
-        blocking_issues.append(f"unknown_chart_placeholders:{','.join(unknown_chart_ids)}")
+    # Compute the chart-level metadata the pack needs (chart_id +
+    # lowercase data labels for chart-scope ambiguity check).
+    pack_charts: list[dict[str, Any]] = []
+    for chart in blueprint.charts:
+        labels: set[str] = set()
+        for row in chart.data:
+            if isinstance(row, dict):
+                for vk in ("name", "label", "category"):
+                    v = str(row.get(vk) or "").strip()
+                    if v:
+                        labels.add(v.lower())
+        pack_charts.append({"chart_id": chart.chart_id, "data_labels_lower": labels})
 
-    unresolved_tokens: list[str] = []
-    for token in _PLACEHOLDER_RE.findall(body):
-        token = token.strip()
-        if token.startswith("chart:"):
-            continue
-        unresolved_tokens.append(token)
-    if unresolved_tokens:
-        blocking_issues.append(
-            f"unresolved_placeholders:{','.join(sorted(set(unresolved_tokens))[:6])}"
-        )
+    # Collect required vendor names (the pack just checks presence).
+    required_vendors = _required_vendor_names(blueprint)
 
-    quoted = _extract_blockquote_quotes(body)
-    if source_quotes and len(quoted) < 2:
-        blocking_issues.append(f"too_few_sourced_quotes:{len(quoted)}")
-    if not source_quotes and len(quoted) == 0:
-        warnings.append("no_quotes_present")
+    pack_input = QualityInput(
+        artifact_type="blog_post",
+        artifact_id=blueprint.slug,
+        content=body,
+        context={
+            "topic_type": blueprint.topic_type,
+            "slug": blueprint.slug,
+            "suggested_title": str(content.get("title") or blueprint.suggested_title or ""),
+            "data_context": blueprint.data_context if isinstance(blueprint.data_context, dict) else {},
+            "charts": pack_charts,
+            "source_quotes": tuple(source_quotes),
+            "required_vendors": tuple(required_vendors),
+            "grounded_vendors": _build_grounded_vendor_set(blueprint),
+            # Atlas-specific skip words for data-claim regex strategy 2.
+            # Includes review-source enum names and wedge labels that
+            # match the multi-word capitalized pattern but are not
+            # vendors.
+            "non_vendor_skip_words": frozenset(_BLOG_NON_VENDOR_SKIP_WORDS),
+        },
+    )
+    pack_policy = QualityPolicy(
+        name="blog_post",
+        thresholds={
+            "min_words": min_words,
+            "target_words": target_words,
+            "pass_score": pass_score,
+        },
+    )
+    pack_report = evaluate_blog_post(pack_input, policy=pack_policy)
 
-    review_period = str((blueprint.data_context or {}).get("review_period") or "").strip()
-    if review_period and review_period not in body:
-        warnings.append("review_period_not_explicitly_mentioned")
-    if "self-selected" not in body.lower():
-        warnings.append("methodology_disclaimer_missing_self_selected")
+    blocking_issues: list[str] = list(pack_report.metadata.get("blocking_issues", ()))
+    warnings: list[str] = list(pack_report.metadata.get("warnings", ()))
 
-    missing_vendors = _required_vendor_mentions(blueprint, body)
-    if missing_vendors:
-        blocking_issues.append(f"missing_vendor_mentions:{','.join(missing_vendors)}")
-
+    # ---- Atlas-side specificity check (PR-B5 territory) ----
     specificity_context = surface_specificity_context(
         blueprint.data_context if isinstance(blueprint.data_context, dict) else {},
         surface="blog",
@@ -1693,121 +1709,45 @@ def _apply_blog_quality_gate(
             for warning in specificity.get("warnings", []) or []
         )
 
-    # Block placeholder links
-    if 'href="#"' in body or "href='#'" in body:
-        blocking_issues.append("placeholder_links_href_hash")
-
-    # Block nonexistent internal blog links
-    internal_links = re.findall(r'/blog/([a-z0-9\-]+)', body)
-    if internal_links:
-        known = set((blueprint.data_context or {}).get("_valid_internal_slugs") or [])
-        fake = [lk for lk in internal_links if lk not in known and lk != blueprint.slug]
-        if fake:
-            blocking_issues.append(f"nonexistent_internal_links:{','.join(fake[:4])}")
-
-    # Warn on title/slug mismatch
-    title_lower = str(content.get("title") or blueprint.suggested_title or "").lower()
-    for vk in ("vendor", "vendor_a", "vendor_b"):
-        v = str((blueprint.data_context or {}).get(vk) or "").strip()
-        if v and len(v) > 2 and v.lower() not in title_lower:
-            warnings.append(f"title_missing_expected_vendor:{v}")
-            break
-
-    body_lower = body.lower()
-    if "category winner" in body_lower or "category loser" in body_lower:
-        dc = blueprint.data_context or {}
-        if not (dc.get("category_winner") or dc.get("category_loser")):
-            blocking_issues.append("unsupported_category_outcome_assertion")
-
-    # Unsupported data claims: vendor names in claim-bearing sentences not in data
-    grounded = _build_grounded_vendor_set(blueprint)
-    ctx = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
-    unsupported = _find_unsupported_data_claims(
-        body, grounded, known_vendors=ctx.get("_known_vendors"),
-    )
-    for claim in unsupported[:3]:
-        warnings.append(f"unsupported_data_claim:{claim}")
-
-    # Chart-scope ambiguity: strongest claim phrases must match chart data_labels
-    _CHART_SCOPE_PHRASES = (
-        "most common source", "top migration source", "top source",
-        "primary source", "where users come from", "where teams come from",
-        "most common migration",
-    )
-    chart_labels_lower: set[str] = set()
-    for chart in blueprint.charts:
-        for row in chart.data:
-            if isinstance(row, dict):
-                for vk in ("name", "label", "category"):
-                    v = str(row.get(vk) or "").strip()
-                    if v:
-                        chart_labels_lower.add(v.lower())
-    if chart_labels_lower:
-        sentences = re.split(r'(?<=[.!?])\s+|\n+', body)
-        for sentence in sentences:
-            s_lower = sentence.lower()
-            if not any(phrase in s_lower for phrase in _CHART_SCOPE_PHRASES):
-                continue
-            # Check if sentence names a vendor NOT in chart labels
-            for v in (ctx.get("_known_vendors") or []):
-                if len(v) > 2 and v.lower() not in chart_labels_lower and re.search(r"\b" + re.escape(v) + r"\b", sentence, re.IGNORECASE):
-                    warnings.append(
-                        f"chart_scope_ambiguity:{v}: {sentence.strip()[:100]}"
-                    )
-                    break
-
-    # Numeric consistency: check that sub-counts don't exceed headline counts
-    _COUNT_PATTERN = re.compile(
-        r"(\d[\d,]*)\s+(?:switching|churn|migration|displacement)\s+"
-        r"(?:signals?|stories|reviews?|mentions?)",
-        re.IGNORECASE,
-    )
-    count_values = [int(m.replace(",", "")) for m in _COUNT_PATTERN.findall(body)]
-    if len(count_values) >= 2:
-        headline = max(count_values)
-        sub_total = sum(v for v in count_values if v != headline)
-        if sub_total > headline and headline > 0:
-            warnings.append(
-                f"numeric_inconsistency:sub-counts ({sub_total}) exceed headline ({headline})"
-            )
-
-    # Direction guard: migration_guide should stay inbound-focused
-    if blueprint.topic_type == "migration_guide":
-        dc = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
-        topic_vendor = str(dc.get("vendor") or dc.get("to_vendor") or "").strip()
-        if topic_vendor:
-            _OUTBOUND_PHRASES = (
-                f"switching from {topic_vendor}".lower(),
-                f"leaving {topic_vendor}".lower(),
-                f"moving away from {topic_vendor}".lower(),
-                f"migrating from {topic_vendor}".lower(),
-                f"abandoning {topic_vendor}".lower(),
-            )
-            outbound_count = sum(
-                1 for phrase in _OUTBOUND_PHRASES
-                if phrase in body_lower
-            )
-            if outbound_count >= 2:
-                warnings.append(
-                    f"migration_direction_drift:too much outbound prose about leaving {topic_vendor} "
-                    f"in a switch-to-{topic_vendor} article ({outbound_count} outbound phrases)"
-                )
-
-    threshold = int(settings.b2b_churn.blog_quality_pass_score)
+    # Recompute score with merged issues so specificity findings affect status.
     score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
     report = {
         "score": score,
-        "threshold": threshold,
-        "status": "pass" if (not blocking_issues and score >= threshold) else "fail",
+        "threshold": pass_score,
+        "status": "pass" if (not blocking_issues and score >= pass_score) else "fail",
         "blocking_issues": blocking_issues,
         "warnings": warnings,
         "fixes_applied": fixes_applied,
-        "quote_count": len(quoted),
-        "word_count": word_count,
+        "quote_count": pack_report.metadata.get("quote_count", 0),
+        "word_count": pack_report.metadata.get("word_count", len(body.split())),
         "min_words_required": min_words,
         "target_words": target_words,
     }
     return cleaned, report
+
+
+def _required_vendor_names(blueprint: PostBlueprint) -> list[str]:
+    """Resolve required vendor names from the blueprint context.
+
+    Mirrors the resolution logic of the legacy
+    ``_required_vendor_mentions`` but returns the names rather than
+    the missing-from-body subset, so the pack can do the membership
+    test.
+    """
+    ctx = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+    required: list[str] = []
+    for key in ("vendor", "vendor_a", "vendor_b"):
+        value = str(ctx.get(key) or "").strip()
+        if value:
+            required.append(value)
+    if not required:
+        topic_ctx = ctx.get("topic_ctx")
+        if isinstance(topic_ctx, dict):
+            for key in ("vendor", "vendor_a", "vendor_b"):
+                value = str(topic_ctx.get(key) or "").strip()
+                if value:
+                    required.append(value)
+    return required
 
 
 def _quality_feedback(report: dict[str, Any]) -> list[str]:
