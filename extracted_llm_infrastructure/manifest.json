@@ -100,6 +100,7 @@
   "owned": [
     {"target": "extracted_llm_infrastructure/services/cost/__init__.py"},
     {"target": "extracted_llm_infrastructure/services/cost/cache_savings.py"},
+    {"target": "extracted_llm_infrastructure/services/cost/openai_billing.py"},
     {"target": "extracted_llm_infrastructure/storage/migrations/259_llm_cache_savings.sql"}
   ]
 }
