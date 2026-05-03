@@ -23,6 +23,9 @@ from extracted_content_pipeline.campaign_example import (  # noqa: E402
 from extracted_content_pipeline.campaign_postgres_generation import (  # noqa: E402
     generate_campaign_drafts_from_postgres,
 )
+from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
+    load_campaign_reasoning_context_provider,
+)
 
 
 def _json_object(value: str | None) -> dict[str, Any]:
@@ -63,6 +66,14 @@ def _parse_args() -> argparse.Namespace:
         help="Optional JSON object of opportunity filters.",
     )
     parser.add_argument(
+        "--reasoning-context",
+        type=Path,
+        help=(
+            "Optional JSON file containing host-provided reasoning context "
+            "keyed by target id, company, email, or vendor."
+        ),
+    )
+    parser.add_argument(
         "--llm",
         choices=("pipeline", "offline"),
         default="pipeline",
@@ -87,12 +98,18 @@ async def _create_pool(database_url: str):
 
 
 def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    if args.reasoning_context:
+        overrides["reasoning_context"] = load_campaign_reasoning_context_provider(
+            args.reasoning_context
+        )
     if args.llm == "pipeline":
-        return {}
-    return {
+        return overrides
+    overrides.update({
         "llm": DeterministicCampaignLLM(),
         "skills": StaticCampaignSkillStore(),
-    }
+    })
+    return overrides
 
 
 async def _main() -> int:
