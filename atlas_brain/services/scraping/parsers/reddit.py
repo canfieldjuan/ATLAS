@@ -62,6 +62,7 @@ _SORTS_INCREMENTAL = ["new", "relevance"]
 # Time window per scrape mode
 _TIME_INITIAL = "all"
 _TIME_INCREMENTAL = "month"
+_RATE_LIMIT_BREAKER_THRESHOLD = 5    # Stop search fanout after repeated 429s
 _COMMENT_TRIGGER_KEYWORDS = {
     "migration", "migrating", "evaluating", "replacing", "budget",
     "cto", "switch", "switching", "alternative", "leaving", "moved",
@@ -103,6 +104,25 @@ _INSIDER_SUBREDDITS = [
     "sales", "consulting", "recruiting", "careerguidance",
     "MBA", "jobs",
     # Tier 3: tech discussion with insider spillover
+    "sysadmin", "devops", "cybersecurity", "netsec",
+    "aws", "salesforce", "datascience", "programming",
+    "webdev", "UXDesign", "SaaS", "startups",
+    "RemoteWork", "WorkOnline", "microsoft", "google",
+    "cscareeradvice", "management", "technology", "softwaregore",
+]
+
+_INSIDER_BROAD_PRIMARY_SUBREDDITS = [
+    # Tier 1: direct employee/workplace
+    "cscareerquestions", "ExperiencedDevs", "antiwork",
+    "recruitinghell", "overemployed", "layoffs", "workreform",
+    # Tier 2: industry career
+    "ITCareerQuestions", "ProductManagement", "CustomerSuccess",
+    "sales", "consulting", "recruiting", "careerguidance",
+    "MBA", "jobs",
+]
+
+_INSIDER_BROAD_EXPANSION_SUBREDDITS = [
+    # Tier 3: broader tech discussion, only if primary pass is sparse
     "sysadmin", "devops", "cybersecurity", "netsec",
     "aws", "salesforce", "datascience", "programming",
     "webdev", "UXDesign", "SaaS", "startups",
@@ -378,6 +398,18 @@ def _resolve_target_subreddits(target: ScrapeTarget, profile: str) -> list[str]:
     defaults = _INSIDER_SUBREDDITS if profile == "insider" else _DEFAULT_SUBREDDITS
     configured = _coerce_subreddit_list((target.metadata or {}).get("subreddits"))
     return configured or list(defaults)
+
+
+def _resolve_insider_broad_subreddits(target: ScrapeTarget) -> tuple[list[str], list[str]]:
+    """Return staged insider broad-pass subreddit lists.
+
+    Configured subreddits are treated as explicit operator intent and are not
+    split into primary/expansion phases.
+    """
+    configured = _coerce_subreddit_list((target.metadata or {}).get("subreddits"))
+    if configured:
+        return configured, []
+    return list(_INSIDER_BROAD_PRIMARY_SUBREDDITS), list(_INSIDER_BROAD_EXPANSION_SUBREDDITS)
 
 
 def _build_expected_subreddit_set(target: ScrapeTarget, profile: str) -> set[str]:
@@ -975,6 +1007,7 @@ class RedditParser:
         # Semaphore: max 3 concurrent requests
         sem = asyncio.Semaphore(3)
         pages_scraped_ref = [0]  # mutable int via list
+        rate_limit_state = {"hits": 0, "tripped": False}
 
         async def _get(http: httpx.AsyncClient, url: str) -> httpx.Response | None:
             async with sem:
@@ -982,6 +1015,17 @@ class RedditParser:
                     resp = await http.get(url)
                     pages_scraped_ref[0] += 1
                     if resp.status_code == 429:
+                        rate_limit_state["hits"] += 1
+                        if (
+                            rate_limit_state["hits"] >= _RATE_LIMIT_BREAKER_THRESHOLD
+                            and not rate_limit_state["tripped"]
+                        ):
+                            rate_limit_state["tripped"] = True
+                            logger.info(
+                                "Reddit rate-limit breaker tripped for %s after %d HTTP 429 responses",
+                                target.vendor_name,
+                                rate_limit_state["hits"],
+                            )
                         logger.debug("Reddit rate limited, pausing 2s")
                         await asyncio.sleep(2)
                         errors.append(f"GET {url}: 429 rate limited")
@@ -1020,14 +1064,15 @@ class RedditParser:
             queries = self._build_global_queries(target.vendor_name, profile)
 
             if profile == "insider":
+                broad_signal_subs: set[str] = set()
+                broad_primary_subs, broad_expansion_subs = _resolve_insider_broad_subreddits(target)
                 # Insider: restrict search to insider subreddits only.
                 # Strategy: one broad vendor-name query per sub first (covers
-                # all subs within budget), then targeted insider queries on
-                # remaining budget. This ensures we reach all 36 subs instead
-                # of exhausting budget on the first 2.
+                # primary insider subs within budget), then expand into broader
+                # tech subs only when the primary pass stays sparse.
                 broad_query = target.vendor_name
-                for sub in subreddits:
-                    if budget_ref[0] <= 0:
+                for sub in broad_primary_subs:
+                    if budget_ref[0] <= 0 or rate_limit_state["tripped"]:
                         break
                     found = await self._search_with_pagination(
                         http, _get, broad_query, "relevance", time_window,
@@ -1037,16 +1082,44 @@ class RedditParser:
                         subreddit=sub,
                     )
                     reviews.extend(found)
+                    if any(
+                        (review.get("raw_metadata") or {}).get("employment_claim")
+                        or (review.get("raw_metadata") or {}).get("candidate_score", 0) >= 5.0
+                        or len((review.get("raw_metadata") or {}).get("org_signal_types") or []) >= 2
+                        for review in found
+                    ):
+                        broad_signal_subs.add(sub)
+                if not broad_signal_subs and len(reviews) < 5:
+                    for sub in broad_expansion_subs:
+                        if budget_ref[0] <= 0 or rate_limit_state["tripped"]:
+                            break
+                        found = await self._search_with_pagination(
+                            http, _get, broad_query, "relevance", time_window,
+                            target, seen_ids, profile, alias_pattern,
+                            author_index, budget_ref, max_pages,
+                            _maybe_pause,
+                            subreddit=sub,
+                        )
+                        reviews.extend(found)
+                        if any(
+                            (review.get("raw_metadata") or {}).get("employment_claim")
+                            or (review.get("raw_metadata") or {}).get("candidate_score", 0) >= 5.0
+                            or len((review.get("raw_metadata") or {}).get("org_signal_types") or []) >= 2
+                            for review in found
+                        ):
+                            broad_signal_subs.add(sub)
                 # Second pass: targeted insider queries on high-value subs
                 _high_value_subs = [
                     "cscareerquestions", "ExperiencedDevs", "antiwork",
                     "layoffs", "sales", "SaaS", "startups",
                 ]
                 for sub in _high_value_subs:
-                    if budget_ref[0] <= 0:
+                    if budget_ref[0] <= 0 or rate_limit_state["tripped"]:
                         break
+                    if sub not in broad_signal_subs:
+                        continue
                     for query in queries[:5]:
-                        if budget_ref[0] <= 0:
+                        if budget_ref[0] <= 0 or rate_limit_state["tripped"]:
                             break
                         found = await self._search_with_pagination(
                             http, _get, query, "relevance", time_window,
@@ -1059,10 +1132,10 @@ class RedditParser:
             else:
                 # Churn/deep: global search across all of Reddit.
                 for query in queries:
-                    if budget_ref[0] <= 0:
+                    if budget_ref[0] <= 0 or rate_limit_state["tripped"]:
                         break
                     for sort in sorts:
-                        if budget_ref[0] <= 0:
+                        if budget_ref[0] <= 0 or rate_limit_state["tripped"]:
                             break
                         found = await self._search_with_pagination(
                             http, _get, query, sort, time_window,
@@ -1078,6 +1151,8 @@ class RedditParser:
                 comment_fetches = 0
 
                 for post_dict in list(reviews):  # iterate snapshot
+                    if rate_limit_state["tripped"]:
+                        break
                     if comment_fetches >= _MAX_COMMENT_FETCHES:
                         logger.info(
                             "Reddit comment fetch cap (%d) reached for %s [%s]",
@@ -1086,9 +1161,18 @@ class RedditParser:
                         break
 
                     post_id = post_dict.get("source_review_id", "")
-                    num_comments = (post_dict.get("raw_metadata") or {}).get("num_comments", 0)
+                    post_meta = post_dict.get("raw_metadata") or {}
+                    num_comments = post_meta.get("num_comments", 0)
                     if not post_id or num_comments < 3:
                         continue
+                    if profile == "insider":
+                        has_insider_signal = (
+                            bool(post_meta.get("employment_claim"))
+                            or float(post_meta.get("candidate_score", 0) or 0) >= 5.0
+                            or len(post_meta.get("org_signal_types") or []) >= 2
+                        )
+                        if not has_insider_signal or num_comments < 5:
+                            continue
 
                     comments, cpages, cerrs = await self._fetch_comments_authenticated(
                         http, post_id, target, post_dict, comment_limit, _MIN_COMMENT_SCORE, seen_ids,
@@ -1124,6 +1208,8 @@ class RedditParser:
                 author_fetches = 0
                 expanded_authors: set[str] = set()
                 for ic in insider_candidates:
+                    if rate_limit_state["tripped"]:
+                        break
                     if author_fetches >= _MAX_AUTHOR_FETCHES:
                         break
                     author_name = ic.get("reviewer_name", "")
@@ -1195,7 +1281,12 @@ class RedditParser:
             profile, scrape_mode, target.vendor_name, len(reviews),
             search_budget - budget_ref[0], search_budget,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            stop_reason="rate_limited" if rate_limit_state["tripped"] else "",
+        )
 
     async def _fetch_comments_authenticated(
         self,
@@ -1314,21 +1405,22 @@ class RedditParser:
                     meta["search_page"] = page + 1
                     meta["search_time_window"] = time_window
                     review["raw_metadata"] = meta
-                    collected.append(review)
-                    author = review.get("reviewer_name", "")
-                    if author:
-                        author_index.setdefault(author, []).append({
-                            "title": review.get("summary", ""),
-                            "score": meta.get("score", 0),
-                            "reviewed_at": review.get("reviewed_at"),
-                        })
                     page_reviews.append(review)
 
             page_reviews, stop_for_cutoff = apply_date_cutoff(
                 page_reviews,
                 target.date_cutoff,
             )
-            collected.extend(page_reviews)
+            for review in page_reviews:
+                collected.append(review)
+                author = review.get("reviewer_name", "")
+                if author:
+                    meta = review.get("raw_metadata") or {}
+                    author_index.setdefault(author, []).append({
+                        "title": review.get("summary", ""),
+                        "score": meta.get("score", 0),
+                        "reviewed_at": review.get("reviewed_at"),
+                    })
 
             await _maybe_pause()
             await asyncio.sleep(0.3)

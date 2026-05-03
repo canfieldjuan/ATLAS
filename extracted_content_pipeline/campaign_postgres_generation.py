@@ -45,6 +45,7 @@ async def generate_campaign_drafts_from_postgres(
     scope: Mapping[str, Any] | TenantScope | None = None,
     target_mode: str = "vendor_retention",
     channel: str = "email",
+    channels: tuple[str, ...] = (),
     limit: int = 20,
     filters: Mapping[str, Any] | None = None,
     llm: LLMClient | None = None,
@@ -58,6 +59,7 @@ async def generate_campaign_drafts_from_postgres(
 
     generation_config = config or CampaignGenerationConfig(
         channel=channel,
+        channels=channels,
         limit=limit,
     )
     service = CampaignGenerationService(

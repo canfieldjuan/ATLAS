@@ -249,15 +249,25 @@ Acceptance criteria:
 - Keep `_b2b_pool_compression.py`, `_b2b_witnesses.py`, and `_b2b_shared.py`
   out of the product-owned path.
 
+Status: first slice implemented. `CampaignGenerationService` now expands one
+normalized opportunity into configured channels such as `email_cold` and
+`email_followup`, passes the generated cold-email context into the follow-up
+prompt, and saves both drafts through `CampaignRepository`. The offline
+customer-data runner and Postgres runner both expose `--channels` so the copied
+task's cold/follow-up producer shape is now available through the product-owned
+ports.
+
 ## Reasoning Producer Gap (logged 2026-05-03)
 
 The extraction has the *consumers* of reasoning (`reasoning/archetypes.py`,
 `evidence_engine.py`, `temporal.py`, plus `services/campaign_reasoning_context.py`
-which normalises pre-baked input). The *producers* — the LLM-driven engines
-that actually generate the reasoning context — never made it across. The
-decision to keep `_b2b_pool_compression.py` and `_b2b_witnesses.py` outside
-the product boundary is documented above; the larger producer surface was
-implicitly left behind without a documented rationale.
+which normalises pre-baked input). The *producers* - the LLM-driven engines
+that actually generate the reasoning context - never made it across. The
+decision to keep `_b2b_pool_compression.py` and `_b2b_witnesses.py` outside the
+product boundary is documented above; the larger producer surface was
+implicitly left behind without a documented rationale. The multi-channel
+producer slice above improves the product-owned campaign flow, but it does not
+change this reasoning boundary.
 
 ### What's absent
 
@@ -273,7 +283,7 @@ of pre-existing reasoning state, not generators of it.
 
 ### Why this matters
 
-The extraction made an architectural choice — probably implicit — that
+The extraction made an architectural choice - probably implicit - that
 **reasoning is a separate sellable product, not part of the content-ops
 product**. Campaign generation accepts pre-baked reasoning *as input* via
 the `CampaignReasoningContextProvider` port. The host (atlas_brain or

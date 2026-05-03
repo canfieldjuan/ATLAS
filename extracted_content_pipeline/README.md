@@ -130,6 +130,13 @@ draft metadata:
 python scripts/run_extracted_campaign_generation_example.py customer_opportunities.csv --format csv
 ```
 
+Generate cold-email and follow-up drafts for each opportunity by passing
+channels:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py --channels email_cold,email_followup
+```
+
 The example uses in-memory product ports and an offline deterministic LLM stand
 in, so it does not need Atlas, a database, or provider credentials. It proves
 the customer-data path: JSON opportunities in, normalized campaign drafts out.
@@ -148,6 +155,12 @@ For database-backed runs, apply the product migrations, set
 
 ```bash
 python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --limit 10
+```
+
+The Postgres runner accepts the same channel expansion:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --channels email_cold,email_followup
 ```
 
 ## Import smoke test

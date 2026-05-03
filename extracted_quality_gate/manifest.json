@@ -1,0 +1,28 @@
+{
+  "mappings": [
+    {
+      "source": "atlas_brain/services/b2b/product_claim.py",
+      "target": "extracted_quality_gate/product_claim.py"
+    }
+  ],
+  "owned": [
+    {
+      "target": "extracted_quality_gate/__init__.py"
+    },
+    {
+      "target": "extracted_quality_gate/api.py"
+    },
+    {
+      "target": "extracted_quality_gate/ports.py"
+    },
+    {
+      "target": "extracted_quality_gate/types.py"
+    },
+    {
+      "target": "extracted_quality_gate/README.md"
+    },
+    {
+      "target": "extracted_quality_gate/STATUS.md"
+    }
+  ]
+}

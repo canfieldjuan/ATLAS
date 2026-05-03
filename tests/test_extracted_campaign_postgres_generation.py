@@ -135,6 +135,44 @@ async def test_generate_campaign_drafts_from_postgres_reads_generates_and_saves(
     assert save_call["args"][10] == "test-model"
 
 
+@pytest.mark.asyncio
+async def test_generate_campaign_drafts_from_postgres_supports_channel_expansion():
+    pool = _Pool()
+    pool.fetchval_results = ["campaign-1", "campaign-2"]
+    pool.fetch_rows = [
+        {
+            "target_id": "opp-1",
+            "company_name": "Acme",
+            "vendor_name": "HubSpot",
+            "raw_payload": {},
+        }
+    ]
+
+    result = await generate_campaign_drafts_from_postgres(
+        pool,
+        scope={"account_id": "acct-1"},
+        target_mode="vendor_retention",
+        channel="email",
+        channels=("email_cold", "email_followup"),
+        limit=1,
+        llm=_LLM(),
+        skills=_Skills(),
+    )
+
+    assert result.generated == 2
+    assert result.saved_ids == ("campaign-1", "campaign-2")
+    assert [call["args"][4] for call in pool.fetchval_calls] == [
+        "email_cold",
+        "email_followup",
+    ]
+    followup_metadata = json.loads(pool.fetchval_calls[1]["args"][9])
+    assert followup_metadata["source_opportunity"]["channel"] == "email_followup"
+    assert followup_metadata["source_opportunity"]["cold_email_context"] == {
+        "subject": "Acme pricing signal",
+        "body": "<p>Pricing pressure is showing up.</p>",
+    }
+
+
 def test_tenant_scope_from_mapping_accepts_mapping_and_existing_scope():
     scope = tenant_scope_from_mapping({
         "account_id": "acct-1",
