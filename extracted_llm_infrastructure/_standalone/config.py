@@ -184,6 +184,7 @@ class B2BChurnSubConfig(BaseSettings):
     anthropic_batch_poll_interval_seconds: float = Field(default=5.0, ge=1.0, le=60.0)
     anthropic_batch_timeout_seconds: float = Field(default=900.0, ge=30.0, le=86400.0)
     anthropic_batch_min_items: int = Field(default=2, ge=1, le=10000)
+    llm_exact_cache_enabled: bool = Field(default=False)
 
 
 class ReasoningSubConfig(BaseSettings):

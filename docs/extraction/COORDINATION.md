@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T19:31Z by codex-2026-05-03
+Last updated: 2026-05-03T22:15Z by claude-2026-05-03-b
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -28,8 +28,8 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| #87 | Add `llm_exact_cache` to LLM-infrastructure manifest | `extracted_llm_infrastructure/{manifest.json, services/b2b/llm_exact_cache.py, storage/migrations/251_b2b_llm_exact_cache.sql, README.md, STATUS.md}`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | manifest edits or files synced into `extracted_llm_infrastructure/services/b2b/` and `storage/migrations/` |
-_(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
+| (PR-A1.5, opening) | Re-apply Copilot fixes that missed PR #87 merge | `extracted_llm_infrastructure/{skills/__init__.py, _standalone/config.py, STATUS.md}`; `scripts/smoke_extracted_llm_infrastructure_imports.py`; `scripts/smoke_extracted_llm_infrastructure_standalone.py` | claude-2026-05-03-b | the 5 listed files |
+_(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86, #87 dropped per session protocol step 4.)_
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 

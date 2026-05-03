@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 MODULES = [
     "extracted_llm_infrastructure.services.b2b.anthropic_batch",
     "extracted_llm_infrastructure.services.b2b.cache_strategy",
+    "extracted_llm_infrastructure.services.b2b.llm_exact_cache",
     "extracted_llm_infrastructure.pipelines.llm",
     "extracted_llm_infrastructure.reasoning.semantic_cache",
     "extracted_llm_infrastructure.services.llm_router",
