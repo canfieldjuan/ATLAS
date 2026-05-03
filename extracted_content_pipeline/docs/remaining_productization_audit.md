@@ -248,3 +248,92 @@ Acceptance criteria:
 - Generate and persist drafts through `CampaignRepository`.
 - Keep `_b2b_pool_compression.py`, `_b2b_witnesses.py`, and `_b2b_shared.py`
   out of the product-owned path.
+
+## Reasoning Producer Gap (logged 2026-05-03)
+
+The extraction has the *consumers* of reasoning (`reasoning/archetypes.py`,
+`evidence_engine.py`, `temporal.py`, plus `services/campaign_reasoning_context.py`
+which normalises pre-baked input). The *producers* — the LLM-driven engines
+that actually generate the reasoning context — never made it across. The
+decision to keep `_b2b_pool_compression.py` and `_b2b_witnesses.py` outside
+the product boundary is documented above; the larger producer surface was
+implicitly left behind without a documented rationale.
+
+### What's absent
+
+| Source file | Lines | Role | In extracted? |
+| --- | --- | --- | --- |
+| `atlas_brain/autonomous/tasks/b2b_reasoning_synthesis.py` | 3,903 | Main LLM-based reasoning generator. Produces vendor / displacement / category / account reasoning contracts that the campaign generator later consumes. | No |
+| `atlas_brain/autonomous/tasks/b2b_churn_intelligence.py` | 5,779 | Pools raw review / signal / temporal data and seeds the synthesis above. | No |
+| `atlas_brain/reasoning/` directory | ~5,000 across 17 files | Knowledge graph (Neo4j), narrative chains, ecosystem health, multi-hop graph walks, semantic cache, falsification rules, entity locks, market patterns, event bus, agent orchestrator, trigger events, cross-vendor selection, multi-tier cache. | None of it. |
+
+The extracted package's three reasoning files (`archetypes.py`,
+`evidence_engine.py`, `temporal.py`, ~1,400 lines combined) are all evaluators
+of pre-existing reasoning state, not generators of it.
+
+### Why this matters
+
+The extraction made an architectural choice — probably implicit — that
+**reasoning is a separate sellable product, not part of the content-ops
+product**. Campaign generation accepts pre-baked reasoning *as input* via
+the `CampaignReasoningContextProvider` port. The host (atlas_brain or
+equivalent) is expected to produce that input.
+
+This makes the extracted package effectively unable to run as a standalone
+product *for the B2B campaign use case* unless the buyer either:
+
+1. Brings their own reasoning engine and pipes output through the provider port, OR
+2. Operates with `reasoning_context = None` and accepts the
+   defensive-normalisation fallback (dramatically lower output quality), OR
+3. Bundles atlas_brain alongside it (which defeats the extraction).
+
+### Implication for the parked product directions
+
+- **Podcast repurposing** — unaffected. Episode-to-assets is a single-pass
+  transformation; no reasoning engine needed. The episode itself is the
+  compressed context.
+- **Long-form creative stories** — needs a reasoning generator built from
+  scratch (worldbuilding planner, character-arc tracker, plot coherence
+  reasoner). The B2B reasoning machinery wouldn't transfer even if extracted;
+  the domain shape is wrong.
+- **B2B campaign generation as a sellable product** — has a structural hole.
+  Either the reasoning engine joins the extraction, or the product positioning
+  explicitly says "bring your own reasoning."
+
+### Two options for closing the gap
+
+**Option A - Extract the reasoning producer.**
+
+Bring `b2b_reasoning_synthesis.py`, `b2b_churn_intelligence.py`, and the
+`atlas_brain/reasoning/` directory into the extraction following the same
+scaffold pattern (manifest + sync + validate + smoke). Multi-week effort;
+probably its own PR series. Decide first whether reasoning is part of the
+content-ops product or its own sellable.
+
+Pros: standalone product becomes self-sufficient for the B2B use case.
+Cons: large surface area, Neo4j dependency, event-bus orchestration, and the
+producer surface has its own atlas_brain coupling that needs to be unwound.
+
+**Option B - Document the host-owned-reasoning contract explicitly.**
+
+Add a buyer-facing note that the standalone product accepts pre-baked
+reasoning and provide a reference adapter contract spec for what shape that
+input must take. Smaller scope, but it accepts the architectural choice
+that reasoning is a separate concern.
+
+Pros: keeps the extracted product narrowly scoped and shippable.
+Cons: limits the addressable market to buyers who already have reasoning
+infrastructure or are willing to build one.
+
+### Recommended sequencing
+
+Decide between A and B *before* the next concrete slice above. The "Next
+Concrete Slice" recommendation assumes Option B implicitly (it migrates the
+producer flow but keeps reasoning as host-owned input). If Option A is the
+intended direction, the next slice should change shape to extract the
+producer surface first.
+
+For the two parked product directions captured in the strategy docs in this
+folder, Option B is sufficient for the podcast repurposing offer (no
+reasoning needed at all) and insufficient for either creative-content or
+B2B-campaign-as-product offers.
