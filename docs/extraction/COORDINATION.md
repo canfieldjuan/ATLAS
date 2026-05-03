@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T20:02Z by codex-2026-05-03
+Last updated: 2026-05-03T22:01Z by codex-2026-05-03
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -14,7 +14,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 
 | Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
 |---|---|---|---|---|---|
-| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #87 | — | Cost-closure additions (PR-A2 -> A4) | none |
+| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #89 | — (PR-A1.5 queued by claude-2026-05-03-b) | PR-A1.5 Copilot-fix replay, then cost-closure additions (PR-A3 -> A4) | `extracted_llm_infrastructure/{skills/__init__.py,_standalone/config.py,STATUS.md}`; `scripts/smoke_extracted_llm_infrastructure_{imports,standalone}.py` |
 | `extracted_competitive_intelligence` | 1 (scaffold) | #80 | — | Phase 2 standalone toggle | none |
 | `extracted_content_pipeline` | 1 -> 2 (productization seams) | #78 | — | Standalone runner without `atlas_brain` on path | none |
 | `extracted_reasoning_core` | 1 (scaffold + wedge consolidated; PR-C1 claimed) | #82 | — (PR-C1 claimed by claude-2026-05-03) | Evidence/temporal/archetypes consolidation per merged PR #82 audit | `extracted_reasoning_core/**` (api/types/archetypes/evidence_engine/evidence_map.yaml/temporal); `atlas_brain/reasoning/{evidence_engine.py, review_enrichment.py}`; `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py`; `tests/test_extracted_reasoning_*.py` |
@@ -28,8 +28,8 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| — | — | — | — | — |
-_(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86, #87 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
+| (PR-A1.5, queued) | Apply Copilot fixes that missed PR #87 merge | `extracted_llm_infrastructure/{skills/__init__.py, _standalone/config.py, STATUS.md}`; `scripts/smoke_extracted_llm_infrastructure_imports.py`; `scripts/smoke_extracted_llm_infrastructure_standalone.py` | claude-2026-05-03-b | the 5 files listed; opening immediately after PR-A2 |
+_(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86, #87, #88, #89 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 
@@ -39,7 +39,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 
 | Slice | Product | Owner | Dependencies | Notes |
 |---|---|---|---|---|
-| PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 / #87 (merged) | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
+| PR-A1.5 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none | Re-apply Copilot fixes that did not land in PR #87 merge: skills bridge stub, standalone `llm_exact_cache_enabled` flag, smoke script entries, STATUS detail rows. Opening immediately after PR-A2. |
 | PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 / #87 (merged) | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
 | PR-A4 | `extracted_llm_infrastructure` | unclaimed | PR-A2, PR-A3 | New code: drift report (local vs invoiced), budget gate, OpenAI provider adapter. May split if too large. |
 | PR-B3 | `extracted_quality_gate` | unclaimed | PR-B2 / #85 (merged) | Safety-gate split: deterministic content/risk scan to core; approvals + audit log + DB to ports + Atlas adapter wrapper. |
@@ -62,6 +62,8 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 - **2026-05-03** — PR-C1 claimed by `claude-2026-05-03` for the reasoning evidence/temporal/archetypes consolidation. Hot zone recorded in per-product state and Upcoming queue.
 - **2026-05-03** — PR-A1 merged as #87. `llm_exact_cache.py` and migration 251 are now in the LLM-infrastructure manifest; PR-A2 and PR-A3 are unblocked.
 - **2026-05-03** — Coordination timestamp protocol tightened: stamps must be monotonic using `max(now, last_stamp + 1 minute)` so future edits cannot regress the audit log.
+- **2026-05-03** — PR-A2 merged as #89. `provider_cost_sync.py` and migration 258 are now in the LLM-infrastructure manifest; PR-A4's provider reconciliation input is unblocked.
+- **2026-05-03** — PR-A1.5 queued to re-apply Copilot fixes that missed the #87 merge window: skills bridge stub, standalone exact-cache config, smoke imports, and STATUS detail rows.
 
 ---
 
