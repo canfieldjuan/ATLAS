@@ -7,6 +7,11 @@ Provides four enforcement layers:
 3. Audit logging       -- immutable event log via atlas_events table
 4. Human review gate   -- block execution until a human approves
 
+The deterministic primitives (`check_content`, `assess_risk`) are owned
+by `extracted_quality_gate.safety_gate` (PR-B3) and consumed here. This
+module is the Atlas-side adapter: it adds the I/O surface (DB writes
+to `intervention_approvals` + `atlas_events`) on top of the pure core.
+
 Usage:
     from atlas_brain.services.safety_gate import SafetyGate
 
@@ -21,43 +26,63 @@ Usage:
 
 import json
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
+from extracted_quality_gate.safety_gate import (
+    assess_risk as _core_assess_risk,
+    check_content as _core_check_content,
+)
+from extracted_quality_gate.types import (
+    ContentScanResult,
+    RiskAssessment,
+    RiskLevel,
+)
+
 logger = logging.getLogger("atlas.services.safety_gate")
 
-# Patterns that must never appear in intervention output.
-# These catch deceptive, coercive, or identity-misrepresenting content.
-_PROHIBITED_PATTERNS: list[tuple[str, str]] = [
-    (r"\bimpersonat(?:e|ing|ion)\b", "impersonation"),
-    (r"\bfabricat(?:e|ed|ing)\s+(?:facts?|evidence|data)", "fabricated_facts"),
-    (r"\bblackmail\b", "blackmail"),
-    (r"\bextort(?:ion|ing)?\b", "extortion"),
-    (r"\bthreaten(?:s|ed|ing)?\s+(?:to\s+)?(?:harm|violence|physical)", "threat_of_harm"),
-    (r"\bmanipulat(?:e|ing)\s+(?:evidence|records|data)", "evidence_manipulation"),
-    (r"\bdoxx?(?:ing|ed)?\b", "doxxing"),
-    (r"\bphishing\b", "phishing"),
-    (r"\bsocial\s+engineer(?:ing)?\b", "social_engineering"),
-]
 
-# Compiled once at module load
-_COMPILED_PATTERNS = [
-    (re.compile(pat, re.IGNORECASE), label) for pat, label in _PROHIBITED_PATTERNS
-]
-
-_RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
-
-
-def _load_safety_config() -> tuple[str, int]:
+def _load_safety_config() -> tuple[RiskLevel, int]:
     """Load safety gate settings from config (deferred to avoid circular imports)."""
     try:
         from ..config import settings
         cfg = settings.external_data
-        return cfg.safety_auto_approve_max_risk, cfg.safety_approval_expiry_hours
+        max_risk = RiskLevel(cfg.safety_auto_approve_max_risk)
+        return max_risk, cfg.safety_approval_expiry_hours
     except Exception:
-        return "MEDIUM", 72
+        return RiskLevel.MEDIUM, 72
+
+
+def _content_to_dict(result: ContentScanResult) -> dict[str, Any]:
+    """Convert a core ``ContentScanResult`` to the legacy dict shape.
+
+    Existing callers (intervention_pipeline, REST API, MCP server) read
+    the old dict format. Conversion lives here, not in the core, so the
+    core stays I/O-free.
+    """
+    return {
+        "passed": result.passed,
+        "blocked": result.blocked,
+        "flags": [
+            {
+                "pattern": flag.pattern,
+                "match": flag.match,
+                "position": flag.position,
+            }
+            for flag in result.flags
+        ],
+    }
+
+
+def _risk_to_dict(assessment: RiskAssessment) -> dict[str, Any]:
+    """Convert a core ``RiskAssessment`` to the legacy dict shape."""
+    return {
+        "risk_level": assessment.risk_level.value,
+        "risk_score": assessment.risk_score,
+        "auto_approve_eligible": assessment.auto_approve_eligible,
+        "factors": list(assessment.factors),
+    }
 
 
 class SafetyGate:
@@ -71,6 +96,10 @@ class SafetyGate:
     def check_content(self, text: str) -> dict[str, Any]:
         """Scan text for prohibited patterns.
 
+        Thin wrapper over :func:`extracted_quality_gate.safety_gate.check_content`
+        that converts the frozen-dataclass result into the dict shape
+        existing callers expect.
+
         Returns:
             {
                 "passed": bool,
@@ -78,24 +107,7 @@ class SafetyGate:
                 "flags": [{"pattern": str, "match": str, "position": int}],
             }
         """
-        if not text:
-            return {"passed": True, "blocked": False, "flags": []}
-
-        flags: list[dict[str, Any]] = []
-        for compiled, label in _COMPILED_PATTERNS:
-            for match in compiled.finditer(text):
-                flags.append({
-                    "pattern": label,
-                    "match": match.group(),
-                    "position": match.start(),
-                })
-
-        blocked = len(flags) > 0
-        return {
-            "passed": not blocked,
-            "blocked": blocked,
-            "flags": flags,
-        }
+        return _content_to_dict(_core_check_content(text))
 
     # ---- Approval Workflow ----
 
@@ -348,6 +360,12 @@ class SafetyGate:
     ) -> dict[str, Any]:
         """Assess the overall risk level for a pipeline run.
 
+        Thin wrapper over :func:`extracted_quality_gate.safety_gate.assess_risk`.
+        Converts the legacy ``content_check`` dict (if provided) back
+        into the core ``ContentScanResult`` shape, then converts the
+        resulting frozen dataclass into the dict shape existing callers
+        expect.
+
         Returns:
             {
                 "risk_level": "LOW"|"MEDIUM"|"HIGH"|"CRITICAL",
@@ -355,49 +373,36 @@ class SafetyGate:
                 "factors": [str],
             }
         """
-        factors: list[str] = []
-        risk_score = 0
-
-        # Sensor-based risk
-        sensor_level = sensor_summary.get("dominant_risk_level", "LOW")
-        risk_score += _RISK_ORDER.get(sensor_level, 0)
-        if sensor_level in ("HIGH", "CRITICAL"):
-            factors.append(f"Sensor composite: {sensor_level}")
-
-        # Pressure-based risk
-        pressure_score = pressure.get("pressure_score", 0)
-        if isinstance(pressure_score, (int, float)):
-            if pressure_score >= 8:
-                risk_score += 2
-                factors.append(f"Critical pressure: {pressure_score}/10")
-            elif pressure_score >= 6:
-                risk_score += 1
-                factors.append(f"Elevated pressure: {pressure_score}/10")
-
-        # Content filtering risk
-        if content_check and content_check.get("blocked"):
-            risk_score += 3
-            flag_labels = [f["pattern"] for f in content_check.get("flags", [])]
-            factors.append(f"Content flags: {', '.join(flag_labels)}")
-
-        # Map score to level
-        if risk_score >= 4:
-            level = "CRITICAL"
-        elif risk_score >= 3:
-            level = "HIGH"
-        elif risk_score >= 1:
-            level = "MEDIUM"
+        scan: Optional[ContentScanResult]
+        if content_check is None:
+            scan = None
         else:
-            level = "LOW"
-
-        auto_eligible = _RISK_ORDER.get(level, 0) <= _RISK_ORDER.get(self._auto_approve_max_risk, 1)
-
-        return {
-            "risk_level": level,
-            "risk_score": risk_score,
-            "auto_approve_eligible": auto_eligible,
-            "factors": factors,
-        }
+            # The wrapper produces dicts; recover a ContentScanResult by
+            # round-tripping through check_content when text would be
+            # available, but content_check here is already a scan
+            # *result*, so synthesize one. ``_core_assess_risk`` only
+            # reads ``blocked`` and the flag labels, so a minimal
+            # reconstruction is sufficient.
+            from extracted_quality_gate.types import ContentFlag
+            scan = ContentScanResult(
+                passed=bool(content_check.get("passed", True)),
+                blocked=bool(content_check.get("blocked", False)),
+                flags=tuple(
+                    ContentFlag(
+                        pattern=str(flag.get("pattern", "")),
+                        match=str(flag.get("match", "")),
+                        position=int(flag.get("position", 0)),
+                    )
+                    for flag in content_check.get("flags", [])
+                ),
+            )
+        assessment = _core_assess_risk(
+            sensor_summary=sensor_summary,
+            pressure=pressure,
+            content_check=scan,
+            auto_approve_max_risk=self._auto_approve_max_risk,
+        )
+        return _risk_to_dict(assessment)
 
     # ---- Audit Logging ----
 
