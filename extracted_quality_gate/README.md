@@ -11,6 +11,8 @@ The package contains:
 - a policy registry for claim-type-specific thresholds
 - generic quality-report types and integration ports
 - deterministic safety-gate primitives (`check_content`, `assess_risk`)
+- deterministic blog quality pack (`evaluate_blog_post`)
+- deterministic campaign quality pack (`evaluate_campaign`)
 
 The package intentionally has no Atlas runtime dependency. Product-specific behavior belongs in packs or adapters layered on top of the public API.
 
@@ -27,12 +29,14 @@ from extracted_quality_gate.safety_gate import (
     check_content,
 )
 from extracted_quality_gate.blog_pack import evaluate_blog_post
+from extracted_quality_gate.campaign_pack import evaluate_campaign
 ```
 
 Products should import from:
 
 - `extracted_quality_gate.api`
 - `extracted_quality_gate.blog_pack`
+- `extracted_quality_gate.campaign_pack`
 - `extracted_quality_gate.safety_gate`
 - `extracted_quality_gate.types`
 - `extracted_quality_gate.ports`
@@ -74,3 +78,25 @@ The wrapper at `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py:_apply_
 sanitizes, builds the input, calls the pack, then layers the
 specificity findings on top. Public dict shape is preserved so existing
 call sites need no changes.
+
+## Campaign quality pack (PR-B4b)
+
+`campaign_pack.evaluate_campaign` is a pure validator over a
+`QualityInput` (subject, body, CTA, the campaign payload) and a
+`QualityPolicy` (currently just `require_anchor_support`). It returns
+a `QualityReport` whose `findings` enumerate every gate that fired:
+proof-term coverage (`missing_exact_proof_term`), report-tier banned
+language (`report_tier_language:<word>`), forbidden competitor name in
+cold email (`competitor_name_in_email_cold:<vendor>`), forbidden
+incumbent name in challenger-intel cold email
+(`incumbent_name_in_email_cold:<vendor>`), and private-account leak
+(`private_account_name_leak:<company>`).
+
+The atlas-side specificity audit stays in the wrapper -- the wrapper
+runs `specificity_audit_snapshot` first, passes its blocking issues
+and warnings into the pack as `context['specificity_blocking_issues']`
+/ `context['specificity_warnings']`, and the pack appends its own
+findings. The wrapper at
+`atlas_brain/autonomous/tasks/_b2b_specificity.py:campaign_policy_audit_snapshot`
+returns the same dict shape it always did, so the existing caller in
+`atlas_brain/services/campaign_quality.py` needs no changes.
