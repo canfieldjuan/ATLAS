@@ -192,7 +192,11 @@ def test_tenant_scope_from_mapping_accepts_mapping_and_existing_scope():
 
 
 @pytest.mark.asyncio
-async def test_postgres_runner_cli_wires_pool_and_offline_dependencies(monkeypatch, capsys):
+async def test_postgres_runner_cli_wires_pool_offline_and_reasoning_context(
+    monkeypatch,
+    capsys,
+    tmp_path,
+):
     postgres_cli = _load_postgres_cli_module()
     pool = _Pool()
     pool.fetch_rows = [
@@ -205,6 +209,21 @@ async def test_postgres_runner_cli_wires_pool_and_offline_dependencies(monkeypat
             "raw_payload": {},
         }
     ]
+    reasoning_path = tmp_path / "reasoning.json"
+    reasoning_path.write_text(
+        json.dumps({
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "reasoning_context": {
+                        "wedge": "renewal pressure",
+                        "confidence": "high",
+                    },
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
     created_urls = []
 
     async def create_pool(database_url):
@@ -227,6 +246,8 @@ async def test_postgres_runner_cli_wires_pool_and_offline_dependencies(monkeypat
             "1",
             "--llm",
             "offline",
+            "--reasoning-context",
+            str(reasoning_path),
         ],
     )
 
@@ -238,6 +259,11 @@ async def test_postgres_runner_cli_wires_pool_and_offline_dependencies(monkeypat
     assert created_urls == ["postgres://example"]
     assert output["generated"] == 1
     assert output["saved_ids"] == ["campaign-1"]
+    metadata = json.loads(pool.fetchval_calls[0]["args"][9])
+    assert metadata["source_opportunity"]["reasoning_context"] == {
+        "confidence": "high",
+        "wedge": "renewal pressure",
+    }
     assert pool.closed is True
 
 

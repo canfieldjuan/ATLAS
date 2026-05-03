@@ -181,6 +181,14 @@ The Postgres runner accepts the same channel expansion:
 python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --channels email_cold,email_followup
 ```
 
+It also accepts the same host-provided reasoning JSON as the offline example:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
+```
+
 ## Import smoke test
 
 ```bash
