@@ -123,6 +123,36 @@ def test_to_public_match_translates_fields() -> None:
     assert public.risk_label == "high"
 
 
+def test_evaluate_rule_coerces_messy_string_values() -> None:
+    # Regression guard: PR-C1h carried forward content_pipeline's
+    # `_numeric_value` defensive helper into core's archetypes scoring.
+    # Strings with percent suffix or thousands separators must coerce
+    # to float so the high/low value-based checks fire correctly.
+    # Before the carry-forward, "28%" raised ValueError and the metric
+    # was treated as a non-match.
+    evidence = {
+        "avg_urgency": "7.2",                  # plain decimal string
+        "top_pain": "Renewal pricing jumped and the invoice became too expensive",
+        "competitor_count": 4,
+        "recommend_ratio": 0.2,
+        "displacement_edge_count": 3,
+        "positive_review_pct": "28%",          # percent-suffixed string
+    }
+    m = best_match(evidence)
+    assert m is not None
+    assert m.archetype == "pricing_shock"
+    # All six pricing_shock signals must now match including the messy
+    # string-shaped numerics.
+    assert set(m.matched_signals) >= {
+        "avg_urgency",
+        "top_pain",
+        "competitor_count",
+        "recommend_ratio",
+        "displacement_edge_count",
+        "positive_review_pct",
+    }
+
+
 def test_evaluate_rule_tolerates_non_numeric_velocity() -> None:
     # Regression guard: PR #94 review flagged that velocity branches
     # of _evaluate_rule did float() without try/except. A non-numeric
