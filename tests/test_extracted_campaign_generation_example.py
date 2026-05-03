@@ -118,6 +118,32 @@ async def test_example_accepts_host_llm_and_skill_store_overrides() -> None:
 
 
 @pytest.mark.asyncio
+async def test_example_generates_cold_and_followup_channels_from_payload() -> None:
+    payload = {
+        "target_mode": "vendor_retention",
+        "channels": ["email_cold", "email_followup"],
+        "limit": 1,
+        "opportunities": [
+            {"id": "opp-1", "company": "Acme Logistics", "vendor": "HubSpot"}
+        ],
+    }
+
+    result = await generate_campaign_drafts_from_payload(payload)
+
+    assert result["result"]["generated"] == 2
+    assert result["result"]["saved_ids"] == ["draft-1", "draft-2"]
+    assert [draft["channel"] for draft in result["drafts"]] == [
+        "email_cold",
+        "email_followup",
+    ]
+    followup = result["drafts"][1]
+    assert followup["metadata"]["source_opportunity"]["cold_email_context"] == {
+        "subject": result["drafts"][0]["subject"],
+        "body": result["drafts"][0]["body"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_example_respects_limit_and_normalizes_multiple_rows() -> None:
     payload = json.loads(EXAMPLE_PAYLOAD.read_text(encoding="utf-8"))
 

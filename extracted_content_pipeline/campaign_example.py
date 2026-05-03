@@ -205,6 +205,22 @@ def _scope_from_payload(payload: Mapping[str, Any]) -> TenantScope:
     )
 
 
+def _channels_from_payload(payload: Mapping[str, Any], *, default: str) -> tuple[str, ...]:
+    raw = payload.get("channels")
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray)):
+        values = raw
+    else:
+        values = ()
+    channels = tuple(
+        str(item or "").strip()
+        for item in values
+        if str(item or "").strip()
+    )
+    return channels or (default,)
+
+
 def _draft_to_dict(draft: CampaignDraft, campaign_id: str) -> dict[str, Any]:
     return {
         "id": campaign_id,
@@ -242,6 +258,7 @@ async def generate_campaign_drafts_from_payload(
         raise ValueError("payload must include an opportunities array")
     target_mode = str(payload.get("target_mode") or "vendor_retention")
     channel = str(payload.get("channel") or "email")
+    channels = _channels_from_payload(payload, default=channel)
     limit = int(payload.get("limit") or len(opportunities) or 20)
 
     intelligence = InMemoryIntelligenceRepository(
@@ -255,7 +272,11 @@ async def generate_campaign_drafts_from_payload(
         campaigns=campaigns,
         llm=llm_client,
         skills=skill_store,
-        config=CampaignGenerationConfig(channel=channel, limit=limit),
+        config=CampaignGenerationConfig(
+            channel=channel,
+            channels=channels,
+            limit=limit,
+        ),
     )
 
     result = await service.generate(

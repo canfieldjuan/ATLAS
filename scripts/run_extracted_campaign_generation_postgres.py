@@ -50,6 +50,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--user-id", help="User id to attach to generated draft metadata.")
     parser.add_argument("--target-mode", default="vendor_retention")
     parser.add_argument("--channel", default="email")
+    parser.add_argument(
+        "--channels",
+        help=(
+            "Comma-separated draft channels to generate per opportunity, "
+            "for example email_cold,email_followup."
+        ),
+    )
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument(
         "--filters-json",
@@ -99,6 +106,11 @@ async def _main() -> int:
             scope={"account_id": args.account_id, "user_id": args.user_id},
             target_mode=args.target_mode,
             channel=args.channel,
+            channels=tuple(
+                item.strip()
+                for item in str(args.channels or "").split(",")
+                if item.strip()
+            ),
             limit=args.limit,
             filters=_json_object(args.filters_json),
             **_dependency_overrides(args),

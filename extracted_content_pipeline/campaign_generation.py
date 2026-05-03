@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import json
 import re
@@ -37,6 +37,7 @@ class CampaignGenerationConfig:
     max_tokens: int = 1200
     temperature: float = 0.4
     include_source_opportunity: bool = True
+    channels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,7 @@ class CampaignGenerationService:
         drafts: list[CampaignDraft] = []
         errors: list[dict[str, Any]] = []
         skipped = 0
+        channels = self._channels()
         for opportunity in opportunities:
             target_id = opportunity_target_id(opportunity)
             if not target_id:
@@ -163,29 +165,55 @@ class CampaignGenerationService:
                     target_id=target_id,
                     opportunity=opportunity,
                 )
-                parsed = await self._generate_one(
-                    prompt_template,
-                    opportunity=opportunity,
-                    target_mode=target_mode,
-                )
             except Exception as exc:
                 skipped += 1
                 errors.append({"target_id": target_id, "reason": str(exc)})
                 continue
-            if not parsed:
-                skipped += 1
-                errors.append({"target_id": target_id, "reason": "unparseable_response"})
-                continue
-            drafts.append(
-                CampaignDraft(
-                    target_id=target_id,
-                    target_mode=target_mode,
-                    channel=self._config.channel,
-                    subject=parsed["subject"],
-                    body=parsed["body"],
-                    metadata=self._metadata(parsed, opportunity),
+            cold_email_context: dict[str, str] | None = None
+            for channel in channels:
+                channel_opportunity = self._opportunity_for_channel(
+                    opportunity,
+                    channel=channel,
+                    cold_email_context=cold_email_context,
                 )
-            )
+                try:
+                    parsed = await self._generate_one(
+                        prompt_template,
+                        opportunity=channel_opportunity,
+                        target_mode=target_mode,
+                        channel=channel,
+                    )
+                except Exception as exc:
+                    skipped += 1
+                    errors.append({
+                        "target_id": target_id,
+                        "channel": channel,
+                        "reason": str(exc),
+                    })
+                    continue
+                if not parsed:
+                    skipped += 1
+                    errors.append({
+                        "target_id": target_id,
+                        "channel": channel,
+                        "reason": "unparseable_response",
+                    })
+                    continue
+                if channel == "email_cold":
+                    cold_email_context = {
+                        "subject": parsed["subject"],
+                        "body": parsed["body"],
+                    }
+                drafts.append(
+                    CampaignDraft(
+                        target_id=target_id,
+                        target_mode=target_mode,
+                        channel=channel,
+                        subject=parsed["subject"],
+                        body=parsed["body"],
+                        metadata=self._metadata(parsed, channel_opportunity),
+                    )
+                )
 
         saved_ids: tuple[str, ...] = ()
         if drafts:
@@ -200,6 +228,36 @@ class CampaignGenerationService:
             saved_ids=saved_ids,
             errors=tuple(errors),
         )
+
+    def _channels(self) -> tuple[str, ...]:
+        raw_value = self._config.channels or (self._config.channel,)
+        raw: Sequence[str]
+        if isinstance(raw_value, str):
+            raw = raw_value.split(",")
+        else:
+            raw = raw_value
+        channels: list[str] = []
+        for item in raw:
+            channel = str(item or "").strip()
+            if channel and channel not in channels:
+                channels.append(channel)
+        return tuple(channels or ("email",))
+
+    def _opportunity_for_channel(
+        self,
+        opportunity: Mapping[str, Any],
+        *,
+        channel: str,
+        cold_email_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        enriched = dict(opportunity)
+        enriched["channel"] = channel
+        if channel == "email_followup" and cold_email_context:
+            enriched["cold_email_context"] = {
+                "subject": str(cold_email_context.get("subject") or ""),
+                "body": str(cold_email_context.get("body") or ""),
+            }
+        return enriched
 
     async def _opportunity_with_reasoning_context(
         self,
@@ -244,11 +302,13 @@ class CampaignGenerationService:
         *,
         opportunity: Mapping[str, Any],
         target_mode: str,
+        channel: str,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
         system_prompt = (
             prompt_template
             .replace("{target_mode}", target_mode)
+            .replace("{channel}", channel)
             .replace("{opportunity}", opportunity_json)
             .replace("{opportunity_json}", opportunity_json)
         )
@@ -260,6 +320,7 @@ class CampaignGenerationService:
                     content=(
                         "Generate one campaign draft from this normalized "
                         f"opportunity.\ntarget_mode={target_mode}\n"
+                        f"channel={channel}\n"
                         f"opportunity={opportunity_json}"
                     ),
                 ),
@@ -269,6 +330,7 @@ class CampaignGenerationService:
             metadata={
                 "target_mode": target_mode,
                 "target_id": opportunity_target_id(opportunity),
+                "channel": channel,
                 "skill_name": self._config.skill_name,
             },
         )

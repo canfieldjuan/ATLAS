@@ -258,9 +258,11 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
     assert '"target_mode":"churning_company"' in llm_call["messages"][0].content
     assert '"company_name":"Acme"' in llm_call["messages"][1].content
     assert "target_mode=churning_company" in llm_call["messages"][1].content
+    assert "channel=email" in llm_call["messages"][1].content
     assert llm_call["metadata"] == {
         "target_mode": "churning_company",
         "target_id": "opp-1",
+        "channel": "email",
         "skill_name": "digest/b2b_campaign_generation",
     }
     draft = campaigns.saved[0]["drafts"][0]
@@ -273,6 +275,7 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
     assert draft.metadata["generation_model"] == "test-model"
     assert draft.metadata["source_opportunity"]["target_id"] == "opp-1"
     assert draft.metadata["source_opportunity"]["target_mode"] == "churning_company"
+    assert draft.metadata["source_opportunity"]["channel"] == "email"
     assert draft.metadata["source_opportunity"]["company_name"] == "Acme"
     assert draft.metadata["source_opportunity"]["pain"] == "pricing pressure"
 
@@ -298,9 +301,75 @@ async def test_generate_includes_opportunity_payload_when_skill_has_no_placehold
     assert "opportunity=" not in llm.calls[0]["messages"][0].content
     user_prompt = llm.calls[0]["messages"][1].content
     assert "target_mode=vendor_retention" in user_prompt
+    assert "channel=email" in user_prompt
     assert '"target_id":"opp-1"' in user_prompt
     assert '"company_name":"Acme"' in user_prompt
     assert '"target_mode":"vendor_retention"' in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_expands_configured_channels_and_passes_cold_context():
+    config = CampaignGenerationConfig(channels=("email_cold", "email_followup"))
+    service, _, campaigns, llm, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [
+            json.dumps({"subject": "Cold subject", "body": "<p>Cold body</p>"}),
+            json.dumps({"subject": "Follow-up subject", "body": "<p>Follow-up body</p>"}),
+        ],
+        config=config,
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.as_dict() == {
+        "requested": 1,
+        "generated": 2,
+        "skipped": 0,
+        "saved_ids": ["draft-1", "draft-2"],
+        "errors": [],
+    }
+    cold, followup = campaigns.saved[0]["drafts"]
+    assert cold.channel == "email_cold"
+    assert cold.subject == "Cold subject"
+    assert followup.channel == "email_followup"
+    assert followup.subject == "Follow-up subject"
+    assert cold.metadata["source_opportunity"]["channel"] == "email_cold"
+    assert followup.metadata["source_opportunity"]["channel"] == "email_followup"
+    assert followup.metadata["source_opportunity"]["cold_email_context"] == {
+        "subject": "Cold subject",
+        "body": "<p>Cold body</p>",
+    }
+    assert [call["metadata"]["channel"] for call in llm.calls] == [
+        "email_cold",
+        "email_followup",
+    ]
+    assert "channel=email_cold" in llm.calls[0]["messages"][1].content
+    assert "channel=email_followup" in llm.calls[1]["messages"][1].content
+    assert "cold_email_context" in llm.calls[1]["messages"][0].content
+
+
+@pytest.mark.asyncio
+async def test_generate_accepts_comma_string_channels_defensively():
+    config = CampaignGenerationConfig(channels="email_cold,email_followup")  # type: ignore[arg-type]
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [
+            json.dumps({"subject": "Cold subject", "body": "<p>Cold body</p>"}),
+            json.dumps({"subject": "Follow-up subject", "body": "<p>Follow-up body</p>"}),
+        ],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 2
+    assert [draft.channel for draft in campaigns.saved[0]["drafts"]] == [
+        "email_cold",
+        "email_followup",
+    ]
 
 
 @pytest.mark.asyncio
@@ -521,7 +590,11 @@ async def test_generate_skips_missing_target_and_unparseable_responses():
     assert result.generated == 0
     assert result.skipped == 2
     assert result.errors[0]["reason"] == "missing_target_id"
-    assert result.errors[1] == {"target_id": "opp-2", "reason": "unparseable_response"}
+    assert result.errors[1] == {
+        "target_id": "opp-2",
+        "channel": "email",
+        "reason": "unparseable_response",
+    }
     assert campaigns.saved == []
 
 
@@ -542,7 +615,9 @@ async def test_generate_continues_after_llm_error():
 
     assert result.generated == 1
     assert result.skipped == 1
-    assert result.errors == ({"target_id": "opp-1", "reason": "provider down"},)
+    assert result.errors == (
+        {"target_id": "opp-1", "channel": "email", "reason": "provider down"},
+    )
     assert campaigns.saved[0]["drafts"][0].target_id == "opp-2"
 
 
