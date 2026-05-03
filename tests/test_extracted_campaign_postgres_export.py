@@ -85,8 +85,8 @@ async def test_list_campaign_drafts_filters_review_rows() -> None:
     assert "metadata -> 'scope' ->> 'account_id' = $2" in query
     assert "target_mode = $3" in query
     assert "channel = $4" in query
-    assert "LOWER(vendor_name) = LOWER($5)" in query
-    assert "LOWER(company_name) = LOWER($6)" in query
+    assert "vendor_name = $5" in query
+    assert "company_name = $6" in query
     assert args == (
         ["draft", "approved"],
         "acct_1",
@@ -101,6 +101,26 @@ async def test_list_campaign_drafts_filters_review_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_campaign_drafts_reuses_tenant_scope_mapping_semantics() -> None:
+    pool = _Pool(rows=[_row()])
+
+    await list_campaign_drafts(
+        pool,
+        scope={
+            "account_id": "acct_1",
+            "user_id": "user_1",
+            "allowed_vendors": ("LegacyCRM",),
+            "roles": ("admin",),
+        },
+        limit=1,
+    )
+
+    query, args = pool.fetch_calls[0]
+    assert "metadata -> 'scope' ->> 'account_id' = $2" in query
+    assert args == (["draft"], "acct_1", 1)
+
+
+@pytest.mark.asyncio
 async def test_list_campaign_drafts_all_statuses_when_statuses_empty() -> None:
     pool = _Pool(rows=[_row()])
 
@@ -109,6 +129,24 @@ async def test_list_campaign_drafts_all_statuses_when_statuses_empty() -> None:
     query, args = pool.fetch_calls[0]
     assert "status = ANY" not in query
     assert args == (2,)
+
+
+@pytest.mark.asyncio
+async def test_list_campaign_drafts_allows_zero_limit() -> None:
+    pool = _Pool(rows=[_row()])
+
+    result = await list_campaign_drafts(pool, limit=0)
+
+    query, args = pool.fetch_calls[0]
+    assert "LIMIT $2" in query
+    assert args == (["draft"], 0)
+    assert result.limit == 0
+
+
+@pytest.mark.asyncio
+async def test_list_campaign_drafts_rejects_negative_limit() -> None:
+    with pytest.raises(ValueError, match="limit must be non-negative"):
+        await list_campaign_drafts(_Pool(), limit=-1)
 
 
 @pytest.mark.asyncio

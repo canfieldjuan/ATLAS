@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 from .campaign_ports import TenantScope
+from .campaign_postgres_generation import tenant_scope_from_mapping
 
 
 JsonDict = dict[str, Any]
@@ -75,7 +76,8 @@ async def list_campaign_drafts(
     """Return generated campaign drafts for host review/export workflows."""
 
     table = _identifier(campaign_table)
-    tenant = _tenant_scope(scope)
+    tenant = tenant_scope_from_mapping(scope)
+    normalized_limit = _normalize_limit(limit)
     filters: dict[str, Any] = {
         "statuses": tuple(_clean(status) for status in statuses if _clean(status)),
     }
@@ -99,14 +101,14 @@ async def list_campaign_drafts(
         filters["channel"] = _clean(channel)
     if vendor_name:
         params.append(_clean(vendor_name))
-        where.append(f"LOWER(vendor_name) = LOWER(${len(params)})")
+        where.append(f"vendor_name = ${len(params)}")
         filters["vendor_name"] = _clean(vendor_name)
     if company_name:
         params.append(_clean(company_name))
-        where.append(f"LOWER(company_name) = LOWER(${len(params)})")
+        where.append(f"company_name = ${len(params)}")
         filters["company_name"] = _clean(company_name)
 
-    params.append(max(1, int(limit)))
+    params.append(normalized_limit)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     rows = await pool.fetch(
         f"""
@@ -123,20 +125,16 @@ async def list_campaign_drafts(
     )
     return CampaignDraftExportResult(
         rows=tuple(_serializable_row(_row_dict(row)) for row in rows),
-        limit=max(1, int(limit)),
+        limit=normalized_limit,
         filters=filters,
     )
 
 
-def _tenant_scope(value: TenantScope | Mapping[str, Any] | None) -> TenantScope:
-    if isinstance(value, TenantScope):
-        return value
-    if isinstance(value, Mapping):
-        return TenantScope(
-            account_id=_clean(value.get("account_id")) or None,
-            user_id=_clean(value.get("user_id")) or None,
-        )
-    return TenantScope()
+def _normalize_limit(value: Any) -> int:
+    limit = int(value)
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
+    return limit
 
 
 def _serializable_row(row: Mapping[str, Any]) -> JsonDict:
