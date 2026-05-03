@@ -9,6 +9,7 @@ from typing import Any
 from .campaign_generation import CampaignGenerationConfig, CampaignGenerationService
 from .campaign_ports import (
     CampaignDraft,
+    CampaignReasoningContextProvider,
     LLMClient,
     LLMMessage,
     LLMResponse,
@@ -250,6 +251,7 @@ async def generate_campaign_drafts_from_payload(
     payload: Mapping[str, Any],
     *,
     llm: LLMClient | None = None,
+    reasoning_context: CampaignReasoningContextProvider | None = None,
     skills: SkillStore | None = None,
 ) -> dict[str, Any]:
     """Run campaign generation from a portable JSON-compatible payload."""
@@ -272,6 +274,7 @@ async def generate_campaign_drafts_from_payload(
         campaigns=campaigns,
         llm=llm_client,
         skills=skill_store,
+        reasoning_context=reasoning_context,
         config=CampaignGenerationConfig(
             channel=channel,
             channels=channels,

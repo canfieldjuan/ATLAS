@@ -108,6 +108,19 @@ class HostReasoningProvider:
         }
 ```
 
+## File-Backed Example Adapter
+
+`campaign_reasoning_data.FileCampaignReasoningContextProvider` is the reference
+adapter for hosts that already have reasoning output as JSON. It accepts
+context rows keyed by target id, company, email, or vendor, normalizes them into
+`CampaignReasoningContext`, and keeps AI Content Ops independent from any
+reasoning producer.
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py \
+  --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
+```
+
 ## Integration Modes
 
 | Mode | Who produces reasoning? | Content package behavior |

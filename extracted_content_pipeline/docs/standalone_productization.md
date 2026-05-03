@@ -127,7 +127,10 @@ Reasoning remains a host/product boundary for this slice. The generator accepts
 pre-compressed reasoning through `CampaignReasoningContextProvider` and
 normalizes it with `services.campaign_reasoning_context`; it must not reach into
 Atlas reasoning producers or the extracted reasoning-core internals. The
-contract is documented in `docs/reasoning_handoff_contract.md`.
+contract is documented in `docs/reasoning_handoff_contract.md`. The
+file-backed reference adapter in `campaign_reasoning_data.py` lets standalone
+examples consume host-generated reasoning JSON through that same port without
+adding a reasoning runtime dependency.
 
 `extracted_content_pipeline/campaign_postgres_generation.py` wires the
 database-backed product path. Hosts pass an async Postgres pool and the runner

@@ -143,6 +143,18 @@ channels:
 python scripts/run_extracted_campaign_generation_example.py --channels email_cold,email_followup
 ```
 
+Pass host-provided reasoning context without installing a reasoning engine:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py \
+  --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
+```
+
+`campaign_reasoning_data.FileCampaignReasoningContextProvider` matches context
+rows by target id, company, email, or vendor and feeds the normalized
+`CampaignReasoningContextProvider` port documented in
+`docs/reasoning_handoff_contract.md`.
+
 The example uses in-memory product ports and an offline deterministic LLM stand
 in, so it does not need Atlas, a database, or provider credentials. It proves
 the customer-data path: JSON opportunities in, normalized campaign drafts out.

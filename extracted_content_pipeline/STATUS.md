@@ -73,6 +73,10 @@
   upstream reasoning. Hosts pass already-compressed witness/anchor/account
   context into the generator; `_b2b_pool_compression.py` stays outside the
   standalone campaign product.
+- `campaign_reasoning_data.FileCampaignReasoningContextProvider` is the
+  reference file-backed adapter for that boundary. It lets examples and hosts
+  provide precomputed reasoning JSON keyed by target id, company, email, or
+  vendor without importing a reasoning producer.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.
