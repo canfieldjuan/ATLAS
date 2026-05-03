@@ -46,6 +46,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .temporal import _numeric_value
 from .types import ArchetypeMatch
 
 # Minimum score to consider an archetype a plausible match
@@ -478,14 +479,14 @@ def _evaluate_rule(rule: SignalRule, evidence: dict[str, Any]) -> bool:
     if rule.direction == "present":
         return rule.metric in evidence
 
-    # Value-based checks require the metric to be present and numeric
+    # Value-based checks require the metric to be present and numeric.
+    # Use the shared `_numeric_value` helper so messy snapshot payloads
+    # (strings with commas / percent suffix) coerce consistently with
+    # the temporal helpers. This was a content_pipeline drift carried
+    # forward into core via PR-C1h.
     if rule.direction in ("high", "low"):
-        val = evidence.get(rule.metric)
-        if val is None:
-            return False
-        try:
-            val_f = float(val)
-        except (ValueError, TypeError):
+        val_f = _numeric_value(evidence.get(rule.metric))
+        if val_f is None:
             return False
 
         if rule.direction == "high":
@@ -493,41 +494,22 @@ def _evaluate_rule(rule: SignalRule, evidence: dict[str, Any]) -> bool:
         elif rule.direction == "low":
             return val_f <= (rule.threshold if rule.threshold is not None else float("inf"))
 
-    # Velocity/Trend checks look for derived fields. Coercion is guarded
-    # consistently with the high/low branch above: non-numeric values
-    # treated as a non-match rather than aborting scoring for the vendor.
+    # Velocity / trend checks look for derived fields. Coercion uses the
+    # shared `_numeric_value` helper for consistency with the high/low
+    # branch above; non-numeric values treated as non-match rather than
+    # aborting scoring for the vendor.
     elif rule.direction == "increasing":
-        vel = evidence.get(f"velocity_{rule.metric}")
-        if vel is None:
-            return False
-        try:
-            return float(vel) > 0
-        except (ValueError, TypeError):
-            return False
+        vel_f = _numeric_value(evidence.get(f"velocity_{rule.metric}"))
+        return vel_f is not None and vel_f > 0
     elif rule.direction == "decreasing":
-        vel = evidence.get(f"velocity_{rule.metric}")
-        if vel is None:
-            return False
-        try:
-            return float(vel) < 0
-        except (ValueError, TypeError):
-            return False
+        vel_f = _numeric_value(evidence.get(f"velocity_{rule.metric}"))
+        return vel_f is not None and vel_f < 0
     elif rule.direction == "increasing_30d":
-        slope = evidence.get(f"trend_30d_{rule.metric}")
-        if slope is None:
-            return False
-        try:
-            return float(slope) > 0
-        except (ValueError, TypeError):
-            return False
+        slope_f = _numeric_value(evidence.get(f"trend_30d_{rule.metric}"))
+        return slope_f is not None and slope_f > 0
     elif rule.direction == "decreasing_30d":
-        slope = evidence.get(f"trend_30d_{rule.metric}")
-        if slope is None:
-            return False
-        try:
-            return float(slope) < 0
-        except (ValueError, TypeError):
-            return False
+        slope_f = _numeric_value(evidence.get(f"trend_30d_{rule.metric}"))
+        return slope_f is not None and slope_f < 0
 
     return False
 
