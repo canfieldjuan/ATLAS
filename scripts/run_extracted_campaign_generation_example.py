@@ -21,6 +21,9 @@ from extracted_content_pipeline.campaign_example import (  # noqa: E402
 from extracted_content_pipeline.campaign_customer_data import (  # noqa: E402
     load_campaign_opportunities_from_file,
 )
+from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
+    load_campaign_reasoning_context_provider,
+)
 
 
 DEFAULT_PAYLOAD = (
@@ -82,6 +85,14 @@ def _parse_args() -> argparse.Namespace:
         help="Write generated draft JSON to this file instead of stdout.",
     )
     parser.add_argument(
+        "--reasoning-context",
+        type=Path,
+        help=(
+            "Optional JSON file containing host-provided reasoning context "
+            "keyed by target id, company, email, or vendor."
+        ),
+    )
+    parser.add_argument(
         "--llm",
         choices=("offline", "pipeline"),
         default="offline",
@@ -94,18 +105,24 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    if args.reasoning_context:
+        overrides["reasoning_context"] = load_campaign_reasoning_context_provider(
+            args.reasoning_context
+        )
     if args.llm == "offline":
-        return {}
+        return overrides
 
     from extracted_content_pipeline.campaign_llm_client import (  # noqa: PLC0415
         create_pipeline_llm_client,
     )
     from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: PLC0415
 
-    return {
+    overrides.update({
         "llm": create_pipeline_llm_client(),
         "skills": get_skill_registry(),
-    }
+    })
+    return overrides
 
 
 async def _main() -> int:

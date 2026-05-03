@@ -61,6 +61,10 @@
       "target": "extracted_llm_infrastructure/services/b2b/llm_exact_cache.py"
     },
     {
+      "source": "atlas_brain/services/provider_cost_sync.py",
+      "target": "extracted_llm_infrastructure/services/provider_cost_sync.py"
+    },
+    {
       "source": "atlas_brain/storage/migrations/127_llm_usage.sql",
       "target": "extracted_llm_infrastructure/storage/migrations/127_llm_usage.sql"
     },
@@ -81,6 +85,10 @@
       "target": "extracted_llm_infrastructure/storage/migrations/251_b2b_llm_exact_cache.sql"
     },
     {
+      "source": "atlas_brain/storage/migrations/258_provider_cost_reconciliation.sql",
+      "target": "extracted_llm_infrastructure/storage/migrations/258_provider_cost_reconciliation.sql"
+    },
+    {
       "source": "atlas_brain/storage/migrations/255_anthropic_message_batches.sql",
       "target": "extracted_llm_infrastructure/storage/migrations/255_anthropic_message_batches.sql"
     },
@@ -92,6 +100,7 @@
   "owned": [
     {"target": "extracted_llm_infrastructure/services/cost/__init__.py"},
     {"target": "extracted_llm_infrastructure/services/cost/cache_savings.py"},
+    {"target": "extracted_llm_infrastructure/services/cost/openai_billing.py"},
     {"target": "extracted_llm_infrastructure/services/cost/drift.py"},
     {"target": "extracted_llm_infrastructure/storage/migrations/259_llm_cache_savings.sql"}
   ]

@@ -33,6 +33,14 @@ class _FakePool:
         self.daily_cost_rows: list[dict[str, Any]] = []
 
     async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]:
+        # Sanity-check that the production SQL keeps the shape this fake
+        # emulates. If a future edit changes the join type or table
+        # names, these assertions catch it instead of letting the fake
+        # silently pass while production diverges.
+        assert "FULL OUTER JOIN" in sql
+        assert "llm_usage" in sql
+        assert "llm_provider_daily_costs" in sql
+        assert "AT TIME ZONE 'UTC'" in sql
         provider, start, end = args
         # Local daily sums
         local_by_date: dict[date, Decimal] = {}
@@ -107,7 +115,7 @@ async def test_compute_drift_single_day_clean_match():
     assert row.invoiced_usd == Decimal("10.00")
     assert row.delta_usd == Decimal("0")
     assert row.delta_pct == 0.0
-    assert row.explained_by == []
+    assert row.explained_by == ()
 
 
 @pytest.mark.asyncio
@@ -169,6 +177,7 @@ async def test_compute_drift_missing_local_rows_chip():
     row = result[0]
     assert row.local_usd == Decimal(0)
     assert row.invoiced_usd == Decimal("50.00")
+    assert isinstance(row.explained_by, tuple)
     assert "missing_local_rows" in row.explained_by
     assert "high_drift" in row.explained_by
     assert "stale_pricing" not in row.explained_by
@@ -190,7 +199,8 @@ async def test_compute_drift_missing_invoice_chip():
     row = result[0]
     assert row.local_usd == Decimal("50.00")
     assert row.invoiced_usd == Decimal(0)
-    assert row.delta_pct == 0.0
+    # delta_pct is undefined when the invoice side is zero
+    assert row.delta_pct is None
     assert "missing_invoice" in row.explained_by
 
 
@@ -261,7 +271,7 @@ def test_drift_row_is_frozen_dataclass():
         delta_usd=Decimal(0),
         delta_pct=0.0,
     )
-    assert row.explained_by == []
+    assert row.explained_by == ()
     # Frozen
     with pytest.raises(Exception):
         row.provider = "openrouter"  # type: ignore[misc]

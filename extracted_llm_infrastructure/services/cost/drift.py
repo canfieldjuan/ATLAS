@@ -14,16 +14,25 @@ Public API:
 
     DriftRow -- per-day delta with explanatory chips.
 
-A non-empty ``explained_by`` list is a hint, not a verdict. The chips
+A non-empty ``explained_by`` tuple is a hint, not a verdict. The chips
 exist so an operator looking at a $87 / $400 daily delta can see at a
 glance whether it's likely a stale-pricing issue, a missing-row issue,
 or genuinely outside the noise floor.
+
+Provider coverage note: ``llm_provider_daily_costs`` is the only table
+this module reads on the invoiced side. OpenRouter currently feeds
+that table via day-end snapshots only (no per-day invoice rows for
+past days), so OpenRouter drift may show ``missing_invoice`` chips on
+backfill windows even when the snapshot exists. Anthropic and OpenAI
+populate the table with true per-day rows. Phase 3 unifies the
+snapshot-vs-daily-row source behind a ``ProviderBillingPort``
+Protocol.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -46,6 +55,10 @@ class DriftRow:
     multi-modal billing). Negative delta means local thinks we spent
     more than the invoice says (less common: cancelled requests still
     counted locally, batch refunds applied later).
+
+    ``delta_pct`` is ``None`` when ``invoiced_usd`` is zero (the
+    percentage is undefined). It is ``0.0`` only when invoice and local
+    actually match.
     """
 
     provider: str
@@ -53,8 +66,8 @@ class DriftRow:
     local_usd: Decimal
     invoiced_usd: Decimal
     delta_usd: Decimal
-    delta_pct: float
-    explained_by: list[str] = field(default_factory=list)
+    delta_pct: float | None
+    explained_by: tuple[str, ...] = ()
 
 
 def _classify(local: Decimal, invoiced: Decimal, delta: Decimal) -> list[str]:
@@ -107,8 +120,8 @@ async def compute_drift(
                 DATE(created_at AT TIME ZONE 'UTC') AS cost_date,
                 COALESCE(SUM(cost_usd), 0)::NUMERIC(12, 6) AS local_usd
             FROM llm_usage
-            WHERE created_at >= ($2::DATE)::TIMESTAMPTZ
-              AND created_at < ($3::DATE)::TIMESTAMPTZ
+            WHERE created_at >= ($2::DATE) AT TIME ZONE 'UTC'
+              AND created_at < ($3::DATE) AT TIME ZONE 'UTC'
               AND model_provider = $1
             GROUP BY cost_date
         ),
@@ -140,7 +153,7 @@ async def compute_drift(
         local = Decimal(str(row["local_usd"]))
         invoiced = Decimal(str(row["invoiced_usd"]))
         delta = invoiced - local
-        pct = float(delta) / float(invoiced) if invoiced else 0.0
+        pct: float | None = float(delta) / float(invoiced) if invoiced else None
         drift_rows.append(
             DriftRow(
                 provider=provider,
@@ -149,7 +162,7 @@ async def compute_drift(
                 invoiced_usd=invoiced,
                 delta_usd=delta,
                 delta_pct=pct,
-                explained_by=_classify(local, invoiced, delta),
+                explained_by=tuple(_classify(local, invoiced, delta)),
             )
         )
     return drift_rows
