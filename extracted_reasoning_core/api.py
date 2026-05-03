@@ -51,14 +51,23 @@ def score_archetypes(
 ) -> Sequence[ArchetypeMatch]:
     """Score evidence against shared archetypes.
 
-    The implementation lands when `archetypes.py` is consolidated into the
-    core. The public name is reserved now so products can depend on the stable
-    API shape instead of importing product-local forks.
+    Returns the top `limit` matches as public `ArchetypeMatch` instances,
+    sorted by score descending. Internal scoring runs against the
+    canonical 10-archetype catalog from `extracted_reasoning_core.archetypes`;
+    the rich internal `_ArchetypeMatchInternal` shape is converted to the
+    public contract via the module's `_to_public_match` adapter so callers
+    consume the stable `types.ArchetypeMatch` shape.
+
+    `evidence` is the flat snapshot dict; `temporal` is an optional
+    overlay (e.g., output of `TemporalEngine.to_evidence_dict`) that gets
+    merged before scoring. `limit` defaults to 3 (matches the prior
+    `top_matches` convention).
     """
-    del evidence
-    del temporal
-    del limit
-    raise NotImplementedError("score_archetypes lands with archetype consolidation")
+    from . import archetypes as _archetypes
+
+    matches = _archetypes.score_evidence(dict(evidence), dict(temporal) if temporal else None)
+    capped = matches[: max(0, int(limit))]
+    return tuple(_archetypes._to_public_match(m) for m in capped)
 
 
 def evaluate_evidence(
@@ -77,10 +86,70 @@ def build_temporal_evidence(
     *,
     baselines: Mapping[str, Any] | None = None,
 ) -> TemporalEvidence:
-    """Build normalized temporal evidence from snapshots."""
-    del snapshots
-    del baselines
-    raise NotImplementedError("build_temporal_evidence lands with temporal consolidation")
+    """Build normalized temporal evidence from already-loaded snapshots.
+
+    Pure-function path: caller supplies a sorted (oldest-first) sequence of
+    snapshot dicts and gets back the rich `TemporalEvidence` shape with
+    velocities and long-term trends computed in-memory. No DB access; this
+    is the in-process companion to `TemporalEngine.analyze_vendor` which
+    handles DB-backed snapshots and category baselines.
+
+    Velocities require >= 2 snapshots (`MIN_DAYS_FOR_VELOCITY`); long-term
+    trends require >= 14 (`MIN_DAYS_FOR_TREND`). Below the velocity floor
+    the function returns a `TemporalEvidence` with `insufficient_data=True`
+    and the right `snapshot_days` count.
+
+    `baselines` accepts a `Mapping` carrying optional category-percentile
+    data. Atlas's full anomaly-vs-baseline pipeline (which requires
+    DB-backed category lookups via `_compute_percentiles`) is intentionally
+    out of scope here; callers needing it should use `TemporalEngine`
+    directly. When `baselines` is `None` or empty, the returned
+    `TemporalEvidence` has empty `anomalies` and `category_baselines`
+    lists. A future PR can extend this entry point to honor a structured
+    baselines payload without breaking callers.
+    """
+    from .temporal import (
+        MIN_DAYS_FOR_TREND,
+        MIN_DAYS_FOR_VELOCITY,
+        TemporalEngine,
+    )
+
+    snaps = [dict(s) for s in snapshots]
+    vendor_name = ""
+    if snaps:
+        vendor_name = str(snaps[-1].get("vendor_name") or "")
+
+    if len(snaps) < MIN_DAYS_FOR_VELOCITY:
+        return TemporalEvidence(
+            vendor_name=vendor_name,
+            snapshot_days=len(snaps),
+            insufficient_data=True,
+        )
+
+    # `TemporalEngine` exposes the in-memory helpers we need; pool=None is
+    # safe because we never call the DB-backed methods (`analyze_vendor`,
+    # `_compute_percentiles`, `_infer_category`) from this entry point.
+    engine = TemporalEngine(pool=None)
+    velocities = engine._compute_velocities(vendor_name, snaps)
+    trends = (
+        engine._compute_long_term_trends(vendor_name, snaps)
+        if len(snaps) >= MIN_DAYS_FOR_TREND
+        else []
+    )
+
+    # `baselines` is an optional advisory input today; structured anomaly
+    # support is a follow-up. The argument is accepted (and unpacked into a
+    # local) so the public signature is honored even though the value is
+    # not yet consumed.
+    _baselines = dict(baselines) if baselines else {}
+    del _baselines
+
+    return TemporalEvidence(
+        vendor_name=vendor_name,
+        snapshot_days=len(snaps),
+        velocities=velocities,
+        trends=trends,
+    )
 
 
 def build_narrative_plan(
