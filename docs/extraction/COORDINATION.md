@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T20:01Z by claude-2026-05-03
+Last updated: 2026-05-03T20:02Z by codex-2026-05-03
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -14,11 +14,11 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 
 | Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
 |---|---|---|---|---|---|
-| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | — | Cost-closure additions (PR-A1 → A4) | none |
-| `extracted_competitive_intelligence` | 1 (scaffold) | #48 | #80 | Stabilize after #80 wedge migration | `reasoning/wedge_registry.py` |
-| `extracted_content_pipeline` | 1 → 2 (productization seams in flight) | #76 | #77, #78 | Standalone runner without `atlas_brain` on path | `campaign_generation.py`, `*_postgres_*`, `README.md`, `STATUS.md`, `docs/remaining_productization_audit.md` |
+| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #87 | — | Cost-closure additions (PR-A2 -> A4) | none |
+| `extracted_competitive_intelligence` | 1 (scaffold) | #80 | — | Phase 2 standalone toggle | none |
+| `extracted_content_pipeline` | 1 -> 2 (productization seams) | #78 | — | Standalone runner without `atlas_brain` on path | none |
 | `extracted_reasoning_core` | 1 (scaffold + wedge consolidated; PR-C1 claimed) | #82 | — (PR-C1 claimed by claude-2026-05-03) | Evidence/temporal/archetypes consolidation per merged PR #82 audit | `extracted_reasoning_core/**` (api/types/archetypes/evidence_engine/evidence_map.yaml/temporal); `atlas_brain/reasoning/{evidence_engine.py, review_enrichment.py}`; `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py`; `tests/test_extracted_reasoning_*.py` |
-| `extracted_quality_gate` | not started | — | — | Boundary audit claimed by PR-B1 | `docs/extraction/quality_gate_boundary_audit_2026-05-03.md` |
+| `extracted_quality_gate` | 1 (scaffold + product_claim core landed via #85) | #85 | — | Safety-gate split (PR-B3); blog + campaign packs (PR-B4) | none |
 
 Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle loads local substrate (per-product env var: `EXTRACTED_LLM_INFRA_STANDALONE`, `EXTRACTED_COMP_INTEL_STANDALONE`, `EXTRACTED_PIPELINE_STANDALONE`, etc.; see `extracted/METHODOLOGY.md` for the canonical list). 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
 
@@ -28,9 +28,8 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| #77 | docs: park product strategy notes | `extracted_content_pipeline/docs/long_form_creative_backlog.md`, `extracted_content_pipeline/docs/podcast_repurposing_landing_page_strategy.md`, `extracted_content_pipeline/docs/remaining_productization_audit.md` | (unknown — confirm) | #78 on `extracted_content_pipeline/docs/remaining_productization_audit.md` |
-| #78 | Add multi-channel campaign generation flow | `extracted_content_pipeline/campaign_generation.py`, postgres runners, README, STATUS, tests | (unknown — confirm) | `extracted_content_pipeline/{campaign_generation.py, campaign_postgres_generation.py, campaign_example.py, README.md, STATUS.md, docs/remaining_productization_audit.md, docs/standalone_productization.md}`; `scripts/run_extracted_campaign_generation_*.py`; `tests/test_extracted_campaign_*.py` |
-_(Rows for merged PRs #79, #80, #81, #82, #83, #84, #85 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
+| — | — | — | — | — |
+_(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86, #87 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 
@@ -40,13 +39,12 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 
 | Slice | Product | Owner | Dependencies | Notes |
 |---|---|---|---|---|
-| PR-Coord | meta | claude-2026-05-03-b | none | This doc. Establishes the mechanism. |
-| PR-A0 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none | Boundary audit doc: `docs/extraction/cost_closure_audit_2026-05-03.md`. Mirrors PR #79's structure. Open as PR #83. |
-| PR-A1 | `extracted_llm_infrastructure` | unclaimed | PR-A0 | Add `services/b2b/llm_exact_cache.py` + migration `251_b2b_llm_exact_cache.sql` (rename target: `llm_exact_cache.sql`) to manifest. Update README "What's in scope" table. |
-| PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
-| PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
+| PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 / #87 (merged) | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
+| PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 / #87 (merged) | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
 | PR-A4 | `extracted_llm_infrastructure` | unclaimed | PR-A2, PR-A3 | New code: drift report (local vs invoiced), budget gate, OpenAI provider adapter. May split if too large. |
-| PR-B1 | `extracted_quality_gate` | codex-2026-05-03 | (independent of A) | Boundary audit doc: `docs/extraction/quality_gate_boundary_audit_2026-05-03.md`. Mirrors PR #79. Docs only; avoid code until audit lands. |
+| PR-B3 | `extracted_quality_gate` | unclaimed | PR-B2 / #85 (merged) | Safety-gate split: deterministic content/risk scan to core; approvals + audit log + DB to ports + Atlas adapter wrapper. |
+| PR-B4 | `extracted_quality_gate` | unclaimed | PR-B2 / #85 (merged) | Blog + campaign quality packs over the core gate contract. |
+| PR-B5 | `extracted_quality_gate` | unclaimed | PR-B2 / #85 (merged) | B2B evidence + witness + source-quality packs. |
 | PR-C1 | `extracted_reasoning_core` | claude-2026-05-03 | PR #80, PR #82 (both merged) | Consolidate evidence/temporal/archetypes per merged PR #82 audit. NEW in core: `archetypes.py`, `evidence_engine.py` (slim conclusions+suppression surface), `evidence_map.yaml`, `temporal.py` (with `_numeric_value` / `_row_get` helpers + parameterized `MIN_DAYS_FOR_PERCENTILES`). Atlas-side: NEW `atlas_brain/reasoning/review_enrichment.py`; slim `atlas_brain/reasoning/evidence_engine.py`. Convert `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py` to re-export wrappers. EDIT `extracted_reasoning_core/api.py` (impl 3 stubs) and `extracted_reasoning_core/types.py` (rich `TemporalEvidence` + 4 sub-types + `ConclusionResult` + `SuppressionResult`). Rename + redirect `tests/test_extracted_reasoning_*.py`. PR #79 contract amendment lands in the same commit. |
 
 ---
@@ -60,12 +58,15 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 - **2026-05-03** — `docs/extraction/COORDINATION.md` is the canonical state-of-the-world doc for extraction work. Read at session start, update at session end.
 - **2026-05-03** — Coordination protocol refinements: ISO 8601 UTC timestamps; alphabetical suffix scheme (`-b`, `-c`, …) for AI sessions colliding on a date, claimed in the same commit; unknown-owner fallback (treat as locked); tie-breaker on simultaneous claims (last write wins, loser negotiates); forgive-and-claim for missed-step recovery. CI enforcement deferred to PR-Coord-2.
 - **2026-05-03** — Active session letter aliases (A/B/C) added as conversational shorthand alongside canonical agent-date IDs (Option 2 over replacement). Aliases re-anchor each calendar day; agent-date IDs remain canonical in tables and decisions log.
+- **2026-05-03** — Post-merge cleanup: PRs #77, #78, #79, #80, #81, #82, #83, #84, #85 merged into main. Per-product state advanced for `extracted_competitive_intelligence` (#80), `extracted_content_pipeline` (#78), `extracted_reasoning_core` (#82, now Phase 1 with wedge consolidated), `extracted_quality_gate` (#85, now Phase 1 with product_claim core landed). `PR-Coord` and `PR-A0` slices retired. PR-B1 retired (merged as #84). PR-B2 retired (merged as #85).
+- **2026-05-03** — PR-C1 claimed by `claude-2026-05-03` for the reasoning evidence/temporal/archetypes consolidation. Hot zone recorded in per-product state and Upcoming queue.
+- **2026-05-03** — PR-A1 merged as #87. `llm_exact_cache.py` and migration 251 are now in the LLM-infrastructure manifest; PR-A2 and PR-A3 are unblocked.
+- **2026-05-03** — Coordination timestamp protocol tightened: stamps must be monotonic using `max(now, last_stamp + 1 minute)` so future edits cannot regress the audit log.
 
 ---
 
 ## Open questions / blockers
 
-- Owners for in-flight PRs #77, #78 — separate AI sessions; pending session-ID confirmation from `@canfieldjuan`. PRs #79, #80, and #82 confirmed as `claude-2026-05-03`.
 - **Future hardening (deferred)**: a CI check that requires any merged PR touching `extracted_*/` to also modify `COORDINATION.md`. Forces the protocol mechanically instead of relying on convention. Land as a follow-up PR-Coord-2 once the doc has hit real friction (i.e. someone has demonstrably forgotten to update).
 
 ---
