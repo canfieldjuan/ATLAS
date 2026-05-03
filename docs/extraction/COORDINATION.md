@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T19:30Z by claude-2026-05-03
+Last updated: 2026-05-03T20:01Z by claude-2026-05-03
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -17,7 +17,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 | `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | — | Cost-closure additions (PR-A1 → A4) | none |
 | `extracted_competitive_intelligence` | 1 (scaffold) | #48 | #80 | Stabilize after #80 wedge migration | `reasoning/wedge_registry.py` |
 | `extracted_content_pipeline` | 1 → 2 (productization seams in flight) | #76 | #77, #78 | Standalone runner without `atlas_brain` on path | `campaign_generation.py`, `*_postgres_*`, `README.md`, `STATUS.md`, `docs/remaining_productization_audit.md` |
-| `extracted_reasoning_core` | 1 (scaffold + wedge consolidated; PR-C1 claimed) | #82 | PR-C1 (claimed; claude-2026-05-03) | Evidence/temporal/archetypes consolidation per merged PR #82 audit | `extracted_reasoning_core/**` (api/types/archetypes/evidence_engine/evidence_map.yaml/temporal); `atlas_brain/reasoning/{evidence_engine.py, review_enrichment.py}`; `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py`; `tests/test_extracted_reasoning_*.py` |
+| `extracted_reasoning_core` | 1 (scaffold + wedge consolidated; PR-C1 claimed) | #82 | — (PR-C1 claimed by claude-2026-05-03) | Evidence/temporal/archetypes consolidation per merged PR #82 audit | `extracted_reasoning_core/**` (api/types/archetypes/evidence_engine/evidence_map.yaml/temporal); `atlas_brain/reasoning/{evidence_engine.py, review_enrichment.py}`; `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py`; `tests/test_extracted_reasoning_*.py` |
 | `extracted_quality_gate` | not started | — | — | Boundary audit claimed by PR-B1 | `docs/extraction/quality_gate_boundary_audit_2026-05-03.md` |
 
 Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle loads local substrate (per-product env var: `EXTRACTED_LLM_INFRA_STANDALONE`, `EXTRACTED_COMP_INTEL_STANDALONE`, `EXTRACTED_PIPELINE_STANDALONE`, etc.; see `extracted/METHODOLOGY.md` for the canonical list). 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
@@ -77,7 +77,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 3. **Before starting code on a queued slice**: claim it in *Upcoming queue* (set Owner) so a parallel session doesn't pick the same one.
 4. **After a PR merges**: update *Per-product state* (most recent PR, next milestone), drop the row from *In-flight PRs*, log any decisions made during review.
 5. **When a decision lands**: append to *Decisions log* with the date. Never edit historical entries; supersede with a newer entry instead.
-6. **Update the "Last updated" stamp** every time you touch this file. ISO 8601 UTC: `YYYY-MM-DDTHH:MMZ`.
+6. **Update the "Last updated" stamp** every time you touch this file. ISO 8601 UTC: `YYYY-MM-DDTHH:MMZ`. Stamps must be monotonic relative to the previous value: write `max(now, last_stamp + 1 minute)`. If the prior stamp is in the future relative to your real clock (clock drift, estimation), still bump past it -- the audit log must never regress.
 7. **Tie-breaker on simultaneous claims**: if two sessions claim the same slice within minutes, last commit to this file wins; the loser pivots to a different slice or negotiates in PR comments before opening a competing PR.
 8. **Forgive-and-claim**: if you opened a PR without first adding a row, add the row before requesting review. Skipping the claim once is not punishable; abandoning the protocol is.
 
