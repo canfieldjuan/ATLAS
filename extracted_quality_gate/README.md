@@ -26,11 +26,13 @@ from extracted_quality_gate.safety_gate import (
     assess_risk,
     check_content,
 )
+from extracted_quality_gate.blog_pack import evaluate_blog_post
 ```
 
 Products should import from:
 
 - `extracted_quality_gate.api`
+- `extracted_quality_gate.blog_pack`
 - `extracted_quality_gate.safety_gate`
 - `extracted_quality_gate.types`
 - `extracted_quality_gate.ports`
@@ -48,3 +50,27 @@ The Atlas-side wrapper (`atlas_brain/services/safety_gate.py`) layers the I/O su
 - composite `gate_check()` that coordinates pure scan + DB writes
 
 The wrapper consumes the core via direct import; the `ApprovalStore` and `AuditLog` Protocols defined in `ports.py` describe the I/O surface for future packs that want to plug a different backend.
+
+## Blog quality pack (PR-B4a)
+
+`blog_pack.evaluate_blog_post` is a pure validator over a `QualityInput`
+(cleaned body in `content`, blueprint metadata in `context`) and a
+`QualityPolicy` (per-topic word-count thresholds, pass score). It returns
+a `QualityReport` whose `findings` enumerate every gate that fired:
+content-too-short, missing/duplicate/unknown chart placeholders,
+unresolved `{{token}}` placeholders, quote-count, review-period mention,
+methodology disclaimer, required vendors, placeholder/internal links,
+title/vendor match, category-outcome support, ungrounded data claims
+(two-strategy: known-vendor lookup + multi-word capitalized-name regex
+with configurable skip words), chart-scope ambiguity, numeric
+consistency, migration-direction drift.
+
+Sanitization (markdown cleanup + unmatched-quote removal) lives in the
+Atlas wrapper, not the pack -- the pack validates only. Specificity
+checks (witness-anchor support, evidence coverage) also stay
+Atlas-side; PR-B5 ships them as their own pack.
+
+The wrapper at `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py:_apply_blog_quality_gate`
+sanitizes, builds the input, calls the pack, then layers the
+specificity findings on top. Public dict shape is preserved so existing
+call sites need no changes.
