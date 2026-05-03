@@ -1,23 +1,26 @@
-"""Phase 1 bridge: re-exports atlas_brain.reasoning.wedge_registry.
+"""Compatibility wrapper for the shared extracted reasoning wedge registry."""
 
-Programmatically copies every non-dunder name (including underscore-
-prefixed helpers that from X import * would drop). Required because
-many scaffolded modules import private helpers from atlas_brain peers
-via from .X import _foo lazily inside function bodies. Phase 2
-replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
-"""
 from __future__ import annotations
 
-import importlib as _importlib
+from extracted_reasoning_core.api import (
+    WEDGE_ENUM_VALUES,
+    Wedge,
+    WedgeMeta,
+    get_required_pools,
+    get_sales_motion,
+    get_wedge_meta,
+    validate_wedge,
+    wedge_from_archetype,
+)
 
-def _bridge() -> None:
-    src = _importlib.import_module("atlas_brain.reasoning.wedge_registry")
-    g = globals()
-    for name in dir(src):
-        if not name.startswith("__"):
-            g[name] = getattr(src, name)
 
-
-_bridge()
-del _bridge, _importlib
+__all__ = [
+    "WEDGE_ENUM_VALUES",
+    "Wedge",
+    "WedgeMeta",
+    "get_required_pools",
+    "get_sales_motion",
+    "get_wedge_meta",
+    "validate_wedge",
+    "wedge_from_archetype",
+]
