@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T20:02Z by codex-2026-05-03
+Last updated: 2026-05-03T22:30Z by claude-2026-05-03-b
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -14,7 +14,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 
 | Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
 |---|---|---|---|---|---|
-| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #87 | — | Cost-closure additions (PR-A2 -> A4) | none |
+| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #87 | #89 (PR-A2), #90 (PR-A1.5), (PR-A3 opening) | Cost-closure additions (PR-A2 lift, PR-A1.5 cleanup, PR-A3 cache-savings new code, PR-A4 next) | `extracted_llm_infrastructure/services/cost/`, `extracted_llm_infrastructure/storage/migrations/259_*` |
 | `extracted_competitive_intelligence` | 1 (scaffold) | #80 | — | Phase 2 standalone toggle | none |
 | `extracted_content_pipeline` | 1 -> 2 (productization seams) | #78 | — | Standalone runner without `atlas_brain` on path | none |
 | `extracted_reasoning_core` | 1 (scaffold + wedge consolidated; PR-C1 claimed) | #82 | — (PR-C1 claimed by claude-2026-05-03) | Evidence/temporal/archetypes consolidation per merged PR #82 audit | `extracted_reasoning_core/**` (api/types/archetypes/evidence_engine/evidence_map.yaml/temporal); `atlas_brain/reasoning/{evidence_engine.py, review_enrichment.py}`; `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py`; `tests/test_extracted_reasoning_*.py` |
@@ -28,7 +28,9 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| #89 | Add `provider_cost_sync` to LLM-infrastructure manifest (PR-A2) | `extracted_llm_infrastructure/{manifest.json, services/provider_cost_sync.py, storage/migrations/258_provider_cost_reconciliation.sql, README.md, STATUS.md}`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | manifest edits or files synced into `extracted_llm_infrastructure/services/` and `storage/migrations/258_*` |
+| #90 | Re-apply Copilot fixes that missed PR #87 merge (PR-A1.5) | `extracted_llm_infrastructure/{skills/__init__.py, _standalone/config.py, STATUS.md}`; `scripts/smoke_extracted_llm_infrastructure_imports.py`; `scripts/smoke_extracted_llm_infrastructure_standalone.py` | claude-2026-05-03-b | the 5 listed files |
+| (PR-A3, opening) | Add cache-savings persistence (NEW CODE) | `extracted_llm_infrastructure/{manifest.json, services/cost/__init__.py, services/cost/cache_savings.py, storage/migrations/259_llm_cache_savings.sql, README.md, STATUS.md}`; `tests/test_extracted_llm_infrastructure_cache_savings.py`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | `services/cost/` (any file) or `storage/migrations/259_*` |
 _(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86, #87 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
@@ -39,8 +41,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 
 | Slice | Product | Owner | Dependencies | Notes |
 |---|---|---|---|---|
-| PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 / #87 (merged) | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
-| PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 / #87 (merged) | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
+| PR-A3 | `extracted_llm_infrastructure` | claude-2026-05-03-b | PR-A1 / #87 (merged) | New code: cache-savings persistence layer + migration 259. Closes the "$ saved by cache" telemetry gap. **In flight.** |
 | PR-A4 | `extracted_llm_infrastructure` | unclaimed | PR-A2, PR-A3 | New code: drift report (local vs invoiced), budget gate, OpenAI provider adapter. May split if too large. |
 | PR-B3 | `extracted_quality_gate` | unclaimed | PR-B2 / #85 (merged) | Safety-gate split: deterministic content/risk scan to core; approvals + audit log + DB to ports + Atlas adapter wrapper. |
 | PR-B4 | `extracted_quality_gate` | unclaimed | PR-B2 / #85 (merged) | Blog + campaign quality packs over the core gate contract. |

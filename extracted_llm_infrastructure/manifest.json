@@ -88,5 +88,10 @@
       "source": "atlas_brain/storage/migrations/257_llm_usage_reasoning_attribution.sql",
       "target": "extracted_llm_infrastructure/storage/migrations/257_llm_usage_reasoning_attribution.sql"
     }
+  ],
+  "owned": [
+    {"target": "extracted_llm_infrastructure/services/cost/__init__.py"},
+    {"target": "extracted_llm_infrastructure/services/cost/cache_savings.py"},
+    {"target": "extracted_llm_infrastructure/storage/migrations/259_llm_cache_savings.sql"}
   ]
 }
