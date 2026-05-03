@@ -76,13 +76,104 @@ class EvidenceDecision:
     trace: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class ConclusionResult:
+    """Outcome of a single per-vendor conclusion rule evaluation.
+
+    Mirrors the shape `EvidenceEngine.evaluate_conclusion` returns in
+    atlas. Public so products that need the richer per-rule outcome
+    (vs the simpler `EvidenceDecision`) can consume it from the
+    canonical location.
+    """
+
+    conclusion_id: str
+    met: bool
+    confidence: str
+    fallback_label: str | None = None
+    fallback_action: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SuppressionResult:
+    """Per-section render-suppression decision.
+
+    Mirrors the shape `EvidenceEngine.evaluate_suppression` returns in
+    atlas. Public so report renderers can consume the same outcome
+    types from the canonical location.
+    """
+
+    suppress: bool = False
+    degrade: bool = False
+    disclaimer: str | None = None
+    fallback_label: str | None = None
+
+
+@dataclass(frozen=True)
+class VendorVelocity:
+    """Rate-of-change metrics for a vendor metric over a snapshot window."""
+
+    vendor_name: str
+    metric: str
+    current_value: float
+    previous_value: float
+    velocity: float          # change per day
+    days_between: int
+    acceleration: float | None = None  # change in velocity (needs 3+ points)
+
+
+@dataclass(frozen=True)
+class LongTermTrend:
+    """Long-term linear trend (30-day / 90-day slopes)."""
+
+    metric: str
+    slope_30d: float | None = None
+    slope_90d: float | None = None
+    volatility: float | None = None  # standard deviation of changes
+    data_points: int = 0
+
+
+@dataclass(frozen=True)
+class CategoryPercentile:
+    """Rolling percentile baselines for a metric within a product category."""
+
+    product_category: str
+    metric: str
+    p25: float
+    p50: float
+    p75: float
+    sample_count: int
+
+
+@dataclass(frozen=True)
+class AnomalyScore:
+    """Z-score anomaly detection for a single vendor metric."""
+
+    vendor_name: str
+    metric: str
+    value: float
+    z_score: float
+    p_value: float | None = None
+    is_anomaly: bool = False    # |z| > 2.0
+
+
 @dataclass(frozen=True)
 class TemporalEvidence:
-    velocity: Mapping[str, Any] = field(default_factory=dict)
-    trend: Mapping[str, Any] = field(default_factory=dict)
-    anomaly: Mapping[str, Any] = field(default_factory=dict)
-    recency: Mapping[str, Any] = field(default_factory=dict)
-    baselines: Mapping[str, Any] = field(default_factory=dict)
+    """Complete temporal analysis for a vendor.
+
+    Promoted from PR #79's coarse `Mapping[str, Any]` placeholder to
+    the rich shape per the PR #82 audit's contract amendment. The 4
+    sub-types (`VendorVelocity`, `LongTermTrend`, `CategoryPercentile`,
+    `AnomalyScore`) are public so products can render velocity / trend
+    charts without losing type safety at the boundary.
+    """
+
+    vendor_name: str
+    snapshot_days: int
+    velocities: list[VendorVelocity] = field(default_factory=list)
+    trends: list[LongTermTrend] = field(default_factory=list)
+    anomalies: list[AnomalyScore] = field(default_factory=list)
+    category_baselines: list[CategoryPercentile] = field(default_factory=list)
+    insufficient_data: bool = False
 
 
 @dataclass(frozen=True)
@@ -133,12 +224,16 @@ class ValidationReport:
 
 
 __all__ = [
+    "AnomalyScore",
     "ArchetypeMatch",
+    "CategoryPercentile",
+    "ConclusionResult",
     "EvidenceDecision",
     "EvidenceItem",
     "EvidencePolicy",
     "FalsificationPolicy",
     "FalsificationResult",
+    "LongTermTrend",
     "NarrativePlan",
     "OutputPolicy",
     "ReasoningDepth",
@@ -146,8 +241,10 @@ __all__ = [
     "ReasoningPack",
     "ReasoningPorts",
     "ReasoningResult",
+    "SuppressionResult",
     "TemporalEvidence",
     "ValidationReport",
+    "VendorVelocity",
     "Wedge",
     "WedgeMeta",
 ]
