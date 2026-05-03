@@ -77,6 +77,9 @@
   reference file-backed adapter for that boundary. It lets examples and hosts
   provide precomputed reasoning JSON keyed by target id, company, email, or
   vendor without importing a reasoning producer.
+- Both the offline and Postgres campaign generation runners can consume that
+  JSON through `--reasoning-context`, so file-backed host reasoning is available
+  on demo and DB-backed generation paths.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.
