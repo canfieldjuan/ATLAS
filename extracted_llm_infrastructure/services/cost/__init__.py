@@ -5,11 +5,14 @@ Owned modules in this package (not synced from atlas_brain):
 - ``cache_savings`` -- persists one row per cache hit with the would-have-
   been input/output tokens and cost, then rolls them up for the
   "saved by cache" hero metric on the cost dashboard.
+- ``drift`` -- per-day reconciliation between locally-tracked spend
+  (``llm_usage``) and invoiced spend (``llm_provider_daily_costs``).
+  Returns ``DriftRow`` objects with explanatory chips
+  (``stale_pricing``, ``missing_local_rows``, ``high_drift``, etc.).
+  The differentiated cost-closure wedge.
 
 Future siblings (queued in ``docs/extraction/cost_closure_audit_2026-05-03.md``):
 
-- ``drift`` (PR-A4): local-vs-invoiced reconciliation per (provider,
-  model, day, attribution).
-- ``budget`` (PR-A4): runtime budget gate with daily and per-attribution
-  caps.
+- ``budget`` (PR-A4b): runtime budget gate with daily and
+  per-attribution caps.
 """

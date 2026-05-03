@@ -7,7 +7,7 @@
 | Manifest of source → scaffold mappings | ✅ done |
 | Verbatim byte-snapshot of 15 Python files | ✅ done (added `services/b2b/llm_exact_cache.py` in PR-A1) |
 | Verbatim byte-snapshot of 7 migration SQL files | ✅ done (added migration 251 in PR-A1) |
-| Owned (not synced) Python files: 2 (PR-A3) | ✅ done (`services/cost/__init__.py`, `services/cost/cache_savings.py`) |
+| Owned (not synced) Python files: 3 (PR-A3 + PR-A4a) | ✅ done (`services/cost/__init__.py`, `services/cost/cache_savings.py`, `services/cost/drift.py`) |
 | Owned (not synced) migration SQL files: 1 (PR-A3) | ✅ done (`storage/migrations/259_llm_cache_savings.sql`) |
 | Package `__init__.py` files at every level | ✅ done |
 | Sync + validate scripts | ✅ done via shared tooling wrappers |
@@ -84,6 +84,7 @@ Import contract is closed; the remaining work is **runtime** behavior when funct
 | `services/tracing.py` | ✅ | ✅ | 🔲 |
 | `services/cost/__init__.py` (OWNED, PR-A3) | n/a | ✅ (no atlas imports; owned by extraction) | n/a |
 | `services/cost/cache_savings.py` (OWNED, PR-A3) | n/a | ✅ (asyncpg-pool-shaped; runs standalone with the local DatabasePool) | n/a |
+| `services/cost/drift.py` (OWNED, PR-A4a) | n/a | ✅ (asyncpg-pool-shaped; pure SQL + dataclass output, no atlas imports) | n/a |
 | `storage/migrations/127_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/130_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/252_*.sql` | ✅ | n/a | n/a |
