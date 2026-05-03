@@ -136,6 +136,27 @@ class ReasoningPorts:
     clock: Clock | None = None
 ```
 
+Supporting types defined in PR 2:
+
+| Type | Meaning |
+| --- | --- |
+| `Wedge` | Stable enum of sales/reasoning wedge identifiers shared by prompts, validation, and product renderers. |
+| `WedgeMeta` | Label, archetype mapping, sales motion, and required evidence pools for a wedge. |
+| `ArchetypeMatch` | One scored archetype result with id, label, score, evidence hits, missing evidence, and risk label. |
+| `EvidencePolicy` | Rule set for evidence thresholds, required pools, confidence labels, and section suppression. |
+| `EvidenceDecision` | Output of evidence evaluation: allowed/suppressed, confidence, reasons, missing evidence, and trace data. |
+| `TemporalEvidence` | Normalized velocity, trend, anomaly, recency, and baseline-relative evidence for a time series. |
+| `NarrativePlan` | Product-neutral outline of claims, sections, evidence requirements, and continuity/state hints. |
+| `ReasoningPack` | Product-specific prompt and policy bundle selected by name/version. |
+| `FalsificationPolicy` | Product or pack rules for deciding which fresh evidence can invalidate a prior claim. |
+| `FalsificationResult` | Triggered and non-triggered falsification conditions plus invalidation recommendation. |
+| `OutputPolicy` | Validation policy for reasoned outputs, including required claims, citations, confidence, and blocked phrasing. |
+| `ValidationReport` | Structured validation result with blockers, warnings, repaired fields, and audit trace. |
+| `LLMClient` | Port for chat/completion calls; provider routing stays outside reasoning core. |
+| `SemanticCacheStore` | Port for lookup/store/validate/invalidate of semantic-cache entries. |
+| `ReasoningStateStore` | Port for reading/writing long-running reasoning state and continuation checkpoints. |
+| `Clock` | Deterministic time source for recency, cache decay, schedule, and testability. |
+
 Stable entry points:
 
 ```python
@@ -205,6 +226,16 @@ Deprecation policy:
   removal.
 - Reasoning packs can version prompt contracts independently of core.
 
+Graph prompt policy:
+
+- `run_reasoning(input, ports=ports)` without a product pack is valid.
+- Core ships a minimal default pack for generic triage, synthesis, and
+  validation.
+- Product packs override or extend default graph prompts for battle cards,
+  campaigns, vendor briefings, long-form stories, and cross-vendor analysis.
+- The graph engine must not import product packs directly; pack selection goes
+  through `load_reasoning_pack(name)` or an injected `ReasoningPack`.
+
 ## Module Classification
 
 | Atlas file | Lines | Classification | Extraction decision |
@@ -224,7 +255,7 @@ Deprecation policy:
 | `evidence_map.yaml` | 284 | shared core policy data | package as default policy map |
 | `falsification.py` | 318 | opinionated shared core | extract with extension points and ports |
 | `graph.py` | 652 | shared engine after porting | extract after public API skeleton |
-| `graph_prompts.py` | 122 | reasoning pack | pack-specific prompt scaffolding |
+| `graph_prompts.py` | 122 | default pack + pack override surface | core ships minimal defaults; products override through packs |
 | `knowledge_graph.py` | 744 | shared core after porting | extract after state/ports are defined |
 | `llm_utils.py` | 131 | LLM port helper | move generic parsing to core; provider calls stay outside |
 | `lock_integration.py` | 119 | host adapter | leave out of core |
@@ -245,7 +276,7 @@ Deprecation policy:
 | `single_pass_prompts/category_council_synthesis.py` | 64 | reasoning pack | cross-vendor/category pack |
 | `single_pass_prompts/cross_vendor_battle.py` | 55 | reasoning pack | competitive/battle-card pack |
 | `single_pass_prompts/cross_vendor_battle_synthesis.py` | 70 | reasoning pack | competitive/cross-vendor pack |
-| `single_pass_prompts/reasoning_synthesis.py` | 302 | reasoning pack | general synthesis pack |
+| `single_pass_prompts/reasoning_synthesis.py` | 302 | default synthesis pack | explicit default pack asset, not miscellaneous core internals |
 | `single_pass_prompts/resource_asymmetry_synthesis.py` | 63 | reasoning pack | competitive/cross-vendor pack |
 | `single_pass_prompts/vendor_classify.py` | 174 | reasoning pack | vendor classification pack |
 | `skill_prompts/reasoning_analysis.md` | 47 | reasoning pack | prompt pack asset |
@@ -345,28 +376,35 @@ Acceptance criteria:
   the same wedge registry
 - no product owns a forked `wedge_registry.py`
 - public API import smoke exists
+- tests for consolidated `wedge_registry.py` move to
+  `tests/test_extracted_reasoning_core_wedge_registry.py`; existing Atlas tests
+  remain until their modules migrate
 
-### PR 3: Semantic Cache Split
-
-Move key derivation and cache-entry types to reasoning core. Keep storage in
-LLM infrastructure behind a port.
-
-Acceptance criteria:
-
-- `compute_evidence_hash` has one implementation
-- LLM infrastructure owns Postgres queries
-- competitive intelligence no longer bridges Atlas semantic cache
-
-### PR 4: Evidence, Temporal, Archetypes Consolidation
+### PR 3: Evidence, Temporal, Archetypes Consolidation
 
 Move `evidence_engine.py`, `evidence_map.yaml`, `temporal.py`, and
-`archetypes.py` into core.
+`archetypes.py` into core so semantic-cache keys can depend on stable evidence
+types instead of today's Atlas-shaped dicts.
 
 Acceptance criteria:
 
 - content pipeline imports these from reasoning core
 - Atlas can adapt to the shared core without behavior drift
 - drifted content copies are removed or converted to wrappers
+- reasoning-core tests own the consolidated evidence, temporal, and archetype
+  contracts
+
+### PR 4: Semantic Cache Split
+
+Move key derivation and cache-entry types to reasoning core after the evidence
+types settle. Keep storage in LLM infrastructure behind a port.
+
+Acceptance criteria:
+
+- `compute_evidence_hash` has one implementation
+- LLM infrastructure owns Postgres queries
+- competitive intelligence no longer bridges Atlas semantic cache
+- cache tests cover core key derivation separately from the LLM-infra store
 
 ### PR 5: Reasoning Pack Registry
 
@@ -408,7 +446,11 @@ Acceptance criteria:
 
 - no runtime `atlas_brain.reasoning` imports in extracted products
 - duplicate reasoning leaves are gone
-- CI includes drift guard for reasoning-core files
+- CI includes an import-boundary drift guard: extracted products may import
+  only `extracted_reasoning_core.api`, `extracted_reasoning_core.types`,
+  `extracted_reasoning_core.ports`, or approved pack entry points. Direct
+  imports from `extracted_reasoning_core._internal`, concrete module files, or
+  `atlas_brain.reasoning` fail CI.
 
 ## Immediate Next Code Slice
 
