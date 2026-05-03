@@ -24,6 +24,7 @@ The pattern mirrors the content-pipeline scaffold under
 | `services/tracing.py` | `atlas_brain/services/tracing.py` | FTL tracer client (token counts, cost telemetry, hierarchical spans) |
 | `services/b2b/llm_exact_cache.py` | `atlas_brain/services/b2b/llm_exact_cache.py` | Hash-keyed exact-match LLM response cache (~378 LOC); namespace + request envelope -> SHA -> response_text + usage_json. Cost-closure foundation. |
 | `services/cost/cache_savings.py` (OWNED, PR-A3) | (new code) | Cache-savings persistence: one row per cache hit + ``daily_cache_savings`` rollup with per-namespace and per-attribution-dim breakdowns. Closes the "cache hits in memory only" telemetry gap. |
+| `services/cost/budget.py` (OWNED, PR-A4b) | (new code) | Runtime budget gate: ``BudgetGate.check_before_call`` returns a ``BudgetDecision`` denying LLM calls that would breach configured daily or per-(attribution dim, value) caps. Reads ``llm_usage`` for current spend. Fail-open on bad input so a malformed estimate cannot silently block all calls. |
 | `storage/migrations/127_llm_usage.sql` | mig 127 | Initial llm_usage table |
 | `storage/migrations/130_reasoning_semantic_cache.sql` | mig 130 | Semantic cache + metacognition tables |
 | `storage/migrations/251_b2b_llm_exact_cache.sql` | mig 251 | b2b_llm_exact_cache table (cost-closure: cached LLM responses + usage_json) |
