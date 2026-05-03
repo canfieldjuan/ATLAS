@@ -157,6 +157,14 @@ for customer opportunity reads through `PostgresIntelligenceRepository`. It
 reads the product-owned `campaign_opportunities` table and normalizes rows
 through the same contract as the JSON/CSV adapters before generation.
 
+`extracted_content_pipeline/storage/migration_runner.py` owns the standalone
+schema installation path. It lists packaged SQL migrations, tracks applied
+versions in a product metadata table, supports dry runs, and accepts either a
+host async pool or direct connection. The
+`scripts/run_extracted_content_pipeline_migrations.py` CLI exposes that runner
+through `EXTRACTED_DATABASE_URL`, `DATABASE_URL`, or an explicit
+`--database-url` argument.
+
 `extracted_content_pipeline/campaign_opportunities.py` owns the host/customer
 opportunity input contract. It accepts loose customer rows, preserves custom
 fields, and adds stable prompt/storage keys (`target_id`, `company_name`,
@@ -228,5 +236,5 @@ The command must pass before this package is considered customer-usable.
 - `api/b2b_campaigns.py`, `api/seller_campaigns.py`, and
   `api/campaign_webhooks.py` need an app-factory boundary and host-provided
   auth/tenant dependencies.
-- SQL migrations are portable only after the product owns its base schema and
-  migration runner.
+- SQL migrations now have a product-owned runner, but customer installation
+  still needs a host-facing runbook and final base-schema hardening.

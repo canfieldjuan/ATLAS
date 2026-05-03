@@ -181,6 +181,9 @@
       "target": "extracted_content_pipeline/campaign_reasoning_data.py"
     },
     {
+      "target": "extracted_content_pipeline/storage/migration_runner.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_customer_data.py"
     },
     {

@@ -7,7 +7,7 @@
 | Manifest of source → scaffold mappings | ✅ done |
 | Verbatim byte-snapshot of 16 Python files | ✅ done (added `services/b2b/llm_exact_cache.py` in PR-A1, `services/provider_cost_sync.py` in PR-A2) |
 | Verbatim byte-snapshot of 8 migration SQL files | ✅ done (added migration 251 in PR-A1, 258 in PR-A2) |
-| Owned (not synced) Python files: 4 (PR-A3 + PR-A4a + PR-A4c) | ✅ done (`services/cost/__init__.py`, `services/cost/cache_savings.py`, `services/cost/openai_billing.py`, `services/cost/drift.py`) |
+| Owned (not synced) Python files: 5 (PR-A3 + PR-A4a + PR-A4b + PR-A4c) | ✅ done (`services/cost/__init__.py`, `services/cost/cache_savings.py`, `services/cost/openai_billing.py`, `services/cost/drift.py`, `services/cost/budget.py`) |
 | Owned (not synced) migration SQL files: 1 (PR-A3) | ✅ done (`storage/migrations/259_llm_cache_savings.sql`) |
 | Package `__init__.py` files at every level | ✅ done |
 | Sync + validate scripts | ✅ done via shared tooling wrappers |
@@ -70,6 +70,8 @@ Import contract is closed; the remaining work is **runtime** behavior when funct
 | `storage/database.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
 | `services/b2b/anthropic_batch.py` | ✅ | ✅ (imports cleanly; consumes standalone substrate transitively) | 🔲 |
 | `services/b2b/cache_strategy.py` | ✅ | ✅ (pure data; no atlas imports) | n/a |
+| `services/b2b/llm_exact_cache.py` (PR-A1) | ✅ | ✅ (lazy `from ...config import settings` + `from ...storage.database import get_db_pool` route via env-gated bridges; new `from ...skills import get_skill_registry` routes via PR-A1.5 skills bridge with explicit standalone-mode error; `B2BChurnSubConfig.llm_exact_cache_enabled` flag added in PR-A1.5) | 🔲 (Phase 3: substrate skills layer or replace skill helpers with Protocol-based DI) |
+| `skills/__init__.py` (bridge, PR-A1.5) | n/a | ✅ env-gated dispatch; raises NotImplementedError in standalone mode | 🔲 |
 | `pipelines/llm.py` | ✅ | ✅ (lazy `from ..config import settings` routes to standalone) | 🔲 |
 | `reasoning/semantic_cache.py` | ✅ | ✅ (pool injected by caller; standalone DatabasePool compatible) | 🔲 |
 | `services/llm_router.py` | ✅ | ✅ (consumes standalone settings + registry) | 🔲 |
@@ -87,8 +89,10 @@ Import contract is closed; the remaining work is **runtime** behavior when funct
 | `services/cost/cache_savings.py` (OWNED, PR-A3) | n/a | ✅ (asyncpg-pool-shaped; runs standalone with the local DatabasePool) | n/a |
 | `services/cost/openai_billing.py` (OWNED, PR-A4c) | n/a | ✅ (httpx + asyncpg-pool-shaped; settings.provider_cost lookup with env fallback) | 🔲 (Phase 3: unify with provider_cost_sync via ProviderBillingPort Protocol) |
 | `services/cost/drift.py` (OWNED, PR-A4a) | n/a | ✅ (asyncpg-pool-shaped; pure SQL + dataclass output, no atlas imports) | n/a |
+| `services/cost/budget.py` (OWNED, PR-A4b) | n/a | ✅ (asyncpg-pool-shaped; reads llm_usage; fail-open on bad input) | n/a |
 | `storage/migrations/127_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/130_*.sql` | ✅ | n/a | n/a |
+| `storage/migrations/251_*.sql` (PR-A1) | ✅ | n/a | n/a |
 | `storage/migrations/252_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/253_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/255_*.sql` | ✅ | n/a | n/a |
