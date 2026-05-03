@@ -1,6 +1,6 @@
 # Upcoming Queue
 
-Last updated: 2026-05-03T23:55Z by claude-2026-05-03-b
+Last updated: 2026-05-04T00:04Z by codex-2026-05-03
 
 Sequence reflects dependencies. Claim a slice (set Owner) before starting code so a parallel session does not pick the same one. See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
