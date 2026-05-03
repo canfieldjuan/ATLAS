@@ -14,7 +14,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 
 | Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
 |---|---|---|---|---|---|
-| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #87 | PR-A2 (in flight) | Cost-closure additions (PR-A2 -> A4); A2 adds `provider_cost_sync.py` + migration 258. PR-A1.5 follow-up needed for Copilot fixes that did not land in #87 (skills bridge, smoke script update, standalone config flag, STATUS detail rows). | `extracted_llm_infrastructure/services/provider_cost_sync.py`, `extracted_llm_infrastructure/storage/migrations/258_provider_cost_reconciliation.sql`, manifest, README, STATUS |
+| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #87 | #89 | Cost-closure additions (PR-A2 -> A4); A2 adds `provider_cost_sync.py` + migration 258. PR-A1.5 follow-up needed for Copilot fixes that did not land in #87 (skills bridge, smoke script update, standalone config flag, STATUS detail rows). | `extracted_llm_infrastructure/services/provider_cost_sync.py`, `extracted_llm_infrastructure/storage/migrations/258_provider_cost_reconciliation.sql`, manifest, README, STATUS |
 | `extracted_competitive_intelligence` | 1 (scaffold) | #80 | — | Phase 2 standalone toggle | none |
 | `extracted_content_pipeline` | 1 -> 2 (productization seams) | #78 | — | Standalone runner without `atlas_brain` on path | none |
 | `extracted_reasoning_core` | 1 (scaffold + wedge consolidated; PR-C1 claimed) | #82 | PR-C1 (claimed; claude-2026-05-03) | Evidence/temporal/archetypes consolidation per merged PR #82 audit | `extracted_reasoning_core/**` (api/types/archetypes/evidence_engine/evidence_map.yaml/temporal); `atlas_brain/reasoning/{evidence_engine.py, review_enrichment.py}`; `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py`; `tests/test_extracted_reasoning_*.py` |
@@ -28,7 +28,7 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| (PR-A2, opening) | Add `provider_cost_sync` to LLM-infrastructure manifest | `extracted_llm_infrastructure/{manifest.json, services/provider_cost_sync.py, storage/migrations/258_provider_cost_reconciliation.sql, README.md, STATUS.md}`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | manifest edits or files synced into `extracted_llm_infrastructure/services/` and `storage/migrations/258_*` |
+| #89 | Add `provider_cost_sync` to LLM-infrastructure manifest | `extracted_llm_infrastructure/{manifest.json, services/provider_cost_sync.py, storage/migrations/258_provider_cost_reconciliation.sql, README.md, STATUS.md}`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | manifest edits or files synced into `extracted_llm_infrastructure/services/` and `storage/migrations/258_*` |
 | (PR-A1.5, queued) | Apply Copilot fixes that missed PR #87 merge | `extracted_llm_infrastructure/{skills/__init__.py, _standalone/config.py, STATUS.md}`; `scripts/smoke_extracted_llm_infrastructure_imports.py`; `scripts/smoke_extracted_llm_infrastructure_standalone.py` | claude-2026-05-03-b | the 5 files listed; opening immediately after PR-A2 |
 _(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86, #87 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
 
