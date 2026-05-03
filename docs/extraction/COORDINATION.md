@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T20:03Z by claude-2026-05-03
+Last updated: 2026-05-03T22:02Z by claude-2026-05-03
 
 State-of-the-world for the multi-product extraction effort. **This file is the index and protocol; live state lives in per-section files under `coordination/`.** Read this end-to-end at session start before doing substantive work, then check each section file you intend to touch.
 
@@ -20,7 +20,8 @@ A single shared file generated a merge-conflict every PR. The bottleneck was lin
 
 The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitHub usernames for human work and agent-stamped session IDs for AI work (`{agent}-YYYY-MM-DD[-suffix]`, e.g. `claude-2026-05-03`, `codex-2026-05-03`). The first session for an agent on a calendar day is unsuffixed; subsequent same-agent sessions claim alphabetical suffixes from `-b` (`claude-2026-05-03-b`, `codex-2026-05-03-b`, ...) in the same commit that claims a slice. Timestamps in coordination files use ISO 8601 UTC (`YYYY-MM-DDTHH:MMZ`).
 
-**Active session aliases (2026-05-03)** -- for conversational shorthand: `A` = `claude-2026-05-03-b` (PR #81 authoring / PR-A0 claim), `B` = `codex-2026-05-03` (PR #81 review, PR #82 coordination update, PR-B1 quality-gate audit, PR #88 conflict resolution), `C` = `claude-2026-05-03` (PRs #79, #80, #82, #86, #88, this split). Aliases re-anchor each calendar day. Agent-date IDs remain canonical in all tables; aliases are for in-conversation reference only.
+**Active session aliases (2026-05-03)** -- for conversational shorthand: `A` = `claude-2026-05-03-b` (PR #81 authoring / PR-A0 claim, PR-A1, PR-A2, PR-A1.5), `B` = `codex-2026-05-03` (PR #81 review, PR #82 coordination update, PR-B1 quality-gate audit, PR #88 conflict resolution, PR #89 conflict resolution), `C` = `claude-2026-05-03` (PRs #79, #80, #82, #86, #88, this split). Aliases re-anchor each calendar day. Agent-date IDs remain canonical in all tables; aliases are for in-conversation reference only.
+_(The Per-product state, In-flight PRs, Upcoming queue, Decisions log, and Open questions sections that previously lived here have moved to per-section files under `coordination/`. This split lands in the same commit; see the section table above for links. New content from origin/main has been applied to the appropriate per-section files during this merge resolution.)_
 
 ---
 

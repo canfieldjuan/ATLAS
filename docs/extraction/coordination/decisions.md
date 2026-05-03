@@ -1,6 +1,6 @@
 # Decisions Log
 
-Last updated: 2026-05-03T20:03Z by claude-2026-05-03
+Last updated: 2026-05-03T22:02Z by claude-2026-05-03
 
 Append-only chronological log. Never edit historical entries; supersede with a newer entry instead. See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -15,4 +15,6 @@ Append-only chronological log. Never edit historical entries; supersede with a n
 - **2026-05-03** — PR-C1 claimed by `claude-2026-05-03` for the reasoning evidence/temporal/archetypes consolidation. Hot zone recorded in per-product state and Upcoming queue.
 - **2026-05-03** — PR-A1 merged as #87. `llm_exact_cache.py` and migration 251 are now in the LLM-infrastructure manifest; PR-A2 and PR-A3 are unblocked.
 - **2026-05-03** — Coordination timestamp protocol tightened: stamps must be monotonic using `max(now, last_stamp + 1 minute)` so future edits cannot regress the audit log.
+- **2026-05-03** — PR-A2 merged as #89. `provider_cost_sync.py` and migration 258 are now in the LLM-infrastructure manifest; PR-A4's provider reconciliation input is unblocked.
+- **2026-05-03** — PR-A1.5 queued to re-apply Copilot fixes that missed the #87 merge window: skills bridge stub, standalone exact-cache config, smoke imports, and STATUS detail rows.
 - **2026-05-03** — Coordination doc split into per-section files under `docs/extraction/coordination/` to reduce merge-conflict contention. COORDINATION.md is now an index + protocol + conventions; the four high-frequency sections (state, inflight, queue, decisions) live in separate files. Sessions touching different sections no longer conflict at the file level. PR-Coord-2 (CI enforcement of COORDINATION updates) remains deferred.

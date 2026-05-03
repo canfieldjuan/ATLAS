@@ -1,12 +1,12 @@
 # Upcoming Queue
 
-Last updated: 2026-05-03T20:03Z by claude-2026-05-03
+Last updated: 2026-05-03T22:02Z by claude-2026-05-03
 
 Sequence reflects dependencies. Claim a slice (set Owner) before starting code so a parallel session does not pick the same one. See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
 | Slice | Product | Owner | Dependencies | Notes |
 |---|---|---|---|---|
-| PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 / #87 (merged) | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
+| PR-A1.5 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none | Re-apply Copilot fixes that did not land in PR #87 merge: skills bridge stub, standalone `llm_exact_cache_enabled` flag, smoke script entries, STATUS detail rows. Opening immediately after PR-A2. |
 | PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 / #87 (merged) | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
 | PR-A4 | `extracted_llm_infrastructure` | unclaimed | PR-A2, PR-A3 | New code: drift report (local vs invoiced), budget gate, OpenAI provider adapter. May split if too large. |
 | PR-B3 | `extracted_quality_gate` | unclaimed | PR-B2 / #85 (merged) | Safety-gate split: deterministic content/risk scan to core; approvals + audit log + DB to ports + Atlas adapter wrapper. |
