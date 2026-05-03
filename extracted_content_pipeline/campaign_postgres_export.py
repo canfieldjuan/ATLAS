@@ -32,6 +32,8 @@ _EXPORT_COLUMNS = (
     "metadata",
 )
 
+_ACCOUNT_ID_FILTER_EXPR = "metadata -> 'scope' ->> 'account_id'"
+
 
 @dataclass(frozen=True)
 class CampaignDraftExportResult:
@@ -89,7 +91,7 @@ async def list_campaign_drafts(
         where.append(f"status = ANY(${len(params)}::text[])")
     if tenant.account_id:
         params.append(tenant.account_id)
-        where.append(f"metadata -> 'scope' ->> 'account_id' = ${len(params)}")
+        where.append(f"{_ACCOUNT_ID_FILTER_EXPR} = ${len(params)}")
         filters["account_id"] = tenant.account_id
     if target_mode:
         params.append(_clean(target_mode))
