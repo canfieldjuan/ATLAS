@@ -1,6 +1,6 @@
 # Decisions Log
 
-Last updated: 2026-05-04T00:04Z by codex-2026-05-03
+Last updated: 2026-05-04T01:37Z by codex-2026-05-03
 
 Append-only chronological log. Never edit historical entries; supersede with a newer entry instead. See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -26,3 +26,4 @@ Append-only chronological log. Never edit historical entries; supersede with a n
 - **2026-05-03** — PR-D5 merged as #105. AI Content Ops now has a product-owned SQL migration runner and CLI, so hosts can apply copied campaign/content migrations through `EXTRACTED_DATABASE_URL`, `DATABASE_URL`, or an explicit DSN without Atlas migration tooling.
 - **2026-05-04** — PR-D6 merged as #110. AI Content Ops now has a product-owned JSON/CSV opportunity importer and CLI, so hosts can load customer rows into `campaign_opportunities` before running DB-backed campaign generation.
 - **2026-05-04** — PR-D7 merged as #112. AI Content Ops now has a host install runbook covering DSN setup, migrations, opportunity import, optional reasoning JSON, optional prompt skill roots, DB-backed generation, and output verification.
+- **2026-05-04** — PR-D8 merged as #116. AI Content Ops now has a product-owned read-only campaign draft export path for reviewing generated `b2b_campaigns` rows as JSON/CSV, plus export-specific indexes for account, vendor, company, and status review filters.
