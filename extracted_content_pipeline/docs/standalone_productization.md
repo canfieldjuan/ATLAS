@@ -143,6 +143,10 @@ for campaign generation. It wires in-memory ports, a static prompt store, and an
 offline deterministic LLM so customer opportunity JSON can be converted into
 drafts without Atlas, a database, or provider credentials.
 
+`extracted_content_pipeline/skills/registry.py` is the product-owned prompt
+registry. It reads packaged markdown skills by default and accepts host-provided
+skill roots that override bundled prompt contracts without importing Atlas.
+
 `extracted_content_pipeline/campaign_customer_data.py` is the customer-export
 adapter slice. It loads JSON or CSV opportunity rows, normalizes them through
 the product opportunity contract, returns non-fatal data-quality warnings, and
@@ -224,7 +228,5 @@ The command must pass before this package is considered customer-usable.
 - `api/b2b_campaigns.py`, `api/seller_campaigns.py`, and
   `api/campaign_webhooks.py` need an app-factory boundary and host-provided
   auth/tenant dependencies.
-- Prompt skills are portable, but the skill registry is currently an Atlas
-  shim.
 - SQL migrations are portable only after the product owns its base schema and
   migration runner.

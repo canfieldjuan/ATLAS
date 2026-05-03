@@ -15,6 +15,7 @@ pytest \
   tests/test_extracted_campaign_generation_seams.py \
   tests/test_extracted_campaign_generation.py \
   tests/test_extracted_campaign_reasoning_data.py \
+  tests/test_extracted_campaign_skill_registry.py \
   tests/test_extracted_campaign_generation_example.py \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_postgres_generation.py \

@@ -155,6 +155,16 @@ rows by target id, company, email, or vendor and feeds the normalized
 `CampaignReasoningContextProvider` port documented in
 `docs/reasoning_handoff_contract.md`.
 
+Use host-provided prompt contracts by pointing at a markdown skill directory:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py \
+  --skills-root customer_skills
+```
+
+Custom prompts with the same skill name override packaged prompts; missing
+prompts fall back to the bundled `skills/digest/*.md` files.
+
 The example uses in-memory product ports and an offline deterministic LLM stand
 in, so it does not need Atlas, a database, or provider credentials. It proves
 the customer-data path: JSON opportunities in, normalized campaign drafts out.
@@ -188,6 +198,9 @@ python scripts/run_extracted_campaign_generation_postgres.py \
   --account-id acct_123 \
   --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
 ```
+
+Use `--skills-root customer_skills` on the Postgres runner for the same
+host-prompt override behavior.
 
 ## Import smoke test
 
@@ -272,8 +285,9 @@ Several small utility shims provide product-owned local behavior by default so t
   `PipelineLLMClient`, and the local skill registry for DB-backed draft
   generation
 - `storage/repositories/scheduled_task.py`: local execution metadata updater
-- `skills/registry.py`: local markdown-backed skill registry implementing
-  `.get()` and product `SkillStore.get_prompt()`
+- `skills/registry.py`: configurable markdown-backed skill registry
+  implementing `.get()` and product `SkillStore.get_prompt()`, with optional
+  host roots that override packaged prompt contracts
 - `reasoning/archetypes.py`: product-owned deterministic churn-archetype scorer
   for extracted report builders
 - `reasoning/temporal.py`: product-owned temporal analytics over vendor

@@ -43,7 +43,7 @@ def _load_payload(path: Path, *, file_format: str = "auto") -> dict[str, Any]:
     return data
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Generate offline campaign drafts from customer opportunity JSON "
@@ -93,6 +93,14 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--skills-root",
+        type=Path,
+        help=(
+            "Optional directory of host-provided markdown skill prompts. "
+            "Custom prompts override packaged prompts with the same name."
+        ),
+    )
+    parser.add_argument(
         "--llm",
         choices=("offline", "pipeline"),
         default="offline",
@@ -101,7 +109,7 @@ def _parse_args() -> argparse.Namespace:
             "configured through EXTRACTED_CAMPAIGN_LLM_* environment variables."
         ),
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
@@ -110,6 +118,10 @@ def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
         overrides["reasoning_context"] = load_campaign_reasoning_context_provider(
             args.reasoning_context
         )
+    if args.skills_root:
+        from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: PLC0415
+
+        overrides["skills"] = get_skill_registry(root=args.skills_root)
     if args.llm == "offline":
         return overrides
 
@@ -118,10 +130,8 @@ def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
     )
     from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: PLC0415
 
-    overrides.update({
-        "llm": create_pipeline_llm_client(),
-        "skills": get_skill_registry(),
-    })
+    overrides["llm"] = create_pipeline_llm_client()
+    overrides.setdefault("skills", get_skill_registry())
     return overrides
 
 

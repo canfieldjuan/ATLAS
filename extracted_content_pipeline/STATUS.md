@@ -69,6 +69,9 @@
   `autonomous.tasks.campaign_suppression`, `templates.email.vendor_briefing`,
   `services.b2b.account_opportunity_claims`, `services.campaign_quality`,
   `services.campaign_reasoning_context`, and `autonomous.visibility`.
+- `skills.registry` is product-owned and markdown-backed. Hosts can pass a
+  custom skill root to override packaged prompt contracts while retaining
+  bundled fallback prompts.
 - `CampaignReasoningContextProvider` is the campaign-core boundary for
   upstream reasoning. Hosts pass already-compressed witness/anchor/account
   context into the generator; `_b2b_pool_compression.py` stays outside the

@@ -191,6 +191,25 @@ def test_tenant_scope_from_mapping_accepts_mapping_and_existing_scope():
     assert tenant_scope_from_mapping(None) == TenantScope()
 
 
+def test_postgres_runner_cli_accepts_skills_root(tmp_path) -> None:
+    postgres_cli = _load_postgres_cli_module()
+    skill_path = tmp_path / "digest" / "b2b_campaign_generation.md"
+    skill_path.parent.mkdir()
+    skill_path.write_text("Custom DB prompt {opportunity_json}", encoding="utf-8")
+
+    args = postgres_cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--skills-root",
+        str(tmp_path),
+    ])
+    overrides = postgres_cli._dependency_overrides(args)
+
+    assert overrides["skills"].get_prompt("digest/b2b_campaign_generation") == (
+        "Custom DB prompt {opportunity_json}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_postgres_runner_cli_wires_pool_offline_and_reasoning_context(
     monkeypatch,
