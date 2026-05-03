@@ -25,6 +25,51 @@ class GateDecision(StrEnum):
     APPROVAL_REQUIRED = "approval_required"
 
 
+class RiskLevel(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+@dataclass(frozen=True)
+class ContentFlag:
+    """One regex hit during a deterministic content scan."""
+
+    pattern: str
+    match: str
+    position: int
+
+
+@dataclass(frozen=True)
+class ContentScanResult:
+    """Result of ``check_content``: a pure scan with no I/O.
+
+    ``passed`` and ``blocked`` are inverses by construction; both are
+    surfaced so call sites can use whichever reads more naturally.
+    """
+
+    passed: bool
+    blocked: bool
+    flags: tuple[ContentFlag, ...] = ()
+
+
+@dataclass(frozen=True)
+class RiskAssessment:
+    """Result of ``assess_risk``: composite risk level + auto-approve flag.
+
+    ``factors`` is a tuple of human-readable strings explaining why the
+    assessment landed where it did (e.g. "Critical pressure: 9/10" or
+    "Content flags: doxxing, phishing"). Suitable for surfacing in an
+    operator UI.
+    """
+
+    risk_level: RiskLevel
+    risk_score: int
+    auto_approve_eligible: bool
+    factors: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class GateFinding:
     code: str
@@ -77,10 +122,14 @@ class QualityInput:
 
 
 __all__ = [
+    "ContentFlag",
+    "ContentScanResult",
     "GateDecision",
     "GateFinding",
     "GateSeverity",
     "QualityInput",
     "QualityPolicy",
     "QualityReport",
+    "RiskAssessment",
+    "RiskLevel",
 ]

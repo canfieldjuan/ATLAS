@@ -29,12 +29,21 @@ from .api import (
     register_policy,
     reset_policy_registry,
 )
+from .safety_gate import assess_risk, check_content
+from .types import (
+    ContentFlag,
+    ContentScanResult,
+    RiskAssessment,
+    RiskLevel,
+)
 
 
 __all__ = [
     "ClaimGatePolicy",
     "ClaimScope",
     "ConfidenceLabel",
+    "ContentFlag",
+    "ContentScanResult",
     "EvidencePosture",
     "GateDecision",
     "GateFinding",
@@ -44,8 +53,12 @@ __all__ = [
     "QualityInput",
     "QualityPolicy",
     "QualityReport",
+    "RiskAssessment",
+    "RiskLevel",
     "SuppressionReason",
+    "assess_risk",
     "build_product_claim",
+    "check_content",
     "compute_claim_id",
     "decide_render_gates",
     "derive_confidence",
