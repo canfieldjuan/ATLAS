@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T22:00Z by claude-2026-05-03
+Last updated: 2026-05-03T22:30Z by claude-2026-05-03-b
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -39,8 +39,8 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 
 | Slice | Product | Owner | Dependencies | Notes |
 |---|---|---|---|---|
-| PR-Coord | meta | claude-2026-05-03 | none | This doc. Establishes the mechanism. |
-| PR-A0 | `extracted_llm_infrastructure` | claude-2026-05-03 | none | Boundary audit doc: `docs/extraction/cost_closure_audit_2026-05-04.md`. Mirrors PR #79's structure. |
+| PR-Coord | meta | claude-2026-05-03-b | none | This doc. Establishes the mechanism. |
+| PR-A0 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none | Boundary audit doc: `docs/extraction/cost_closure_audit_2026-05-04.md`. Mirrors PR #79's structure. |
 | PR-A1 | `extracted_llm_infrastructure` | unclaimed | PR-A0 | Add `services/b2b/llm_exact_cache.py` + migration `251_b2b_llm_exact_cache.sql` (rename target: `llm_exact_cache.sql`) to manifest. Update README "What's in scope" table. |
 | PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
 | PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
