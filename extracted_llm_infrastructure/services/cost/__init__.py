@@ -14,9 +14,7 @@ Owned modules in this package (not synced from atlas_brain):
   Returns ``DriftRow`` objects with explanatory chips
   (``stale_pricing``, ``missing_local_rows``, ``high_drift``, etc.).
   The differentiated cost-closure wedge.
-
-Future siblings (queued in ``docs/extraction/cost_closure_audit_2026-05-03.md``):
-
-- ``budget`` (PR-A4b): runtime budget gate with daily and
-  per-attribution caps.
+- ``budget`` -- runtime budget gate. ``BudgetGate.check_before_call``
+  returns a ``BudgetDecision`` so the call site can deny LLM calls
+  that would breach a configured daily or per-attribution cap.
 """
