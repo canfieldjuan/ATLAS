@@ -201,6 +201,9 @@ The loader uses the same normalization contract as the offline example. It is
 append-only by default; `--replace-existing` deletes matching target ids for
 the selected account and target mode before inserting the new rows.
 
+For the full database-backed host install path, see
+`docs/host_install_runbook.md`.
+
 ```bash
 python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --limit 10
 ```
