@@ -16,13 +16,17 @@ Module layout:
   - ``_ArchetypeMatchInternal`` -- rich internal scoring result. Atlas
     callers and the in-module scoring functions return this. The public
     contract type ``ArchetypeMatch`` lives in
-    ``extracted_reasoning_core.types`` and is produced by the public
-    ``score_archetypes`` entry point in ``extracted_reasoning_core.api``
-    via ``_to_public_match``.
-  - ``score_evidence``, ``best_match``, ``top_matches``,
-    ``enrich_evidence_with_archetypes`` -- internal helpers returning
-    ``_ArchetypeMatchInternal``. Public callers should use
-    ``extracted_reasoning_core.api.score_archetypes``.
+    ``extracted_reasoning_core.types``; this module provides the
+    ``_to_public_match`` adapter that produces it.
+  - ``score_evidence``, ``best_match``, ``top_matches`` -- internal
+    scoring helpers returning ``_ArchetypeMatchInternal``.
+  - ``enrich_evidence_with_archetypes`` -- internal helper that
+    returns the input evidence dict augmented with an
+    ``archetype_scores`` key (top 3 matches, serialized).
+  - The public boundary ``extracted_reasoning_core.api.score_archetypes``
+    is currently a stub raising ``NotImplementedError``; it will be
+    wired in a follow-up PR-C1 slice and will call ``score_evidence``
+    + ``_to_public_match`` to return ``Sequence[ArchetypeMatch]``.
 
 Archetypes:
     pricing_shock       -- Sudden price increase -> complaint spike -> competitor mentions
@@ -39,14 +43,10 @@ Archetypes:
 
 from __future__ import annotations
 
-import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from .types import ArchetypeMatch
-
-logger = logging.getLogger("extracted_reasoning_core.archetypes")
 
 # Minimum score to consider an archetype a plausible match
 MATCH_THRESHOLD = 0.25
@@ -92,7 +92,7 @@ class _ArchetypeMatchInternal:
 
 
 # ------------------------------------------------------------------
-# The 8 canonical archetypes
+# The 10 canonical archetypes
 # ------------------------------------------------------------------
 
 ARCHETYPES: dict[str, ArchetypeProfile] = {
@@ -493,27 +493,41 @@ def _evaluate_rule(rule: SignalRule, evidence: dict[str, Any]) -> bool:
         elif rule.direction == "low":
             return val_f <= (rule.threshold if rule.threshold is not None else float("inf"))
 
-    # Velocity/Trend checks look for derived fields
+    # Velocity/Trend checks look for derived fields. Coercion is guarded
+    # consistently with the high/low branch above: non-numeric values
+    # treated as a non-match rather than aborting scoring for the vendor.
     elif rule.direction == "increasing":
         vel = evidence.get(f"velocity_{rule.metric}")
-        if vel is not None:
+        if vel is None:
+            return False
+        try:
             return float(vel) > 0
-        return False
+        except (ValueError, TypeError):
+            return False
     elif rule.direction == "decreasing":
         vel = evidence.get(f"velocity_{rule.metric}")
-        if vel is not None:
+        if vel is None:
+            return False
+        try:
             return float(vel) < 0
-        return False
+        except (ValueError, TypeError):
+            return False
     elif rule.direction == "increasing_30d":
         slope = evidence.get(f"trend_30d_{rule.metric}")
-        if slope is not None:
+        if slope is None:
+            return False
+        try:
             return float(slope) > 0
-        return False
+        except (ValueError, TypeError):
+            return False
     elif rule.direction == "decreasing_30d":
         slope = evidence.get(f"trend_30d_{rule.metric}")
-        if slope is not None:
+        if slope is None:
+            return False
+        try:
             return float(slope) < 0
-        return False
+        except (ValueError, TypeError):
+            return False
 
     return False
 
@@ -564,12 +578,19 @@ def _anomaly_bonus(profile: ArchetypeProfile, evidence: dict[str, Any]) -> float
         if not isinstance(anom, dict):
             continue
         metric = anom.get("metric", "")
-        if metric in archetype_metrics:
-            z = abs(anom.get("z_score", 0))
-            if z > 2.0:
-                bonus += 0.25
-            elif z > 1.5:
-                bonus += 0.1
+        if metric not in archetype_metrics:
+            continue
+        # z_score may arrive as a string from JSON payloads; coerce
+        # defensively. Skip the anomaly on conversion failure rather
+        # than aborting the bonus calculation for the vendor.
+        try:
+            z = abs(float(anom.get("z_score", 0)))
+        except (ValueError, TypeError):
+            continue
+        if z > 2.0:
+            bonus += 0.25
+        elif z > 1.5:
+            bonus += 0.1
 
     return min(bonus, 0.5)  # cap anomaly bonus
 
