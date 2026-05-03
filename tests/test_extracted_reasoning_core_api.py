@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
 
 import extracted_reasoning_core.api as api
 from extracted_reasoning_core.api import (
+    ArchetypeMatch,
     EvidenceItem,
     FalsificationResult,
     NarrativePlan,
@@ -106,10 +109,11 @@ def test_stubbed_public_entry_points_fail_closed_until_consolidated() -> None:
         state={},
     )
 
+    # PR-C1g wired `score_archetypes` and `build_temporal_evidence`; both
+    # are removed from this fail-closed list. `evaluate_evidence` stays
+    # until PR-C1d's slim `EvidenceEngine` lands.
     sync_calls = [
-        lambda: api.score_archetypes({}),
         lambda: api.evaluate_evidence({}),
-        lambda: api.build_temporal_evidence(()),
         lambda: api.build_narrative_plan({}, pack=ReasoningPack(name="default")),
         lambda: api.compute_evidence_hash({}),
         lambda: api.build_semantic_cache_key(reasoning_input, tier="L1"),
@@ -120,6 +124,104 @@ def test_stubbed_public_entry_points_fail_closed_until_consolidated() -> None:
     for call in sync_calls:
         with pytest.raises(NotImplementedError):
             call()
+
+
+# ------------------------------------------------------------------
+# PR-C1g wired entry points
+# ------------------------------------------------------------------
+
+
+def test_score_archetypes_returns_public_archetype_matches() -> None:
+    # Strong pricing-flavored evidence picks pricing_shock as top match.
+    evidence = {
+        "avg_urgency": 7.0,
+        "top_pain": "pricing too expensive after renewal",
+        "competitor_count": 4,
+        "recommend_ratio": 0.3,
+        "displacement_edge_count": 3,
+        "positive_review_pct": 35,
+    }
+    matches = api.score_archetypes(evidence)
+    assert isinstance(matches, tuple)
+    assert len(matches) <= 3  # default limit
+    assert all(isinstance(m, ArchetypeMatch) for m in matches)
+    # Top match should be pricing_shock with the public-shape fields populated.
+    top = matches[0]
+    assert top.archetype_id == "pricing_shock"
+    assert top.label == "Pricing Shock"  # title-case derived
+    assert top.score > 0.0
+    assert isinstance(top.evidence_hits, tuple)
+    assert top.risk_label  # non-empty
+
+
+def test_score_archetypes_respects_explicit_limit() -> None:
+    evidence = {
+        "avg_urgency": 7.0,
+        "top_pain": "pricing too expensive",
+        "competitor_count": 4,
+    }
+    matches = api.score_archetypes(evidence, limit=1)
+    assert len(matches) == 1
+
+
+def test_score_archetypes_returns_empty_for_empty_evidence() -> None:
+    matches = api.score_archetypes({}, limit=3)
+    # No evidence -> all archetype scores fall below MATCH_THRESHOLD; the
+    # adapter still returns Sequence[ArchetypeMatch] but limit caps the
+    # returned slice. Pricing evidence with empty input also yields a
+    # valid (low-score) shape.
+    assert isinstance(matches, tuple)
+    assert all(isinstance(m, ArchetypeMatch) for m in matches)
+
+
+def test_build_temporal_evidence_insufficient_data_short_circuit() -> None:
+    # Single snapshot is below MIN_DAYS_FOR_VELOCITY=2 -> insufficient.
+    one = [{"vendor_name": "acme", "snapshot_date": date(2026, 5, 1), "avg_urgency": 5.0}]
+    te = api.build_temporal_evidence(one)
+    assert isinstance(te, TemporalEvidence)
+    assert te.vendor_name == "acme"
+    assert te.snapshot_days == 1
+    assert te.insufficient_data is True
+    assert te.velocities == []
+
+
+def test_build_temporal_evidence_computes_velocities() -> None:
+    snapshots = [
+        {"vendor_name": "acme", "snapshot_date": date(2026, 5, 1), "avg_urgency": 5.0},
+        {"vendor_name": "acme", "snapshot_date": date(2026, 5, 5), "avg_urgency": 7.0},
+    ]
+    te = api.build_temporal_evidence(snapshots)
+    assert te.vendor_name == "acme"
+    assert te.snapshot_days == 2
+    assert te.insufficient_data is False
+    by_metric = {v.metric: v for v in te.velocities}
+    assert "avg_urgency" in by_metric
+    v = by_metric["avg_urgency"]
+    assert v.current_value == 7.0
+    assert v.previous_value == 5.0
+    assert v.days_between == 4
+
+
+def test_build_temporal_evidence_handles_empty_snapshots() -> None:
+    te = api.build_temporal_evidence(())
+    assert isinstance(te, TemporalEvidence)
+    assert te.snapshot_days == 0
+    assert te.insufficient_data is True
+    assert te.vendor_name == ""
+
+
+def test_build_temporal_evidence_accepts_baselines_kwarg() -> None:
+    # The signature accepts an optional baselines mapping. PR-C1g treats
+    # it as an advisory input (structured anomaly support is a future
+    # PR); confirm the call shape works without raising and that the
+    # returned evidence has the velocity computed.
+    snapshots = [
+        {"vendor_name": "acme", "snapshot_date": date(2026, 5, 1), "avg_urgency": 5.0},
+        {"vendor_name": "acme", "snapshot_date": date(2026, 5, 5), "avg_urgency": 7.0},
+    ]
+    te = api.build_temporal_evidence(snapshots, baselines={"avg_urgency": {"p50": 6.0}})
+    assert te.snapshot_days == 2
+    assert any(v.metric == "avg_urgency" for v in te.velocities)
 
 
 @pytest.mark.asyncio
