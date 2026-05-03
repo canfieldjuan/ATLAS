@@ -21,6 +21,7 @@ if _os.environ.get("EXTRACTED_LLM_INFRA_STANDALONE") == "1":
         ModelPricingConfig,
         ReasoningSubConfig,
         B2BChurnSubConfig,
+        ProviderCostSubConfig,
         settings,
     )
 else:

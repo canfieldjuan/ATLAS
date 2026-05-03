@@ -208,6 +208,7 @@ def main() -> int:
         "extracted_llm_infrastructure.services.llm.hybrid",
         "extracted_llm_infrastructure.services.llm.cloud",
         "extracted_llm_infrastructure.services.tracing",
+        "extracted_llm_infrastructure.services.provider_cost_sync",
     ]
     for module_name in PROVIDERS:
         try:

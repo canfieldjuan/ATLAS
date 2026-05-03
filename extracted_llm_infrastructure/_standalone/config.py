@@ -186,6 +186,32 @@ class B2BChurnSubConfig(BaseSettings):
     anthropic_batch_min_items: int = Field(default=2, ge=1, le=10000)
 
 
+class ProviderCostSubConfig(BaseSettings):
+    """Slim provider-cost config -- only the fields the
+    ``services/provider_cost_sync.py`` extraction reads at runtime.
+
+    Mirrors ``atlas_brain.config.ProviderCostConfig`` for the subset
+    consumed by the OpenRouter credits + Anthropic admin daily-cost
+    fetchers and the snapshot/daily-row retention cleanup.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_PROVIDER_COST_",
+        env_file=(".env", ".env.local"),
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False)
+    interval_seconds: int = Field(default=3600, ge=300, le=86400)
+    sync_timeout_seconds: int = Field(default=20, ge=5, le=300)
+    snapshot_retention_days: int = Field(default=90, ge=7, le=730)
+    daily_retention_days: int = Field(default=365, ge=30, le=1825)
+    openrouter_enabled: bool = Field(default=True)
+    openrouter_api_key: str = Field(default="")
+    anthropic_enabled: bool = Field(default=False)
+    anthropic_admin_api_key: str = Field(default="")
+
+
 class ReasoningSubConfig(BaseSettings):
     """Slim reasoning config -- just the model name read by
     services/llm_router.py."""
@@ -229,6 +255,7 @@ class LLMInfraSettings(BaseModel):
 
     llm: LLMSubConfig = Field(default_factory=LLMSubConfig)
     b2b_churn: B2BChurnSubConfig = Field(default_factory=B2BChurnSubConfig)
+    provider_cost: ProviderCostSubConfig = Field(default_factory=ProviderCostSubConfig)
     reasoning: ReasoningSubConfig = Field(default_factory=ReasoningSubConfig)
     ftl_tracing: FTLTracingSubConfig = Field(default_factory=FTLTracingSubConfig)
 
