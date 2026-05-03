@@ -22,12 +22,21 @@ from extracted_llm_infrastructure.services.cost.cache_savings import (
 
 
 class _FakePool:
-    """Minimal asyncpg-compatible pool stub for unit tests."""
+    """Minimal asyncpg-compatible pool stub for unit tests.
+
+    Honors the ``hit_at >= start AND hit_at < end`` filter on every
+    fetch query so the date-range semantics of ``daily_cache_savings``
+    can actually be exercised. Set ``next_hit_at`` before
+    ``record_cache_hit`` to control the row's timestamp; otherwise
+    rows default to a fixed in-window timestamp so older tests that
+    don't care about time keep passing.
+    """
 
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
         self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.next_hit_at: datetime | None = None
 
     async def execute(self, sql: str, *args: Any) -> None:
         self.execute_calls.append((sql, args))
@@ -44,16 +53,27 @@ class _FakePool:
                     "saved_cost_usd": args[6],
                     "attribution": json.loads(args[7]),
                     "metadata": json.loads(args[8]),
-                    "hit_at": datetime(2026, 5, 3, 12, tzinfo=timezone.utc),
+                    "hit_at": self.next_hit_at
+                    or datetime(2026, 5, 3, 12, tzinfo=timezone.utc),
                 }
             )
+
+    @staticmethod
+    def _within_range(row: dict[str, Any], start: date, end: date) -> bool:
+        # Mirror the SQL semantics (date cast to TIMESTAMPTZ at UTC midnight,
+        # half-open interval): hit_at >= start_utc AND hit_at < end_utc.
+        boundary_start = datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc)
+        boundary_end = datetime.combine(end, datetime.min.time(), tzinfo=timezone.utc)
+        return boundary_start <= row["hit_at"] < boundary_end
 
     async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]:
         self.fetch_calls.append((sql, args))
         normalized = " ".join(sql.split())
+        start, end = args[0], args[1]
+        scoped = [row for row in self.rows if self._within_range(row, start, end)]
         if "GROUP BY namespace" in normalized:
             buckets: dict[str, Decimal] = {}
-            for row in self.rows:
+            for row in scoped:
                 buckets[row["namespace"]] = (
                     buckets.get(row["namespace"], Decimal(0))
                     + Decimal(str(row["saved_cost_usd"]))
@@ -67,7 +87,7 @@ class _FakePool:
         if "GROUP BY dim_value" in normalized:
             attribution_key = args[2]
             buckets = {}
-            for row in self.rows:
+            for row in scoped:
                 value = row["attribution"].get(attribution_key)
                 if value is None:
                     continue
@@ -83,17 +103,17 @@ class _FakePool:
             ]
         # Summary query
         total_cost = sum(
-            (Decimal(str(row["saved_cost_usd"])) for row in self.rows),
+            (Decimal(str(row["saved_cost_usd"])) for row in scoped),
             Decimal(0),
         )
-        total_input = sum(int(row["saved_input_tokens"]) for row in self.rows)
-        total_output = sum(int(row["saved_output_tokens"]) for row in self.rows)
+        total_input = sum(int(row["saved_input_tokens"]) for row in scoped)
+        total_output = sum(int(row["saved_output_tokens"]) for row in scoped)
         return [
             {
                 "total_cost": total_cost,
                 "total_input": total_input,
                 "total_output": total_output,
-                "hit_count": len(self.rows),
+                "hit_count": len(scoped),
             }
         ]
 
@@ -269,6 +289,106 @@ async def test_daily_cache_savings_skips_attribution_when_no_key():
         date_range=(date(2026, 5, 1), date(2026, 5, 10)),
     )
     assert dict(rollup["by_attribution_dim"]) == {}
+
+
+@pytest.mark.asyncio
+async def test_daily_cache_savings_respects_date_range_boundaries():
+    # Two hits inside the window, one before, one after. Only the two
+    # in-window hits should appear in the rollup.
+    pool = _FakePool()
+    pool.next_hit_at = datetime(2026, 4, 30, 23, 0, tzinfo=timezone.utc)  # before
+    await record_cache_hit(
+        pool, cache_key="before", namespace="ns", provider="anthropic",
+        model="claude", would_have_been_input_tokens=100,
+        would_have_been_output_tokens=50, would_have_been_cost_usd=Decimal("0.99"),
+    )
+    pool.next_hit_at = datetime(2026, 5, 1, 0, 1, tzinfo=timezone.utc)  # in
+    await record_cache_hit(
+        pool, cache_key="in1", namespace="ns", provider="anthropic",
+        model="claude", would_have_been_input_tokens=100,
+        would_have_been_output_tokens=50, would_have_been_cost_usd=Decimal("0.10"),
+    )
+    pool.next_hit_at = datetime(2026, 5, 3, 12, tzinfo=timezone.utc)  # in
+    await record_cache_hit(
+        pool, cache_key="in2", namespace="ns", provider="anthropic",
+        model="claude", would_have_been_input_tokens=100,
+        would_have_been_output_tokens=50, would_have_been_cost_usd=Decimal("0.20"),
+    )
+    pool.next_hit_at = datetime(2026, 5, 4, 0, 0, tzinfo=timezone.utc)  # at end (excluded)
+    await record_cache_hit(
+        pool, cache_key="at_end", namespace="ns", provider="anthropic",
+        model="claude", would_have_been_input_tokens=100,
+        would_have_been_output_tokens=50, would_have_been_cost_usd=Decimal("0.99"),
+    )
+    rollup = await daily_cache_savings(
+        pool, date_range=(date(2026, 5, 1), date(2026, 5, 4)),
+    )
+    assert rollup["hit_count"] == 2
+    assert rollup["total_saved_usd"] == Decimal("0.30")
+
+
+@pytest.mark.asyncio
+async def test_record_cache_hit_attribution_accepts_non_string_values():
+    # Free-form JSONB: callers should be able to attach numeric IDs,
+    # booleans, and nested dicts without coercing to strings.
+    pool = _FakePool()
+    await record_cache_hit(
+        pool,
+        cache_key="k",
+        namespace="ns",
+        provider="anthropic",
+        model="claude",
+        would_have_been_input_tokens=10,
+        would_have_been_output_tokens=5,
+        would_have_been_cost_usd=Decimal("0.01"),
+        attribution={
+            "tenant_id": 12345,
+            "is_premium": True,
+            "tags": ["alpha", "beta"],
+        },
+    )
+    assert pool.rows[0]["attribution"] == {
+        "tenant_id": 12345,
+        "is_premium": True,
+        "tags": ["alpha", "beta"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_record_cache_hit_swallows_invalid_decimal():
+    # Non-Decimal-coercible cost must not raise out of the helper.
+    pool = _FakePool()
+    await record_cache_hit(
+        pool,
+        cache_key="k",
+        namespace="ns",
+        provider="anthropic",
+        model="claude",
+        would_have_been_input_tokens=10,
+        would_have_been_output_tokens=5,
+        would_have_been_cost_usd="not-a-number",  # type: ignore[arg-type]
+    )
+    assert pool.rows == []  # no insert reached the pool
+
+
+@pytest.mark.asyncio
+async def test_record_cache_hit_swallows_unserializable_attribution():
+    # Non-JSON-serializable attribution must not raise out of the helper.
+    pool = _FakePool()
+    class _NotSerializable:
+        pass
+    await record_cache_hit(
+        pool,
+        cache_key="k",
+        namespace="ns",
+        provider="anthropic",
+        model="claude",
+        would_have_been_input_tokens=10,
+        would_have_been_output_tokens=5,
+        would_have_been_cost_usd=Decimal("0.01"),
+        attribution={"obj": _NotSerializable()},  # type: ignore[dict-item]
+    )
+    assert pool.rows == []  # no insert reached the pool
 
 
 def test_cache_savings_rollup_is_typed_dict():

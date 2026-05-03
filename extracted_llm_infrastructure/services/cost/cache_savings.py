@@ -60,7 +60,7 @@ async def record_cache_hit(
     would_have_been_input_tokens: int,
     would_have_been_output_tokens: int,
     would_have_been_cost_usd: Decimal | float | int,
-    attribution: Mapping[str, str] | None = None,
+    attribution: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
     """Persist one cache-savings row.
@@ -69,18 +69,24 @@ async def record_cache_hit(
     have incurred without the cache. Together they enable
     "$ saved by cache last month" rollups.
 
+    ``attribution`` is free-form: keys are strings, values are anything
+    JSON-serializable. The schema column is JSONB so callers can add
+    dimensions (numeric IDs, booleans, nested objects) without
+    schema migrations.
+
     No-op when ``pool`` is ``None`` so callers can opt out without
-    changing call sites. Failures are logged and swallowed -- cache
+    changing call sites. Failures (including invalid Decimal input or
+    non-JSON-serializable attribution/metadata) are logged with the
+    full stack trace + identifying fields and swallowed -- cache
     telemetry must not block the cache hit itself.
     """
     if pool is None:
         return
 
-    cost_value = Decimal(str(would_have_been_cost_usd))
-    attribution_json = json.dumps(dict(attribution) if attribution else {})
-    metadata_json = json.dumps(dict(metadata) if metadata else {})
-
     try:
+        cost_value = Decimal(str(would_have_been_cost_usd))
+        attribution_json = json.dumps(dict(attribution) if attribution else {})
+        metadata_json = json.dumps(dict(metadata) if metadata else {})
         await pool.execute(
             """
             INSERT INTO llm_cache_savings
@@ -99,8 +105,16 @@ async def record_cache_hit(
             attribution_json,
             metadata_json,
         )
-    except Exception as exc:  # pragma: no cover -- defensive log path
-        logger.warning("cache savings record failed: %s", exc)
+    except Exception:  # pragma: no cover -- defensive log path
+        logger.exception(
+            "cache savings record failed",
+            extra={
+                "cache_key": cache_key,
+                "namespace": namespace,
+                "provider": provider,
+                "model": model,
+            },
+        )
 
 
 async def daily_cache_savings(
@@ -121,6 +135,11 @@ async def daily_cache_savings(
     """
     start, end = date_range
 
+    # Cast date params to TIMESTAMPTZ explicitly so the comparison is
+    # not subject to the DB session timezone. ``date`` -> ``timestamp``
+    # implicit casts in Postgres use the session timezone, which can
+    # shift day boundaries depending on the connection's TZ. Casting to
+    # TIMESTAMPTZ at midnight UTC anchors the range to UTC days.
     summary_rows = await pool.fetch(
         """
         SELECT
@@ -129,7 +148,8 @@ async def daily_cache_savings(
             COALESCE(SUM(saved_output_tokens), 0)::BIGINT AS total_output,
             COUNT(*)::BIGINT AS hit_count
         FROM llm_cache_savings
-        WHERE hit_at >= $1 AND hit_at < $2
+        WHERE hit_at >= ($1::DATE)::TIMESTAMPTZ
+          AND hit_at < ($2::DATE)::TIMESTAMPTZ
         """,
         start,
         end,
@@ -140,7 +160,8 @@ async def daily_cache_savings(
         """
         SELECT namespace, COALESCE(SUM(saved_cost_usd), 0) AS cost
         FROM llm_cache_savings
-        WHERE hit_at >= $1 AND hit_at < $2
+        WHERE hit_at >= ($1::DATE)::TIMESTAMPTZ
+          AND hit_at < ($2::DATE)::TIMESTAMPTZ
         GROUP BY namespace
         ORDER BY cost DESC
         """,
@@ -159,7 +180,8 @@ async def daily_cache_savings(
                 attribution ->> $3 AS dim_value,
                 COALESCE(SUM(saved_cost_usd), 0) AS cost
             FROM llm_cache_savings
-            WHERE hit_at >= $1 AND hit_at < $2
+            WHERE hit_at >= ($1::DATE)::TIMESTAMPTZ
+              AND hit_at < ($2::DATE)::TIMESTAMPTZ
               AND attribution ? $3
             GROUP BY dim_value
             ORDER BY cost DESC
