@@ -1,6 +1,6 @@
 # Decisions Log
 
-Last updated: 2026-05-03T22:04Z by codex-2026-05-03
+Last updated: 2026-05-03T22:07Z by codex-2026-05-03
 
 Append-only chronological log. Never edit historical entries; supersede with a newer entry instead. See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -19,3 +19,4 @@ Append-only chronological log. Never edit historical entries; supersede with a n
 - **2026-05-03** — PR-A1.5 queued to re-apply Copilot fixes that missed the #87 merge window: skills bridge stub, standalone exact-cache config, smoke imports, and STATUS detail rows.
 - **2026-05-03** — Coordination doc split into per-section files under `docs/extraction/coordination/` to reduce merge-conflict contention. COORDINATION.md is now an index + protocol + conventions; the four high-frequency sections (state, inflight, queue, decisions) live in separate files. Sessions touching different sections no longer conflict at the file level. PR-Coord-2 (CI enforcement of COORDINATION updates) remains deferred.
 - **2026-05-03** — PR-D1 merged as #93. AI Content Ops reasoning generation is explicitly host/product-owned; the content package consumes compressed context through `CampaignReasoningContextProvider` and must not import Atlas synthesis, pool compression, or extracted reasoning-core internals directly.
+- **2026-05-03** — PR-D2 merged as #97. AI Content Ops now has a file-backed `CampaignReasoningContextProvider` reference adapter, and the offline campaign-generation example can consume buyer/host reasoning JSON without importing a reasoning runtime.
