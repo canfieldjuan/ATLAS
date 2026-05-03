@@ -32,6 +32,10 @@
 - `campaign_postgres_generation` wires the DB-backed generation path from
   `campaign_opportunities` to saved `b2b_campaigns` drafts through product
   ports.
+- `CampaignGenerationService` supports multi-channel draft expansion through
+  product config (`channels=("email_cold", "email_followup")`), including
+  passing the generated cold-email context into follow-up prompts without
+  importing the copied Atlas campaign task.
 - Small utility shims now default to local extracted implementations:
   `config`, `pipelines.notify`, `reasoning.wedge_registry`,
   `reasoning.archetypes`, `reasoning.evidence_engine`, `reasoning.temporal`,

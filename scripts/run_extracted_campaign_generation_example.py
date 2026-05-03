@@ -59,6 +59,13 @@ def _parse_args() -> argparse.Namespace:
         help="Override the payload target_mode.",
     )
     parser.add_argument(
+        "--channels",
+        help=(
+            "Comma-separated draft channels to generate per opportunity, "
+            "for example email_cold,email_followup."
+        ),
+    )
+    parser.add_argument(
         "--format",
         choices=("auto", "json", "csv"),
         default="auto",
@@ -106,6 +113,12 @@ async def _main() -> int:
     payload = _load_payload(args.payload, file_format=args.format)
     if args.target_mode:
         payload["target_mode"] = args.target_mode
+    if args.channels:
+        payload["channels"] = [
+            item.strip()
+            for item in args.channels.split(",")
+            if item.strip()
+        ]
     if args.limit is not None:
         payload["limit"] = args.limit
 

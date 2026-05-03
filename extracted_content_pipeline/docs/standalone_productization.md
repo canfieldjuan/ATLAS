@@ -112,6 +112,13 @@ slice. It reads campaign opportunities through `IntelligenceRepository`, prompts
 through `SkillStore` and `LLMClient`, parses generated draft JSON, and persists
 `CampaignDraft` rows through `CampaignRepository`.
 
+The generator now owns the first concrete copied-task producer behavior:
+multi-channel expansion for one normalized opportunity. Hosts can request
+`email_cold` and `email_followup` drafts in one run, and the follow-up prompt
+receives the generated cold-email context through the product opportunity
+payload. This keeps the cold/follow-up flow inside the product-owned ports
+instead of calling the copied `b2b_campaign_generation.py` task.
+
 `extracted_content_pipeline/campaign_postgres_generation.py` wires the
 database-backed product path. Hosts pass an async Postgres pool and the runner
 combines `PostgresIntelligenceRepository`, `PostgresCampaignRepository`,

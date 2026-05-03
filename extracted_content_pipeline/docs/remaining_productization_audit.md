@@ -248,3 +248,11 @@ Acceptance criteria:
 - Generate and persist drafts through `CampaignRepository`.
 - Keep `_b2b_pool_compression.py`, `_b2b_witnesses.py`, and `_b2b_shared.py`
   out of the product-owned path.
+
+Status: first slice implemented. `CampaignGenerationService` now expands one
+normalized opportunity into configured channels such as `email_cold` and
+`email_followup`, passes the generated cold-email context into the follow-up
+prompt, and saves both drafts through `CampaignRepository`. The offline
+customer-data runner and Postgres runner both expose `--channels` so the copied
+task's cold/follow-up producer shape is now available through the product-owned
+ports.
