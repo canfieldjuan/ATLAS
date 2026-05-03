@@ -21,6 +21,10 @@ MODULES = [
     "extracted_llm_infrastructure.services.b2b.anthropic_batch",
     "extracted_llm_infrastructure.services.b2b.cache_strategy",
     "extracted_llm_infrastructure.services.b2b.llm_exact_cache",
+    # llm_exact_cache lazily imports `from ...skills import
+    # get_skill_registry` inside helpers; importing the skills bridge
+    # explicitly here catches a broken bridge even if no helper runs.
+    "extracted_llm_infrastructure.skills",
     "extracted_llm_infrastructure.pipelines.llm",
     "extracted_llm_infrastructure.reasoning.semantic_cache",
     "extracted_llm_infrastructure.services.llm_router",

@@ -188,6 +188,27 @@ def main() -> int:
         print(f"FAIL storage.database: {exc}")
         failed.append("storage.database")
 
+    # 6. Skills (bridge stub)
+    try:
+        from extracted_llm_infrastructure.skills import get_skill_registry
+
+        # In standalone mode the bridge MUST raise NotImplementedError.
+        # If it instead resolved silently to atlas_brain.skills (e.g.
+        # the env-gate regressed), this assertion would catch it.
+        try:
+            get_skill_registry()
+        except NotImplementedError:
+            print("OK skills (bridge raises NotImplementedError as expected)")
+        else:
+            raise AssertionError(
+                "skills bridge did not raise in standalone mode -- "
+                "the env-gate may have regressed and silently resolved "
+                "to atlas_brain.skills"
+            )
+    except Exception as exc:
+        print(f"FAIL skills: {exc}")
+        failed.append("skills")
+
     # ------------------------------------------------------------------
     # Part C: every provider module imports cleanly in standalone mode
     # ------------------------------------------------------------------
