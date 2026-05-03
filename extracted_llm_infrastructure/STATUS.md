@@ -5,8 +5,8 @@
 | Step | Status |
 |---|---|
 | Manifest of source → scaffold mappings | ✅ done |
-| Verbatim byte-snapshot of 15 Python files | ✅ done (added `services/b2b/llm_exact_cache.py` in PR-A1) |
-| Verbatim byte-snapshot of 7 migration SQL files | ✅ done (added migration 251 in PR-A1) |
+| Verbatim byte-snapshot of 16 Python files | ✅ done (added `services/b2b/llm_exact_cache.py` in PR-A1, `services/provider_cost_sync.py` in PR-A2) |
+| Verbatim byte-snapshot of 8 migration SQL files | ✅ done (added migration 251 in PR-A1, 258 in PR-A2) |
 | Package `__init__.py` files at every level | ✅ done |
 | Sync + validate scripts | ✅ done via shared tooling wrappers |
 | ASCII / smoke-import / import-debt checks | ✅ done via shared tooling wrappers |
@@ -80,9 +80,11 @@ Import contract is closed; the remaining work is **runtime** behavior when funct
 | `services/llm/hybrid.py` | ✅ | ✅ | 🔲 |
 | `services/llm/cloud.py` | ✅ | ✅ | 🔲 |
 | `services/tracing.py` | ✅ | ✅ | 🔲 |
+| `services/provider_cost_sync.py` (PR-A2) | ✅ | 🔲 (Phase 2 follow-up: standalone substrate for provider settings + db pool wrapper for snapshot/daily-cost upserts; lift uses default Atlas mode for now) | 🔲 |
 | `storage/migrations/127_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/130_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/252_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/253_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/255_*.sql` | ✅ | n/a | n/a |
 | `storage/migrations/257_*.sql` | ✅ | n/a | n/a |
+| `storage/migrations/258_*.sql` (PR-A2) | ✅ | n/a | n/a |

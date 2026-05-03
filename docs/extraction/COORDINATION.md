@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T19:31Z by codex-2026-05-03
+Last updated: 2026-05-03T22:00Z by claude-2026-05-03-b
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -14,7 +14,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 
 | Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
 |---|---|---|---|---|---|
-| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | #87 | Cost-closure additions (PR-A1 -> A4); A1 adds `llm_exact_cache.py` + migration 251 | `extracted_llm_infrastructure/services/b2b/llm_exact_cache.py`, `extracted_llm_infrastructure/storage/migrations/251_b2b_llm_exact_cache.sql`, manifest, README, STATUS |
+| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #87 | PR-A2 (in flight) | Cost-closure additions (PR-A2 -> A4); A2 adds `provider_cost_sync.py` + migration 258. PR-A1.5 follow-up needed for Copilot fixes that did not land in #87 (skills bridge, smoke script update, standalone config flag, STATUS detail rows). | `extracted_llm_infrastructure/services/provider_cost_sync.py`, `extracted_llm_infrastructure/storage/migrations/258_provider_cost_reconciliation.sql`, manifest, README, STATUS |
 | `extracted_competitive_intelligence` | 1 (scaffold) | #80 | — | Phase 2 standalone toggle | none |
 | `extracted_content_pipeline` | 1 -> 2 (productization seams) | #78 | — | Standalone runner without `atlas_brain` on path | none |
 | `extracted_reasoning_core` | 1 (scaffold + wedge consolidated; PR-C1 claimed) | #82 | PR-C1 (claimed; claude-2026-05-03) | Evidence/temporal/archetypes consolidation per merged PR #82 audit | `extracted_reasoning_core/**` (api/types/archetypes/evidence_engine/evidence_map.yaml/temporal); `atlas_brain/reasoning/{evidence_engine.py, review_enrichment.py}`; `extracted_content_pipeline/reasoning/{archetypes,evidence_engine,temporal}.py`; `tests/test_extracted_reasoning_*.py` |
@@ -28,8 +28,9 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| #87 | Add `llm_exact_cache` to LLM-infrastructure manifest | `extracted_llm_infrastructure/{manifest.json, services/b2b/llm_exact_cache.py, storage/migrations/251_b2b_llm_exact_cache.sql, README.md, STATUS.md}`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | manifest edits or files synced into `extracted_llm_infrastructure/services/b2b/` and `storage/migrations/` |
-_(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
+| (PR-A2, opening) | Add `provider_cost_sync` to LLM-infrastructure manifest | `extracted_llm_infrastructure/{manifest.json, services/provider_cost_sync.py, storage/migrations/258_provider_cost_reconciliation.sql, README.md, STATUS.md}`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | manifest edits or files synced into `extracted_llm_infrastructure/services/` and `storage/migrations/258_*` |
+| (PR-A1.5, queued) | Apply Copilot fixes that missed PR #87 merge | `extracted_llm_infrastructure/{skills/__init__.py, _standalone/config.py, STATUS.md}`; `scripts/smoke_extracted_llm_infrastructure_imports.py`; `scripts/smoke_extracted_llm_infrastructure_standalone.py` | claude-2026-05-03-b | the 5 files listed; opening immediately after PR-A2 |
+_(Rows for merged PRs #77, #78, #79, #80, #81, #82, #83, #84, #85, #86, #87 dropped per session protocol step 4. Outcomes preserved in Decisions log and per-product state.)_
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 
@@ -39,8 +40,8 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 
 | Slice | Product | Owner | Dependencies | Notes |
 |---|---|---|---|---|
-| PR-A1 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none (PR-A0 / #83 merged) | Add `services/b2b/llm_exact_cache.py` + migration `251_b2b_llm_exact_cache.sql` to manifest. Update README + STATUS. **In flight.** |
-| PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
+| PR-A2 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none (PR-A1 / #87 merged) | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql` to manifest. **In flight.** |
+| PR-A1.5 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none | Re-apply Copilot fixes that did not land in PR #87 merge: skills bridge stub, standalone `llm_exact_cache_enabled` flag, smoke script entries, STATUS detail rows. Opening immediately after PR-A2. |
 | PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
 | PR-A4 | `extracted_llm_infrastructure` | unclaimed | PR-A2, PR-A3 | New code: drift report (local vs invoiced), budget gate, OpenAI provider adapter. May split if too large. |
 | PR-B3 | `extracted_quality_gate` | unclaimed | PR-B2 / #85 (merged) | Safety-gate split: deterministic content/risk scan to core; approvals + audit log + DB to ports + Atlas adapter wrapper. |
