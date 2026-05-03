@@ -24,10 +24,12 @@ The pattern mirrors the content-pipeline scaffold under
 | `services/tracing.py` | `atlas_brain/services/tracing.py` | FTL tracer client (token counts, cost telemetry, hierarchical spans) |
 | `services/b2b/llm_exact_cache.py` | `atlas_brain/services/b2b/llm_exact_cache.py` | Hash-keyed exact-match LLM response cache (~378 LOC); namespace + request envelope -> SHA -> response_text + usage_json. Cost-closure foundation. |
 | `services/provider_cost_sync.py` | `atlas_brain/services/provider_cost_sync.py` | Provider billing reconciliation (~286 LOC). Fetches OpenRouter credits + Anthropic admin daily costs, persists snapshots and daily rows for local-vs-invoiced drift reporting. |
+| `services/cost/cache_savings.py` (OWNED, PR-A3) | (new code) | Cache-savings persistence: one row per cache hit + ``daily_cache_savings`` rollup with per-namespace and per-attribution-dim breakdowns. Closes the "cache hits in memory only" telemetry gap. |
 | `storage/migrations/127_llm_usage.sql` | mig 127 | Initial llm_usage table |
 | `storage/migrations/130_reasoning_semantic_cache.sql` | mig 130 | Semantic cache + metacognition tables |
 | `storage/migrations/251_b2b_llm_exact_cache.sql` | mig 251 | b2b_llm_exact_cache table (cost-closure: cached LLM responses + usage_json) |
 | `storage/migrations/258_provider_cost_reconciliation.sql` | mig 258 | llm_provider_usage_snapshots + llm_provider_daily_costs tables (cost-closure: invoice reconciliation) |
+| `storage/migrations/259_llm_cache_savings.sql` (OWNED, PR-A3) | (new schema) | llm_cache_savings table (cost-closure: per-hit savings rows for "$ saved by cache" rollups) |
 | `storage/migrations/252_llm_usage_cache_breakdown.sql` | mig 252 | Cache + queue token breakdown |
 | `storage/migrations/253_llm_usage_vendor_and_run_id.sql` | mig 253 | Vendor + run_id columns |
 | `storage/migrations/255_anthropic_message_batches.sql` | mig 255 | Anthropic batch + items tables |
