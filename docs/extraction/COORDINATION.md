@@ -1,10 +1,12 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T18:31Z by codex-2026-05-03
+Last updated: 2026-05-03T19:00Z by claude-2026-05-03-b
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
 The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitHub usernames for human work and agent-stamped session IDs for AI work (`{agent}-YYYY-MM-DD[-suffix]`, e.g. `claude-2026-05-03`, `codex-2026-05-03`). The first session for an agent on a calendar day is unsuffixed; subsequent same-agent sessions claim alphabetical suffixes from `-b` (`claude-2026-05-03-b`, `codex-2026-05-03-b`, …) in the same commit that claims a slice. Timestamps in this doc use ISO 8601 UTC (`YYYY-MM-DDTHH:MMZ`).
+
+**Active session aliases (2026-05-03)** — for conversational shorthand: `A` = `claude-2026-05-03-b` (this session, PR #81), `B` = `codex-2026-05-03` (reviewed PR #81), `C` = `claude-2026-05-03` (PRs #79, #80, #82). Aliases re-anchor each calendar day. Agent-date IDs remain canonical in all tables; aliases are for in-conversation reference only.
 
 ---
 
@@ -30,7 +32,8 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 | #78 | Add multi-channel campaign generation flow | `extracted_content_pipeline/campaign_generation.py`, postgres runners, README, STATUS, tests | (unknown — confirm) | `extracted_content_pipeline/{campaign_generation.py, campaign_postgres_generation.py, campaign_example.py, README.md, STATUS.md, docs/remaining_productization_audit.md, docs/standalone_productization.md}`; `scripts/run_extracted_campaign_generation_*.py`; `tests/test_extracted_campaign_*.py` |
 | #79 | Document reasoning core extraction boundary | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
 | #80 | Add shared reasoning core wedge registry | `extracted_reasoning_core/**`, `extracted_competitive_intelligence/reasoning/wedge_registry.py`, `extracted_content_pipeline/reasoning/wedge_registry.py`, tests | claude-2026-05-03 | `extracted_reasoning_core/**`, the migrated `wedge_registry.py` files |
-| #81 | Add extraction coordination doc | `docs/extraction/COORDINATION.md` | codex-2026-05-03 | coordination-doc edits; claim before touching `docs/extraction/COORDINATION.md` |
+| #81 | Add extraction coordination doc | `docs/extraction/COORDINATION.md` | claude-2026-05-03-b (drafted), codex-2026-05-03 (reviewed) | coordination-doc edits; claim before touching `docs/extraction/COORDINATION.md` |
+| #82 | Document reasoning evidence-temporal-archetypes consolidation | `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 
@@ -58,6 +61,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 - **2026-05-03** — Cost-closure additions (`llm_exact_cache.py`, `provider_cost_sync.py`, migrations 251 + 258, plus new code: cache-savings, drift report, budget gate, OpenAI adapter) go INTO `extracted_llm_infrastructure`. No separate `llm-spend-py` package.
 - **2026-05-03** — `docs/extraction/COORDINATION.md` is the canonical state-of-the-world doc for extraction work. Read at session start, update at session end.
 - **2026-05-03** — Coordination protocol refinements: ISO 8601 UTC timestamps; alphabetical suffix scheme (`-b`, `-c`, …) for AI sessions colliding on a date, claimed in the same commit; unknown-owner fallback (treat as locked); tie-breaker on simultaneous claims (last write wins, loser negotiates); forgive-and-claim for missed-step recovery. CI enforcement deferred to PR-Coord-2.
+- **2026-05-03** — Active session letter aliases (A/B/C) added as conversational shorthand alongside canonical agent-date IDs (Option 2 over replacement). Aliases re-anchor each calendar day; agent-date IDs remain canonical in tables and decisions log.
 
 ---
 
