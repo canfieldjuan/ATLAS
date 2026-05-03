@@ -4,7 +4,21 @@ Date: 2026-05-03
 
 ## Current Slice
 
-PR-B4a: blog quality pack.
+PR-B4b: campaign quality pack.
+
+- Deterministic core (`campaign_pack.py`) -- `evaluate_campaign(input, *, policy)`
+  returning a `QualityReport`. Validates proof-term coverage,
+  report-tier banned language, forbidden competitor / incumbent names
+  in cold email (channel + target_mode gated), and private account-name
+  leak detection. Specificity findings are passed through from the
+  Atlas-side audit so the report carries one merged blocking-issues
+  list.
+- Atlas-side wrapper (`atlas_brain/autonomous/tasks/_b2b_specificity.py:campaign_policy_audit_snapshot`)
+  now runs the specificity audit, resolves proof terms, builds a
+  `QualityInput`/`QualityPolicy`, calls the pack, and merges the pack
+  findings with the audit dict so callers see the legacy shape.
+
+PR-B4a (merged via #118): blog quality pack.
 
 - Deterministic core (`blog_pack.py`) -- `evaluate_blog_post(input, *, policy)`
   returning a `QualityReport`. Validates word count, chart placeholders,
@@ -46,6 +60,7 @@ The module is deterministic and imports without Atlas.
 - Integration port protocols
 - Safety gate (deterministic core: `check_content` + `assess_risk`) -- PR-B3
 - Blog quality pack (deterministic core: `evaluate_blog_post`) -- PR-B4a
+- Campaign quality pack (deterministic core: `evaluate_campaign`) -- PR-B4b
 
 ## Not Yet Included
 
@@ -53,7 +68,6 @@ The module is deterministic and imports without Atlas.
   in `atlas_brain/services/safety_gate.py`; the deterministic core
   is now in `extracted_quality_gate/safety_gate.py` and the wrapper
   delegates to it -- but the wrapper itself is not yet extracted)
-- Campaign quality pack (PR-B4b)
 - Witness render policy pack (PR-B5)
 - Evidence-claim coverage pack (PR-B5)
 - Source-quality ingest pack (PR-B5)
