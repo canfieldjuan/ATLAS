@@ -97,6 +97,12 @@ shipping in the customer product.
 
 The email/campaign generation slice is mapped in `docs/email_campaign_generation_pipeline.md`, with standalone productization requirements in `docs/standalone_productization.md`.
 
+Reasoning is a host/product boundary, not copied into AI Content Ops. The
+campaign generator consumes already-compressed reasoning through
+`CampaignReasoningContextProvider`; see
+`docs/reasoning_handoff_contract.md` for the accepted context shape and the
+no-direct-import rule.
+
 `campaign_opportunities.py` defines the customer-data contract for campaign
 generation. Hosts can pass loose opportunity rows from a CRM, warehouse, or
 vendor-intelligence feed; the product normalizes them into stable prompt and

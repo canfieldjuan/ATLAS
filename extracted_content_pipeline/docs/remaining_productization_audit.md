@@ -335,15 +335,19 @@ Pros: keeps the extracted product narrowly scoped and shippable.
 Cons: limits the addressable market to buyers who already have reasoning
 infrastructure or are willing to build one.
 
-### Recommended sequencing
+### Decision
 
-Decide between A and B *before* the next concrete slice above. The "Next
-Concrete Slice" recommendation assumes Option B implicitly (it migrates the
-producer flow but keeps reasoning as host-owned input). If Option A is the
-intended direction, the next slice should change shape to extract the
-producer surface first.
+Use Option B for AI Content Ops. Reasoning is a separate product/host concern,
+and the content package consumes already-compressed context through
+`CampaignReasoningContextProvider`. The explicit handoff contract is now
+documented in `reasoning_handoff_contract.md`.
+
+This keeps AI Content Ops focused on generation, sequencing, delivery, and
+customer-data adapters while allowing Atlas, an extracted reasoning product, or
+a buyer-owned engine to feed the same context shape.
 
 For the two parked product directions captured in the strategy docs in this
 folder, Option B is sufficient for the podcast repurposing offer (no
 reasoning needed at all) and insufficient for either creative-content or
-B2B-campaign-as-product offers.
+B2B-campaign-as-product offers unless a reasoning provider is bundled,
+integrated, or supplied by the buyer.
