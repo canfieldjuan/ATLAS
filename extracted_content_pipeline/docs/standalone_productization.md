@@ -163,6 +163,11 @@ into `campaign_opportunities`, supports dry-run validation, and keeps imports
 append-only unless a host explicitly requests replace-existing behavior for the
 selected account, target mode, and target ids.
 
+`extracted_content_pipeline/campaign_postgres_export.py` owns the read-only
+review path for generated drafts. It filters saved `b2b_campaigns` rows by
+account, status, target mode, channel, vendor, or company and emits JSON or CSV
+for host review workflows.
+
 `extracted_content_pipeline/storage/migration_runner.py` owns the standalone
 schema installation path. It lists packaged SQL migrations, tracks applied
 versions in a product metadata table, supports dry runs, and accepts either a

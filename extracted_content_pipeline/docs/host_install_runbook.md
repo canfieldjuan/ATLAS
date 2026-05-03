@@ -215,7 +215,7 @@ Inspect generated drafts:
 ```sql
 SELECT id, company_name, vendor_name, status, created_at
 FROM b2b_campaigns
-WHERE account_id = 'acct_123'
+WHERE metadata -> 'scope' ->> 'account_id' = 'acct_123'
 ORDER BY created_at DESC
 LIMIT 20;
 ```
@@ -225,9 +225,22 @@ Inspect draft metadata for source opportunity and reasoning context:
 ```sql
 SELECT metadata
 FROM b2b_campaigns
-WHERE account_id = 'acct_123'
+WHERE metadata -> 'scope' ->> 'account_id' = 'acct_123'
 ORDER BY created_at DESC
 LIMIT 1;
+```
+
+Or export generated drafts through the product CLI:
+
+```bash
+python scripts/export_extracted_campaign_drafts.py \
+  --account-id acct_123 \
+  --limit 20
+
+python scripts/export_extracted_campaign_drafts.py \
+  --account-id acct_123 \
+  --format csv \
+  --output campaign_drafts.csv
 ```
 
 ## Retry And Rollback Notes
@@ -238,7 +251,7 @@ LIMIT 1;
 - For test tenants, deleting rows by `account_id` is the cleanest reset:
 
 ```sql
-DELETE FROM b2b_campaigns WHERE account_id = 'acct_123';
+DELETE FROM b2b_campaigns WHERE metadata -> 'scope' ->> 'account_id' = 'acct_123';
 DELETE FROM campaign_opportunities WHERE account_id = 'acct_123';
 ```
 
