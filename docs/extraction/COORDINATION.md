@@ -1,10 +1,10 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03 by claude-2026-05-03
+Last updated: 2026-05-03T22:00Z by claude-2026-05-03
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
-The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitHub usernames for human work and date-stamped session IDs (e.g. `claude-2026-05-03`) for AI work; append a suffix if multiple AI sessions land in a single day (`claude-2026-05-03-b`).
+The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitHub usernames for human work and date-stamped session IDs for AI work. The first AI session of a calendar day is unsuffixed (e.g. `claude-2026-05-03`); subsequent sessions claim alphabetical suffixes from `-b` (`claude-2026-05-03-b`, `-c`, …) in the same commit that claims a slice. Timestamps in this doc use ISO 8601 UTC (`YYYY-MM-DDTHH:MMZ`).
 
 ---
 
@@ -27,9 +27,9 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
 | #77 | docs: park product strategy notes | docs only | (unknown — confirm) | — |
-| #78 | Add multi-channel campaign generation flow | `extracted_content_pipeline/campaign_generation.py`, postgres runners, README, STATUS, tests | (unknown — confirm) | anything in `extracted_content_pipeline/` |
-| #79 | Document reasoning core extraction boundary | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` | (unknown — confirm) | (docs only) |
-| #80 | Add shared reasoning core wedge registry | `extracted_reasoning_core/**`, `extracted_competitive_intelligence/reasoning/wedge_registry.py`, `extracted_content_pipeline/reasoning/wedge_registry.py`, tests | (unknown — confirm) | `extracted_reasoning_core/**`, the migrated `wedge_registry.py` files |
+| #78 | Add multi-channel campaign generation flow | `extracted_content_pipeline/campaign_generation.py`, postgres runners, README, STATUS, tests | (unknown — confirm) | `extracted_content_pipeline/{campaign_generation.py, campaign_postgres_generation.py, campaign_example.py, README.md, STATUS.md, docs/remaining_productization_audit.md, docs/standalone_productization.md}`; `scripts/run_extracted_campaign_generation_*.py`; `tests/test_extracted_campaign_*.py` |
+| #79 | Document reasoning core extraction boundary | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
+| #80 | Add shared reasoning core wedge registry | `extracted_reasoning_core/**`, `extracted_competitive_intelligence/reasoning/wedge_registry.py`, `extracted_content_pipeline/reasoning/wedge_registry.py`, tests | claude-2026-05-03 | `extracted_reasoning_core/**`, the migrated `wedge_registry.py` files |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 
@@ -56,12 +56,14 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 - **2026-05-03** — Reasoning is its own extracted product (`extracted_reasoning_core`), not a leaf duplicated into each consumer. Boundary doc + skeleton + compat-wrapper migration. Settled by PRs #79, #80.
 - **2026-05-03** — Cost-closure additions (`llm_exact_cache.py`, `provider_cost_sync.py`, migrations 251 + 258, plus new code: cache-savings, drift report, budget gate, OpenAI adapter) go INTO `extracted_llm_infrastructure`. No separate `llm-spend-py` package.
 - **2026-05-03** — `docs/extraction/COORDINATION.md` is the canonical state-of-the-world doc for extraction work. Read at session start, update at session end.
+- **2026-05-03** — Coordination protocol refinements: ISO 8601 UTC timestamps; alphabetical suffix scheme (`-b`, `-c`, …) for AI sessions colliding on a date, claimed in the same commit; unknown-owner fallback (treat as locked); tie-breaker on simultaneous claims (last write wins, loser negotiates); forgive-and-claim for missed-step recovery. CI enforcement deferred to PR-Coord-2.
 
 ---
 
 ## Open questions / blockers
 
-- Owners for in-flight PRs #77–#80 — none identified yet. Filling in unblocks accurate "don't conflict with" guidance.
+- Owners for in-flight PRs #77, #78 — separate AI sessions; pending session-ID confirmation from `@canfieldjuan`. PRs #79 and #80 confirmed as `claude-2026-05-03`.
+- **Future hardening (deferred)**: a CI check that requires any merged PR touching `extracted_*/` to also modify `COORDINATION.md`. Forces the protocol mechanically instead of relying on convention. Land as a follow-up PR-Coord-2 once the doc has hit real friction (i.e. someone has demonstrably forgotten to update).
 
 ---
 
@@ -72,13 +74,16 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 3. **Before starting code on a queued slice**: claim it in *Upcoming queue* (set Owner) so a parallel session doesn't pick the same one.
 4. **After a PR merges**: update *Per-product state* (most recent PR, next milestone), drop the row from *In-flight PRs*, log any decisions made during review.
 5. **When a decision lands**: append to *Decisions log* with the date. Never edit historical entries; supersede with a newer entry instead.
-6. **Update the "Last updated" stamp** every time you touch this file.
+6. **Update the "Last updated" stamp** every time you touch this file. ISO 8601 UTC: `YYYY-MM-DDTHH:MMZ`.
+7. **Tie-breaker on simultaneous claims**: if two sessions claim the same slice within minutes, last commit to this file wins; the loser pivots to a different slice or negotiates in PR comments before opening a competing PR.
+8. **Forgive-and-claim**: if you opened a PR without first adding a row, add the row before requesting review. Skipping the claim once is not punishable; abandoning the protocol is.
 
 ---
 
 ## Conventions
 
 - **Owner format** — GitHub username (`@canfieldjuan`) for human work; `claude-YYYY-MM-DD[-suffix]` for AI session work.
+- **Unknown-owner fallback** — if an in-flight PR's Owner is `(unknown — confirm)`, treat its listed file paths as locked until the owner is filled in. Safer default than racing on an unattributed PR.
 - **PR title verbs** — match the established pattern: `Add X`, `Own X`, `Route X through Y`, `Document X`, `Harden X`, `Refresh X`. The verb signals intent (Phase 1 add vs Phase 2 ownership vs Phase 3 decoupling vs docs).
 - **Boundary audit docs** — land in `docs/extraction/<product>_boundary_audit_<date>.md` BEFORE the first scaffold PR. PR #79 is the template.
 - **Per-product status** — STATUS.md inside each `extracted_*/` folder is the product-internal state. This doc is the cross-product state. Don't duplicate detail; link.
