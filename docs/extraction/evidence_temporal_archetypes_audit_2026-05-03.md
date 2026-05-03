@@ -18,16 +18,47 @@ evidence-shape semantics.
 
 ## Verified Current State
 
-| File | atlas_brain LOC | content_pipeline fork | Drift (diff lines) | atlas_brain deps |
-| --- | ---: | --- | ---: | --- |
-| `archetypes.py` | 592 | yes (drifted) | ~60 | 0 (stdlib + dataclasses only) |
-| `evidence_engine.py` | 548 | yes (drifted) | ~20 | yaml + stdlib |
-| `evidence_map.yaml` | 284 | not present | n/a | yaml data file |
-| `temporal.py` | 490 | yes (drifted) | ~48 | stdlib only |
-| **total** | **1,914** | 3 of 4 forked | ~128 lines | none |
+| File | atlas_brain LOC | content_pipeline LOC | LOC delta | Nature of divergence | atlas_brain deps |
+| --- | ---: | ---: | ---: | --- | --- |
+| `archetypes.py` | 592 | 590 | -2 | minor: docstrings, `frozen=True`, formatting; description-string rewrites for ~6 archetypes (user-facing copy) | 0 (stdlib + dataclasses only) |
+| `evidence_engine.py` | 548 | 338 | -210 | **different implementation, not drift**; see Drift Reality Check | yaml + stdlib |
+| `evidence_map.yaml` | 284 | not present | n/a | content_pipeline never carried the YAML; loads rules via custom `_load_rules` helper | yaml data file |
+| `temporal.py` | 490 | 466 | -24 | `frozen=True` + 2 new defensive helpers (`_numeric_value`, `_row_get`); `MIN_DAYS_FOR_PERCENTILES` 7 -> 3 | stdlib only |
+| **total** | **1,914** | n/a | n/a | mixed: minor + structural + parameter | none |
 
 Zero `atlas_brain.*` imports in any of the four files. Pure
-consolidation candidates.
+consolidation candidates by dependency graph; not all by behavior.
+
+## Drift Reality Check
+
+The first measurement in this audit's initial draft used
+`diff -q | grep -cE '^[+-]'` and reported drift as "20 / 60 / 48
+lines" -- a hunk-marker count, not a real LOC delta. A direct LOC
+comparison surfaced a much larger divergence on `evidence_engine.py`
+(548 vs 338) that the original draft did not anticipate. This audit
+records the corrected measurement and adjusts the consolidation plan
+accordingly.
+
+What `extracted_content_pipeline/reasoning/evidence_engine.py`
+actually contains:
+
+- Same dataclasses (`ConclusionResult`, `SuppressionResult`).
+- A re-implementation of `EvidenceEngine` that loads rules via a
+  custom `_load_rules(map_path)` helper, not from `evidence_map.yaml`.
+- A renamed plural method
+  `evaluate_conclusions(...) -> list[ConclusionResult]` (atlas has
+  the singular `evaluate_conclusion(...) -> ConclusionResult` plus an
+  internal collection helper).
+- **Drops the entire per-review enrichment surface** that atlas owns:
+  `compute_urgency`, `override_pain`, the recommend / price regex
+  pre-compilation, and `_check_condition_simple`. ~210 LOC of
+  per-review business logic does not exist in content_pipeline.
+
+Implication: this is the case the original Risks section warned
+about. The "fork" is a fundamentally smaller engine focused on the
+conclusions + suppression surface; the per-review enrichment lives
+only in atlas and is therefore atlas-flavored business logic, not
+shared-core machinery.
 
 Existing tests already in `tests/`:
 
@@ -100,14 +131,27 @@ atlas_brain's `EvidenceEngine` has two finer-grained methods:
 Add `ConclusionResult`, `SuppressionResult` to PR #79's
 supporting-types table in the same amendment.
 
+### Collision 4: `evaluate_conclusion` vs `evaluate_conclusions`
+
+content_pipeline's fork uses a plural method
+`evaluate_conclusions(...) -> list[ConclusionResult]` that loops the
+`_conclusions` rule-set internally. atlas exposes the singular
+`evaluate_conclusion(rule_id, evidence) -> ConclusionResult` and lets
+callers iterate.
+
+**Decision:** Keep both. Singular is the lower-level public method;
+plural is a convenience wrapper that iterates. The plural shape is
+genuinely useful (content_pipeline already wrote it that way) and
+the cost of carrying both is one short delegation method.
+
 ## Module Disposition
 
 | File | Disposition | Notes |
 | --- | --- | --- |
-| `archetypes.py` | Move verbatim to `extracted_reasoning_core/archetypes.py`; reconcile content_pipeline drift forward | Add public-shape `ArchetypeMatch` adapter; keep `ArchetypeProfile`, `SignalRule`, `ARCHETYPES` catalog as core internals |
-| `evidence_engine.py` | Move verbatim to `extracted_reasoning_core/evidence_engine.py`; reconcile content_pipeline drift forward | Class stays public; `get_evidence_engine` factory stays public; `_DEFAULT_MAP_PATH` recomputed for new location |
+| `archetypes.py` | Move atlas as canonical to `extracted_reasoning_core/archetypes.py`; carry `frozen=True` from content_pipeline; archetype description-string rewrites flagged for a future `content_review_pack` | Add public-shape `ArchetypeMatch` adapter; keep `ArchetypeProfile`, `SignalRule`, `ARCHETYPES` catalog as core internals |
+| `evidence_engine.py` | **Slim core + enrichment pack split.** Move conclusions + suppression surface to `extracted_reasoning_core/evidence_engine.py` (the surface content_pipeline currently exposes). Move per-review enrichment (`compute_urgency`, `override_pain`, recommend / price regex pre-compilation, `_check_condition_simple`) to `atlas_brain/reasoning/review_enrichment.py` (renamed) AND scaffold a `content_review_pack` that consumes it. Keep YAML loader in core; rule shape unchanged. | Class stays public; both `evaluate_conclusion` and `evaluate_conclusions` exposed; per-review methods removed from core public API |
 | `evidence_map.yaml` | Move verbatim to `extracted_reasoning_core/evidence_map.yaml`; ships as default policy data | Products override via `get_evidence_engine(map_path=...)` or by injecting their own `EvidencePolicy` |
-| `temporal.py` | Move verbatim to `extracted_reasoning_core/temporal.py`; reconcile content_pipeline drift forward | `TemporalEngine` class stays public; promote `VendorVelocity`, `LongTermTrend`, `CategoryPercentile`, `AnomalyScore` to public types |
+| `temporal.py` | Move atlas as canonical to `extracted_reasoning_core/temporal.py`; **carry forward content_pipeline's `_numeric_value` / `_row_get` defensive helpers** (real engineering value, not drift); **parameterize `MIN_DAYS_FOR_PERCENTILES`** via `TemporalEngine` constructor (atlas=7, content_pipeline=3 are both valid for their use cases) | `TemporalEngine` class stays public; promote `VendorVelocity`, `LongTermTrend`, `CategoryPercentile`, `AnomalyScore` to public types |
 
 ## evidence_map.yaml Placement Decision
 
@@ -124,24 +168,44 @@ product-specific rule sets become product-pack assets in a future PR.
 
 ## Drift-Forward Plan (per file)
 
-Three forks differ from atlas_brain by a combined ~128 lines. Each
-fork's drift must be classified before consolidation:
+Triage based on the corrected measurements above:
 
-1. **Per-file drift triage** during the code PR: run
-   `diff atlas_brain/reasoning/<file> extracted_content_pipeline/reasoning/<file>`,
-   categorize each hunk as:
+**`archetypes.py` (-2 LOC; ~30 differing characters)**
 
-   - **(a)** content-pipeline-specific behavior; flag for extraction
-     into a content reasoning pack (deferred PR)
-   - **(b)** forward port to canonical; land in core
-   - **(c)** equivalent rewrite; discard, use canonical
-2. The code PR's commit message lists each hunk's category. Future
-   review cannot ask "where did the content-pipeline behavior go"
-   without an answer in the commit.
+- (b) forward port: docstrings, `frozen=True`, formatting -- land in
+  core unchanged from atlas
+- (a) content-pipeline-specific: archetype description-string
+  rewrites and falsification template wording for ~6 archetypes; this
+  is user-facing copy, not engine behavior. Flag for the future
+  `content_review_pack` (catalog override). Core ships atlas's
+  technical descriptions.
 
-If most hunks land in category (a), the consolidation may need to wait
-for a content reasoning pack to exist; triage during the code PR will
-tell.
+**`evidence_engine.py` (-210 LOC; structural divergence)**
+
+This file does NOT fit the simple (a)/(b)/(c) drift model. The
+content_pipeline fork is a different implementation, not a drifted
+copy. Decision is in Module Disposition: split into a slim conclusions
++ suppression core (matches content_pipeline's public shape) plus a
+`review_enrichment` module that becomes part of an atlas-flavored
+`content_review_pack`. The code PR delivers the slim core and the
+extracted review_enrichment module; the pack scaffolding is a separate
+follow-up PR.
+
+**`temporal.py` (-24 LOC; mostly real)**
+
+- (b) forward port: `frozen=True`, formatting, multi-line
+  comprehensions -- land in core
+- new functionality from content_pipeline to ADOPT (forward port from
+  the fork, not from atlas): `_numeric_value` and `_row_get` defensive
+  helpers handle messy input data; this is engineering value worth
+  carrying into core
+- (parameterize) `MIN_DAYS_FOR_PERCENTILES` -- atlas=7,
+  content_pipeline=3; constructor parameter with default=7 (matches
+  atlas) and content_pipeline overrides at instantiation
+
+The code PR's commit message lists each non-trivial hunk's
+classification. Future review cannot ask "where did the
+content-pipeline behavior go" without an answer in the commit.
 
 ## Test Migration
 
@@ -172,8 +236,22 @@ Files touched by the code PR:
 ```
 NEW:    extracted_reasoning_core/archetypes.py
 NEW:    extracted_reasoning_core/evidence_engine.py
+        (slim conclusions + suppression surface;
+         per-review enrichment NOT included)
 NEW:    extracted_reasoning_core/evidence_map.yaml
 NEW:    extracted_reasoning_core/temporal.py
+        (with _numeric_value / _row_get helpers carried
+         from content_pipeline fork; MIN_DAYS_FOR_PERCENTILES
+         parameterized)
+NEW:    atlas_brain/reasoning/review_enrichment.py
+        (extracted from atlas evidence_engine: compute_urgency,
+         override_pain, recommend/price regex pre-compilation,
+         _check_condition_simple. Atlas-internal until the
+         content_review_pack PR follows up.)
+EDIT:   atlas_brain/reasoning/evidence_engine.py
+        (delete the per-review enrichment surface; remaining
+         conclusions + suppression behavior delegates to or
+         imports from extracted_reasoning_core)
 EDIT:   extracted_reasoning_core/api.py
         (impl 3 stubs; export new public types)
 EDIT:   extracted_reasoning_core/types.py
@@ -190,9 +268,19 @@ EDIT:   docs/extraction/reasoning_boundary_audit_2026-05-03.md
         (PR #79 contract amendment)
 ```
 
-NOT touched by the code PR: `atlas_brain/reasoning/*` (PR 7 / Product
-Migration), `extracted_competitive_intelligence/*` (no archetypes,
-evidence, or temporal forks there), any other product.
+NOT touched by the code PR: `extracted_competitive_intelligence/*`
+(no archetypes, evidence, or temporal forks there), any other
+product. The code PR DOES touch `atlas_brain/reasoning/` for the
+slim-core split (this is the first PR in the sequence to do so;
+subsequent PRs in PR #79's sequence continue the atlas-side
+migration). PR 7 / Product Migration still owns the broader
+atlas-to-core wedge_registry alignment.
+
+**Follow-up PR (out of scope for this code PR):** scaffold a
+`content_review_pack` that consumes
+`atlas_brain.reasoning.review_enrichment` (or a future
+`extracted_reasoning_packs.review_enrichment`) and exposes the
+per-review enrichment surface to content_pipeline through a Protocol.
 
 ## Risks
 
@@ -201,10 +289,24 @@ evidence, or temporal forks there), any other product.
   during review, the code PR rebases. Acceptable.
 - **PR #79 contract amendment in same PR.** This is the second
   contract amendment after the `reasoning_input` rename plus `tier`
-  typing. Frequency is currently fine; watch the pattern.
-- **Drift-forward triage risk.** ~128 drifted lines across 3 files.
-  If most hunks are category (a), the consolidation may need to wait
-  for a content reasoning pack. Triage during the code PR will tell.
+  typing. Frequency is currently acceptable; if PR 4 produces a third,
+  that is a signal the original audit was under-specified.
+- **First atlas-side edits in this sequence.** Earlier PRs in the
+  reasoning extraction (PR #79, #80) only added or modified extracted
+  files. This code PR is the first to touch `atlas_brain/reasoning/`
+  (creating `review_enrichment.py`, slimming `evidence_engine.py`).
+  Atlas tests (`test_evidence_engine.py`,
+  `test_b2b_phase{2,3}_*.py`) must pass after the slim. If they
+  fail, the slim plan needs revision before the code PR opens.
+- **Slim-core decision is load-bearing.** If review-enrichment ever
+  needs to live in core (because a non-atlas product needs per-review
+  enrichment), the split has to be revisited. Today only atlas needs
+  it, so the split is safe. Watch for the second consumer.
+- **Audit measurement was wrong on first pass.** Using
+  `diff -q | grep -cE` instead of LOC comparison undercounted
+  evidence_engine drift by an order of magnitude. Future audit docs
+  should report `wc -l` deltas alongside structural-divergence notes,
+  not hunk-marker counts.
 
 ## Acceptance Criteria (for the code PR)
 
@@ -213,14 +315,32 @@ evidence, or temporal forks there), any other product.
 - 3 forks in `extracted_content_pipeline/reasoning/` are now re-export
   wrappers (`<= 30` lines each, byte-identical pattern to current
   `wedge_registry.py` wrappers)
+- `extracted_reasoning_core/evidence_engine.py` exposes only the
+  conclusions + suppression surface; no per-review enrichment methods
+  in core public API
+- `atlas_brain/reasoning/review_enrichment.py` exists with the
+  per-review enrichment surface; `atlas_brain/reasoning/evidence_engine.py`
+  no longer contains those methods
 - All existing `test_extracted_reasoning_*` tests pass after rename and
   redirect
+- All atlas tests touching `evidence_engine` (`test_evidence_engine.py`,
+  `test_b2b_phase2_subject_gate.py`, `test_b2b_phase3_polarity_gate.py`)
+  still pass after the slim
 - `tests/test_extracted_reasoning_core_api.py::test_stubbed_public_entry_points_fail_closed_until_consolidated`
   updated to remove the 3 now-implemented entries
 - `extracted_reasoning_core/types.py` exports the rich
   `TemporalEvidence` plus 4 sub-types plus `ConclusionResult` plus
   `SuppressionResult`
+- `TemporalEngine` constructor accepts `min_days_for_percentiles`
+  parameter (default=7)
+- `TemporalEngine` carries `_numeric_value` and `_row_get` defensive
+  helpers from the content_pipeline fork
 - PR #79 audit doc amended in the same commit to reflect the contract
   amendment
-- Drift-forward triage table appears in the commit message body
+- Drift-forward triage classifications appear in the commit message
+  body for `archetypes.py` and `temporal.py`; `evidence_engine.py`
+  notes reference the slim-core split documented in this audit
 - `bash scripts/run_extracted_*_checks.sh` all pass
+- `bash scripts/run_extracted_competitive_intelligence_checks.sh` passes
+  (no behavioral changes there, but verifies the wedge_registry
+  re-export wrapper still resolves)
