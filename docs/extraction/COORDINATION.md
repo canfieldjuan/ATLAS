@@ -1,0 +1,91 @@
+# Extraction Coordination
+
+Last updated: 2026-05-03 by claude-2026-05-03
+
+State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
+
+The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitHub usernames for human work and date-stamped session IDs (e.g. `claude-2026-05-03`) for AI work; append a suffix if multiple AI sessions land in a single day (`claude-2026-05-03-b`).
+
+---
+
+## Per-product state
+
+| Product | Phase | Most recent merged PR | Next milestone | Active hot zone |
+|---|---|---|---|---|
+| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | Cost-closure additions (PR-A1 → A4) | none |
+| `extracted_competitive_intelligence` | 1 (scaffold) | #48 / #80 (open) | Stabilize after #80 wedge migration | `reasoning/wedge_registry.py` |
+| `extracted_content_pipeline` | 1 → 2 (productization seams in flight) | #76 | Standalone runner without `atlas_brain` on path | `campaign_generation.py`, `*_postgres_*`, `README.md`, `STATUS.md` |
+| `extracted_reasoning_core` | 0 → 1 (kickoff) | — (#79 + #80 open) | First scaffold + wedge registry land | `extracted_reasoning_core/**` |
+| `extracted_quality_gate` | not started | — | Boundary audit (deferred behind cost-closure) | — |
+
+Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle (`EXTRACTED_X_STANDALONE=1`) loads local substrate. 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
+
+---
+
+## In-flight PRs (claim before opening, update when state changes)
+
+| PR | Title | Touches | Owner | Don't conflict with |
+|---|---|---|---|---|
+| #77 | docs: park product strategy notes | docs only | (unknown — confirm) | — |
+| #78 | Add multi-channel campaign generation flow | `extracted_content_pipeline/campaign_generation.py`, postgres runners, README, STATUS, tests | (unknown — confirm) | anything in `extracted_content_pipeline/` |
+| #79 | Document reasoning core extraction boundary | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` | (unknown — confirm) | (docs only) |
+| #80 | Add shared reasoning core wedge registry | `extracted_reasoning_core/**`, `extracted_competitive_intelligence/reasoning/wedge_registry.py`, `extracted_content_pipeline/reasoning/wedge_registry.py`, tests | (unknown — confirm) | `extracted_reasoning_core/**`, the migrated `wedge_registry.py` files |
+
+This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
+
+---
+
+## Upcoming queue (claim before starting; sequence reflects dependencies)
+
+| Slice | Product | Owner | Dependencies | Notes |
+|---|---|---|---|---|
+| PR-Coord | meta | claude-2026-05-03 | none | This doc. Establishes the mechanism. |
+| PR-A0 | `extracted_llm_infrastructure` | claude-2026-05-03 | none | Boundary audit doc: `docs/extraction/cost_closure_audit_2026-05-04.md`. Mirrors PR #79's structure. |
+| PR-A1 | `extracted_llm_infrastructure` | unclaimed | PR-A0 | Add `services/b2b/llm_exact_cache.py` + migration `251_b2b_llm_exact_cache.sql` (rename target: `llm_exact_cache.sql`) to manifest. Update README "What's in scope" table. |
+| PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
+| PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
+| PR-A4 | `extracted_llm_infrastructure` | unclaimed | PR-A2, PR-A3 | New code: drift report (local vs invoiced), budget gate, OpenAI provider adapter. May split if too large. |
+| PR-B1 | `extracted_quality_gate` | unclaimed | (independent of A) | Boundary audit doc. Mirrors PR #79. Can run in parallel with cost-closure if a second session opens. |
+
+---
+
+## Decisions log (chronological, append-only)
+
+- **2026-05-01** — Folders stay siblings of `atlas_brain/`, not relocated under `extracted/`. Only `extracted/_shared/` lives in the umbrella. Path moves would touch hundreds of references in manifests, READMEs, and CI; not worth the disruption.
+- **2026-05-01** — Wrapper-script pattern for shared tooling rollout: keep existing entry-point script names as thin wrappers that delegate to `extracted/_shared/scripts/`. Preserves CI references. Settled by PRs #48–50.
+- **2026-05-03** — Reasoning is its own extracted product (`extracted_reasoning_core`), not a leaf duplicated into each consumer. Boundary doc + skeleton + compat-wrapper migration. Settled by PRs #79, #80.
+- **2026-05-03** — Cost-closure additions (`llm_exact_cache.py`, `provider_cost_sync.py`, migrations 251 + 258, plus new code: cache-savings, drift report, budget gate, OpenAI adapter) go INTO `extracted_llm_infrastructure`. No separate `llm-spend-py` package.
+- **2026-05-03** — `docs/extraction/COORDINATION.md` is the canonical state-of-the-world doc for extraction work. Read at session start, update at session end.
+
+---
+
+## Open questions / blockers
+
+- Owners for in-flight PRs #77–#80 — none identified yet. Filling in unblocks accurate "don't conflict with" guidance.
+
+---
+
+## Session protocol
+
+1. **At session start**: read this doc end-to-end before opening files.
+2. **Before opening a PR**: add a row to *In-flight PRs* with your owner ID and the files you'll touch.
+3. **Before starting code on a queued slice**: claim it in *Upcoming queue* (set Owner) so a parallel session doesn't pick the same one.
+4. **After a PR merges**: update *Per-product state* (most recent PR, next milestone), drop the row from *In-flight PRs*, log any decisions made during review.
+5. **When a decision lands**: append to *Decisions log* with the date. Never edit historical entries; supersede with a newer entry instead.
+6. **Update the "Last updated" stamp** every time you touch this file.
+
+---
+
+## Conventions
+
+- **Owner format** — GitHub username (`@canfieldjuan`) for human work; `claude-YYYY-MM-DD[-suffix]` for AI session work.
+- **PR title verbs** — match the established pattern: `Add X`, `Own X`, `Route X through Y`, `Document X`, `Harden X`, `Refresh X`. The verb signals intent (Phase 1 add vs Phase 2 ownership vs Phase 3 decoupling vs docs).
+- **Boundary audit docs** — land in `docs/extraction/<product>_boundary_audit_<date>.md` BEFORE the first scaffold PR. PR #79 is the template.
+- **Per-product status** — STATUS.md inside each `extracted_*/` folder is the product-internal state. This doc is the cross-product state. Don't duplicate detail; link.
+
+## What this doc is NOT for
+
+- Detailed product roadmaps — those live in each product's `STATUS.md` or boundary audit doc.
+- Architecture decisions specific to one product — capture those in the relevant boundary audit or README.
+- A real-time PR mirror — `gh pr list` is the source of truth for what's open. This doc tracks intent and ownership for in-flight work we're coordinating around.
+- Long discussion threads — keep this scannable. Conversations belong in PR descriptions and review comments; only the *outcome* lands in *Decisions log*.
