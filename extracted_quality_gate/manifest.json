@@ -13,6 +13,9 @@
       "target": "extracted_quality_gate/api.py"
     },
     {
+      "target": "extracted_quality_gate/blog_pack.py"
+    },
+    {
       "target": "extracted_quality_gate/ports.py"
     },
     {

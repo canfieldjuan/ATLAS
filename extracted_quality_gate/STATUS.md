@@ -4,7 +4,21 @@ Date: 2026-05-03
 
 ## Current Slice
 
-PR-B3: split safety-gate primitives.
+PR-B4a: blog quality pack.
+
+- Deterministic core (`blog_pack.py`) -- `evaluate_blog_post(input, *, policy)`
+  returning a `QualityReport`. Validates word count, chart placeholders,
+  unresolved tokens, quote count, review-period mention, methodology
+  disclaimer, required vendors, placeholder/internal links, title/vendor
+  match, category-outcome support, ungrounded data claims (two-strategy
+  scan: known-vendor lookup + multi-word capitalized-name regex with
+  configurable skip words), chart-scope ambiguity, numeric consistency,
+  migration-direction drift.
+- Atlas-side wrapper (`atlas_brain/autonomous/tasks/b2b_blog_post_generation.py:_apply_blog_quality_gate`)
+  now sanitizes the body, builds a `QualityInput`/`QualityPolicy`, calls
+  the pack, then layers atlas-side specificity findings on top.
+
+PR-B3 (merged via #114): split safety-gate primitives.
 
 - Deterministic core (`safety_gate.py`) -- `check_content` + `assess_risk`
 - Atlas-side wrapper (`atlas_brain/services/safety_gate.py`) now delegates
@@ -31,6 +45,7 @@ The module is deterministic and imports without Atlas.
 - Generic quality report types
 - Integration port protocols
 - Safety gate (deterministic core: `check_content` + `assess_risk`) -- PR-B3
+- Blog quality pack (deterministic core: `evaluate_blog_post`) -- PR-B4a
 
 ## Not Yet Included
 
@@ -38,8 +53,7 @@ The module is deterministic and imports without Atlas.
   in `atlas_brain/services/safety_gate.py`; the deterministic core
   is now in `extracted_quality_gate/safety_gate.py` and the wrapper
   delegates to it -- but the wrapper itself is not yet extracted)
-- Blog quality pack (PR-B4)
-- Campaign quality pack (PR-B4)
+- Campaign quality pack (PR-B4b)
 - Witness render policy pack (PR-B5)
 - Evidence-claim coverage pack (PR-B5)
 - Source-quality ingest pack (PR-B5)
