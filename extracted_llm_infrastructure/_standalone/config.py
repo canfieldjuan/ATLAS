@@ -168,10 +168,17 @@ class LLMSubConfig(BaseSettings):
 
 
 class B2BChurnSubConfig(BaseSettings):
-    """Slim B2B churn config -- only the LLM-batch and OpenRouter fields
-    the scaffold reads at runtime. Atlas's full ``B2BChurnConfig`` has
-    ~80 unrelated fields (billing, scrape, calibration, etc.) that the
-    LLM-infra subsystem does not touch."""
+    """Slim B2B churn config -- only the LLM-infrastructure fields the
+    scaffold reads at runtime. Atlas's full ``B2BChurnConfig`` has ~80
+    unrelated fields (billing, scrape, calibration, etc.) that the
+    LLM-infra subsystem does not touch.
+
+    Currently includes:
+
+    - OpenRouter API key
+    - Anthropic Message Batches settings (enabled / poll / timeout / min items)
+    - LLM exact-cache feature flag (``llm_exact_cache_enabled``)
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_B2B_CHURN_",
@@ -184,6 +191,7 @@ class B2BChurnSubConfig(BaseSettings):
     anthropic_batch_poll_interval_seconds: float = Field(default=5.0, ge=1.0, le=60.0)
     anthropic_batch_timeout_seconds: float = Field(default=900.0, ge=30.0, le=86400.0)
     anthropic_batch_min_items: int = Field(default=2, ge=1, le=10000)
+    llm_exact_cache_enabled: bool = Field(default=False)
 
 
 class ReasoningSubConfig(BaseSettings):
