@@ -57,6 +57,10 @@
       "target": "extracted_llm_infrastructure/services/tracing.py"
     },
     {
+      "source": "atlas_brain/services/b2b/llm_exact_cache.py",
+      "target": "extracted_llm_infrastructure/services/b2b/llm_exact_cache.py"
+    },
+    {
       "source": "atlas_brain/storage/migrations/127_llm_usage.sql",
       "target": "extracted_llm_infrastructure/storage/migrations/127_llm_usage.sql"
     },
@@ -71,6 +75,10 @@
     {
       "source": "atlas_brain/storage/migrations/253_llm_usage_vendor_and_run_id.sql",
       "target": "extracted_llm_infrastructure/storage/migrations/253_llm_usage_vendor_and_run_id.sql"
+    },
+    {
+      "source": "atlas_brain/storage/migrations/251_b2b_llm_exact_cache.sql",
+      "target": "extracted_llm_infrastructure/storage/migrations/251_b2b_llm_exact_cache.sql"
     },
     {
       "source": "atlas_brain/storage/migrations/255_anthropic_message_batches.sql",

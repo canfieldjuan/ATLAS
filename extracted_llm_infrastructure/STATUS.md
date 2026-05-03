@@ -5,8 +5,8 @@
 | Step | Status |
 |---|---|
 | Manifest of source → scaffold mappings | ✅ done |
-| Verbatim byte-snapshot of 14 Python files | ✅ done |
-| Verbatim byte-snapshot of 6 migration SQL files | ✅ done |
+| Verbatim byte-snapshot of 15 Python files | ✅ done (added `services/b2b/llm_exact_cache.py` in PR-A1) |
+| Verbatim byte-snapshot of 7 migration SQL files | ✅ done (added migration 251 in PR-A1) |
 | Package `__init__.py` files at every level | ✅ done |
 | Sync + validate scripts | ✅ done via shared tooling wrappers |
 | ASCII / smoke-import / import-debt checks | ✅ done via shared tooling wrappers |
