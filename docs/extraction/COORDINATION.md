@@ -1,6 +1,6 @@
 # Extraction Coordination
 
-Last updated: 2026-05-03T18:49Z by codex-2026-05-03
+Last updated: 2026-05-03T19:35Z by claude-2026-05-03-b
 
 State-of-the-world for the multi-product extraction effort. Read this end-to-end at session start before doing substantive work. Update before opening a PR, after merging one, or when a decision lands.
 
@@ -34,6 +34,7 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 | #80 | Add shared reasoning core wedge registry | `extracted_reasoning_core/**`, `extracted_competitive_intelligence/reasoning/wedge_registry.py`, `extracted_content_pipeline/reasoning/wedge_registry.py`, tests | claude-2026-05-03 | `extracted_reasoning_core/**`, the migrated `wedge_registry.py` files |
 | #81 | Add extraction coordination doc | `docs/extraction/COORDINATION.md` | claude-2026-05-03-b (drafted), codex-2026-05-03 (reviewed + #82 coordination update) | coordination-doc edits; claim before touching `docs/extraction/COORDINATION.md` |
 | #82 | Document reasoning evidence-temporal-archetypes consolidation | `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md` | claude-2026-05-03 | (docs only) |
+| (TBD-A0) | Document cost-closure boundary | `docs/extraction/cost_closure_audit_2026-05-03.md` + COORDINATION update | claude-2026-05-03-b | (docs only) |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 
@@ -44,7 +45,7 @@ This table is for PRs we need to coordinate around, not a mirror of `gh pr list`
 | Slice | Product | Owner | Dependencies | Notes |
 |---|---|---|---|---|
 | PR-Coord | meta | claude-2026-05-03-b | none | This doc. Establishes the mechanism. |
-| PR-A0 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none | Boundary audit doc: `docs/extraction/cost_closure_audit_2026-05-04.md`. Mirrors PR #79's structure. |
+| PR-A0 | `extracted_llm_infrastructure` | claude-2026-05-03-b | none | Boundary audit doc: `docs/extraction/cost_closure_audit_2026-05-03.md`. Mirrors PR #79's structure. PR opened (TBD-A0). |
 | PR-A1 | `extracted_llm_infrastructure` | unclaimed | PR-A0 | Add `services/b2b/llm_exact_cache.py` + migration `251_b2b_llm_exact_cache.sql` (rename target: `llm_exact_cache.sql`) to manifest. Update README "What's in scope" table. |
 | PR-A2 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | Add `services/provider_cost_sync.py` + migration `258_provider_cost_reconciliation.sql`. Sync orchestration. |
 | PR-A3 | `extracted_llm_infrastructure` | unclaimed | PR-A1 | New code: cache-savings persistence layer + migration. Closes the "$ saved by cache" telemetry gap. |
