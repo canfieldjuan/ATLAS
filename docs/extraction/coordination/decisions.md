@@ -1,6 +1,6 @@
 # Decisions Log
 
-Last updated: 2026-05-03T22:10Z by codex-2026-05-03
+Last updated: 2026-05-03T23:34Z by codex-2026-05-03
 
 Append-only chronological log. Never edit historical entries; supersede with a newer entry instead. See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -22,3 +22,4 @@ Append-only chronological log. Never edit historical entries; supersede with a n
 - **2026-05-03** — PR-D2 merged as #97. AI Content Ops now has a file-backed `CampaignReasoningContextProvider` reference adapter, and the offline campaign-generation example can consume buyer/host reasoning JSON without importing a reasoning runtime.
 - **2026-05-03** — PR-C1a merged as #94. `extracted_reasoning_core` now owns the first archetype/evidence-map move; PR-C1 follow-up slices remain claimed for temporal/types/evidence_engine/API/wrapper migration.
 - **2026-05-03** — PR-D3 merged as #99. The Postgres campaign generation runner now accepts the same file-backed reasoning JSON as the offline example, so host-provided reasoning works on demo and DB-backed AI Content Ops paths.
+- **2026-05-03** — PR-D4 merged as #101. AI Content Ops now has a host-configurable markdown skill registry; offline and Postgres campaign CLIs accept `--skills-root` so buyer/customer prompt contracts can override packaged prompts without importing Atlas skills.
