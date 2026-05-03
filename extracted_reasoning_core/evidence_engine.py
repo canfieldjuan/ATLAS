@@ -223,11 +223,18 @@ class EvidenceEngine:
     # Confidence labeling
     # ------------------------------------------------------------------
 
-    def get_confidence_tier(self, total_reviews: int) -> str:
-        """Return confidence tier label for a review count."""
+    def get_confidence_tier(self, total_reviews: Any) -> str:
+        """Return confidence tier label for a review count.
+
+        Coerces messy numeric inputs ("1,234", "120 reviews") via
+        `_numeric_value` so a single string-shaped review count does
+        not silently fall through to "insufficient".
+        """
+        review_count = _numeric_value(total_reviews) or 0.0
         for tier_name in ("high", "medium", "low"):
             tier = self._confidence_tiers.get(tier_name, {})
-            if total_reviews >= tier.get("min_reviews", 0):
+            min_reviews = _numeric_value(tier.get("min_reviews")) or 0.0
+            if review_count >= min_reviews:
                 return tier_name
         return "insufficient"
 
@@ -267,9 +274,13 @@ class EvidenceEngine:
         if "eq" in cond:
             return value == cond["eq"]
         if "lte" in cond:
-            return value is not None and float(value) <= float(cond["lte"])
+            value_num = _numeric_value(value)
+            cond_num = _numeric_value(cond["lte"])
+            return value_num is not None and cond_num is not None and value_num <= cond_num
         if "gte" in cond:
-            return value is not None and float(value) >= float(cond["gte"])
+            value_num = _numeric_value(value)
+            cond_num = _numeric_value(cond["gte"])
+            return value_num is not None and cond_num is not None and value_num >= cond_num
         if "in" in cond:
             return value in cond["in"]
         return False
@@ -282,35 +293,67 @@ class EvidenceEngine:
         value = self._resolve_field(evidence, field)
         op = req.get("operator", "eq")
 
-        if op == "gte":
-            return value is not None and float(value) >= float(req["value"])
-        if op == "gt":
-            return value is not None and float(value) > float(req["value"])
-        if op == "lte":
-            return value is not None and float(value) <= float(req["value"])
-        if op == "lt":
-            return value is not None and float(value) < float(req["value"])
+        if op in {"gte", "gt", "lte", "lt"}:
+            value_num = _numeric_value(value)
+            rule_num = _numeric_value(req.get("value"))
+            if value_num is None or rule_num is None:
+                return False
+            if op == "gte":
+                return value_num >= rule_num
+            if op == "gt":
+                return value_num > rule_num
+            if op == "lte":
+                return value_num <= rule_num
+            return value_num < rule_num
+
         if op == "eq":
             return value == req.get("value")
         if op == "in":
             return value in req.get("values", [])
+        if op == "exists":
+            return value is not None and value != ""
+        if op == "min_count":
+            expected = _numeric_value(req.get("value"))
+            return (
+                isinstance(value, (list, tuple, set, dict))
+                and expected is not None
+                and len(value) >= expected
+            )
         return False
 
     def _check_suppression_rule(
         self, rule: dict[str, Any], evidence: dict[str, Any],
     ) -> bool:
-        """Check a suppression condition ({field, lt/eq/gt/lte/gte} shape)."""
+        """Check a suppression condition.
+
+        Accepts two shapes:
+          - shorthand: ``{field: ..., lt: 5}`` (the canonical form in
+            core's `evidence_map.yaml`)
+          - explicit:  ``{field: ..., operator: lt, value: 5}`` (the
+            form some content-pipeline rules use; carried forward in
+            PR-C1i so a single suppression-section rule shape works
+            on both pipelines without forcing a YAML rewrite)
+        """
+        # Explicit-operator form delegates to _check_requirement.
+        if "operator" in rule:
+            return self._check_requirement(rule, evidence)
+
         field = rule.get("field", "")
         value = self._resolve_field(evidence, field)
 
-        if "lt" in rule:
-            return value is not None and float(value) < float(rule["lt"])
-        if "lte" in rule:
-            return value is not None and float(value) <= float(rule["lte"])
-        if "gt" in rule:
-            return value is not None and float(value) > float(rule["gt"])
-        if "gte" in rule:
-            return value is not None and float(value) >= float(rule["gte"])
+        for op_key in ("lt", "lte", "gt", "gte"):
+            if op_key in rule:
+                value_num = _numeric_value(value)
+                rule_num = _numeric_value(rule[op_key])
+                if value_num is None or rule_num is None:
+                    return False
+                if op_key == "lt":
+                    return value_num < rule_num
+                if op_key == "lte":
+                    return value_num <= rule_num
+                if op_key == "gt":
+                    return value_num > rule_num
+                return value_num >= rule_num
         if "eq" in rule:
             return value == rule["eq"]
 
@@ -375,6 +418,34 @@ def reload_evidence_engine() -> EvidenceEngine:
     _engine = None
     _engine_path = None
     return get_evidence_engine()
+
+
+def _numeric_value(value: Any) -> float | None:
+    """Coerce common numeric-shaped values to float, returning None on bad input.
+
+    Handles ints, floats, percent-suffixed strings ("28%"), thousands
+    separators ("1,234"), and bare decimal strings ("7.2"). Booleans
+    return None to avoid `True == 1.0` collisions in numeric comparisons.
+
+    Carried forward from `extracted_content_pipeline.reasoning.evidence_engine`
+    in PR-C1i so the slim core can absorb the same defensive coercion the
+    drifted content_pipeline fork already had.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip().replace(",", "")
+        if not stripped:
+            return None
+        if stripped.endswith("%"):
+            stripped = stripped[:-1]
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
+    return None
 
 
 __all__ = [
