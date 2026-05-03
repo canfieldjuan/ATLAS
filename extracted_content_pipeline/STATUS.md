@@ -29,6 +29,9 @@
 - `campaign_postgres` provides async Postgres adapters for the intelligence,
   campaign, sequence, suppression, and audit ports against the copied campaign
   schema plus the product-owned `campaign_opportunities` source table.
+- `campaign_postgres_import` loads normalized JSON/CSV opportunity rows into
+  `campaign_opportunities`, with dry-run validation and optional
+  replace-existing semantics for repeatable customer imports.
 - `storage.migration_runner` is product-owned and applies the packaged SQL
   migrations through a host-provided async pool or connection. The
   `scripts/run_extracted_content_pipeline_migrations.py` CLI wires it to

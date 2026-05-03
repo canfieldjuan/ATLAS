@@ -190,6 +190,17 @@ The migration command reads `EXTRACTED_DATABASE_URL` first, then `DATABASE_URL`.
 Pass `--database-url` explicitly when a host app keeps product data in a
 separate database.
 
+Load customer opportunities from JSON or CSV into the product table:
+
+```bash
+python scripts/load_extracted_campaign_opportunities.py customer_opportunities.csv --dry-run
+python scripts/load_extracted_campaign_opportunities.py customer_opportunities.csv --account-id acct_123 --replace-existing
+```
+
+The loader uses the same normalization contract as the offline example. It is
+append-only by default; `--replace-existing` deletes matching target ids for
+the selected account and target mode before inserting the new rows.
+
 ```bash
 python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --limit 10
 ```
@@ -293,6 +304,8 @@ Several small utility shims provide product-owned local behavior by default so t
   `PostgresIntelligenceRepository`, `PostgresCampaignRepository`,
   `PipelineLLMClient`, and the local skill registry for DB-backed draft
   generation
+- `campaign_postgres_import.py`: JSON/CSV customer opportunity import into the
+  product `campaign_opportunities` table
 - `storage/repositories/scheduled_task.py`: local execution metadata updater
 - `skills/registry.py`: configurable markdown-backed skill registry
   implementing `.get()` and product `SkillStore.get_prompt()`, with optional

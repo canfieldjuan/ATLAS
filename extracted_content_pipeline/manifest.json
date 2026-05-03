@@ -175,6 +175,9 @@
       "target": "extracted_content_pipeline/campaign_postgres_generation.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_postgres_import.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_example.py"
     },
     {

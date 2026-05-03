@@ -19,6 +19,7 @@ pytest \
   tests/test_extracted_campaign_generation_example.py \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_postgres_generation.py \
+  tests/test_extracted_campaign_postgres_import.py \
   tests/test_extracted_content_pipeline_migration_runner.py \
   tests/test_extracted_pipeline_notify.py \
   tests/test_extracted_reasoning_archetypes.py \
