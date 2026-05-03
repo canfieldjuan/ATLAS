@@ -182,6 +182,15 @@ For database-backed runs, apply the product migrations, set
 `b2b_campaigns`:
 
 ```bash
+python scripts/run_extracted_content_pipeline_migrations.py --dry-run
+python scripts/run_extracted_content_pipeline_migrations.py
+```
+
+The migration command reads `EXTRACTED_DATABASE_URL` first, then `DATABASE_URL`.
+Pass `--database-url` explicitly when a host app keeps product data in a
+separate database.
+
+```bash
 python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --limit 10
 ```
 
