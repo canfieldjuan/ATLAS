@@ -178,6 +178,9 @@
       "target": "extracted_content_pipeline/campaign_example.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_reasoning_data.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_customer_data.py"
     },
     {

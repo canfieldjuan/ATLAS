@@ -73,6 +73,13 @@
   upstream reasoning. Hosts pass already-compressed witness/anchor/account
   context into the generator; `_b2b_pool_compression.py` stays outside the
   standalone campaign product.
+- `campaign_reasoning_data.FileCampaignReasoningContextProvider` is the
+  reference file-backed adapter for that boundary. It lets examples and hosts
+  provide precomputed reasoning JSON keyed by target id, company, email, or
+  vendor without importing a reasoning producer.
+- Both the offline and Postgres campaign generation runners can consume that
+  JSON through `--reasoning-context`, so file-backed host reasoning is available
+  on demo and DB-backed generation paths.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.
@@ -82,6 +89,11 @@
 - `reasoning.evidence_engine` is product-owned and evaluates deterministic
   conclusion gates, section suppression gates, and confidence labels from
   built-in rules or an optional host-provided evidence map.
+- Reasoning generation is explicitly host-owned. AI Content Ops consumes
+  compressed reasoning through `CampaignReasoningContextProvider` and the
+  contract documented in `docs/reasoning_handoff_contract.md`; it does not
+  import Atlas synthesis, pool compression, or extracted reasoning-core
+  internals.
 
 ## Validation gates in repo
 
@@ -105,6 +117,9 @@ extracted package, not just manifest-relative import resolution.
    manifest-synced from Atlas.
 2. Move copied task imports and package layout toward native extracted modules instead of manifest-synced mirrors.
 3. Add focused unit tests around extraction-specific contracts (manifest sync, importability, runner smoke).
+4. For each new content type, state whether reasoning is required, optional, or
+   absent; if required, consume it through a host/provider port instead of
+   copying reasoning producer internals.
 
 See `docs/remaining_productization_audit.md` for the current campaign-core
 import blockers and the recommended next PR sequence.

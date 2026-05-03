@@ -97,6 +97,12 @@ shipping in the customer product.
 
 The email/campaign generation slice is mapped in `docs/email_campaign_generation_pipeline.md`, with standalone productization requirements in `docs/standalone_productization.md`.
 
+Reasoning is a host/product boundary, not copied into AI Content Ops. The
+campaign generator consumes already-compressed reasoning through
+`CampaignReasoningContextProvider`; see
+`docs/reasoning_handoff_contract.md` for the accepted context shape and the
+no-direct-import rule.
+
 `campaign_opportunities.py` defines the customer-data contract for campaign
 generation. Hosts can pass loose opportunity rows from a CRM, warehouse, or
 vendor-intelligence feed; the product normalizes them into stable prompt and
@@ -137,6 +143,18 @@ channels:
 python scripts/run_extracted_campaign_generation_example.py --channels email_cold,email_followup
 ```
 
+Pass host-provided reasoning context without installing a reasoning engine:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py \
+  --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
+```
+
+`campaign_reasoning_data.FileCampaignReasoningContextProvider` matches context
+rows by target id, company, email, or vendor and feeds the normalized
+`CampaignReasoningContextProvider` port documented in
+`docs/reasoning_handoff_contract.md`.
+
 The example uses in-memory product ports and an offline deterministic LLM stand
 in, so it does not need Atlas, a database, or provider credentials. It proves
 the customer-data path: JSON opportunities in, normalized campaign drafts out.
@@ -161,6 +179,14 @@ The Postgres runner accepts the same channel expansion:
 
 ```bash
 python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --channels email_cold,email_followup
+```
+
+It also accepts the same host-provided reasoning JSON as the offline example:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
 ```
 
 ## Import smoke test

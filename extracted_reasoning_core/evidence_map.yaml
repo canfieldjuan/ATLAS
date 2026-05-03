@@ -1,0 +1,284 @@
+# Evidence Map v2 -- Deterministic evidence-to-conclusion rules
+# Editable without code changes. Consumed by evidence_engine.py.
+#
+# Two levels:
+#   enrichment:   per-review rules (run at enrichment time)
+#   conclusions:  per-vendor rules (run at report generation time)
+#   suppression:  per-section rules (run at report rendering time)
+
+version: 2
+
+# -- Per-Review Enrichment Rules ------------------------------------------
+
+enrichment:
+
+  urgency_scoring:
+    description: "Compute urgency_score (0-10) from boolean indicator flags"
+    weights:
+      # Tier A: Hard churn signals
+      intent_to_leave_signal: 2.0
+      migration_in_progress_signal: 2.5
+      explicit_cancel_language: 3.0
+      active_migration_language: 2.5
+      completed_switch_language: 3.0
+      # Tier B: Moderate signals
+      actively_evaluating_signal: 1.5
+      active_evaluation_language: 2.0
+      comparison_shopping_language: 2.0
+      named_alternative_with_reason: 2.0
+      price_pressure_language: 1.5
+      reconsideration_language: 1.5
+      # Tier C: Supporting signals
+      frustration_without_alternative: 1.5
+      dollar_amount_mentioned: 0.5
+      timeline_mentioned: 1.5
+      decision_maker_language: 1.5
+    rating_floors:
+      - max_normalized_rating: 0.2
+        min_score: 3.0
+      - max_normalized_rating: 0.4
+        min_score: 2.0
+    adjustments:
+      - condition: {field: content_type, eq: comment}
+        delta: -1.0
+    gates:
+      - condition: {field: source_weight, lte: 0.3}
+        force: 0.0
+    clamp: [0, 10]
+
+  pain_override:
+    description: "Override generic pain_category using keyword scan"
+    trigger: {field: pain_category, in: [other, general_dissatisfaction, overall_dissatisfaction]}
+    keyword_map:
+      pricing: [expensive, cost, price, pricing, budget, overpriced, overcharge, costly, fee, fees, subscription, invoice, invoiced, billing, billed, charged, charge, refund, cost increase, price increase, pay for every, paying for, paid for, invested, overpay, nickel and dime, hidden cost, hidden fee, sticker shock, renewal cost, renewal price, per seat, per user, add-on cost, upsell, price hike, price jump, not worth the price, too much money, waste of money, money pit, rates, rate increase, not transparent about, deceptive pricing, bait and switch]
+      support: [support, response time, ticket, customer service, helpdesk, wait time, unresponsive, no help, unhelpful, ignored, no response, ghosted, runaround, passed around, escalation, complaint, complaints team]
+      reliability: [downtime, outage, crash, bug, unstable, unreliable, broken, error]
+      ux: [clunky, unintuitive, confusing, ui, ux, user interface, learning curve, ugly, dated, clumsy]
+      performance: [slow, latency, performance, speed, loading, lag, timeout]
+      integration: [integration, connector, webhook, incompatible, sync, interop]
+      security: [security, breach, vulnerability, compliance, gdpr, soc2, encryption, audit]
+      onboarding: [onboarding, setup, implementation, getting started, documentation, tutorial]
+      features: [feature, missing, roadmap, functionality, capability, wishlist, lacking, calendar, scheduling, customization, workflow, template, automation, notification, dashboard, reporting, analytics, export]
+      technical_debt: [technical debt, legacy, outdated codebase, deprecated, spaghetti, refactor, tech debt]
+      contract_lock_in: [lock-in, locked in, exit cost, switching cost, vendor lock, contract trap, penalty, cancel, cancellation, terminate, termination, auto renew, automatic renewal, renewed without notice, notice period, contract term, billing dispute, runaround, unsubscribe, delete my account, close my account, deactivate, cannot cancel, won't let me cancel, impossible to cancel, trying to cancel]
+      data_migration: [data migration, export, portability, data export, migrate data, data transfer, import]
+      api_limitations: [api limit, rate limit, api limitation, missing endpoint, api documentation, throttle, api quota]
+      outcome_gap: [out of the box, only does, partial fit, does 60, does 70, does 80, not enough for our use case, had to work around, had to supplement, needed another tool, does not cover our process, poor fit for our workflow, missing business process support]
+      admin_burden: [dedicated admin, dedicated administrator, salesforce admin, consultant, consultants, consulting, requires consultants, apex, apex development, flow builder, workflow maintenance, maintain workflows, cumbersome setup, too much setup, too much configuration, admin overhead, maintenance overhead, hard to administer, needs constant maintenance, steep learning curve for admins, training investment]
+      ai_hallucination: [hallucination, hallucinates, made up answer, fabricated answer, wrong answer from ai, unsafe ai response, ai gave incorrect, ai summary was wrong, generated false]
+      integration_debt: [app exchange, appexchange, connector broke, integration broke, brittle integration, brittle connector, sync breaks, sync broke, integration maintenance, integration drift, middleware dependency, custom integration, patch integration after updates, update broke integration, after updates, constant maintenance, breaking after updates]
+    scan_fields: [specific_complaints, quotable_phrases, pricing_phrases, feature_gaps, recommendation_language]
+    fallback: overall_dissatisfaction
+
+  recommend_derivation:
+    description: "Derive would_recommend from extracted language + rating"
+    positive_patterns:
+      - "\\brecommend\\b"
+      - "\\bhighly recommend\\b"
+      - "\\bwould suggest\\b"
+      - "\\bgreat (tool|product|software|platform)\\b"
+    negative_patterns:
+      - "\\bwould not recommend\\b"
+      - "\\bcannot recommend\\b"
+      - "\\bdon'?t recommend\\b"
+      - "\\bdo not recommend\\b"
+      - "\\bnot recommend\\b"
+      - "\\bnever recommend\\b"
+      - "\\bstay away\\b"
+      - "\\bavoid\\b"
+      - "\\bnot worth\\b"
+      - "\\bwouldn'?t recommend\\b"
+      - "\\bwaste of\\b"
+    scan_field: recommendation_language
+    rating_fallback:
+      true_above: 0.7
+      false_below: 0.3
+    default: null
+
+  price_complaint_derivation:
+    description: "Derive price_complaint from Tier 1 flags + extracted phrases"
+    positive_patterns:
+      - "\\bpricing (?:is )?reasonable\\b"
+      - "\\bprice(?:s|d)? (?:is|are|was|were)? reasonable\\b"
+      - "\\b(?:cost|pricing) (?:is|was|were|seems)? fair\\b"
+      - "\\baffordable\\b"
+      - "\\bgood value\\b"
+      - "\\bworth (?:the|its) price\\b"
+      - "\\bpricing (?:works|worked) for us\\b"
+      - "\\bmet all (?:of )?our expectations\\b"
+    true_if_any:
+      - {field: "budget_signals.price_increase_mentioned", eq: true}
+      - {field: "pricing_phrases", min_count: 1}
+      - field: specific_complaints
+        contains_any: [expensive, cost, price, pricing, overpriced, overcharge, costly]
+
+  budget_authority_derivation:
+    description: "Derive has_budget_authority from role + language"
+    true_if_any:
+      - {field: "reviewer_context.role_level", in: [executive, director]}
+      - {field: "reviewer_context.decision_maker", eq: true}
+      - {field: "urgency_indicators.decision_maker_language", eq: true}
+      - {field: "budget_signals.annual_spend_estimate", not_null: true}
+      - {field: "budget_signals.price_per_seat", not_null: true}
+
+# -- Per-Vendor Conclusion Gates -------------------------------------------
+
+conclusions:
+
+  pricing_crisis:
+    description: "Vendor has a systemic pricing problem"
+    requires:
+      - field: pain_distribution.pricing.count
+        operator: gte
+        value: 15
+      - field: pain_distribution.pricing.source_count
+        operator: gte
+        value: 3
+      - field: pricing_phrases_total
+        operator: gte
+        value: 2
+    amplifiers:
+      - field: pain_distribution.pricing.rank
+        operator: lte
+        value: 2
+        boost_confidence: true
+    confidence_when_met: high
+    fallback:
+      action: show_raw
+      label: "Pricing complaints detected but below threshold for crisis classification"
+      show: pain_distribution
+
+  losing_market_share:
+    description: "Vendor is losing to a specific competitor"
+    requires:
+      - field: displacement_edge.mention_count
+        operator: gte
+        value: 5
+      - field: displacement_edge.signal_strength
+        operator: in
+        values: [strong, moderate]
+      - field: displacement_edge.explicit_switch_count
+        operator: gte
+        value: 1
+      - field: displacement_edge.net_flow
+        operator: lt
+        value: 0
+    confidence_when_met: high
+    fallback:
+      action: label
+      label: "Emerging displacement signal"
+      confidence: low
+
+  support_collapse:
+    description: "Support quality is driving churn"
+    requires:
+      - field: pain_distribution.support.count
+        operator: gte
+        value: 10
+      - field: support_escalation_rate
+        operator: gte
+        value: 0.05
+    confidence_when_met: medium
+    fallback:
+      action: suppress
+      reason: "Insufficient support-related evidence"
+
+  active_churn_wave:
+    description: "Multiple accounts actively leaving right now"
+    requires:
+      - field: indicator_counts.active_evaluation_language
+        operator: gte
+        value: 5
+      - field: indicator_counts.explicit_cancel_language
+        operator: gte
+        value: 2
+      - field: total_reviews
+        operator: gte
+        value: 50
+    confidence_when_met: high
+    fallback:
+      action: label
+      label: "Elevated churn signals but below active-wave threshold"
+      confidence: low
+
+  category_disruption:
+    description: "Vendor from outside the expected category is encroaching"
+    requires:
+      - field: cross_category_displacement.mention_count
+        operator: gte
+        value: 3
+      - field: cross_category_displacement.signal_strength
+        operator: in
+        values: [strong, moderate]
+    confidence_when_met: medium
+    fallback:
+      action: suppress
+
+  insufficient_data:
+    description: "Not enough evidence to draw any conclusion"
+    trigger:
+      - field: total_reviews
+        operator: lt
+        value: 20
+    action: suppress_all_conclusions
+    label: "Insufficient review volume for reliable analysis"
+    exceptions: [raw_pain_distribution, displacement_edges]
+
+# -- Report Section Suppression Rules --------------------------------------
+
+suppression:
+
+  executive_summary:
+    suppress_when:
+      - {field: total_reviews, lt: 20}
+    degrade_when:
+      - {field: total_reviews, lt: 50}
+      - {field: confidence, eq: low}
+    degrade_action: prepend_disclaimer
+    disclaimer: "Based on limited review volume. Interpret with caution."
+
+  target_accounts:
+    suppress_when:
+      - {field: named_company_count, eq: 0}
+    fallback_label: "No named accounts resolved. Review volume suggests anonymous churn activity."
+
+  displacement_rankings:
+    suppress_when:
+      - {field: displacement_edge_count, lt: 3}
+    degrade_when:
+      - {field: displacement_edge_count, lt: 10}
+    degrade_action: prepend_disclaimer
+    disclaimer: "Displacement data is preliminary."
+
+  recommend_ratio:
+    suppress_when:
+      - {field: recommend_denominator, lt: 10}
+    fallback_label: "Insufficient recommendation data"
+
+  timing_intelligence:
+    degrade_when:
+      - {field: quote_count, lt: 3}
+    degrade_action: prepend_disclaimer
+    disclaimer: "Timing guidance is based on limited direct evidence."
+
+  migration_proof:
+    degrade_when:
+      - {field: displacement_mention_count, lt: 3}
+    degrade_action: prepend_disclaimer
+    disclaimer: "Migration evidence is preliminary."
+
+# -- Confidence Tiers -------------------------------------------------------
+
+confidence_tiers:
+  high:
+    min_reviews: 50
+    label: "High confidence"
+  medium:
+    min_reviews: 20
+    label: "Moderate confidence"
+  low:
+    min_reviews: 1
+    label: "Low confidence -- interpret with caution"
+  insufficient:
+    max_reviews: 0
+    label: "No data"
