@@ -14,7 +14,7 @@ The team is one human (`@canfieldjuan`) plus AI sessions. Owner column uses GitH
 
 | Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
 |---|---|---|---|---|---|
-| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | PR-A1 (in flight) | Cost-closure additions (PR-A1 -> A4); A1 adds `llm_exact_cache.py` + migration 251 | `extracted_llm_infrastructure/services/b2b/llm_exact_cache.py`, `extracted_llm_infrastructure/storage/migrations/251_b2b_llm_exact_cache.sql`, manifest, README, STATUS |
+| `extracted_llm_infrastructure` | 2 (standalone toggle landed; Phase 3 decoupling pending) | #49 | #87 | Cost-closure additions (PR-A1 -> A4); A1 adds `llm_exact_cache.py` + migration 251 | `extracted_llm_infrastructure/services/b2b/llm_exact_cache.py`, `extracted_llm_infrastructure/storage/migrations/251_b2b_llm_exact_cache.sql`, manifest, README, STATUS |
 | `extracted_competitive_intelligence` | 1 (scaffold) | #80 | — | Phase 2 standalone toggle | none |
 | `extracted_content_pipeline` | 1 -> 2 (productization seams) | #78 | — | Standalone runner without `atlas_brain` on path | none |
 | `extracted_reasoning_core` | 1 (scaffold + wedge consolidated) | #82 | — | Evidence/temporal/archetypes consolidation per merged #82 audit (PR-C1 queued) | none |
@@ -28,7 +28,7 @@ Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, s
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| (PR-A1, opening) | Add `llm_exact_cache` to LLM-infrastructure manifest | `extracted_llm_infrastructure/{manifest.json, services/b2b/llm_exact_cache.py, storage/migrations/251_b2b_llm_exact_cache.sql, README.md, STATUS.md}`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | manifest edits or files synced into `extracted_llm_infrastructure/services/b2b/` and `storage/migrations/` |
+| #87 | Add `llm_exact_cache` to LLM-infrastructure manifest | `extracted_llm_infrastructure/{manifest.json, services/b2b/llm_exact_cache.py, storage/migrations/251_b2b_llm_exact_cache.sql, README.md, STATUS.md}`; `docs/extraction/COORDINATION.md` | claude-2026-05-03-b | manifest edits or files synced into `extracted_llm_infrastructure/services/b2b/` and `storage/migrations/` |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
 
