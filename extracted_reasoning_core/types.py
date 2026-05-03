@@ -36,7 +36,7 @@ class ReasoningResult:
     summary: str
     claims: Sequence[Mapping[str, Any]]
     confidence: float
-    tier: str
+    tier: ReasoningDepth
     state: Mapping[str, Any]
     trace: Mapping[str, Any] = field(default_factory=dict)
 

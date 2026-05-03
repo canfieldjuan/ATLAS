@@ -95,14 +95,14 @@ def build_narrative_plan(
 
 
 async def run_reasoning(
-    input: ReasoningInput,
+    reasoning_input: ReasoningInput,
     *,
     depth: ReasoningDepth = "L2",
     pack: ReasoningPack | None = None,
     ports: ReasoningPorts | None = None,
 ) -> ReasoningResult:
     """Run the shared reasoning engine."""
-    del input
+    del reasoning_input
     del depth
     del pack
     del ports
@@ -144,13 +144,13 @@ def compute_evidence_hash(evidence: Mapping[str, Any]) -> str:
 
 
 def build_semantic_cache_key(
-    input: ReasoningInput,
+    reasoning_input: ReasoningInput,
     *,
     tier: str,
     pack_name: str | None = None,
 ) -> str:
     """Build a stable semantic-cache key for a reasoning input."""
-    del input
+    del reasoning_input
     del tier
     del pack_name
     raise NotImplementedError("build_semantic_cache_key lands with semantic-cache split")
