@@ -114,6 +114,99 @@ caching, and model routing all reuse without modification.
   reusable; email shape itself is not)
 - Churn-signal-gated generation: `services/campaign_reasoning_context.py`
 
+## Reasoning depth gap — scope correction
+
+The "Punch list" below originally sized a novel pipeline at 6 new files /
+~1,200 LOC. That estimate assumed the package already had multi-step LLM
+orchestration. It does not. Audit findings:
+
+### What reasoning the package actually has today
+
+- **Deterministic rule engines + numeric scoring** — `reasoning/archetypes.py`
+  (signal-rule matching, thresholds, falsification templates),
+  `reasoning/evidence_engine.py` (conclusion / suppression evaluation),
+  `reasoning/temporal.py` (velocity, acceleration, recency decay).
+  Pattern matchers and threshold checks, not LLM inference.
+- **Reasoning context normalisation** — `services/campaign_reasoning_context.py`
+  takes pre-compressed reasoning input (anchor examples, witness highlights,
+  account signals, timing windows, proof points) and shapes it for prompt
+  assembly. The product accepts reasoning *as input*; it does not compute it.
+- **One-shot prompt-completion** — assemble a very rich prompt (rules +
+  context + structural constraints) and run a single LLM pass. No iterative
+  refinement, no critique-and-revise, no chain-of-thought decomposition.
+
+The heavy LLM-driven reasoning (pool compression, cross-vendor synthesis,
+witness selection) is upstream in `atlas_brain` and is deliberately kept
+**out** of the sellable spine per `remaining_productization_audit.md`.
+
+### What's missing for novel-length generation
+
+A 50k-word novel cannot be produced by a one-shot prompt. It requires an
+orchestration loop the package does not have:
+
+- Outline planner (theme + structure → chapter list with arcs)
+- Chapter planner (chapter outline → scene beats)
+- Drafter (scene beats → prose, per-chapter)
+- Continuity checker (cross-chapter character / timeline / setting state)
+- Revision pass (drafter critiques and rewrites against continuity findings)
+- Long-context memory (compressed prior chapters surfaced into the next
+  chapter's prompt without exceeding context limits)
+
+None of these exist as primitives in the package today. The closest
+analogue, `campaign_sequence_progression.py`, sequences emails over time
+based on engagement signals — different shape and cannot be reused
+directly for chapter-by-chapter narrative generation.
+
+### Revised scope for novel generation
+
+The original 6-file / ~1,200 LOC punch list covered: skill prompt,
+story models, sequence progression, story evidence engine, story
+reasoning context, chapter renderer, plus a `story_generation.py`
+orchestrator. That is the *generation surface*, not the orchestration
+loop underneath it.
+
+**Honest revised scope: 2-4x the original estimate** once the
+multi-pass orchestration is included. Roughly:
+
+| Component | New work |
+| --- | --- |
+| Outline + chapter planner agents | new — multi-step LLM with structured output |
+| Continuity state ledger | new — character / timeline / setting tracker, persisted across chapters |
+| Critique / revision loop | new — second-pass LLM that reads draft against continuity findings |
+| Long-context memory compression | partial reuse of `campaign_sequence_context.py` token-aware compression, but the eviction policy for long-form is different (preserve plot-critical state, drop scene-level detail) |
+| Existing punch list (6 files) | as scoped, but bolted onto the orchestration loop above |
+
+Realistic estimate: **12-15 new files / ~3,000-4,500 LOC**, plus
+prompt-engineering effort that scales with the number of agents in
+the loop.
+
+### Cost implication
+
+Multi-pass generation = roughly 3-6x the token cost per finished chapter
+versus a one-shot pipeline (one outline pass + one draft pass + one
+critique pass + one revision pass + per-chapter context-compression
+calls). At Claude Opus pricing this is non-trivial. The unit economics
+need a model-mix decision (smaller models for planning / continuity
+checks, larger model only for drafting and revision) before this is
+viable as a paid product.
+
+### Where this leaves the two parked products
+
+- **Podcast repurposing** — unaffected. Single-pass works for
+  newsletters / threads / show notes / blog posts. The existing
+  prompt-assembly + structural-validation infrastructure carries it
+  directly. The unit economics are clean.
+- **Long-form creative stories** — bigger lift than originally captured.
+  Either accept the larger scope, or narrow the v0 product to short
+  fiction (3-5k words / single-pass) before attempting novel-length
+  generation.
+
+A pragmatic v0 path for the creative side: ship "10-minute YouTube
+mystery scripts" first (2-3k word, single-pass, fits the existing
+infrastructure) — that validates the writing-quality moat without
+building the orchestration loop. Novel-length generation becomes a
+v2 only after the v0 retention numbers prove the moat exists.
+
 ## Punch list for a 50k-word novel pipeline (parked)
 
 When this work eventually starts, six new files / ~1200 LOC:
