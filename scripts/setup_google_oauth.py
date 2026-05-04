@@ -32,11 +32,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-# Calendar (full read/write) and Gmail (read + send) in one consent
+# Calendar (full read/write) and Gmail (read + compose) in one consent.
+# gmail.compose is a superset of gmail.send (allows draft creation AND
+# sending), so we don't list gmail.send separately.
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.compose",
 ]
 
 REDIRECT_URI = "http://localhost:8085"
