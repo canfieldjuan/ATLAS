@@ -288,13 +288,23 @@ from extracted_content_pipeline.api.campaign_webhooks import (
     create_campaign_webhook_router,
 )
 
+
+async def verify_unsubscribe_token(email: str, token: str) -> bool:
+    return await customer_unsubscribe_tokens.verify(email=email, token=token)
+
+
 app.include_router(
     create_campaign_webhook_router(
         pool_provider=get_pool,
         signing_secret_provider=get_resend_webhook_secret,
+        unsubscribe_token_verifier=verify_unsubscribe_token,
     )
 )
 ```
+
+The unsubscribe route accepts both browser `GET` links and RFC 8058 one-click
+`POST` requests. Keep the default token requirement enabled and issue tokens in
+the host send path so public URLs cannot unsubscribe arbitrary recipients.
 
 Refresh analytics after sends or webhook ingestion:
 

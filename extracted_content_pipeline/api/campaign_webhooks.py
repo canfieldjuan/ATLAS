@@ -31,6 +31,7 @@ from ..campaign_webhooks import (
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 SigningSecretProvider = Callable[[], str | Awaitable[str]]
+UnsubscribeTokenVerifier = Callable[[str, str], bool | Awaitable[bool]]
 
 
 def _require_fastapi() -> None:
@@ -51,6 +52,11 @@ class CampaignWebhookApiConfig:
     verify_signatures: bool = True
     record_unknown_events: bool = False
     soft_bounce_suppression_days: int = 30
+    require_unsubscribe_token: bool = True
+
+    def __post_init__(self) -> None:
+        if self.soft_bounce_suppression_days <= 0:
+            raise ValueError("soft_bounce_suppression_days must be positive")
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -83,10 +89,32 @@ async def _resolve_signing_secret(
     return str(await _maybe_await(signing_secret_provider()) or "")
 
 
+async def _verify_unsubscribe_token(
+    *,
+    email: str,
+    token: str,
+    verifier: UnsubscribeTokenVerifier | None,
+    config: CampaignWebhookApiConfig,
+) -> None:
+    if not config.require_unsubscribe_token:
+        return
+    token_text = str(token or "").strip()
+    if not token_text:
+        raise HTTPException(status_code=401, detail="Unsubscribe token is required")
+    if verifier is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unsubscribe token verifier is not configured",
+        )
+    if not await _maybe_await(verifier(email, token_text)):
+        raise HTTPException(status_code=401, detail="Invalid unsubscribe token")
+
+
 def create_campaign_webhook_router(
     *,
     pool_provider: PoolProvider,
     signing_secret_provider: SigningSecretProvider | None = None,
+    unsubscribe_token_verifier: UnsubscribeTokenVerifier | None = None,
     config: CampaignWebhookApiConfig | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
@@ -100,10 +128,18 @@ def create_campaign_webhook_router(
     )
 
     @router.get("/unsubscribe", response_class=HTMLResponse)
+    @router.post("/unsubscribe", response_class=HTMLResponse)
     async def unsubscribe(
         email: str = Query(..., description="Email to unsubscribe"),
+        token: str = Query("", description="Host-issued unsubscribe token."),
     ) -> HTMLResponse:
         cleaned_email = _clean_required_text(email, "email")
+        await _verify_unsubscribe_token(
+            email=cleaned_email.lower(),
+            token=token,
+            verifier=unsubscribe_token_verifier,
+            config=resolved_config,
+        )
         pool = await _resolve_pool(pool_provider)
         suppression = CampaignSuppressionService(PostgresSuppressionRepository(pool))
         await suppression.add_suppression(

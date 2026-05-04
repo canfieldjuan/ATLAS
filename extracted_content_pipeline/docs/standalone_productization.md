@@ -194,9 +194,11 @@ unsubscribe events without importing Atlas API code.
 
 `extracted_content_pipeline/api/campaign_webhooks.py` owns the host-mounted
 FastAPI surface for that webhook seam. It exposes a router factory that accepts
-host pool/signing-secret providers plus optional FastAPI dependencies, so
-customer apps can mount webhook and unsubscribe routes without Atlas API
-globals.
+host pool/signing-secret providers, an unsubscribe-token verifier, and optional
+FastAPI dependencies, so customer apps can mount webhook and unsubscribe routes
+without Atlas API globals. The unsubscribe route supports browser `GET` links
+and RFC 8058 one-click `POST` requests while requiring host-issued tokens by
+default.
 
 `extracted_content_pipeline/campaign_postgres_sequence_progression.py` owns the
 DB-backed sequence progression worker seam. It composes

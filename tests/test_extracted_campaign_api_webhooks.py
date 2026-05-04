@@ -48,6 +48,10 @@ def _headers(body: bytes, *, secret: str | None = None, msg_id: str = "msg_1"):
     }
 
 
+def _token_verifier(email: str, token: str) -> bool:
+    return email == "buyer@example.com" and token == "token_1"
+
+
 class _Pool:
     def __init__(self, *, initialized: bool = True) -> None:
         self.is_initialized = initialized
@@ -64,6 +68,7 @@ def _client(
     secret: str | None = None,
     config: CampaignWebhookApiConfig | None = None,
     dependencies=None,
+    unsubscribe_token_verifier=None,
 ) -> TestClient:
     app = FastAPI()
 
@@ -77,6 +82,7 @@ def _client(
         create_campaign_webhook_router(
             pool_provider=pool_provider,
             signing_secret_provider=signing_secret_provider,
+            unsubscribe_token_verifier=unsubscribe_token_verifier,
             config=config,
             dependencies=dependencies,
         )
@@ -115,7 +121,10 @@ def test_campaign_webhook_router_ingests_signed_resend_event() -> None:
 def test_campaign_webhook_router_unsubscribe_records_suppression() -> None:
     pool = _Pool()
 
-    response = _client(pool).get("/webhooks/unsubscribe?email=Buyer@Example.com")
+    response = _client(
+        pool,
+        unsubscribe_token_verifier=_token_verifier,
+    ).get("/webhooks/unsubscribe?email=Buyer@Example.com&token=token_1")
 
     assert response.status_code == 200
     assert "You have been unsubscribed" in response.text
@@ -126,6 +135,69 @@ def test_campaign_webhook_router_unsubscribe_records_suppression() -> None:
         "unsubscribe",
         "recipient",
     )
+
+
+def test_campaign_webhook_router_one_click_post_records_suppression() -> None:
+    pool = _Pool()
+
+    response = _client(
+        pool,
+        unsubscribe_token_verifier=_token_verifier,
+    ).post("/webhooks/unsubscribe?email=buyer@example.com&token=token_1")
+
+    assert response.status_code == 200
+    assert len(pool.execute_calls) == 1
+    assert "INSERT INTO campaign_suppressions" in pool.execute_calls[0]["query"]
+
+
+def test_campaign_webhook_router_rejects_unsubscribe_without_token() -> None:
+    pool = _Pool()
+
+    response = _client(
+        pool,
+        unsubscribe_token_verifier=_token_verifier,
+    ).get("/webhooks/unsubscribe?email=buyer@example.com")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Unsubscribe token is required"
+    assert pool.execute_calls == []
+
+
+def test_campaign_webhook_router_rejects_invalid_unsubscribe_token() -> None:
+    pool = _Pool()
+
+    response = _client(
+        pool,
+        unsubscribe_token_verifier=_token_verifier,
+    ).get("/webhooks/unsubscribe?email=buyer@example.com&token=wrong")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid unsubscribe token"
+    assert pool.execute_calls == []
+
+
+def test_campaign_webhook_router_requires_unsubscribe_token_verifier() -> None:
+    pool = _Pool()
+
+    response = _client(pool).get(
+        "/webhooks/unsubscribe?email=buyer@example.com&token=token_1"
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Unsubscribe token verifier is not configured"
+    assert pool.execute_calls == []
+
+
+def test_campaign_webhook_router_can_disable_unsubscribe_token_requirement() -> None:
+    pool = _Pool()
+
+    response = _client(
+        pool,
+        config=CampaignWebhookApiConfig(require_unsubscribe_token=False),
+    ).get("/webhooks/unsubscribe?email=buyer@example.com")
+
+    assert response.status_code == 200
+    assert len(pool.execute_calls) == 1
 
 
 def test_campaign_webhook_router_rejects_invalid_signature() -> None:
@@ -194,6 +266,11 @@ def test_campaign_webhook_router_requires_secret_when_verifying() -> None:
     assert response.status_code == 500
     assert response.json()["detail"] == "Webhook signing secret is not configured"
     assert pool.execute_calls == []
+
+
+def test_campaign_webhook_api_config_requires_positive_soft_bounce_days() -> None:
+    with pytest.raises(ValueError, match="soft_bounce_suppression_days"):
+        CampaignWebhookApiConfig(soft_bounce_suppression_days=0)
 
 
 def test_campaign_webhook_router_accepts_host_dependencies() -> None:
