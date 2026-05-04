@@ -178,6 +178,9 @@
       "target": "extracted_content_pipeline/campaign_postgres_export.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_postgres_review.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_postgres_import.py"
     },
     {
