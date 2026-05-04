@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..config import settings
-from ..storage.models import CompetitiveSet
+from .b2b.competitive_set_ports import get_competitive_set_reasoning_port
+
+if TYPE_CHECKING:
+    from ..storage.models import CompetitiveSet
 
 
 def _norm_vendor(name: str) -> str:
@@ -155,13 +158,11 @@ async def _estimate_vendor_reuse_for_plan(
             "likely_reuse_vendors": [],
         }
 
-    from ..autonomous.tasks import b2b_reasoning_synthesis as synthesis_mod
-    from ..autonomous.tasks._b2b_shared import fetch_all_pool_layers
-
+    reasoning_port = get_competitive_set_reasoning_port()
     today = date.today()
     window_days = int(settings.b2b_churn.intelligence_window_days)
     requested_by_norm = {_norm_vendor(name): name for name in plan.vendor_names}
-    vendor_pools_all = await fetch_all_pool_layers(
+    vendor_pools_all = await reasoning_port.fetch_all_pool_layers(
         pool,
         as_of=today,
         analysis_window_days=window_days,
@@ -195,7 +196,7 @@ async def _estimate_vendor_reuse_for_plan(
         FROM latest
         """,
         window_days,
-        synthesis_mod._SCHEMA_VERSION,
+        reasoning_port.schema_version,
         plan.vendor_names,
     )
     latest_rows: dict[str, dict[str, Any]] = {
@@ -225,8 +226,8 @@ async def _estimate_vendor_reuse_for_plan(
     legacy_current_hashes: dict[str, str] = {}
     transition_candidates_by_date: dict[date, list[str]] = {}
     for vendor_name, layers in vendor_pools.items():
-        ev_hash = synthesis_mod._compute_pool_hash(layers)
-        legacy_ev_hash = synthesis_mod._compute_pool_hash_legacy(layers)
+        ev_hash = reasoning_port.compute_pool_hash(layers)
+        legacy_ev_hash = reasoning_port.compute_pool_hash_legacy(layers)
         normalized_hashes[vendor_name] = ev_hash
         legacy_current_hashes[vendor_name] = legacy_ev_hash
         latest_row = latest_rows.get(vendor_name)
@@ -235,14 +236,16 @@ async def _estimate_vendor_reuse_for_plan(
         prior_hash = str(latest_row.get("evidence_hash") or "")
         if prior_hash in {ev_hash, legacy_ev_hash}:
             continue
-        prior_as_of_date = synthesis_mod._coerce_as_of_date(latest_row.get("as_of_date"))
+        prior_as_of_date = reasoning_port.coerce_as_of_date(
+            latest_row.get("as_of_date")
+        )
         if prior_as_of_date is None or prior_as_of_date == today:
             continue
         transition_candidates_by_date.setdefault(prior_as_of_date, []).append(vendor_name)
 
     legacy_hash_compatible_vendors: set[str] = set()
     for prior_as_of_date, candidate_vendors in transition_candidates_by_date.items():
-        prior_vendor_pools = await fetch_all_pool_layers(
+        prior_vendor_pools = await reasoning_port.fetch_all_pool_layers(
             pool,
             as_of=prior_as_of_date,
             analysis_window_days=window_days,
@@ -254,8 +257,8 @@ async def _estimate_vendor_reuse_for_plan(
             if prior_layers is None or latest_row is None:
                 continue
             prior_hash = str(latest_row.get("evidence_hash") or "")
-            prior_normalized_hash = synthesis_mod._compute_pool_hash(prior_layers)
-            prior_legacy_hash = synthesis_mod._compute_pool_hash_legacy(prior_layers)
+            prior_normalized_hash = reasoning_port.compute_pool_hash(prior_layers)
+            prior_legacy_hash = reasoning_port.compute_pool_hash_legacy(prior_layers)
             if prior_hash not in {prior_normalized_hash, prior_legacy_hash}:
                 continue
             if prior_normalized_hash == normalized_hashes.get(vendor_name):
@@ -274,7 +277,7 @@ async def _estimate_vendor_reuse_for_plan(
             prior_hash in {ev_hash, legacy_current_hashes[vendor_name]}
             or vendor_name in legacy_hash_compatible_vendors
         )
-        decision = synthesis_mod._classify_vendor_reasoning_decision(
+        decision = reasoning_port.classify_vendor_reasoning_decision(
             vendor_name=vendor_name,
             today=today,
             evidence_hash=ev_hash,
@@ -538,9 +541,8 @@ async def load_vendor_category_map(pool, vendor_names: list[str]) -> dict[str, s
         """,
         vendor_names,
     )
-    from ..autonomous.tasks._b2b_shared import read_vendor_scorecard_details
-
-    scorecard_rows = await read_vendor_scorecard_details(
+    reasoning_port = get_competitive_set_reasoning_port()
+    scorecard_rows = await reasoning_port.read_vendor_scorecard_details(
         pool,
         vendor_names=vendor_names,
     )

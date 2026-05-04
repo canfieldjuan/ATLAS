@@ -107,6 +107,12 @@ direct-displacement ProductClaim aggregation. The mapped battle-card task keeps
 its relative import: Atlas resolves the native aggregator, while standalone
 competitive hosts register explicit claim readers.
 
+`services/b2b_competitive_sets.py` is product-owned competitive-set planning
+logic. Runtime preview helpers that need reasoning hashes, pool layers, or
+scorecard fallback rows go through `services/b2b/competitive_set_ports.py`, so
+standalone hosts can register explicit adapters instead of importing task
+internals.
+
 `templates/email/vendor_briefing.py` is a product-owned customer-facing
 renderer. It no longer imports runtime settings; hosts configure the fallback
 witness highlight limit through an explicit renderer function.
