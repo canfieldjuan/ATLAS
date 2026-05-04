@@ -180,6 +180,12 @@ worker seam. It composes `PostgresCampaignRepository`,
 `CampaignSendService` so hosts can send queued drafts through an injected
 `CampaignSender` without importing Atlas task code.
 
+`extracted_content_pipeline/campaign_postgres_sequence_progression.py` owns the
+DB-backed sequence progression worker seam. It composes
+`PostgresCampaignSequenceRepository`, `PostgresCampaignAuditSink`, the product
+LLM port, and the local skill registry so hosts can queue due follow-up drafts
+without importing Atlas scheduled-task code.
+
 `extracted_content_pipeline/storage/migration_runner.py` owns the standalone
 schema installation path. It lists packaged SQL migrations, tracks applied
 versions in a product metadata table, supports dry runs, and accepts either a
@@ -259,8 +265,10 @@ The command must pass before this package is considered customer-usable.
   and B2B intelligence readers.
 - `campaign_send.py` imports Atlas config, DB, visibility, campaign quality,
   sender, and suppression helpers.
-- `campaign_sequence_progression.py` imports Atlas config, DB, scheduled-task
-  model, skills, LLM routing, tracing, and protocol classes.
+- The copied Atlas `autonomous/tasks/campaign_sequence_progression.py` imports
+  Atlas config, DB, scheduled-task model, skills, LLM routing, tracing, and
+  protocol classes. The product-owned Postgres worker above is the standalone
+  path.
 - `api/b2b_campaigns.py`, `api/seller_campaigns.py`, and
   `api/campaign_webhooks.py` need an app-factory boundary and host-provided
   auth/tenant dependencies.

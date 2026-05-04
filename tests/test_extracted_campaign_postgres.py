@@ -339,6 +339,25 @@ async def test_sequence_repository_queues_followup_step():
 
 
 @pytest.mark.asyncio
+async def test_sequence_repository_lists_only_due_sequences_without_queued_followups():
+    pool = _Pool()
+    pool.fetch_rows = [{"id": "sequence-1"}]
+    repo = PostgresCampaignSequenceRepository(pool)
+    now = datetime(2026, 5, 1, 15, tzinfo=timezone.utc)
+
+    rows = await repo.list_due_sequences(limit=5, now=now)
+
+    assert rows == ({"id": "sequence-1"},)
+    call = pool.fetch_calls[0]
+    assert "FROM campaign_sequences cs" in call["query"]
+    assert "COALESCE(cs.current_step, 0) < COALESCE(cs.max_steps, 0)" in call["query"]
+    assert "NOT EXISTS" in call["query"]
+    assert "bc.sequence_id = cs.id" in call["query"]
+    assert "bc.status = 'queued'" in call["query"]
+    assert call["args"] == (now, 5)
+
+
+@pytest.mark.asyncio
 async def test_suppression_repository_checks_and_upserts_email_suppression():
     pool = _Pool()
     pool.fetchrow_result = {"id": "sup-1"}
