@@ -7,10 +7,62 @@ and interval between reminders. Returns results for LLM synthesis.
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
 from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.invoice_payment_reminders")
+
+
+def _should_send_reminder(
+    reminder_count: int,
+    due_date: date,
+    last_reminder_at: Optional[datetime],
+    today: date,
+    now: datetime,
+    intervals: list[int],
+    legacy_max_count: int,
+    legacy_interval_days: int,
+) -> tuple[bool, Optional[str]]:
+    """Decide whether a reminder is due now.
+
+    Returns (should_send, skip_reason). When intervals is non-empty, uses an
+    escalating cadence: intervals[0] days from due_date -> reminder #1, then
+    intervals[i] days from last_reminder_at -> reminder #(i+1). Total reminders
+    capped at len(intervals).
+
+    Empty intervals falls back to the legacy flat cadence (same gap between
+    every reminder, capped at legacy_max_count).
+    """
+    if not intervals:
+        if reminder_count >= legacy_max_count:
+            return False, f"Max reminders ({legacy_max_count}) reached"
+        if last_reminder_at:
+            gap = now - last_reminder_at
+            if gap < timedelta(days=legacy_interval_days):
+                return False, f"Too soon (last: {last_reminder_at.strftime('%Y-%m-%d')})"
+        return True, None
+
+    if reminder_count >= len(intervals):
+        return False, f"Max reminders ({len(intervals)}) reached"
+
+    required_gap_days = intervals[reminder_count]
+
+    if reminder_count == 0:
+        days_since_due = (today - due_date).days
+        if days_since_due < required_gap_days:
+            wait = required_gap_days - days_since_due
+            return False, f"Wait {wait} more day(s); first reminder due {required_gap_days}d after due_date"
+        return True, None
+
+    if not last_reminder_at:
+        # reminder_count > 0 with no last_reminder_at is anomalous; allow send.
+        return True, None
+    gap = now - last_reminder_at
+    if gap < timedelta(days=required_gap_days):
+        wait = required_gap_days - gap.days
+        return False, f"Wait {wait} more day(s) since last reminder"
+    return True, None
 
 
 async def run(task: ScheduledTask) -> dict:
@@ -25,6 +77,10 @@ async def run(task: ScheduledTask) -> dict:
         return {"_skip_synthesis": "Invoicing disabled"}
 
     cfg = settings.invoicing
+
+    if not cfg.reminders_enabled:
+        return {"_skip_synthesis": "Payment reminders disabled (reminders_enabled=False)"}
+
     from ...storage.repositories.invoice import get_invoice_repo
 
     repo = get_invoice_repo()
@@ -38,26 +94,27 @@ async def run(task: ScheduledTask) -> dict:
     if not overdue:
         return {"_skip_synthesis": "No overdue invoices to remind"}
 
+    today = date.today()
     now = datetime.now(timezone.utc)
-    min_interval = timedelta(days=cfg.reminder_interval_days)
+    intervals = list(cfg.reminder_intervals or [])
     reminders_sent = []
     reminders_skipped = []
 
     for inv in overdue:
-        # Check reminder limits
-        if inv["reminder_count"] >= cfg.reminder_max_count:
+        should_send, skip_reason = _should_send_reminder(
+            reminder_count=inv["reminder_count"],
+            due_date=inv["due_date"],
+            last_reminder_at=inv.get("last_reminder_at"),
+            today=today,
+            now=now,
+            intervals=intervals,
+            legacy_max_count=cfg.reminder_max_count,
+            legacy_interval_days=cfg.reminder_interval_days,
+        )
+        if not should_send:
             reminders_skipped.append({
                 "invoice_number": inv["invoice_number"],
-                "reason": f"Max reminders ({cfg.reminder_max_count}) reached",
-            })
-            continue
-
-        # Check interval since last reminder
-        last_reminder = inv.get("last_reminder_at")
-        if last_reminder and (now - last_reminder) < min_interval:
-            reminders_skipped.append({
-                "invoice_number": inv["invoice_number"],
-                "reason": f"Too soon (last: {last_reminder.strftime('%Y-%m-%d')})",
+                "reason": skip_reason or "skipped",
             })
             continue
 

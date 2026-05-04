@@ -888,6 +888,154 @@ async def test_list_pending_drafts_summary_and_filter(monkeypatch):
     assert blocked_only["summary"]["send_safe"] == 0
 
 
+def test_should_send_reminder_first_blocked_before_intervals0():
+    """First reminder waits intervals[0] days after due_date."""
+    from atlas_brain.autonomous.tasks.invoice_payment_reminders import _should_send_reminder
+
+    ok, reason = _should_send_reminder(
+        reminder_count=0,
+        due_date=date(2026, 1, 1),
+        last_reminder_at=None,
+        today=date(2026, 1, 5),
+        now=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        intervals=[7, 14, 30],
+        legacy_max_count=3,
+        legacy_interval_days=7,
+    )
+    assert ok is False
+    assert "more day" in reason
+
+
+def test_should_send_reminder_first_fires_on_intervals0():
+    """First reminder fires when days_since_due >= intervals[0]."""
+    from atlas_brain.autonomous.tasks.invoice_payment_reminders import _should_send_reminder
+
+    ok, reason = _should_send_reminder(
+        reminder_count=0,
+        due_date=date(2026, 1, 1),
+        last_reminder_at=None,
+        today=date(2026, 1, 8),
+        now=datetime(2026, 1, 8, tzinfo=timezone.utc),
+        intervals=[7, 14, 30],
+        legacy_max_count=3,
+        legacy_interval_days=7,
+    )
+    assert ok is True
+    assert reason is None
+
+
+def test_should_send_reminder_second_uses_last_reminder_gap():
+    """Second reminder uses gap from last_reminder_at, not due_date."""
+    from atlas_brain.autonomous.tasks.invoice_payment_reminders import _should_send_reminder
+
+    last_reminder = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    # 13 days after first reminder; intervals[1]=14 -> too soon
+    ok, _ = _should_send_reminder(
+        reminder_count=1,
+        due_date=date(2026, 1, 1),
+        last_reminder_at=last_reminder,
+        today=date(2026, 1, 23),
+        now=datetime(2026, 1, 23, tzinfo=timezone.utc),
+        intervals=[7, 14, 30],
+        legacy_max_count=3,
+        legacy_interval_days=7,
+    )
+    assert ok is False
+
+    # 14 days after first reminder -> fires
+    ok2, _ = _should_send_reminder(
+        reminder_count=1,
+        due_date=date(2026, 1, 1),
+        last_reminder_at=last_reminder,
+        today=date(2026, 1, 24),
+        now=datetime(2026, 1, 24, tzinfo=timezone.utc),
+        intervals=[7, 14, 30],
+        legacy_max_count=3,
+        legacy_interval_days=7,
+    )
+    assert ok2 is True
+
+
+def test_should_send_reminder_caps_at_intervals_length():
+    """After len(intervals) reminders, stop sending."""
+    from atlas_brain.autonomous.tasks.invoice_payment_reminders import _should_send_reminder
+
+    last_reminder = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ok, reason = _should_send_reminder(
+        reminder_count=3,  # already 3 sent; intervals=[7,14,30] caps at 3
+        due_date=date(2025, 12, 1),
+        last_reminder_at=last_reminder,
+        today=date(2026, 6, 1),
+        now=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        intervals=[7, 14, 30],
+        legacy_max_count=3,
+        legacy_interval_days=7,
+    )
+    assert ok is False
+    assert "Max reminders" in reason
+
+
+def test_should_send_reminder_empty_intervals_uses_legacy_flat():
+    """Empty intervals falls back to legacy flat cadence."""
+    from atlas_brain.autonomous.tasks.invoice_payment_reminders import _should_send_reminder
+
+    # Legacy: first reminder fires immediately (no gap check)
+    ok, _ = _should_send_reminder(
+        reminder_count=0,
+        due_date=date(2026, 1, 1),
+        last_reminder_at=None,
+        today=date(2026, 1, 2),
+        now=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        intervals=[],
+        legacy_max_count=3,
+        legacy_interval_days=7,
+    )
+    assert ok is True
+
+    # Legacy: cap at legacy_max_count
+    ok2, reason = _should_send_reminder(
+        reminder_count=3,
+        due_date=date(2026, 1, 1),
+        last_reminder_at=datetime(2026, 1, 30, tzinfo=timezone.utc),
+        today=date(2026, 6, 1),
+        now=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        intervals=[],
+        legacy_max_count=3,
+        legacy_interval_days=7,
+    )
+    assert ok2 is False
+    assert "Max reminders (3)" in reason
+
+
+@pytest.mark.asyncio
+async def test_payment_reminder_toggle_disables_run(monkeypatch):
+    """reminders_enabled=False short-circuits run() before any repo access."""
+    from atlas_brain.autonomous.tasks import invoice_payment_reminders as task_mod
+    from atlas_brain.storage.models import ScheduledTask
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.invoicing, "reminders_enabled", False)
+
+    def fail_repo():
+        raise AssertionError("repo accessed despite reminders_enabled=False")
+
+    monkeypatch.setattr(
+        "atlas_brain.storage.repositories.invoice.get_invoice_repo",
+        fail_repo,
+    )
+
+    task = ScheduledTask(
+        id=uuid4(),
+        name="invoice_payment_reminders",
+        task_type="builtin",
+        schedule_type="cron",
+        cron_expression="0 10 * * *",
+    )
+    result = await task_mod.run(task)
+    assert "_skip_synthesis" in result
+    assert "disabled" in result["_skip_synthesis"].lower()
+
+
 @pytest.mark.asyncio
 async def test_payment_reminder_attaches_pdf(monkeypatch):
     """Reminder emails must attach the invoice PDF (consistency with original send)."""
