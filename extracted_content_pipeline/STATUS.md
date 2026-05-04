@@ -32,6 +32,9 @@
 - `campaign_postgres_import` loads normalized JSON/CSV opportunity rows into
   `campaign_opportunities`, with dry-run validation and optional
   replace-existing semantics for repeatable customer imports.
+- `campaign_postgres_export` provides a read-only draft export path over
+  generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
+  handwritten SQL.
 - `storage.migration_runner` is product-owned and applies the packaged SQL
   migrations through a host-provided async pool or connection. The
   `scripts/run_extracted_content_pipeline_migrations.py` CLI wires it to

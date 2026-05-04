@@ -30,6 +30,7 @@ from .api import (
     reset_policy_registry,
 )
 from .blog_pack import evaluate_blog_post
+from .campaign_pack import evaluate_campaign
 from .safety_gate import assess_risk, check_content
 from .types import (
     ContentFlag,
@@ -61,6 +62,7 @@ __all__ = [
     "build_product_claim",
     "check_content",
     "evaluate_blog_post",
+    "evaluate_campaign",
     "compute_claim_id",
     "decide_render_gates",
     "derive_confidence",
