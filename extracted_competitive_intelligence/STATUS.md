@@ -26,6 +26,7 @@ Full task/runtime decoupling remains Phase 3.
 | Carve a slim `CompIntelSettings` Pydantic class out of `atlas_brain/config.py` | ✅ done for config fields used by current scaffold |
 | Local DB pool abstraction | ✅ uses `extracted_llm_infrastructure.storage.database` in standalone mode |
 | Email-send provider Protocol | ✅ `services.campaign_sender` routes to injectable standalone campaign sender |
+| CRM provider Protocol | ✅ `services.crm_provider` routes to an injectable standalone CRM adapter |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
 | Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM bridge, and service package fallback |
 | Standalone smoke script + CI | ✅ `smoke_extracted_competitive_intelligence_standalone.py` runs in the local check driver |
