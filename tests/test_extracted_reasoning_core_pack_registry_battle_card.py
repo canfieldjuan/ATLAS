@@ -7,13 +7,21 @@ This test confirms the registration call fires when the module is imported
 and that the registry exposes the same prompt content + version that
 direct callers see.
 
+**Not wired into the standalone extracted-pipeline CI**: importing the
+atlas-side battle_card_reasoning module transitively pulls in
+``atlas_brain.reasoning.config`` -> ``pydantic``, which isn't part of
+the standalone CI's minimal pip install. This test runs as part of
+the full atlas-side test suite (which has ``requirements.txt`` with
+pydantic). The pack registry's own contract is covered by
+``test_extracted_reasoning_core_pack_registry.py`` which IS wired
+into the standalone CI.
+
 No ``clear_packs`` fixture: the pack-registry-skeleton test file
-(``test_extracted_reasoning_core_pack_registry.py``) tests the registry's
-own contract under isolation; this file tests that the *module side
-effect* registers the right pack, so it relies on the registration
-having actually happened. Each test reloads the module under test to
-re-trigger registration after any prior ``clear_packs`` call leaked in
-from a sibling suite.
+tests the registry's own contract under isolation; this file tests
+that the *module side effect* registers the right pack, so it relies
+on the registration having actually happened. Each test reloads the
+module under test to re-trigger registration after any prior
+``clear_packs`` call leaked in from a sibling suite.
 """
 
 from __future__ import annotations
