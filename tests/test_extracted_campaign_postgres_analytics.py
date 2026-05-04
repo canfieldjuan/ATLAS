@@ -82,6 +82,18 @@ def test_analytics_cli_parses_env_database_url(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_analytics_cli_requires_database_url(monkeypatch) -> None:
+    cli = _load_cli_module()
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    parse_args = cli._parse_args
+    monkeypatch.setattr(cli, "_parse_args", lambda: parse_args([]))
+
+    with pytest.raises(SystemExit, match="Missing --database-url"):
+        await cli._main()
+
+
+@pytest.mark.asyncio
 async def test_analytics_cli_closes_pool_and_prints_json(monkeypatch, capsys) -> None:
     cli = _load_cli_module()
     pool = _Pool()
