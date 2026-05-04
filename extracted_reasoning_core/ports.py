@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 
 class LLMClient(Protocol):
@@ -46,6 +46,70 @@ class ReasoningStateStore(Protocol):
         """Persist a reasoning state snapshot."""
 
 
+@runtime_checkable
+class EventSink(Protocol):
+    """Port for emitting reasoning-related events to the host's event bus.
+
+    Atlas implements this against ``atlas_events`` (Postgres + LISTEN/NOTIFY).
+    Other hosts can plug in any FIFO/log/queue that conforms to the contract.
+    Reasoning core emits via this port; it never reaches into the host's
+    storage layer directly.
+
+    Returns the event id (opaque string) so callers can reference the
+    persisted event in trace metadata, downstream lookups, or reply
+    correlation.
+
+    Marked ``@runtime_checkable`` so adapter wiring can use
+    ``isinstance(obj, EventSink)`` as a structural validation guard
+    when registering hosts at startup.
+    """
+
+    async def emit(
+        self,
+        event_type: str,
+        source: str,
+        payload: Mapping[str, Any],
+        *,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+    ) -> str:
+        """Persist an event and return its identifier."""
+
+
+@runtime_checkable
+class TraceSink(Protocol):
+    """Port for emitting reasoning spans to the host's tracing backend.
+
+    Atlas's tracing wrapper (LangSmith / OTel-style spans + business
+    context) implements this. Reasoning core opens a span before LLM /
+    cache work and closes it after, attaching status + metadata. Hosts
+    that don't trace pass a no-op implementation.
+
+    The ``span`` returned from ``start_span`` is opaque to reasoning core --
+    it's a host-side handle that must be passed back to ``end_span``.
+
+    Marked ``@runtime_checkable`` so adapter wiring can use
+    ``isinstance(obj, TraceSink)`` as a structural validation guard.
+    """
+
+    def start_span(
+        self,
+        name: str,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Open a span and return an opaque span handle."""
+
+    def end_span(
+        self,
+        span: Any,
+        *,
+        status: str = "ok",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Close a span. ``status`` is host-defined ('ok'/'error'/etc)."""
+
+
 class Clock(Protocol):
     """Deterministic time source for recency and cache-decay decisions."""
 
@@ -55,7 +119,9 @@ class Clock(Protocol):
 
 __all__ = [
     "Clock",
+    "EventSink",
     "LLMClient",
     "ReasoningStateStore",
     "SemanticCacheStore",
+    "TraceSink",
 ]

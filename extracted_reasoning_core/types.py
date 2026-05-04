@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
-from .ports import Clock, LLMClient, ReasoningStateStore, SemanticCacheStore
+from .ports import Clock, EventSink, LLMClient, ReasoningStateStore, SemanticCacheStore, TraceSink
 from .wedge_registry import Wedge, WedgeMeta
 
 
@@ -47,6 +47,8 @@ class ReasoningPorts:
     semantic_cache: SemanticCacheStore | None = None
     state_store: ReasoningStateStore | None = None
     clock: Clock | None = None
+    event_sink: EventSink | None = None
+    trace_sink: TraceSink | None = None
 
 
 @dataclass(frozen=True)
