@@ -13,32 +13,39 @@ vendor reasoning, archetype scoring, and downstream deterministic
 builders.
 
 This module landed via PR-C1b as a consolidation of the atlas-canonical
-temporal engine and the content_pipeline fork. Documented decisions
-(per `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md`):
+temporal engine and the content_pipeline fork; PR-C1j (this commit's
+predecessor) carried the rest of content_pipeline's defensive logic
+across so the slim core is the single canonical implementation.
+Documented decisions (per
+`docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md`):
 
   - 5 dataclasses are `frozen=True` (carries content_pipeline's
     immutability decision forward).
-  - `_numeric_value` / `_row_get` defensive helpers from
+  - `_numeric_value` / `_row_get` / `_coerce_date` / `_days_between` /
+    `_volatility` / `_percentiles_from_rows` defensive helpers from
     content_pipeline are surfaced at module scope so callers handling
-    messy snapshot payloads (strings with commas / percent signs,
-    asyncpg.Records vs plain dicts) have a single coercion point.
+    messy snapshot payloads (strings with commas / percent signs, ISO
+    date strings, asyncpg.Records vs plain dicts) have a single
+    coercion point.
   - `TemporalEngine` takes a `min_days_for_percentiles` constructor
     argument (default = `MIN_DAYS_FOR_PERCENTILES` = 3). Atlas's prior
     module constant declared 7 but the percentile gate was hardcoded
     to `< 3` everywhere it was checked; the constant is the actual
     behavior, with a knob for products that want stricter gating.
-  - The `_b2b_shared` lookup helpers used by `_compute_percentiles` /
-    `_infer_category` are imported from `atlas_brain` lazily so the
-    module loads cleanly even when atlas_brain is not on the import
-    path (degrades to empty percentiles + no inferred category in
-    that case). A future PR will replace these with a port-based
-    abstraction so reasoning core has zero atlas dependency.
+  - `_compute_percentiles` is self-contained -- it queries
+    `b2b_vendor_snapshots` directly with a single SELECT scoped to
+    `s.product_category`. PR-C1j replaced the prior atlas-coupled
+    implementation (which lazily imported `_b2b_shared` helpers) so
+    reasoning core has zero `atlas_brain` dependency at runtime.
+    Category inference now reads `latest.product_category` from the
+    most recent snapshot rather than calling out to atlas; the dead
+    `_infer_category` helper was dropped.
 """
 
 from __future__ import annotations
 
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from .types import (
@@ -86,48 +93,59 @@ class TemporalEngine:
         self._min_days_for_percentiles = int(min_days_for_percentiles)
 
     async def analyze_vendor(self, vendor_name: str) -> TemporalEvidence:
-        """Full temporal analysis for a single vendor."""
-        snapshots = await self._load_snapshots(vendor_name)
+        """Full temporal analysis for a single vendor.
+
+        ``vendor_name`` is normalized via ``str(...).strip()`` so callers
+        can pass loosely-shaped input (whitespace, ``None``) without
+        breaking the per-vendor lookup. The returned ``TemporalEvidence``
+        is constructed once with all fields -- the prior implementation
+        mutated it after construction, which now fails because PR-C1c
+        promoted ``TemporalEvidence`` to ``frozen=True``.
+        """
+        normalized_name = str(vendor_name or "").strip()
+        snapshots = await self._load_snapshots(normalized_name)
 
         if len(snapshots) < MIN_DAYS_FOR_VELOCITY:
             return TemporalEvidence(
-                vendor_name=vendor_name,
+                vendor_name=normalized_name,
                 snapshot_days=len(snapshots),
                 insufficient_data=True,
             )
 
-        evidence = TemporalEvidence(
-            vendor_name=vendor_name,
-            snapshot_days=len(snapshots),
-        )
-
-        # Compute velocities
-        evidence.velocities = self._compute_velocities(vendor_name, snapshots)
-
-        # Compute long-term trends
+        velocities = self._compute_velocities(normalized_name, snapshots)
+        trends: list[LongTermTrend] = []
         if len(snapshots) >= MIN_DAYS_FOR_TREND:
-            evidence.trends = self._compute_long_term_trends(vendor_name, snapshots)
+            trends = self._compute_long_term_trends(normalized_name, snapshots)
 
-        # Compute category baselines + anomalies
-        if len(snapshots) >= 2:
-            latest = snapshots[-1]
-            category = latest.get("product_category") or await self._infer_category(vendor_name)
-            if category:
-                evidence.category_baselines = await self._compute_percentiles(category)
-                evidence.anomalies = self._compute_anomalies(
-                    vendor_name, latest, evidence.category_baselines,
-                )
+        baselines: list[CategoryPercentile] = []
+        anomalies: list[AnomalyScore] = []
+        latest = snapshots[-1]
+        category = str(latest.get("product_category") or "").strip()
+        if category:
+            baselines = await self._compute_percentiles(category)
+            anomalies = self._compute_anomalies(normalized_name, latest, baselines)
 
-        return evidence
+        return TemporalEvidence(
+            vendor_name=normalized_name,
+            snapshot_days=len(snapshots),
+            velocities=velocities,
+            trends=trends,
+            anomalies=anomalies,
+            category_baselines=baselines,
+        )
 
     async def analyze_all_vendors(self) -> dict[str, TemporalEvidence]:
         """Temporal analysis for all vendors with snapshots."""
-        vendors = await self._pool.fetch(
+        if not self._pool or not hasattr(self._pool, "fetch"):
+            return {}
+        rows = await self._pool.fetch(
             "SELECT DISTINCT vendor_name FROM b2b_vendor_snapshots ORDER BY vendor_name"
         )
-        results = {}
-        for row in vendors:
-            name = row["vendor_name"]
+        results: dict[str, TemporalEvidence] = {}
+        for row in rows:
+            name = str(_row_get(row, "vendor_name") or "").strip()
+            if not name:
+                continue
             results[name] = await self.analyze_vendor(name)
         return results
 
@@ -136,134 +154,145 @@ class TemporalEngine:
     # ------------------------------------------------------------------
 
     def _compute_velocities(
-        self, vendor_name: str, snapshots: list[dict],
+        self,
+        vendor_name: str,
+        snapshots: list[dict[str, Any]],
     ) -> list[VendorVelocity]:
-        """Compute rate-of-change for each metric between consecutive snapshots."""
-        if len(snapshots) < 2:
+        """Compute rate-of-change for each metric between consecutive snapshots.
+
+        Uses ``_days_between`` for date math (handles ISO date strings via
+        ``_coerce_date``) and ``_numeric_value`` for metric values
+        (handles "1,234"/"28%" strings) so messy inbound rows don't
+        silently fall through.
+        """
+        if len(snapshots) < MIN_DAYS_FOR_VELOCITY:
             return []
 
-        velocities = []
         latest = snapshots[-1]
         previous = snapshots[-2]
-        days = (latest["snapshot_date"] - previous["snapshot_date"]).days
+        days = _days_between(previous.get("snapshot_date"), latest.get("snapshot_date"))
         if days <= 0:
             return []
 
+        velocities: list[VendorVelocity] = []
         for metric in _VELOCITY_METRICS:
-            curr = latest.get(metric)
-            prev = previous.get(metric)
-            if curr is None or prev is None:
-                continue
-            try:
-                curr_f = float(curr)
-                prev_f = float(prev)
-            except (ValueError, TypeError):
+            current = _numeric_value(latest.get(metric))
+            prior = _numeric_value(previous.get(metric))
+            if current is None or prior is None:
                 continue
 
-            velocity = (curr_f - prev_f) / days
-
-            # Acceleration if 3+ snapshots
-            accel = None
-            if len(snapshots) >= 3:
-                prev2 = snapshots[-3]
-                prev2_val = prev2.get(metric)
-                if prev2_val is not None:
-                    days2 = (previous["snapshot_date"] - prev2["snapshot_date"]).days
-                    if days2 > 0:
-                        prev_velocity = (prev_f - float(prev2_val)) / days2
-                        accel = (velocity - prev_velocity) / days
+            velocity = (current - prior) / days
+            acceleration = None
+            if len(snapshots) >= MIN_DAYS_FOR_ACCELERATION:
+                prior2 = snapshots[-3]
+                prior2_value = _numeric_value(prior2.get(metric))
+                days2 = _days_between(prior2.get("snapshot_date"), previous.get("snapshot_date"))
+                if prior2_value is not None and days2 > 0:
+                    previous_velocity = (prior - prior2_value) / days2
+                    acceleration = (velocity - previous_velocity) / days
 
             velocities.append(VendorVelocity(
                 vendor_name=vendor_name,
                 metric=metric,
-                current_value=curr_f,
-                previous_value=prev_f,
+                current_value=current,
+                previous_value=prior,
                 velocity=velocity,
                 days_between=days,
-                acceleration=accel,
+                acceleration=acceleration,
             ))
 
         return velocities
 
     def _compute_long_term_trends(
-        self, vendor_name: str, snapshots: list[dict],
+        self,
+        vendor_name: str,
+        snapshots: list[dict[str, Any]],
     ) -> list[LongTermTrend]:
-        """Compute 30-day and 90-day linear trends for key metrics."""
-        trends = []
+        """Compute 30-day and 90-day linear trends for key metrics.
+
+        Uses ``_coerce_date`` so date math works on snapshot rows that
+        carry ``snapshot_date`` as an ISO string. Builds each
+        ``LongTermTrend`` with its final fields rather than mutating
+        post-construction (the prior implementation triggered
+        ``FrozenInstanceError`` after PR-C1c froze the dataclass).
+        """
         if len(snapshots) < MIN_DAYS_FOR_TREND:
             return []
 
-        latest_date = snapshots[-1]["snapshot_date"]
-        
-        # Helper to get subset of snapshots within last N days
-        def _get_window(days: int) -> list[dict]:
+        latest_date = _coerce_date(snapshots[-1].get("snapshot_date"))
+        if latest_date is None:
+            return []
+
+        def _window(days: int) -> list[dict[str, Any]]:
             cutoff = latest_date - timedelta(days=days)
-            return [s for s in snapshots if s["snapshot_date"] >= cutoff]
+            rows: list[dict[str, Any]] = []
+            for snapshot in snapshots:
+                snapshot_date = _coerce_date(snapshot.get("snapshot_date"))
+                if snapshot_date is not None and snapshot_date >= cutoff:
+                    rows.append(snapshot)
+            return rows
 
-        window_30 = _get_window(30)
-        window_90 = _get_window(90)
+        window_30 = _window(30)
+        window_90 = _window(90)
 
+        trends: list[LongTermTrend] = []
         for metric in _VELOCITY_METRICS:
-            # Only compute trend if metric exists in latest snapshot
-            if snapshots[-1].get(metric) is None:
+            if _numeric_value(snapshots[-1].get(metric)) is None:
                 continue
-
-            trend = LongTermTrend(metric=metric)
-            
-            # 30-day slope
             slope_30 = self._calculate_slope(window_30, metric)
-            if slope_30 is not None:
-                trend.slope_30d = slope_30
-                trend.data_points = len(window_30)
-
-            # 90-day slope (only if we have more history than 30 days)
-            if len(window_90) > len(window_30):
-                slope_90 = self._calculate_slope(window_90, metric)
-                if slope_90 is not None:
-                    trend.slope_90d = slope_90
-
-            if trend.slope_30d is not None:
-                trends.append(trend)
-
+            slope_90 = (
+                self._calculate_slope(window_90, metric)
+                if len(window_90) > len(window_30)
+                else None
+            )
+            if slope_30 is None and slope_90 is None:
+                continue
+            trends.append(
+                LongTermTrend(
+                    metric=metric,
+                    slope_30d=slope_30,
+                    slope_90d=slope_90,
+                    volatility=_volatility(window_30, metric),
+                    data_points=len(window_30),
+                )
+            )
         return trends
 
-    def _calculate_slope(self, window: list[dict], metric: str) -> float | None:
+    def _calculate_slope(
+        self,
+        window: list[dict[str, Any]],
+        metric: str,
+    ) -> float | None:
         """Calculate linear regression slope (change per day)."""
         if len(window) < 2:
             return None
-            
-        x_vals = [] # Days from start of window
-        y_vals = []
-        
-        start_date = window[0]["snapshot_date"]
-        
-        for s in window:
-            val = s.get(metric)
-            if val is not None:
-                try:
-                    y = float(val)
-                    days = (s["snapshot_date"] - start_date).days
-                    x_vals.append(days)
-                    y_vals.append(y)
-                except (ValueError, TypeError):
-                    continue
-                    
-        if len(x_vals) < 2:
+
+        start = _coerce_date(window[0].get("snapshot_date"))
+        if start is None:
             return None
-            
-        # Simple linear regression: slope = cov(x,y) / var(x)
-        n = len(x_vals)
-        sum_x = sum(x_vals)
-        sum_y = sum(y_vals)
-        sum_xy = sum(x*y for x, y in zip(x_vals, y_vals))
-        sum_xx = sum(x*x for x in x_vals)
-        
-        denom = (n * sum_xx - sum_x * sum_x)
-        if denom == 0:
+
+        x_values: list[int] = []
+        y_values: list[float] = []
+        for snapshot in window:
+            snapshot_date = _coerce_date(snapshot.get("snapshot_date"))
+            value = _numeric_value(snapshot.get(metric))
+            if snapshot_date is None or value is None:
+                continue
+            x_values.append((snapshot_date - start).days)
+            y_values.append(value)
+
+        if len(x_values) < 2:
             return None
-            
-        slope = (n * sum_xy - sum_x * sum_y) / denom
-        return slope
+
+        n = len(x_values)
+        sum_x = sum(x_values)
+        sum_y = sum(y_values)
+        sum_xy = sum(x * y for x, y in zip(x_values, y_values))
+        sum_xx = sum(x * x for x in x_values)
+        denominator = n * sum_xx - sum_x * sum_x
+        if denominator == 0:
+            return None
+        return (n * sum_xy - sum_x * sum_y) / denominator
 
     # ------------------------------------------------------------------
     # Category Percentiles
@@ -272,33 +301,15 @@ class TemporalEngine:
     async def _compute_percentiles(self, category: str) -> list[CategoryPercentile]:
         """Compute rolling percentiles for a category from latest snapshots.
 
-        Uses atlas's `read_category_vendor_signal_rows` helper when
-        `atlas_brain` is on the import path; degrades to an empty list
-        when it is not, so the module loads cleanly outside the host.
-        A future PR will replace this lazy import with a port-based
-        abstraction so reasoning core has zero atlas dependency.
+        Self-contained: queries ``b2b_vendor_snapshots`` directly (one
+        SELECT) instead of layering atop the atlas-side
+        ``read_category_vendor_signal_rows`` helper. This keeps reasoning
+        core free of an ``atlas_brain`` import dependency, matching the
+        standalone behavior content_pipeline shipped before PR-C1j
+        consolidated onto core.
         """
-        try:
-            from atlas_brain.autonomous.tasks._b2b_shared import (
-                read_category_vendor_signal_rows,
-            )
-        except ImportError:
+        if not self._pool or not hasattr(self._pool, "fetch"):
             return []
-
-        vendor_rows = await read_category_vendor_signal_rows(
-            self._pool,
-            product_category=category,
-        )
-        normalized_vendor_names = sorted(
-            {
-                str(row.get("vendor_name") or "").strip().lower()
-                for row in vendor_rows
-                if str(row.get("vendor_name") or "").strip()
-            }
-        )
-        if not normalized_vendor_names:
-            return []
-
         rows = await self._pool.fetch(
             """
             SELECT s.* FROM b2b_vendor_snapshots s
@@ -306,42 +317,17 @@ class TemporalEngine:
                 SELECT vendor_name, MAX(snapshot_date) AS max_date
                 FROM b2b_vendor_snapshots
                 GROUP BY vendor_name
-            ) latest ON s.vendor_name = latest.vendor_name AND s.snapshot_date = latest.max_date
-            WHERE LOWER(s.vendor_name) = ANY($1::text[])
+            ) latest ON s.vendor_name = latest.vendor_name
+                AND s.snapshot_date = latest.max_date
+            WHERE s.product_category = $1
             """,
-            normalized_vendor_names,
+            category,
         )
-
-        if len(rows) < self._min_days_for_percentiles:
-            return []
-
-        percentiles = []
-        for metric in _VELOCITY_METRICS:
-            values = []
-            for row in rows:
-                val = _row_get(row, metric)
-                num = _numeric_value(val)
-                if num is not None:
-                    values.append(num)
-            if len(values) < self._min_days_for_percentiles:
-                continue
-
-            values.sort()
-            n = len(values)
-            p25 = values[int(n * 0.25)]
-            p50 = values[int(n * 0.50)]
-            p75 = values[int(n * 0.75)]
-
-            percentiles.append(CategoryPercentile(
-                product_category=category,
-                metric=metric,
-                p25=p25,
-                p50=p50,
-                p75=p75,
-                sample_count=n,
-            ))
-
-        return percentiles
+        return _percentiles_from_rows(
+            category,
+            [dict(row) for row in rows],
+            min_count=self._min_days_for_percentiles,
+        )
 
     # ------------------------------------------------------------------
     # Z-Score Anomaly Detection
@@ -350,43 +336,33 @@ class TemporalEngine:
     def _compute_anomalies(
         self,
         vendor_name: str,
-        latest_snapshot: dict,
+        latest_snapshot: dict[str, Any],
         baselines: list[CategoryPercentile],
     ) -> list[AnomalyScore]:
         """Compute z-scores for vendor metrics against category baselines."""
-        anomalies = []
-        baseline_map = {b.metric: b for b in baselines}
-
+        baseline_by_metric = {baseline.metric: baseline for baseline in baselines}
+        anomalies: list[AnomalyScore] = []
         for metric in _VELOCITY_METRICS:
-            val = latest_snapshot.get(metric)
-            baseline = baseline_map.get(metric)
-            if val is None or baseline is None:
+            value = _numeric_value(latest_snapshot.get(metric))
+            baseline = baseline_by_metric.get(metric)
+            if value is None or baseline is None:
                 continue
-
-            try:
-                val_f = float(val)
-            except (ValueError, TypeError):
-                continue
-
-            # Approximate std from IQR: std ~= IQR / 1.35
             iqr = baseline.p75 - baseline.p25
             if iqr <= 0:
                 continue
             std_approx = iqr / 1.35
-            z = (val_f - baseline.p50) / std_approx
-
-            # Approximate p-value from z-score (normal CDF)
-            p_value = _normal_sf(abs(z))
-
-            anomalies.append(AnomalyScore(
-                vendor_name=vendor_name,
-                metric=metric,
-                value=val_f,
-                z_score=round(z, 3),
-                p_value=round(p_value, 4) if p_value else None,
-                is_anomaly=abs(z) > 2.0,
-            ))
-
+            z_score = (value - baseline.p50) / std_approx
+            p_value = _normal_sf(abs(z_score))
+            anomalies.append(
+                AnomalyScore(
+                    vendor_name=vendor_name,
+                    metric=metric,
+                    value=value,
+                    z_score=round(z_score, 3),
+                    p_value=round(p_value, 4),
+                    is_anomaly=abs(z_score) > 2.0,
+                )
+            )
         return anomalies
 
     # ------------------------------------------------------------------
@@ -447,8 +423,10 @@ class TemporalEngine:
     # Internal
     # ------------------------------------------------------------------
 
-    async def _load_snapshots(self, vendor_name: str) -> list[dict]:
+    async def _load_snapshots(self, vendor_name: str) -> list[dict[str, Any]]:
         """Load snapshots for a vendor, ordered by date."""
+        if not self._pool or not hasattr(self._pool, "fetch"):
+            return []
         rows = await self._pool.fetch(
             """
             SELECT * FROM b2b_vendor_snapshots
@@ -457,29 +435,94 @@ class TemporalEngine:
             """,
             vendor_name,
         )
-        return [dict(r) for r in rows]
+        return [dict(row) for row in rows]
 
-    async def _infer_category(self, vendor_name: str) -> str | None:
-        """Try to infer product category from churn signals.
 
-        Uses atlas's `read_vendor_signal_detail_exact` helper when
-        `atlas_brain` is on the import path; returns None otherwise so
-        callers degrade gracefully when reasoning core is loaded outside
-        the host. A future PR will replace this lazy import with a
-        port-based abstraction.
-        """
-        try:
-            from atlas_brain.autonomous.tasks._b2b_shared import (
-                read_vendor_signal_detail_exact,
-            )
-        except ImportError:
-            return None
+def _percentiles_from_rows(
+    category: str,
+    rows: list[dict[str, Any]],
+    *,
+    min_count: int = MIN_DAYS_FOR_PERCENTILES,
+) -> list[CategoryPercentile]:
+    """Compute per-metric p25/p50/p75 percentiles from a list of snapshot rows.
 
-        row = await read_vendor_signal_detail_exact(
-            self._pool,
-            vendor_name=vendor_name,
+    ``min_count`` controls the per-metric sample-size gate -- callers
+    that want stricter gating (atlas's prior constant=7 path) can pass
+    a larger value via ``TemporalEngine(min_days_for_percentiles=...)``.
+    """
+    if len(rows) < min_count:
+        return []
+
+    percentiles: list[CategoryPercentile] = []
+    for metric in _VELOCITY_METRICS:
+        values = sorted(
+            value
+            for value in (_numeric_value(row.get(metric)) for row in rows)
+            if value is not None
         )
-        return row["product_category"] if row else None
+        if len(values) < min_count:
+            continue
+        n = len(values)
+        percentiles.append(
+            CategoryPercentile(
+                product_category=category,
+                metric=metric,
+                p25=values[int(n * 0.25)],
+                p50=values[int(n * 0.50)],
+                p75=values[int(n * 0.75)],
+                sample_count=n,
+            )
+        )
+    return percentiles
+
+
+def _volatility(window: list[dict[str, Any]], metric: str) -> float | None:
+    """Standard deviation of ``metric`` values in a snapshot window."""
+    values = [
+        value
+        for value in (_numeric_value(snapshot.get(metric)) for snapshot in window)
+        if value is not None
+    ]
+    if len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return math.sqrt(variance)
+
+
+def _days_between(start: Any, end: Any) -> int:
+    """Days between two date-shaped values, coerced via ``_coerce_date``.
+
+    Returns 0 if either side fails to coerce -- callers gate on
+    ``days > 0`` before doing arithmetic, so 0 is a safe sentinel.
+    """
+    start_date = _coerce_date(start)
+    end_date = _coerce_date(end)
+    if start_date is None or end_date is None:
+        return 0
+    return (end_date - start_date).days
+
+
+def _coerce_date(value: Any) -> date | None:
+    """Coerce a possibly-stringified date to a ``datetime.date``.
+
+    Accepts ``date``, ``datetime``, and ISO-format strings (``"2026-05-04"``).
+    Returns ``None`` for empty/None/unparseable input so callers can
+    treat ingestion errors as missing data instead of raising.
+    """
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return datetime.fromisoformat(stripped).date()
+        except ValueError:
+            return None
+    return None
 
 
 def _normal_sf(z: float) -> float:
