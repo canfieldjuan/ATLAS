@@ -385,3 +385,56 @@ def test_quality_report_is_frozen():
     report = evaluate_blog_post(_make_input(_LONG_GOOD_BODY))
     with pytest.raises(Exception):
         report.passed = False  # type: ignore[misc]
+
+
+# ---- Structured blocking_codes / warning_codes (added 2026-05-04) ----
+
+
+def test_metadata_exposes_blocking_codes_for_blockers():
+    """Consumers must be able to match on stable codes, not on
+    rendered message-string prefixes.
+    """
+    short_body = "Way too short for this."
+    report = evaluate_blog_post(_make_input(short_body))
+    assert "blocking_codes" in report.metadata
+    assert "content_too_short" in report.metadata["blocking_codes"]
+
+
+def test_metadata_blocking_codes_aligns_with_blocking_issues():
+    """``blocking_codes`` and ``blocking_issues`` are parallel tuples:
+    same length, same order. The pair is the contract consumers rely
+    on to find a code's message without re-running the pack.
+    """
+    short_body = "Way too short for this."
+    report = evaluate_blog_post(_make_input(short_body))
+    codes = report.metadata["blocking_codes"]
+    issues = report.metadata["blocking_issues"]
+    assert isinstance(codes, tuple)
+    assert isinstance(issues, tuple)
+    assert len(codes) == len(issues)
+
+
+def test_metadata_exposes_warning_codes_for_warnings():
+    """Same parallel-tuple contract for warnings."""
+    body_below_target = " ".join(["word"] * 1700)  # above min, below target
+    body_below_target += '\n> "It works really well for our team."\n'
+    body_below_target += '\n> "We saw real improvements."\n'
+    report = evaluate_blog_post(_make_input(body_below_target))
+    assert "warning_codes" in report.metadata
+    assert isinstance(report.metadata["warning_codes"], tuple)
+    assert len(report.metadata["warning_codes"]) == len(report.metadata["warnings"])
+    assert "content_below_seo_target" in report.metadata["warning_codes"]
+
+
+def test_blocking_codes_does_not_carry_message_substring():
+    """The whole point of the codes surface: a code is the stable
+    identifier, never an embedded substring of the rendered message.
+    A future refactor of the message format must not change the code.
+    """
+    short_body = "Way too short."
+    report = evaluate_blog_post(_make_input(short_body))
+    for code in report.metadata["blocking_codes"]:
+        # Codes are simple snake_case identifiers, never contain
+        # colons or numeric details.
+        assert ":" not in code
+        assert not any(ch.isdigit() for ch in code)

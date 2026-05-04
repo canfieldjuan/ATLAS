@@ -1677,6 +1677,8 @@ def _apply_blog_quality_gate(
 
     blocking_issues: list[str] = list(pack_report.metadata.get("blocking_issues", ()))
     warnings: list[str] = list(pack_report.metadata.get("warnings", ()))
+    blocking_codes: list[str] = list(pack_report.metadata.get("blocking_codes", ()))
+    warning_codes: list[str] = list(pack_report.metadata.get("warning_codes", ()))
 
     # ---- Atlas-side specificity check (PR-B5 territory) ----
     specificity_context = surface_specificity_context(
@@ -1700,14 +1702,12 @@ def _apply_blog_quality_gate(
             include_competitor_terms=True,
             numeric_term_filter=_is_meaningful_numeric_anchor,
         )
-        blocking_issues.extend(
-            f"witness_specificity:{issue}"
-            for issue in specificity.get("blocking_issues", []) or []
-        )
-        warnings.extend(
-            f"witness_specificity:{warning}"
-            for warning in specificity.get("warnings", []) or []
-        )
+        specificity_blockers = specificity.get("blocking_issues", []) or []
+        specificity_warnings = specificity.get("warnings", []) or []
+        blocking_issues.extend(f"witness_specificity:{issue}" for issue in specificity_blockers)
+        warnings.extend(f"witness_specificity:{warning}" for warning in specificity_warnings)
+        blocking_codes.extend("witness_specificity" for _ in specificity_blockers)
+        warning_codes.extend("witness_specificity" for _ in specificity_warnings)
 
     # Recompute score with merged issues so specificity findings affect status.
     score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
@@ -1716,7 +1716,9 @@ def _apply_blog_quality_gate(
         "threshold": pass_score,
         "status": "pass" if (not blocking_issues and score >= pass_score) else "fail",
         "blocking_issues": blocking_issues,
+        "blocking_codes": blocking_codes,
         "warnings": warnings,
+        "warning_codes": warning_codes,
         "fixes_applied": fixes_applied,
         "quote_count": pack_report.metadata.get("quote_count", 0),
         "word_count": pack_report.metadata.get("word_count", len(body.split())),
@@ -2186,6 +2188,16 @@ def _apply_specificity_anchor_repair(
 
 
 def _only_content_too_short_blockers(report: dict[str, Any]) -> bool:
+    # Match against the structured ``blocking_codes`` surface
+    # (added 2026-05-04) so this gate cannot regress when a future
+    # refactor changes the rendered ``blocking_issues`` message
+    # format. Falls back to the legacy prefix match on
+    # ``blocking_issues`` when ``blocking_codes`` is absent (older
+    # report shapes / partial migrations).
+    codes = report.get("blocking_codes")
+    if codes is not None:
+        codes_list = [str(c) for c in codes]
+        return bool(codes_list) and all(c == "content_too_short" for c in codes_list)
     blockers = [str(issue) for issue in (report.get("blocking_issues") or [])]
     return bool(blockers) and all(issue.startswith("content_too_short:") for issue in blockers)
 
