@@ -38,6 +38,15 @@ from .types import (
     RiskAssessment,
     RiskLevel,
 )
+from .witness_pack import (
+    campaign_proof_terms_from_audit,
+    evaluate_specificity_support,
+    evaluate_witness_specificity,
+    merge_specificity_contexts,
+    specificity_audit_snapshot,
+    specificity_signal_terms,
+    surface_specificity_context,
+)
 
 
 __all__ = [
@@ -60,6 +69,7 @@ __all__ = [
     "SuppressionReason",
     "assess_risk",
     "build_product_claim",
+    "campaign_proof_terms_from_audit",
     "check_content",
     "evaluate_blog_post",
     "evaluate_campaign",
@@ -67,8 +77,14 @@ __all__ = [
     "decide_render_gates",
     "derive_confidence",
     "derive_evidence_posture",
+    "evaluate_specificity_support",
+    "evaluate_witness_specificity",
     "get_policy",
     "get_registered_policy",
+    "merge_specificity_contexts",
     "register_policy",
     "reset_policy_registry",
+    "specificity_audit_snapshot",
+    "specificity_signal_terms",
+    "surface_specificity_context",
 ]
