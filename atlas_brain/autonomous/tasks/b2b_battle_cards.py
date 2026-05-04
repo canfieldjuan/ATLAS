@@ -2978,7 +2978,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Enrich with ecosystem context
     try:
-        from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
+        from ...reasoning.ecosystem import EcosystemAnalyzer
         eco = EcosystemAnalyzer(pool)
         ecosystem_evidence = await eco.analyze_all_categories()
         for card in deterministic_battle_cards:

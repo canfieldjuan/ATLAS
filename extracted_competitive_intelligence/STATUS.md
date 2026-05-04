@@ -37,16 +37,17 @@ Full task/runtime decoupling remains Phase 3.
 | Source impact support boundary | ✅ `source_impact.py` and its static scrape capability registry are product-owned |
 | Cross-vendor selection boundary | ✅ `reasoning/cross_vendor_selection.py` is product-owned pure selection logic |
 | Prompt contract boundary | ✅ single-pass battle prompts are product-owned LLM contracts |
+| Ecosystem analyzer boundary | ✅ `reasoning/ecosystem.py` is a host adapter port, not an Atlas import |
 
 ### Current audit snapshot
 
 | Metric | Count |
 |---|---:|
-| Extracted files | 88 |
+| Extracted files | 89 |
 | Manifest mappings | 15 |
 | Manifest Python snapshots | 6 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 11 |
+| Product-owned modules | 12 |
 
 Product-owned modules:
 
@@ -58,6 +59,7 @@ Product-owned modules:
 - `services/vendor_registry.py`
 - `services/scraping/capabilities.py`
 - `services/b2b/source_impact.py`
+- `reasoning/ecosystem.py`
 - `reasoning/cross_vendor_selection.py`
 - `reasoning/single_pass_prompts/cross_vendor_battle.py`
 - `reasoning/single_pass_prompts/battle_card_reasoning.py`
@@ -87,6 +89,7 @@ Product-owned modules:
 | `mcp/b2b/server.py` | n/a | ✅ | 🔲 |
 | `services/b2b/source_impact.py` | ✅ | ✅ | ✅ |
 | `services/scraping/sources.py` | n/a | ✅ | ✅ |
+| `reasoning/ecosystem.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | 🔲 | 🔲 |
