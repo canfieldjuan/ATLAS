@@ -226,6 +226,12 @@
       "target": "extracted_content_pipeline/settings.py"
     },
     {
+      "target": "extracted_content_pipeline/api/__init__.py"
+    },
+    {
+      "target": "extracted_content_pipeline/api/campaign_webhooks.py"
+    },
+    {
       "target": "extracted_content_pipeline/storage/migrations/151_campaign_opportunities.sql"
     },
     {

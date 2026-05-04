@@ -271,6 +271,8 @@ async def test_send_cli_outputs_json_summary_and_closes_pool(monkeypatch, capsys
             "re_key",
             "--default-from-email",
             "sales@example.com",
+            "--unsubscribe-token-secret",
+            "token-secret",
             "--limit",
             "4",
             "--json",
@@ -296,6 +298,7 @@ async def test_send_cli_outputs_json_summary_and_closes_pool(monkeypatch, capsys
         default_from_email="sales@example.com",
         default_reply_to=None,
         unsubscribe_base_url="",
+        unsubscribe_token_secret="token-secret",
         company_address="",
         limit=4,
     )

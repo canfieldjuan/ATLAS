@@ -29,6 +29,7 @@ MODULES = [
     "extracted_content_pipeline.podcast_postgres_repurpose",
     "extracted_content_pipeline.podcast_example",
     "extracted_content_pipeline.services.podcast_quality",
+    "extracted_content_pipeline.api.campaign_webhooks",
 ]
 
 

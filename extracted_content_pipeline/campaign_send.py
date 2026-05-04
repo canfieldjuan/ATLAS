@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
@@ -24,6 +26,7 @@ class CampaignSendConfig:
     default_from_email: str = ""
     default_reply_to: str | None = None
     unsubscribe_base_url: str = ""
+    unsubscribe_token_secret: str = ""
     company_address: str = ""
     limit: int = 20
 
@@ -49,15 +52,55 @@ class SystemClock:
         return datetime.now(timezone.utc)
 
 
-def build_unsubscribe_url(base_url: str, recipient_email: str) -> str:
+def build_unsubscribe_token(recipient_email: str, token_secret: str) -> str:
+    cleaned_email = normalize_email(recipient_email)
+    cleaned_secret = str(token_secret or "").strip()
+    if not cleaned_email or not cleaned_secret:
+        return ""
+    return hmac.new(
+        cleaned_secret.encode("utf-8"),
+        cleaned_email.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def verify_unsubscribe_token(
+    recipient_email: str,
+    token: str,
+    token_secret: str,
+) -> bool:
+    expected = build_unsubscribe_token(recipient_email, token_secret)
+    candidate = str(token or "").strip()
+    return bool(expected and candidate and hmac.compare_digest(expected, candidate))
+
+
+def build_unsubscribe_url(
+    base_url: str,
+    recipient_email: str,
+    *,
+    token_secret: str = "",
+) -> str:
     sep = "&" if "?" in base_url else "?"
-    return f"{base_url}{sep}email={quote(recipient_email, safe='')}"
+    url = f"{base_url}{sep}email={quote(recipient_email, safe='')}"
+    token = build_unsubscribe_token(recipient_email, token_secret)
+    if token:
+        url = f"{url}&token={quote(token, safe='')}"
+    return url
 
 
-def unsubscribe_headers(base_url: str, recipient_email: str) -> dict[str, str]:
+def unsubscribe_headers(
+    base_url: str,
+    recipient_email: str,
+    *,
+    token_secret: str = "",
+) -> dict[str, str]:
     if not base_url:
         return {}
-    unsubscribe_url = build_unsubscribe_url(base_url, recipient_email)
+    unsubscribe_url = build_unsubscribe_url(
+        base_url,
+        recipient_email,
+        token_secret=token_secret,
+    )
     return {
         "List-Unsubscribe": f"<{unsubscribe_url}>",
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -80,6 +123,7 @@ def wrap_with_footer(
         unsubscribe_url = build_unsubscribe_url(
             config.unsubscribe_base_url,
             recipient_email,
+            token_secret=config.unsubscribe_token_secret,
         )
         parts.append(f'<a href="{unsubscribe_url}" style="color:#999;">Unsubscribe</a>')
 
@@ -104,11 +148,18 @@ def _merge_headers(
     *,
     unsubscribe_base_url: str,
     recipient_email: str,
+    unsubscribe_token_secret: str,
 ) -> dict[str, str]:
     headers: dict[str, str] = {}
     if isinstance(row_headers, Mapping):
         headers.update({str(k): str(v) for k, v in row_headers.items()})
-    headers.update(unsubscribe_headers(unsubscribe_base_url, recipient_email))
+    headers.update(
+        unsubscribe_headers(
+            unsubscribe_base_url,
+            recipient_email,
+            token_secret=unsubscribe_token_secret,
+        )
+    )
     return headers
 
 
@@ -237,6 +288,7 @@ class CampaignSendService:
                     row.get("headers"),
                     unsubscribe_base_url=self._config.unsubscribe_base_url,
                     recipient_email=recipient_email,
+                    unsubscribe_token_secret=self._config.unsubscribe_token_secret,
                 ),
                 tags=_tags_for(row),
                 metadata=dict(row.get("metadata") or {}) if isinstance(row.get("metadata"), dict) else {},

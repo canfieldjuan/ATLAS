@@ -152,6 +152,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Base URL used for List-Unsubscribe headers and footer links.",
     )
     parser.add_argument(
+        "--unsubscribe-token-secret",
+        default=_env(
+            "EXTRACTED_CAMPAIGN_UNSUBSCRIBE_TOKEN_SECRET",
+            default=send_defaults.unsubscribe_token_secret,
+        ),
+        help="Secret used to sign unsubscribe links.",
+    )
+    parser.add_argument(
         "--company-address",
         default=_env("EXTRACTED_CAMPAIGN_COMPANY_ADDRESS", default=send_defaults.company_address),
         help="Physical address appended to outbound email footers.",
@@ -288,6 +296,7 @@ async def _main() -> int:
         default_from_email=args.default_from_email or args.ses_from_email or "",
         default_reply_to=args.reply_to,
         unsubscribe_base_url=args.unsubscribe_base_url,
+        unsubscribe_token_secret=args.unsubscribe_token_secret,
         company_address=args.company_address,
         limit=args.limit,
     )

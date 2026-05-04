@@ -8,8 +8,10 @@ from extracted_content_pipeline.campaign_ports import SendResult
 from extracted_content_pipeline.campaign_send import (
     CampaignSendConfig,
     CampaignSendService,
+    build_unsubscribe_token,
     build_unsubscribe_url,
     unsubscribe_headers,
+    verify_unsubscribe_token,
     wrap_with_footer,
 )
 from extracted_content_pipeline.campaign_suppression import CampaignSuppressionService
@@ -137,6 +139,22 @@ def test_build_unsubscribe_url_handles_existing_query_string():
     )
 
 
+def test_build_unsubscribe_url_can_include_signed_token():
+    token = build_unsubscribe_token("Buyer@Example.com", "secret")
+
+    assert token
+    assert verify_unsubscribe_token("buyer@example.com", token, "secret") is True
+    assert verify_unsubscribe_token("buyer@example.com", "wrong", "secret") is False
+    assert (
+        build_unsubscribe_url(
+            "https://example.test/unsub",
+            "Buyer@Example.com",
+            token_secret="secret",
+        )
+        == f"https://example.test/unsub?email=Buyer%40Example.com&token={token}"
+    )
+
+
 def test_unsubscribe_headers_and_footer_are_optional():
     assert unsubscribe_headers("", "person@example.com") == {}
     assert wrap_with_footer(
@@ -148,7 +166,18 @@ def test_unsubscribe_headers_and_footer_are_optional():
 
 @pytest.mark.asyncio
 async def test_send_due_sends_campaign_and_records_audit():
-    service, repo, suppression_repo, sender, audit, clock = _service([_row()])
+    config = CampaignSendConfig(
+        default_from_email="sender@example.com",
+        default_reply_to="reply@example.com",
+        unsubscribe_base_url="https://example.test/unsub",
+        unsubscribe_token_secret="secret",
+        company_address="123 Market St",
+        limit=10,
+    )
+    service, repo, suppression_repo, sender, audit, clock = _service(
+        [_row()],
+        config=config,
+    )
 
     summary = await service.send_due()
 
@@ -164,7 +193,10 @@ async def test_send_due_sends_campaign_and_records_audit():
     assert request.from_email == "sender@example.com"
     assert request.reply_to == "reply@example.com"
     assert "Unsubscribe" in request.html_body
-    assert request.headers["List-Unsubscribe"] == "<https://example.test/unsub?email=buyer%40example.com>"
+    token = build_unsubscribe_token("buyer@example.com", "secret")
+    assert request.headers["List-Unsubscribe"] == (
+        f"<https://example.test/unsub?email=buyer%40example.com&token={token}>"
+    )
     assert {"name": "company", "value": "Acme"} in request.tags
     assert repo.sent == [{
         "campaign_id": "campaign-1",
