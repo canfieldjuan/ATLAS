@@ -1,12 +1,13 @@
 # In-Flight PRs
 
-Last updated: 2026-05-04T02:25Z by claude-2026-05-03-b
+Last updated: 2026-05-04T02:30Z by claude-2026-05-03-b
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| (PR-C1i, in flight) | PR-C1i: Route `extracted_content_pipeline/reasoning/evidence_engine.py` through reasoning core wrapper | EDIT: `extracted_content_pipeline/reasoning/evidence_engine.py` (drop ~338-line drifted fork; replace with wrapper carrying rules as a Python dict + `from_rules(...)` route). EDIT: `extracted_reasoning_core/evidence_engine.py` (add `from_rules` classmethod, lazy yaml import + JSON suffix detection, drift-forward `_numeric_value` helper into numeric checks, `min_count`/`exists` operator parity, dual-form suppression). Existing `tests/test_extracted_reasoning_evidence_engine.py` keeps green against the wrapper. | claude-2026-05-03 | `extracted_content_pipeline/reasoning/evidence_engine.py`; `extracted_reasoning_core/evidence_engine.py`; `tests/test_extracted_reasoning_evidence_engine.py` |
+| (PR-C1j, in flight) | PR-C1j: Route `extracted_content_pipeline/reasoning/temporal.py` through reasoning core wrapper | EDIT: `extracted_content_pipeline/reasoning/temporal.py` (drop ~466-line drifted fork; replace with thin re-export wrapper from `extracted_reasoning_core.temporal` + `extracted_reasoning_core.types`). All temporal types/constants/`TemporalEngine` were already promoted to core in PR-C1b/PR-C1c, so no drift-forward needed. Existing `tests/test_extracted_reasoning_temporal.py` keeps green against the wrapper. | claude-2026-05-03 | `extracted_content_pipeline/reasoning/temporal.py`; `tests/test_extracted_reasoning_temporal.py` |
+| (PR-D9, in flight) | Add AI Content Ops draft review/status update path | NEW: `extracted_content_pipeline/campaign_postgres_review.py`; NEW: `scripts/review_extracted_campaign_drafts.py`; EDIT: content-pipeline docs/status/manifest/check script; NEW focused review tests | codex-2026-05-03 | Avoid `extracted_reasoning_core/**`, `extracted_content_pipeline/reasoning/**`, `extracted_content_pipeline/docs/reasoning_state_audit.md`, and `extracted_quality_gate/**` |
 | (PR-B5a, in flight) | PR-B5a: Evidence-coverage gate (deterministic core + Atlas re-export) | NEW: `extracted_quality_gate/evidence_pack.py` (legacy `audit_witness_evidence_coverage` + pack-contract `evaluate_evidence_coverage`). EDIT: `extracted_quality_gate/{__init__.py, manifest.json, README.md, STATUS.md}`. EDIT: `atlas_brain/services/b2b/evidence_gate.py` (slimmed to thin re-export). NEW: `tests/test_extracted_quality_gate_evidence_pack.py` (29 tests). | claude-2026-05-03-b | `extracted_quality_gate/evidence_pack.py`; `atlas_brain/services/b2b/evidence_gate.py`; the new evidence-pack test file |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.

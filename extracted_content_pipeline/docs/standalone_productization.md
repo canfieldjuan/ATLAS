@@ -168,6 +168,12 @@ review path for generated drafts. It filters saved `b2b_campaigns` rows by
 account, status, target mode, channel, vendor, or company and emits JSON or CSV
 for host review workflows.
 
+`extracted_content_pipeline/campaign_postgres_review.py` owns the write side of
+that host review loop. It updates selected `b2b_campaigns` rows by explicit
+campaign id, optional account scope, and source-status guard so hosts can move
+reviewed drafts to `approved`, `queued`, `cancelled`, or `expired` without
+writing ad hoc SQL.
+
 `extracted_content_pipeline/storage/migration_runner.py` owns the standalone
 schema installation path. It lists packaged SQL migrations, tracks applied
 versions in a product metadata table, supports dry runs, and accepts either a

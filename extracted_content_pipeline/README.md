@@ -232,6 +232,14 @@ python scripts/export_extracted_campaign_drafts.py --account-id acct_123 --limit
 python scripts/export_extracted_campaign_drafts.py --account-id acct_123 --format csv --output campaign_drafts.csv
 ```
 
+After review, update selected draft rows without writing SQL:
+
+```bash
+python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id acct_123 --status approved
+python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id acct_123 --status queued --from-email audit@customer.com
+python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id acct_123 --status cancelled --reason "customer rejected"
+```
+
 ## Import smoke test
 
 ```bash
