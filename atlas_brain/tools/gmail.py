@@ -271,6 +271,47 @@ class GmailTransport:
         )
         return result
 
+    async def modify_thread(
+        self,
+        thread_id: str,
+        add_labels: list[str] | None = None,
+        remove_labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Add and/or remove labels on a Gmail thread.
+
+        Common label IDs: INBOX, UNREAD, IMPORTANT, STARRED, SENT, TRASH, SPAM.
+        To mark a thread as read, remove the UNREAD label.
+        Requires gmail.modify scope (or broader).
+        """
+        body: dict[str, list[str]] = {}
+        if add_labels:
+            body["addLabelIds"] = list(add_labels)
+        if remove_labels:
+            body["removeLabelIds"] = list(remove_labels)
+        if not body:
+            raise ValueError("modify_thread: provide add_labels and/or remove_labels")
+
+        token = await self._get_access_token()
+        client = await self._ensure_client()
+        response = await client.post(
+            f"{GMAIL_API_BASE}/users/me/threads/{thread_id}/modify",
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if response.status_code == 403:
+            raise RuntimeError(
+                "Gmail modify permission denied. Re-run setup with gmail.modify scope: "
+                "python scripts/setup_google_oauth.py"
+            )
+        response.raise_for_status()
+        result = response.json()
+        logger.info(
+            "Gmail thread modified: id=%s add=%s remove=%s",
+            thread_id, add_labels, remove_labels,
+        )
+        return result
+
     async def get_sent_message_id(self, gmail_message_id: str) -> str | None:
         """Fetch RFC 2822 Message-ID of a sent Gmail message."""
         token = await self._get_access_token()
