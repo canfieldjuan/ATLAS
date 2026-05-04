@@ -41,6 +41,9 @@
 - `campaign_postgres_send` provides a DB-backed queued send worker seam. Hosts
   inject a Resend or SES sender and reuse the product campaign, suppression,
   and audit ports to send rows already moved to `queued`.
+- `campaign_postgres_analytics` provides a DB-backed analytics refresh worker
+  seam. Hosts can refresh the packaged campaign funnel materialized view and
+  audit the result without importing Atlas scheduled-task code.
 - `campaign_postgres_sequence_progression` provides a DB-backed follow-up
   generation worker seam. Hosts reuse due `campaign_sequences` rows, packaged
   or custom sequence prompts, and the product LLM port to queue the next

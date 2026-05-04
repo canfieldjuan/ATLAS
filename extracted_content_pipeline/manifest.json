@@ -172,7 +172,13 @@
       "target": "extracted_content_pipeline/campaign_generation.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_analytics.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_postgres_generation.py"
+    },
+    {
+      "target": "extracted_content_pipeline/campaign_postgres_analytics.py"
     },
     {
       "target": "extracted_content_pipeline/campaign_postgres_export.py"
