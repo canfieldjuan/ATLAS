@@ -1,12 +1,12 @@
 # In-Flight PRs
 
-Last updated: 2026-05-04T21:24Z by codex-content-api-webhook-worker
+Last updated: 2026-05-04T21:31Z by codex-content-api-webhook-worker
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| (PR-C4a, in flight) | PR-C4a: Add EventSink + TraceSink ports (PR 6 from reasoning boundary audit) | EDIT: `extracted_reasoning_core/ports.py` (add `EventSink` Protocol for host event-bus emission and `TraceSink` Protocol for host tracing/span emission; existing `LLMClient`/`SemanticCacheStore`/`ReasoningStateStore`/`Clock` ports unchanged). NEW: `tests/test_extracted_reasoning_core_event_trace_ports.py` (8 unit tests: Protocol satisfaction, async emit round-trip, span open/close round-trip, optional metadata, error status). EDIT: `scripts/run_extracted_pipeline_checks.sh` (wire the new test). First slice of PR 6 (graph/state engine ports) -- adds the two contract ports the audit names; subsequent PR-C4b/c/d/e slices wire atlas adapters and port the graph/agent/state/reflection/context_aggregator engines. | claude-2026-05-03 | `extracted_reasoning_core/ports.py`; `tests/test_extracted_reasoning_core_event_trace_ports.py`; `scripts/run_extracted_pipeline_checks.sh` |
+| (PR-C4b, in flight) | PR-C4b: Atlas reasoning state inherits core's ReasoningAgentState (PR 6 second slice) | EDIT: `atlas_brain/reasoning/state.py` (atlas's `ReasoningAgentState` becomes a `TypedDict` subclass of `extracted_reasoning_core.state.ReasoningAgentState` -- atlas keeps its 10 atlas-specific context fields (`crm_context`, `email_history`, `voice_turns`, `calendar_events`, `sms_messages`, `graph_facts`, `recent_events`, `market_context`, `news_context`, `b2b_churn`); core fields are inherited). NEW: `tests/test_atlas_reasoning_state_inherits_core.py` (subclass relationship + subtype acceptance + token-tracking smoke). Pure typing seam -- no runtime behavior changes; `agent.py` / `graph.py` import sites unchanged. Forward-looking note: PR-C4d/e will decide whether atlas's granular context fields stay atlas-side or migrate up; this slice only establishes the structural is-a. | claude-2026-05-03 | `atlas_brain/reasoning/state.py`; `tests/test_atlas_reasoning_state_inherits_core.py` |
 | TBD | Add AI Content Ops webhook API router factory | `extracted_content_pipeline/api/campaign_webhooks.py`, `tests/test_extracted_campaign_api_webhooks.py`, content pipeline docs/manifest/check wiring | codex-content-api-webhook-worker | Avoid editing extracted campaign webhook API factory seams until this lands |
 | #164 | docs: log cross-product standalone % audit | `docs/extraction/cross_product_audit_2026-05-04.md` | canfieldjuan | Avoid editing the cross-product audit doc until PR #164 lands |
 

@@ -18,7 +18,7 @@ import base64
 import logging
 import os
 from calendar import monthrange
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -26,6 +26,13 @@ from uuid import UUID
 from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.monthly_invoice_generation")
+
+# Placeholder values for Per Hour service drafts.
+# Drafts are created with quantity=0 (subtotal=$0) and a clearly-flagged
+# description; the user fills in actual hours via update_invoice before
+# approve_and_send.
+_PER_HOUR_PLACEHOLDER_DESC_SUFFIX = " (hours TBD - update before sending)"
+_PER_HOUR_PLACEHOLDER_QTY = 0
 
 
 async def run(task: ScheduledTask) -> dict:
@@ -118,16 +125,47 @@ async def run(task: ScheduledTask) -> dict:
         "invoices_sent": 0,
         "invoices_skipped_dedup": 0,
         "invoices_skipped_no_events": 0,
+        "skipped_no_events_details": [],
         "needs_hours": [],
+        "keyword_collisions": [],
         "total_amount": 0.0,
         "details": [],
     }
 
-    # -- Phase 1: Build per-customer bundles from service agreements ----------
+    # -- Phase 1a: Assign each calendar event to exactly one service ----------
+    # Substring matching can produce collisions (e.g. event "Smith Corp" matches
+    # both a "Smith" and a "Smith Corp" service, double-counting the visit).
+    # Resolve by longest matching keyword (most specific); record every multi-
+    # match so the user can rename keywords after the fact.
+
+    billing_start = date(period_year, period_month, 1)
+    billing_end = date(period_year, period_month, last_day)
+    month_events = [
+        e for e in confirmed_events
+        if billing_start <= (e.start.date() if isinstance(e.start, datetime) else e.start) <= billing_end
+    ]
+
+    # Per Hour services participate in event assignment too: if Brookstone
+    # has events this month, those events should land on the Brookstone
+    # service (and produce a placeholder draft) rather than be dropped.
+    eligible_services = [
+        s for s in services
+        if not contact_id_filter or str(s["contact_id"]) in contact_id_filter
+    ]
+
+    events_by_service, collisions = _assign_events_to_services(month_events, eligible_services)
+    results["keyword_collisions"] = collisions
+    for c in collisions:
+        logger.warning(
+            "Keyword collision: '%s' on %s matched %d services (%s); assigned to '%s' via %s",
+            c["event_summary"], c["event_date"], len(c["matched_services"]),
+            [m["keyword"] for m in c["matched_services"]],
+            c["assigned_to"], c["resolution"],
+        )
+
+    # -- Phase 1b: Build per-customer bundles from service agreements ---------
     # Group services by contact_id so customers with multiple services
     # (e.g. Kinder Morgan St. Elmo + Altamont) get ONE combined invoice.
-
-    from collections import defaultdict
 
     customer_bundles: dict[str, dict[str, Any]] = {}  # contact_id -> bundle
 
@@ -139,10 +177,10 @@ async def run(task: ScheduledTask) -> dict:
         if contact_id_filter and contact_id not in contact_id_filter:
             continue
 
-        keyword = svc["calendar_keyword"].lower()
         rate_label = svc.get("rate_label", "Per Visit")
 
-        # Per Hour services need manual input -- skip and flag
+        # Per Hour services always get flagged in needs_hours so the user
+        # sees them in the ntfy summary even if no events were logged.
         if rate_label == "Per Hour":
             results["needs_hours"].append({
                 "service": svc["service_name"],
@@ -150,24 +188,21 @@ async def run(task: ScheduledTask) -> dict:
                 "rate": float(svc["rate"]),
                 "keyword": svc["calendar_keyword"],
             })
-            logger.info(
-                "Service %s (%s): Per Hour rate, skipping -- needs manual hours",
-                svc_id, svc["service_name"],
-            )
-            continue
 
-        # Match events by keyword in summary, filtered to billing month dates
-        billing_start = date(period_year, period_month, 1)
-        billing_end = date(period_year, period_month, last_day)
-        matching = [
-            e for e in confirmed_events
-            if keyword in e.summary.lower()
-            and billing_start <= (e.start.date() if isinstance(e.start, datetime) else e.start) <= billing_end
-        ]
+        matching = events_by_service.get(str(svc_id), [])
 
-        # Per Month services don't need events (flat rate)
+        # Per Month services don't need events (flat rate). Per Hour and
+        # Per Visit both require at least one matching event for the month.
         if not matching and rate_label != "Per Month":
             results["invoices_skipped_no_events"] += 1
+            last_invoiced = svc.get("last_invoiced_at")
+            results["skipped_no_events_details"].append({
+                "service": svc["service_name"],
+                "contact_id": contact_id,
+                "keyword": svc["calendar_keyword"],
+                "rate_label": rate_label,
+                "last_invoiced_at": last_invoiced.isoformat() if hasattr(last_invoiced, "isoformat") else last_invoiced,
+            })
             logger.debug(
                 "Service %s (%s): no matching events for keyword '%s'",
                 svc_id, svc["service_name"], svc["calendar_keyword"],
@@ -176,7 +211,7 @@ async def run(task: ScheduledTask) -> dict:
 
         # Build line items for this service
         rate = float(svc["rate"])
-        svc_line_items = []
+        svc_line_items: list[dict] = []
         visit_count = 0
 
         if rate_label == "Per Month":
@@ -187,6 +222,10 @@ async def run(task: ScheduledTask) -> dict:
                 "unit_price": rate,
             })
             visit_count = len(matching) if matching else 0
+        elif rate_label == "Per Hour":
+            svc_line_items, visit_count = _build_per_hour_line_items(
+                matching, rate, svc["service_name"],
+            )
         else:
             day_counts: Counter[date] = Counter()
             for event in matching:
@@ -218,6 +257,11 @@ async def run(task: ScheduledTask) -> dict:
         bundle["line_items"].extend(svc_line_items)
         bundle["visit_count"] += visit_count
         bundle["service_names"].append(svc["service_name"])
+
+        # Flag the whole invoice as needing hours when any contributing
+        # service is Per Hour. Picked up by review tooling / list_pending_drafts.
+        if rate_label == "Per Hour":
+            bundle["invoice_metadata"]["needs_hours"] = True
 
         # Use highest tax_rate across grouped services
         svc_tax = float(svc.get("tax_rate", 0))
@@ -289,6 +333,9 @@ async def run(task: ScheduledTask) -> dict:
                 source_ref=source_ref,
                 notes=f"Auto-generated for {period_label}.",
                 metadata=invoice_metadata if invoice_metadata else None,
+                # Embed the billing month (April) in the invoice number,
+                # not the issue month (early May when the cron fires).
+                billing_period=date(period_year, period_month, 1),
             )
         except Exception as e:
             logger.error("Failed to create invoice for customer %s: %s", customer_name, e)
@@ -319,7 +366,7 @@ async def run(task: ScheduledTask) -> dict:
             pdf_bytes = render_invoice_pdf(invoice)
             customer_folder = os.path.join(save_base, str(period_year), customer_name)
             os.makedirs(customer_folder, exist_ok=True)
-            pdf_filename = f"{invoice['invoice_number']} - {_month_name(period_month)} {period_year}.pdf"
+            pdf_filename = f"{invoice['invoice_number']}.pdf"
             pdf_path = os.path.join(customer_folder, pdf_filename)
             with open(pdf_path, "wb") as f:
                 f.write(pdf_bytes)
@@ -425,6 +472,61 @@ async def run(task: ScheduledTask) -> dict:
     return results
 
 
+def _build_notification_lines(results: dict) -> list[str]:
+    """Build the ntfy message body for a monthly_invoice_generation result.
+
+    Pure function so it can be unit-tested in isolation; _send_notification
+    wraps this with the actual ntfy delivery + config gating.
+    """
+    period = results["period"]
+    created = results["invoices_created"]
+    sent = results["invoices_sent"]
+    total = results["total_amount"]
+    review = results.get("review_mode", False)
+
+    lines = [f"Period: {period}"]
+    if review:
+        lines.append(f"REVIEW MODE: {created} invoices ready for review (not sent)")
+    else:
+        lines.append(f"Invoices created: {created}")
+        if sent:
+            lines.append(f"Sent via email: {sent}")
+    lines.append(f"Total: {_money(total)}")
+
+    for d in results.get("details", []):
+        status = "DRAFT" if review else ("SENT" if d.get("sent") else "created")
+        lines.append(f"  {d['customer']}: {d['invoice_number']} ({d['visits']} visits, {_money(d['total'])}) [{status}]")
+
+    needs_hours = results.get("needs_hours", [])
+    if needs_hours:
+        lines.append("")
+        lines.append(f"NEEDS HOURS ({len(needs_hours)}):")
+        for nh in needs_hours:
+            lines.append(f"  {nh['service']} @ ${nh['rate']:.2f}/hr")
+
+    collisions = results.get("keyword_collisions", [])
+    if collisions:
+        lines.append("")
+        lines.append(f"KEYWORD COLLISIONS ({len(collisions)}) -- review service keywords:")
+        for c in collisions:
+            matched = ", ".join(m["keyword"] for m in c["matched_services"])
+            lines.append(
+                f"  '{c['event_summary']}' ({c['event_date']}) -> {c['assigned_to']} "
+                f"[{c['resolution']}; matched: {matched}]"
+            )
+
+    skipped = results.get("skipped_no_events_details", [])
+    if skipped:
+        lines.append("")
+        lines.append(f"NO EVENTS THIS MONTH ({len(skipped)}):")
+        for s in skipped:
+            last = s.get("last_invoiced_at")
+            tail = f"last invoiced {last}" if last else "no prior invoices"
+            lines.append(f"  {s['service']} ({tail})")
+
+    return lines
+
+
 async def _send_notification(results: dict, task: ScheduledTask) -> None:
     """Send ntfy push notification with invoice generation summary."""
     try:
@@ -438,32 +540,7 @@ async def _send_notification(results: dict, task: ScheduledTask) -> None:
 
         from ...tools.notify import notify_tool
 
-        period = results["period"]
-        created = results["invoices_created"]
-        sent = results["invoices_sent"]
-        total = results["total_amount"]
-        review = results.get("review_mode", False)
-
-        lines = [f"Period: {period}"]
-        if review:
-            lines.append(f"REVIEW MODE: {created} invoices ready for review (not sent)")
-        else:
-            lines.append(f"Invoices created: {created}")
-            if sent:
-                lines.append(f"Sent via email: {sent}")
-        lines.append(f"Total: {_money(total)}")
-
-        for d in results.get("details", []):
-            status = "DRAFT" if review else ("SENT" if d.get("sent") else "created")
-            lines.append(f"  {d['customer']}: {d['invoice_number']} ({d['visits']} visits, {_money(d['total'])}) [{status}]")
-
-        needs_hours = results.get("needs_hours", [])
-        if needs_hours:
-            lines.append("")
-            lines.append(f"NEEDS HOURS ({len(needs_hours)}):")
-            for nh in needs_hours:
-                lines.append(f"  {nh['service']} @ ${nh['rate']:.2f}/hr")
-
+        lines = _build_notification_lines(results)
         priority = (task.metadata or {}).get("notify_priority") or autonomous_config.notify_priority
         await notify_tool._send_notification(
             message="\n".join(lines),
@@ -473,6 +550,81 @@ async def _send_notification(results: dict, task: ScheduledTask) -> None:
         )
     except Exception:
         logger.warning("Failed to send ntfy notification", exc_info=True)
+
+
+def _build_per_hour_line_items(
+    events: list,
+    rate: float,
+    service_name: str,
+) -> tuple[list[dict], int]:
+    """Build placeholder line items for a Per Hour service.
+
+    One line item per event date, quantity=_PER_HOUR_PLACEHOLDER_QTY (0)
+    so the draft renders at $0 until the user fills hours via update_invoice.
+    Returns (line_items, visit_count).
+    """
+    day_counts: Counter[date] = Counter()
+    for event in events:
+        event_date = event.start.date() if isinstance(event.start, datetime) else event.start
+        day_counts[event_date] += 1
+
+    line_items: list[dict] = []
+    for event_date in sorted(day_counts.keys()):
+        line_items.append({
+            "date": event_date.strftime("%m/%d/%Y"),
+            "description": service_name + _PER_HOUR_PLACEHOLDER_DESC_SUFFIX,
+            "quantity": _PER_HOUR_PLACEHOLDER_QTY,
+            "unit_price": rate,
+        })
+    return line_items, sum(day_counts.values())
+
+
+def _assign_events_to_services(
+    events: list,
+    eligible_services: list[dict],
+) -> tuple[dict[str, list], list[dict]]:
+    """Assign each event to exactly one service.
+
+    For events whose summary contains multiple service keywords, picks the
+    LONGEST keyword (most specific). Equal-length keywords break alphabetically
+    to stay deterministic, and every multi-match is recorded as a collision.
+
+    Returns (events_by_service_id, collisions).
+    """
+    events_by_service: dict[str, list] = defaultdict(list)
+    collisions: list[dict] = []
+
+    for event in events:
+        summary_lower = event.summary.lower()
+        matchers = [
+            s for s in eligible_services
+            if s["calendar_keyword"].lower() in summary_lower
+        ]
+        if not matchers:
+            continue
+
+        if len(matchers) == 1:
+            events_by_service[str(matchers[0]["id"])].append(event)
+            continue
+
+        matchers.sort(key=lambda s: (-len(s["calendar_keyword"]), s["calendar_keyword"]))
+        chosen = matchers[0]
+        events_by_service[str(chosen["id"])].append(event)
+
+        is_tie = len(matchers[0]["calendar_keyword"]) == len(matchers[1]["calendar_keyword"])
+        event_date = event.start.date() if isinstance(event.start, datetime) else event.start
+        collisions.append({
+            "event_summary": event.summary,
+            "event_date": event_date.isoformat() if hasattr(event_date, "isoformat") else str(event_date),
+            "matched_services": [
+                {"service": m["service_name"], "keyword": m["calendar_keyword"]}
+                for m in matchers
+            ],
+            "assigned_to": chosen["service_name"],
+            "resolution": "alphabetical_tiebreak" if is_tie else "longest_keyword",
+        })
+
+    return dict(events_by_service), collisions
 
 
 def _month_name(month: int) -> str:

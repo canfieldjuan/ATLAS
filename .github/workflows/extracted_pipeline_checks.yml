@@ -5,6 +5,7 @@ on:
     paths:
       - "extracted_content_pipeline/**"
       - "extracted_reasoning_core/**"
+      - "atlas_brain/reasoning/state.py"
       - "scripts/sync_extracted_content_pipeline.sh"
       - "scripts/validate_extracted_content_pipeline.sh"
       - "scripts/check_ascii_python.sh"
@@ -16,10 +17,12 @@ on:
       - "tests/test_extracted_vendor_briefing_*.py"
       - "tests/test_extracted_content_pipeline_reasoning_*.py"
       - "tests/test_extracted_reasoning_core_*.py"
+      - "tests/test_atlas_reasoning_state_*.py"
   push:
     paths:
       - "extracted_content_pipeline/**"
       - "extracted_reasoning_core/**"
+      - "atlas_brain/reasoning/state.py"
       - "scripts/sync_extracted_content_pipeline.sh"
       - "scripts/validate_extracted_content_pipeline.sh"
       - "scripts/check_ascii_python.sh"
@@ -31,6 +34,7 @@ on:
       - "tests/test_extracted_vendor_briefing_*.py"
       - "tests/test_extracted_content_pipeline_reasoning_*.py"
       - "tests/test_extracted_reasoning_core_*.py"
+      - "tests/test_atlas_reasoning_state_*.py"
 
 jobs:
   extracted-checks:
@@ -53,9 +57,14 @@ jobs:
         # as an in-memory _DEFAULT_RULES dict and routes through
         # EvidenceEngine.from_rules (per PR-C1i). yaml is only needed
         # by the *core* tests that load extracted_reasoning_core/evidence_map.yaml.
+        # pydantic-settings is needed because the atlas reasoning-state
+        # inheritance test imports atlas_brain.reasoning.state, which
+        # triggers atlas_brain/reasoning/__init__.py -> config.py ->
+        # pydantic_settings. content_pipeline itself does not depend on
+        # pydantic-settings; this is purely the cross-boundary seam test.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio beautifulsoup4 httpx PyJWT pyyaml
+          python -m pip install pytest pytest-asyncio beautifulsoup4 httpx PyJWT pyyaml pydantic-settings
 
       - name: Run extracted pipeline checks
         run: bash scripts/run_extracted_pipeline_checks.sh

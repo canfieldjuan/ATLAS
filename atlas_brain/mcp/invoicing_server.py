@@ -37,6 +37,14 @@ from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger("atlas.mcp.invoicing")
 
+# Draft review codes used by list_pending_drafts. Blockers mirror the gates in
+# approve_and_send -- an invoice with any blocker will NOT be mailed. Warnings
+# are sendable but worth a human glance before approve.
+_BLOCKER_NEEDS_HOURS = "needs_hours"
+_BLOCKER_NO_EMAIL = "no_email"
+_WARNING_SUBTOTAL_ZERO = "subtotal_zero"
+_WARNING_NO_CONTACT = "no_contact_id"
+
 
 @asynccontextmanager
 async def _lifespan(server):
@@ -822,6 +830,113 @@ async def search_invoices(
 
 
 # ---------------------------------------------------------------------------
+# Tool: list_pending_drafts
+# ---------------------------------------------------------------------------
+
+def _annotate_draft(inv: dict) -> dict:
+    """Compute blockers and warnings for a draft invoice.
+
+    Blockers mirror the gates in approve_and_send -- the invoice will NOT be
+    mailed while any blocker is set. Warnings are sendable but flagged for
+    human review.
+    """
+    meta = inv.get("metadata") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if meta.get("needs_hours"):
+        blockers.append(_BLOCKER_NEEDS_HOURS)
+    if not inv.get("customer_email"):
+        blockers.append(_BLOCKER_NO_EMAIL)
+
+    # subtotal_zero is expected when needs_hours is set (Per Hour placeholders);
+    # only flag it for non-needs_hours drafts where $0 is genuinely odd.
+    total = inv.get("total_amount")
+    try:
+        total_val = float(total) if total is not None else 0.0
+    except (TypeError, ValueError):
+        total_val = 0.0
+    if total_val == 0.0 and not meta.get("needs_hours"):
+        warnings.append(_WARNING_SUBTOTAL_ZERO)
+
+    if not inv.get("contact_id"):
+        warnings.append(_WARNING_NO_CONTACT)
+
+    return {
+        "invoice_number": inv.get("invoice_number"),
+        "invoice_id": str(inv["id"]) if inv.get("id") else None,
+        "customer_name": inv.get("customer_name"),
+        "customer_email": inv.get("customer_email"),
+        "total_amount": total_val,
+        "issue_date": inv.get("issue_date"),
+        "due_date": inv.get("due_date"),
+        "blockers": blockers,
+        "warnings": warnings,
+        "send_safe": len(blockers) == 0,
+    }
+
+
+@mcp.tool()
+async def list_pending_drafts(
+    contact_id: Optional[str] = None,
+    business_context_id: Optional[str] = None,
+    only_blocked: bool = False,
+    limit: int = 100,
+) -> str:
+    """
+    List all draft invoices annotated with review flags.
+
+    Each draft is returned with two lists:
+      blockers -- approve_and_send will refuse to mail (needs_hours, no_email)
+      warnings -- mailable but worth a glance (subtotal_zero, no_contact_id)
+
+    contact_id: filter by CRM contact UUID
+    business_context_id: filter by business context (Python-side)
+    only_blocked: if True, return only drafts with at least one blocker
+    limit: max drafts to fetch (capped at 200)
+
+    Returns JSON with `drafts` (annotated list) and `summary` counts.
+    """
+    try:
+        repo = _repo()
+        cid = _uuid.UUID(contact_id) if contact_id and _is_uuid(contact_id) else None
+        invoices = await repo.search(
+            contact_id=cid,
+            status="draft",
+            limit=min(limit, 200),
+        )
+
+        if business_context_id:
+            invoices = [i for i in invoices if i.get("business_context_id") == business_context_id]
+
+        annotated = [_annotate_draft(i) for i in invoices]
+
+        if only_blocked:
+            annotated = [d for d in annotated if d["blockers"]]
+
+        summary = {
+            "total_drafts": len(annotated),
+            "send_safe": sum(1 for d in annotated if d["send_safe"]),
+            "blocked": sum(1 for d in annotated if d["blockers"]),
+            "by_blocker": {},
+            "by_warning": {},
+        }
+        for d in annotated:
+            for code in d["blockers"]:
+                summary["by_blocker"][code] = summary["by_blocker"].get(code, 0) + 1
+            for code in d["warnings"]:
+                summary["by_warning"][code] = summary["by_warning"].get(code, 0) + 1
+
+        return json.dumps({"drafts": annotated, "summary": summary}, default=str)
+    except Exception as exc:
+        logger.exception("list_pending_drafts error")
+        return json.dumps({"error": "Internal error", "drafts": [], "summary": {}})
+
+
+# ---------------------------------------------------------------------------
 # Tool: approve_and_send
 # ---------------------------------------------------------------------------
 
@@ -897,6 +1012,22 @@ async def approve_and_send(
         if inv.get("status") != "draft":
             results["skipped"] += 1
             results["details"].append({"invoice": inv_num, "status": "skipped", "reason": f"status is {inv.get('status')}, expected draft"})
+            continue
+
+        # Refuse to send drafts flagged as awaiting hours (Per Hour placeholders
+        # generated by monthly_invoice_generation start with quantity=0 and a
+        # metadata.needs_hours flag; user must update_invoice with real hours
+        # to clear the flag before approve_and_send will mail them).
+        # This check runs before the email check so the user sees the real
+        # blocker -- adding an email won't make a $0 placeholder safe to send.
+        inv_meta = inv.get("metadata") or {}
+        if isinstance(inv_meta, dict) and inv_meta.get("needs_hours"):
+            results["skipped"] += 1
+            results["details"].append({
+                "invoice": inv_num,
+                "status": "skipped",
+                "reason": "needs hours - update quantities via update_invoice before sending",
+            })
             continue
 
         if not customer_email:
@@ -1064,13 +1195,36 @@ async def export_invoice_pdf(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    transport = "sse" if "--sse" in sys.argv else "stdio"
-    if transport == "sse":
+    if "--sse" in sys.argv:
+        # Streamable HTTP transport (preferred by claude.ai connectors;
+        # mcp.sse_app() is being deprecated). Bearer auth via
+        # apply_auth_middleware when ATLAS_MCP_AUTH_TOKEN is set.
+        import anyio
+        import uvicorn
+        from mcp.server.transport_security import TransportSecuritySettings
+
         from ..config import settings
-        from .auth import run_sse_with_auth
+        from .auth import apply_auth_middleware
 
         mcp.settings.host = settings.mcp.host
         mcp.settings.port = settings.mcp.invoicing_port
-        run_sse_with_auth(mcp, settings.mcp.host, settings.mcp.invoicing_port)
+        # Required when accessed via reverse proxy (Tailscale Funnel,
+        # Cloudflare, etc.) -- Host header won't match 127.0.0.1.
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+        secured_app = apply_auth_middleware(mcp.streamable_http_app())
+
+        async def _serve():
+            config = uvicorn.Config(
+                secured_app,
+                host=settings.mcp.host,
+                port=settings.mcp.invoicing_port,
+                log_level="info",
+            )
+            server = uvicorn.Server(config)
+            await server.serve()
+
+        anyio.run(_serve)
     else:
         mcp.run(transport="stdio")

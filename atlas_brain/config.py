@@ -2079,8 +2079,18 @@ class InvoicingConfig(BaseSettings):
     enabled: bool = Field(default=False, description="Enable invoicing system")
     default_payment_terms_days: int = Field(default=30, ge=1, le=365, description="Default days until due")
     default_tax_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Default tax rate (0.0-1.0)")
-    reminder_max_count: int = Field(default=3, ge=0, le=10, description="Max payment reminders per invoice")
-    reminder_interval_days: int = Field(default=7, ge=1, le=90, description="Days between reminders")
+    reminders_enabled: bool = Field(default=True, description="Master toggle for the payment-reminder cron task")
+    reminder_intervals: list[int] = Field(
+        default_factory=lambda: [7, 14, 30],
+        description=(
+            "Escalating gaps (days) before each reminder. "
+            "intervals[0] = days from due_date to reminder #1, "
+            "intervals[1] = days from #1 to #2, etc. "
+            "Total reminders = len(intervals); empty list -> legacy flat behavior."
+        ),
+    )
+    reminder_max_count: int = Field(default=3, ge=0, le=10, description="Max payment reminders per invoice (legacy fallback when reminder_intervals is empty)")
+    reminder_interval_days: int = Field(default=7, ge=1, le=90, description="Days between reminders (legacy fallback when reminder_intervals is empty)")
     notify_enabled: bool = Field(default=True, description="Push ntfy for invoice events")
     invoice_number_prefix: str = Field(default="INV", description="Prefix for invoice numbers")
     auto_invoice_enabled: bool = Field(default=True, description="Monthly auto-invoice generation")
