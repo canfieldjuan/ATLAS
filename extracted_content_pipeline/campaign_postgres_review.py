@@ -78,14 +78,17 @@ async def review_campaign_drafts(
 
     params: list[Any] = [list(normalized_ids)]
     where = ["id = ANY($1::uuid[])"]
+    update_where = ["campaign.id = matched.id"]
     filters: dict[str, Any] = {"campaign_ids": normalized_ids}
     if status_guard:
         params.append(list(status_guard))
         where.append(f"status = ANY(${len(params)}::text[])")
+        update_where.append("campaign.status = matched.previous_status")
         filters["from_statuses"] = status_guard
     if tenant.account_id:
         params.append(tenant.account_id)
         where.append(f"{_ACCOUNT_ID_FILTER_EXPR} = ${len(params)}")
+        update_where.append(f"campaign.{_ACCOUNT_ID_FILTER_EXPR} = ${len(params)}")
         filters["account_id"] = tenant.account_id
 
     if dry_run:
@@ -112,7 +115,7 @@ async def review_campaign_drafts(
         status_position = len(params)
         params.append(_jsonb(patch))
         patch_position = len(params)
-        params.append(_clean(from_email) or None)
+        params.append((_clean(from_email) or None) if target_status == "queued" else None)
         from_email_position = len(params)
         rows = await pool.fetch(
             f"""
@@ -132,7 +135,7 @@ async def review_campaign_drafts(
                    metadata = COALESCE(campaign.metadata, '{{}}'::jsonb) || ${patch_position}::jsonb,
                    updated_at = NOW()
               FROM matched
-             WHERE campaign.id = matched.id
+             WHERE {' AND '.join(update_where)}
              RETURNING
                    campaign.id::text AS id,
                    matched.previous_status,

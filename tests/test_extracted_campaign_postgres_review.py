@@ -77,6 +77,8 @@ async def test_review_campaign_drafts_approves_scoped_draft_rows() -> None:
     assert "id = ANY($1::uuid[])" in query
     assert "status = ANY($2::text[])" in query
     assert "metadata -> 'scope' ->> 'account_id' = $3" in query
+    assert "campaign.status = matched.previous_status" in query
+    assert "campaign.metadata -> 'scope' ->> 'account_id' = $3" in query
     assert "status = $4" in query
     assert args[0] == ["00000000-0000-0000-0000-000000000001"]
     assert args[1] == ["draft"]
@@ -114,6 +116,28 @@ async def test_review_campaign_drafts_queues_with_from_email() -> None:
         "queued",
         "{\"review_status\":\"queued\"}",
         "sales@example.com",
+    )
+
+
+@pytest.mark.asyncio
+async def test_review_campaign_drafts_only_stamps_from_email_when_queueing() -> None:
+    pool = _Pool(rows=[_row(status="approved", from_email="existing@example.com")])
+
+    await review_campaign_drafts(
+        pool,
+        campaign_ids=["00000000-0000-0000-0000-000000000001"],
+        status="approved",
+        from_email="sales@example.com",
+    )
+
+    query, args = pool.fetch_calls[0]
+    assert "from_email = COALESCE($5::text, campaign.from_email)" in query
+    assert args == (
+        ["00000000-0000-0000-0000-000000000001"],
+        ["draft"],
+        "approved",
+        "{\"review_status\":\"approved\"}",
+        None,
     )
 
 
