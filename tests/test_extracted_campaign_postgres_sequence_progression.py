@@ -255,6 +255,8 @@ def test_sequence_cli_validates_positive_limits() -> None:
         "1",
         "--max-steps",
         "1",
+        "--from-email",
+        "sales@example.com",
     ])
     cli._validate_args(args)
 
@@ -264,6 +266,23 @@ def test_sequence_cli_validates_positive_limits() -> None:
     args.limit = 1
     args.max_steps = 0
     with pytest.raises(SystemExit, match="Invalid --max-steps"):
+        cli._validate_args(args)
+
+
+def test_sequence_cli_requires_from_email() -> None:
+    cli = _load_cli_module()
+    args = cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--limit",
+        "1",
+        "--max-steps",
+        "1",
+        "--from-email",
+        "   ",
+    ])
+
+    with pytest.raises(SystemExit, match="Missing --from-email"):
         cli._validate_args(args)
 
 

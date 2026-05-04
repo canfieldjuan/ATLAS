@@ -162,13 +162,18 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("Invalid --limit: must be greater than 0")
     if int(args.max_steps) <= 0:
         raise SystemExit("Invalid --max-steps: must be greater than 0")
+    if not str(args.from_email or "").strip():
+        raise SystemExit(
+            "Missing --from-email, EXTRACTED_CAMPAIGN_SEQUENCE_FROM_EMAIL, "
+            "or EXTRACTED_CAMPAIGN_FROM_EMAIL"
+        )
 
 
 def _config_from_args(args: argparse.Namespace) -> CampaignSequenceProgressionConfig:
     return CampaignSequenceProgressionConfig(
         batch_limit=int(args.limit),
         max_steps=int(args.max_steps),
-        from_email=str(args.from_email or ""),
+        from_email=str(args.from_email or "").strip(),
         onboarding_product_name=str(args.onboarding_product_name or ""),
         temperature=float(args.temperature),
     )
