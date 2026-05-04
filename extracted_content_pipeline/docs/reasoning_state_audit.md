@@ -36,15 +36,19 @@ python scripts/audit_extracted_standalone.py --fail-on-debt
 # Atlas runtime import findings: 0
 ```
 
-The buyer-facing happy path (each step works on a fresh box with
-nothing but Postgres and Python installed):
+The buyer-facing happy path. Prerequisites: Python 3.11+, Postgres,
+plus `pip install -r requirements.txt` (the DB-backed CLIs need
+`asyncpg`). Step 4 below uses `--llm offline` so the path runs without
+external LLM credentials. To run against a real LLM, drop `--llm
+offline` and set `EXTRACTED_CAMPAIGN_LLM_*` per the host install
+runbook.
 
 ```bash
 # 1. Migrations
 export EXTRACTED_DATABASE_URL="postgres://user:pass@localhost/content_ops"
 python scripts/run_extracted_content_pipeline_migrations.py
 
-# 2. Validate offline (optional but recommended)
+# 2. Validate offline (optional but recommended; no DB required)
 python scripts/run_extracted_campaign_generation_example.py \
   customer_opportunities.csv --format csv
 
@@ -52,9 +56,10 @@ python scripts/run_extracted_campaign_generation_example.py \
 python scripts/load_extracted_campaign_opportunities.py \
   customer_opportunities.csv --format csv --account-id acct_123
 
-# 4. Generate drafts
+# 4. Generate drafts (offline LLM; swap to real LLM by removing --llm offline
+#    and configuring EXTRACTED_CAMPAIGN_LLM_*)
 python scripts/run_extracted_campaign_generation_postgres.py \
-  --account-id acct_123 --limit 10
+  --account-id acct_123 --limit 10 --llm offline
 
 # 5. Export
 python scripts/export_extracted_campaign_drafts.py \
