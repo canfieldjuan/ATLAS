@@ -15,9 +15,11 @@
 | README + this STATUS file | ✅ done |
 | `import_debt_allowlist.txt` (empty by design — corrected resolver) | ✅ done |
 
-## Phase 2 — Standalone toggle 🔲 (separate PR)
+## Phase 2 — Standalone toggle 🔲
 
-Goal: every scaffolded module is importable and runnable without `atlas_brain` on `sys.path`, gated by `EXTRACTED_COMP_INTEL_STANDALONE=1`.
+Goal: core substrate and selected product surfaces are importable without
+`atlas_brain` on `sys.path`, gated by `EXTRACTED_COMP_INTEL_STANDALONE=1`.
+Full task/runtime decoupling remains Phase 3.
 
 | Task | Notes |
 |---|---|
@@ -31,14 +33,38 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 | Source registry support module | ✅ `services.scraping.sources` is extracted-owned instead of an Atlas bridge |
 | Package-level Atlas fallbacks | ✅ standalone mode fails closed for lazy package access in services, B2B services, templates, reasoning, autonomous, and autonomous tasks |
 | Product-owned manifest entries | ✅ `manifest.json` supports `owned` modules that stay in ASCII/import checks but are skipped by byte-sync validation |
+| MCP write tool boundary | ✅ `write_intelligence.py` owns simple DB writes and exposes explicit host ports for deep runtime builders/enrichers |
+| Source impact support boundary | ✅ `source_impact.py` and its static scrape capability registry are product-owned |
+
+### Current audit snapshot
+
+| Metric | Count |
+|---|---:|
+| Extracted files | 88 |
+| Manifest mappings | 18 |
+| Manifest Python snapshots | 9 |
+| Manifest SQL snapshots | 9 |
+| Product-owned modules | 8 |
+
+Product-owned modules:
+
+- `mcp/b2b/vendor_registry.py`
+- `mcp/b2b/displacement.py`
+- `mcp/b2b/cross_vendor.py`
+- `mcp/b2b/write_intelligence.py`
+- `mcp/b2b/write_ports.py`
+- `services/vendor_registry.py`
+- `services/scraping/capabilities.py`
+- `services/b2b/source_impact.py`
 
 ## Phase 3 — Decoupling 🔲 (later PRs)
 
 | Task | Source file referenced |
 |---|---|
-| Rewire `b2b_battle_cards.py` LLM calls to consume `extracted_llm_infrastructure` directly | `autonomous/tasks/b2b_battle_cards.py:260` (`call_llm_with_skill`), `b2b_vendor_briefing.py:1201` (`get_llm`) |
+| Rewire `b2b_battle_cards.py` LLM calls to consume `extracted_llm_infrastructure` directly | `autonomous/tasks/b2b_battle_cards.py:3140` (`call_llm_with_skill`, `get_pipeline_llm`), `b2b_vendor_briefing.py:1199-1202` (`get_llm`) |
 | Replace `_b2b_shared.py` cross-imports with explicit `Protocol`-based interfaces | `vendor_briefing.py:40-47` reads from `_b2b_shared` for vendor intelligence records |
 | Decouple from `atlas_brain.services.b2b.challenger_dashboard_claims` | `b2b_battle_cards.py:21` imports `aggregate_direct_displacement_claims_for_incumbent` |
+| Provide host adapters for write-tool builders | `mcp/b2b/write_ports.py` defines ports for challenger brief and accounts-in-motion builders |
 | Generic `EvidenceClaimReader` Protocol | `services/b2b/evidence_claim_*.py` stays in atlas-core; scaffold consumes via Protocol |
 | Open-source-grade README + LICENSE + pyproject.toml | scaffold root |
 | Publishable PyPI package | scaffold root |
@@ -47,14 +73,14 @@ Goal: every scaffolded module is importable and runnable without `atlas_brain` o
 
 | Scaffold file | Phase 1 (snapshot) | Phase 2 (standalone-ready) | Phase 3 (decoupled) |
 |---|---|---|---|
-| `services/vendor_registry.py` | ✅ | 🔲 | 🔲 |
+| `services/vendor_registry.py` | ✅ | ✅ | 🔲 |
 | `mcp/b2b/vendor_registry.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/displacement.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/cross_vendor.py` | ✅ | ✅ | ✅ |
-| `mcp/b2b/write_intelligence.py` | ✅ | 🔲 | 🔲 |
+| `mcp/b2b/write_intelligence.py` | ✅ | ✅ | 🔲 (deep builders require host adapters) |
 | `mcp/b2b/_shared.py` | n/a | ✅ | 🔲 |
 | `mcp/b2b/server.py` | n/a | ✅ | 🔲 |
-| `services/b2b/source_impact.py` | ✅ | 🔲 (mostly pure data; should be easy) | 🔲 |
+| `services/b2b/source_impact.py` | ✅ | ✅ | ✅ |
 | `services/scraping/sources.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |

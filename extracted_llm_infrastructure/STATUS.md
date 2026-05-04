@@ -41,18 +41,18 @@ transitively through the bridge stubs, so when
 
 The standalone smoke (`scripts/smoke_extracted_llm_infrastructure_standalone.py`) verifies this end-to-end: it sets the env var, imports every provider, and asserts (via `__module__` walk on `AnthropicLLM.__mro__`) that providers transitively consume the standalone substrate rather than silently falling back to atlas_brain.
 
-## Phase 3 — Runtime decoupling 🔲 (later PRs)
+## Phase 3 — Runtime decoupling 🟡 (in progress)
 
 Import contract is closed; the remaining work is **runtime** behavior when functions execute, not when modules load:
 
-| Task | Source file referenced |
-|---|---|
-| `Protocol`-based DI for LLM instances; replace `isinstance(AnthropicLLM)` checks | `services/b2b/anthropic_batch.py:550, 740, 1034, 1144` and `services/llm_router.py:205-247` |
-| Extract `_convert_messages` from `AnthropicLLM` so batch code does not call a private method | `services/llm/anthropic.py:103+`, called from `services/b2b/anthropic_batch.py:409` |
-| Decouple `SemanticCache` from Postgres (asyncpg.Record assumptions) | `reasoning/semantic_cache.py:70-339` |
-| Move `evidence_hash` computation to a single owner | currently split between `reasoning/semantic_cache.py:47` and B2B callers |
-| Open-source-grade README + LICENSE + pyproject.toml | scaffold root |
-| Publishable PyPI package | scaffold root |
+| Task | Source file referenced | Status |
+|---|---|---|
+| `Protocol`-based DI for LLM instances; replace `isinstance(AnthropicLLM)` checks | `services/b2b/anthropic_batch.py:550, 740, 1034, 1144` and `services/llm_router.py:205-247` | 🔲 |
+| Extract `_convert_messages` from `AnthropicLLM` so batch code does not call a private method | `services/llm/anthropic.py:103+`, called from `services/b2b/anthropic_batch.py:409` | ✅ PR-A5a (module-level `convert_messages`; method preserved as backwards-compat alias; batch caller imports the public function) |
+| Decouple `SemanticCache` from Postgres (asyncpg.Record assumptions) | `reasoning/semantic_cache.py:70-339` | 🔲 |
+| Move `evidence_hash` computation to a single owner | currently split between `reasoning/semantic_cache.py:47` and B2B callers | 🔲 |
+| Open-source-grade README + LICENSE + pyproject.toml | scaffold root | 🔲 |
+| Publishable PyPI package | scaffold root | 🔲 |
 
 ## Per-file extraction state
 

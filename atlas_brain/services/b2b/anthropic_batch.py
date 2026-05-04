@@ -13,7 +13,7 @@ from typing import Any, Sequence
 
 from ...config import settings
 from ...pipelines.llm import trace_llm_call
-from ..llm.anthropic import AnthropicLLM
+from ..llm.anthropic import AnthropicLLM, convert_messages
 from ..protocols import Message
 
 logger = logging.getLogger("atlas.services.b2b.anthropic_batch")
@@ -406,7 +406,7 @@ async def _update_batch_job(
 
 def _build_request_params(llm: AnthropicLLM, item: AnthropicBatchItem) -> dict[str, Any]:
     messages = [_message_from_value(message) for message in item.messages]
-    system_prompt, api_messages = llm._convert_messages(messages)  # type: ignore[attr-defined]
+    system_prompt, api_messages = convert_messages(messages)
     params: dict[str, Any] = {
         "model": llm.model,
         "messages": api_messages,

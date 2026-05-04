@@ -1,8 +1,5 @@
 {
   "mappings": [
-    {"source": "atlas_brain/services/vendor_registry.py", "target": "extracted_competitive_intelligence/services/vendor_registry.py"},
-    {"source": "atlas_brain/mcp/b2b/write_intelligence.py", "target": "extracted_competitive_intelligence/mcp/b2b/write_intelligence.py"},
-    {"source": "atlas_brain/services/b2b/source_impact.py", "target": "extracted_competitive_intelligence/services/b2b/source_impact.py"},
     {"source": "atlas_brain/autonomous/tasks/b2b_battle_cards.py", "target": "extracted_competitive_intelligence/autonomous/tasks/b2b_battle_cards.py"},
     {"source": "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py", "target": "extracted_competitive_intelligence/autonomous/tasks/b2b_vendor_briefing.py"},
     {"source": "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py", "target": "extracted_competitive_intelligence/autonomous/tasks/_b2b_cross_vendor_synthesis.py"},
@@ -23,8 +20,13 @@
     {"source": "atlas_brain/storage/migrations/263_b2b_competitive_set_run_constraints.sql", "target": "extracted_competitive_intelligence/storage/migrations/263_b2b_competitive_set_run_constraints.sql"}
   ],
   "owned": [
+    {"target": "extracted_competitive_intelligence/services/vendor_registry.py"},
     {"target": "extracted_competitive_intelligence/mcp/b2b/vendor_registry.py"},
     {"target": "extracted_competitive_intelligence/mcp/b2b/displacement.py"},
-    {"target": "extracted_competitive_intelligence/mcp/b2b/cross_vendor.py"}
+    {"target": "extracted_competitive_intelligence/mcp/b2b/cross_vendor.py"},
+    {"target": "extracted_competitive_intelligence/mcp/b2b/write_intelligence.py"},
+    {"target": "extracted_competitive_intelligence/mcp/b2b/write_ports.py"},
+    {"target": "extracted_competitive_intelligence/services/scraping/capabilities.py"},
+    {"target": "extracted_competitive_intelligence/services/b2b/source_impact.py"}
   ]
 }
