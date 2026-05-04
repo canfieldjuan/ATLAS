@@ -250,6 +250,16 @@ python scripts/send_extracted_campaigns.py \
   --limit 10
 ```
 
+Ingest Resend webhook payloads into the campaign tables:
+
+```bash
+export EXTRACTED_RESEND_WEBHOOK_SECRET="whsec_..."
+python scripts/ingest_extracted_campaign_webhook.py \
+  --body-file resend-event.json \
+  --headers-json resend-headers.json \
+  --json
+```
+
 Refresh campaign analytics after send or webhook updates:
 
 ```bash
@@ -355,6 +365,9 @@ Several small utility shims provide product-owned local behavior by default so t
   campaign, suppression, audit, and sender ports for host worker CLIs
 - `campaign_postgres_analytics.py`: DB-backed analytics refresh runner that
   composes campaign and audit ports for host worker CLIs
+- `campaign_postgres_webhooks.py`: DB-backed webhook ingestion runner that
+  composes campaign, suppression, audit, and Resend verification ports for
+  host worker CLIs
 - `campaign_postgres_sequence_progression.py`: DB-backed due-sequence worker
   that composes the sequence, audit, LLM, and skill ports for follow-up
   generation
