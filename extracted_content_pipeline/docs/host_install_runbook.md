@@ -259,6 +259,16 @@ python scripts/review_extracted_campaign_drafts.py \
   --from-email audit@customer.com
 ```
 
+Send queued drafts through the configured provider:
+
+```bash
+export EXTRACTED_RESEND_API_KEY="re_..."
+python scripts/send_extracted_campaigns.py \
+  --provider resend \
+  --default-from-email audit@customer.com \
+  --limit 10
+```
+
 Reject a draft without deleting it:
 
 ```bash
@@ -291,8 +301,8 @@ DELETE FROM campaign_opportunities WHERE account_id = 'acct_123';
 
 ## Current Limits
 
-- API routes, review queues, send workers, and dashboard auth are not part of
-  this install path yet.
+- API routes, review queues, and dashboard auth are not part of this install
+  path yet.
 - The runbook covers campaign opportunity generation, not blog generation or
   vendor briefing delivery.
 - Reasoning production remains host-owned. This product accepts reasoning
