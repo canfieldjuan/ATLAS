@@ -53,3 +53,35 @@ GROUNDING RULES:
 
 Output ONLY valid JSON matching the schema provided.\
 """
+
+
+# PR-C3c: register this prompt with the shared reasoning pack registry
+# (PR-C3a / extracted_reasoning_core.pack_registry). Existing callers
+# that import ``CROSS_VENDOR_BATTLE_SINGLE_PASS`` directly keep working;
+# the registry exists alongside for callers preferring the by-name
+# pattern (``get_pack("cross_vendor_battle_single_pass")``). Per the
+# audit, the pack file moves into ``extracted_competitive_intelligence``
+# during PR 7 (Product Migration).
+import hashlib as _hashlib
+
+from extracted_reasoning_core.pack_registry import (
+    Pack as _Pack,
+    register_pack as _register_pack,
+)
+
+CROSS_VENDOR_BATTLE_SINGLE_PASS_VERSION = _hashlib.sha256(
+    CROSS_VENDOR_BATTLE_SINGLE_PASS.encode()
+).hexdigest()[:8]
+
+_register_pack(
+    _Pack(
+        name="cross_vendor_battle_single_pass",
+        version=CROSS_VENDOR_BATTLE_SINGLE_PASS_VERSION,
+        prompts={"battle_single_pass": CROSS_VENDOR_BATTLE_SINGLE_PASS},
+        metadata={
+            "output_artifact": "cross_vendor_battle_conclusion",
+            "owner_product": "competitive_intelligence",
+            "synthesis_mode": "single_pass_with_self_check",
+        },
+    )
+)
