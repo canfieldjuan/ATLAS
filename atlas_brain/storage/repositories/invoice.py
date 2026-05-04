@@ -42,8 +42,15 @@ class InvoiceRepository:
         business_context_id: Optional[str] = None,
         notes: Optional[str] = None,
         metadata: Optional[dict] = None,
+        billing_period: Optional[date] = None,
     ) -> dict:
-        """Create a new invoice with auto-generated invoice number."""
+        """Create a new invoice with auto-generated invoice number.
+
+        billing_period: the date whose YYYY-Mon is embedded in the invoice
+        number. Defaults to issue_date if not given. Set this to the first
+        day of the period when invoicing past work (e.g. April 1 for an
+        April-billing invoice issued in early May).
+        """
         pool = get_db_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("create invoice")
@@ -80,7 +87,7 @@ class InvoiceRepository:
                 )
                 VALUES (
                     $1,
-                    (SELECT $19 || '-' || to_char($13::date, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
+                    (SELECT $19 || '-' || to_char(COALESCE($25::date, $13::date), 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
                     $2, $3, $4, $5, $6,
                     $7::jsonb, $8, $9, $10, $11, $12,
                     $13, $14, 'draft', $15, $16, $17,
@@ -113,6 +120,7 @@ class InvoiceRepository:
                 invoice_for,
                 contact_name,
                 now,
+                billing_period,
             )
             if row:
                 logger.info("Created invoice %s number=%s total=%.2f", invoice_id, row["invoice_number"], total)

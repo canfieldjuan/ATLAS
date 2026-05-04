@@ -333,6 +333,9 @@ async def run(task: ScheduledTask) -> dict:
                 source_ref=source_ref,
                 notes=f"Auto-generated for {period_label}.",
                 metadata=invoice_metadata if invoice_metadata else None,
+                # Embed the billing month (April) in the invoice number,
+                # not the issue month (early May when the cron fires).
+                billing_period=date(period_year, period_month, 1),
             )
         except Exception as e:
             logger.error("Failed to create invoice for customer %s: %s", customer_name, e)
