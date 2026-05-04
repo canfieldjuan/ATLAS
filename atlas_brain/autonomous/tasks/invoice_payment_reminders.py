@@ -66,7 +66,9 @@ async def run(task: ScheduledTask) -> dict:
         customer_email = inv.get("customer_email")
         if customer_email:
             try:
+                import base64
                 from ...services.email_provider import get_email_provider
+                from ...services.invoice_pdf import render_invoice_pdf
                 email_provider = get_email_provider()
 
                 body = (
@@ -76,14 +78,36 @@ async def run(task: ScheduledTask) -> dict:
                     f"for ${inv['amount_due']:.2f} is past due.\n\n"
                     f"Original Due Date: {inv['due_date']}\n"
                     f"Amount Due: ${inv['amount_due']:.2f}\n\n"
+                    f"A copy of the invoice is attached for your reference.\n\n"
                     f"Please arrange payment at your earliest convenience.\n\n"
                     f"Thank you."
                 )
+
+                # Attach invoice PDF; fall back to text-only if render fails so
+                # the reminder still goes out (a missing nudge is worse than
+                # a missing attachment).
+                attachments = None
+                try:
+                    pdf_bytes = render_invoice_pdf(inv)
+                    attachments = [{
+                        "filename": f"{inv['invoice_number']}.pdf",
+                        "content": base64.b64encode(pdf_bytes).decode("ascii"),
+                    }]
+                except Exception as pdf_err:
+                    logger.warning(
+                        "PDF render failed for reminder %s, sending text-only: %s",
+                        inv["invoice_number"], pdf_err,
+                    )
+                    body = body.replace(
+                        "A copy of the invoice is attached for your reference.\n\n",
+                        "",
+                    )
 
                 await email_provider.send(
                     to=[customer_email],
                     subject=f"Payment Reminder: Invoice {inv['invoice_number']} - ${inv['amount_due']:.2f}",
                     body=body,
+                    attachments=attachments,
                 )
                 email_sent = True
             except Exception as e:

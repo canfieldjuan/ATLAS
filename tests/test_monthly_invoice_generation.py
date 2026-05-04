@@ -410,6 +410,442 @@ async def test_approve_and_send_dry_run():
         await close_database()
 
 
+def _fake_event(summary: str, dt: date):
+    """Build a minimal calendar-event stand-in for the resolver."""
+    return SimpleNamespace(
+        summary=summary,
+        start=datetime(dt.year, dt.month, dt.day, 16, 0, tzinfo=timezone.utc),
+        status="confirmed",
+    )
+
+
+def _fake_service(svc_id: str, name: str, keyword: str):
+    return {
+        "id": svc_id,
+        "service_name": name,
+        "calendar_keyword": keyword,
+        "rate_label": "Per Visit",
+    }
+
+
+def test_resolver_unique_match_assigns_directly():
+    """Single matching keyword: event goes to that service, no collision."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _assign_events_to_services,
+    )
+
+    services = [
+        _fake_service("svc-a", "Menards", "Menards"),
+        _fake_service("svc-b", "Lincare Office", "Lincare"),
+    ]
+    events = [_fake_event("Menards", date(2026, 3, 7))]
+
+    by_service, collisions = _assign_events_to_services(events, services)
+
+    assert by_service == {"svc-a": [events[0]]}
+    assert collisions == []
+
+
+def test_resolver_longest_keyword_wins_on_collision():
+    """When two keywords both match, the longer one (more specific) is chosen."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _assign_events_to_services,
+    )
+
+    services = [
+        _fake_service("svc-short", "Smith Family", "Smith"),
+        _fake_service("svc-long", "Smith Corporation", "Smith Corp"),
+    ]
+    events = [_fake_event("Smith Corp Office", date(2026, 3, 14))]
+
+    by_service, collisions = _assign_events_to_services(events, services)
+
+    assert "svc-long" in by_service
+    assert "svc-short" not in by_service
+    assert by_service["svc-long"] == [events[0]]
+    assert len(collisions) == 1
+    assert collisions[0]["assigned_to"] == "Smith Corporation"
+    assert collisions[0]["resolution"] == "longest_keyword"
+    assert {m["keyword"] for m in collisions[0]["matched_services"]} == {"Smith", "Smith Corp"}
+
+
+def test_resolver_no_collision_when_only_one_keyword_matches():
+    """Substring of another keyword is fine if only one actually matches."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _assign_events_to_services,
+    )
+
+    # "Smith" alone should match "Smith Family Cleaning" but "Smith Corp" should not
+    services = [
+        _fake_service("svc-short", "Smith Family", "Smith"),
+        _fake_service("svc-long", "Smith Corporation", "Smith Corp"),
+    ]
+    events = [_fake_event("Smith Family Cleaning", date(2026, 3, 14))]
+
+    by_service, collisions = _assign_events_to_services(events, services)
+
+    assert by_service == {"svc-short": [events[0]]}
+    assert collisions == []
+
+
+def test_resolver_alphabetical_tiebreak_on_equal_length():
+    """Equal-length keywords break alphabetically and are flagged as ties."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _assign_events_to_services,
+    )
+
+    services = [
+        _fake_service("svc-bbb", "Beta Customer", "BBB"),
+        _fake_service("svc-aaa", "Alpha Customer", "AAA"),
+    ]
+    # Event summary contains both keywords -- true ambiguity
+    events = [_fake_event("AAA / BBB combo job", date(2026, 3, 14))]
+
+    by_service, collisions = _assign_events_to_services(events, services)
+
+    # Alphabetical ascending: AAA < BBB, so Alpha wins
+    assert "svc-aaa" in by_service
+    assert "svc-bbb" not in by_service
+    assert collisions[0]["assigned_to"] == "Alpha Customer"
+    assert collisions[0]["resolution"] == "alphabetical_tiebreak"
+
+
+def test_resolver_event_with_no_match_is_dropped():
+    """Events that don't match any service are silently ignored (current behavior)."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _assign_events_to_services,
+    )
+
+    services = [_fake_service("svc-a", "Menards", "Menards")]
+    events = [_fake_event("Personal appointment", date(2026, 3, 7))]
+
+    by_service, collisions = _assign_events_to_services(events, services)
+
+    assert by_service == {}
+    assert collisions == []
+
+
+def test_per_hour_line_items_one_per_event_date():
+    """Per Hour helper builds one placeholder line item per unique event date."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _build_per_hour_line_items,
+        _PER_HOUR_PLACEHOLDER_QTY,
+        _PER_HOUR_PLACEHOLDER_DESC_SUFFIX,
+    )
+
+    events = [
+        _fake_event("Brookstone room 1", date(2026, 3, 7)),
+        _fake_event("Brookstone room 2", date(2026, 3, 7)),
+        _fake_event("Brookstone room 3", date(2026, 3, 14)),
+    ]
+
+    line_items, visit_count = _build_per_hour_line_items(events, 35.0, "Brookstone")
+
+    assert len(line_items) == 2  # 2 unique dates
+    assert visit_count == 3  # 3 total events
+    for li in line_items:
+        assert li["quantity"] == _PER_HOUR_PLACEHOLDER_QTY
+        assert li["unit_price"] == 35.0
+        assert li["description"] == "Brookstone" + _PER_HOUR_PLACEHOLDER_DESC_SUFFIX
+    # Sorted by date ascending
+    assert line_items[0]["date"] == "03/07/2026"
+    assert line_items[1]["date"] == "03/14/2026"
+
+
+def test_per_hour_line_items_zero_subtotal():
+    """Per Hour drafts must produce $0 subtotal so the user can spot them."""
+    from decimal import Decimal
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _build_per_hour_line_items,
+    )
+
+    events = [_fake_event("Firefly", date(2026, 3, 7))]
+    line_items, _ = _build_per_hour_line_items(events, 50.0, "Firefly")
+
+    subtotal = sum(
+        Decimal(str(li["quantity"])) * Decimal(str(li["unit_price"]))
+        for li in line_items
+    )
+    assert subtotal == Decimal("0")
+
+
+def test_per_hour_line_items_empty_when_no_events():
+    """Helper returns empty list and 0 count when no events match."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _build_per_hour_line_items,
+    )
+
+    line_items, visit_count = _build_per_hour_line_items([], 35.0, "Brookstone")
+    assert line_items == []
+    assert visit_count == 0
+
+
+def test_per_hour_service_now_eligible_in_assignment():
+    """Per Hour services must be in eligible_services so their events route correctly."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _assign_events_to_services,
+    )
+
+    # Per Hour service should receive its events (not be filtered out)
+    services = [
+        {
+            "id": "svc-firefly",
+            "service_name": "Firefly Hourly",
+            "calendar_keyword": "Firefly",
+            "rate_label": "Per Hour",
+        },
+    ]
+    events = [_fake_event("Firefly daily clean", date(2026, 3, 7))]
+
+    by_service, collisions = _assign_events_to_services(events, services)
+    assert by_service == {"svc-firefly": [events[0]]}
+    assert collisions == []
+
+
+def test_resolver_no_double_count_for_collision():
+    """Critical: a single colliding event must not appear in two services' lists."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _assign_events_to_services,
+    )
+
+    services = [
+        _fake_service("svc-short", "Smith Family", "Smith"),
+        _fake_service("svc-long", "Smith Corporation", "Smith Corp"),
+    ]
+    events = [_fake_event("Smith Corp Office", date(2026, 3, 14))]
+
+    by_service, _ = _assign_events_to_services(events, services)
+
+    total_assigned = sum(len(v) for v in by_service.values())
+    assert total_assigned == 1, "Colliding event was double-counted"
+
+
+@pytest.mark.asyncio
+async def test_payment_reminder_attaches_pdf(monkeypatch):
+    """Reminder emails must attach the invoice PDF (consistency with original send)."""
+    from atlas_brain.autonomous.tasks import invoice_payment_reminders as task_mod
+    from atlas_brain.storage.models import ScheduledTask
+
+    captured: dict = {}
+
+    class FakeEmailProvider:
+        async def send(self, *, to, subject, body, attachments=None, **_):
+            captured["to"] = to
+            captured["subject"] = subject
+            captured["body"] = body
+            captured["attachments"] = attachments
+            return {"ok": True}
+
+    class FakeRepo:
+        async def get_overdue(self, as_of_date=None):
+            return [{
+                "id": uuid4(),
+                "invoice_number": "INV-2026-9001",
+                "customer_name": "Test Customer",
+                "customer_email": "test@example.com",
+                "amount_due": 250.0,
+                "due_date": date(2026, 1, 1),
+                "reminder_count": 0,
+                "last_reminder_at": None,
+                "contact_id": None,
+                "line_items": [
+                    {"date": "01/01/2026", "description": "Test", "quantity": 1, "unit_price": 250.0, "amount": 250.0},
+                ],
+                "subtotal": 250.0,
+                "tax_rate": 0.0,
+                "tax_amount": 0.0,
+                "discount_amount": 0.0,
+                "total_amount": 250.0,
+                "metadata": {},
+            }]
+
+        async def update_reminder(self, _id):
+            captured["update_reminder_called"] = True
+
+    def fake_render(inv):
+        captured["render_called_for"] = inv["invoice_number"]
+        return b"%PDF-fake-bytes"
+
+    monkeypatch.setattr(
+        "atlas_brain.storage.repositories.invoice.get_invoice_repo",
+        lambda: FakeRepo(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.email_provider.get_email_provider",
+        lambda: FakeEmailProvider(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.invoice_pdf.render_invoice_pdf",
+        fake_render,
+    )
+
+    task = ScheduledTask(
+        id=uuid4(),
+        name="invoice_payment_reminders",
+        task_type="builtin",
+        schedule_type="cron",
+        cron_expression="0 10 * * *",
+    )
+
+    result = await task_mod.run(task)
+
+    assert result.get("reminders_sent") == 1
+    assert captured.get("render_called_for") == "INV-2026-9001"
+    attachments = captured.get("attachments")
+    assert attachments and len(attachments) == 1
+    assert attachments[0]["filename"] == "INV-2026-9001.pdf"
+    import base64
+    assert base64.b64decode(attachments[0]["content"]) == b"%PDF-fake-bytes"
+    # Body should reference the attachment when PDF render succeeded
+    assert "attached for your reference" in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_payment_reminder_falls_back_when_pdf_fails(monkeypatch):
+    """If PDF render fails, send text-only reminder (don't skip the customer)."""
+    from atlas_brain.autonomous.tasks import invoice_payment_reminders as task_mod
+    from atlas_brain.storage.models import ScheduledTask
+
+    captured: dict = {}
+
+    class FakeEmailProvider:
+        async def send(self, *, to, subject, body, attachments=None, **_):
+            captured["attachments"] = attachments
+            captured["body"] = body
+            return {"ok": True}
+
+    class FakeRepo:
+        async def get_overdue(self, as_of_date=None):
+            return [{
+                "id": uuid4(),
+                "invoice_number": "INV-2026-9002",
+                "customer_name": "Test",
+                "customer_email": "test@example.com",
+                "amount_due": 100.0,
+                "due_date": date(2026, 1, 1),
+                "reminder_count": 0,
+                "last_reminder_at": None,
+                "contact_id": None,
+                "line_items": [],
+                "metadata": {},
+            }]
+
+        async def update_reminder(self, _id):
+            pass
+
+    def boom_render(_inv):
+        raise RuntimeError("font missing")
+
+    monkeypatch.setattr(
+        "atlas_brain.storage.repositories.invoice.get_invoice_repo",
+        lambda: FakeRepo(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.email_provider.get_email_provider",
+        lambda: FakeEmailProvider(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.invoice_pdf.render_invoice_pdf",
+        boom_render,
+    )
+
+    task = ScheduledTask(
+        id=uuid4(),
+        name="invoice_payment_reminders",
+        task_type="builtin",
+        schedule_type="cron",
+        cron_expression="0 10 * * *",
+    )
+
+    result = await task_mod.run(task)
+
+    assert result.get("reminders_sent") == 1, "Reminder should still go out without attachment"
+    assert captured.get("attachments") is None
+    # Body should NOT mention the attachment when PDF render failed
+    assert "attached for your reference" not in captured.get("body", "")
+
+
+@pytest.mark.asyncio
+async def test_approve_and_send_skips_needs_hours_drafts():
+    """approve_and_send must refuse to mail drafts flagged needs_hours,
+    so $0 placeholders generated by monthly_invoice_generation never go
+    out before the user fills real hours."""
+    import json
+    from atlas_brain.storage.database import init_database, get_db_pool, close_database
+
+    await init_database()
+    pool = get_db_pool()
+    try:
+        from atlas_brain.storage.repositories.invoice import get_invoice_repo
+        from atlas_brain.storage.repositories.customer_service import get_customer_service_repo
+        from atlas_brain.mcp.invoicing_server import approve_and_send
+
+        inv_repo = get_invoice_repo()
+        svc_repo = get_customer_service_repo()
+
+        # Find any active service to attach the test invoice to a real contact_id
+        services = await svc_repo.list_active()
+        assert services, "No active services to anchor test invoice"
+        anchor = services[0]
+
+        test_source_ref = f"test_needs_hours_{uuid4()}"
+        line_items = [
+            {"date": "03/07/2026", "description": "Brookstone (hours TBD)", "quantity": 0, "unit_price": 35.0},
+        ]
+
+        invoice = await inv_repo.create(
+            customer_name="Brookstone Test",
+            customer_email="brookstone-test@example.com",
+            due_date=date(2026, 5, 1),
+            line_items=line_items,
+            contact_id=anchor["contact_id"],
+            source="test",
+            source_ref=test_source_ref,
+            invoice_for="Per Hour Placeholder Test",
+            metadata={"needs_hours": True},
+        )
+
+        try:
+            # Real send (dry_run=False) -- must SKIP with needs_hours reason
+            result = json.loads(await approve_and_send(
+                invoice_ids=json.dumps([invoice["invoice_number"]]),
+                dry_run=False,
+            ))
+            assert result["success"] is True
+            assert result["sent"] == 0, "needs_hours draft must NOT be sent"
+            assert result["skipped"] >= 1
+            skip_detail = next(
+                (d for d in result["details"] if d["invoice"] == invoice["invoice_number"]),
+                None,
+            )
+            assert skip_detail is not None
+            assert "needs hours" in skip_detail["reason"].lower()
+
+            # dry_run path also skips
+            result_dry = json.loads(await approve_and_send(
+                invoice_ids=json.dumps([invoice["invoice_number"]]),
+                dry_run=True,
+            ))
+            dry_detail = next(
+                (d for d in result_dry["details"] if d["invoice"] == invoice["invoice_number"]),
+                None,
+            )
+            assert dry_detail is not None
+            assert "needs hours" in dry_detail["reason"].lower()
+
+            # Confirm the invoice is still draft (not silently mutated)
+            still = await inv_repo.get_by_id(invoice["id"])
+            assert still["status"] == "draft"
+
+        finally:
+            await pool.execute(
+                "UPDATE invoices SET status = 'void', void_reason = 'test cleanup' WHERE source_ref = $1",
+                test_source_ref,
+            )
+    finally:
+        await close_database()
+
+
 @pytest.mark.asyncio
 async def test_export_invoice_pdf():
     """export_invoice_pdf should generate PDF bytes for a real invoice."""
