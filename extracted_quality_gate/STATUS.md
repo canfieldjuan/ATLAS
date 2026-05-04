@@ -4,7 +4,25 @@ Date: 2026-05-03
 
 ## Current Slice
 
-PR-B4b: campaign quality pack.
+PR-B5b: witness specificity pack.
+
+- Deterministic core (`witness_pack.py`) -- six legacy entry points
+  (`surface_specificity_context`, `merge_specificity_contexts`,
+  `specificity_signal_terms`, `evaluate_specificity_support`,
+  `specificity_audit_snapshot`, `campaign_proof_terms_from_audit`)
+  plus a pack-contract entry point
+  `evaluate_witness_specificity(input, *, policy)` that returns a
+  standard `QualityReport`.
+- Atlas-side `atlas_brain/autonomous/tasks/_b2b_specificity.py` is now
+  a thin re-export wrapper (~210 LOC, was 755). It keeps
+  `campaign_policy_audit_snapshot` (the PR-B4b adapter) plus
+  metadata helpers `latest_specificity_audit` and
+  `specificity_quality_summary` that read pre-computed audit dicts
+  out of row metadata and are not deterministic validators.
+- All existing import paths (`from atlas_brain.autonomous.tasks._b2b_specificity import ...`)
+  keep working without external code changes.
+
+PR-B4b (merged via #120): campaign quality pack.
 
 - Deterministic core (`campaign_pack.py`) -- `evaluate_campaign(input, *, policy)`
   returning a `QualityReport`. Validates proof-term coverage,
@@ -61,6 +79,7 @@ The module is deterministic and imports without Atlas.
 - Safety gate (deterministic core: `check_content` + `assess_risk`) -- PR-B3
 - Blog quality pack (deterministic core: `evaluate_blog_post`) -- PR-B4a
 - Campaign quality pack (deterministic core: `evaluate_campaign`) -- PR-B4b
+- Witness specificity pack (deterministic core: `evaluate_witness_specificity` + 6 legacy entry points) -- PR-B5b
 
 ## Not Yet Included
 
@@ -68,7 +87,6 @@ The module is deterministic and imports without Atlas.
   in `atlas_brain/services/safety_gate.py`; the deterministic core
   is now in `extracted_quality_gate/safety_gate.py` and the wrapper
   delegates to it -- but the wrapper itself is not yet extracted)
-- Witness render policy pack (PR-B5)
-- Evidence-claim coverage pack (PR-B5)
-- Source-quality ingest pack (PR-B5)
+- Evidence-claim coverage gate (PR-B5a) -- async DB query
+- Source-quality ingest pack (PR-B5c) -- async DB + settings
 - Memory quality pack
