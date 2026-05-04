@@ -107,6 +107,10 @@ direct-displacement ProductClaim aggregation. The mapped battle-card task keeps
 its relative import: Atlas resolves the native aggregator, while standalone
 competitive hosts register explicit claim readers.
 
+`templates/email/vendor_briefing.py` is a product-owned customer-facing
+renderer. It no longer imports runtime settings; hosts configure the fallback
+witness highlight limit through an explicit renderer function.
+
 `reasoning/cross_vendor_selection.py` is product-owned pure selection logic for
 battles, categories, and asymmetry pairs. It is covered by extracted-package
 behavior tests and is no longer byte-synced from Atlas.

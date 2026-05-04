@@ -45,10 +45,10 @@ Full task/runtime decoupling remains Phase 3.
 | Metric | Count |
 |---|---:|
 | Extracted files | 89 |
-| Manifest mappings | 15 |
-| Manifest Python snapshots | 6 |
+| Manifest mappings | 14 |
+| Manifest Python snapshots | 5 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 13 |
+| Product-owned modules | 14 |
 
 Product-owned modules:
 
@@ -61,6 +61,7 @@ Product-owned modules:
 - `services/scraping/capabilities.py`
 - `services/b2b/source_impact.py`
 - `services/b2b/challenger_dashboard_claims.py`
+- `templates/email/vendor_briefing.py`
 - `reasoning/ecosystem.py`
 - `reasoning/cross_vendor_selection.py`
 - `reasoning/single_pass_prompts/cross_vendor_battle.py`
@@ -99,7 +100,7 @@ Product-owned modules:
 | `reasoning/cross_vendor_selection.py` | ✅ | ✅ | ✅ |
 | `reasoning/single_pass_prompts/cross_vendor_battle.py` | ✅ | ✅ | n/a (product-owned LLM contract) |
 | `reasoning/single_pass_prompts/battle_card_reasoning.py` | ✅ | ✅ | n/a (product-owned LLM contract) |
-| `templates/email/vendor_briefing.py` | ✅ | 🔲 | 🔲 |
+| `templates/email/vendor_briefing.py` | ✅ | ✅ | ✅ |
 | `api/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
 | `storage/migrations/095_b2b_vendor_registry.sql` | ✅ | n/a | n/a |
 | `storage/migrations/099_displacement_edges_and_company_signals.sql` | ✅ | n/a | n/a |
