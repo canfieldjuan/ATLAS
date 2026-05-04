@@ -61,3 +61,28 @@ Return ONLY valid JSON.\
 RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT_VERSION = _hashlib.sha256(
     RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT.encode()
 ).hexdigest()[:8]
+
+
+# PR-C3f: register this prompt with the shared reasoning pack registry
+# (PR-C3a / extracted_reasoning_core.pack_registry). The resource
+# asymmetry synthesis pack assesses resource divergence between two
+# vendors with similar churn pressure but different market positions.
+# Per the audit, the pack file moves into a product package during
+# PR 7 (Product Migration); for now it stays atlas-side.
+from extracted_reasoning_core.pack_registry import (  # noqa: E402
+    Pack as _Pack,
+    register_pack as _register_pack,
+)
+
+_register_pack(
+    _Pack(
+        name="resource_asymmetry_synthesis",
+        version=RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT_VERSION,
+        prompts={"synthesis": RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT},
+        metadata={
+            "output_artifact": "resource_asymmetry_assessment",
+            "owner_product": "competitive_intelligence",
+            "synthesis_mode": "structured_synthesis_v1",
+        },
+    )
+)
