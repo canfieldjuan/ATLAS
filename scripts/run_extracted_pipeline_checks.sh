@@ -21,11 +21,13 @@ pytest \
   tests/test_extracted_campaign_postgres_generation.py \
   tests/test_extracted_campaign_postgres_export.py \
   tests/test_extracted_campaign_postgres_review.py \
+  tests/test_extracted_campaign_postgres_seller_targets.py \
   tests/test_extracted_campaign_postgres_send.py \
   tests/test_extracted_campaign_postgres_analytics.py \
   tests/test_extracted_campaign_postgres_webhooks.py \
   tests/test_extracted_campaign_api_webhooks.py \
   tests/test_extracted_campaign_api_b2b_campaigns.py \
+  tests/test_extracted_campaign_api_seller_campaigns.py \
   tests/test_extracted_campaign_postgres_sequence_progression.py \
   tests/test_extracted_campaign_postgres_import.py \
   tests/test_extracted_content_pipeline_migration_runner.py \

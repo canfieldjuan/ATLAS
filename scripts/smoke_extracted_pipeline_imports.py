@@ -31,6 +31,7 @@ MODULES = [
     "extracted_content_pipeline.services.podcast_quality",
     "extracted_content_pipeline.api.campaign_webhooks",
     "extracted_content_pipeline.api.b2b_campaigns",
+    "extracted_content_pipeline.api.seller_campaigns",
 ]
 
 
