@@ -111,6 +111,10 @@ def _ideas_from_response(
             rank_int = int(rank) if rank is not None else index
         except (TypeError, ValueError):
             rank_int = index
+        # Rank is 1-indexed by contract. Fall back to the model-supplied
+        # ordering (1-based) if the LLM emits 0 / negative / missing rank.
+        if rank_int < 1:
+            rank_int = index
         ideas.append(
             PodcastIdea(
                 episode_id=episode_id,

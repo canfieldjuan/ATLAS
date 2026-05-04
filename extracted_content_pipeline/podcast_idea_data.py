@@ -69,12 +69,22 @@ class FilePodcastIdeaProvider:
         source: str | None = None,
     ) -> "FilePodcastIdeaProvider":
         rows = _idea_rows(payload)
+        # Track per-episode insertion order so missing/invalid ranks fall
+        # back to a 1-based index instead of 0 (which would collide on the
+        # (account_id, episode_id, rank) UNIQUE constraint at persist time).
+        per_episode_counter: dict[str, int] = {}
         indexed: dict[str, list[PodcastIdea]] = {}
         for row in rows:
             episode_id = str(row.get("episode_id") or "").strip()
             if not episode_id:
                 continue
-            idea = _idea_from_row(row, episode_id=episode_id)
+            per_episode_counter[episode_id] = per_episode_counter.get(episode_id, 0) + 1
+            fallback_rank = per_episode_counter[episode_id]
+            idea = _idea_from_row(
+                row,
+                episode_id=episode_id,
+                fallback_rank=fallback_rank,
+            )
             indexed.setdefault(episode_id, []).append(idea)
         sorted_index: dict[str, tuple[PodcastIdea, ...]] = {}
         for episode_id, ideas in indexed.items():
@@ -112,12 +122,23 @@ def _idea_rows(payload: Any) -> list[Mapping[str, Any]]:
     return [payload]
 
 
-def _idea_from_row(row: Mapping[str, Any], *, episode_id: str) -> PodcastIdea:
+def _idea_from_row(
+    row: Mapping[str, Any],
+    *,
+    episode_id: str,
+    fallback_rank: int = 1,
+) -> PodcastIdea:
     rank = row.get("rank")
     try:
-        rank_int = int(rank) if rank is not None else 0
+        rank_int = int(rank) if rank is not None else fallback_rank
     except (TypeError, ValueError):
-        rank_int = 0
+        rank_int = fallback_rank
+    # Rank is 1-indexed by contract. A rank of 0 / negative / missing
+    # would collapse to 0 and collide on the
+    # (account_id, episode_id, rank) UNIQUE constraint at persist time;
+    # fall back to the per-episode insertion order instead.
+    if rank_int < 1:
+        rank_int = fallback_rank
     metadata = row.get("metadata")
     if not isinstance(metadata, Mapping):
         metadata = {}

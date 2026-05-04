@@ -263,6 +263,17 @@ class PostgresFormatDraftRepository:
         account_id = scope.account_id or ""
         saved: list[str] = []
         for draft in drafts:
+            # Validate up front rather than letting asyncpg surface a
+            # "invalid input syntax for type uuid" deep in the cast. The
+            # drafts_table FK requires a real ideas.id UUID.
+            idea_id = (draft.idea_id or "").strip()
+            if not idea_id:
+                raise ValueError(
+                    f"PodcastFormatDraft for episode_id={draft.episode_id!r} "
+                    f"format_type={draft.format_type!r} is missing idea_id; "
+                    "the idea must be persisted via IdeaRepository.save_ideas "
+                    "before its drafts can be saved."
+                )
             audit = dict(draft.quality_audit)
             audit_status = str(audit.get("status") or "").strip().lower()
             row_status = "needs_review" if audit_status == "fail" else "draft"
@@ -279,7 +290,7 @@ class PostgresFormatDraftRepository:
                 RETURNING id
                 """,
                 account_id,
-                draft.idea_id,
+                idea_id,
                 draft.episode_id,
                 draft.format_type,
                 _clean(draft.title),

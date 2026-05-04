@@ -134,16 +134,30 @@ class DeterministicPodcastLLM:
             metadata_extra = {"section_count": 3}
             title = f"Offline shorts script for {episode_id}"
         elif format_type == "blog":
+            # Build a structurally realistic blog: H1, lede, four named H2
+            # sections (within the spec's 4-7 range), and a conclusion.
+            # Only the paragraph text repeats to hit the word-count band;
+            # headings appear once each.
+            paragraph_filler = ("Deterministic body sentence. " * 90).rstrip()
+            blog_sections = [
+                ("Background", paragraph_filler),
+                ("The Argument", paragraph_filler),
+                ("Supporting Evidence", paragraph_filler),
+                ("Implications", paragraph_filler),
+            ]
+            section_blocks = "\n\n".join(
+                f"## {heading}\n\n{paragraph}"
+                for heading, paragraph in blog_sections
+            )
             body = (
                 f"# Offline blog draft for {episode_id}\n\n"
                 "Lede paragraph that is at least eighty words long for a deterministic offline draft. "
                 "The lede explains why the topic matters, sets the stake, and previews the structure of the post. "
                 "It is intentionally verbose to exceed the minimum word band that the quality validator enforces. "
                 "After this lede the post moves into named sub-sections each of which can be expanded later.\n\n"
-                "## Section one\n\nDeterministic body for section one. " * 30 + "\n\n"
-                "## Section two\n\nDeterministic body for section two. " * 30 + "\n\n"
-                "## Section three\n\nDeterministic body for section three. " * 30 + "\n\n"
-                "## Conclusion\n\nDeterministic conclusion. " * 20
+                f"{section_blocks}\n\n"
+                "## Conclusion\n\n"
+                + ("Deterministic conclusion sentence. " * 20).rstrip()
             )
             metadata_extra = {
                 "meta_description": (
