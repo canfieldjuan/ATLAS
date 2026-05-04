@@ -119,6 +119,7 @@ async def list_churn_signals(
                 "decision_maker_churn_rate": float(r["decision_maker_churn_rate"]) if r["decision_maker_churn_rate"] is not None else None,
                 "archetype": None,
                 "archetype_confidence": None,
+                "reasoning_mode": None,
                 "reasoning_risk_level": None,
                 "keyword_spike_count": r["keyword_spike_count"],
                 "insider_signal_count": r["insider_signal_count"],

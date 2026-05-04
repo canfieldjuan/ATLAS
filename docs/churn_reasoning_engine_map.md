@@ -76,8 +76,9 @@
   - pipeline LLM clients/routing, tracing, cache metrics used during synthesis.
 - **Reasoning registries/utilities**:
   - wedge registry/validation, semantic hashing/cache utilities.
-- **Consumer interfaces**:
-  - MCP tools (`atlas_brain/mcp/b2b/signals.py`, `.../write_intelligence.py`) read and overlay reasoning into API outputs.
+- **Consumer interfaces** (split by direction):
+  - **Read / overlay** (surface reasoning into outputs): `atlas_brain/mcp/b2b/signals.py` (MCP `list_churn_signals` / `get_churn_signal`) and `atlas_brain/api/b2b_dashboard.py` (HTTP API).
+  - **Write / persistence** (push synthesized conclusions back into storage): `atlas_brain/mcp/b2b/write_intelligence.py` (`persist_conclusion`, `persist_report`, etc.).
 
 ## Re-creating for other use-cases: feasibility + likely missing pieces
 
@@ -109,18 +110,29 @@
 
 ## Practical extraction checklist
 
-1. Start by extracting these modules together as one unit:
+1. Start by extracting these entrypoint modules together as one unit. Each
+   pulls in same-folder helpers via local imports -- check each entrypoint's
+   imports and bring its supporting modules along too (notable transitive
+   dependencies called out below).
    - `b2b_enrichment.py`
    - `b2b_churn_intelligence.py`
-   - `b2b_reasoning_synthesis.py`
+   - `b2b_reasoning_synthesis.py` -- pulls in `_b2b_pool_compression.py`,
+     `_b2b_synthesis_validation.py`
    - `_b2b_synthesis_reader.py`
    - `_b2b_reasoning_contracts.py`
    - `_b2b_reasoning_atoms.py`
    - `_b2b_cross_vendor_synthesis.py`
-2. Pull required table migrations (at minimum):
-   - `055_b2b_reviews.sql`
-   - `247_b2b_vendor_witness_packets.sql`
-   - `305_b2b_evidence_claims.sql`
+2. Pull required table migrations. The set below covers the entrypoints
+   above; verify by greping the extracted modules for `CREATE TABLE` /
+   table names referenced in SQL strings before declaring extraction
+   complete:
+   - `055_b2b_reviews.sql` -- baseline review intake
+   - `230_b2b_reasoning_synthesis.sql` -- synthesis persistence
+     (`b2b_reasoning_synthesis`)
+   - `245_cross_vendor_reasoning_synthesis.sql` -- cross-vendor synthesis
+     (`b2b_cross_vendor_reasoning_synthesis`)
+   - `247_b2b_vendor_witness_packets.sql` -- packet engine
+   - `305_b2b_evidence_claims.sql` -- contract/claim layer
 3. Include shared infra:
    - `_b2b_shared.py`, LLM pipeline/routing/tracing, wedge registry, semantic hash/cache utils.
 4. Add a domain adapter layer before touching prompts.
