@@ -240,6 +240,28 @@ python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id ac
 python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id acct_123 --status cancelled --reason "customer rejected"
 ```
 
+Hosts with FastAPI apps can mount the same draft review/export loop through a
+router factory. The host injects its database pool, tenant scope, and auth
+dependencies:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.b2b_campaigns import create_b2b_campaign_router
+
+
+app.include_router(
+    create_b2b_campaign_router(
+        pool_provider=get_pool,
+        scope_provider=current_tenant_scope,
+        dependencies=[Depends(require_content_ops_user)],
+    )
+)
+```
+
+This adds JSON draft listing, CSV/JSON export, and approve/queue/cancel/expire
+review routes without importing Atlas API globals.
+
 Send queued drafts through the configured provider:
 
 ```bash
@@ -403,6 +425,8 @@ Several small utility shims provide product-owned local behavior by default so t
   host worker CLIs
 - `api/campaign_webhooks.py`: optional FastAPI router factory for host-mounted
   campaign webhook and unsubscribe routes
+- `api/b2b_campaigns.py`: optional FastAPI router factory for host-mounted
+  B2B draft list/export/review routes
 - `campaign_postgres_sequence_progression.py`: DB-backed due-sequence worker
   that composes the sequence, audit, LLM, and skill ports for follow-up
   generation

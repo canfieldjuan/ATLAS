@@ -174,6 +174,11 @@ campaign id, optional account scope, and source-status guard so hosts can move
 reviewed drafts to `approved`, `queued`, `cancelled`, or `expired` without
 writing ad hoc SQL.
 
+`extracted_content_pipeline/api/b2b_campaigns.py` owns the host-mounted FastAPI
+surface for that review loop. It exposes a router factory for draft listing,
+CSV/JSON export, and review status updates while requiring the host to inject
+pool providers, tenant scope, and auth dependencies.
+
 `extracted_content_pipeline/campaign_postgres_send.py` owns the DB-backed send
 worker seam. It composes `PostgresCampaignRepository`,
 `PostgresSuppressionRepository`, `PostgresCampaignAuditSink`, and
