@@ -125,6 +125,7 @@ async def run(task: ScheduledTask) -> dict:
         "invoices_sent": 0,
         "invoices_skipped_dedup": 0,
         "invoices_skipped_no_events": 0,
+        "skipped_no_events_details": [],
         "needs_hours": [],
         "keyword_collisions": [],
         "total_amount": 0.0,
@@ -194,6 +195,14 @@ async def run(task: ScheduledTask) -> dict:
         # Per Visit both require at least one matching event for the month.
         if not matching and rate_label != "Per Month":
             results["invoices_skipped_no_events"] += 1
+            last_invoiced = svc.get("last_invoiced_at")
+            results["skipped_no_events_details"].append({
+                "service": svc["service_name"],
+                "contact_id": contact_id,
+                "keyword": svc["calendar_keyword"],
+                "rate_label": rate_label,
+                "last_invoiced_at": last_invoiced.isoformat() if hasattr(last_invoiced, "isoformat") else last_invoiced,
+            })
             logger.debug(
                 "Service %s (%s): no matching events for keyword '%s'",
                 svc_id, svc["service_name"], svc["calendar_keyword"],
@@ -460,6 +469,61 @@ async def run(task: ScheduledTask) -> dict:
     return results
 
 
+def _build_notification_lines(results: dict) -> list[str]:
+    """Build the ntfy message body for a monthly_invoice_generation result.
+
+    Pure function so it can be unit-tested in isolation; _send_notification
+    wraps this with the actual ntfy delivery + config gating.
+    """
+    period = results["period"]
+    created = results["invoices_created"]
+    sent = results["invoices_sent"]
+    total = results["total_amount"]
+    review = results.get("review_mode", False)
+
+    lines = [f"Period: {period}"]
+    if review:
+        lines.append(f"REVIEW MODE: {created} invoices ready for review (not sent)")
+    else:
+        lines.append(f"Invoices created: {created}")
+        if sent:
+            lines.append(f"Sent via email: {sent}")
+    lines.append(f"Total: {_money(total)}")
+
+    for d in results.get("details", []):
+        status = "DRAFT" if review else ("SENT" if d.get("sent") else "created")
+        lines.append(f"  {d['customer']}: {d['invoice_number']} ({d['visits']} visits, {_money(d['total'])}) [{status}]")
+
+    needs_hours = results.get("needs_hours", [])
+    if needs_hours:
+        lines.append("")
+        lines.append(f"NEEDS HOURS ({len(needs_hours)}):")
+        for nh in needs_hours:
+            lines.append(f"  {nh['service']} @ ${nh['rate']:.2f}/hr")
+
+    collisions = results.get("keyword_collisions", [])
+    if collisions:
+        lines.append("")
+        lines.append(f"KEYWORD COLLISIONS ({len(collisions)}) -- review service keywords:")
+        for c in collisions:
+            matched = ", ".join(m["keyword"] for m in c["matched_services"])
+            lines.append(
+                f"  '{c['event_summary']}' ({c['event_date']}) -> {c['assigned_to']} "
+                f"[{c['resolution']}; matched: {matched}]"
+            )
+
+    skipped = results.get("skipped_no_events_details", [])
+    if skipped:
+        lines.append("")
+        lines.append(f"NO EVENTS THIS MONTH ({len(skipped)}):")
+        for s in skipped:
+            last = s.get("last_invoiced_at")
+            tail = f"last invoiced {last}" if last else "no prior invoices"
+            lines.append(f"  {s['service']} ({tail})")
+
+    return lines
+
+
 async def _send_notification(results: dict, task: ScheduledTask) -> None:
     """Send ntfy push notification with invoice generation summary."""
     try:
@@ -473,43 +537,7 @@ async def _send_notification(results: dict, task: ScheduledTask) -> None:
 
         from ...tools.notify import notify_tool
 
-        period = results["period"]
-        created = results["invoices_created"]
-        sent = results["invoices_sent"]
-        total = results["total_amount"]
-        review = results.get("review_mode", False)
-
-        lines = [f"Period: {period}"]
-        if review:
-            lines.append(f"REVIEW MODE: {created} invoices ready for review (not sent)")
-        else:
-            lines.append(f"Invoices created: {created}")
-            if sent:
-                lines.append(f"Sent via email: {sent}")
-        lines.append(f"Total: {_money(total)}")
-
-        for d in results.get("details", []):
-            status = "DRAFT" if review else ("SENT" if d.get("sent") else "created")
-            lines.append(f"  {d['customer']}: {d['invoice_number']} ({d['visits']} visits, {_money(d['total'])}) [{status}]")
-
-        needs_hours = results.get("needs_hours", [])
-        if needs_hours:
-            lines.append("")
-            lines.append(f"NEEDS HOURS ({len(needs_hours)}):")
-            for nh in needs_hours:
-                lines.append(f"  {nh['service']} @ ${nh['rate']:.2f}/hr")
-
-        collisions = results.get("keyword_collisions", [])
-        if collisions:
-            lines.append("")
-            lines.append(f"KEYWORD COLLISIONS ({len(collisions)}) -- review service keywords:")
-            for c in collisions:
-                matched = ", ".join(m["keyword"] for m in c["matched_services"])
-                lines.append(
-                    f"  '{c['event_summary']}' ({c['event_date']}) -> {c['assigned_to']} "
-                    f"[{c['resolution']}; matched: {matched}]"
-                )
-
+        lines = _build_notification_lines(results)
         priority = (task.metadata or {}).get("notify_priority") or autonomous_config.notify_priority
         await notify_tool._send_notification(
             message="\n".join(lines),

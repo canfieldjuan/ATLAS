@@ -620,6 +620,113 @@ def test_resolver_no_double_count_for_collision():
     assert total_assigned == 1, "Colliding event was double-counted"
 
 
+def test_notification_lines_no_events_section_with_history():
+    """Skipped services with last_invoiced_at show the date inline."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _build_notification_lines,
+    )
+
+    results = {
+        "period": "2026-05",
+        "invoices_created": 2,
+        "invoices_sent": 0,
+        "total_amount": 500.0,
+        "review_mode": True,
+        "skipped_no_events_details": [
+            {"service": "Smith Office", "last_invoiced_at": "2026-04-30", "rate_label": "Per Visit"},
+            {"service": "Walker", "last_invoiced_at": "2026-03-31", "rate_label": "Per Visit"},
+        ],
+    }
+    lines = _build_notification_lines(results)
+
+    joined = "\n".join(lines)
+    assert "NO EVENTS THIS MONTH (2):" in joined
+    assert "Smith Office (last invoiced 2026-04-30)" in joined
+    assert "Walker (last invoiced 2026-03-31)" in joined
+
+
+def test_notification_lines_no_events_section_with_new_service():
+    """Skipped service with no last_invoiced_at says 'no prior invoices'."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _build_notification_lines,
+    )
+
+    results = {
+        "period": "2026-05",
+        "invoices_created": 0,
+        "invoices_sent": 0,
+        "total_amount": 0.0,
+        "review_mode": True,
+        "skipped_no_events_details": [
+            {"service": "Brand New Co", "last_invoiced_at": None, "rate_label": "Per Visit"},
+        ],
+    }
+    lines = _build_notification_lines(results)
+
+    joined = "\n".join(lines)
+    assert "NO EVENTS THIS MONTH (1):" in joined
+    assert "Brand New Co (no prior invoices)" in joined
+
+
+def test_notification_lines_omits_no_events_section_when_empty():
+    """Empty skipped list -> no NO EVENTS section in the message."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _build_notification_lines,
+    )
+
+    results = {
+        "period": "2026-05",
+        "invoices_created": 5,
+        "invoices_sent": 0,
+        "total_amount": 1000.0,
+        "review_mode": True,
+        "skipped_no_events_details": [],
+    }
+    lines = _build_notification_lines(results)
+    joined = "\n".join(lines)
+    assert "NO EVENTS THIS MONTH" not in joined
+
+
+def test_notification_lines_renders_collisions_and_skipped_together():
+    """Multiple flag sections coexist without stomping each other."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _build_notification_lines,
+    )
+
+    results = {
+        "period": "2026-05",
+        "invoices_created": 1,
+        "invoices_sent": 0,
+        "total_amount": 100.0,
+        "review_mode": True,
+        "needs_hours": [
+            {"service": "Brookstone", "rate": 35.0},
+        ],
+        "keyword_collisions": [
+            {
+                "event_summary": "Smith Corp Office",
+                "event_date": "2026-05-07",
+                "assigned_to": "Smith Corporation",
+                "resolution": "longest_keyword",
+                "matched_services": [
+                    {"service": "Smith Family", "keyword": "Smith"},
+                    {"service": "Smith Corporation", "keyword": "Smith Corp"},
+                ],
+            },
+        ],
+        "skipped_no_events_details": [
+            {"service": "Walker", "last_invoiced_at": "2026-04-30", "rate_label": "Per Visit"},
+        ],
+    }
+    lines = _build_notification_lines(results)
+    joined = "\n".join(lines)
+
+    assert "NEEDS HOURS (1):" in joined
+    assert "KEYWORD COLLISIONS (1)" in joined
+    assert "NO EVENTS THIS MONTH (1):" in joined
+    assert "Walker (last invoiced 2026-04-30)" in joined
+
+
 def test_annotate_draft_clean_invoice_is_send_safe():
     """Draft with email, real total, contact -- no blockers, no warnings."""
     from atlas_brain.mcp.invoicing_server import _annotate_draft
