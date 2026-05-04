@@ -8,6 +8,7 @@ from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.campaign_reasoning_data import (
     FileCampaignReasoningContextProvider,
     load_campaign_reasoning_context_provider,
+    load_reasoning_provider_port,
 )
 
 
