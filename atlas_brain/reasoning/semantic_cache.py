@@ -1,22 +1,34 @@
-"""Semantic memory cache for the stratified reasoning engine.
+"""Postgres-backed semantic cache storage for the stratified reasoning engine.
 
-Stores generalised reasoning conclusions in Postgres with confidence decay.
-Each entry represents a cached pattern conclusion (e.g. "pricing_shock for
-Vendor X") that can be recalled without re-running the LLM.
+PR-C2 (PR 4 from the reasoning boundary audit) split this module: the
+*pure* primitives (``CacheEntry``, ``compute_evidence_hash``,
+``apply_decay``, ``row_to_cache_entry``, ``STALE_THRESHOLD``) now live
+in ``extracted_reasoning_core.semantic_cache_keys``. This module owns
+the Postgres-specific storage class (``SemanticCache``) and the
+asyncpg-shaped pool Protocol it consumes. ``CacheEntry`` /
+``compute_evidence_hash`` / ``STALE_THRESHOLD`` are re-exported here
+so existing callers keep working without changing imports.
 
 Confidence decays exponentially since last validation:
     effective = confidence * 2^(-(days_since_validated / decay_half_life_days))
+
+The decay is computed by ``apply_decay`` from the core module; this
+adapter just calls it on every row read out of Postgres.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import math
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
+
+from extracted_reasoning_core.semantic_cache_keys import (
+    CacheEntry,
+    STALE_THRESHOLD,
+    apply_decay as _apply_decay,
+    compute_evidence_hash,
+    row_to_cache_entry,
+)
 
 logger = logging.getLogger("atlas.reasoning.semantic_cache")
 
@@ -33,8 +45,8 @@ class SemanticCachePool(Protocol):
 
     ``fetchrow`` and ``fetch`` return row mappings (the production
     binding returns ``asyncpg.Record`` instances that subscript like
-    dicts; ``_row_to_entry`` reads them via ``row[key]`` and accepts
-    anything that supports the ``Mapping`` protocol).
+    dicts; ``row_to_cache_entry`` reads them via ``row[key]`` and
+    accepts anything that supports the ``Mapping`` protocol).
     """
 
     async def fetchrow(self, query: str, *args: Any) -> Any: ...
@@ -42,51 +54,20 @@ class SemanticCachePool(Protocol):
     async def execute(self, query: str, *args: Any) -> Any: ...
 
 
-@dataclass
-class CacheEntry:
-    """A single cached reasoning conclusion."""
-
-    pattern_sig: str
-    pattern_class: str
-    conclusion: dict[str, Any]
-    confidence: float
-    reasoning_steps: list[dict[str, Any]] = field(default_factory=list)
-    boundary_conditions: dict[str, Any] = field(default_factory=dict)
-    falsification_conditions: list[str] = field(default_factory=list)
-    uncertainty_sources: list[str] = field(default_factory=list)
-    vendor_name: str | None = None
-    product_category: str | None = None
-    decay_half_life_days: int = 90
-    conclusion_type: str | None = None
-    evidence_hash: str | None = None
-    created_at: datetime | None = None
-    last_validated_at: datetime | None = None
-    validation_count: int = 1
-    effective_confidence: float | None = None
-
-
-def compute_evidence_hash(evidence: dict[str, Any]) -> str:
-    """SHA-256 of deterministically serialised evidence dict."""
-    raw = json.dumps(evidence, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
-def _apply_decay(confidence: float, last_validated: datetime, half_life_days: int) -> float:
-    """Return effective confidence after exponential decay."""
-    now = datetime.now(timezone.utc)
-    if last_validated.tzinfo is None:
-        last_validated = last_validated.replace(tzinfo=timezone.utc)
-    days = (now - last_validated).total_seconds() / 86400.0
-    if days <= 0 or half_life_days <= 0:
-        return confidence
-    return confidence * math.pow(2, -(days / half_life_days))
-
-
 class SemanticCache:
-    """Postgres-backed semantic memory for cached reasoning conclusions."""
+    """Postgres-backed semantic memory for cached reasoning conclusions.
 
-    # Entries with effective confidence below this are treated as stale
-    STALE_THRESHOLD = 0.5
+    Implements the ``SemanticCacheStore`` port declared in
+    ``extracted_reasoning_core.ports``: ``lookup`` / ``store`` /
+    ``validate`` / ``invalidate`` plus the read-side helpers
+    ``lookup_by_class`` / ``lookup_for_tier`` / ``get_cache_stats``
+    that callers reach for directly.
+    """
+
+    # Re-exported as a class attribute for backward-compat with callers
+    # that read ``SemanticCache.STALE_THRESHOLD``. The module-level
+    # constant in core's ``semantic_cache_keys`` is the canonical home.
+    STALE_THRESHOLD = STALE_THRESHOLD
 
     def __init__(self, pool: SemanticCachePool):
         """*pool*: any object exposing the ``SemanticCachePool``
@@ -116,7 +97,7 @@ class SemanticCache:
         if row is None:
             return None
 
-        entry = self._row_to_entry(row)
+        entry = row_to_cache_entry(row)
         eff = _apply_decay(entry.confidence, entry.last_validated_at, entry.decay_half_life_days)
         entry.effective_confidence = eff
 
@@ -256,7 +237,7 @@ class SemanticCache:
             )
         entries = []
         for row in rows:
-            e = self._row_to_entry(row)
+            e = row_to_cache_entry(row)
             e.effective_confidence = _apply_decay(e.confidence, e.last_validated_at, e.decay_half_life_days)
             entries.append(e)
         return entries
@@ -309,7 +290,7 @@ class SemanticCache:
             )
         entries = []
         for row in rows:
-            e = self._row_to_entry(row)
+            e = row_to_cache_entry(row)
             e.effective_confidence = _apply_decay(e.confidence, e.last_validated_at, e.decay_half_life_days)
             if e.effective_confidence >= self.STALE_THRESHOLD:
                 entries.append(e)
@@ -334,39 +315,8 @@ class SemanticCache:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _row_to_entry(row: Mapping[str, Any]) -> CacheEntry:
-        """Convert a row mapping to a :class:`CacheEntry`.
-
-        Accepts any object supporting ``Mapping`` access -- typically
-        an ``asyncpg.Record`` (which subscripts like a dict) but also
-        a plain dict, which is what tests + non-asyncpg adapters
-        produce. JSONB columns may arrive either pre-decoded (asyncpg
-        with the json codec installed) or as raw strings (a vanilla
-        adapter); the body handles both shapes defensively.
-        """
-        falsification = row["falsification_conditions"]
-        if isinstance(falsification, str):
-            falsification = json.loads(falsification)
-        if isinstance(falsification, dict):
-            falsification = list(falsification.values()) if falsification else []
-
-        return CacheEntry(
-            pattern_sig=row["pattern_sig"],
-            pattern_class=row["pattern_class"],
-            vendor_name=row["vendor_name"],
-            product_category=row["product_category"],
-            conclusion=row["conclusion"] if isinstance(row["conclusion"], dict) else json.loads(row["conclusion"]),
-            confidence=row["confidence"],
-            reasoning_steps=row["reasoning_steps"] if isinstance(row["reasoning_steps"], list) else json.loads(row["reasoning_steps"]),
-            boundary_conditions=row["boundary_conditions"] if isinstance(row["boundary_conditions"], dict) else json.loads(row["boundary_conditions"]),
-            falsification_conditions=falsification if isinstance(falsification, list) else [],
-            uncertainty_sources=list(row["uncertainty_sources"]) if row["uncertainty_sources"] else [],
-            decay_half_life_days=row["decay_half_life_days"],
-            conclusion_type=row["conclusion_type"],
-            evidence_hash=row["evidence_hash"],
-            created_at=row["created_at"],
-            last_validated_at=row["last_validated_at"],
-            validation_count=row["validation_count"],
-        )
+    #
+    # Row-to-entry coercion now lives in
+    # ``extracted_reasoning_core.semantic_cache_keys.row_to_cache_entry``
+    # (PR-C2). The static method that used to live here has been
+    # removed; callers below import the function directly.

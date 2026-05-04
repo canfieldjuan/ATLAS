@@ -1,11 +1,11 @@
 # In-Flight PRs
 
-Last updated: 2026-05-04T06:30Z by claude-2026-05-03
+Last updated: 2026-05-04T07:00Z by claude-2026-05-03
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| (PR-C1l, in flight) | PR-C1l: Document PR-C1 implementation outcomes in reasoning boundary audit | EDIT: `docs/extraction/reasoning_boundary_audit_2026-05-03.md` (append "PR-C1 Implementation Outcomes" section recording PR-C1a through PR-C1k slices, architectural deviations from the original plan, and the drift-forward pattern; mark which acceptance criteria from PR 2/PR 3 are now satisfied vs deferred to PR 4/PR 5/PR 6/PR 7). Doc-only change; no code touched. Closes the PR-C1 sequence. | claude-2026-05-03 | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` |
+| (PR-C2, in flight) | PR-C2: Semantic cache split (PR 4 from reasoning boundary audit) | NEW: `extracted_reasoning_core/semantic_cache_keys.py` (pure: `compute_evidence_hash`, `apply_decay`, `CacheEntry`, `STALE_THRESHOLD`, `row_to_cache_entry`). NEW: `tests/test_extracted_reasoning_core_semantic_cache_keys.py`. EDIT: `extracted_llm_infrastructure/reasoning/semantic_cache.py` (import pure code from core; keep `SemanticCachePool` Protocol + `SemanticCache` storage class). EDIT: `extracted_competitive_intelligence/reasoning/semantic_cache.py` (replace atlas bridge with explicit re-exports from core + LLM-infra; closes PR 4 acceptance criterion #3). Atlas-side migration deferred to PR 7. | claude-2026-05-03 | `extracted_reasoning_core/semantic_cache_keys.py`; `extracted_llm_infrastructure/reasoning/semantic_cache.py`; `extracted_competitive_intelligence/reasoning/semantic_cache.py`; `tests/test_extracted_reasoning_core_semantic_cache_keys.py` |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.

@@ -2,7 +2,7 @@
 
 These tests exercise the parts of ``atlas_brain.reasoning.semantic_cache``
 that don't require a live Postgres: the pure helpers
-(``compute_evidence_hash``, ``_apply_decay``, ``_row_to_entry``) plus
+(``compute_evidence_hash``, ``_apply_decay``, ``row_to_cache_entry``) plus
 the ``SemanticCachePool`` Protocol contract. The async query methods
 are tested against a fake pool that records its inputs.
 
@@ -26,6 +26,13 @@ from atlas_brain.reasoning.semantic_cache import (
     _apply_decay,
     compute_evidence_hash,
 )
+
+# PR-C2: ``row_to_cache_entry`` was promoted from a private staticmethod
+# on ``SemanticCache`` to a public function in
+# ``extracted_reasoning_core.semantic_cache_keys``. The decoupling tests
+# below import it from the canonical home rather than reaching into
+# ``SemanticCache._row_to_entry`` (which no longer exists).
+from extracted_reasoning_core.semantic_cache_keys import row_to_cache_entry
 
 
 class _FakePool:
@@ -136,7 +143,7 @@ def test_decay_zero_half_life_returns_input():
 
 
 def test_row_to_entry_accepts_plain_dict():
-    entry = SemanticCache._row_to_entry(_row())
+    entry = row_to_cache_entry(_row())
     assert isinstance(entry, CacheEntry)
     assert entry.pattern_sig == "sig1"
     assert entry.confidence == 0.9
@@ -151,7 +158,7 @@ def test_row_to_entry_jsonb_decodes_when_string():
         boundary_conditions='{"max": 10}',
         falsification_conditions='["x"]',
     )
-    entry = SemanticCache._row_to_entry(row)
+    entry = row_to_cache_entry(row)
     assert entry.conclusion == {"k": "v"}
     assert entry.reasoning_steps == [{"step": 9}]
     assert entry.boundary_conditions == {"max": 10}
@@ -161,21 +168,21 @@ def test_row_to_entry_jsonb_decodes_when_string():
 def test_row_to_entry_jsonb_passes_through_when_dict():
     # Asyncpg shape: JSONB pre-decoded to dict.
     row = _row(conclusion={"already": "decoded"})
-    entry = SemanticCache._row_to_entry(row)
+    entry = row_to_cache_entry(row)
     assert entry.conclusion == {"already": "decoded"}
 
 
 def test_row_to_entry_falsification_dict_collapses_to_list():
     # Defensive case: caller stored a dict rather than a list.
     row = _row(falsification_conditions={"a": "x", "b": "y"})
-    entry = SemanticCache._row_to_entry(row)
+    entry = row_to_cache_entry(row)
     # Either of "x", "y" -- order is dict insertion order in Py3.7+
     assert sorted(entry.falsification_conditions) == ["x", "y"]
 
 
 def test_row_to_entry_handles_empty_uncertainty_sources():
     row = _row(uncertainty_sources=None)
-    entry = SemanticCache._row_to_entry(row)
+    entry = row_to_cache_entry(row)
     assert entry.uncertainty_sources == []
 
 
