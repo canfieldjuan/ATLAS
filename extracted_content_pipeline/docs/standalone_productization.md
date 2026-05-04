@@ -186,6 +186,12 @@ analytics refresh worker seam. It composes `PostgresCampaignRepository`,
 refresh the packaged campaign funnel materialized view without importing Atlas
 scheduled-task code.
 
+`extracted_content_pipeline/campaign_postgres_webhooks.py` owns the DB-backed
+webhook ingestion seam. It composes `PostgresCampaignRepository`,
+`PostgresSuppressionRepository`, `PostgresCampaignAuditSink`, and the Resend
+webhook verifier so hosts can record engagement, bounce, complaint, and
+unsubscribe events without importing Atlas API code.
+
 `extracted_content_pipeline/campaign_postgres_sequence_progression.py` owns the
 DB-backed sequence progression worker seam. It composes
 `PostgresCampaignSequenceRepository`, `PostgresCampaignAuditSink`, the product
