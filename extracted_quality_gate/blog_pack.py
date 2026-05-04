@@ -226,10 +226,16 @@ def evaluate_blog_post(
     target_words = _threshold(policy, "target_words")
     word_count = len(body.split())
     if word_count < min_words:
+        # Legacy underscore-joined message format that downstream
+        # consumers rely on for prefix matching, e.g.
+        # ``_only_content_too_short_blockers`` in
+        # ``b2b_blog_post_generation.py`` checks
+        # ``startswith("content_too_short:")`` to gate the
+        # deterministic-repair retry path.
         findings.append(
             GateFinding(
                 code="content_too_short",
-                message=f"{word_count} words; need {min_words}",
+                message=f"content_too_short:{word_count}_words_need_{min_words}",
                 severity=GateSeverity.BLOCKER,
                 metadata={"word_count": word_count, "min_words": min_words},
             )
@@ -238,7 +244,7 @@ def evaluate_blog_post(
         findings.append(
             GateFinding(
                 code="content_below_seo_target",
-                message=f"{word_count} words below SEO target {target_words}",
+                message=f"content_below_seo_target_{target_words}_words",
                 severity=GateSeverity.WARNING,
                 metadata={"word_count": word_count, "target_words": target_words},
             )
