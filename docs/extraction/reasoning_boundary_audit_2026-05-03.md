@@ -466,3 +466,44 @@ Scope:
 
 This validates the boundary on the smallest drifted file before touching the
 larger engine modules.
+
+---
+
+## PR-C1 Implementation Outcomes (2026-05-04)
+
+This section records the actual outcomes from the PR-C1 sequence (PR-C1a → PR-C1k) so the audit reflects what shipped, not just what was planned. The original PR 2 / PR 3 acceptance criteria from the "Follow-Up PR Sequence" above are now satisfied; the PR 4 / PR 5 / PR 6 / PR 7 sequence remains as planned.
+
+### Slices that landed
+
+| Slice | PR | What it shipped |
+| --- | --- | --- |
+| PR-C1a | [#94](https://github.com/canfieldjuan/ATLAS/pull/94) | Archetypes consolidation: 10 canonical archetypes in `extracted_reasoning_core/archetypes.py`, frozen `ArchetypeProfile` / `SignalRule` dataclasses, `_ArchetypeMatchInternal` (rich) + `_to_public_match` adapter to public `ArchetypeMatch` |
+| PR-C1b | [#100](https://github.com/canfieldjuan/ATLAS/pull/100) | Temporal consolidation: atlas-canonical `TemporalEngine` + content_pipeline's defensive helpers (`_numeric_value` / `_row_get`); canonicalized `MIN_DAYS_FOR_PERCENTILES = 3` (atlas's actual runtime value, not the dead module-constant `= 7`); parameterized `min_days_for_percentiles` constructor knob |
+| PR-C1c | [#102](https://github.com/canfieldjuan/ATLAS/pull/102) | Public types promotion: rich `TemporalEvidence` (frozen, slots) + 4 sub-types (`VendorVelocity`, `LongTermTrend`, `CategoryPercentile`, `AnomalyScore`); `ConclusionResult` and `SuppressionResult` |
+| PR-C1d | [#104](https://github.com/canfieldjuan/ATLAS/pull/104) | Slim `EvidenceEngine` core: conclusions + suppression surface only; per-review enrichment stays atlas-side until PR 5; both `evaluate_conclusions` (plural) and `evaluate_conclusion` (singular) shipped per audit Collision 4 resolution |
+| PR-C1g | [#103](https://github.com/canfieldjuan/ATLAS/pull/103) | API wiring: `score_archetypes`, `build_temporal_evidence`, `evaluate_evidence` stubs from PR-C1d wired through to the consolidated engines |
+| PR-C1h | [#111](https://github.com/canfieldjuan/ATLAS/pull/111) | `extracted_content_pipeline/reasoning/archetypes.py`: 590-line drifted fork → 44-line wrapper. Drift-forward: `_numeric_value` into core's `_evaluate_rule` to handle messy string values |
+| PR-C1i | [#117](https://github.com/canfieldjuan/ATLAS/pull/117) | `extracted_content_pipeline/reasoning/evidence_engine.py`: 338-line drifted fork → 85-line wrapper. Drift-forwards into core: `EvidenceEngine.from_rules(dict)` classmethod (in-memory construction), lazy yaml import + JSON suffix detection, `_numeric_value` in numeric checks, `min_count`/`exists` operator parity, dual-form suppression. Wrapper carries content-pipeline-specific `_DEFAULT_RULES` dict (consumer-review conclusions: `pricing_crisis`, `losing_market_share`, `active_churn_wave`, `support_quality_risk`) |
+| PR-C1j | [#127](https://github.com/canfieldjuan/ATLAS/pull/127) | `extracted_content_pipeline/reasoning/temporal.py`: 466-line drifted fork → 49-line wrapper. Drift-forwards into core: `_coerce_date`, `_days_between`, `_volatility`, `_percentiles_from_rows` helpers; vendor_name `.strip()` normalization; self-contained `_compute_percentiles` SELECT (drops atlas import). Latent bug fix: `analyze_vendor` and `_compute_long_term_trends` were mutating frozen `TemporalEvidence` / `LongTermTrend` (activated by PR-C1c freeze) -- fixed by constructing dataclasses with all fields at once |
+| PR-C1k | [#134](https://github.com/canfieldjuan/ATLAS/pull/134) | Test rename: `tests/test_extracted_reasoning_{archetypes,evidence_engine,temporal}.py` → `tests/test_extracted_content_pipeline_reasoning_*.py`; audit-doc amendment to `evidence_temporal_archetypes_audit_2026-05-03.md` |
+
+### Architectural deviations from the original plan
+
+Two judgment calls during implementation departed from the audit's original PR 3 acceptance criteria. Both are documented in the per-slice doc / PR description; surfaced here for the audit trail.
+
+1. **Atlas adaptation deferred to PR 5/6** -- the original PR 3 line "Atlas can adapt to the shared core without behavior drift" turned out to require an atlas-side migration that didn't fit the consolidation slice. Atlas continues to use its own `atlas_brain/reasoning/temporal.py` and `atlas_brain/reasoning/archetypes.py` (forks of the now-canonical core). The content_pipeline mirrors are routed through core; the atlas-side migration is part of the PR 7 "Product Migration Pass" sequence, not PR-C1. Core's `TemporalEngine` had no production callers in atlas during PR-C1, which is why latent bugs (frozen-dataclass mutations) only surfaced once content_pipeline routed through it.
+
+2. **Test rename deviation** -- the original PR 3 acceptance criterion "reasoning-core tests own the consolidated evidence, temporal, and archetype contracts" was interpreted in the per-slice audit (`evidence_temporal_archetypes_audit_2026-05-03.md`) as "rename `tests/test_extracted_reasoning_*.py` and redirect imports to `extracted_reasoning_core.*`". That plan turned out to be wrong for `evidence_engine` because the wrapper carries content-pipeline-specific `_DEFAULT_RULES` (consumer-review conclusions absent from core's `evidence_map.yaml`). Redirecting imports would have broken the assertions. PR-C1k instead renamed the files to `test_extracted_content_pipeline_reasoning_*.py` and kept imports unchanged; the canonical core tests live separately at `test_extracted_reasoning_core_*.py` (unit-style). Both layers are kept; coverage is complementary. Per-slice audit (`evidence_temporal_archetypes_audit_2026-05-03.md`) carries the detailed deviation note; the original "redirect" table is preserved with `~~SUPERSEDED~~` strikethrough markers.
+
+### What did not ship in PR-C1
+
+The following remain on the PR 4 / PR 5 / PR 6 / PR 7 backlog as originally planned:
+
+- **PR 4: Semantic cache split.** Not touched in PR-C1.
+- **PR 5: Reasoning pack registry.** Per-review enrichment (`compute_urgency`, `override_pain`, `derive_recommend`, etc.) still lives in atlas-side `atlas_brain/reasoning/` and has not been carved into a pack module. This was an explicit scope-out in PR-C1d's slim-core split.
+- **PR 6: Graph/state engine with ports.** Not touched in PR-C1.
+- **PR 7: Product migration pass.** Atlas-side reasoning still uses the atlas-local forks of `archetypes.py` / `temporal.py` / `evidence_engine.py`. Removing those forks (and pointing atlas at core) is the PR 7 work.
+
+### Drift-forward summary
+
+PR-C1 surfaced a recurring pattern: surface comparison of "what's in core vs what's in the fork" missed defensive helpers that only manifested under test. The slim core was the better-engineered _interface_, but the content_pipeline fork carried better defensive coercion in helpers (`_numeric_value`, `_row_get`, `_coerce_date`, `_days_between`, `_volatility`, `_percentiles_from_rows`) and more tolerant operator handling (`min_count`, `exists`, dual-form suppression). Each wrapper-conversion slice (PR-C1h / PR-C1i / PR-C1j) carried these forward into core in the same commit as the wrapper. Future product-migration slices (PR 7) should expect the same pattern when atlas-side reasoning is finally pointed at core.
