@@ -35,6 +35,22 @@ def _witness_rows(count: int) -> list[dict[str, object]]:
     return rows
 
 
+def test_package_level_import_resolves_owned_renderer() -> None:
+    from extracted_competitive_intelligence.templates.email import (
+        vendor_briefing as package_vendor_briefing,
+    )
+
+    assert package_vendor_briefing.__name__ == vendor_briefing.__name__
+
+
+def test_package_level_export_resolves_owned_renderer_function() -> None:
+    from extracted_competitive_intelligence.templates.email import (
+        render_vendor_briefing_html,
+    )
+
+    assert render_vendor_briefing_html.__module__ == vendor_briefing.__name__
+
+
 def test_renderer_default_witness_limit_matches_atlas_contract() -> None:
     selected = vendor_briefing._selected_reasoning_anchors(
         {"reasoning_witness_highlights": _witness_rows(WITNESS_COUNT)}
