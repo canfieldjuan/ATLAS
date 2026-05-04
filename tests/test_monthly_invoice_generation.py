@@ -620,6 +620,167 @@ def test_resolver_no_double_count_for_collision():
     assert total_assigned == 1, "Colliding event was double-counted"
 
 
+def test_annotate_draft_clean_invoice_is_send_safe():
+    """Draft with email, real total, contact -- no blockers, no warnings."""
+    from atlas_brain.mcp.invoicing_server import _annotate_draft
+
+    inv = {
+        "id": uuid4(),
+        "invoice_number": "INV-2026-0001",
+        "customer_name": "AKRA",
+        "customer_email": "billing@akra.example",
+        "contact_id": uuid4(),
+        "total_amount": 320.0,
+        "issue_date": date(2026, 5, 1),
+        "due_date": date(2026, 6, 1),
+        "metadata": {},
+    }
+    out = _annotate_draft(inv)
+    assert out["blockers"] == []
+    assert out["warnings"] == []
+    assert out["send_safe"] is True
+    assert out["total_amount"] == 320.0
+
+
+def test_annotate_draft_needs_hours_blocks_send():
+    """needs_hours metadata -> blocker. subtotal_zero suppressed (expected)."""
+    from atlas_brain.mcp.invoicing_server import (
+        _annotate_draft,
+        _BLOCKER_NEEDS_HOURS,
+        _WARNING_SUBTOTAL_ZERO,
+    )
+
+    inv = {
+        "id": uuid4(),
+        "invoice_number": "INV-2026-0002",
+        "customer_name": "Brookstone",
+        "customer_email": "ops@brookstone.example",
+        "contact_id": uuid4(),
+        "total_amount": 0.0,
+        "metadata": {"needs_hours": True},
+    }
+    out = _annotate_draft(inv)
+    assert _BLOCKER_NEEDS_HOURS in out["blockers"]
+    assert _WARNING_SUBTOTAL_ZERO not in out["warnings"]
+    assert out["send_safe"] is False
+
+
+def test_annotate_draft_no_email_blocks_send():
+    """Missing customer_email is a blocker."""
+    from atlas_brain.mcp.invoicing_server import _annotate_draft, _BLOCKER_NO_EMAIL
+
+    inv = {
+        "id": uuid4(),
+        "invoice_number": "INV-2026-0003",
+        "customer_name": "Walk-in",
+        "customer_email": None,
+        "contact_id": uuid4(),
+        "total_amount": 100.0,
+        "metadata": {},
+    }
+    out = _annotate_draft(inv)
+    assert _BLOCKER_NO_EMAIL in out["blockers"]
+    assert out["send_safe"] is False
+
+
+def test_annotate_draft_subtotal_zero_warning_only_when_no_needs_hours():
+    """A non-Per-Hour draft with $0 total is a warning, not a blocker."""
+    from atlas_brain.mcp.invoicing_server import _annotate_draft, _WARNING_SUBTOTAL_ZERO
+
+    inv = {
+        "id": uuid4(),
+        "invoice_number": "INV-2026-0004",
+        "customer_name": "Test",
+        "customer_email": "test@example.com",
+        "contact_id": uuid4(),
+        "total_amount": 0.0,
+        "metadata": {},
+    }
+    out = _annotate_draft(inv)
+    assert _WARNING_SUBTOTAL_ZERO in out["warnings"]
+    assert out["blockers"] == []
+    assert out["send_safe"] is True
+
+
+def test_annotate_draft_no_contact_id_warning():
+    """Draft without a CRM contact gets a soft warning."""
+    from atlas_brain.mcp.invoicing_server import _annotate_draft, _WARNING_NO_CONTACT
+
+    inv = {
+        "id": uuid4(),
+        "invoice_number": "INV-2026-0005",
+        "customer_name": "Cash customer",
+        "customer_email": "cash@example.com",
+        "contact_id": None,
+        "total_amount": 50.0,
+        "metadata": {},
+    }
+    out = _annotate_draft(inv)
+    assert _WARNING_NO_CONTACT in out["warnings"]
+    assert out["send_safe"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_pending_drafts_summary_and_filter(monkeypatch):
+    """End-to-end: tool annotates each draft, computes summary, honors only_blocked."""
+    import json
+    from atlas_brain.mcp.invoicing_server import list_pending_drafts
+
+    fixture_drafts = [
+        {
+            "id": uuid4(),
+            "invoice_number": "INV-A",
+            "customer_name": "Clean Co",
+            "customer_email": "clean@example.com",
+            "contact_id": uuid4(),
+            "total_amount": 200.0,
+            "metadata": {},
+        },
+        {
+            "id": uuid4(),
+            "invoice_number": "INV-B",
+            "customer_name": "Hourly Co",
+            "customer_email": "hourly@example.com",
+            "contact_id": uuid4(),
+            "total_amount": 0.0,
+            "metadata": {"needs_hours": True},
+        },
+        {
+            "id": uuid4(),
+            "invoice_number": "INV-C",
+            "customer_name": "No Email",
+            "customer_email": None,
+            "contact_id": uuid4(),
+            "total_amount": 75.0,
+            "metadata": {},
+        },
+    ]
+
+    class FakeRepo:
+        async def search(self, **kwargs):
+            assert kwargs.get("status") == "draft"
+            return fixture_drafts
+
+    monkeypatch.setattr(
+        "atlas_brain.mcp.invoicing_server._repo",
+        lambda: FakeRepo(),
+    )
+
+    result = json.loads(await list_pending_drafts())
+    assert len(result["drafts"]) == 3
+    assert result["summary"]["total_drafts"] == 3
+    assert result["summary"]["send_safe"] == 1
+    assert result["summary"]["blocked"] == 2
+    assert result["summary"]["by_blocker"]["needs_hours"] == 1
+    assert result["summary"]["by_blocker"]["no_email"] == 1
+
+    blocked_only = json.loads(await list_pending_drafts(only_blocked=True))
+    assert len(blocked_only["drafts"]) == 2
+    assert all(d["blockers"] for d in blocked_only["drafts"])
+    assert blocked_only["summary"]["total_drafts"] == 2
+    assert blocked_only["summary"]["send_safe"] == 0
+
+
 @pytest.mark.asyncio
 async def test_payment_reminder_attaches_pdf(monkeypatch):
     """Reminder emails must attach the invoice PDF (consistency with original send)."""
