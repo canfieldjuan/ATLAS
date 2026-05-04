@@ -1,12 +1,12 @@
 # Per-Product State
 
-Last updated: 2026-05-04T19:40Z by codex-content-analytics-worker
+Last updated: 2026-05-04T19:50Z by claude-2026-05-03-b
 
 Cross-product state-of-the-world for the extraction effort. Update when a PR merges or a product's phase advances. See [`../COORDINATION.md`](../COORDINATION.md) for the protocol that governs edits to this file.
 
 | Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
 |---|---|---|---|---|---|
-| `extracted_llm_infrastructure` | 3 (runtime-decoupled; no OSS publish — internal refactor only) | #150 | — | Done as a decoupling refactor. Customer-facing API/SaaS work tracks under product roadmap (P1/P5/P6), not this scaffold. | none |
+| `extracted_llm_infrastructure` | 3 (runtime-decoupled + 100% standalone-operational; no OSS publish — internal refactor only) | #171 | — | Extraction effort terminal. PR-A6a #169 carved `ProviderCostSubConfig` into `_standalone/config.py`; PR-A6b #171 ported `SkillRegistry` substrate. Customer-facing API/SaaS work tracks under product roadmap (P1/P5/P6), not this scaffold. | none |
 | `extracted_competitive_intelligence` | 2 in progress (standalone toggle surfaces landing) | #160 | — | Continue Phase 2 ownership of standalone-ready product surfaces | none |
 | `extracted_content_pipeline` | 1 -> 2 (productization seams) | #167 | — | Continue remaining campaign orchestration/API seams after DB-backed review/export/send/progression/analytics paths landed | none |
 | `extracted_reasoning_core` | 1 (scaffold + archetypes/evidence_map moved; PR-C1 series merged through #163) | #163 | — | Continue temporal/types/evidence_engine/API/wrapper follow-up slices per merged PR #82 audit | none |
