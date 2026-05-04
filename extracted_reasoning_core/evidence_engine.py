@@ -36,11 +36,10 @@ Public surface:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from .types import ConclusionResult, SuppressionResult
 
@@ -50,7 +49,21 @@ _DEFAULT_MAP_PATH = Path(__file__).parent / "evidence_map.yaml"
 
 
 class EvidenceEngine:
-    """YAML-driven conclusion + suppression evaluator.
+    """Conclusion + suppression evaluator driven by a rules dict.
+
+    Rules can be supplied in three shapes:
+
+      - YAML/JSON file (``EvidenceEngine(map_path)``) -- loaded from
+        disk; ``.json`` files are parsed with stdlib ``json``, all
+        other suffixes use ``yaml.safe_load`` (yaml is imported lazily
+        so the standalone extracted-pipeline CI -- which intentionally
+        omits PyYAML -- can still import this module).
+      - In-memory dict (``EvidenceEngine.from_rules(rules)``) -- no
+        filesystem I/O. Used by callers that ship rules as Python
+        literals, e.g. the content-pipeline wrapper.
+      - Default (``EvidenceEngine()`` / no args) -- loads the YAML map
+        shipped next to this module. Atlas-side use only; standalone
+        callers should use ``from_rules`` instead.
 
     Slim-core split: per-review enrichment lives in
     `atlas_brain.reasoning.review_enrichment` (will be carved out in
@@ -60,15 +73,39 @@ class EvidenceEngine:
 
     def __init__(self, map_path: str | Path | None = None) -> None:
         path = Path(map_path) if map_path else _DEFAULT_MAP_PATH
-        with open(path) as f:
+        with open(path, "rb") as f:
             raw_bytes = f.read()
-        self._rules: dict[str, Any] = yaml.safe_load(raw_bytes)
-        self.map_hash: str = hashlib.sha256(raw_bytes.encode()).hexdigest()[:16]
-        self.map_path: str = str(path)
-        # Enrichment rules are loaded for completeness (the YAML carries
-        # them for the atlas-side enrichment module) but this slim core
-        # never reads them. No regex pre-compilation here -- those live
-        # in review_enrichment.py.
+        rules = _parse_rules_bytes(raw_bytes, path)
+        self._init_from_rules(rules, str(path), raw_bytes)
+
+    @classmethod
+    def from_rules(cls, rules: dict[str, Any]) -> "EvidenceEngine":
+        """Construct an engine directly from an in-memory rules dict.
+
+        Used by callers (notably the content-pipeline wrapper) that
+        ship rules as Python literals and do not want a filesystem
+        dependency. The hash is computed over a canonical JSON dump of
+        the dict so two callers with identical rules get identical
+        ``map_hash`` fingerprints.
+        """
+        inst = cls.__new__(cls)
+        canonical = json.dumps(rules, sort_keys=True).encode("utf-8")
+        inst._init_from_rules(rules, "in-memory", canonical)
+        return inst
+
+    def _init_from_rules(
+        self,
+        rules: dict[str, Any],
+        map_path_str: str,
+        raw_bytes: bytes,
+    ) -> None:
+        self._rules: dict[str, Any] = rules
+        self.map_hash: str = hashlib.sha256(raw_bytes).hexdigest()[:16]
+        self.map_path: str = map_path_str
+        # Enrichment rules are loaded for completeness (the atlas YAML
+        # carries them for the atlas-side enrichment module) but this
+        # slim core never reads them. No regex pre-compilation here --
+        # those live in review_enrichment.py.
         self._enrichment = self._rules.get("enrichment", {})
         self._conclusions = self._rules.get("conclusions", {})
         self._suppression = self._rules.get("suppression", {})
@@ -223,11 +260,20 @@ class EvidenceEngine:
     # Confidence labeling
     # ------------------------------------------------------------------
 
-    def get_confidence_tier(self, total_reviews: int) -> str:
-        """Return confidence tier label for a review count."""
+    def get_confidence_tier(self, total_reviews: Any) -> str:
+        """Return confidence tier label for a review count.
+
+        Coerces strict-numeric-shaped inputs (``120``, ``"120"``,
+        ``"1,234"``, ``"28%"``) via ``_numeric_value`` so a single
+        string-shaped review count does not silently fall through to
+        "insufficient". Mixed-text inputs like ``"120 reviews"`` are
+        not parsed -- callers should pre-strip non-numeric content.
+        """
+        review_count = _numeric_value(total_reviews) or 0.0
         for tier_name in ("high", "medium", "low"):
             tier = self._confidence_tiers.get(tier_name, {})
-            if total_reviews >= tier.get("min_reviews", 0):
+            min_reviews = _numeric_value(tier.get("min_reviews")) or 0.0
+            if review_count >= min_reviews:
                 return tier_name
         return "insufficient"
 
@@ -267,9 +313,13 @@ class EvidenceEngine:
         if "eq" in cond:
             return value == cond["eq"]
         if "lte" in cond:
-            return value is not None and float(value) <= float(cond["lte"])
+            value_num = _numeric_value(value)
+            cond_num = _numeric_value(cond["lte"])
+            return value_num is not None and cond_num is not None and value_num <= cond_num
         if "gte" in cond:
-            return value is not None and float(value) >= float(cond["gte"])
+            value_num = _numeric_value(value)
+            cond_num = _numeric_value(cond["gte"])
+            return value_num is not None and cond_num is not None and value_num >= cond_num
         if "in" in cond:
             return value in cond["in"]
         return False
@@ -282,35 +332,67 @@ class EvidenceEngine:
         value = self._resolve_field(evidence, field)
         op = req.get("operator", "eq")
 
-        if op == "gte":
-            return value is not None and float(value) >= float(req["value"])
-        if op == "gt":
-            return value is not None and float(value) > float(req["value"])
-        if op == "lte":
-            return value is not None and float(value) <= float(req["value"])
-        if op == "lt":
-            return value is not None and float(value) < float(req["value"])
+        if op in {"gte", "gt", "lte", "lt"}:
+            value_num = _numeric_value(value)
+            rule_num = _numeric_value(req.get("value"))
+            if value_num is None or rule_num is None:
+                return False
+            if op == "gte":
+                return value_num >= rule_num
+            if op == "gt":
+                return value_num > rule_num
+            if op == "lte":
+                return value_num <= rule_num
+            return value_num < rule_num
+
         if op == "eq":
             return value == req.get("value")
         if op == "in":
             return value in req.get("values", [])
+        if op == "exists":
+            return value is not None and value != ""
+        if op == "min_count":
+            expected = _numeric_value(req.get("value"))
+            return (
+                isinstance(value, (list, tuple, set, dict))
+                and expected is not None
+                and len(value) >= expected
+            )
         return False
 
     def _check_suppression_rule(
         self, rule: dict[str, Any], evidence: dict[str, Any],
     ) -> bool:
-        """Check a suppression condition ({field, lt/eq/gt/lte/gte} shape)."""
+        """Check a suppression condition.
+
+        Accepts two shapes:
+          - shorthand: ``{field: ..., lt: 5}`` (the canonical form in
+            core's `evidence_map.yaml`)
+          - explicit:  ``{field: ..., operator: lt, value: 5}`` (the
+            form some content-pipeline rules use; carried forward in
+            PR-C1i so a single suppression-section rule shape works
+            on both pipelines without forcing a YAML rewrite)
+        """
+        # Explicit-operator form delegates to _check_requirement.
+        if "operator" in rule:
+            return self._check_requirement(rule, evidence)
+
         field = rule.get("field", "")
         value = self._resolve_field(evidence, field)
 
-        if "lt" in rule:
-            return value is not None and float(value) < float(rule["lt"])
-        if "lte" in rule:
-            return value is not None and float(value) <= float(rule["lte"])
-        if "gt" in rule:
-            return value is not None and float(value) > float(rule["gt"])
-        if "gte" in rule:
-            return value is not None and float(value) >= float(rule["gte"])
+        for op_key in ("lt", "lte", "gt", "gte"):
+            if op_key in rule:
+                value_num = _numeric_value(value)
+                rule_num = _numeric_value(rule[op_key])
+                if value_num is None or rule_num is None:
+                    return False
+                if op_key == "lt":
+                    return value_num < rule_num
+                if op_key == "lte":
+                    return value_num <= rule_num
+                if op_key == "gt":
+                    return value_num > rule_num
+                return value_num >= rule_num
         if "eq" in rule:
             return value == rule["eq"]
 
@@ -375,6 +457,60 @@ def reload_evidence_engine() -> EvidenceEngine:
     _engine = None
     _engine_path = None
     return get_evidence_engine()
+
+
+def _parse_rules_bytes(raw_bytes: bytes, path: Path) -> dict[str, Any]:
+    """Parse rule bytes from disk into a dict.
+
+    ``.json`` files use stdlib ``json`` so the standalone extracted-
+    pipeline CI (which omits PyYAML) can still load JSON-shaped rule
+    files in tests. All other suffixes use ``yaml.safe_load`` -- yaml
+    is imported lazily here so the module imports cleanly even when
+    PyYAML is not installed.
+    """
+    if path.suffix.lower() == ".json":
+        loaded = json.loads(raw_bytes.decode("utf-8"))
+    else:
+        try:
+            import yaml  # type: ignore[import-untyped]
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                f"PyYAML is required to load {path} (suffix: {path.suffix}). "
+                f"Install pyyaml, switch to a .json rule file, or use "
+                f"EvidenceEngine.from_rules(...) to pass rules as a dict."
+            ) from exc
+        loaded = yaml.safe_load(raw_bytes)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Evidence map must decode to a dict: {path}")
+    return loaded
+
+
+def _numeric_value(value: Any) -> float | None:
+    """Coerce common numeric-shaped values to float, returning None on bad input.
+
+    Handles ints, floats, percent-suffixed strings ("28%"), thousands
+    separators ("1,234"), and bare decimal strings ("7.2"). Booleans
+    return None to avoid `True == 1.0` collisions in numeric comparisons.
+
+    Carried forward from `extracted_content_pipeline.reasoning.evidence_engine`
+    in PR-C1i so the slim core can absorb the same defensive coercion the
+    drifted content_pipeline fork already had.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip().replace(",", "")
+        if not stripped:
+            return None
+        if stripped.endswith("%"):
+            stripped = stripped[:-1]
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
+    return None
 
 
 __all__ = [
