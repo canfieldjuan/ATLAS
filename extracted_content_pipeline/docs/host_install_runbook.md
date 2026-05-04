@@ -269,6 +269,14 @@ python scripts/send_extracted_campaigns.py \
   --limit 10
 ```
 
+Progress due sequences and queue generated follow-up drafts:
+
+```bash
+python scripts/progress_extracted_campaign_sequences.py \
+  --from-email audit@customer.com \
+  --limit 10
+```
+
 Reject a draft without deleting it:
 
 ```bash

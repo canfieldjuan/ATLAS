@@ -250,6 +250,18 @@ python scripts/send_extracted_campaigns.py \
   --limit 10
 ```
 
+Progress due sequences and queue generated follow-up drafts:
+
+```bash
+python scripts/progress_extracted_campaign_sequences.py \
+  --from-email audit@customer.com \
+  --limit 10
+
+python scripts/progress_extracted_campaign_sequences.py \
+  --llm offline \
+  --json
+```
+
 ## Import smoke test
 
 ```bash
@@ -335,6 +347,9 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_postgres_export.py`: read-only draft export for host review flows
 - `campaign_postgres_send.py`: DB-backed queued send runner that composes the
   campaign, suppression, audit, and sender ports for host worker CLIs
+- `campaign_postgres_sequence_progression.py`: DB-backed due-sequence worker
+  that composes the sequence, audit, LLM, and skill ports for follow-up
+  generation
 - `campaign_postgres_import.py`: JSON/CSV customer opportunity import into the
   product `campaign_opportunities` table
 - `storage/repositories/scheduled_task.py`: local execution metadata updater
