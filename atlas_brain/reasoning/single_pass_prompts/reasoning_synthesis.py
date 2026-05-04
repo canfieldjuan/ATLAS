@@ -300,3 +300,30 @@ Do not duplicate deterministic displacement count wrappers outside
 REASONING_SYNTHESIS_PROMPT_VERSION = _hashlib.sha256(
     REASONING_SYNTHESIS_PROMPT.encode()
 ).hexdigest()[:8]
+
+
+# PR-C3e: register this prompt with the shared reasoning pack registry
+# (PR-C3a / extracted_reasoning_core.pack_registry). The reasoning
+# synthesis pack produces consumer-neutral analytical contracts that
+# downstream consumers (battle cards, reports, blogs, campaigns)
+# translate into their own language. Per the audit, the pack file
+# moves into a product package during PR 7 (Product Migration); for
+# now the file stays atlas-side.
+from extracted_reasoning_core.pack_registry import (  # noqa: E402
+    Pack as _Pack,
+    register_pack as _register_pack,
+)
+
+_register_pack(
+    _Pack(
+        name="reasoning_synthesis",
+        version=REASONING_SYNTHESIS_PROMPT_VERSION,
+        prompts={"synthesis": REASONING_SYNTHESIS_PROMPT},
+        metadata={
+            "output_artifact": "reasoning_contracts",
+            "owner_product": "atlas",
+            "synthesis_mode": "consumer_neutral_contracts",
+            "valid_wedges": tuple(sorted(WEDGE_ENUM_VALUES)),
+        },
+    )
+)
