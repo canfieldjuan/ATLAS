@@ -1195,13 +1195,36 @@ async def export_invoice_pdf(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    transport = "sse" if "--sse" in sys.argv else "stdio"
-    if transport == "sse":
+    if "--sse" in sys.argv:
+        # Streamable HTTP transport (preferred by claude.ai connectors;
+        # mcp.sse_app() is being deprecated). Bearer auth via
+        # apply_auth_middleware when ATLAS_MCP_AUTH_TOKEN is set.
+        import anyio
+        import uvicorn
+        from mcp.server.transport_security import TransportSecuritySettings
+
         from ..config import settings
-        from .auth import run_sse_with_auth
+        from .auth import apply_auth_middleware
 
         mcp.settings.host = settings.mcp.host
         mcp.settings.port = settings.mcp.invoicing_port
-        run_sse_with_auth(mcp, settings.mcp.host, settings.mcp.invoicing_port)
+        # Required when accessed via reverse proxy (Tailscale Funnel,
+        # Cloudflare, etc.) -- Host header won't match 127.0.0.1.
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+        secured_app = apply_auth_middleware(mcp.streamable_http_app())
+
+        async def _serve():
+            config = uvicorn.Config(
+                secured_app,
+                host=settings.mcp.host,
+                port=settings.mcp.invoicing_port,
+                log_level="info",
+            )
+            server = uvicorn.Server(config)
+            await server.serve()
+
+        anyio.run(_serve)
     else:
         mcp.run(transport="stdio")
