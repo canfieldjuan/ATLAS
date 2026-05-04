@@ -31,10 +31,12 @@ from extracted_reasoning_core.semantic_cache_keys import (
 )
 
 # Re-export as a module-level name so callers doing
-# ``from atlas_brain.reasoning.semantic_cache import STALE_THRESHOLD``
-# keep working. Aliased on import to avoid the
-# ``STALE_THRESHOLD = STALE_THRESHOLD`` self-reference shadowing that
-# made the prior shape look like a no-op.
+# ``from <this module> import STALE_THRESHOLD`` keep working. The
+# atlas-side and LLM-infra-mirror copies of this file are validated
+# byte-for-byte, so the wording is module-path-agnostic; the canonical
+# constant lives in ``extracted_reasoning_core.semantic_cache_keys``.
+# Aliased on import to avoid the ``STALE_THRESHOLD = STALE_THRESHOLD``
+# self-reference shadowing that made the prior shape look like a no-op.
 STALE_THRESHOLD = _CORE_STALE_THRESHOLD
 
 logger = logging.getLogger("atlas.reasoning.semantic_cache")

@@ -27,6 +27,13 @@ pytest \
   tests/test_extracted_content_pipeline_reasoning_archetypes.py \
   tests/test_extracted_content_pipeline_reasoning_temporal.py \
   tests/test_extracted_content_pipeline_reasoning_evidence_engine.py \
+  tests/test_extracted_reasoning_core_api.py \
+  tests/test_extracted_reasoning_core_archetypes.py \
+  tests/test_extracted_reasoning_core_evidence_engine.py \
+  tests/test_extracted_reasoning_core_semantic_cache_keys.py \
+  tests/test_extracted_reasoning_core_temporal.py \
+  tests/test_extracted_reasoning_core_types.py \
+  tests/test_extracted_reasoning_core_wedge_registry.py \
   tests/test_extracted_product_utilities.py \
   tests/test_extracted_b2b_batch_utils.py \
   tests/test_extracted_blog_matching.py \
