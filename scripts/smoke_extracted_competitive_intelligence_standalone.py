@@ -33,6 +33,7 @@ MODULES = [
     "extracted_competitive_intelligence.templates.email.vendor_briefing",
     "extracted_competitive_intelligence.services.b2b.source_impact",
     "extracted_competitive_intelligence.services.b2b_competitive_sets",
+    "extracted_competitive_intelligence.reasoning.cross_vendor_selection",
 ]
 
 
@@ -115,6 +116,7 @@ def main() -> int:
         ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "write_ports.py",
         ROOT / "extracted_competitive_intelligence" / "services" / "scraping" / "capabilities.py",
         ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "source_impact.py",
+        ROOT / "extracted_competitive_intelligence" / "reasoning" / "cross_vendor_selection.py",
     )
     for module_path in owned_files:
         if "atlas_brain." in module_path.read_text():
