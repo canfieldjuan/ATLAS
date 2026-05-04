@@ -117,6 +117,40 @@ def test_send_cli_sender_config_uses_ses_from_email_fallback() -> None:
     assert config["region"] == "us-east-1"
 
 
+def test_send_cli_reports_invalid_integer_env(monkeypatch) -> None:
+    cli = _load_cli_module()
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_SEND_LIMIT", "many")
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._parse_args([
+            "--database-url",
+            "postgres://example",
+            "--resend-api-key",
+            "re_key",
+        ])
+
+    message = str(exc_info.value)
+    assert "Invalid integer for EXTRACTED_CAMPAIGN_SEND_LIMIT" in message
+    assert "'many'" in message
+
+
+def test_send_cli_reports_invalid_float_env(monkeypatch) -> None:
+    cli = _load_cli_module()
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_SENDER_TIMEOUT_SECONDS", "slow")
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._parse_args([
+            "--database-url",
+            "postgres://example",
+            "--resend-api-key",
+            "re_key",
+        ])
+
+    message = str(exc_info.value)
+    assert "Invalid float for EXTRACTED_CAMPAIGN_SENDER_TIMEOUT_SECONDS" in message
+    assert "'slow'" in message
+
+
 @pytest.mark.asyncio
 async def test_send_cli_outputs_json_summary_and_closes_pool(monkeypatch, capsys) -> None:
     cli = _load_cli_module()
@@ -193,4 +227,47 @@ async def test_send_cli_requires_database_url(monkeypatch) -> None:
     monkeypatch.setattr(cli.sys, "argv", ["send", "--resend-api-key", "re_key"])
 
     with pytest.raises(SystemExit, match="Missing --database-url"):
+        await cli._main()
+
+
+@pytest.mark.asyncio
+async def test_send_cli_requires_resend_api_key_before_sender_creation(monkeypatch) -> None:
+    cli = _load_cli_module()
+    for name in cli.RESEND_API_KEY_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "send",
+            "--database-url",
+            "postgres://example",
+            "--provider",
+            "resend",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Missing --resend-api-key"):
+        await cli._main()
+
+
+@pytest.mark.asyncio
+async def test_send_cli_requires_ses_from_email_before_sender_creation(monkeypatch) -> None:
+    cli = _load_cli_module()
+    for name in cli.FROM_EMAIL_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("EXTRACTED_SES_FROM_EMAIL", raising=False)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "send",
+            "--database-url",
+            "postgres://example",
+            "--provider",
+            "ses",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Missing --ses-from-email"):
         await cli._main()

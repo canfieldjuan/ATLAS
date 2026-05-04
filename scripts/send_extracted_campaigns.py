@@ -53,21 +53,37 @@ SENDER_TIMEOUT_ENV = (
 
 
 def _env(*names: str, default: str | None = None) -> str | None:
+    return _env_match(*names, default=default)[1]
+
+
+def _env_match(*names: str, default: str | None = None) -> tuple[str | None, str | None]:
     for name in names:
         value = os.getenv(name)
         if value not in (None, ""):
-            return value
-    return default
+            return name, value
+    return None, default
 
 
 def _env_int(names: tuple[str, ...], default: int) -> int:
-    raw = _env(*names)
-    return int(raw) if raw not in (None, "") else int(default)
+    name, raw = _env_match(*names)
+    if raw in (None, ""):
+        return int(default)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        source = name or "default"
+        raise SystemExit(f"Invalid integer for {source}: {raw!r}") from exc
 
 
 def _env_float(names: tuple[str, ...], default: float) -> float:
-    raw = _env(*names)
-    return float(raw) if raw not in (None, "") else float(default)
+    name, raw = _env_match(*names)
+    if raw in (None, ""):
+        return float(default)
+    try:
+        return float(raw)
+    except ValueError as exc:
+        source = name or "default"
+        raise SystemExit(f"Invalid float for {source}: {raw!r}") from exc
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -198,6 +214,26 @@ def _sender_config(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     )
 
 
+def _configured(value: Any) -> bool:
+    return bool(str(value or "").strip())
+
+
+def _validate_sender_config(provider: str, config: dict[str, Any]) -> None:
+    if provider == "ses":
+        if not _configured(config.get("from_email")):
+            raise SystemExit(
+                "Missing --ses-from-email, --default-from-email, "
+                "EXTRACTED_SES_FROM_EMAIL, or EXTRACTED_CAMPAIGN_FROM_EMAIL"
+            )
+        return
+    if not _configured(config.get("api_key")):
+        raise SystemExit(
+            "Missing --resend-api-key, EXTRACTED_RESEND_API_KEY, "
+            "EXTRACTED_CAMPAIGN_RESEND_API_KEY, or "
+            "EXTRACTED_CAMPAIGN_SEQ_RESEND_API_KEY"
+        )
+
+
 async def _create_pool(database_url: str):
     try:
         import asyncpg  # type: ignore[import-not-found]
@@ -213,6 +249,7 @@ async def _main() -> int:
     if not args.database_url:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
     provider, provider_config = _sender_config(args)
+    _validate_sender_config(provider, provider_config)
     sender = create_campaign_sender(provider, provider_config)
     config = CampaignSendConfig(
         default_from_email=args.default_from_email or args.ses_from_email or "",
