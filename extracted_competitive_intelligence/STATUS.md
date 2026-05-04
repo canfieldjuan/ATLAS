@@ -40,16 +40,17 @@ Full task/runtime decoupling remains Phase 3.
 | Ecosystem analyzer boundary | ✅ `reasoning/ecosystem.py` is a host adapter port, not an Atlas import |
 | Challenger claim aggregation boundary | ✅ `services/b2b/challenger_dashboard_claims.py` is a fail-closed host adapter port |
 | Competitive-set planner boundary | ✅ `services/b2b_competitive_sets.py` is product-owned and uses `competitive_set_ports.py` for reasoning/task support |
+| Cross-vendor synthesis boundary | ✅ `_b2b_cross_vendor_synthesis.py` is product-owned packet/contract/reader logic with extracted semantic-cache hashing |
 
 ### Current audit snapshot
 
 | Metric | Count |
 |---|---:|
 | Extracted files | 90 |
-| Manifest mappings | 13 |
-| Manifest Python snapshots | 4 |
+| Manifest mappings | 12 |
+| Manifest Python snapshots | 3 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 16 |
+| Product-owned modules | 17 |
 
 Product-owned modules:
 
@@ -64,6 +65,7 @@ Product-owned modules:
 - `services/b2b/challenger_dashboard_claims.py`
 - `services/b2b/competitive_set_ports.py`
 - `services/b2b_competitive_sets.py`
+- `autonomous/tasks/_b2b_cross_vendor_synthesis.py`
 - `templates/email/vendor_briefing.py`
 - `reasoning/ecosystem.py`
 - `reasoning/cross_vendor_selection.py`
@@ -98,7 +100,7 @@ Product-owned modules:
 | `reasoning/ecosystem.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
-| `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | 🔲 | 🔲 |
+| `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | ✅ | ✅ |
 | `services/b2b_competitive_sets.py` | ✅ | ✅ | ✅ |
 | `reasoning/cross_vendor_selection.py` | ✅ | ✅ | ✅ |
 | `reasoning/single_pass_prompts/cross_vendor_battle.py` | ✅ | ✅ | n/a (product-owned LLM contract) |
