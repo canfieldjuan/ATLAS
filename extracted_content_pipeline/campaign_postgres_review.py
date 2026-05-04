@@ -49,6 +49,7 @@ async def review_campaign_drafts(
     status: str = "approved",
     scope: TenantScope | Mapping[str, Any] | None = None,
     campaign_table: str = "b2b_campaigns",
+    target_mode: str | None = None,
     from_statuses: Sequence[str] = ("draft",),
     from_email: str | None = None,
     reason: str | None = None,
@@ -90,6 +91,11 @@ async def review_campaign_drafts(
         where.append(f"{_ACCOUNT_ID_FILTER_EXPR} = ${len(params)}")
         update_where.append(f"campaign.{_ACCOUNT_ID_FILTER_EXPR} = ${len(params)}")
         filters["account_id"] = tenant.account_id
+    if target_mode:
+        params.append(_clean(target_mode))
+        where.append(f"target_mode = ${len(params)}")
+        update_where.append(f"campaign.target_mode = ${len(params)}")
+        filters["target_mode"] = _clean(target_mode)
 
     if dry_run:
         rows = await pool.fetch(

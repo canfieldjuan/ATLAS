@@ -285,6 +285,28 @@ The router exposes:
 | `GET` | `/b2b/campaigns/drafts/export` | Export scoped drafts as CSV or JSON. |
 | `POST` | `/b2b/campaigns/drafts/review` | Approve, queue, cancel, or expire selected drafts. |
 
+Amazon seller installs can mount the seller-specific router:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.seller_campaigns import create_seller_campaign_router
+
+
+app.include_router(
+    create_seller_campaign_router(
+        pool_provider=get_pool,
+        scope_provider=current_tenant_scope,
+        dependencies=[Depends(require_content_ops_user)],
+    )
+)
+```
+
+It exposes seller target CRUD under `/seller/targets` and seller draft
+list/export/review routes under `/seller/campaigns/drafts`. Seller draft
+review is guarded to `target_mode="amazon_seller"` so the route cannot update
+other campaign products by id.
+
 Send queued drafts through the configured provider:
 
 ```bash
