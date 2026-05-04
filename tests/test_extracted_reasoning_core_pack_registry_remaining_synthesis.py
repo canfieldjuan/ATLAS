@@ -57,6 +57,7 @@ def test_category_council_pack_registers_on_import() -> None:
     assert pack is not None
     assert pack.name == "category_council_synthesis"
     assert len(pack.version) == 8
+    assert all(c in "0123456789abcdef" for c in pack.version)
     assert pack.version == module.CATEGORY_COUNCIL_SYNTHESIS_PROMPT_VERSION
     assert pack.prompts["synthesis"] == module.CATEGORY_COUNCIL_SYNTHESIS_PROMPT
 
@@ -83,6 +84,7 @@ def test_resource_asymmetry_pack_registers_on_import() -> None:
     assert pack is not None
     assert pack.name == "resource_asymmetry_synthesis"
     assert len(pack.version) == 8
+    assert all(c in "0123456789abcdef" for c in pack.version)
     assert pack.version == module.RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT_VERSION
     assert pack.prompts["synthesis"] == module.RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT
 
