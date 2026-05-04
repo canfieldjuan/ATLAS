@@ -8,7 +8,13 @@ product's internals.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:  # pragma: no cover - Python 3.10 CI compatibility
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        pass
 from typing import Any, Mapping
 
 

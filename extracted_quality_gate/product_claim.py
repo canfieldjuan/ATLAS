@@ -38,7 +38,13 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import date
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:  # pragma: no cover - Python 3.10 CI compatibility
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        pass
 
 
 class ClaimScope(StrEnum):
