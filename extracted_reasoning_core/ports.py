@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 
 class LLMClient(Protocol):
@@ -46,6 +46,7 @@ class ReasoningStateStore(Protocol):
         """Persist a reasoning state snapshot."""
 
 
+@runtime_checkable
 class EventSink(Protocol):
     """Port for emitting reasoning-related events to the host's event bus.
 
@@ -57,6 +58,10 @@ class EventSink(Protocol):
     Returns the event id (opaque string) so callers can reference the
     persisted event in trace metadata, downstream lookups, or reply
     correlation.
+
+    Marked ``@runtime_checkable`` so adapter wiring can use
+    ``isinstance(obj, EventSink)`` as a structural validation guard
+    when registering hosts at startup.
     """
 
     async def emit(
@@ -71,6 +76,7 @@ class EventSink(Protocol):
         """Persist an event and return its identifier."""
 
 
+@runtime_checkable
 class TraceSink(Protocol):
     """Port for emitting reasoning spans to the host's tracing backend.
 
@@ -81,6 +87,9 @@ class TraceSink(Protocol):
 
     The ``span`` returned from ``start_span`` is opaque to reasoning core --
     it's a host-side handle that must be passed back to ``end_span``.
+
+    Marked ``@runtime_checkable`` so adapter wiring can use
+    ``isinstance(obj, TraceSink)`` as a structural validation guard.
     """
 
     def start_span(

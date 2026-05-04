@@ -54,10 +54,20 @@ class _FakeEventSink:
 
 
 def test_event_sink_protocol_is_runtime_satisfiable() -> None:
-    sink: EventSink = _FakeEventSink()
-    # Static-type assertion via annotation only -- the body just exercises
-    # the duck-typed call to confirm the Protocol shape matches.
-    assert hasattr(sink, "emit")
+    sink = _FakeEventSink()
+    # Real runtime Protocol satisfaction check. Marked
+    # @runtime_checkable so adapter wiring (e.g. registering hosts at
+    # startup) can use isinstance() as a structural guard. A plain
+    # hasattr would not catch the case where someone forgets the
+    # decorator.
+    assert isinstance(sink, EventSink)
+
+
+def test_event_sink_protocol_rejects_object_without_emit() -> None:
+    class _NotASink:
+        pass
+
+    assert not isinstance(_NotASink(), EventSink)
 
 
 @pytest.mark.asyncio
@@ -131,9 +141,18 @@ class _FakeTraceSink:
 
 
 def test_trace_sink_protocol_is_runtime_satisfiable() -> None:
-    sink: TraceSink = _FakeTraceSink()
-    assert hasattr(sink, "start_span")
-    assert hasattr(sink, "end_span")
+    sink = _FakeTraceSink()
+    # Real runtime Protocol satisfaction check (see EventSink test above
+    # for rationale).
+    assert isinstance(sink, TraceSink)
+
+
+def test_trace_sink_protocol_rejects_object_with_only_start_span() -> None:
+    class _PartialSink:
+        def start_span(self, name, *, metadata=None):
+            return None
+
+    assert not isinstance(_PartialSink(), TraceSink)
 
 
 def test_trace_sink_round_trip_passes_span_handle_back() -> None:
@@ -185,3 +204,37 @@ def test_ports_module_exports_new_ports() -> None:
 
     assert "EventSink" in ports_module.__all__
     assert "TraceSink" in ports_module.__all__
+
+
+def test_reasoning_ports_bundle_accepts_event_and_trace_sinks() -> None:
+    # The public ``run_reasoning`` / ``continue_reasoning`` /
+    # ``check_falsification`` entry points all accept a ``ReasoningPorts``
+    # bundle. Without the new fields on that dataclass, callers had no
+    # supported path to wire EventSink/TraceSink through. Pin the bundle
+    # surface so a future refactor can't accidentally drop it.
+    from extracted_reasoning_core.types import ReasoningPorts
+
+    event_sink = _FakeEventSink()
+    trace_sink = _FakeTraceSink()
+    bundle = ReasoningPorts(event_sink=event_sink, trace_sink=trace_sink)
+
+    assert bundle.event_sink is event_sink
+    assert bundle.trace_sink is trace_sink
+    # Existing fields default to None when only event/trace sinks are
+    # passed; the new fields don't break the existing partial-bundle
+    # construction pattern.
+    assert bundle.llm is None
+    assert bundle.semantic_cache is None
+    assert bundle.state_store is None
+    assert bundle.clock is None
+
+
+def test_reasoning_ports_bundle_event_and_trace_default_none() -> None:
+    from extracted_reasoning_core.types import ReasoningPorts
+
+    bundle = ReasoningPorts()
+    # New fields are optional + default to None to preserve backward
+    # compatibility with callers that built ``ReasoningPorts()`` before
+    # PR-C4a landed.
+    assert bundle.event_sink is None
+    assert bundle.trace_sink is None
