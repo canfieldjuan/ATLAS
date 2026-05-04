@@ -10,6 +10,13 @@ mirror. Without this wrapper module the mirror import blew up with
 re-pointed that file to the atlas-side helper and PR-C2 (#144) bundled
 the mirror sync without adding the missing wrapper file.
 
+A minimal in-tree fix landed via PR #135 (parallel session) that
+re-exported only ``compute_evidence_hash``. PR-C2.1 supersedes that
+with the broader surface to match the
+``extracted_competitive_intelligence/reasoning/semantic_cache.py``
+sibling wrapper, so callers of either content_pipeline or
+competitive_intelligence get the same names.
+
 Standalone-mode handling: ``content_pipeline`` ships an
 ``EXTRACTED_PIPELINE_STANDALONE=1`` mode (see
 ``extracted_content_pipeline/pipelines/llm.py``,
@@ -22,11 +29,6 @@ isn't installed -- callers that only need the pure helpers
 ``SemanticCache`` and ``SemanticCachePool`` are stubbed out in
 standalone mode so attribute access at import time doesn't crash; any
 runtime use raises ``RuntimeError`` with a clear message.
-
-Re-exports match the surface of the
-``extracted_competitive_intelligence/reasoning/semantic_cache.py``
-sibling wrapper so callers of either content_pipeline or
-competitive_intelligence get the same names.
 """
 
 from __future__ import annotations

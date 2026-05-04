@@ -240,6 +240,16 @@ python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id ac
 python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id acct_123 --status cancelled --reason "customer rejected"
 ```
 
+Send queued drafts through the configured provider:
+
+```bash
+export EXTRACTED_RESEND_API_KEY="re_..."
+python scripts/send_extracted_campaigns.py \
+  --provider resend \
+  --default-from-email audit@customer.com \
+  --limit 10
+```
+
 ## Import smoke test
 
 ```bash
@@ -323,6 +333,8 @@ Several small utility shims provide product-owned local behavior by default so t
   `PipelineLLMClient`, and the local skill registry for DB-backed draft
   generation
 - `campaign_postgres_export.py`: read-only draft export for host review flows
+- `campaign_postgres_send.py`: DB-backed queued send runner that composes the
+  campaign, suppression, audit, and sender ports for host worker CLIs
 - `campaign_postgres_import.py`: JSON/CSV customer opportunity import into the
   product `campaign_opportunities` table
 - `storage/repositories/scheduled_task.py`: local execution metadata updater

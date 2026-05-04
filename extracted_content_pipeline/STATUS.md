@@ -38,6 +38,9 @@
 - `campaign_postgres_review` provides a product-owned draft review/status
   update path so hosts can approve, queue, cancel, or expire generated
   `b2b_campaigns` rows after export without handwritten SQL.
+- `campaign_postgres_send` provides a DB-backed queued send worker seam. Hosts
+  inject a Resend or SES sender and reuse the product campaign, suppression,
+  and audit ports to send rows already moved to `queued`.
 - `storage.migration_runner` is product-owned and applies the packaged SQL
   migrations through a host-provided async pool or connection. The
   `scripts/run_extracted_content_pipeline_migrations.py` CLI wires it to

@@ -174,6 +174,12 @@ campaign id, optional account scope, and source-status guard so hosts can move
 reviewed drafts to `approved`, `queued`, `cancelled`, or `expired` without
 writing ad hoc SQL.
 
+`extracted_content_pipeline/campaign_postgres_send.py` owns the DB-backed send
+worker seam. It composes `PostgresCampaignRepository`,
+`PostgresSuppressionRepository`, `PostgresCampaignAuditSink`, and
+`CampaignSendService` so hosts can send queued drafts through an injected
+`CampaignSender` without importing Atlas task code.
+
 `extracted_content_pipeline/storage/migration_runner.py` owns the standalone
 schema installation path. It lists packaged SQL migrations, tracks applied
 versions in a product metadata table, supports dry runs, and accepts either a

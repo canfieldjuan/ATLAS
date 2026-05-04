@@ -8,6 +8,15 @@ from extracted_content_pipeline.reasoning.evidence_engine import (
     SuppressionResult,
     get_evidence_engine,
 )
+from extracted_content_pipeline.reasoning.semantic_cache import compute_evidence_hash
+from extracted_reasoning_core.semantic_cache_keys import (
+    compute_evidence_hash as core_compute_evidence_hash,
+)
+
+
+def test_semantic_cache_hash_uses_reasoning_core_owner():
+    assert compute_evidence_hash is core_compute_evidence_hash
+    assert compute_evidence_hash({"a": 1}) == core_compute_evidence_hash({"a": 1})
 
 
 def test_default_engine_has_stable_builtin_metadata():
