@@ -19,6 +19,9 @@
       "target": "extracted_quality_gate/campaign_pack.py"
     },
     {
+      "target": "extracted_quality_gate/evidence_pack.py"
+    },
+    {
       "target": "extracted_quality_gate/ports.py"
     },
     {
