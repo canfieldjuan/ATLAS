@@ -33,6 +33,8 @@ def test_manifest_tracks_product_owned_competitive_modules() -> None:
     assert "extracted_competitive_intelligence/services/scraping/capabilities.py" in owned
     assert "extracted_competitive_intelligence/services/b2b/source_impact.py" in owned
     assert "extracted_competitive_intelligence/reasoning/cross_vendor_selection.py" in owned
+    assert "extracted_competitive_intelligence/reasoning/single_pass_prompts/cross_vendor_battle.py" in owned
+    assert "extracted_competitive_intelligence/reasoning/single_pass_prompts/battle_card_reasoning.py" in owned
 
 
 def test_product_owned_competitive_modules_are_not_manifest_synced() -> None:
@@ -44,6 +46,8 @@ def test_product_owned_competitive_modules_are_not_manifest_synced() -> None:
     assert "extracted_competitive_intelligence/services/scraping/capabilities.py" not in mapped
     assert "extracted_competitive_intelligence/services/b2b/source_impact.py" not in mapped
     assert "extracted_competitive_intelligence/reasoning/cross_vendor_selection.py" not in mapped
+    assert "extracted_competitive_intelligence/reasoning/single_pass_prompts/cross_vendor_battle.py" not in mapped
+    assert "extracted_competitive_intelligence/reasoning/single_pass_prompts/battle_card_reasoning.py" not in mapped
 
 
 def test_product_owned_competitive_modules_do_not_import_atlas() -> None:

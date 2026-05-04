@@ -4,8 +4,6 @@
     {"source": "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py", "target": "extracted_competitive_intelligence/autonomous/tasks/b2b_vendor_briefing.py"},
     {"source": "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py", "target": "extracted_competitive_intelligence/autonomous/tasks/_b2b_cross_vendor_synthesis.py"},
     {"source": "atlas_brain/services/b2b_competitive_sets.py", "target": "extracted_competitive_intelligence/services/b2b_competitive_sets.py"},
-    {"source": "atlas_brain/reasoning/single_pass_prompts/cross_vendor_battle.py", "target": "extracted_competitive_intelligence/reasoning/single_pass_prompts/cross_vendor_battle.py"},
-    {"source": "atlas_brain/reasoning/single_pass_prompts/battle_card_reasoning.py", "target": "extracted_competitive_intelligence/reasoning/single_pass_prompts/battle_card_reasoning.py"},
     {"source": "atlas_brain/templates/email/vendor_briefing.py", "target": "extracted_competitive_intelligence/templates/email/vendor_briefing.py"},
     {"source": "atlas_brain/api/b2b_vendor_briefing.py", "target": "extracted_competitive_intelligence/api/b2b_vendor_briefing.py"},
     {"source": "atlas_brain/storage/migrations/095_b2b_vendor_registry.sql", "target": "extracted_competitive_intelligence/storage/migrations/095_b2b_vendor_registry.sql"},
@@ -27,6 +25,8 @@
     {"target": "extracted_competitive_intelligence/mcp/b2b/write_ports.py"},
     {"target": "extracted_competitive_intelligence/services/scraping/capabilities.py"},
     {"target": "extracted_competitive_intelligence/services/b2b/source_impact.py"},
-    {"target": "extracted_competitive_intelligence/reasoning/cross_vendor_selection.py"}
+    {"target": "extracted_competitive_intelligence/reasoning/cross_vendor_selection.py"},
+    {"target": "extracted_competitive_intelligence/reasoning/single_pass_prompts/cross_vendor_battle.py"},
+    {"target": "extracted_competitive_intelligence/reasoning/single_pass_prompts/battle_card_reasoning.py"}
   ]
 }

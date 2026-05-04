@@ -5,7 +5,7 @@
 | Step | Status |
 |---|---|
 | Manifest of source → scaffold mappings | ✅ done |
-| Verbatim byte-snapshot of 8 mapped Python files | ✅ done |
+| Verbatim byte-snapshot of 6 mapped Python files | ✅ done |
 | Verbatim byte-snapshot of 9 migration SQL files | ✅ done |
 | Package `__init__.py` files at every level | ✅ done |
 | Sync + validate scripts (with `src.exists()` guards) | ✅ done |
@@ -36,16 +36,17 @@ Full task/runtime decoupling remains Phase 3.
 | MCP write tool boundary | ✅ `write_intelligence.py` owns simple DB writes and exposes explicit host ports for deep runtime builders/enrichers |
 | Source impact support boundary | ✅ `source_impact.py` and its static scrape capability registry are product-owned |
 | Cross-vendor selection boundary | ✅ `reasoning/cross_vendor_selection.py` is product-owned pure selection logic |
+| Prompt contract boundary | ✅ single-pass battle prompts are product-owned LLM contracts |
 
 ### Current audit snapshot
 
 | Metric | Count |
 |---|---:|
 | Extracted files | 88 |
-| Manifest mappings | 17 |
-| Manifest Python snapshots | 8 |
+| Manifest mappings | 15 |
+| Manifest Python snapshots | 6 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 9 |
+| Product-owned modules | 11 |
 
 Product-owned modules:
 
@@ -58,6 +59,8 @@ Product-owned modules:
 - `services/scraping/capabilities.py`
 - `services/b2b/source_impact.py`
 - `reasoning/cross_vendor_selection.py`
+- `reasoning/single_pass_prompts/cross_vendor_battle.py`
+- `reasoning/single_pass_prompts/battle_card_reasoning.py`
 
 ## Phase 3 — Decoupling 🔲 (later PRs)
 
@@ -89,8 +92,8 @@ Product-owned modules:
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | 🔲 | 🔲 |
 | `services/b2b_competitive_sets.py` | ✅ | 🔲 | 🔲 |
 | `reasoning/cross_vendor_selection.py` | ✅ | ✅ | ✅ |
-| `reasoning/single_pass_prompts/cross_vendor_battle.py` | ✅ | ✅ (pure prompt string; no atlas imports) | n/a |
-| `reasoning/single_pass_prompts/battle_card_reasoning.py` | ✅ | ✅ (pure prompt string; no atlas imports) | n/a |
+| `reasoning/single_pass_prompts/cross_vendor_battle.py` | ✅ | ✅ | n/a (product-owned LLM contract) |
+| `reasoning/single_pass_prompts/battle_card_reasoning.py` | ✅ | ✅ | n/a (product-owned LLM contract) |
 | `templates/email/vendor_briefing.py` | ✅ | 🔲 | 🔲 |
 | `api/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
 | `storage/migrations/095_b2b_vendor_registry.sql` | ✅ | n/a | n/a |
