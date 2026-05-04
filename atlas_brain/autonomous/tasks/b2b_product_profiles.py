@@ -1139,7 +1139,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         prepare_b2b_exact_stage_request,
         store_b2b_exact_stage_text,
     )
-    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.llm.anthropic import AnthropicBatchableLLM
     from ...services.protocols import Message
     from ...skills import get_skill_registry
     from ._b2b_batch_utils import (
@@ -1167,7 +1167,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if batch_requested
         else None
     )
-    if not isinstance(batch_llm, AnthropicLLM):
+    if not isinstance(batch_llm, AnthropicBatchableLLM):
         batch_llm = None
     skill = get_skill_registry().get("b2b/product_profile_synthesis")
 
