@@ -1,11 +1,16 @@
 # Podcast Repurposing Landing Page Strategy — Demo-First Productized Offer
 
-Date: 2026-05-03
+Date: 2026-05-03 (updated)
 
 This document is the buyer-facing strategy for the podcast repurposing
-offer that uses the AI Content Ops system as its engine. It is **not**
-in flight; it is logged alongside the long-form creative backlog so the
-strategy doesn't have to be re-derived later.
+offer that uses the AI Content Ops system as its engine.
+
+**Status:** the engineering required to honour the page promise is now
+shipped. The product can ingest a transcript, extract the strongest
+ideas, and generate per-format drafts (newsletter, blog, LinkedIn post,
+X thread, shorts script). See `host_install_runbook.md` for the host
+install path and the new `run_extracted_podcast_*.py` CLIs at the
+repository root.
 
 **Buyer-facing language convention:** never reference "AI Content Ops,"
 "the pipeline," or any internal machinery. The buyer sees a service that
@@ -171,25 +176,53 @@ underneath.
   driver.** Conversion to monthly is the metric that matters; price
   the sample to remove friction.
 
-## Pricing implication for the engineering work
+## Engineering status (was: prerequisites)
 
-This offer assumes the AI Content Ops system can produce voice-matched,
-multi-format output reliably enough to ship as a paid service. Two
-engineering prerequisites before the page goes live:
+The two engineering prerequisites originally flagged for this offer are
+both addressed in v0:
 
-1. Voice-match quality must be good enough that the $149 sample doesn't
-   produce refunds. Style transfer / persona-conditioning is the
-   constraint.
-2. Multi-format output needs deterministic templates per asset type
-   (newsletter vs blog vs X thread have different structural rules,
-   not just different lengths).
+1. **Voice-match quality** — the format-repurpose skill accepts a
+   `voice_anchors` payload (tone descriptors, banned phrases, style
+   examples) which the prompt threads through to the generation call. A
+   deterministic per-format quality validator
+   (`services/podcast_quality.py`) blocks placeholder tokens, banned
+   phrases, and per-format structural violations before drafts persist.
+   The validator runs after every LLM call; failures are saved with
+   `status='needs_review'` for human triage rather than silently
+   discarded.
+2. **Multi-format output with deterministic per-format templates** —
+   the format-repurpose skill encodes per-format structural rules
+   (newsletter / blog / linkedin / x_thread / shorts) inline and the
+   generator loops one LLM call per format. Per-format `max_tokens`
+   budgets are configured in `PodcastRepurposeConfig`. Format set is
+   locked to the five from this strategy doc by a CHECK constraint on
+   `podcast_format_drafts.format_type`.
 
-Both are downstream of the standalone-readiness work tracked in
-`remaining_productization_audit.md`. This strategy doc is parked behind
-the same resume condition.
+Voice fine-tuning (embedding-based style transfer, persona-conditioned
+generation) remains a v1.5+ deferral. Hosts that need stronger voice
+matching today can ship style examples in `voice_anchors.style_examples`
+and override the format-repurpose skill via the `--skills-root` CLI flag
+without forking the package.
 
-## Resume condition
+## Build artifacts shipped
 
-Same as the long-form creative backlog: no buyer-facing work starts
-until the campaign-core spine is fully product-owned per
-`remaining_productization_audit.md`'s "Next Concrete Slice."
+For reviewers and operators:
+
+- Migrations: `storage/migrations/270_podcast_transcripts.sql`,
+  `271_podcast_extracted_ideas.sql`, `272_podcast_format_drafts.sql`.
+- Library: `podcast_ports.py`, `podcast_transcript_data.py`,
+  `podcast_postgres_import.py`, `podcast_extraction.py`,
+  `podcast_postgres.py`, `podcast_postgres_extraction.py`,
+  `podcast_idea_data.py` (BYO seam),
+  `podcast_repurpose_generation.py`, `podcast_postgres_repurpose.py`,
+  `podcast_example.py` (offline deterministic LLM),
+  `services/podcast_quality.py`.
+- Skills: `skills/digest/podcast_idea_extraction.md`,
+  `skills/digest/podcast_format_repurpose.md`.
+- CLIs: `scripts/run_extracted_podcast_transcript_import.py`,
+  `scripts/run_extracted_podcast_idea_extraction.py`,
+  `scripts/run_extracted_podcast_repurpose_generation.py`.
+- Tests: `tests/test_extracted_podcast_transcript_import.py`,
+  `tests/test_extracted_podcast_extraction.py`,
+  `tests/test_extracted_podcast_repurpose_generation.py`,
+  `tests/test_extracted_podcast_quality.py` (43 tests).
