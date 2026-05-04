@@ -16,9 +16,30 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping, Protocol
 
 logger = logging.getLogger("atlas.reasoning.semantic_cache")
+
+
+class SemanticCachePool(Protocol):
+    """Async pool contract that ``SemanticCache`` requires.
+
+    Any object exposing these three coroutine methods works -- atlas's
+    ``DatabasePool`` wrapper, an asyncpg ``Pool`` directly, or a test
+    fake that emulates the same shape. The Protocol declares only the
+    surface this module touches; the SQL itself remains
+    Postgres-specific (``::jsonb``, ``ON CONFLICT``, ``NOW()``,
+    ``INTERVAL``) so the pool is expected to speak Postgres dialect.
+
+    ``fetchrow`` and ``fetch`` return row mappings (the production
+    binding returns ``asyncpg.Record`` instances that subscript like
+    dicts; ``_row_to_entry`` reads them via ``row[key]`` and accepts
+    anything that supports the ``Mapping`` protocol).
+    """
+
+    async def fetchrow(self, query: str, *args: Any) -> Any: ...
+    async def fetch(self, query: str, *args: Any) -> Any: ...
+    async def execute(self, query: str, *args: Any) -> Any: ...
 
 
 @dataclass
@@ -67,8 +88,13 @@ class SemanticCache:
     # Entries with effective confidence below this are treated as stale
     STALE_THRESHOLD = 0.5
 
-    def __init__(self, pool: Any):
-        """*pool*: atlas_brain.storage.database.DatabasePool instance."""
+    def __init__(self, pool: SemanticCachePool):
+        """*pool*: any object exposing the ``SemanticCachePool``
+        contract (``fetchrow`` / ``fetch`` / ``execute`` coroutine
+        methods that speak Postgres dialect). The atlas
+        ``DatabasePool`` wrapper and a raw asyncpg ``Pool`` both
+        satisfy this Protocol.
+        """
         self._pool = pool
 
     # ------------------------------------------------------------------
@@ -310,8 +336,16 @@ class SemanticCache:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _row_to_entry(row) -> CacheEntry:
-        """Convert an asyncpg Record to a CacheEntry."""
+    def _row_to_entry(row: Mapping[str, Any]) -> CacheEntry:
+        """Convert a row mapping to a :class:`CacheEntry`.
+
+        Accepts any object supporting ``Mapping`` access -- typically
+        an ``asyncpg.Record`` (which subscripts like a dict) but also
+        a plain dict, which is what tests + non-asyncpg adapters
+        produce. JSONB columns may arrive either pre-decoded (asyncpg
+        with the json codec installed) or as raw strings (a vanilla
+        adapter); the body handles both shapes defensively.
+        """
         falsification = row["falsification_conditions"]
         if isinstance(falsification, str):
             falsification = json.loads(falsification)
