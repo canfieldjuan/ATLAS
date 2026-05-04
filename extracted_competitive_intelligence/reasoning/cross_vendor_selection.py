@@ -10,7 +10,9 @@ import logging
 import re
 from typing import Any
 
-logger = logging.getLogger("atlas.reasoning.cross_vendor_selection")
+logger = logging.getLogger(
+    "extracted_competitive_intelligence.reasoning.cross_vendor_selection"
+)
 
 
 def _canonical_vendor(name: str) -> str:

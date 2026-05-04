@@ -13,6 +13,7 @@ on:
       - "scripts/smoke_extracted_competitive_intelligence_imports.py"
       - "scripts/run_extracted_competitive_intelligence_checks.sh"
       - "tests/test_extracted_competitive_manifest.py"
+      - "tests/test_extracted_competitive_cross_vendor_selection.py"
       # Atlas source paths the manifest snapshots from. If any of these
       # change without a corresponding scaffold sync, the validate step
       # catches the drift.
@@ -25,7 +26,6 @@ on:
       - "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py"
       - "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py"
       - "atlas_brain/services/b2b_competitive_sets.py"
-      - "atlas_brain/reasoning/cross_vendor_selection.py"
       - "atlas_brain/reasoning/single_pass_prompts/cross_vendor_battle.py"
       - "atlas_brain/reasoning/single_pass_prompts/battle_card_reasoning.py"
       - "atlas_brain/templates/email/vendor_briefing.py"
@@ -50,6 +50,7 @@ on:
       - "scripts/smoke_extracted_competitive_intelligence_imports.py"
       - "scripts/run_extracted_competitive_intelligence_checks.sh"
       - "tests/test_extracted_competitive_manifest.py"
+      - "tests/test_extracted_competitive_cross_vendor_selection.py"
       - "atlas_brain/mcp/b2b/vendor_registry.py"
       - "atlas_brain/mcp/b2b/displacement.py"
       - "atlas_brain/mcp/b2b/cross_vendor.py"
@@ -59,7 +60,6 @@ on:
       - "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py"
       - "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py"
       - "atlas_brain/services/b2b_competitive_sets.py"
-      - "atlas_brain/reasoning/cross_vendor_selection.py"
       - "atlas_brain/reasoning/single_pass_prompts/cross_vendor_battle.py"
       - "atlas_brain/reasoning/single_pass_prompts/battle_card_reasoning.py"
       - "atlas_brain/templates/email/vendor_briefing.py"
