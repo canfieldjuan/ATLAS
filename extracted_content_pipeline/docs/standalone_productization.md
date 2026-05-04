@@ -192,6 +192,12 @@ webhook ingestion seam. It composes `PostgresCampaignRepository`,
 webhook verifier so hosts can record engagement, bounce, complaint, and
 unsubscribe events without importing Atlas API code.
 
+`extracted_content_pipeline/api/campaign_webhooks.py` owns the host-mounted
+FastAPI surface for that webhook seam. It exposes a router factory that accepts
+host pool/signing-secret providers plus optional FastAPI dependencies, so
+customer apps can mount webhook and unsubscribe routes without Atlas API
+globals.
+
 `extracted_content_pipeline/campaign_postgres_sequence_progression.py` owns the
 DB-backed sequence progression worker seam. It composes
 `PostgresCampaignSequenceRepository`, `PostgresCampaignAuditSink`, the product
@@ -281,9 +287,8 @@ The command must pass before this package is considered customer-usable.
   Atlas config, DB, scheduled-task model, skills, LLM routing, tracing, and
   protocol classes. The product-owned Postgres worker above is the standalone
   path.
-- `api/b2b_campaigns.py`, `api/seller_campaigns.py`, and
-  `api/campaign_webhooks.py` need an app-factory boundary and host-provided
-  auth/tenant dependencies.
+- `api/b2b_campaigns.py` and `api/seller_campaigns.py` need an app-factory
+  boundary and host-provided auth/tenant dependencies.
 - SQL migrations and customer opportunity imports now have product-owned
   runners and a host install runbook, but customer installation still needs
   final base-schema hardening.

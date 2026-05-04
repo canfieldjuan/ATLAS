@@ -280,6 +280,22 @@ python scripts/ingest_extracted_campaign_webhook.py \
   --json
 ```
 
+Or mount the router in a host FastAPI app and inject the host database and
+secret providers:
+
+```python
+from extracted_content_pipeline.api.campaign_webhooks import (
+    create_campaign_webhook_router,
+)
+
+app.include_router(
+    create_campaign_webhook_router(
+        pool_provider=get_pool,
+        signing_secret_provider=get_resend_webhook_secret,
+    )
+)
+```
+
 Refresh analytics after sends or webhook ingestion:
 
 ```bash

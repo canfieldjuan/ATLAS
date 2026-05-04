@@ -260,6 +260,21 @@ python scripts/ingest_extracted_campaign_webhook.py \
   --json
 ```
 
+Hosts with FastAPI apps can mount the same policy through a router factory:
+
+```python
+from extracted_content_pipeline.api.campaign_webhooks import (
+    create_campaign_webhook_router,
+)
+
+app.include_router(
+    create_campaign_webhook_router(
+        pool_provider=get_pool,
+        signing_secret_provider=get_resend_webhook_secret,
+    )
+)
+```
+
 Refresh campaign analytics after send or webhook updates:
 
 ```bash
@@ -368,6 +383,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_postgres_webhooks.py`: DB-backed webhook ingestion runner that
   composes campaign, suppression, audit, and Resend verification ports for
   host worker CLIs
+- `api/campaign_webhooks.py`: optional FastAPI router factory for host-mounted
+  campaign webhook and unsubscribe routes
 - `campaign_postgres_sequence_progression.py`: DB-backed due-sequence worker
   that composes the sequence, audit, LLM, and skill ports for follow-up
   generation

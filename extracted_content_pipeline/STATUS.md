@@ -47,6 +47,9 @@
 - `campaign_postgres_webhooks` provides a DB-backed webhook ingestion seam.
   Hosts can verify Resend/Svix webhooks, record campaign engagement, apply
   suppression policy, and audit the result without importing Atlas API code.
+- `api.campaign_webhooks` provides a FastAPI router factory around the
+  DB-backed webhook seam. Hosts inject pool/signing-secret providers and any
+  auth dependencies instead of importing Atlas API globals.
 - `campaign_postgres_sequence_progression` provides a DB-backed follow-up
   generation worker seam. Hosts reuse due `campaign_sequences` rows, packaged
   or custom sequence prompts, and the product LLM port to queue the next
