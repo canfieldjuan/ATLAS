@@ -631,8 +631,14 @@ def _build_report(
         "threshold": pass_score,
         "status": "pass" if passed else "fail",
         # Legacy-shape mirrors so the wrapper has a 1-step conversion.
+        # ``*_issues``/``warnings`` carry rendered messages; ``*_codes``
+        # carry the structured ``GateFinding.code`` values so consumers
+        # can match on a stable identifier instead of a brittle prefix
+        # in the message string.
         "blocking_issues": tuple(f.message for f in blockers),
+        "blocking_codes": tuple(f.code for f in blockers),
         "warnings": tuple(f.message for f in warnings),
+        "warning_codes": tuple(f.code for f in warnings),
         "quote_count": quote_count,
         "word_count": word_count,
         "min_words_required": min_words,

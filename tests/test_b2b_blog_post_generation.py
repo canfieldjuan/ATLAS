@@ -2153,6 +2153,78 @@ def test_apply_blog_deterministic_repairs_adds_coverage_snapshot_for_borderline_
     )
 
 
+# ---- Structured blocking_codes / _only_content_too_short_blockers (added 2026-05-04) ----
+
+
+def test_apply_blog_quality_gate_emits_blocking_codes_alongside_messages():
+    """The wrapper carries the structured ``blocking_codes`` /
+    ``warning_codes`` from the pack through to the report dict so
+    consumers can match on stable identifiers instead of message
+    prefixes.
+    """
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="migration_guide",
+        slug="switch-to-zendesk-2026-04",
+        suggested_title="Switch to Zendesk",
+        tags=["helpdesk"],
+        data_context={"vendor": "Zendesk", "review_period": "2025-06 to 2026-03"},
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Switch to Zendesk",
+        "content": _body_with_exact_words(800),  # well below min for migration_guide
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+
+    assert "blocking_codes" in report
+    assert "content_too_short" in report["blocking_codes"]
+    assert len(report["blocking_codes"]) == len(report["blocking_issues"])
+
+
+def test_only_content_too_short_blockers_matches_on_codes_field():
+    """The gate function reads ``blocking_codes`` first; the legacy
+    ``startswith("content_too_short:")`` prefix check is only a
+    fallback.
+    """
+    # New shape: codes-only, message format intentionally different
+    # from the legacy prefix to prove the gate doesn't depend on it.
+    new_shape_report = {
+        "blocking_codes": ["content_too_short"],
+        "blocking_issues": ["1234 words; need 2000"],  # arbitrary message
+    }
+    assert blog_mod._only_content_too_short_blockers(new_shape_report) is True
+
+    # Mixed: any non-content_too_short code disqualifies.
+    mixed = {
+        "blocking_codes": ["content_too_short", "missing_chart_placeholder"],
+        "blocking_issues": ["doesn't matter", "doesn't matter"],
+    }
+    assert blog_mod._only_content_too_short_blockers(mixed) is False
+
+    # Empty: never matches.
+    empty = {"blocking_codes": [], "blocking_issues": []}
+    assert blog_mod._only_content_too_short_blockers(empty) is False
+
+
+def test_only_content_too_short_blockers_falls_back_to_legacy_prefix():
+    """Old report shapes (no ``blocking_codes`` field) still work
+    via the legacy prefix match. Matters for in-flight artifacts
+    that were generated before this PR landed.
+    """
+    legacy_only = {
+        "blocking_issues": ["content_too_short:1234_words_need_2000"],
+        # no blocking_codes
+    }
+    assert blog_mod._only_content_too_short_blockers(legacy_only) is True
+
+    legacy_no_match = {
+        "blocking_issues": ["missing_chart_placeholder:trend"],
+    }
+    assert blog_mod._only_content_too_short_blockers(legacy_no_match) is False
+
+
 @pytest.mark.asyncio
 async def test_assemble_and_store_forwards_run_metadata_to_canonical_row(monkeypatch):
     blueprint = blog_mod.PostBlueprint(
