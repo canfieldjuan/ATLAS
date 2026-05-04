@@ -234,6 +234,17 @@ def _validate_sender_config(provider: str, config: dict[str, Any]) -> None:
         )
 
 
+def _validate_send_args(args: argparse.Namespace) -> None:
+    if int(args.limit) <= 0:
+        raise SystemExit("Invalid --limit: must be greater than 0")
+    default_from_email = args.default_from_email or args.ses_from_email
+    if not _configured(default_from_email):
+        raise SystemExit(
+            "Missing --default-from-email, EXTRACTED_CAMPAIGN_FROM_EMAIL, "
+            "or a provider-specific From email"
+        )
+
+
 async def _create_pool(database_url: str):
     try:
         import asyncpg  # type: ignore[import-not-found]
@@ -250,6 +261,7 @@ async def _main() -> int:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
     provider, provider_config = _sender_config(args)
     _validate_sender_config(provider, provider_config)
+    _validate_send_args(args)
     sender = create_campaign_sender(provider, provider_config)
     config = CampaignSendConfig(
         default_from_email=args.default_from_email or args.ses_from_email or "",

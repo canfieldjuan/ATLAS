@@ -99,6 +99,23 @@ async def test_postgres_send_runner_sends_due_campaigns() -> None:
     assert any("INSERT INTO campaign_audit_log" in call[0] for call in pool.execute_calls)
 
 
+@pytest.mark.asyncio
+async def test_postgres_send_runner_limit_zero_returns_empty_without_query() -> None:
+    pool = _Pool(rows=[_row()])
+    sender = _Sender()
+
+    summary = await send_due_campaigns_from_postgres(
+        pool,
+        sender=sender,
+        config=CampaignSendConfig(default_from_email="sales@example.com", limit=3),
+        limit=0,
+    )
+
+    assert summary.as_dict() == {"sent": 0, "failed": 0, "suppressed": 0, "skipped": 0}
+    assert pool.fetch_calls == []
+    assert sender.requests == []
+
+
 def test_send_cli_sender_config_uses_ses_from_email_fallback() -> None:
     cli = _load_cli_module()
     args = cli._parse_args([
@@ -115,6 +132,20 @@ def test_send_cli_sender_config_uses_ses_from_email_fallback() -> None:
     assert provider == "ses"
     assert config["from_email"] == "ses@example.com"
     assert config["region"] == "us-east-1"
+
+
+def test_send_cli_send_args_allows_default_from_for_ses() -> None:
+    cli = _load_cli_module()
+    args = cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--provider",
+        "ses",
+        "--default-from-email",
+        "sales@example.com",
+    ])
+
+    cli._validate_send_args(args)
 
 
 def test_send_cli_reports_invalid_integer_env(monkeypatch) -> None:
@@ -231,6 +262,38 @@ async def test_send_cli_requires_database_url(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_cli_rejects_zero_limit_before_pool_creation(monkeypatch) -> None:
+    cli = _load_cli_module()
+    pool_called = False
+
+    async def create_pool(database_url):
+        nonlocal pool_called
+        pool_called = True
+        return _Pool()
+
+    monkeypatch.setattr(cli, "_create_pool", create_pool)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "send",
+            "--database-url",
+            "postgres://example",
+            "--resend-api-key",
+            "re_key",
+            "--default-from-email",
+            "sales@example.com",
+            "--limit",
+            "0",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Invalid --limit"):
+        await cli._main()
+    assert pool_called is False
+
+
+@pytest.mark.asyncio
 async def test_send_cli_requires_resend_api_key_before_sender_creation(monkeypatch) -> None:
     cli = _load_cli_module()
     for name in cli.RESEND_API_KEY_ENV:
@@ -248,6 +311,29 @@ async def test_send_cli_requires_resend_api_key_before_sender_creation(monkeypat
     )
 
     with pytest.raises(SystemExit, match="Missing --resend-api-key"):
+        await cli._main()
+
+
+@pytest.mark.asyncio
+async def test_send_cli_requires_resend_default_from_email(monkeypatch) -> None:
+    cli = _load_cli_module()
+    for name in cli.FROM_EMAIL_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "send",
+            "--database-url",
+            "postgres://example",
+            "--provider",
+            "resend",
+            "--resend-api-key",
+            "re_key",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Missing --default-from-email"):
         await cli._main()
 
 

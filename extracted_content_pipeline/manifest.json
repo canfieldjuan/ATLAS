@@ -229,6 +229,9 @@
       "target": "extracted_content_pipeline/reasoning/evidence_engine.py"
     },
     {
+      "target": "extracted_content_pipeline/reasoning/semantic_cache.py"
+    },
+    {
       "target": "extracted_content_pipeline/autonomous/tasks/_execution_progress.py"
     },
     {

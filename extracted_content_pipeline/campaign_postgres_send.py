@@ -22,6 +22,13 @@ async def send_due_campaigns_from_postgres(
     limit: int | None = None,
 ) -> CampaignSendSummary:
     """Send queued campaigns from Postgres through an injected sender."""
+    effective_limit = int(
+        limit
+        if limit is not None
+        else (config.limit if config is not None else CampaignSendConfig().limit)
+    )
+    if effective_limit <= 0:
+        return CampaignSendSummary()
     service = CampaignSendService(
         campaigns=PostgresCampaignRepository(pool),
         suppression=CampaignSuppressionService(PostgresSuppressionRepository(pool)),
@@ -29,4 +36,4 @@ async def send_due_campaigns_from_postgres(
         audit=PostgresCampaignAuditSink(pool),
         config=config,
     )
-    return await service.send_due(limit=limit)
+    return await service.send_due(limit=effective_limit)

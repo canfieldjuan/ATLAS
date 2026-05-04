@@ -17,11 +17,11 @@ The flow below gives a host app a working campaign-generation loop:
 3. Optionally attach host-produced reasoning context.
 4. Optionally override packaged prompt skills.
 5. Generate campaign drafts through the DB-backed runner.
-6. Inspect persisted drafts in `b2b_campaigns`.
+6. Inspect, approve, queue, and send persisted drafts in `b2b_campaigns`.
 
-It does not install an API server, auth layer, dashboard, or sender worker. Those
-remain host-owned integration points until the API/orchestration seams are
-extracted.
+It does not install an API server, auth layer, dashboard, or hosted background
+worker. Sending is available through the host-run CLI below; long-running
+scheduling and hosted orchestration remain host-owned integration points.
 
 ## Prerequisites
 
