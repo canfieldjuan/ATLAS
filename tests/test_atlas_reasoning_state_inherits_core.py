@@ -10,19 +10,40 @@ atlas's TypedDict to a sibling definition.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import get_type_hints
 
 from atlas_brain.reasoning.state import ReasoningAgentState
 from extracted_reasoning_core.state import ReasoningAgentState as CoreReasoningAgentState
 
+_ATLAS_STATE_SRC = (
+    Path(__file__).resolve().parent.parent
+    / "atlas_brain"
+    / "reasoning"
+    / "state.py"
+)
 
-def test_atlas_state_is_typeddict_subclass_of_core() -> None:
-    # The structural is-a relationship is what makes atlas state usable
-    # by core-typed functions. TypedDict strips its bases from ``__mro__``
-    # (the runtime class is just ``dict``), but ``__orig_bases__`` keeps
-    # the declared parent chain -- that's what type-checkers consult and
-    # what we want to pin here.
-    assert CoreReasoningAgentState in ReasoningAgentState.__orig_bases__
+
+def test_atlas_state_source_declares_core_typeddict_as_base() -> None:
+    # Source-level inheritance check: parse atlas's state.py and verify
+    # ReasoningAgentState's class declaration lists the core TypedDict as
+    # a base. We pin this at the AST level rather than via runtime
+    # markers (``__orig_bases__`` / ``__mro__``) because TypedDict's
+    # runtime representation varies by Python version -- 3.11+ exposes
+    # ``__orig_bases__`` but 3.10 doesn't, and the runtime class is just
+    # ``dict`` either way. The seam is the source-level declaration.
+    tree = ast.parse(_ATLAS_STATE_SRC.read_text())
+    classdef = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == "ReasoningAgentState"
+    )
+    base_names = {base.id for base in classdef.bases if isinstance(base, ast.Name)}
+    assert "_CoreReasoningAgentState" in base_names, (
+        f"atlas ReasoningAgentState must declare _CoreReasoningAgentState as a base; "
+        f"saw bases={sorted(base_names)}"
+    )
 
 
 def test_atlas_state_inherits_every_core_field() -> None:
