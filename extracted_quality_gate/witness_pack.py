@@ -64,7 +64,7 @@ from .types import (
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
 _NUMERIC_TEXT_RE = re.compile(
-    r"(?:[$€£]?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|k|m|b|x))?(?:/[a-z]+)?)",
+    r"(?:[$\u20ac\u00a3]?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|k|m|b|x))?(?:/[a-z]+)?)",
     re.IGNORECASE,
 )
 _TIMING_TEXT_RE = re.compile(
