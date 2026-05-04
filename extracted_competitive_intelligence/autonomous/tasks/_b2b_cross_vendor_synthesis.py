@@ -11,14 +11,19 @@ downstream deterministic/reporting consumers.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
 from datetime import date
 from typing import Any
 
+from ...reasoning.semantic_cache import (
+    compute_evidence_hash as compute_cross_vendor_evidence_hash,
+)
+
 logger = logging.getLogger("atlas.autonomous.tasks._b2b_cross_vendor_synthesis")
+
+__all__ = ["compute_cross_vendor_evidence_hash"]
 
 
 # ---------------------------------------------------------------------------
@@ -57,12 +62,13 @@ def empty_cross_vendor_lookup() -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 # Evidence hashing
 # ---------------------------------------------------------------------------
-
-def compute_cross_vendor_evidence_hash(packet: dict[str, Any]) -> str:
-    """Deterministic SHA-256 prefix from packet content."""
-    raw = json.dumps(packet, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
+#
+# ``compute_cross_vendor_evidence_hash`` is re-exported from
+# ``atlas_brain.reasoning.semantic_cache.compute_evidence_hash`` (PR-A5c).
+# Both names compute the same SHA-256[:16] over a JSON-canonicalised
+# dict; consolidating to a single owner keeps the hash invariants
+# (sort_keys, ``(",", ":")`` separators, ``default=str``) in one place
+# so a future tweak to canonicalisation only has to land once.
 
 # ---------------------------------------------------------------------------
 # Pool summary extraction
