@@ -28,6 +28,9 @@
       "target": "extracted_quality_gate/types.py"
     },
     {
+      "target": "extracted_quality_gate/witness_pack.py"
+    },
+    {
       "target": "extracted_quality_gate/README.md"
     },
     {

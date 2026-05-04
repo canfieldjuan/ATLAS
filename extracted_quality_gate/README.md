@@ -13,6 +13,7 @@ The package contains:
 - deterministic safety-gate primitives (`check_content`, `assess_risk`)
 - deterministic blog quality pack (`evaluate_blog_post`)
 - deterministic campaign quality pack (`evaluate_campaign`)
+- deterministic witness specificity pack (`evaluate_witness_specificity` + 6 legacy entry points)
 
 The package intentionally has no Atlas runtime dependency. Product-specific behavior belongs in packs or adapters layered on top of the public API.
 
@@ -30,6 +31,11 @@ from extracted_quality_gate.safety_gate import (
 )
 from extracted_quality_gate.blog_pack import evaluate_blog_post
 from extracted_quality_gate.campaign_pack import evaluate_campaign
+from extracted_quality_gate.witness_pack import (
+    evaluate_witness_specificity,
+    surface_specificity_context,
+    specificity_audit_snapshot,
+)
 ```
 
 Products should import from:
@@ -38,6 +44,7 @@ Products should import from:
 - `extracted_quality_gate.blog_pack`
 - `extracted_quality_gate.campaign_pack`
 - `extracted_quality_gate.safety_gate`
+- `extracted_quality_gate.witness_pack`
 - `extracted_quality_gate.types`
 - `extracted_quality_gate.ports`
 
@@ -100,3 +107,31 @@ findings. The wrapper at
 `atlas_brain/autonomous/tasks/_b2b_specificity.py:campaign_policy_audit_snapshot`
 returns the same dict shape it always did, so the existing caller in
 `atlas_brain/services/campaign_quality.py` needs no changes.
+
+## Witness specificity pack (PR-B5b)
+
+`witness_pack.py` ships two API styles. The legacy entry points
+(`surface_specificity_context`, `merge_specificity_contexts`,
+`specificity_signal_terms`, `evaluate_specificity_support`,
+`specificity_audit_snapshot`, `campaign_proof_terms_from_audit`)
+keep their original signatures; the atlas-side
+`atlas_brain/autonomous/tasks/_b2b_specificity.py` re-exports them
+verbatim so existing imports continue to resolve. The pack-contract
+entry point `evaluate_witness_specificity(input, *, policy)` returns
+a standard `QualityReport`.
+
+The validators are pure: they operate on already-fetched anchor /
+witness rows + candidate text. The pack does not touch the database,
+the clock, or the network. ``QualityPolicy.thresholds`` accepts:
+
+- `min_anchor_hits` (int, default 1)
+- `require_anchor_support` (bool, default True)
+- `require_timing_or_numeric_when_available` (bool, default False)
+- `include_competitor_terms` (bool, default True)
+- `allow_company_names` (bool, default depends on `surface`)
+
+The blog and campaign packs compose against this pack: today they
+call `evaluate_specificity_support` directly through the atlas
+re-export; future revisions can pass `evaluate_witness_specificity`
+findings through `QualityInput.context` for cleaner pack-to-pack
+composition.
