@@ -269,6 +269,17 @@ python scripts/send_extracted_campaigns.py \
   --limit 10
 ```
 
+Ingest Resend webhook events after provider delivery, open, click, bounce,
+complaint, or unsubscribe callbacks:
+
+```bash
+export EXTRACTED_RESEND_WEBHOOK_SECRET="whsec_..."
+python scripts/ingest_extracted_campaign_webhook.py \
+  --body-file resend-event.json \
+  --headers-json resend-headers.json \
+  --json
+```
+
 Refresh analytics after sends or webhook ingestion:
 
 ```bash

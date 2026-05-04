@@ -44,6 +44,9 @@
 - `campaign_postgres_analytics` provides a DB-backed analytics refresh worker
   seam. Hosts can refresh the packaged campaign funnel materialized view and
   audit the result without importing Atlas scheduled-task code.
+- `campaign_postgres_webhooks` provides a DB-backed webhook ingestion seam.
+  Hosts can verify Resend/Svix webhooks, record campaign engagement, apply
+  suppression policy, and audit the result without importing Atlas API code.
 - `campaign_postgres_sequence_progression` provides a DB-backed follow-up
   generation worker seam. Hosts reuse due `campaign_sequences` rows, packaged
   or custom sequence prompts, and the product LLM port to queue the next

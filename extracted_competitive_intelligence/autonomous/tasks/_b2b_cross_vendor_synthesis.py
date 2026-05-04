@@ -63,8 +63,8 @@ def empty_cross_vendor_lookup() -> dict[str, dict]:
 # Evidence hashing
 # ---------------------------------------------------------------------------
 #
-# ``compute_cross_vendor_evidence_hash`` is re-exported from
-# ``atlas_brain.reasoning.semantic_cache.compute_evidence_hash`` (PR-A5c).
+# ``compute_cross_vendor_evidence_hash`` is re-exported from the competitive
+# package's semantic-cache facade.
 # Both names compute the same SHA-256[:16] over a JSON-canonicalised
 # dict; consolidating to a single owner keeps the hash invariants
 # (sort_keys, ``(",", ":")`` separators, ``default=str``) in one place
