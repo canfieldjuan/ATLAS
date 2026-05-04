@@ -16,6 +16,10 @@ from extracted_content_pipeline.api.campaign_webhooks import (
     CampaignWebhookApiConfig,
     create_campaign_webhook_router,
 )
+from extracted_content_pipeline.campaign_send import (
+    build_unsubscribe_token,
+    verify_unsubscribe_token,
+)
 
 
 def _secret() -> str:
@@ -49,7 +53,7 @@ def _headers(body: bytes, *, secret: str | None = None, msg_id: str = "msg_1"):
 
 
 def _token_verifier(email: str, token: str) -> bool:
-    return email == "buyer@example.com" and token == "token_1"
+    return verify_unsubscribe_token(email, token, "secret")
 
 
 class _Pool:
@@ -120,11 +124,12 @@ def test_campaign_webhook_router_ingests_signed_resend_event() -> None:
 
 def test_campaign_webhook_router_unsubscribe_records_suppression() -> None:
     pool = _Pool()
+    token = build_unsubscribe_token("Buyer@Example.com", "secret")
 
     response = _client(
         pool,
         unsubscribe_token_verifier=_token_verifier,
-    ).get("/webhooks/unsubscribe?email=Buyer@Example.com&token=token_1")
+    ).get(f"/webhooks/unsubscribe?email=Buyer@Example.com&token={token}")
 
     assert response.status_code == 200
     assert "You have been unsubscribed" in response.text
@@ -139,11 +144,12 @@ def test_campaign_webhook_router_unsubscribe_records_suppression() -> None:
 
 def test_campaign_webhook_router_one_click_post_records_suppression() -> None:
     pool = _Pool()
+    token = build_unsubscribe_token("buyer@example.com", "secret")
 
     response = _client(
         pool,
         unsubscribe_token_verifier=_token_verifier,
-    ).post("/webhooks/unsubscribe?email=buyer@example.com&token=token_1")
+    ).post(f"/webhooks/unsubscribe?email=buyer@example.com&token={token}")
 
     assert response.status_code == 200
     assert len(pool.execute_calls) == 1
@@ -178,9 +184,10 @@ def test_campaign_webhook_router_rejects_invalid_unsubscribe_token() -> None:
 
 def test_campaign_webhook_router_requires_unsubscribe_token_verifier() -> None:
     pool = _Pool()
+    token = build_unsubscribe_token("buyer@example.com", "secret")
 
     response = _client(pool).get(
-        "/webhooks/unsubscribe?email=buyer@example.com&token=token_1"
+        f"/webhooks/unsubscribe?email=buyer@example.com&token={token}"
     )
 
     assert response.status_code == 500

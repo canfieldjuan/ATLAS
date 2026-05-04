@@ -266,10 +266,15 @@ Hosts with FastAPI apps can mount the same policy through a router factory:
 from extracted_content_pipeline.api.campaign_webhooks import (
     create_campaign_webhook_router,
 )
+from extracted_content_pipeline.campaign_send import verify_unsubscribe_token as verify_token
 
 
 async def verify_unsubscribe_token(email: str, token: str) -> bool:
-    return await customer_unsubscribe_tokens.verify(email=email, token=token)
+    return verify_token(
+        email,
+        token,
+        get_unsubscribe_token_secret(),
+    )
 
 
 app.include_router(
@@ -283,7 +288,10 @@ app.include_router(
 
 The unsubscribe route accepts both `GET` and RFC 8058 one-click `POST`
 requests. By default, hosts must provide an unsubscribe-token verifier so a
-public query string cannot suppress arbitrary recipient addresses.
+public query string cannot suppress arbitrary recipient addresses. Use the same
+secret for `CampaignSendConfig.unsubscribe_token_secret` or
+`EXTRACTED_CAMPAIGN_UNSUBSCRIBE_TOKEN_SECRET` so generated unsubscribe links
+carry tokens the router can verify.
 
 Refresh campaign analytics after send or webhook updates:
 
