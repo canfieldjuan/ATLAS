@@ -5,7 +5,7 @@
 | Step | Status |
 |---|---|
 | Manifest of source → scaffold mappings | ✅ done |
-| Verbatim byte-snapshot of 15 Python files | ✅ done |
+| Verbatim byte-snapshot of 8 mapped Python files | ✅ done |
 | Verbatim byte-snapshot of 9 migration SQL files | ✅ done |
 | Package `__init__.py` files at every level | ✅ done |
 | Sync + validate scripts (with `src.exists()` guards) | ✅ done |
@@ -35,16 +35,17 @@ Full task/runtime decoupling remains Phase 3.
 | Product-owned manifest entries | ✅ `manifest.json` supports `owned` modules that stay in ASCII/import checks but are skipped by byte-sync validation |
 | MCP write tool boundary | ✅ `write_intelligence.py` owns simple DB writes and exposes explicit host ports for deep runtime builders/enrichers |
 | Source impact support boundary | ✅ `source_impact.py` and its static scrape capability registry are product-owned |
+| Cross-vendor selection boundary | ✅ `reasoning/cross_vendor_selection.py` is product-owned pure selection logic |
 
 ### Current audit snapshot
 
 | Metric | Count |
 |---|---:|
 | Extracted files | 88 |
-| Manifest mappings | 18 |
-| Manifest Python snapshots | 9 |
+| Manifest mappings | 17 |
+| Manifest Python snapshots | 8 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 8 |
+| Product-owned modules | 9 |
 
 Product-owned modules:
 
@@ -56,6 +57,7 @@ Product-owned modules:
 - `services/vendor_registry.py`
 - `services/scraping/capabilities.py`
 - `services/b2b/source_impact.py`
+- `reasoning/cross_vendor_selection.py`
 
 ## Phase 3 — Decoupling 🔲 (later PRs)
 
@@ -86,7 +88,7 @@ Product-owned modules:
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | 🔲 | 🔲 |
 | `services/b2b_competitive_sets.py` | ✅ | 🔲 | 🔲 |
-| `reasoning/cross_vendor_selection.py` | ✅ | 🔲 | 🔲 |
+| `reasoning/cross_vendor_selection.py` | ✅ | ✅ | ✅ |
 | `reasoning/single_pass_prompts/cross_vendor_battle.py` | ✅ | ✅ (pure prompt string; no atlas imports) | n/a |
 | `reasoning/single_pass_prompts/battle_card_reasoning.py` | ✅ | ✅ (pure prompt string; no atlas imports) | n/a |
 | `templates/email/vendor_briefing.py` | ✅ | 🔲 | 🔲 |

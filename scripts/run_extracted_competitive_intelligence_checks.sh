@@ -9,6 +9,6 @@ bash scripts/check_ascii_python_competitive_intelligence.sh
 python scripts/check_extracted_competitive_intelligence_imports.py
 python scripts/smoke_extracted_competitive_intelligence_imports.py
 python scripts/smoke_extracted_competitive_intelligence_standalone.py
-python -m pytest tests/test_extracted_competitive_manifest.py -q
+python -m pytest tests/test_extracted_competitive_manifest.py tests/test_extracted_competitive_cross_vendor_selection.py -q
 
 echo "All extracted_competitive_intelligence checks passed"

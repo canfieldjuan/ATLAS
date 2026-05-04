@@ -101,19 +101,24 @@ accounts-in-motion reports are explicit host ports defined in
 product-owned as well. They provide the source impact ledger and static scrape
 capability registry without importing Atlas runtime modules.
 
+`reasoning/cross_vendor_selection.py` is product-owned pure selection logic for
+battles, categories, and asymmetry pairs. It is covered by extracted-package
+behavior tests and is no longer byte-synced from Atlas.
+
 ## Local checks
 
 ```bash
 bash scripts/run_extracted_competitive_intelligence_checks.sh
 ```
 
-Runs five checks in sequence:
+Runs six checks in sequence:
 
 1. `validate_*.sh` — byte-diff mapped scaffold files vs source, excluding product-owned manifest entries
 2. `check_ascii_python_*.sh` — every scaffolded `.py` is ASCII-only (true 0-based offsets on failure)
 3. `check_extracted_competitive_intelligence_imports.py` — relative imports either resolve inside the scaffold or are listed in `import_debt_allowlist.txt` (resolver honors `level - 1` Python semantics)
 4. `smoke_extracted_competitive_intelligence_imports.py` — every public module imports without raising
 5. `smoke_extracted_competitive_intelligence_standalone.py` — standalone-mode substrate imports resolve to extracted-owned or extracted-LLM modules
+6. `test_extracted_competitive_cross_vendor_selection.py` — product-boundary behavior tests for cross-vendor selection
 
 ## Import debt
 
