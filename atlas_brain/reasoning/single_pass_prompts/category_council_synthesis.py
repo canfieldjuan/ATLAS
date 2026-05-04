@@ -62,3 +62,29 @@ Return ONLY valid JSON.\
 CATEGORY_COUNCIL_SYNTHESIS_PROMPT_VERSION = _hashlib.sha256(
     CATEGORY_COUNCIL_SYNTHESIS_PROMPT.encode()
 ).hexdigest()[:8]
+
+
+# PR-C3f: register this prompt with the shared reasoning pack registry
+# (PR-C3a / extracted_reasoning_core.pack_registry). The category
+# council synthesis pack produces a market-regime assessment for a
+# product category from category dynamics, vendor evidence, and
+# ecosystem context. Per the audit, the pack file moves into a
+# product package during PR 7 (Product Migration); for now it stays
+# atlas-side.
+from extracted_reasoning_core.pack_registry import (  # noqa: E402
+    Pack as _Pack,
+    register_pack as _register_pack,
+)
+
+_register_pack(
+    _Pack(
+        name="category_council_synthesis",
+        version=CATEGORY_COUNCIL_SYNTHESIS_PROMPT_VERSION,
+        prompts={"synthesis": CATEGORY_COUNCIL_SYNTHESIS_PROMPT},
+        metadata={
+            "output_artifact": "category_market_regime",
+            "owner_product": "atlas",
+            "synthesis_mode": "structured_synthesis_v1",
+        },
+    )
+)
