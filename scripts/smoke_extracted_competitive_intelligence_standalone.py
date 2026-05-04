@@ -36,6 +36,7 @@ MODULES = [
     "extracted_competitive_intelligence.services.b2b.source_impact",
     "extracted_competitive_intelligence.services.b2b.challenger_dashboard_claims",
     "extracted_competitive_intelligence.services.b2b.competitive_set_ports",
+    "extracted_competitive_intelligence.services.b2b.pdf_renderer",
     "extracted_competitive_intelligence.services.b2b_competitive_sets",
     "extracted_competitive_intelligence.autonomous.tasks._b2b_cross_vendor_synthesis",
     "extracted_competitive_intelligence.reasoning.ecosystem",

@@ -1,23 +1,33 @@
-"""Phase 1 bridge: re-exports atlas_brain.services.b2b.pdf_renderer.
+"""PDF renderer bridge for extracted competitive intelligence.
 
-Programmatically copies every non-dunder name (including underscore-
-prefixed helpers that from X import * would drop). Required because
-many scaffolded modules import private helpers from atlas_brain peers
-via from .X import _foo lazily inside function bodies. Phase 2
-replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
+Default mode re-exports atlas_brain.services.b2b.pdf_renderer. Standalone
+mode exposes a configurable PDF renderer port and fails closed until
+a host adapter is registered.
 """
 from __future__ import annotations
 
 import importlib as _importlib
+import os as _os
 
-def _bridge() -> None:
-    src = _importlib.import_module("atlas_brain.services.b2b.pdf_renderer")
-    g = globals()
-    for name in dir(src):
-        if not name.startswith("__"):
-            g[name] = getattr(src, name)
+if _os.environ.get("EXTRACTED_COMP_INTEL_STANDALONE") == "1":
+    from ..._standalone.pdf_renderer import (  # noqa: F401
+        PDFRenderer,
+        PDFRendererNotConfigured,
+        configure_pdf_renderer,
+        get_pdf_renderer,
+        render_report_pdf,
+        render_vendor_full_report_pdf,
+    )
+else:
+    def _bridge() -> None:
+        src = _importlib.import_module("atlas_brain.services.b2b.pdf_renderer")
+        g = globals()
+        for name in dir(src):
+            if not name.startswith("__"):
+                g[name] = getattr(src, name)
 
 
-_bridge()
-del _bridge, _importlib
+    _bridge()
+    del _bridge
+
+del _importlib, _os
