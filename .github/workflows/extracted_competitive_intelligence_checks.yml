@@ -3,6 +3,7 @@ name: Extracted Competitive Intelligence Checks
 on:
   pull_request:
     paths:
+      - ".github/workflows/extracted_competitive_intelligence_checks.yml"
       # Scaffold + script paths
       - "extracted_competitive_intelligence/**"
       - "scripts/sync_extracted_competitive_intelligence.sh"
@@ -41,6 +42,7 @@ on:
       - "atlas_brain/storage/migrations/263_b2b_competitive_set_run_constraints.sql"
   push:
     paths:
+      - ".github/workflows/extracted_competitive_intelligence_checks.yml"
       - "extracted_competitive_intelligence/**"
       - "scripts/sync_extracted_competitive_intelligence.sh"
       - "scripts/validate_extracted_competitive_intelligence.sh"
