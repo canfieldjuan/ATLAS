@@ -113,6 +113,11 @@ scorecard fallback rows go through `services/b2b/competitive_set_ports.py`, so
 standalone hosts can register explicit adapters instead of importing task
 internals.
 
+`autonomous/tasks/_b2b_cross_vendor_synthesis.py` is product-owned packet,
+citation, contract-normalization, and lookup-reader logic. It depends on the
+extracted semantic-cache facade for evidence hashes and no longer byte-syncs
+from Atlas.
+
 `templates/email/vendor_briefing.py` is a product-owned customer-facing
 renderer. It no longer imports runtime settings; hosts configure the fallback
 witness highlight limit through an explicit renderer function.
