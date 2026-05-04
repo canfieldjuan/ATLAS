@@ -121,6 +121,7 @@ def main() -> int:
         ROOT / "extracted_competitive_intelligence" / "services" / "scraping" / "capabilities.py",
         ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "source_impact.py",
         ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "challenger_dashboard_claims.py",
+        ROOT / "extracted_competitive_intelligence" / "templates" / "email" / "vendor_briefing.py",
         ROOT / "extracted_competitive_intelligence" / "reasoning" / "ecosystem.py",
         ROOT / "extracted_competitive_intelligence" / "reasoning" / "cross_vendor_selection.py",
         ROOT / "extracted_competitive_intelligence" / "reasoning" / "single_pass_prompts" / "cross_vendor_battle.py",
