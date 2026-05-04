@@ -97,7 +97,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m pip install pytest
+          python -m pip install pytest pytest-asyncio
 
       - name: Run extracted competitive intelligence checks
         run: bash scripts/run_extracted_competitive_intelligence_checks.sh
