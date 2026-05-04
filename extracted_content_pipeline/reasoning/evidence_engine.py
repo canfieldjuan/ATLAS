@@ -1,176 +1,36 @@
+"""Compatibility wrapper for the shared extracted reasoning evidence engine.
+
+PR-C1i replaced the prior ~338-line local fork with this thin wrapper.
+The canonical implementation lives in
+`extracted_reasoning_core.evidence_engine` (slim core split per PR-C1d /
+PR #104). The content-pipeline-specific rule catalog (consumer-review
+pipeline conclusions like `pricing_crisis`, `losing_market_share`,
+`active_churn_wave`, `support_quality_risk`) is shipped as a Python
+dict (`_DEFAULT_RULES`) below and passed to the core engine via
+``EvidenceEngine.from_rules(...)`` -- this keeps the default path
+filesystem-free and yaml-free, matching the prior fork's behavior and
+the ``EXTRACTED_PIPELINE_STANDALONE=1`` CI env (no PyYAML installed).
+
+The exported `EvidenceEngine` subclass defaults to ``_DEFAULT_RULES``
+when called with no arguments and exposes the same ``"builtin"``
+sentinel for ``map_path`` that the prior fork did, so existing
+content_pipeline callers and the
+``tests/test_extracted_reasoning_evidence_engine.py`` test suite keep
+working unchanged.
+
+Public contract types `ConclusionResult` / `SuppressionResult` are
+re-exported from `extracted_reasoning_core.types` (promoted in PR-C1c).
+"""
+
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
-@dataclass(frozen=True, slots=True)
-class ConclusionResult:
-    conclusion_id: str
-    met: bool
-    confidence: str
-    fallback_label: str | None = None
-    fallback_action: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SuppressionResult:
-    suppress: bool = False
-    degrade: bool = False
-    disclaimer: str | None = None
-    fallback_label: str | None = None
-
-
-class EvidenceEngine:
-    def __init__(self, map_path: str | Path | None = None) -> None:
-        self.map_path = str(map_path or "builtin")
-        raw_rules = _load_rules(map_path)
-        self.map_hash = hashlib.sha256(
-            json.dumps(raw_rules, sort_keys=True).encode("utf-8")
-        ).hexdigest()[:16]
-        self._conclusions = raw_rules.get("conclusions", {})
-        self._suppression = raw_rules.get("suppression", {})
-        self._confidence_tiers = raw_rules.get("confidence_tiers", {})
-
-    def evaluate_conclusions(
-        self,
-        vendor_evidence: dict[str, Any],
-    ) -> list[ConclusionResult]:
-        evidence = dict(vendor_evidence or {})
-        insufficient = self._conclusions.get("insufficient_data")
-        if insufficient and all(
-            self._check_requirement(rule, evidence)
-            for rule in insufficient.get("trigger", [])
-        ):
-            return [
-                ConclusionResult(
-                    conclusion_id="insufficient_data",
-                    met=True,
-                    confidence="insufficient",
-                    fallback_label=insufficient.get("label"),
-                    fallback_action=insufficient.get("action"),
-                )
-            ]
-
-        results: list[ConclusionResult] = []
-        for conclusion_id, spec in self._conclusions.items():
-            if conclusion_id == "insufficient_data":
-                continue
-            requirements = spec.get("requires", [])
-            met = all(self._check_requirement(rule, evidence) for rule in requirements)
-            confidence = spec.get("confidence_when_met", "medium") if met else "insufficient"
-            if met:
-                for amplifier in spec.get("amplifiers", []):
-                    if self._check_requirement(amplifier, evidence) and amplifier.get("boost_confidence"):
-                        confidence = str(amplifier.get("boost_confidence"))
-            fallback = spec.get("fallback", {}) if not met else {}
-            results.append(
-                ConclusionResult(
-                    conclusion_id=conclusion_id,
-                    met=met,
-                    confidence=confidence,
-                    fallback_label=fallback.get("label"),
-                    fallback_action=fallback.get("action"),
-                )
-            )
-        return results
-
-    def evaluate_suppression(
-        self,
-        section: str,
-        evidence: dict[str, Any],
-    ) -> SuppressionResult:
-        spec = self._suppression.get(section)
-        if not spec:
-            return SuppressionResult()
-
-        evidence = dict(evidence or {})
-        for rule in spec.get("suppress_when", []):
-            if self._check_requirement(rule, evidence):
-                return SuppressionResult(
-                    suppress=True,
-                    fallback_label=spec.get("fallback_label"),
-                )
-
-        for rule in spec.get("degrade_when", []):
-            if self._check_requirement(rule, evidence):
-                return SuppressionResult(
-                    degrade=True,
-                    disclaimer=spec.get("disclaimer"),
-                )
-
-        return SuppressionResult()
-
-    def get_confidence_tier(self, total_reviews: int) -> str:
-        review_count = _numeric_value(total_reviews) or 0.0
-        for tier_name in ("high", "medium", "low"):
-            tier = self._confidence_tiers.get(tier_name, {})
-            if review_count >= (_numeric_value(tier.get("min_reviews")) or 0.0):
-                return tier_name
-        return "insufficient"
-
-    def get_confidence_label(self, total_reviews: int) -> str:
-        tier_name = self.get_confidence_tier(total_reviews)
-        tier = self._confidence_tiers.get(tier_name, {})
-        return str(tier.get("label") or tier_name)
-
-    @staticmethod
-    def _resolve_field(data: dict[str, Any], field_path: str) -> Any:
-        current: Any = data
-        for part in str(field_path or "").split("."):
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-        return current
-
-    def _check_requirement(self, rule: dict[str, Any], evidence: dict[str, Any]) -> bool:
-        field = str(rule.get("field") or "")
-        value = self._resolve_field(evidence, field)
-        operator = rule.get("operator")
-
-        if operator in {"gte", "gt", "lte", "lt"}:
-            value_num = _numeric_value(value)
-            rule_num = _numeric_value(rule.get("value"))
-            if value_num is None or rule_num is None:
-                return False
-            if operator == "gte":
-                return value_num >= rule_num
-            if operator == "gt":
-                return value_num > rule_num
-            if operator == "lte":
-                return value_num <= rule_num
-            return value_num < rule_num
-
-        if operator == "eq":
-            return value == rule.get("value")
-        if operator == "in":
-            return value in rule.get("values", [])
-        if operator == "exists":
-            return value is not None and value != ""
-        if operator == "min_count":
-            expected = _numeric_value(rule.get("value"))
-            return (
-                isinstance(value, (list, tuple, set, dict))
-                and expected is not None
-                and len(value) >= expected
-            )
-
-        for op in ("gte", "gt", "lte", "lt", "eq"):
-            if op in rule:
-                return self._check_requirement(
-                    {"field": field, "operator": op, "value": rule[op]},
-                    evidence,
-                )
-        if "in" in rule:
-            return self._check_requirement(
-                {"field": field, "operator": "in", "values": rule["in"]},
-                evidence,
-            )
-        return False
+from extracted_reasoning_core.evidence_engine import (
+    EvidenceEngine as _CoreEvidenceEngine,
+)
+from extracted_reasoning_core.types import ConclusionResult, SuppressionResult
 
 
 _DEFAULT_RULES: dict[str, Any] = {
@@ -281,12 +141,39 @@ _DEFAULT_RULES: dict[str, Any] = {
 }
 
 
+class EvidenceEngine(_CoreEvidenceEngine):
+    """Content-pipeline-tuned evidence engine.
+
+    Same evaluation logic as the core engine; differs only in default
+    rule catalog (the in-memory ``_DEFAULT_RULES`` dict) and in
+    carrying the prior fork's ``"builtin"`` ``map_path`` sentinel
+    when no path is passed explicitly.
+    """
+
+    def __init__(self, map_path: str | Path | None = None) -> None:
+        if map_path is None:
+            # No path -> use the in-memory default rules. Avoids a
+            # filesystem dependency on the standalone CI path.
+            tmp = _CoreEvidenceEngine.from_rules(_DEFAULT_RULES)
+            self.__dict__.update(tmp.__dict__)
+            self.map_path = "builtin"
+        else:
+            super().__init__(map_path)
+
+
 _engine: EvidenceEngine | None = None
 _engine_path: str | None = None
 
 
 def get_evidence_engine(map_path: str | Path | None = None) -> EvidenceEngine:
+    """Return a cached `EvidenceEngine` instance for the content pipeline.
+
+    Defaults to the in-memory ``_DEFAULT_RULES`` dict shipped above.
+    Pass an explicit ``map_path`` to load a different rule catalog
+    (e.g. tests injecting a tmp_path JSON file).
+    """
     global _engine, _engine_path
+
     resolved = str(map_path) if map_path else "builtin"
     if _engine is None or _engine_path != resolved:
         _engine = EvidenceEngine(map_path)
@@ -295,44 +182,17 @@ def get_evidence_engine(map_path: str | Path | None = None) -> EvidenceEngine:
 
 
 def reload_evidence_engine() -> EvidenceEngine:
+    """Force-reload the cached engine (e.g. after on-disk YAML edits)."""
     global _engine, _engine_path
     _engine = None
     _engine_path = None
     return get_evidence_engine()
 
 
-def _load_rules(map_path: str | Path | None) -> dict[str, Any]:
-    if map_path is None:
-        return dict(_DEFAULT_RULES)
-    path = Path(map_path)
-    raw = path.read_text()
-    if path.suffix.lower() == ".json":
-        loaded = json.loads(raw)
-    else:
-        try:
-            import yaml  # type: ignore
-        except ModuleNotFoundError:
-            loaded = json.loads(raw)
-        else:
-            loaded = yaml.safe_load(raw)
-    if not isinstance(loaded, dict):
-        raise ValueError(f"Evidence map must decode to an object: {path}")
-    return loaded
-
-
-def _numeric_value(value: Any) -> float | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        stripped = value.strip().replace(",", "")
-        if not stripped:
-            return None
-        if stripped.endswith("%"):
-            stripped = stripped[:-1]
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
-    return None
+__all__ = [
+    "ConclusionResult",
+    "EvidenceEngine",
+    "SuppressionResult",
+    "get_evidence_engine",
+    "reload_evidence_engine",
+]
