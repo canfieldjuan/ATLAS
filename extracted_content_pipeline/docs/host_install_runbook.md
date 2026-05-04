@@ -269,6 +269,12 @@ python scripts/send_extracted_campaigns.py \
   --limit 10
 ```
 
+Refresh analytics after sends or webhook ingestion:
+
+```bash
+python scripts/refresh_extracted_campaign_analytics.py --json
+```
+
 Progress due sequences and queue generated follow-up drafts:
 
 ```bash

@@ -70,9 +70,11 @@ Import contract is closed; runtime behavior is decoupled from `atlas_brain`-spec
 | `storage/database.py` (bridge) | n/a | ✅ env-gated dispatch | n/a |
 | `services/b2b/anthropic_batch.py` | ✅ | ✅ (imports cleanly; consumes standalone substrate transitively) | 🔲 |
 | `services/b2b/cache_strategy.py` | ✅ | ✅ (pure data; no atlas imports) | n/a |
-| `services/b2b/llm_exact_cache.py` (PR-A1) | ✅ | ✅ (lazy `from ...config import settings` + `from ...storage.database import get_db_pool` route via env-gated bridges; new `from ...skills import get_skill_registry` routes via PR-A1.5 skills bridge with explicit standalone-mode error; `B2BChurnSubConfig.llm_exact_cache_enabled` flag added in PR-A1.5) | 🔲 (Phase 3: substrate skills layer or replace skill helpers with Protocol-based DI) |
-| `skills/__init__.py` (bridge, PR-A1.5) | n/a | ✅ env-gated dispatch; raises NotImplementedError in standalone mode | 🔲 |
-| `pipelines/llm.py` | ✅ | ✅ (lazy `from ..config import settings` routes to standalone) | 🔲 |
+| `services/b2b/llm_exact_cache.py` (PR-A1) | ✅ | ✅ (lazy `from ...config import settings` + `from ...storage.database import get_db_pool` route via env-gated bridges; `from ...skills import get_skill_registry` routes via PR-A6b skills substrate; `B2BChurnSubConfig.llm_exact_cache_enabled` flag added in PR-A1.5) | ✅ (PR-A6b: skills substrate carved as owned file; `build_skill_messages` / `build_skill_request_envelope` succeed in standalone mode against the local registry) |
+| `skills/__init__.py` (bridge, PR-A1.5) | n/a | ✅ env-gated dispatch; standalone branch returns a real `SkillRegistry` (PR-A6b) | ✅ |
+| `skills/registry.py` (OWNED, PR-A6b) | n/a | ✅ standalone substrate; mirrors atlas SkillRegistry verbatim with three env-aware tweaks (default skills dir, logger name, `EXTRACTED_LLM_INFRA_SKILLS_DIR` override) | n/a |
+| `skills/markdown/.gitkeep` (OWNED, PR-A6b) | n/a | ✅ default standalone skills dir (empty by design; package ships no public skills per 2026-05-04 strategy) | n/a |
+| `pipelines/llm.py` | ✅ | ✅ (lazy `from ..config import settings` routes to standalone; lazy `from ..skills import get_skill_registry` routes to PR-A6b substrate) | ✅ |
 | `reasoning/semantic_cache.py` | ✅ | ✅ (pool injected by caller; standalone DatabasePool compatible) | 🔲 |
 | `services/llm_router.py` | ✅ | ✅ (consumes standalone settings + registry) | 🔲 |
 | `services/llm/anthropic.py` | ✅ | ✅ (transitive substrate verified by smoke check) | 🔲 |
@@ -84,7 +86,7 @@ Import contract is closed; runtime behavior is decoupled from `atlas_brain`-spec
 | `services/llm/hybrid.py` | ✅ | ✅ | 🔲 |
 | `services/llm/cloud.py` | ✅ | ✅ | 🔲 |
 | `services/tracing.py` | ✅ | ✅ | 🔲 |
-| `services/provider_cost_sync.py` (PR-A2) | ✅ | 🔲 (Phase 2 follow-up: standalone substrate for provider settings + db pool wrapper for snapshot/daily-cost upserts; lift uses default Atlas mode for now) | 🔲 |
+| `services/provider_cost_sync.py` (PR-A2) | ✅ | ✅ (PR-A6a added `ProviderCostSubConfig` to `_standalone/config.py`; module's `settings.provider_cost.{snapshot_retention_days, daily_retention_days, openrouter_enabled, anthropic_enabled, ...}` calls now resolve under standalone mode; db pool already env-gated via `_standalone/database.py`) | n/a |
 | `services/cost/__init__.py` (OWNED, PR-A3) | n/a | ✅ (no atlas imports; owned by extraction) | n/a |
 | `services/cost/cache_savings.py` (OWNED, PR-A3) | n/a | ✅ (asyncpg-pool-shaped; runs standalone with the local DatabasePool) | n/a |
 | `services/cost/openai_billing.py` (OWNED, PR-A4c) | n/a | ✅ (httpx + asyncpg-pool-shaped; settings.provider_cost lookup with env fallback) | 🔲 (Phase 3: unify with provider_cost_sync via ProviderBillingPort Protocol) |

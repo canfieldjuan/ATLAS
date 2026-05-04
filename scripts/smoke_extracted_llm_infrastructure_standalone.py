@@ -188,23 +188,32 @@ def main() -> int:
         print(f"FAIL storage.database: {exc}")
         failed.append("storage.database")
 
-    # 6. Skills (bridge stub)
+    # 6. Skills (PR-A6b: bridge returns the local SkillRegistry in
+    # standalone mode; default markdown dir is empty by design but
+    # callable; env-gate must NOT silently resolve to atlas_brain.skills).
     try:
-        from extracted_llm_infrastructure.skills import get_skill_registry
+        from extracted_llm_infrastructure.skills import (
+            SkillRegistry,
+            get_skill_registry,
+        )
 
-        # In standalone mode the bridge MUST raise NotImplementedError.
-        # If it instead resolved silently to atlas_brain.skills (e.g.
-        # the env-gate regressed), this assertion would catch it.
-        try:
-            get_skill_registry()
-        except NotImplementedError:
-            print("OK skills (bridge raises NotImplementedError as expected)")
-        else:
+        registry = get_skill_registry()
+        if not isinstance(registry, SkillRegistry):
             raise AssertionError(
-                "skills bridge did not raise in standalone mode -- "
-                "the env-gate may have regressed and silently resolved "
-                "to atlas_brain.skills"
+                "skills bridge returned a non-SkillRegistry object "
+                f"({type(registry).__name__}) -- the env-gate may have "
+                "regressed and silently resolved to atlas_brain.skills"
             )
+        # Confirm the substrate copy is what we got, not atlas_brain's.
+        if not type(registry).__module__.startswith(
+            "extracted_llm_infrastructure.skills."
+        ):
+            raise AssertionError(
+                "skills bridge returned a SkillRegistry from "
+                f"{type(registry).__module__!r} -- expected the "
+                "extracted_llm_infrastructure.skills.registry module"
+            )
+        print("OK skills (PR-A6b standalone substrate active)")
     except Exception as exc:
         print(f"FAIL skills: {exc}")
         failed.append("skills")

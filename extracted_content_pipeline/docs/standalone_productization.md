@@ -180,6 +180,12 @@ worker seam. It composes `PostgresCampaignRepository`,
 `CampaignSendService` so hosts can send queued drafts through an injected
 `CampaignSender` without importing Atlas task code.
 
+`extracted_content_pipeline/campaign_postgres_analytics.py` owns the DB-backed
+analytics refresh worker seam. It composes `PostgresCampaignRepository`,
+`PostgresCampaignAuditSink`, and `CampaignAnalyticsRefreshService` so hosts can
+refresh the packaged campaign funnel materialized view without importing Atlas
+scheduled-task code.
+
 `extracted_content_pipeline/campaign_postgres_sequence_progression.py` owns the
 DB-backed sequence progression worker seam. It composes
 `PostgresCampaignSequenceRepository`, `PostgresCampaignAuditSink`, the product
