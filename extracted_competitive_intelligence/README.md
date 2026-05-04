@@ -65,6 +65,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `auth/dependencies.py` uses fail-closed standalone auth hooks
 - `services/campaign_sender.py` and `autonomous/tasks/campaign_suppression.py` use injectable product-owned ports
 - `services/crm_provider.py` uses an injectable CRM provider port for standalone lead/contact writes
+- `services/email_provider.py` uses an injectable email provider port for standalone checkout confirmations
 - `services/protocols.py` and `pipelines/llm.py` use `extracted_llm_infrastructure`
 - `services/scraping/sources.py` owns the source enum and classification sets locally
 - MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed

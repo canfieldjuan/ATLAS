@@ -24,6 +24,7 @@ MODULES = [
     "extracted_competitive_intelligence.services.vendor_registry",
     "extracted_competitive_intelligence.services.campaign_sender",
     "extracted_competitive_intelligence.services.crm_provider",
+    "extracted_competitive_intelligence.services.email_provider",
     "extracted_competitive_intelligence.services.scraping.capabilities",
     "extracted_competitive_intelligence.services.scraping.sources",
     "extracted_competitive_intelligence.autonomous.tasks.campaign_suppression",
