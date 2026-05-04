@@ -22,6 +22,97 @@ _ANTHROPIC_MODEL_ALIASES: dict[str, str] = {
     "claude-3-5-haiku-latest": "claude-haiku-4-5",
 }
 
+# Default character threshold above which the system prompt is wrapped
+# in a cache_control content block. Below the threshold, the system
+# prompt is passed as a plain string. The 1024-char cutoff matches
+# Anthropic's recommended minimum for cacheable prefixes.
+_DEFAULT_CACHE_THRESHOLD_CHARS: int = 1024
+
+
+def convert_messages(
+    messages: list[Message],
+    *,
+    cache_threshold_chars: int = _DEFAULT_CACHE_THRESHOLD_CHARS,
+) -> tuple[str | list[dict], list[dict]]:
+    """Convert ``Message`` objects to Anthropic API format.
+
+    Anthropic requires system content as a separate parameter, not in
+    the messages array. Returns ``(system_prompt_or_blocks,
+    messages_list)`` where:
+
+      * ``system_prompt_or_blocks`` is the system text as a plain
+        string when its length is at or below ``cache_threshold_chars``,
+        otherwise a list of content blocks with ``cache_control`` set
+        so Anthropic caches the prefix and avoids re-tokenizing large
+        skill prompts on every call.
+      * ``messages_list`` is the user/assistant/tool message array
+        formatted for the Anthropic Messages API. Assistant tool
+        calls become ``tool_use`` content blocks; ``tool`` role
+        messages become ``user`` messages with ``tool_result`` blocks
+        and consecutive tool results coalesce into a single user
+        message (Anthropic requires this).
+
+    Pure: no I/O, no clock, no SDK dependency. Safe to call from
+    any context that has ``Message`` objects.
+    """
+    system_parts: list[str] = []
+    api_messages: list[dict] = []
+
+    for msg in messages:
+        if msg.role == "system":
+            system_parts.append(msg.content)
+        elif msg.role == "assistant" and getattr(msg, "tool_calls", None):
+            # Anthropic: assistant tool calls are content blocks.
+            content_blocks: list[dict] = []
+            if msg.content:
+                content_blocks.append({"type": "text", "text": msg.content})
+            for call in msg.tool_calls:
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": call.get("id", ""),
+                    "name": call["function"]["name"],
+                    "input": call["function"].get("arguments", {}),
+                })
+            api_messages.append({"role": "assistant", "content": content_blocks})
+        elif msg.role == "tool":
+            # Anthropic: tool results are user messages with
+            # tool_result blocks. Consecutive tool results are
+            # coalesced into one user message.
+            tool_result_block = {
+                "type": "tool_result",
+                "tool_use_id": getattr(msg, "tool_call_id", "") or "",
+                "content": msg.content,
+            }
+            if (
+                api_messages
+                and api_messages[-1]["role"] == "user"
+                and isinstance(api_messages[-1]["content"], list)
+            ):
+                api_messages[-1]["content"].append(tool_result_block)
+            else:
+                api_messages.append({
+                    "role": "user",
+                    "content": [tool_result_block],
+                })
+        else:
+            api_messages.append({"role": msg.role, "content": msg.content})
+
+    system_text = "\n\n".join(system_parts)
+
+    # Wrap large system prompts in a cache_control block so Anthropic
+    # caches the prefix (saves ~90% on repeated system prompt tokens
+    # when skill prompts are 5-20 KB and reused across calls).
+    if len(system_text) > cache_threshold_chars:
+        return [
+            {
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ], api_messages
+
+    return system_text, api_messages
+
 
 def _normalize_anthropic_model(model: str) -> str:
     """Map deprecated Anthropic model aliases to currently supported ids."""
@@ -103,71 +194,11 @@ class AnthropicLLM(BaseModelService):
     def _convert_messages(
         self, messages: list[Message]
     ) -> tuple[str | list[dict], list[dict]]:
-        """Convert Message objects to Anthropic format.
-
-        Anthropic requires system content as a separate param, not in messages.
-        Returns (system_prompt_or_blocks, messages_list).
-
-        When the system prompt exceeds 1024 chars, it is returned as a list of
-        content blocks with ``cache_control`` set so Anthropic can cache the
-        prefix and avoid re-tokenizing large skill prompts on every call.
+        """Backwards-compatible alias for the module-level
+        :func:`convert_messages` helper. New callers should import the
+        public function directly.
         """
-        system_parts: list[str] = []
-        api_messages: list[dict] = []
-
-        for msg in messages:
-            if msg.role == "system":
-                system_parts.append(msg.content)
-            elif msg.role == "assistant" and getattr(msg, "tool_calls", None):
-                # Anthropic: assistant tool calls are content blocks
-                content_blocks = []
-                if msg.content:
-                    content_blocks.append({"type": "text", "text": msg.content})
-                for call in msg.tool_calls:
-                    content_blocks.append({
-                        "type": "tool_use",
-                        "id": call.get("id", ""),
-                        "name": call["function"]["name"],
-                        "input": call["function"].get("arguments", {}),
-                    })
-                api_messages.append({"role": "assistant", "content": content_blocks})
-            elif msg.role == "tool":
-                # Anthropic: tool results are user messages with tool_result blocks
-                tool_result_block = {
-                    "type": "tool_result",
-                    "tool_use_id": getattr(msg, "tool_call_id", "") or "",
-                    "content": msg.content,
-                }
-                # Coalesce consecutive tool results into one user message
-                if (
-                    api_messages
-                    and api_messages[-1]["role"] == "user"
-                    and isinstance(api_messages[-1]["content"], list)
-                ):
-                    api_messages[-1]["content"].append(tool_result_block)
-                else:
-                    api_messages.append({
-                        "role": "user",
-                        "content": [tool_result_block],
-                    })
-            else:
-                api_messages.append({"role": msg.role, "content": msg.content})
-
-        system_text = "\n\n".join(system_parts)
-
-        # Enable prompt caching for large system prompts (skill prompts are
-        # 5-20 KB and reused across calls).  Anthropic caches the prefix when
-        # cache_control is set, saving ~90% on repeated system prompt tokens.
-        if len(system_text) > 1024:
-            return [
-                {
-                    "type": "text",
-                    "text": system_text,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ], api_messages
-
-        return system_text, api_messages
+        return convert_messages(messages)
 
     def chat(
         self,
