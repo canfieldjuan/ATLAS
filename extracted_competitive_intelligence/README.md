@@ -105,6 +105,10 @@ capability registry without importing Atlas runtime modules.
 battles, categories, and asymmetry pairs. It is covered by extracted-package
 behavior tests and is no longer byte-synced from Atlas.
 
+The single-pass prompt modules under `reasoning/single_pass_prompts/` are
+product-owned LLM contracts. They are covered by extracted-package contract
+tests and are no longer byte-synced from Atlas.
+
 ## Local checks
 
 ```bash
@@ -118,7 +122,7 @@ Runs six checks in sequence:
 3. `check_extracted_competitive_intelligence_imports.py` — relative imports either resolve inside the scaffold or are listed in `import_debt_allowlist.txt` (resolver honors `level - 1` Python semantics)
 4. `smoke_extracted_competitive_intelligence_imports.py` — every public module imports without raising
 5. `smoke_extracted_competitive_intelligence_standalone.py` — standalone-mode substrate imports resolve to extracted-owned or extracted-LLM modules
-6. `test_extracted_competitive_cross_vendor_selection.py` — product-boundary behavior tests for cross-vendor selection
+6. Extracted pytest coverage — product-boundary behavior tests for cross-vendor selection and prompt contracts
 
 ## Import debt
 
