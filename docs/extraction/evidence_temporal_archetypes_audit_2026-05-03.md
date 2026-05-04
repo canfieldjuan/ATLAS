@@ -209,13 +209,23 @@ content-pipeline behavior go" without an answer in the commit.
 
 ## Test Migration
 
+> **SUPERSEDED 2026-05-04 (PR-C1k).** The original plan in this section assumed a single layer of test coverage; in practice we landed two complementary layers. See the **PR-C1k amendment** below for the canonical state. The original table is preserved for audit-trail integrity but should not be followed.
+
 Existing tests get renamed and redirected, not duplicated:
 
-| Current test file | Action |
+| ~~Current test file~~ (SUPERSEDED) | ~~Action~~ (SUPERSEDED) |
 | --- | --- |
-| `tests/test_extracted_reasoning_archetypes.py` | Rename to `tests/test_extracted_reasoning_core_archetypes.py`; switch imports to `extracted_reasoning_core.archetypes` |
-| `tests/test_extracted_reasoning_evidence_engine.py` | Rename to `tests/test_extracted_reasoning_core_evidence_engine.py`; redirect imports |
-| `tests/test_extracted_reasoning_temporal.py` | Rename to `tests/test_extracted_reasoning_core_temporal.py`; redirect imports |
+| ~~`tests/test_extracted_reasoning_archetypes.py`~~ | ~~Rename to `tests/test_extracted_reasoning_core_archetypes.py`; switch imports to `extracted_reasoning_core.archetypes`~~ |
+| ~~`tests/test_extracted_reasoning_evidence_engine.py`~~ | ~~Rename to `tests/test_extracted_reasoning_core_evidence_engine.py`; redirect imports~~ |
+| ~~`tests/test_extracted_reasoning_temporal.py`~~ | ~~Rename to `tests/test_extracted_reasoning_core_temporal.py`; redirect imports~~ |
+
+**PR-C1k amendment (2026-05-04) -- canonical state:** the "rename to `*_core_*` + redirect imports" line above turned out to be wrong for two of the three files, and was partially superseded during PR-C1h / PR-C1i / PR-C1j:
+
+  - PR-C1h / PR-C1i / PR-C1j each shipped a **new** `tests/test_extracted_reasoning_core_*.py` file containing **unit-level** tests of the canonical core (constants, frozen invariants, single-rule `_check_requirement` operators, helper coercion). Those are now the authoritative core tests.
+  - The original `tests/test_extracted_reasoning_*.py` files turned out to be **integration-style scenario tests** (pricing_crisis met-and-amplified, feature_gap winning when capability signals dominate, integration_break recognition from nested weakness_evidence text). They are *not* redundant with the unit tests.
+  - For evidence_engine specifically, the wrapper test exercises the content-pipeline-specific `_DEFAULT_RULES` catalog (`pricing_crisis`, `losing_market_share`, `active_churn_wave`, `support_quality_risk`). Redirecting its imports to `extracted_reasoning_core.evidence_engine` would run the same assertions against core's `evidence_map.yaml`, which carries a different conclusion vocabulary -- the assertions would all fail.
+
+PR-C1k therefore renames the wrapper-tests to a clearer prefix (`tests/test_extracted_content_pipeline_reasoning_*.py`) and **keeps imports unchanged** (still pointing at `extracted_content_pipeline.reasoning.*`). The unit-level core tests stay at `tests/test_extracted_reasoning_core_*.py`. Both layers are kept; coverage is complementary, not duplicative.
 
 `tests/test_extracted_reasoning_core_api.py` updated: drop the three
 now-implemented stubs from
