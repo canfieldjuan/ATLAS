@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "extracted_content_pipeline/**"
+      - "extracted_reasoning_core/**"
       - "scripts/sync_extracted_content_pipeline.sh"
       - "scripts/validate_extracted_content_pipeline.sh"
       - "scripts/check_ascii_python.sh"
@@ -13,9 +14,12 @@ on:
       - "scripts/run_extracted_pipeline_checks.sh"
       - "tests/test_extracted_campaign_*.py"
       - "tests/test_extracted_vendor_briefing_*.py"
+      - "tests/test_extracted_content_pipeline_reasoning_*.py"
+      - "tests/test_extracted_reasoning_core_*.py"
   push:
     paths:
       - "extracted_content_pipeline/**"
+      - "extracted_reasoning_core/**"
       - "scripts/sync_extracted_content_pipeline.sh"
       - "scripts/validate_extracted_content_pipeline.sh"
       - "scripts/check_ascii_python.sh"
@@ -25,6 +29,8 @@ on:
       - "scripts/run_extracted_pipeline_checks.sh"
       - "tests/test_extracted_campaign_*.py"
       - "tests/test_extracted_vendor_briefing_*.py"
+      - "tests/test_extracted_content_pipeline_reasoning_*.py"
+      - "tests/test_extracted_reasoning_core_*.py"
 
 jobs:
   extracted-checks:
