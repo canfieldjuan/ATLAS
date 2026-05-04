@@ -68,3 +68,28 @@ Return ONLY valid JSON.\
 CROSS_VENDOR_BATTLE_SYNTHESIS_PROMPT_VERSION = _hashlib.sha256(
     CROSS_VENDOR_BATTLE_SYNTHESIS_PROMPT.encode()
 ).hexdigest()[:8]
+
+
+# PR-C3c: register this prompt with the shared reasoning pack registry
+# (PR-C3a / extracted_reasoning_core.pack_registry). The "synthesis"
+# variant produces the structured battle conclusion downstream of the
+# single-pass version; both share owner_product but ship distinct
+# output_artifact metadata. Per the audit, both files move into
+# ``extracted_competitive_intelligence`` during PR 7.
+from extracted_reasoning_core.pack_registry import (  # noqa: E402
+    Pack as _Pack,
+    register_pack as _register_pack,
+)
+
+_register_pack(
+    _Pack(
+        name="cross_vendor_battle_synthesis",
+        version=CROSS_VENDOR_BATTLE_SYNTHESIS_PROMPT_VERSION,
+        prompts={"battle_synthesis": CROSS_VENDOR_BATTLE_SYNTHESIS_PROMPT},
+        metadata={
+            "output_artifact": "cross_vendor_battle_synthesis",
+            "owner_product": "competitive_intelligence",
+            "synthesis_mode": "structured_synthesis_v1",
+        },
+    )
+)
