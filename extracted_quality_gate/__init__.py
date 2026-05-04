@@ -31,6 +31,10 @@ from .api import (
 )
 from .blog_pack import evaluate_blog_post
 from .campaign_pack import evaluate_campaign
+from .evidence_pack import (
+    audit_witness_evidence_coverage,
+    evaluate_evidence_coverage,
+)
 from .safety_gate import assess_risk, check_content
 from .types import (
     ContentFlag,
@@ -68,15 +72,17 @@ __all__ = [
     "RiskLevel",
     "SuppressionReason",
     "assess_risk",
+    "audit_witness_evidence_coverage",
     "build_product_claim",
     "campaign_proof_terms_from_audit",
     "check_content",
-    "evaluate_blog_post",
-    "evaluate_campaign",
     "compute_claim_id",
     "decide_render_gates",
     "derive_confidence",
     "derive_evidence_posture",
+    "evaluate_blog_post",
+    "evaluate_campaign",
+    "evaluate_evidence_coverage",
     "evaluate_specificity_support",
     "evaluate_witness_specificity",
     "get_policy",

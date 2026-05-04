@@ -13,26 +13,33 @@ vendor reasoning, archetype scoring, and downstream deterministic
 builders.
 
 This module landed via PR-C1b as a consolidation of the atlas-canonical
-temporal engine and the content_pipeline fork. Documented decisions
-(per `docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md`):
+temporal engine and the content_pipeline fork; PR-C1j (this commit's
+predecessor) carried the rest of content_pipeline's defensive logic
+across so the slim core is the single canonical implementation.
+Documented decisions (per
+`docs/extraction/evidence_temporal_archetypes_audit_2026-05-03.md`):
 
   - 5 dataclasses are `frozen=True` (carries content_pipeline's
     immutability decision forward).
-  - `_numeric_value` / `_row_get` defensive helpers from
+  - `_numeric_value` / `_row_get` / `_coerce_date` / `_days_between` /
+    `_volatility` / `_percentiles_from_rows` defensive helpers from
     content_pipeline are surfaced at module scope so callers handling
-    messy snapshot payloads (strings with commas / percent signs,
-    asyncpg.Records vs plain dicts) have a single coercion point.
+    messy snapshot payloads (strings with commas / percent signs, ISO
+    date strings, asyncpg.Records vs plain dicts) have a single
+    coercion point.
   - `TemporalEngine` takes a `min_days_for_percentiles` constructor
     argument (default = `MIN_DAYS_FOR_PERCENTILES` = 3). Atlas's prior
     module constant declared 7 but the percentile gate was hardcoded
     to `< 3` everywhere it was checked; the constant is the actual
     behavior, with a knob for products that want stricter gating.
-  - The `_b2b_shared` lookup helpers used by `_compute_percentiles` /
-    `_infer_category` are imported from `atlas_brain` lazily so the
-    module loads cleanly even when atlas_brain is not on the import
-    path (degrades to empty percentiles + no inferred category in
-    that case). A future PR will replace these with a port-based
-    abstraction so reasoning core has zero atlas dependency.
+  - `_compute_percentiles` is self-contained -- it queries
+    `b2b_vendor_snapshots` directly with a single SELECT scoped to
+    `s.product_category`. PR-C1j replaced the prior atlas-coupled
+    implementation (which lazily imported `_b2b_shared` helpers) so
+    reasoning core has zero `atlas_brain` dependency at runtime.
+    Category inference now reads `latest.product_category` from the
+    most recent snapshot rather than calling out to atlas; the dead
+    `_infer_category` helper was dropped.
 """
 
 from __future__ import annotations

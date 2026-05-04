@@ -14,6 +14,7 @@ The package contains:
 - deterministic blog quality pack (`evaluate_blog_post`)
 - deterministic campaign quality pack (`evaluate_campaign`)
 - deterministic witness specificity pack (`evaluate_witness_specificity` + 6 legacy entry points)
+- async evidence-coverage gate (`evaluate_evidence_coverage` + lifted `audit_witness_evidence_coverage`)
 
 The package intentionally has no Atlas runtime dependency. Product-specific behavior belongs in packs or adapters layered on top of the public API.
 
@@ -36,6 +37,10 @@ from extracted_quality_gate.witness_pack import (
     surface_specificity_context,
     specificity_audit_snapshot,
 )
+from extracted_quality_gate.evidence_pack import (
+    audit_witness_evidence_coverage,
+    evaluate_evidence_coverage,
+)
 ```
 
 Products should import from:
@@ -43,6 +48,7 @@ Products should import from:
 - `extracted_quality_gate.api`
 - `extracted_quality_gate.blog_pack`
 - `extracted_quality_gate.campaign_pack`
+- `extracted_quality_gate.evidence_pack`
 - `extracted_quality_gate.safety_gate`
 - `extracted_quality_gate.witness_pack`
 - `extracted_quality_gate.types`
@@ -135,3 +141,31 @@ call `evaluate_specificity_support` directly through the atlas
 re-export; future revisions can pass `evaluate_witness_specificity`
 findings through `QualityInput.context` for cleaner pack-to-pack
 composition.
+
+## Evidence-coverage gate (PR-B5a)
+
+`evidence_pack.py` ships two entry points:
+
+- `audit_witness_evidence_coverage(pool, *, vendor_name,
+  source_review_ids, min_pain_confidence, valid_status,
+  coverage_precision)` -- legacy, lifted verbatim from
+  `atlas_brain/services/b2b/evidence_gate.py`. Returns the same
+  `dict[str, Any]` shape, two new keyword args are additive
+  (default to the legacy values).
+- `evaluate_evidence_coverage(pool, input, *, policy)` -- pack
+  contract. Reads `vendor_name`, `source_review_ids`, optional
+  `min_pain_confidence` from `input.context`. Reads thresholds
+  (`coverage_block_threshold`, `coverage_warn_threshold`,
+  `min_pain_confidence`, `valid_status`, `coverage_precision`) from
+  `policy.thresholds`. Returns a `QualityReport`.
+
+The pain-confidence rank map is part of the contract
+(`b2b_evidence_claims.pain_confidence_rank` is a STORED generated
+column with values 0/1/2 for strong/weak/none) and not parametric.
+The coverage thresholds, the valid-status string, and the rounding
+precision ARE parametric.
+
+The atlas-side `atlas_brain/services/b2b/evidence_gate.py` is a
+thin re-export wrapper, so the existing shadow-mode call site in
+`atlas_brain/autonomous/tasks/b2b_campaign_generation.py` keeps
+working without change.
