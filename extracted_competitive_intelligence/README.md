@@ -109,6 +109,11 @@ The single-pass prompt modules under `reasoning/single_pass_prompts/` are
 product-owned LLM contracts. They are covered by extracted-package contract
 tests and are no longer byte-synced from Atlas.
 
+`reasoning/ecosystem.py` is a product-owned host port for category-level
+ecosystem analysis. The mapped battle-card task imports it through the package
+relative path: Atlas resolves to its native analyzer, while standalone
+competitive hosts register an explicit adapter.
+
 ## Local checks
 
 ```bash
@@ -122,7 +127,7 @@ Runs six checks in sequence:
 3. `check_extracted_competitive_intelligence_imports.py` — relative imports either resolve inside the scaffold or are listed in `import_debt_allowlist.txt` (resolver honors `level - 1` Python semantics)
 4. `smoke_extracted_competitive_intelligence_imports.py` — every public module imports without raising
 5. `smoke_extracted_competitive_intelligence_standalone.py` — standalone-mode substrate imports resolve to extracted-owned or extracted-LLM modules
-6. Extracted pytest coverage — product-boundary behavior tests for cross-vendor selection and prompt contracts
+6. Extracted pytest coverage — product-boundary behavior tests for cross-vendor selection, prompt contracts, and host ports
 
 ## Import debt
 
