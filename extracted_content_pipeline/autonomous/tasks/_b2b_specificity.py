@@ -24,6 +24,8 @@ import copy
 from typing import Any
 
 from extracted_quality_gate.witness_pack import (
+    _contains_term,
+    _normalize_text,
     campaign_proof_terms_from_audit,
     evaluate_specificity_support,
     merge_specificity_contexts,
