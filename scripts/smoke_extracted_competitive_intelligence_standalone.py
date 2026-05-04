@@ -34,6 +34,8 @@ MODULES = [
     "extracted_competitive_intelligence.services.b2b.source_impact",
     "extracted_competitive_intelligence.services.b2b_competitive_sets",
     "extracted_competitive_intelligence.reasoning.cross_vendor_selection",
+    "extracted_competitive_intelligence.reasoning.single_pass_prompts.cross_vendor_battle",
+    "extracted_competitive_intelligence.reasoning.single_pass_prompts.battle_card_reasoning",
 ]
 
 
@@ -117,6 +119,8 @@ def main() -> int:
         ROOT / "extracted_competitive_intelligence" / "services" / "scraping" / "capabilities.py",
         ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "source_impact.py",
         ROOT / "extracted_competitive_intelligence" / "reasoning" / "cross_vendor_selection.py",
+        ROOT / "extracted_competitive_intelligence" / "reasoning" / "single_pass_prompts" / "cross_vendor_battle.py",
+        ROOT / "extracted_competitive_intelligence" / "reasoning" / "single_pass_prompts" / "battle_card_reasoning.py",
     )
     for module_path in owned_files:
         if "atlas_brain." in module_path.read_text():
