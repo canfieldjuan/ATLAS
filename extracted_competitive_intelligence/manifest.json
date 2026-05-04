@@ -25,6 +25,7 @@
     {"target": "extracted_competitive_intelligence/mcp/b2b/write_ports.py"},
     {"target": "extracted_competitive_intelligence/services/scraping/capabilities.py"},
     {"target": "extracted_competitive_intelligence/services/b2b/source_impact.py"},
+    {"target": "extracted_competitive_intelligence/services/b2b/challenger_dashboard_claims.py"},
     {"target": "extracted_competitive_intelligence/reasoning/cross_vendor_selection.py"},
     {"target": "extracted_competitive_intelligence/reasoning/single_pass_prompts/cross_vendor_battle.py"},
     {"target": "extracted_competitive_intelligence/reasoning/single_pass_prompts/battle_card_reasoning.py"},

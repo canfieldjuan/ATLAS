@@ -34,6 +34,7 @@ MODULES = [
     "extracted_competitive_intelligence.mcp.b2b.cross_vendor",
     "extracted_competitive_intelligence.mcp.b2b.write_intelligence",
     "extracted_competitive_intelligence.services.b2b.source_impact",
+    "extracted_competitive_intelligence.services.b2b.challenger_dashboard_claims",
     "extracted_competitive_intelligence.autonomous.tasks.b2b_battle_cards",
     "extracted_competitive_intelligence.autonomous.tasks.b2b_vendor_briefing",
     "extracted_competitive_intelligence.autonomous.tasks._b2b_cross_vendor_synthesis",
