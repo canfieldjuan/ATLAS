@@ -83,3 +83,34 @@ def test_reasoning_detail_fields_from_view_sparse_entry_has_stable_keys(monkeypa
     assert out["reasoning_key_signals"] == []
     assert out["reasoning_uncertainty_sources"] == []
     assert out["falsification_conditions"] == []
+
+
+def test_reasoning_detail_fields_from_view_explicit_null_lists_stay_lists(monkeypatch):
+    """Explicit-null list fields must coerce to [] -- dict.get(k, default)
+    only uses the default when k is missing, so present-but-null upstream
+    values would otherwise leak through as None and break consumer contracts.
+    """
+    def _fake_entry(_view):
+        return {
+            "archetype": "support_erosion",
+            "confidence": 0.5,
+            "mode": "synthesis",
+            "risk_level": "medium",
+            "executive_summary": "summary",
+            "key_signals": None,
+            "uncertainty_sources": None,
+            "falsification_conditions": None,
+        }
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
+        _fake_entry,
+    )
+
+    out = adapter.reasoning_detail_fields_from_view(_DummyView())
+    assert out["reasoning_key_signals"] == []
+    assert out["reasoning_uncertainty_sources"] == []
+    assert out["falsification_conditions"] == []
+    # Scalars passed through (None is acceptable for those, list contract is the concern)
+    assert out["archetype"] == "support_erosion"
+    assert out["reasoning_executive_summary"] == "summary"
