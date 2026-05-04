@@ -24,11 +24,18 @@ from typing import Any, Protocol
 
 from extracted_reasoning_core.semantic_cache_keys import (
     CacheEntry,
-    STALE_THRESHOLD,
+    STALE_THRESHOLD as _CORE_STALE_THRESHOLD,
     apply_decay as _apply_decay,
     compute_evidence_hash,
     row_to_cache_entry,
 )
+
+# Re-export as a module-level name so callers doing
+# ``from atlas_brain.reasoning.semantic_cache import STALE_THRESHOLD``
+# keep working. Aliased on import to avoid the
+# ``STALE_THRESHOLD = STALE_THRESHOLD`` self-reference shadowing that
+# made the prior shape look like a no-op.
+STALE_THRESHOLD = _CORE_STALE_THRESHOLD
 
 logger = logging.getLogger("atlas.reasoning.semantic_cache")
 
@@ -67,7 +74,7 @@ class SemanticCache:
     # Re-exported as a class attribute for backward-compat with callers
     # that read ``SemanticCache.STALE_THRESHOLD``. The module-level
     # constant in core's ``semantic_cache_keys`` is the canonical home.
-    STALE_THRESHOLD = STALE_THRESHOLD
+    STALE_THRESHOLD = _CORE_STALE_THRESHOLD
 
     def __init__(self, pool: SemanticCachePool):
         """*pool*: any object exposing the ``SemanticCachePool``

@@ -1,9 +1,12 @@
 """Tests for SemanticCache decoupling from asyncpg-specific assumptions.
 
-These tests exercise the parts of ``atlas_brain.reasoning.semantic_cache``
-that don't require a live Postgres: the pure helpers
-(``compute_evidence_hash``, ``_apply_decay``, ``row_to_cache_entry``) plus
-the ``SemanticCachePool`` Protocol contract. The async query methods
+These tests exercise the storage surface of
+``atlas_brain.reasoning.semantic_cache`` that doesn't require a live
+Postgres -- ``CacheEntry`` / ``SemanticCachePool`` / ``SemanticCache``
+plus the atlas-namespace ``_apply_decay`` and ``compute_evidence_hash``
+re-exports -- and the canonical ``row_to_cache_entry`` from
+``extracted_reasoning_core.semantic_cache_keys`` (PR-C2 promoted that
+helper from a private staticmethod into core). The async query methods
 are tested against a fake pool that records its inputs.
 
 The atlas ``DatabasePool`` and a raw asyncpg ``Pool`` both satisfy the
