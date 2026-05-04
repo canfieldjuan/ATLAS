@@ -142,7 +142,7 @@ async def run_enrichment_rows(
         lookup_b2b_exact_stage_text,
         store_b2b_exact_stage_text,
     )
-    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.llm.anthropic import AnthropicBatchableLLM
     from ...services.protocols import Message
     from ...skills import get_skill_registry
     from ...autonomous.tasks._b2b_batch_utils import (
@@ -231,9 +231,9 @@ async def run_enrichment_rows(
         else None
     )
 
-    if not isinstance(tier1_batch_llm, AnthropicLLM):
+    if not isinstance(tier1_batch_llm, AnthropicBatchableLLM):
         tier1_batch_llm = None
-    if not isinstance(tier2_batch_llm, AnthropicLLM):
+    if not isinstance(tier2_batch_llm, AnthropicBatchableLLM):
         tier2_batch_llm = None
 
     tier1_batch_model_id = str(

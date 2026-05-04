@@ -2738,7 +2738,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         run_anthropic_message_batch,
     )
     from ...services.b2b.cache_runner import lookup_b2b_exact_stage_text
-    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.llm.anthropic import AnthropicBatchableLLM
     from ...services.protocols import Message
 
     llm = get_pipeline_llm(
@@ -2755,10 +2755,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         and getattr(cfg, "blog_post_anthropic_batch_enabled", True)
     )
     batch_llm = get_pipeline_llm(workload="anthropic") if batch_requested else None
-    if batch_llm is None and isinstance(llm, AnthropicLLM):
+    if batch_llm is None and isinstance(llm, AnthropicBatchableLLM):
         batch_llm = llm
-    generation_llm = batch_llm if isinstance(batch_llm, AnthropicLLM) else llm
-    blog_batch_enabled = isinstance(batch_llm, AnthropicLLM)
+    generation_llm = batch_llm if isinstance(batch_llm, AnthropicBatchableLLM) else llm
+    blog_batch_enabled = isinstance(batch_llm, AnthropicBatchableLLM)
 
     if generation_llm is None:
         return {"_skip_synthesis": "No LLM available for B2B blog post generation"}
