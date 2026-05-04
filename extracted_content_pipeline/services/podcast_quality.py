@@ -65,8 +65,6 @@ def podcast_quality_revalidation(
         quote_status = _quote_fidelity(body, _string_list(idea.get("key_quotes")))
         if quote_status == "drift":
             warnings.append("quote_drift")
-        elif quote_status == "fabricated":
-            warnings.append("quote_drift")
 
     # Format-specific checks.
     if fmt == "newsletter":
@@ -201,7 +199,7 @@ def _quote_fidelity(body: str, quotes: list[str]) -> str | None:
 
     if not quotes:
         return None
-    body_lower = body.lower()
+    normalized_body = _normalize_for_match(body)
     for quote in quotes:
         text = quote.strip()
         if not text or len(text) < 8:
@@ -210,7 +208,6 @@ def _quote_fidelity(body: str, quotes: list[str]) -> str | None:
             continue
         # Near-match: collapse whitespace + drop common punctuation.
         normalized_quote = _normalize_for_match(text)
-        normalized_body = _normalize_for_match(body)
         if not normalized_quote:
             continue
         if normalized_quote in normalized_body:

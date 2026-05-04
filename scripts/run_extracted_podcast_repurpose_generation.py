@@ -112,8 +112,17 @@ def _load_voice_anchors(path: Path | None) -> dict[str, Any]:
 
 def _resolve_formats(raw: str) -> tuple[str, ...]:
     items = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    if not items:
+        return SUPPORTED_FORMATS
     valid = [item for item in items if item in SUPPORTED_FORMATS]
-    return tuple(valid) or SUPPORTED_FORMATS
+    if not valid:
+        invalid = ", ".join(items)
+        supported = ", ".join(SUPPORTED_FORMATS)
+        raise SystemExit(
+            f"--formats had no valid entries (got: {invalid}). "
+            f"Supported formats: {supported}."
+        )
+    return tuple(valid)
 
 
 async def _main() -> int:
