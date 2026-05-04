@@ -70,6 +70,44 @@ def test_load_json_wrapped_object(tmp_path: Path) -> None:
     assert result.transcripts[0]["episode_id"] == "ep-1"
 
 
+def test_load_jsonl_parses_line_delimited(tmp_path: Path) -> None:
+    file = tmp_path / "ep.jsonl"
+    rows = [
+        {"episode_id": "ep-1", "title": "One", "transcript_text": "x" * 300},
+        {"episode_id": "ep-2", "title": "Two", "transcript_text": "y" * 300},
+    ]
+    file.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    result = load_podcast_transcripts_from_file(file)
+
+    assert {row["episode_id"] for row in result.transcripts} == {"ep-1", "ep-2"}
+
+
+def test_load_jsonl_skips_blank_lines(tmp_path: Path) -> None:
+    file = tmp_path / "ep.jsonl"
+    file.write_text(
+        json.dumps({"episode_id": "ep-1", "transcript_text": "x" * 300}) + "\n\n\n"
+        + json.dumps({"episode_id": "ep-2", "transcript_text": "y" * 300}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = load_podcast_transcripts_from_file(file)
+
+    assert len(result.transcripts) == 2
+
+
+def test_load_jsonl_invalid_line_raises(tmp_path: Path) -> None:
+    file = tmp_path / "ep.jsonl"
+    file.write_text(
+        json.dumps({"episode_id": "ep-1", "transcript_text": "x" * 300}) + "\n"
+        + "{not valid json\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="line 2"):
+        load_podcast_transcripts_from_file(file)
+
+
 def test_load_csv_with_extra_columns(tmp_path: Path) -> None:
     file = tmp_path / "ep.csv"
     file.write_text(

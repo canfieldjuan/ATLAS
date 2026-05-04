@@ -201,7 +201,9 @@ def _quote_fidelity(body: str, quotes: list[str]) -> str | None:
     normalized_body = _normalize_for_match(body)
     for quote in quotes:
         text = quote.strip()
-        if not text or len(text) < 8:
+        # Match the extraction skill spec: ignore quotes shorter than 8 words
+        # rather than 8 characters. Short quotes are too generic to drift-check.
+        if not text or _word_count(text) < 8:
             continue
         if text in body:
             continue

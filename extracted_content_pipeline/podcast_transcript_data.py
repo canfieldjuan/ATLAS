@@ -251,7 +251,22 @@ def _resolve_format(path: Path, file_format: TranscriptDataFormat) -> Literal["j
 
 
 def _load_json_rows(path: Path) -> list[Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    # .jsonl is line-delimited JSON: one row per non-empty line.
+    if path.suffix.lower() == ".jsonl":
+        rows: list[Any] = []
+        for line_no, raw_line in enumerate(text.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Invalid JSON on line {line_no} of {path}: {exc.msg}"
+                ) from exc
+        return rows
+    data = json.loads(text)
     if isinstance(data, list):
         return list(data)
     if not isinstance(data, Mapping):

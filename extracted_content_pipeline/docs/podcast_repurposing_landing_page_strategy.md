@@ -9,8 +9,8 @@ offer that uses the AI Content Ops system as its engine.
 shipped. The product can ingest a transcript, extract the strongest
 ideas, and generate per-format drafts (newsletter, blog, LinkedIn post,
 X thread, shorts script). See `host_install_runbook.md` for the host
-install path and the new `run_extracted_podcast_*.py` CLIs at the
-repository root.
+install path and the new `run_extracted_podcast_*.py` CLIs under
+`scripts/` at the repository root.
 
 **Buyer-facing language convention:** never reference "AI Content Ops,"
 "the pipeline," or any internal machinery. The buyer sees a service that
@@ -185,11 +185,12 @@ both addressed in v0:
    `voice_anchors` payload (tone descriptors, banned phrases, style
    examples) which the prompt threads through to the generation call. A
    deterministic per-format quality validator
-   (`services/podcast_quality.py`) blocks placeholder tokens, banned
-   phrases, and per-format structural violations before drafts persist.
-   The validator runs after every LLM call; failures are saved with
-   `status='needs_review'` for human triage rather than silently
-   discarded.
+   (`services/podcast_quality.py`) flags placeholder tokens, banned
+   phrases, and per-format structural violations after the LLM call. A
+   draft that fails the audit is still persisted, but with
+   `status='needs_review'` and the failing audit captured in
+   `metadata.quality_audit` so a human can triage it rather than
+   silently shipping or silently discarding it.
 2. **Multi-format output with deterministic per-format templates** —
    the format-repurpose skill encodes per-format structural rules
    (newsletter / blog / linkedin / x_thread / shorts) inline and the
