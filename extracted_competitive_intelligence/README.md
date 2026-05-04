@@ -90,7 +90,14 @@ snapshot to extracted implementation.
 
 The first owned MCP modules are `vendor_registry.py`, `displacement.py`, and
 `cross_vendor.py`; they are read-oriented surfaces with extracted-owned support
-dependencies.
+dependencies. `write_intelligence.py` is also product-owned: simple database
+writes run locally, while deep runtime builders such as challenger briefs and
+accounts-in-motion reports are explicit host ports defined in
+`mcp/b2b/write_ports.py`.
+
+`services/b2b/source_impact.py` and `services/scraping/capabilities.py` are now
+product-owned as well. They provide the source impact ledger and static scrape
+capability registry without importing Atlas runtime modules.
 
 ## Local checks
 

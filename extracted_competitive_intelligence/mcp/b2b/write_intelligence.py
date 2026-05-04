@@ -6,11 +6,13 @@ from typing import Optional
 
 from ._shared import VALID_REPORT_TYPES, get_pool, logger
 from .server import mcp
-
-# Lazy import to avoid circular dependency -- only used by draft_campaign
-def _get_blog_matcher():
-    from ...autonomous.tasks._blog_matching import fetch_relevant_blog_posts
-    return fetch_relevant_blog_posts
+from .write_ports import (
+    WriteIntelligencePortNotConfigured,
+    get_accounts_in_motion_builder,
+    get_blog_matcher,
+    get_challenger_brief_builder,
+    get_reasoning_view_loader,
+)
 
 _VALID_ANALYSIS_TYPES = ("pairwise_battle", "category_council", "resource_asymmetry")
 _VALID_CHANNELS = ("email_cold", "email_followup", "linkedin", "phone", "custom")
@@ -233,152 +235,21 @@ async def build_challenger_brief(
     max_target_accounts = max(5, min(200, max_target_accounts))
 
     try:
-        import asyncio
-
-        from atlas_brain.autonomous.tasks.b2b_challenger_brief import (
-            _build_challenger_brief,
-            _fetch_churn_signal,
-            _fetch_displacement_detail,
-            _fetch_persisted_report,
-            _fetch_persisted_report_record,
-            _fetch_product_profile,
-            _resolve_cross_vendor_battle,
-            _fetch_review_pain_quotes,
-        )
-        from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
-            load_best_cross_vendor_lookup,
-        )
-        from atlas_brain.config import settings
-
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
 
-        inc = incumbent.strip()
-        chl = challenger.strip()
-        cfg = settings.b2b_churn
-        fallback_days = cfg.challenger_brief_report_fallback_days
-        window_days = cfg.intelligence_window_days
-        today = date.today()
-
-        (
-            battle_card_rec,
-            aim_data,
-            disp_detail,
-            inc_profile,
-            chl_profile,
-            churn_sig,
-            xv_lookup,
-            review_quotes,
-        ) = await asyncio.gather(
-            _fetch_persisted_report_record(
-                pool, "battle_card", inc, today, fallback_days=fallback_days,
-            ),
-            _fetch_persisted_report(
-                pool, "accounts_in_motion", inc, today, fallback_days=fallback_days,
-            ),
-            _fetch_displacement_detail(pool, inc, chl, window_days),
-            _fetch_product_profile(pool, inc),
-            _fetch_product_profile(pool, chl),
-            _fetch_churn_signal(pool, inc, today),
-            load_best_cross_vendor_lookup(
-                pool,
-                as_of=today,
-                analysis_window_days=window_days,
-            ),
-            _fetch_review_pain_quotes(
-                pool,
-                inc,
-                window_days=window_days,
-                limit=cfg.challenger_brief_quote_fallback_limit,
-                candidate_limit=cfg.challenger_brief_quote_candidate_limit,
-                similarity_threshold=cfg.challenger_brief_quote_similarity_threshold,
-            ),
-        )
-        xv_battle = await _resolve_cross_vendor_battle(
+        builder = get_challenger_brief_builder()
+        result = await builder(
             pool,
-            inc,
-            chl,
-            today,
-            xv_lookup,
-        )
-
-        battle_card = battle_card_rec["data"] if battle_card_rec else None
-
-        brief = _build_challenger_brief(
-            incumbent=inc,
-            challenger=chl,
-            displacement_detail=disp_detail or {},
-            battle_card=battle_card,
-            accounts_in_motion=aim_data,
-            incumbent_profile=inc_profile,
-            challenger_profile=chl_profile,
-            churn_signal=churn_sig,
-            cross_vendor_battle=xv_battle,
-            review_pain_quotes=review_quotes,
+            incumbent=incumbent.strip(),
+            challenger=challenger.strip(),
+            persist=persist,
             max_target_accounts=max_target_accounts,
         )
-
-        result = {
-            "success": True,
-            "incumbent": inc,
-            "challenger": chl,
-            "brief": brief,
-            "persisted": False,
-        }
-
-        exec_summary = brief.pop("_executive_summary", "")
-
-        if persist:
-            disp_summary = brief.get("displacement_summary", {})
-            if not exec_summary:
-                exec_summary = (
-                    f"Challenger brief: {chl} vs {inc}. "
-                    f"{disp_summary.get('total_mentions', 0)} displacement mentions, "
-                    f"{brief.get('total_target_accounts', 0)} target accounts."
-                )
-            density = {
-                "total_mentions": disp_summary.get("total_mentions", 0),
-                "sources_present": sum(1 for v in brief.get("data_sources", {}).values() if v),
-                "target_accounts": brief.get("total_target_accounts", 0),
-            }
-
-            row = await pool.fetchrow(
-                """
-                INSERT INTO b2b_intelligence
-                    (report_date, report_type, vendor_filter, category_filter,
-                     intelligence_data, executive_summary, data_density,
-                     status, llm_model, source_review_count, source_distribution)
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9, $10, $11::jsonb)
-                ON CONFLICT (report_date, report_type,
-                             LOWER(COALESCE(vendor_filter, '')),
-                             LOWER(COALESCE(category_filter, '')),
-                             COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
-                DO UPDATE SET
-                    intelligence_data = EXCLUDED.intelligence_data,
-                    executive_summary = EXCLUDED.executive_summary,
-                    data_density = EXCLUDED.data_density,
-                    source_review_count = EXCLUDED.source_review_count,
-                    source_distribution = EXCLUDED.source_distribution,
-                    created_at = now()
-                RETURNING id
-                """,
-                date.today(),
-                "challenger_brief",
-                inc,
-                chl,
-                json.dumps(brief, default=str),
-                exec_summary,
-                json.dumps(density),
-                "published",
-                "mcp-client:deterministic",
-                disp_summary.get("total_mentions", 0),
-                json.dumps(disp_summary.get("source_distribution", {})),
-            )
-            result["persisted"] = True
-            result["report_id"] = str(row["id"])
-
         return json.dumps(result, default=str)
+    except WriteIntelligencePortNotConfigured as exc:
+        return json.dumps({"success": False, "error": str(exc)})
     except Exception:
         logger.exception("build_challenger_brief error")
         return json.dumps({"success": False, "error": "Internal error"})
@@ -413,223 +284,21 @@ async def build_accounts_in_motion(
     max_accounts = max(5, min(500, max_accounts))
 
     try:
-        import asyncio
-        from collections import Counter
-
-        from atlas_brain.autonomous.tasks.b2b_accounts_in_motion import (
-            _apply_account_quality_adjustments,
-            _build_vendor_aggregate,
-            _compute_account_opportunity_score,
-            _fetch_apollo_org_lookup,
-            _fetch_company_signal_metadata,
-            _merge_company_profiles,
-        )
-        from atlas_brain.autonomous.tasks._b2b_shared import (
-            _aggregate_competitive_disp,
-            _build_competitor_lookup,
-            _build_feature_gap_lookup,
-            _canonicalize_vendor,
-            _fetch_budget_signals,
-            _fetch_churning_companies,
-            _fetch_competitive_displacement,
-            _fetch_feature_gaps,
-            _fetch_high_intent_companies,
-            _fetch_latest_account_intelligence,
-            _fetch_price_complaint_rates,
-            _fetch_quotable_evidence,
-            _fetch_timeline_signals,
-            read_vendor_intelligence_map,
-        )
-        from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
-            build_reasoning_lookup_from_views,
-            load_best_reasoning_view,
-        )
-        from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
-            load_best_cross_vendor_lookup,
-        )
-        from atlas_brain.config import settings
-
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
 
-        vendor = vendor_name.strip()
-        cfg = settings.b2b_churn
-        window = cfg.intelligence_window_days
-        today = date.today()
-
-        (
-            high_intent,
-            timeline_sigs,
-            churning,
-            quotes,
-            feature_gaps,
-            price_rates,
-            budget_sigs,
-            competitive_disp,
-            signal_meta,
-            apollo_orgs,
-            evidence_vault_lookup,
-            account_pool_lookup,
-        ) = await asyncio.gather(
-            _fetch_high_intent_companies(pool, int(min_urgency), window),
-            _fetch_timeline_signals(pool, window),
-            _fetch_churning_companies(pool, window),
-            _fetch_quotable_evidence(pool, window, min_urgency=cfg.quotable_phrase_min_urgency),
-            _fetch_feature_gaps(pool, window, min_mentions=cfg.feature_gap_min_mentions),
-            _fetch_price_complaint_rates(pool, window),
-            _fetch_budget_signals(pool, window),
-            _fetch_competitive_displacement(pool, window),
-            _fetch_company_signal_metadata(pool, window),
-            _fetch_apollo_org_lookup(pool),
-            read_vendor_intelligence_map(pool, as_of=today, analysis_window_days=window),
-            _fetch_latest_account_intelligence(pool, as_of=today, analysis_window_days=window),
-        )
-
-        competitive_disp = _aggregate_competitive_disp(competitive_disp)
-
-        # Synthesis-first reasoning lookup
-        xv_lookup = await load_best_cross_vendor_lookup(
+        builder = get_accounts_in_motion_builder()
+        result = await builder(
             pool,
-            as_of=today,
-            analysis_window_days=window,
-        )
-        try:
-            view = await load_best_reasoning_view(
-                pool,
-                vendor,
-                as_of=today,
-            )
-            if view:
-                synth_lookup = build_reasoning_lookup_from_views({vendor: view})
-            else:
-                synth_lookup = {}
-        except Exception:
-            synth_lookup = {}
-        reasoning_lookup = synth_lookup
-
-        merged = _merge_company_profiles(
-            high_intent,
-            timeline_sigs,
-            churning,
-            quotes,
-            signal_meta,
+            vendor_name=vendor_name.strip(),
+            persist=persist,
             min_urgency=min_urgency,
-            apollo_org_lookup=apollo_orgs,
-            invalid_alternative_terms=cfg.accounts_in_motion_invalid_alternative_terms,
+            max_accounts=max_accounts,
         )
-
-        canon = _canonicalize_vendor(vendor)
-        vendor_accounts = [
-            prof for prof in merged.values()
-            if _canonicalize_vendor(prof.get("vendor", "")) == canon
-        ]
-
-        for acct in vendor_accounts:
-            base_score, components = _compute_account_opportunity_score(acct)
-            delta, adj_components, flags = _apply_account_quality_adjustments(
-                acct, cfg,
-            )
-            total = max(0, min(100, base_score + delta))
-            acct["opportunity_score"] = total
-            acct["score_components"] = {**components, **adj_components}
-            acct["quality_flags"] = flags
-
-        vendor_accounts.sort(key=lambda a: a.get("opportunity_score", 0), reverse=True)
-        vendor_accounts = vendor_accounts[:max_accounts]
-
-        # Derive category from accounts (same logic as nightly pipeline)
-        cat_counts: Counter[str] = Counter()
-        for acct in vendor_accounts:
-            cat = acct.get("category")
-            if cat:
-                cat_counts[cat] += 1
-        vendor_category = cat_counts.most_common(1)[0][0] if cat_counts else None
-
-        feature_gap_lookup = _build_feature_gap_lookup(feature_gaps)
-        price_lookup = {
-            _canonicalize_vendor(r["vendor"]): r["price_complaint_rate"]
-            for r in price_rates
-        }
-        budget_lookup = {
-            _canonicalize_vendor(r["vendor"]): {k: v for k, v in r.items() if k != "vendor"}
-            for r in budget_sigs
-        }
-        competitor_lookup = _build_competitor_lookup(competitive_disp)
-
-        aggregate = _build_vendor_aggregate(
-            vendor,
-            vendor_accounts,
-            category=vendor_category,
-            reasoning_lookup=reasoning_lookup,
-            xv_lookup=xv_lookup,
-            competitor_lookup=competitor_lookup,
-            feature_gap_lookup=feature_gap_lookup,
-            price_lookup=price_lookup,
-            budget_lookup=budget_lookup,
-            evidence_vault_lookup=evidence_vault_lookup if not isinstance(evidence_vault_lookup, Exception) else None,
-            account_pool_lookup=account_pool_lookup if not isinstance(account_pool_lookup, Exception) else None,
-            requested_as_of=today,
-        )
-
-        result = {
-            "success": True,
-            "vendor_name": vendor,
-            "total_accounts": len(vendor_accounts),
-            "aggregate": aggregate,
-            "persisted": False,
-        }
-
-        if persist:
-            n_accounts = len(vendor_accounts)
-            top_score = vendor_accounts[0]["opportunity_score"] if vendor_accounts else 0
-            archetype = aggregate.get("archetype", "unknown")
-            exec_summary = (
-                f"{n_accounts} accounts in motion for {vendor}, "
-                f"top opportunity score {top_score}, archetype {archetype}."
-            )
-            density = {
-                "vendors_analyzed": 1,
-                "total_accounts": n_accounts,
-            }
-            source_dist = aggregate.get("source_distribution", {})
-            src_count = aggregate.get("source_review_count", 0)
-
-            row = await pool.fetchrow(
-                """
-                INSERT INTO b2b_intelligence
-                    (report_date, report_type, vendor_filter,
-                     intelligence_data, executive_summary, data_density,
-                     status, llm_model, source_review_count, source_distribution)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9, $10::jsonb)
-                ON CONFLICT (report_date, report_type,
-                             LOWER(COALESCE(vendor_filter, '')),
-                             LOWER(COALESCE(category_filter, '')),
-                             COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
-                DO UPDATE SET
-                    intelligence_data = EXCLUDED.intelligence_data,
-                    executive_summary = EXCLUDED.executive_summary,
-                    data_density = EXCLUDED.data_density,
-                    source_review_count = EXCLUDED.source_review_count,
-                    source_distribution = EXCLUDED.source_distribution,
-                    created_at = now()
-                RETURNING id
-                """,
-                date.today(),
-                "accounts_in_motion",
-                vendor,
-                json.dumps(aggregate, default=str),
-                exec_summary,
-                json.dumps(density),
-                "published",
-                "mcp-client:deterministic",
-                src_count,
-                json.dumps(source_dist),
-            )
-            result["persisted"] = True
-            result["report_id"] = str(row["id"])
-
         return json.dumps(result, default=str)
+    except WriteIntelligencePortNotConfigured as exc:
+        return json.dumps({"success": False, "error": str(exc)})
     except Exception:
         logger.exception("build_accounts_in_motion error")
         return json.dumps({"success": False, "error": "Internal error"})
@@ -696,14 +365,15 @@ async def draft_campaign(
         # Fetch relevant blog posts before inserting so they can be stored in metadata
         blog_posts: list[dict] = []
         try:
-            fetch_blogs = _get_blog_matcher()
-            blog_posts = await fetch_blogs(
-                pool,
-                pipeline="b2b",
-                vendor_name=vendor_name.strip(),
-                include_drafts=False,
-                limit=3,
-            )
+            fetch_blogs = get_blog_matcher()
+            if fetch_blogs is not None:
+                blog_posts = await fetch_blogs(
+                    pool,
+                    pipeline="b2b",
+                    vendor_name=vendor_name.strip(),
+                    include_drafts=False,
+                    limit=3,
+                )
         except Exception:
             logger.debug("Blog lookup failed for draft_campaign vendor=%s", vendor_name)
 
@@ -713,13 +383,14 @@ async def draft_campaign(
 
         # Store reasoning context for audit trail
         try:
-            from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
-                load_best_reasoning_view,
-            )
-            reasoning_view = await load_best_reasoning_view(
-                pool,
-                vendor_name.strip(),
-            )
+            load_reasoning_view = get_reasoning_view_loader()
+            if load_reasoning_view is not None:
+                reasoning_view = await load_reasoning_view(
+                    pool,
+                    vendor_name.strip(),
+                )
+            else:
+                reasoning_view = None
             if reasoning_view is not None:
                 wedge = reasoning_view.primary_wedge
                 reasoning_meta: dict = {
