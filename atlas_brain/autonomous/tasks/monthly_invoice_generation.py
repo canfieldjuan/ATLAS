@@ -363,7 +363,7 @@ async def run(task: ScheduledTask) -> dict:
             pdf_bytes = render_invoice_pdf(invoice)
             customer_folder = os.path.join(save_base, str(period_year), customer_name)
             os.makedirs(customer_folder, exist_ok=True)
-            pdf_filename = f"{invoice['invoice_number']} - {_month_name(period_month)} {period_year}.pdf"
+            pdf_filename = f"{invoice['invoice_number']}.pdf"
             pdf_path = os.path.join(customer_folder, pdf_filename)
             with open(pdf_path, "wb") as f:
                 f.write(pdf_bytes)
