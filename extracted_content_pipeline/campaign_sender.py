@@ -13,6 +13,8 @@ from .campaign_ports import SendRequest, SendResult
 
 
 RESEND_API_URL = "https://api.resend.com/emails"
+DEFAULT_RESEND_TIMEOUT_SECONDS = 30.0
+DEFAULT_SES_REGION = "us-east-1"
 _TAG_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -37,7 +39,7 @@ def normalize_tags(tags: Any) -> list[dict[str, str]]:
 class ResendSenderConfig:
     api_key: str
     api_url: str = RESEND_API_URL
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = DEFAULT_RESEND_TIMEOUT_SECONDS
 
 
 class ResendCampaignSender:
@@ -96,7 +98,7 @@ class ResendCampaignSender:
 @dataclass(frozen=True)
 class SESSenderConfig:
     from_email: str
-    region: str = "us-east-1"
+    region: str = DEFAULT_SES_REGION
     access_key_id: str | None = None
     secret_access_key: str | None = None
     configuration_set: str | None = None
@@ -185,7 +187,9 @@ def create_campaign_sender(
             ResendSenderConfig(
                 api_key=str(config.get("api_key") or ""),
                 api_url=str(config.get("api_url") or RESEND_API_URL),
-                timeout_seconds=float(config.get("timeout_seconds") or 30.0),
+                timeout_seconds=float(
+                    config.get("timeout_seconds") or DEFAULT_RESEND_TIMEOUT_SECONDS
+                ),
             ),
             http_client=http_client,
         )
@@ -193,7 +197,7 @@ def create_campaign_sender(
         return SESCampaignSender(
             SESSenderConfig(
                 from_email=str(config.get("from_email") or ""),
-                region=str(config.get("region") or "us-east-1"),
+                region=str(config.get("region") or DEFAULT_SES_REGION),
                 access_key_id=config.get("access_key_id"),
                 secret_access_key=config.get("secret_access_key"),
                 configuration_set=config.get("configuration_set"),
