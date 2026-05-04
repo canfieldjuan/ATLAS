@@ -54,7 +54,7 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 | **Campaign suppression** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured `SuppressionPolicy` |
 | **Campaign sender (Resend)** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured campaign sender |
 | **`_b2b_shared.py`** | atlas-core | Circular-import risk; not extracted |
-| **`challenger_dashboard_claims.py`** | atlas-core | Bridge module aggregating displacement claims |
+| **`challenger_dashboard_claims.py`** | injectable in standalone mode | Battle-card displacement gates use configured host claim readers |
 
 ## Standalone toggle
 
@@ -67,6 +67,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `services/protocols.py` and `pipelines/llm.py` use `extracted_llm_infrastructure`
 - `services/scraping/sources.py` owns the source enum and classification sets locally
 - MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed
+- `services/b2b/challenger_dashboard_claims.py` uses fail-closed host reader ports for displacement ProductClaim aggregation
 - Lazy package fallbacks fail closed in standalone mode instead of silently importing Atlas package namespaces
 
 Standalone adapters that require a host application fail closed until configured.
@@ -100,6 +101,11 @@ accounts-in-motion reports are explicit host ports defined in
 `services/b2b/source_impact.py` and `services/scraping/capabilities.py` are now
 product-owned as well. They provide the source impact ledger and static scrape
 capability registry without importing Atlas runtime modules.
+
+`services/b2b/challenger_dashboard_claims.py` is a product-owned host port for
+direct-displacement ProductClaim aggregation. The mapped battle-card task keeps
+its relative import: Atlas resolves the native aggregator, while standalone
+competitive hosts register explicit claim readers.
 
 `reasoning/cross_vendor_selection.py` is product-owned pure selection logic for
 battles, categories, and asymmetry pairs. It is covered by extracted-package

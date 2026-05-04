@@ -38,6 +38,7 @@ Full task/runtime decoupling remains Phase 3.
 | Cross-vendor selection boundary | ✅ `reasoning/cross_vendor_selection.py` is product-owned pure selection logic |
 | Prompt contract boundary | ✅ single-pass battle prompts are product-owned LLM contracts |
 | Ecosystem analyzer boundary | ✅ `reasoning/ecosystem.py` is a host adapter port, not an Atlas import |
+| Challenger claim aggregation boundary | ✅ `services/b2b/challenger_dashboard_claims.py` is a fail-closed host adapter port |
 
 ### Current audit snapshot
 
@@ -47,7 +48,7 @@ Full task/runtime decoupling remains Phase 3.
 | Manifest mappings | 15 |
 | Manifest Python snapshots | 6 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 12 |
+| Product-owned modules | 13 |
 
 Product-owned modules:
 
@@ -59,6 +60,7 @@ Product-owned modules:
 - `services/vendor_registry.py`
 - `services/scraping/capabilities.py`
 - `services/b2b/source_impact.py`
+- `services/b2b/challenger_dashboard_claims.py`
 - `reasoning/ecosystem.py`
 - `reasoning/cross_vendor_selection.py`
 - `reasoning/single_pass_prompts/cross_vendor_battle.py`
@@ -70,7 +72,6 @@ Product-owned modules:
 |---|---|
 | Rewire `b2b_battle_cards.py` LLM calls to consume `extracted_llm_infrastructure` directly | `autonomous/tasks/b2b_battle_cards.py:3140` (`call_llm_with_skill`, `get_pipeline_llm`), `b2b_vendor_briefing.py:1199-1202` (`get_llm`) |
 | Replace `_b2b_shared.py` cross-imports with explicit `Protocol`-based interfaces | `vendor_briefing.py:40-47` reads from `_b2b_shared` for vendor intelligence records |
-| Decouple from `atlas_brain.services.b2b.challenger_dashboard_claims` | `b2b_battle_cards.py:21` imports `aggregate_direct_displacement_claims_for_incumbent` |
 | Provide host adapters for write-tool builders | `mcp/b2b/write_ports.py` defines ports for challenger brief and accounts-in-motion builders |
 | Generic `EvidenceClaimReader` Protocol | `services/b2b/evidence_claim_*.py` stays in atlas-core; scaffold consumes via Protocol |
 | Open-source-grade README + LICENSE + pyproject.toml | scaffold root |
@@ -88,6 +89,7 @@ Product-owned modules:
 | `mcp/b2b/_shared.py` | n/a | ✅ | 🔲 |
 | `mcp/b2b/server.py` | n/a | ✅ | 🔲 |
 | `services/b2b/source_impact.py` | ✅ | ✅ | ✅ |
+| `services/b2b/challenger_dashboard_claims.py` | ✅ | ✅ | ✅ |
 | `services/scraping/sources.py` | n/a | ✅ | ✅ |
 | `reasoning/ecosystem.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 | 🔲 |
