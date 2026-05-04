@@ -29,6 +29,7 @@ from extracted_content_pipeline.campaign_sender import (  # noqa: E402
 
 
 DEFAULT_CAMPAIGN_SENDER_PROVIDER = "resend"
+CAMPAIGN_SENDER_PROVIDERS = ("resend", "ses")
 DATABASE_URL_ENV = ("EXTRACTED_DATABASE_URL", "DATABASE_URL")
 SENDER_PROVIDER_ENV = (
     "EXTRACTED_CAMPAIGN_SENDER_TYPE",
@@ -86,6 +87,21 @@ def _env_float(names: tuple[str, ...], default: float) -> float:
         raise SystemExit(f"Invalid float for {source}: {raw!r}") from exc
 
 
+def _normalize_provider(value: str | None) -> str:
+    provider = str(value or "").strip().lower()
+    if provider not in CAMPAIGN_SENDER_PROVIDERS:
+        choices = ", ".join(CAMPAIGN_SENDER_PROVIDERS)
+        raise SystemExit(f"Invalid --provider: {value!r}; expected one of {choices}")
+    return provider
+
+
+def _provider_arg(value: str) -> str:
+    try:
+        return _normalize_provider(value)
+    except SystemExit as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     send_defaults = CampaignSendConfig()
     parser = argparse.ArgumentParser(
@@ -98,10 +114,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider",
-        choices=("resend", "ses"),
-        default=_env(
-            *SENDER_PROVIDER_ENV,
-            default=DEFAULT_CAMPAIGN_SENDER_PROVIDER,
+        choices=CAMPAIGN_SENDER_PROVIDERS,
+        type=_provider_arg,
+        default=_normalize_provider(
+            _env(
+                *SENDER_PROVIDER_ENV,
+                default=DEFAULT_CAMPAIGN_SENDER_PROVIDER,
+            )
         ),
         help="Email provider to use.",
     )
@@ -192,7 +211,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _sender_config(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
-    provider = str(args.provider or "").strip().lower()
+    provider = _normalize_provider(args.provider)
     if provider == "ses":
         return (
             "ses",
@@ -204,14 +223,16 @@ def _sender_config(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
                 "configuration_set": args.ses_configuration_set,
             },
         )
-    return (
-        "resend",
-        {
-            "api_key": args.resend_api_key,
-            "api_url": args.resend_api_url,
-            "timeout_seconds": args.timeout_seconds,
-        },
-    )
+    if provider == "resend":
+        return (
+            "resend",
+            {
+                "api_key": args.resend_api_key,
+                "api_url": args.resend_api_url,
+                "timeout_seconds": args.timeout_seconds,
+            },
+        )
+    raise SystemExit(f"Invalid --provider: {args.provider!r}")
 
 
 def _configured(value: Any) -> bool:

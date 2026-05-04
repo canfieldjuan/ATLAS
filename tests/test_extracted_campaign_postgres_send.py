@@ -134,6 +134,57 @@ def test_send_cli_sender_config_uses_ses_from_email_fallback() -> None:
     assert config["region"] == "us-east-1"
 
 
+def test_send_cli_normalizes_provider_arg() -> None:
+    cli = _load_cli_module()
+    args = cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--provider",
+        " SES ",
+        "--ses-from-email",
+        "ses@example.com",
+    ])
+
+    provider, config = cli._sender_config(args)
+
+    assert args.provider == "ses"
+    assert provider == "ses"
+    assert config["from_email"] == "ses@example.com"
+
+
+def test_send_cli_normalizes_provider_env(monkeypatch) -> None:
+    cli = _load_cli_module()
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_SENDER_TYPE", " Resend ")
+    args = cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--resend-api-key",
+        "re_key",
+        "--default-from-email",
+        "sales@example.com",
+    ])
+
+    assert args.provider == "resend"
+
+
+def test_send_cli_rejects_unknown_provider_env(monkeypatch) -> None:
+    cli = _load_cli_module()
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_SENDER_TYPE", "smtp")
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._parse_args(["--database-url", "postgres://example"])
+
+    assert "Invalid --provider" in str(exc_info.value)
+    assert "smtp" in str(exc_info.value)
+
+
+def test_sender_config_rejects_unknown_provider_directly() -> None:
+    cli = _load_cli_module()
+
+    with pytest.raises(SystemExit, match="Invalid --provider"):
+        cli._sender_config(type("Args", (), {"provider": "smtp"})())
+
+
 def test_send_cli_send_args_allows_default_from_for_ses() -> None:
     cli = _load_cli_module()
     args = cli._parse_args([
