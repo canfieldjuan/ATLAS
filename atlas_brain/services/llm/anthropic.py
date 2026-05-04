@@ -64,7 +64,7 @@ class AnthropicBatchableLLM(Protocol):
 
     name: str
     model: str
-    _async_client: Any
+    _async_client: Any | None
 
 _ANTHROPIC_MODEL_ALIASES: dict[str, str] = {
     "claude-3-5-haiku-latest": "claude-haiku-4-5",

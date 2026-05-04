@@ -13,7 +13,7 @@ from typing import Any, Sequence
 
 from ...config import settings
 from ...pipelines.llm import trace_llm_call
-from ..llm.anthropic import AnthropicBatchableLLM, AnthropicLLM, convert_messages
+from ..llm.anthropic import AnthropicBatchableLLM, convert_messages
 from ..protocols import Message
 
 logger = logging.getLogger("atlas.services.b2b.anthropic_batch")
