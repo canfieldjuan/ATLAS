@@ -309,3 +309,31 @@ Output ONLY valid JSON matching this schema:
 BATTLE_CARD_REASONING_PROMPT_VERSION = _hashlib.sha256(
     BATTLE_CARD_REASONING_PROMPT.encode()
 ).hexdigest()[:8]
+
+
+# PR-C3b: register this prompt with the shared reasoning pack registry
+# (see ``extracted_reasoning_core.pack_registry``). Existing callers
+# that import ``BATTLE_CARD_REASONING_PROMPT`` directly from this
+# module keep working unchanged; the registry exists alongside the
+# direct exports so callers that prefer the by-name lookup can use
+# ``get_pack("battle_card_reasoning")``. Per the audit, the pack file
+# itself will move into ``extracted_competitive_intelligence`` during
+# PR 7 (Product Migration); this slice (PR-C3b) only adds the
+# registration so the registry contract is exercised by a real pack.
+from extracted_reasoning_core.pack_registry import (  # noqa: E402
+    Pack as _Pack,
+    register_pack as _register_pack,
+)
+
+_register_pack(
+    _Pack(
+        name="battle_card_reasoning",
+        version=BATTLE_CARD_REASONING_PROMPT_VERSION,
+        prompts={"reasoning": BATTLE_CARD_REASONING_PROMPT},
+        metadata={
+            "output_artifact": "battle_card",
+            "owner_product": "competitive_intelligence",
+            "valid_wedges": VALID_WEDGE_TYPES,
+        },
+    )
+)

@@ -172,3 +172,31 @@ Output ONLY valid JSON (after optional <scratchpad> block):
 VENDOR_CLASSIFY_PROMPT_VERSION = _hashlib.sha256(
     VENDOR_CLASSIFY_SINGLE_PASS.encode()
 ).hexdigest()[:8]
+
+
+# PR-C3d: register this prompt with the shared reasoning pack registry
+# (PR-C3a / extracted_reasoning_core.pack_registry). The vendor_classify
+# pack produces archetype assignments + self-check output for the b2b
+# churn intelligence task. Atlas's autonomous tasks consume it directly,
+# and competitive_intelligence's battle card builders read the assigned
+# archetype downstream -- so owner_product captures atlas as the
+# producing host. Per the audit, the pack file moves into a product
+# package during PR 7 (Product Migration); for now the file stays
+# atlas-side.
+from extracted_reasoning_core.pack_registry import (  # noqa: E402
+    Pack as _Pack,
+    register_pack as _register_pack,
+)
+
+_register_pack(
+    _Pack(
+        name="vendor_classify",
+        version=VENDOR_CLASSIFY_PROMPT_VERSION,
+        prompts={"classify_single_pass": VENDOR_CLASSIFY_SINGLE_PASS},
+        metadata={
+            "output_artifact": "vendor_archetype_classification",
+            "owner_product": "atlas",
+            "synthesis_mode": "single_pass_with_self_check",
+        },
+    )
+)

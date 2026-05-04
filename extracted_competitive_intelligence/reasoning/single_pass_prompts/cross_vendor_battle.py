@@ -53,3 +53,36 @@ GROUNDING RULES:
 
 Output ONLY valid JSON matching the schema provided.\
 """
+
+
+# PR-C3c: register this prompt with the shared reasoning pack registry
+# (PR-C3a / extracted_reasoning_core.pack_registry). This file is
+# owned by extracted_competitive_intelligence (per the package
+# manifest); the parallel atlas-side copy at
+# atlas_brain/reasoning/single_pass_prompts/cross_vendor_battle.py
+# carries the same registration. Both calls are idempotent against
+# the registry (identical content -> no ValueError) so importing
+# either or both modules in any order yields the same registered pack.
+import hashlib as _hashlib
+
+from extracted_reasoning_core.pack_registry import (
+    Pack as _Pack,
+    register_pack as _register_pack,
+)
+
+CROSS_VENDOR_BATTLE_SINGLE_PASS_VERSION = _hashlib.sha256(
+    CROSS_VENDOR_BATTLE_SINGLE_PASS.encode()
+).hexdigest()[:8]
+
+_register_pack(
+    _Pack(
+        name="cross_vendor_battle_single_pass",
+        version=CROSS_VENDOR_BATTLE_SINGLE_PASS_VERSION,
+        prompts={"battle_single_pass": CROSS_VENDOR_BATTLE_SINGLE_PASS},
+        metadata={
+            "output_artifact": "cross_vendor_battle_conclusion",
+            "owner_product": "competitive_intelligence",
+            "synthesis_mode": "single_pass_with_self_check",
+        },
+    )
+)
