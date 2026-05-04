@@ -17,10 +17,6 @@ Pins the structural-typing semantics that replaced 9
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
-
 from atlas_brain.services.llm.anthropic import (
     AnthropicBatchableLLM,
     AnthropicLLM,
