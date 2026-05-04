@@ -915,7 +915,7 @@ async def _repair_rows(
         prepare_b2b_exact_skill_stage_request,
         store_b2b_exact_stage_text,
     )
-    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.llm.anthropic import AnthropicBatchableLLM
     from ...pipelines.llm import clean_llm_output
     from ...services.protocols import Message
     from ._b2b_batch_utils import (
@@ -954,7 +954,7 @@ async def _repair_rows(
         if batch_requested and repair_model
         else None
     )
-    if not isinstance(batch_llm, AnthropicLLM):
+    if not isinstance(batch_llm, AnthropicBatchableLLM):
         batch_llm = None
 
     if batch_llm is None:

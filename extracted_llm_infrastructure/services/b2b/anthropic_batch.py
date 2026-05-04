@@ -13,7 +13,7 @@ from typing import Any, Sequence
 
 from ...config import settings
 from ...pipelines.llm import trace_llm_call
-from ..llm.anthropic import AnthropicLLM, convert_messages
+from ..llm.anthropic import AnthropicBatchableLLM, AnthropicLLM, convert_messages
 from ..protocols import Message
 
 logger = logging.getLogger("atlas.services.b2b.anthropic_batch")
@@ -182,7 +182,7 @@ def _extract_message_text_and_usage(message: Any) -> tuple[str, dict[str, Any], 
 def _trace_batched_item(
     *,
     item: AnthropicBatchItem,
-    llm: AnthropicLLM,
+    llm: AnthropicBatchableLLM,
     usage: dict[str, Any],
     response_text: str,
     provider_request_id: str | None,
@@ -404,7 +404,7 @@ async def _update_batch_job(
     )
 
 
-def _build_request_params(llm: AnthropicLLM, item: AnthropicBatchItem) -> dict[str, Any]:
+def _build_request_params(llm: AnthropicBatchableLLM, item: AnthropicBatchItem) -> dict[str, Any]:
     messages = [_message_from_value(message) for message in item.messages]
     system_prompt, api_messages = convert_messages(messages)
     params: dict[str, Any] = {
@@ -547,7 +547,7 @@ async def submit_anthropic_message_batch(
             failed_items=0,
         )
 
-    if not isinstance(llm, AnthropicLLM) or getattr(llm, "_async_client", None) is None:
+    if not isinstance(llm, AnthropicBatchableLLM) or getattr(llm, "_async_client", None) is None:
         for item in pending_items:
             results[item.custom_id] = AnthropicBatchItemResult(
                 custom_id=item.custom_id,
@@ -737,7 +737,7 @@ async def reconcile_anthropic_message_batch(
     cache_prefiltered_items = sum(1 for item_row in item_rows if bool(item_row.get("cache_prefiltered")))
     fallback_items = sum(1 for item_row in item_rows if bool(item_row.get("fallback_single_call")))
 
-    if not pending_rows or not row.get("provider_batch_id") or not isinstance(llm, AnthropicLLM) or getattr(llm, "_async_client", None) is None:
+    if not pending_rows or not row.get("provider_batch_id") or not isinstance(llm, AnthropicBatchableLLM) or getattr(llm, "_async_client", None) is None:
         completed_items = sum(1 for item_row in item_rows if str(item_row.get("status") or "") in {"cache_hit", "batch_succeeded", "fallback_succeeded"})
         failed_items = sum(1 for item_row in item_rows if str(item_row.get("status") or "") in {"fallback_failed", "batch_errored", "batch_expired", "batch_canceled"})
         return AnthropicBatchExecution(
@@ -1031,7 +1031,7 @@ async def run_anthropic_message_batch(
             failed_items=0,
         )
 
-    if not isinstance(llm, AnthropicLLM) or getattr(llm, "_async_client", None) is None:
+    if not isinstance(llm, AnthropicBatchableLLM) or getattr(llm, "_async_client", None) is None:
         for item in pending_items:
             results[item.custom_id] = AnthropicBatchItemResult(
                 custom_id=item.custom_id,
