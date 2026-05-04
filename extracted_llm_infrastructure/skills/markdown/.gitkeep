@@ -1,0 +1,5 @@
+# Default standalone-mode skills directory.
+# Empty by design -- per the 2026-05-04 strategy decision, the
+# extracted_llm_infrastructure package stays internal and ships no
+# skills publicly. Standalone callers either drop their own .md
+# files here or override via EXTRACTED_LLM_INFRA_SKILLS_DIR.
