@@ -13,7 +13,18 @@ from datetime import date
 from html import escape
 from typing import Any
 
-from ...config import settings
+
+DEFAULT_REASONING_WITNESS_HIGHLIGHT_LIMIT = 4
+_reasoning_witness_highlight_limit = DEFAULT_REASONING_WITNESS_HIGHLIGHT_LIMIT
+
+
+def configure_reasoning_witness_highlight_limit(limit: int | None) -> None:
+    """Configure fallback witness highlight count for host applications."""
+    global _reasoning_witness_highlight_limit
+    if limit is None:
+        _reasoning_witness_highlight_limit = DEFAULT_REASONING_WITNESS_HIGHLIGHT_LIMIT
+        return
+    _reasoning_witness_highlight_limit = max(0, int(limit))
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +208,7 @@ def _selected_reasoning_anchors(
     if selected:
         return selected
 
-    limit = int(settings.b2b_churn.reasoning_witness_highlight_limit)
+    limit = _reasoning_witness_highlight_limit
     for witness in _reasoning_witness_highlights(briefing)[:limit]:
         _add(None, witness)
     return selected
