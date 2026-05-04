@@ -1,13 +1,13 @@
 # Per-Product State
 
-Last updated: 2026-05-04T10:02Z by codex-2026-05-04
+Last updated: 2026-05-04T10:05Z by codex-2026-05-04
 
 Cross-product state-of-the-world for the extraction effort. Update when a PR merges or a product's phase advances. See [`../COORDINATION.md`](../COORDINATION.md) for the protocol that governs edits to this file.
 
 | Product | Phase | Most recent merged PR | Active PRs | Next milestone | Active hot zone |
 |---|---|---|---|---|---|
 | `extracted_llm_infrastructure` | 3 (runtime-decoupled; no OSS publish — internal refactor only) | #150 | — | Done as a decoupling refactor. Customer-facing API/SaaS work tracks under product roadmap (P1/P5/P6), not this scaffold. | none |
-| `extracted_competitive_intelligence` | 2 in progress (standalone toggle surfaces landing) | #155 | pending vendor briefing renderer | Continue Phase 2 ownership of standalone-ready product surfaces | `extracted_competitive_intelligence/templates/email/vendor_briefing.py` |
+| `extracted_competitive_intelligence` | 2 in progress (standalone toggle surfaces landing) | #155 | #160 | Continue Phase 2 ownership of standalone-ready product surfaces | `extracted_competitive_intelligence/templates/email/vendor_briefing.py` |
 | `extracted_content_pipeline` | 1 -> 2 (productization seams) | #129 | — | Continue remaining campaign orchestration/API seams after the DB-backed review/export path landed | none |
 | `extracted_reasoning_core` | 1 (scaffold + archetypes/evidence_map moved; PR-C1 series merged through #144) | #144 | #157 | Continue temporal/types/evidence_engine/API/wrapper follow-up slices per merged PR #82 audit | `extracted_reasoning_core/pack_registry.py`; `tests/test_extracted_reasoning_core_pack_registry.py`; `scripts/run_extracted_pipeline_checks.sh` |
 | `extracted_quality_gate` | 1 (scaffold + 7 deterministic packs landed: product_claim core #85; safety-gate split #114; blog quality pack #118; campaign quality pack #120; witness specificity pack #125; evidence coverage gate #130; source-quality pack #132) | #154 | — | Decoupling work effectively complete; no OSS publish. Future quality-gate features land here as new packs when needed. | none |
