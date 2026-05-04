@@ -4,7 +4,50 @@ Date: 2026-05-03
 
 ## Current Slice
 
-PR-B5b: witness specificity pack.
+PR-B5c: source-quality pack.
+
+- Deterministic core (`source_quality_pack.py`):
+  - `apply_witness_render_gate(row, *, policy)` lifted verbatim
+    from `atlas_brain/services/b2b/witness_render_gate.py` (161
+    LOC). Optional `policy` argument is additive; default matches
+    legacy atlas constants.
+  - `compute_coverage_ratio`, `row_count`,
+    `build_non_empty_text_check` lifted from `source_impact.py`
+    (the legacy underscore-prefixed versions).
+  - Pack-contract entry point `evaluate_source_quality(input, *,
+    policy)` returns a `QualityReport` whose findings enumerate
+    suppressed witness rows; decision is BLOCK when zero rows
+    render, WARN on partial suppression, PASS otherwise.
+- Atlas-side `atlas_brain/services/b2b/witness_render_gate.py` is a
+  thin re-export wrapper. The `_compute_coverage_ratio`,
+  `_row_count`, `_build_non_empty_text_check` aliases in
+  `source_impact.py` now resolve to the pack functions.
+- Out of scope (kept atlas-side): `build_source_impact_ledger`,
+  `summarize_source_field_baseline`, `get_consumer_wiring_baseline`,
+  the `_SOURCE_IMPACT_PROFILES` registry data.
+- PR-B5b regression fix: re-exported `_contains_term` and
+  `_normalize_text` from `_b2b_specificity.py` for
+  `services/blog_quality.py`.
+
+PR-B5a (merged via #130): evidence-coverage gate.
+
+- Deterministic core (`evidence_pack.py`) -- legacy entry point
+  `audit_witness_evidence_coverage(pool, *, vendor_name, source_review_ids,
+  min_pain_confidence, valid_status, coverage_precision)` lifted
+  verbatim from `atlas_brain/services/b2b/evidence_gate.py`. The
+  three original kwargs keep their signatures and defaults; two new
+  kwargs (`valid_status`, `coverage_precision`) are additive.
+- Pack-contract entry point `evaluate_evidence_coverage(pool, input,
+  *, policy)` returns a standard `QualityReport`. Decision is driven
+  by `coverage_block_threshold` / `coverage_warn_threshold` thresholds
+  on `QualityPolicy.thresholds`; defaults preserve the current
+  shadow-mode posture (block_threshold=0.0 means never block).
+- Atlas-side `atlas_brain/services/b2b/evidence_gate.py` is a thin
+  re-export wrapper. The single existing caller in
+  `atlas_brain/autonomous/tasks/b2b_campaign_generation.py:1232`
+  continues to work without change.
+
+PR-B5b (merged via #125): witness specificity pack.
 
 - Deterministic core (`witness_pack.py`) -- six legacy entry points
   (`surface_specificity_context`, `merge_specificity_contexts`,
@@ -80,6 +123,8 @@ The module is deterministic and imports without Atlas.
 - Blog quality pack (deterministic core: `evaluate_blog_post`) -- PR-B4a
 - Campaign quality pack (deterministic core: `evaluate_campaign`) -- PR-B4b
 - Witness specificity pack (deterministic core: `evaluate_witness_specificity` + 6 legacy entry points) -- PR-B5b
+- Evidence-coverage gate (deterministic core: `evaluate_evidence_coverage` + lifted `audit_witness_evidence_coverage`) -- PR-B5a
+- Source-quality pack (deterministic core: `apply_witness_render_gate`, coverage helpers, `evaluate_source_quality`) -- PR-B5c
 
 ## Not Yet Included
 
@@ -87,6 +132,7 @@ The module is deterministic and imports without Atlas.
   in `atlas_brain/services/safety_gate.py`; the deterministic core
   is now in `extracted_quality_gate/safety_gate.py` and the wrapper
   delegates to it -- but the wrapper itself is not yet extracted)
-- Evidence-claim coverage gate (PR-B5a) -- async DB query
-- Source-quality ingest pack (PR-B5c) -- async DB + settings
+- `build_source_impact_ledger` / `summarize_source_field_baseline` /
+  `get_consumer_wiring_baseline` / `_SOURCE_IMPACT_PROFILES` registry
+  remain atlas-side (atlas-coupled settings + schema).
 - Memory quality pack

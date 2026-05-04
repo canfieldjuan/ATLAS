@@ -114,6 +114,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/campaign_ports.py" in owned
     assert "extracted_content_pipeline/campaign_generation.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_generation.py" in owned
+    assert "extracted_content_pipeline/campaign_postgres_review.py" in owned
     assert "extracted_content_pipeline/campaign_example.py" in owned
     assert "extracted_content_pipeline/campaign_customer_data.py" in owned
     assert "extracted_content_pipeline/campaign_opportunities.py" in owned

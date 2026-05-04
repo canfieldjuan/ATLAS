@@ -243,11 +243,40 @@ python scripts/export_extracted_campaign_drafts.py \
   --output campaign_drafts.csv
 ```
 
+Approve or queue selected drafts after review:
+
+```bash
+python scripts/review_extracted_campaign_drafts.py \
+  <campaign-id> \
+  --account-id acct_123 \
+  --status approved
+
+python scripts/review_extracted_campaign_drafts.py \
+  <campaign-id> \
+  --account-id acct_123 \
+  --status queued \
+  --from-status draft,approved \
+  --from-email audit@customer.com
+```
+
+Reject a draft without deleting it:
+
+```bash
+python scripts/review_extracted_campaign_drafts.py \
+  <campaign-id> \
+  --account-id acct_123 \
+  --status cancelled \
+  --reason "customer rejected"
+```
+
 ## Retry And Rollback Notes
 
 - Migrations are idempotent by filename. Re-running the migration command skips
   recorded files.
 - Opportunity imports are append-only unless `--replace-existing` is set.
+- Draft review updates require explicit campaign ids and default to rows still
+  in `draft` status. Use `--from-status draft,approved` when moving an
+  approved draft to the send queue.
 - For test tenants, deleting rows by `account_id` is the cleanest reset:
 
 ```sql

@@ -19,10 +19,16 @@
       "target": "extracted_quality_gate/campaign_pack.py"
     },
     {
+      "target": "extracted_quality_gate/evidence_pack.py"
+    },
+    {
       "target": "extracted_quality_gate/ports.py"
     },
     {
       "target": "extracted_quality_gate/safety_gate.py"
+    },
+    {
+      "target": "extracted_quality_gate/source_quality_pack.py"
     },
     {
       "target": "extracted_quality_gate/types.py"

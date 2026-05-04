@@ -14,6 +14,8 @@ The package contains:
 - deterministic blog quality pack (`evaluate_blog_post`)
 - deterministic campaign quality pack (`evaluate_campaign`)
 - deterministic witness specificity pack (`evaluate_witness_specificity` + 6 legacy entry points)
+- async evidence-coverage gate (`evaluate_evidence_coverage` + lifted `audit_witness_evidence_coverage`)
+- source-quality pack (`apply_witness_render_gate`, `evaluate_source_quality`, plus pure SQL coverage helpers)
 
 The package intentionally has no Atlas runtime dependency. Product-specific behavior belongs in packs or adapters layered on top of the public API.
 
@@ -36,6 +38,14 @@ from extracted_quality_gate.witness_pack import (
     surface_specificity_context,
     specificity_audit_snapshot,
 )
+from extracted_quality_gate.evidence_pack import (
+    audit_witness_evidence_coverage,
+    evaluate_evidence_coverage,
+)
+from extracted_quality_gate.source_quality_pack import (
+    apply_witness_render_gate,
+    evaluate_source_quality,
+)
 ```
 
 Products should import from:
@@ -43,7 +53,9 @@ Products should import from:
 - `extracted_quality_gate.api`
 - `extracted_quality_gate.blog_pack`
 - `extracted_quality_gate.campaign_pack`
+- `extracted_quality_gate.evidence_pack`
 - `extracted_quality_gate.safety_gate`
+- `extracted_quality_gate.source_quality_pack`
 - `extracted_quality_gate.witness_pack`
 - `extracted_quality_gate.types`
 - `extracted_quality_gate.ports`
@@ -135,3 +147,66 @@ call `evaluate_specificity_support` directly through the atlas
 re-export; future revisions can pass `evaluate_witness_specificity`
 findings through `QualityInput.context` for cleaner pack-to-pack
 composition.
+
+## Evidence-coverage gate (PR-B5a)
+
+`evidence_pack.py` ships two entry points:
+
+- `audit_witness_evidence_coverage(pool, *, vendor_name,
+  source_review_ids, min_pain_confidence, valid_status,
+  coverage_precision)` -- legacy, lifted verbatim from
+  `atlas_brain/services/b2b/evidence_gate.py`. Returns the same
+  `dict[str, Any]` shape, two new keyword args are additive
+  (default to the legacy values).
+- `evaluate_evidence_coverage(pool, input, *, policy)` -- pack
+  contract. Reads `vendor_name`, `source_review_ids`, optional
+  `min_pain_confidence` from `input.context`. Reads thresholds
+  (`coverage_block_threshold`, `coverage_warn_threshold`,
+  `min_pain_confidence`, `valid_status`, `coverage_precision`) from
+  `policy.thresholds`. Returns a `QualityReport`.
+
+The pain-confidence rank map is part of the contract
+(`b2b_evidence_claims.pain_confidence_rank` is a STORED generated
+column with values 0/1/2 for strong/weak/none) and not parametric.
+The coverage thresholds, the valid-status string, and the rounding
+precision ARE parametric.
+
+The atlas-side `atlas_brain/services/b2b/evidence_gate.py` is a
+thin re-export wrapper, so the existing shadow-mode call site in
+`atlas_brain/autonomous/tasks/b2b_campaign_generation.py` keeps
+working without change.
+
+## Source-quality pack (PR-B5c)
+
+`source_quality_pack.py` ships three styles of entry point:
+
+- `apply_witness_render_gate(row, *, policy)` -- legacy entry point
+  lifted verbatim from `atlas_brain/services/b2b/witness_render_gate.py`.
+  Mutates the row dict in place with the ProductClaim render-gate
+  fields (`evidence_posture`, `confidence`, `render_allowed`,
+  `report_allowed`, `suppression_reason`, `quote_grade`). The new
+  `policy` keyword is additive and defaults to a `ClaimGatePolicy`
+  matching the legacy atlas constants.
+- `compute_coverage_ratio` / `row_count` /
+  `build_non_empty_text_check` -- the pure helpers from
+  `atlas_brain/services/b2b/source_impact.py`. Used by any caller
+  that needs to assemble field-coverage SQL and divide row counts
+  without pulling in the Atlas-coupled baseline machinery.
+- `evaluate_source_quality(input, *, policy)` -- pack contract.
+  Reads a sequence of witness rows from `input.context['witnesses']`,
+  applies the render gate to each, and returns a `QualityReport`
+  whose `decision` is `BLOCK` when zero witnesses render, `WARN`
+  when at least one renders but at least one is suppressed, and
+  `PASS` otherwise. Per-row findings carry the suppression reason.
+
+The atlas-side `atlas_brain/services/b2b/witness_render_gate.py`
+re-exports the lifted symbols. `atlas_brain/services/b2b/source_impact.py`
+keeps its `_compute_coverage_ratio`, `_row_count`,
+`_build_non_empty_text_check` private aliases so the rest of the
+file does not need to change.
+
+Out of scope for this slice (kept atlas-side):
+`build_source_impact_ledger`, `get_consumer_wiring_baseline`,
+`summarize_source_field_baseline`, and the `_SOURCE_IMPACT_PROFILES`
+registry. Each reads multiple `settings.b2b_*` flags or runs
+schema-specific SQL against `b2b_reviews`.

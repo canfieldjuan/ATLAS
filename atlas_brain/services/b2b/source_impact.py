@@ -663,42 +663,17 @@ def get_consumer_wiring_baseline() -> dict[str, Any]:
     }
 
 
-def _compute_coverage_ratio(
-    numerator: int | float | None,
-    denominator: int | float | None,
-) -> float | None:
-    """Return a stable low-volume coverage ratio with 3-decimal precision."""
-    if numerator is None or denominator is None or denominator == 0:
-        return None
-    return round(float(numerator) / float(denominator), 3)
-
-
-def _row_count(
-    row: Any,
-    key: str,
-    *,
-    fallback_key: str | None = None,
-) -> int:
-    """Read an integer count from a query row, optionally falling back to another alias."""
-    if key in row:
-        return int(row[key] or 0)
-    if fallback_key and fallback_key in row:
-        return int(row[fallback_key] or 0)
-    return 0
-
-
-def _build_non_empty_text_check(expression: str) -> str:
-    return f"""
-        NULLIF(
-            TRIM(
-                COALESCE(
-                    {expression},
-                    ''
-                )
-            ),
-            ''
-        ) IS NOT NULL
-    """
+# PR-B5c: the pure helpers below are owned by the
+# ``extracted_quality_gate.source_quality_pack`` pack. Atlas-side
+# call sites continue to use the underscore-prefixed aliases for
+# diff stability; the pack functions take an optional ``precision``
+# kwarg that defaults to 3 (the legacy value) so behaviour is
+# identical when called without it.
+from extracted_quality_gate.source_quality_pack import (
+    build_non_empty_text_check as _build_non_empty_text_check,
+    compute_coverage_ratio as _compute_coverage_ratio,
+    row_count as _row_count,
+)
 
 
 async def summarize_source_field_baseline(
