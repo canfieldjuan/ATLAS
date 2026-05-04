@@ -21,10 +21,14 @@ MODULES = [
     "extracted_competitive_intelligence.storage.database",
     "extracted_competitive_intelligence.auth.dependencies",
     "extracted_competitive_intelligence.services.protocols",
+    "extracted_competitive_intelligence.services.vendor_registry",
     "extracted_competitive_intelligence.services.campaign_sender",
+    "extracted_competitive_intelligence.services.scraping.capabilities",
     "extracted_competitive_intelligence.services.scraping.sources",
     "extracted_competitive_intelligence.autonomous.tasks.campaign_suppression",
     "extracted_competitive_intelligence.mcp.b2b.vendor_registry",
+    "extracted_competitive_intelligence.mcp.b2b.write_ports",
+    "extracted_competitive_intelligence.mcp.b2b.write_intelligence",
     "extracted_competitive_intelligence.pipelines.llm",
     "extracted_competitive_intelligence.templates.email.vendor_briefing",
     "extracted_competitive_intelligence.services.b2b.source_impact",
@@ -102,22 +106,20 @@ def main() -> int:
         print(f"FAIL {module_name}: Atlas fallback did not fail closed", flush=True)
         failed.append(module_name)
 
-    owned_mcp_modules = (
-        "vendor_registry.py",
-        "displacement.py",
-        "cross_vendor.py",
+    owned_files = (
+        ROOT / "extracted_competitive_intelligence" / "services" / "vendor_registry.py",
+        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "vendor_registry.py",
+        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "displacement.py",
+        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "cross_vendor.py",
+        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "write_intelligence.py",
+        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "write_ports.py",
+        ROOT / "extracted_competitive_intelligence" / "services" / "scraping" / "capabilities.py",
+        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "source_impact.py",
     )
-    for file_name in owned_mcp_modules:
-        module_path = (
-            ROOT
-            / "extracted_competitive_intelligence"
-            / "mcp"
-            / "b2b"
-            / file_name
-        )
+    for module_path in owned_files:
         if "atlas_brain." in module_path.read_text():
-            print(f"FAIL mcp.b2b.{file_name}: still imports Atlas", flush=True)
-            failed.append(f"mcp.b2b.{file_name}")
+            print(f"FAIL {module_path.relative_to(ROOT)}: still imports Atlas", flush=True)
+            failed.append(str(module_path.relative_to(ROOT)))
 
     if failed:
         print(f"Standalone smoke failed for {len(failed)} check(s)")

@@ -1,23 +1,368 @@
-"""Phase 1 bridge: re-exports atlas_brain.services.scraping.capabilities.
-
-Programmatically copies every non-dunder name (including underscore-
-prefixed helpers that from X import * would drop). Required because
-many scaffolded modules import private helpers from atlas_brain peers
-via from .X import _foo lazily inside function bodies. Phase 2
-replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
 """
+Source capability profiles for B2B review scraping.
+
+Each profile documents a source's access patterns, anti-bot protection,
+proxy requirements, data quality tier, and recommended concurrency.
+This is a code-level registry (not a DB table) because capabilities
+are properties of the parser implementation, not runtime data.
+"""
+
 from __future__ import annotations
 
-import importlib as _importlib
-
-def _bridge() -> None:
-    src = _importlib.import_module("atlas_brain.services.scraping.capabilities")
-    g = globals()
-    for name in dir(src):
-        if not name.startswith("__"):
-            g[name] = getattr(src, name)
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 
-_bridge()
-del _bridge, _importlib
+class AccessPattern(str, Enum):
+    """How the scraper accesses the source."""
+    api = "api"
+    html_scrape = "html_scrape"
+    js_rendered = "js_rendered"
+    web_unlocker = "web_unlocker"
+
+
+class AntiBot(str, Enum):
+    """Anti-bot protection level on the source."""
+    none = "none"
+    datadome = "datadome"
+    cloudflare = "cloudflare"
+    akamai = "akamai"
+    aggressive = "aggressive"
+
+
+class ProxyClass(str, Enum):
+    """Proxy tier required for reliable access."""
+    none = "none"
+    datacenter = "datacenter"
+    residential = "residential"
+
+
+class DataQuality(str, Enum):
+    """Data quality tier of the source."""
+    verified = "verified"       # Gated review sites with identity checks
+    structured = "structured"   # Structured data but no identity verification
+    community = "community"     # Open community posts (Reddit, HN, etc.)
+    news = "news"               # News/RSS aggregation
+
+
+class ConcurrencyClass(str, Enum):
+    """Concurrency classification for scheduling."""
+    api = "api"   # High concurrency OK (rate limiter handles throttling)
+    web = "web"   # Lower concurrency to avoid proxy overload
+
+
+@dataclass(frozen=True)
+class SourceCapabilityProfile:
+    """Immutable capability profile for a scrape source.
+
+    Includes both static capability metadata and orchestration policy so that
+    the scrape intake task has one authoritative place to read concurrency,
+    retry, cooldown, and fallback behavior per source.
+    """
+
+    source: str
+    access_patterns: tuple[AccessPattern, ...]
+    anti_bot: AntiBot
+    proxy_class: ProxyClass
+    data_quality: DataQuality
+    default_rpm: int
+    concurrency_class: ConcurrencyClass
+    notes: str = ""
+
+    # -- Orchestration policy (Sprint 2) --
+    max_concurrency: int = 4
+    retry_max: int = 2
+    cooldown_minutes: int = 1440   # 24 hours default
+    fallback_chain: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a plain dict for API/MCP responses."""
+        return {
+            "source": self.source,
+            "access_patterns": [p.value for p in self.access_patterns],
+            "anti_bot": self.anti_bot.value,
+            "proxy_class": self.proxy_class.value,
+            "data_quality": self.data_quality.value,
+            "default_rpm": self.default_rpm,
+            "concurrency_class": self.concurrency_class.value,
+            "max_concurrency": self.max_concurrency,
+            "retry_max": self.retry_max,
+            "cooldown_minutes": self.cooldown_minutes,
+            "fallback_chain": list(self.fallback_chain),
+            "notes": self.notes or None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Registry: 17 source profiles from codebase audit
+# ---------------------------------------------------------------------------
+
+_PROFILES: dict[str, SourceCapabilityProfile] = {}
+
+
+def _r(profile: SourceCapabilityProfile) -> None:
+    _PROFILES[profile.source] = profile
+
+
+# Verified review sites (gated, identity checks)
+_r(SourceCapabilityProfile(
+    source="g2",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.js_rendered, AccessPattern.html_scrape),
+    anti_bot=AntiBot.datadome,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=6,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=2,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "js_rendered", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="capterra",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.html_scrape),
+    anti_bot=AntiBot.cloudflare,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=8,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=2,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="trustradius",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.js_rendered, AccessPattern.html_scrape),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=10,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=1440,
+    fallback_chain=("web_unlocker", "js_rendered", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="gartner",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.html_scrape),
+    anti_bot=AntiBot.akamai,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=4,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=2,
+    retry_max=1,
+    cooldown_minutes=4320,
+    fallback_chain=("web_unlocker", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="peerspot",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.html_scrape),
+    anti_bot=AntiBot.cloudflare,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=4,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=2,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="getapp",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.js_rendered, AccessPattern.html_scrape),
+    anti_bot=AntiBot.cloudflare,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=8,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=1440,
+    fallback_chain=("web_unlocker", "js_rendered", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="trustpilot",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.html_scrape),
+    anti_bot=AntiBot.cloudflare,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=6,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=2,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="software_advice",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.html_scrape),
+    anti_bot=AntiBot.cloudflare,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=8,
+    concurrency_class=ConcurrencyClass.web,
+    notes="Gartner Digital Markets property (same family as Capterra/GetApp)",
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=1440,
+    fallback_chain=("web_unlocker", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="sourceforge",
+    access_patterns=(AccessPattern.html_scrape,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.datacenter,
+    data_quality=DataQuality.structured,
+    default_rpm=12,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=720,
+    fallback_chain=("html_scrape",),
+))
+_r(SourceCapabilityProfile(
+    source="slashdot",
+    access_patterns=(AccessPattern.html_scrape,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.structured,
+    default_rpm=8,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=720,
+    fallback_chain=("html_scrape",),
+))
+
+# Community sources (open posts, no identity verification)
+_r(SourceCapabilityProfile(
+    source="quora",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.html_scrape),
+    anti_bot=AntiBot.aggressive,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.community,
+    default_rpm=4,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=1,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="twitter",
+    access_patterns=(AccessPattern.js_rendered, AccessPattern.html_scrape),
+    anti_bot=AntiBot.aggressive,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.community,
+    default_rpm=10,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=2,
+    retry_max=1,
+    cooldown_minutes=4320,
+    fallback_chain=("js_rendered", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="reddit",
+    access_patterns=(AccessPattern.api,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.none,
+    data_quality=DataQuality.community,
+    default_rpm=30,
+    concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
+))
+_r(SourceCapabilityProfile(
+    source="hackernews",
+    access_patterns=(AccessPattern.api,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.none,
+    data_quality=DataQuality.community,
+    default_rpm=100,
+    concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=30,
+))
+_r(SourceCapabilityProfile(
+    source="github",
+    access_patterns=(AccessPattern.api,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.none,
+    data_quality=DataQuality.community,
+    default_rpm=25,
+    concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
+))
+_r(SourceCapabilityProfile(
+    source="youtube",
+    access_patterns=(AccessPattern.api,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.none,
+    data_quality=DataQuality.community,
+    default_rpm=50,
+    concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
+))
+_r(SourceCapabilityProfile(
+    source="stackoverflow",
+    access_patterns=(AccessPattern.api,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.none,
+    data_quality=DataQuality.community,
+    default_rpm=25,
+    concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
+))
+_r(SourceCapabilityProfile(
+    source="producthunt",
+    access_patterns=(AccessPattern.api, AccessPattern.html_scrape),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.none,
+    data_quality=DataQuality.community,
+    default_rpm=20,
+    concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
+    fallback_chain=("api", "html_scrape"),
+))
+
+# News/RSS
+_r(SourceCapabilityProfile(
+    source="rss",
+    access_patterns=(AccessPattern.api,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.none,
+    data_quality=DataQuality.news,
+    default_rpm=10,
+    concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=30,
+))
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def get_capability(source: str) -> SourceCapabilityProfile | None:
+    """Get capability profile for a source, or None if unknown."""
+    return _PROFILES.get(source)
+
+
+def get_all_capabilities() -> dict[str, SourceCapabilityProfile]:
+    """Get all registered capability profiles."""
+    return dict(_PROFILES)
