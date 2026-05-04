@@ -9,6 +9,11 @@
       "command": "/home/juan-canfield/Desktop/Atlas/.venv/bin/python",
       "args": ["-m", "atlas_brain.mcp.memory_server"],
       "env": {}
+    },
+    "atlas-invoicing": {
+      "command": "/home/juan-canfield/Desktop/Atlas/.venv/bin/python",
+      "args": ["-m", "atlas_brain.mcp.invoicing_server"],
+      "env": {}
     }
   }
 }

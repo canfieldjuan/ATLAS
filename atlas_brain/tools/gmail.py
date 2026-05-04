@@ -181,7 +181,7 @@ class GmailTransport:
 
         if response.status_code == 403:
             raise RuntimeError(
-                "Gmail send permission denied. Re-run setup with gmail.send scope: "
+                "Gmail send permission denied. Re-run setup with gmail.modify scope: "
                 "python scripts/setup_google_oauth.py"
             )
         response.raise_for_status()
@@ -192,6 +192,123 @@ class GmailTransport:
             result.get("id"),
             to,
             subject[:50],
+        )
+        return result
+
+    async def create_draft(
+        self,
+        to: list[str],
+        subject: str,
+        body: str,
+        from_email: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        reply_to: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        html: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a Gmail draft (NOT sent) under the authenticated account.
+
+        Same MIME shape as send() including base64 attachments. Returns the
+        Gmail draft resource: {"id": draft_id, "message": {"id", "threadId"}}.
+        The user can review and send the draft from their Gmail UI.
+        """
+        if attachments:
+            msg = MIMEMultipart("mixed")
+            if html:
+                msg.attach(MIMEText(html, "html"))
+            else:
+                msg.attach(MIMEText(body, "plain"))
+        else:
+            msg = MIMEText(html, "html") if html else MIMEText(body, "plain")
+
+        msg["To"] = ", ".join(to)
+        msg["Subject"] = subject
+        if from_email:
+            msg["From"] = from_email
+        if cc:
+            msg["Cc"] = ", ".join(cc)
+        if bcc:
+            msg["Bcc"] = ", ".join(bcc)
+        if reply_to:
+            msg["Reply-To"] = reply_to
+
+        if attachments:
+            for att in attachments:
+                filename = att.get("filename", "attachment")
+                content_b64 = att.get("content", "")
+                content_bytes = base64.b64decode(content_b64)
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(content_bytes)
+                part.add_header("Content-Disposition", "attachment", filename=filename)
+                part.add_header("Content-Transfer-Encoding", "base64")
+                part.set_payload(base64.b64encode(content_bytes).decode("ascii"))
+                msg.attach(part)
+
+        raw_b64 = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+
+        token = await self._get_access_token()
+        client = await self._ensure_client()
+        response = await client.post(
+            f"{GMAIL_API_BASE}/users/me/drafts",
+            json={"message": {"raw": raw_b64}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if response.status_code == 403:
+            raise RuntimeError(
+                "Gmail draft permission denied. Re-run setup with gmail.modify scope: "
+                "python scripts/setup_google_oauth.py"
+            )
+        response.raise_for_status()
+
+        result = response.json()
+        logger.info(
+            "Gmail draft created: id=%s, to=%s, subject=%s",
+            result.get("id"),
+            to,
+            subject[:50],
+        )
+        return result
+
+    async def modify_thread(
+        self,
+        thread_id: str,
+        add_labels: list[str] | None = None,
+        remove_labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Add and/or remove labels on a Gmail thread.
+
+        Common label IDs: INBOX, UNREAD, IMPORTANT, STARRED, SENT, TRASH, SPAM.
+        To mark a thread as read, remove the UNREAD label.
+        Requires gmail.modify scope (or broader).
+        """
+        body: dict[str, list[str]] = {}
+        if add_labels:
+            body["addLabelIds"] = list(add_labels)
+        if remove_labels:
+            body["removeLabelIds"] = list(remove_labels)
+        if not body:
+            raise ValueError("modify_thread: provide add_labels and/or remove_labels")
+
+        token = await self._get_access_token()
+        client = await self._ensure_client()
+        response = await client.post(
+            f"{GMAIL_API_BASE}/users/me/threads/{thread_id}/modify",
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if response.status_code == 403:
+            raise RuntimeError(
+                "Gmail modify permission denied. Re-run setup with gmail.modify scope: "
+                "python scripts/setup_google_oauth.py"
+            )
+        response.raise_for_status()
+        result = response.json()
+        logger.info(
+            "Gmail thread modified: id=%s add=%s remove=%s",
+            thread_id, add_labels, remove_labels,
         )
         return result
 
