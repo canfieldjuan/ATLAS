@@ -181,7 +181,7 @@ class GmailTransport:
 
         if response.status_code == 403:
             raise RuntimeError(
-                "Gmail send permission denied. Re-run setup with gmail.send scope: "
+                "Gmail send permission denied. Re-run setup with gmail.modify scope: "
                 "python scripts/setup_google_oauth.py"
             )
         response.raise_for_status()
@@ -257,7 +257,7 @@ class GmailTransport:
 
         if response.status_code == 403:
             raise RuntimeError(
-                "Gmail draft permission denied. Re-run setup with gmail.compose scope: "
+                "Gmail draft permission denied. Re-run setup with gmail.modify scope: "
                 "python scripts/setup_google_oauth.py"
             )
         response.raise_for_status()
