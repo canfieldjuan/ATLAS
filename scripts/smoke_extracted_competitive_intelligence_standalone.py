@@ -21,6 +21,7 @@ MODULES = [
     "extracted_competitive_intelligence.storage.database",
     "extracted_competitive_intelligence.auth.dependencies",
     "extracted_competitive_intelligence.services.protocols",
+    "extracted_competitive_intelligence.services.vendor_registry",
     "extracted_competitive_intelligence.services.campaign_sender",
     "extracted_competitive_intelligence.services.scraping.capabilities",
     "extracted_competitive_intelligence.services.scraping.sources",
@@ -106,6 +107,7 @@ def main() -> int:
         failed.append(module_name)
 
     owned_files = (
+        ROOT / "extracted_competitive_intelligence" / "services" / "vendor_registry.py",
         ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "vendor_registry.py",
         ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "displacement.py",
         ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "cross_vendor.py",

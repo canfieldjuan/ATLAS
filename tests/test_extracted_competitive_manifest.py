@@ -24,6 +24,7 @@ def _mapped_targets() -> set[str]:
 def test_manifest_tracks_product_owned_competitive_modules() -> None:
     owned = _owned_targets()
 
+    assert "extracted_competitive_intelligence/services/vendor_registry.py" in owned
     assert "extracted_competitive_intelligence/mcp/b2b/vendor_registry.py" in owned
     assert "extracted_competitive_intelligence/mcp/b2b/displacement.py" in owned
     assert "extracted_competitive_intelligence/mcp/b2b/cross_vendor.py" in owned
@@ -36,6 +37,7 @@ def test_manifest_tracks_product_owned_competitive_modules() -> None:
 def test_product_owned_competitive_modules_are_not_manifest_synced() -> None:
     mapped = _mapped_targets()
 
+    assert "extracted_competitive_intelligence/services/vendor_registry.py" not in mapped
     assert "extracted_competitive_intelligence/mcp/b2b/write_intelligence.py" not in mapped
     assert "extracted_competitive_intelligence/mcp/b2b/write_ports.py" not in mapped
     assert "extracted_competitive_intelligence/services/scraping/capabilities.py" not in mapped

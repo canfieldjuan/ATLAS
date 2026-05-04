@@ -41,10 +41,10 @@ Full task/runtime decoupling remains Phase 3.
 | Metric | Count |
 |---|---:|
 | Extracted files | 88 |
-| Manifest mappings | 19 |
-| Manifest Python snapshots | 10 |
+| Manifest mappings | 18 |
+| Manifest Python snapshots | 9 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 7 |
+| Product-owned modules | 8 |
 
 Product-owned modules:
 
@@ -53,6 +53,7 @@ Product-owned modules:
 - `mcp/b2b/cross_vendor.py`
 - `mcp/b2b/write_intelligence.py`
 - `mcp/b2b/write_ports.py`
+- `services/vendor_registry.py`
 - `services/scraping/capabilities.py`
 - `services/b2b/source_impact.py`
 
@@ -72,7 +73,7 @@ Product-owned modules:
 
 | Scaffold file | Phase 1 (snapshot) | Phase 2 (standalone-ready) | Phase 3 (decoupled) |
 |---|---|---|---|
-| `services/vendor_registry.py` | ✅ | 🔲 | 🔲 |
+| `services/vendor_registry.py` | ✅ | ✅ | 🔲 |
 | `mcp/b2b/vendor_registry.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/displacement.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/cross_vendor.py` | ✅ | ✅ | ✅ |
