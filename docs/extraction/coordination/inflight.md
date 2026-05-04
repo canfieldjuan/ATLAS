@@ -1,11 +1,12 @@
 # In-Flight PRs
 
-Last updated: 2026-05-04T06:59Z by codex-2026-05-04
+Last updated: 2026-05-04T07:05Z by claude-2026-05-03-b
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
 | (PR-C1l, in flight) | PR-C1l: Document PR-C1 implementation outcomes in reasoning boundary audit | EDIT: `docs/extraction/reasoning_boundary_audit_2026-05-03.md` (append "PR-C1 Implementation Outcomes" section recording PR-C1a through PR-C1k slices, architectural deviations from the original plan, and the drift-forward pattern; mark which acceptance criteria from PR 2/PR 3 are now satisfied vs deferred to PR 4/PR 5/PR 6/PR 7). Doc-only change; no code touched. Closes the PR-C1 sequence. | claude-2026-05-03 | `docs/extraction/reasoning_boundary_audit_2026-05-03.md` |
+| (PR-A5d, in flight) | PR-A5d: Phase 3 LLM-infra decoupling — Protocol-based DI replacing `isinstance(AnthropicLLM)` checks | EDIT: `atlas_brain/services/llm/anthropic.py` (add `runtime_checkable` `AnthropicBatchableLLM` Protocol with `name`/`model`/`_async_client` surface). EDIT: 9 isinstance sites swapped to use the Protocol (3 internal guards in `services/b2b/anthropic_batch.py`; 6 dispatch gates in `services/b2b/enrichment_row_runner.py` + 3 autonomous tasks). EDIT: 2 private function type hints in `anthropic_batch.py` narrowed from `AnthropicLLM` to `AnthropicBatchableLLM`. EDIT: `extracted_llm_infrastructure/STATUS.md` (mark task ✅). SYNC: 4 extracted_llm_infrastructure files. EDIT: 2 test fixtures (add `_async_client = None` to `FakeAnthropicLLM` classes). NEW: `tests/test_anthropic_batchable_protocol.py` (12 tests pinning Protocol satisfaction, structural duck-typing, negative cases against other LLM providers, companion getattr semantics, `runtime_checkable` decorator presence, and attribute-surface contract). Public API + signatures + behavior unchanged. | claude-2026-05-03-b | `atlas_brain/services/llm/anthropic.py`; `atlas_brain/services/b2b/anthropic_batch.py`; `atlas_brain/services/b2b/enrichment_row_runner.py`; the 3 autonomous-task files; the synced extracted_llm_infrastructure copies; the new test file; the 2 fixture-updated test files |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.

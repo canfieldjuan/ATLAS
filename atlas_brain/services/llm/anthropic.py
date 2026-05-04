@@ -10,13 +10,61 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from ..base import BaseModelService
 from ..protocols import Message, ModelInfo
 from ..registry import register_llm
 
 logger = logging.getLogger("atlas.llm.anthropic")
+
+
+@runtime_checkable
+class AnthropicBatchableLLM(Protocol):
+    """Structural contract for an LLM that can drive the Anthropic batch path.
+
+    The Anthropic Message Batches API is vendor-specific, so consumers
+    in ``atlas_brain.services.b2b.anthropic_batch`` and the dispatch
+    gates in the autonomous tasks need a type that says "this LLM
+    exposes the Anthropic SDK async client surface". Today only
+    ``AnthropicLLM`` satisfies this Protocol; a future adapter
+    (e.g. an Anthropic-via-Vertex client) that exposes the same
+    attribute surface would also satisfy it without subclassing.
+
+    The Protocol is ``runtime_checkable`` so existing
+    ``isinstance(llm, AnthropicLLM)`` patterns can switch to
+    ``isinstance(llm, AnthropicBatchableLLM)`` and keep the same
+    runtime-narrowing semantics. The check is structural (it walks
+    attribute presence at the moment of the call), so subclasses
+    and duck-typed adapters work without nominal inheritance.
+
+    Attribute surface:
+
+      * ``name`` -- short provider id (used by the FTL tracer's
+        pricing lookup; ``AnthropicLLM`` returns ``"anthropic"``).
+      * ``model`` -- the resolved model id passed into the Anthropic
+        batch request body.
+      * ``_async_client`` -- the Anthropic SDK ``AsyncAnthropic``
+        client. Underscore-prefixed because ``AnthropicLLM`` exposes
+        it that way today; renaming would be a separate
+        breaking-change PR. Including this attribute in the Protocol
+        is what makes it specific to Anthropic-shaped LLMs -- without
+        it, the other providers (Ollama / OpenRouter / Together / Groq)
+        would also pass the structural check on ``name`` + ``model``
+        alone and incorrectly route into the Anthropic batch API.
+
+        Note: the attribute is ``None`` until ``load()`` is called.
+        Protocol satisfaction only requires the attribute to exist;
+        the loaded-ness gate is a SEPARATE runtime concern that all
+        call sites preserve via the companion check:
+
+            isinstance(llm, AnthropicBatchableLLM)
+                and getattr(llm, "_async_client", None) is not None
+    """
+
+    name: str
+    model: str
+    _async_client: Any
 
 _ANTHROPIC_MODEL_ALIASES: dict[str, str] = {
     "claude-3-5-haiku-latest": "claude-haiku-4-5",

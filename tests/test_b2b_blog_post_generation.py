@@ -434,6 +434,12 @@ async def test_run_uses_anthropic_batch_for_blog_first_pass(monkeypatch):
     class FakeAnthropicLLM:
         model = "claude-sonnet-4-5"
         name = "anthropic"
+        # ``_async_client`` is part of the AnthropicBatchableLLM
+        # Protocol surface (PR-A5d). It must exist for the structural
+        # isinstance check to pass; the loaded-ness of the SDK client
+        # is gated separately at production call sites via the
+        # companion ``getattr(llm, "_async_client", None)`` check.
+        _async_client = None
 
     class FakeDirectLLM:
         model = "anthropic/claude-sonnet-4-5"

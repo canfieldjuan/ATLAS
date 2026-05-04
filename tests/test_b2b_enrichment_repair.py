@@ -1745,6 +1745,12 @@ async def test_repair_rows_uses_anthropic_batch_when_enabled(monkeypatch):
         def __init__(self, model: str = "claude-haiku-4-5"):
             self.model = model
             self.name = "anthropic"
+            # ``_async_client`` is part of the AnthropicBatchableLLM
+            # Protocol surface (PR-A5d). The structural isinstance
+            # check requires the attribute to exist; the loaded-ness
+            # of the SDK client is gated separately at production
+            # call sites via the companion getattr check.
+            self._async_client = None
 
     row_id = uuid4()
     row = {
