@@ -253,17 +253,29 @@ class PodcastRepurposeService:
     def _normalize_formats(self, formats: Sequence[str] | None) -> tuple[str, ...]:
         configured = self._config.formats or SUPPORTED_FORMATS
         source: Sequence[str]
+        caller_supplied = formats is not None
         if formats is None:
             source = configured
         elif isinstance(formats, str):
             source = formats.split(",")
         else:
             source = formats
+        raw_values = [str(item or "").strip().lower() for item in source]
+        non_empty_inputs = [value for value in raw_values if value]
         out: list[str] = []
-        for item in source:
-            value = str(item or "").strip().lower()
-            if value and value in SUPPORTED_FORMATS and value not in out:
+        for value in non_empty_inputs:
+            if value in SUPPORTED_FORMATS and value not in out:
                 out.append(value)
+        # Fail loud when the caller asked for specific formats that are all
+        # unsupported. Silently dropping them would produce a successful-
+        # looking result with zero drafts.
+        if caller_supplied and non_empty_inputs and not out:
+            invalid = ", ".join(non_empty_inputs)
+            supported = ", ".join(SUPPORTED_FORMATS)
+            raise ValueError(
+                f"No supported formats in requested set ({invalid}). "
+                f"Supported: {supported}."
+            )
         return tuple(out)
 
     async def _episode_metadata(

@@ -85,9 +85,13 @@ def _transcript_from_row(row: Mapping[str, Any]) -> PodcastTranscript:
     publish_date = row.get("publish_date")
     if publish_date is not None and not isinstance(publish_date, str):
         publish_date = publish_date.isoformat() if hasattr(publish_date, "isoformat") else str(publish_date)
+    episode_id = str(row.get("episode_id") or "")
+    # Fall back to episode_id when no explicit title was provided so
+    # downstream prompts always see a non-empty title field.
+    title = str(row.get("title") or "").strip() or episode_id
     return PodcastTranscript(
-        episode_id=str(row.get("episode_id") or ""),
-        title=str(row.get("title") or ""),
+        episode_id=episode_id,
+        title=title,
         transcript_text=str(row.get("transcript_text") or ""),
         duration_seconds=_coerce_int(row.get("duration_seconds")),
         publish_date=publish_date,
@@ -130,11 +134,11 @@ class PostgresTranscriptRepository:
     ) -> Sequence[PodcastTranscript]:
         del filters
         table = _identifier(self.transcripts_table)
-        params: list[Any] = []
-        where = ["status = 'active'"]
-        if scope.account_id:
-            params.append(scope.account_id)
-            where.append(f"account_id = ${len(params)}")
+        # Empty string sentinel for "no tenant scope" — matches the migration
+        # default (NOT NULL DEFAULT '').
+        account_id = scope.account_id or ""
+        params: list[Any] = [account_id]
+        where = ["status = 'active'", "account_id = $1"]
         if episode_id is not None:
             params.append(str(episode_id))
             where.append(f"episode_id = ${len(params)}")
@@ -169,7 +173,9 @@ class PostgresIdeaRepository:
         if not ideas:
             return ()
         table = _identifier(self.ideas_table)
-        account_id = scope.account_id
+        # Coerce to '' so the ON CONFLICT (account_id, episode_id, rank)
+        # upsert actually fires for single-tenant inserts.
+        account_id = scope.account_id or ""
         saved: list[str] = []
         for idea in ideas:
             row = await self.pool.fetchrow(
@@ -216,11 +222,13 @@ class PostgresIdeaRepository:
         limit: int = 10,
     ) -> Sequence[PodcastIdea]:
         table = _identifier(self.ideas_table)
-        params: list[Any] = [episode_id]
-        where = ["status = 'active'", "episode_id = $1"]
-        if scope.account_id:
-            params.append(scope.account_id)
-            where.append(f"account_id = ${len(params)}")
+        account_id = scope.account_id or ""
+        params: list[Any] = [account_id, episode_id]
+        where = [
+            "status = 'active'",
+            "account_id = $1",
+            "episode_id = $2",
+        ]
         params.append(int(max(0, limit)))
         rows = await self.pool.fetch(
             f"""
@@ -252,7 +260,7 @@ class PostgresFormatDraftRepository:
         if not drafts:
             return ()
         table = _identifier(self.drafts_table)
-        account_id = scope.account_id
+        account_id = scope.account_id or ""
         saved: list[str] = []
         for draft in drafts:
             audit = dict(draft.quality_audit)

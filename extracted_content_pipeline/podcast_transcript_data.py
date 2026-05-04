@@ -397,9 +397,14 @@ def _row_to_transcript(row: Mapping[str, Any]) -> PodcastTranscript:
     raw_payload = row.get("raw_payload") or {}
     if not isinstance(raw_payload, Mapping):
         raw_payload = {}
+    episode_id = str(row.get("episode_id") or "")
+    # Fall back to episode_id when no explicit title was provided so
+    # downstream prompts always see a non-empty title field. The
+    # missing_title warning still fires earlier in normalization.
+    title = str(row.get("title") or "").strip() or episode_id
     return PodcastTranscript(
-        episode_id=str(row.get("episode_id") or ""),
-        title=str(row.get("title") or ""),
+        episode_id=episode_id,
+        title=title,
         transcript_text=str(row.get("transcript_text") or ""),
         duration_seconds=_coerce_int(row.get("duration_seconds")),
         publish_date=row.get("publish_date") or None,

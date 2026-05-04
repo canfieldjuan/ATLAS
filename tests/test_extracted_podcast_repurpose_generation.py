@@ -230,6 +230,31 @@ async def test_quality_audit_attached_to_metadata() -> None:
 
 
 @pytest.mark.asyncio
+async def test_repurpose_raises_when_all_formats_invalid() -> None:
+    ideas = [_make_idea(1)]
+    llm = _CountingLLM(lambda meta: _good_payload(meta["format_type"]))
+    drafts_repo = _DraftRepo()
+
+    service = PodcastRepurposeService(
+        ideas=_IdeaRepo(ideas),
+        transcripts=_TranscriptRepo([PodcastTranscript(episode_id="ep-77")]),
+        drafts=drafts_repo,
+        llm=llm,
+        skills=get_skill_registry(),
+        config=PodcastRepurposeConfig(idea_limit=1),
+    )
+
+    with pytest.raises(ValueError, match="No supported formats"):
+        await service.repurpose(
+            scope=TenantScope(account_id="a"),
+            episode_id="ep-77",
+            formats=("not_a_real_format", "also_not"),
+        )
+    assert llm.calls == []
+    assert drafts_repo.saved == []
+
+
+@pytest.mark.asyncio
 async def test_offline_llm_produces_passing_drafts_for_all_five_formats() -> None:
     ideas = [_make_idea(1)]
     drafts_repo = _DraftRepo()

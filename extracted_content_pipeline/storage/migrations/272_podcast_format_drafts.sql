@@ -4,7 +4,7 @@
 
 CREATE TABLE IF NOT EXISTS podcast_format_drafts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id TEXT,
+    account_id TEXT NOT NULL DEFAULT '',
     idea_id UUID NOT NULL REFERENCES podcast_extracted_ideas(id) ON DELETE CASCADE,
     episode_id TEXT NOT NULL,
     format_type TEXT NOT NULL

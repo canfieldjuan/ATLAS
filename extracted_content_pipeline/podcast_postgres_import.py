@@ -88,12 +88,15 @@ async def import_podcast_transcripts(
             source=source or loaded.source,
         )
 
-    account_id = (scope or TenantScope()).account_id
+    # Empty string is the sentinel for "no tenant scope". The migration sets
+    # account_id NOT NULL DEFAULT '' so the UNIQUE (account_id, episode_id)
+    # constraint actually prevents duplicates in single-tenant deployments.
+    account_id = (scope or TenantScope()).account_id or ""
     if replace_existing and episode_ids:
         await db.execute(
             f"""
             DELETE FROM {table}
-             WHERE account_id IS NOT DISTINCT FROM $1
+             WHERE account_id = $1
                AND episode_id = ANY($2::text[])
             """,
             account_id,

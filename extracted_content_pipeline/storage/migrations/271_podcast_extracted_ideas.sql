@@ -8,7 +8,7 @@
 
 CREATE TABLE IF NOT EXISTS podcast_extracted_ideas (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id TEXT,
+    account_id TEXT NOT NULL DEFAULT '',
     episode_id TEXT NOT NULL,
     rank INTEGER NOT NULL,
     summary TEXT NOT NULL,
