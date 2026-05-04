@@ -80,7 +80,7 @@ class InvoiceRepository:
                 )
                 VALUES (
                     $1,
-                    (SELECT $19 || '-' || to_char($13, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
+                    (SELECT $19 || '-' || to_char($13::date, 'YYYY-Mon') || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
                     $2, $3, $4, $5, $6,
                     $7::jsonb, $8, $9, $10, $11, $12,
                     $13, $14, 'draft', $15, $16, $17,
