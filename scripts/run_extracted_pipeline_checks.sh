@@ -25,9 +25,9 @@ pytest \
   tests/test_extracted_campaign_postgres_import.py \
   tests/test_extracted_content_pipeline_migration_runner.py \
   tests/test_extracted_pipeline_notify.py \
-  tests/test_extracted_reasoning_archetypes.py \
-  tests/test_extracted_reasoning_temporal.py \
-  tests/test_extracted_reasoning_evidence_engine.py \
+  tests/test_extracted_content_pipeline_reasoning_archetypes.py \
+  tests/test_extracted_content_pipeline_reasoning_temporal.py \
+  tests/test_extracted_content_pipeline_reasoning_evidence_engine.py \
   tests/test_extracted_product_utilities.py \
   tests/test_extracted_b2b_batch_utils.py \
   tests/test_extracted_blog_matching.py \
