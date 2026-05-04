@@ -182,15 +182,40 @@ def _shorts_spoiler_check(body: str, idea: Mapping[str, Any]) -> str | None:
     spoiler_text = spoiler_text.strip()
     if not spoiler_text:
         return None
-    body_lower = body.lower()
-    spoiler_lower = spoiler_text.lower()
-    if spoiler_lower not in body_lower:
+    # Spec: spoiler must not appear until the LAST SENTENCE OF THE BODY:
+    # SECTION (not the whole draft). Restrict the position check to the
+    # text between BODY: and the next labeled section (CTA: or end of
+    # body). A spoiler placed in CTA: should not satisfy the rule.
+    body_section = _extract_shorts_body_section(body)
+    if not body_section:
         return None
-    pos = body_lower.find(spoiler_lower)
-    tail_start = int(len(body) * (1 - _SHORTS_SPOILER_TAIL_FRACTION))
+    body_section_lower = body_section.lower()
+    spoiler_lower = spoiler_text.lower()
+    if spoiler_lower not in body_section_lower:
+        return None
+    pos = body_section_lower.find(spoiler_lower)
+    tail_start = int(len(body_section) * (1 - _SHORTS_SPOILER_TAIL_FRACTION))
     if pos < tail_start:
         return "spoiler_too_early"
     return None
+
+
+def _extract_shorts_body_section(body: str) -> str:
+    """Return the substring between ``BODY:`` and the next ``CTA:`` label.
+
+    Returns an empty string when ``BODY:`` is missing. When ``CTA:`` is
+    missing, returns everything after ``BODY:``.
+    """
+
+    body_marker = "BODY:"
+    cta_marker = "CTA:"
+    body_idx = body.find(body_marker)
+    if body_idx < 0:
+        return ""
+    section_start = body_idx + len(body_marker)
+    cta_idx = body.find(cta_marker, section_start)
+    section_end = cta_idx if cta_idx >= 0 else len(body)
+    return body[section_start:section_end].strip()
 
 
 def _quote_fidelity(body: str, quotes: list[str]) -> str | None:

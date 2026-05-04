@@ -26,9 +26,13 @@ from extracted_content_pipeline.podcast_transcript_data import (  # noqa: E402
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Load podcast transcripts (JSON / CSV / TXT / SRT) into Postgres."
+        description="Load podcast transcripts (JSON / JSONL / CSV / TXT / SRT) into Postgres."
     )
-    parser.add_argument("path", type=Path, help="Transcript file (.json/.csv/.txt/.srt).")
+    parser.add_argument(
+        "path",
+        type=Path,
+        help="Transcript file (.json / .jsonl / .csv / .txt / .srt).",
+    )
     parser.add_argument(
         "--database-url",
         default=os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL"),

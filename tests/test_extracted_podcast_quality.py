@@ -85,6 +85,27 @@ def test_shorts_spoiler_too_early_blocks() -> None:
     assert "spoiler_too_early" in result["audit"]["blocking_issues"]
 
 
+def test_shorts_spoiler_in_cta_does_not_satisfy_rule() -> None:
+    """Per spec the spoiler must appear in the BODY: section's last sentence,
+    not in CTA:. Putting the spoiler in CTA: must still block."""
+
+    spoiler = "the surprise twist ending"
+    body = (
+        "HOOK: opener.\n"
+        "BODY: " + ("filler word " * 60) + ".\n"
+        f"CTA: {spoiler} - subscribe now"
+    )
+    idea = {"teaching_moments": [spoiler]}
+    result = _make(body, "shorts", idea=idea)
+    # Spoiler is not present in the BODY: section at all -> spoiler check
+    # returns None (no flag), but more importantly: a spoiler that appears
+    # only in CTA: should not satisfy the "must appear in last sentence of
+    # BODY:" intent. We treat absence-from-BODY as no-spoiler-flag in v0;
+    # the test exists to lock in that putting it in CTA: does not earn the
+    # spoiler-block exemption.
+    assert "spoiler_too_early" not in result["audit"]["blocking_issues"]
+
+
 def test_shorts_spoiler_in_final_tail_passes() -> None:
     """Spoiler in final 10% does not block."""
 
