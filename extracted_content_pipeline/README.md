@@ -250,6 +250,12 @@ python scripts/send_extracted_campaigns.py \
   --limit 10
 ```
 
+Refresh campaign analytics after send or webhook updates:
+
+```bash
+python scripts/refresh_extracted_campaign_analytics.py --json
+```
+
 Progress due sequences and queue generated follow-up drafts:
 
 ```bash
@@ -347,6 +353,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_postgres_export.py`: read-only draft export for host review flows
 - `campaign_postgres_send.py`: DB-backed queued send runner that composes the
   campaign, suppression, audit, and sender ports for host worker CLIs
+- `campaign_postgres_analytics.py`: DB-backed analytics refresh runner that
+  composes campaign and audit ports for host worker CLIs
 - `campaign_postgres_sequence_progression.py`: DB-backed due-sequence worker
   that composes the sequence, audit, LLM, and skill ports for follow-up
   generation
