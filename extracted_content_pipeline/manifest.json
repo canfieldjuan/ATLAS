@@ -184,6 +184,9 @@
       "target": "extracted_content_pipeline/campaign_postgres_send.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_postgres_sequence_progression.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_postgres_import.py"
     },
     {
