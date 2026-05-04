@@ -131,7 +131,11 @@ async def review_campaign_drafts(
                        THEN COALESCE(campaign.approved_at, NOW())
                        ELSE campaign.approved_at
                    END,
-                   from_email = COALESCE(${from_email_position}::text, campaign.from_email),
+                   from_email = CASE
+                       WHEN ${status_position} = 'queued'
+                       THEN COALESCE(${from_email_position}::text, campaign.from_email)
+                       ELSE campaign.from_email
+                   END,
                    metadata = COALESCE(campaign.metadata, '{{}}'::jsonb) || ${patch_position}::jsonb,
                    updated_at = NOW()
               FROM matched

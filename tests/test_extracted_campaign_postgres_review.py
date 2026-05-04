@@ -109,7 +109,8 @@ async def test_review_campaign_drafts_queues_with_from_email() -> None:
 
     query, args = pool.fetch_calls[0]
     assert "approved_at = CASE" in query
-    assert "from_email = COALESCE($5::text, campaign.from_email)" in query
+    assert "from_email = CASE" in query
+    assert "THEN COALESCE($5::text, campaign.from_email)" in query
     assert args == (
         ["00000000-0000-0000-0000-000000000001"],
         ["draft", "approved"],
@@ -131,7 +132,10 @@ async def test_review_campaign_drafts_only_stamps_from_email_when_queueing() -> 
     )
 
     query, args = pool.fetch_calls[0]
-    assert "from_email = COALESCE($5::text, campaign.from_email)" in query
+    assert "from_email = CASE" in query
+    assert "WHEN $3 = 'queued'" in query
+    assert "THEN COALESCE($5::text, campaign.from_email)" in query
+    assert "ELSE campaign.from_email" in query
     assert args == (
         ["00000000-0000-0000-0000-000000000001"],
         ["draft"],
