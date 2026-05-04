@@ -8,6 +8,7 @@ works in both modes:
 
   ATLAS_LLM_*               -> settings.llm.*
   ATLAS_B2B_CHURN_*         -> settings.b2b_churn.*
+  ATLAS_PROVIDER_COST_*     -> settings.provider_cost.*
   (FTL tracing fields)      -> settings.ftl_tracing.*
 
 Sub-configs:
@@ -16,6 +17,8 @@ Sub-configs:
   - ``ReasoningSubConfig`` (just ``model``)
   - ``ModelPricingConfig`` (per-model rates + ``cost_usd`` method)
   - ``FTLTracingSubConfig`` (FTL endpoint + pricing reference)
+  - ``ProviderCostSubConfig`` (provider-billing sync surface read by
+    ``services/provider_cost_sync.py`` and ``services/cost/openai_billing.py``)
 """
 
 from __future__ import annotations
@@ -222,6 +225,37 @@ class FTLTracingSubConfig(BaseModel):
     pricing: ModelPricingConfig = Field(default_factory=ModelPricingConfig)
 
 
+class ProviderCostSubConfig(BaseSettings):
+    """Provider billing sync configuration. Fields and validators mirror
+    ``atlas_brain.config.ProviderCostConfig`` so the same
+    ``ATLAS_PROVIDER_COST_*`` env vars work in both modes.
+
+    Read by:
+      - ``services/provider_cost_sync.py`` (snapshot + daily-cost upserts;
+        consumes ``snapshot_retention_days`` / ``daily_retention_days``)
+      - ``services/cost/openai_billing.py`` (uses ``getattr(...)`` so a
+        missing optional field is tolerated; the sub-config still mirrors
+        the atlas surface for the fields atlas exposes today).
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_PROVIDER_COST_",
+        env_file=(".env", ".env.local"),
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False)
+    interval_seconds: int = Field(default=3600, ge=300, le=86400)
+    sync_timeout_seconds: int = Field(default=20, ge=5, le=300)
+    snapshot_retention_days: int = Field(default=90, ge=7, le=730)
+    daily_retention_days: int = Field(default=365, ge=30, le=1825)
+    openrouter_enabled: bool = Field(default=True)
+    openrouter_api_key: str = Field(default="")
+    anthropic_enabled: bool = Field(default=False)
+    anthropic_admin_api_key: str = Field(default="")
+    anthropic_lookback_days: int = Field(default=7, ge=1, le=31)
+
+
 # ---------------------------------------------------------------------------
 # Top-level settings
 # ---------------------------------------------------------------------------
@@ -239,6 +273,7 @@ class LLMInfraSettings(BaseModel):
     b2b_churn: B2BChurnSubConfig = Field(default_factory=B2BChurnSubConfig)
     reasoning: ReasoningSubConfig = Field(default_factory=ReasoningSubConfig)
     ftl_tracing: FTLTracingSubConfig = Field(default_factory=FTLTracingSubConfig)
+    provider_cost: ProviderCostSubConfig = Field(default_factory=ProviderCostSubConfig)
 
 
 settings = LLMInfraSettings()

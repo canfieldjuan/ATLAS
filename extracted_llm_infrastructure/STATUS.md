@@ -84,7 +84,7 @@ Import contract is closed; runtime behavior is decoupled from `atlas_brain`-spec
 | `services/llm/hybrid.py` | ✅ | ✅ | 🔲 |
 | `services/llm/cloud.py` | ✅ | ✅ | 🔲 |
 | `services/tracing.py` | ✅ | ✅ | 🔲 |
-| `services/provider_cost_sync.py` (PR-A2) | ✅ | 🔲 (Phase 2 follow-up: standalone substrate for provider settings + db pool wrapper for snapshot/daily-cost upserts; lift uses default Atlas mode for now) | 🔲 |
+| `services/provider_cost_sync.py` (PR-A2) | ✅ | ✅ (PR-A6a added `ProviderCostSubConfig` to `_standalone/config.py`; module's `settings.provider_cost.{snapshot_retention_days, daily_retention_days, openrouter_enabled, anthropic_enabled, ...}` calls now resolve under standalone mode; db pool already env-gated via `_standalone/database.py`) | n/a |
 | `services/cost/__init__.py` (OWNED, PR-A3) | n/a | ✅ (no atlas imports; owned by extraction) | n/a |
 | `services/cost/cache_savings.py` (OWNED, PR-A3) | n/a | ✅ (asyncpg-pool-shaped; runs standalone with the local DatabasePool) | n/a |
 | `services/cost/openai_billing.py` (OWNED, PR-A4c) | n/a | ✅ (httpx + asyncpg-pool-shaped; settings.provider_cost lookup with env fallback) | 🔲 (Phase 3: unify with provider_cost_sync via ProviderBillingPort Protocol) |
