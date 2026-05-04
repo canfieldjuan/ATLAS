@@ -5,6 +5,10 @@ import hashlib
 import hmac
 import json
 
+import pytest
+
+pytest.importorskip("fastapi")
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 

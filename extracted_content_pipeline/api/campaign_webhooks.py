@@ -6,8 +6,18 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+try:
+    from fastapi import APIRouter, HTTPException, Query, Request
+    from fastapi.responses import HTMLResponse
+except ImportError as exc:  # pragma: no cover - exercised in dependency-light CI.
+    APIRouter = None
+    HTMLResponse = None
+    HTTPException = None
+    Query = None
+    Request = Any
+    _FASTAPI_IMPORT_ERROR: ImportError | None = exc
+else:
+    _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_postgres import PostgresSuppressionRepository
 from ..campaign_postgres_webhooks import ingest_resend_webhook_from_postgres
@@ -21,6 +31,15 @@ from ..campaign_webhooks import (
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 SigningSecretProvider = Callable[[], str | Awaitable[str]]
+
+
+def _require_fastapi() -> None:
+    if _FASTAPI_IMPORT_ERROR is None:
+        return
+    raise RuntimeError(
+        "FastAPI is required to create campaign webhook routes. "
+        "Install fastapi in the host application environment."
+    ) from _FASTAPI_IMPORT_ERROR
 
 
 @dataclass(frozen=True)
@@ -72,6 +91,7 @@ def create_campaign_webhook_router(
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted campaign webhook routes without Atlas globals."""
+    _require_fastapi()
     resolved_config = config or CampaignWebhookApiConfig()
     router = APIRouter(
         prefix=resolved_config.prefix,
