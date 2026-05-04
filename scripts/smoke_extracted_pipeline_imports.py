@@ -17,6 +17,18 @@ MODULES = [
     "extracted_content_pipeline.autonomous.tasks.article_enrichment",
     "extracted_content_pipeline.autonomous.tasks.b2b_vendor_briefing",
     "extracted_content_pipeline.autonomous.tasks.b2b_campaign_generation",
+    # Podcast repurposing surface (single-pass, host-installable).
+    "extracted_content_pipeline.podcast_ports",
+    "extracted_content_pipeline.podcast_transcript_data",
+    "extracted_content_pipeline.podcast_postgres_import",
+    "extracted_content_pipeline.podcast_extraction",
+    "extracted_content_pipeline.podcast_postgres",
+    "extracted_content_pipeline.podcast_postgres_extraction",
+    "extracted_content_pipeline.podcast_idea_data",
+    "extracted_content_pipeline.podcast_repurpose_generation",
+    "extracted_content_pipeline.podcast_postgres_repurpose",
+    "extracted_content_pipeline.podcast_example",
+    "extracted_content_pipeline.services.podcast_quality",
 ]
 
 

@@ -39,6 +39,10 @@ pytest \
   tests/test_extracted_campaign_sequence_progression.py \
   tests/test_extracted_campaign_sender.py \
   tests/test_extracted_campaign_send.py \
-  tests/test_extracted_campaign_webhooks.py
+  tests/test_extracted_campaign_webhooks.py \
+  tests/test_extracted_podcast_transcript_import.py \
+  tests/test_extracted_podcast_extraction.py \
+  tests/test_extracted_podcast_repurpose_generation.py \
+  tests/test_extracted_podcast_quality.py
 
 echo "All extracted_content_pipeline checks completed"
