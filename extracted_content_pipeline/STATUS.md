@@ -41,6 +41,10 @@
 - `campaign_postgres_send` provides a DB-backed queued send worker seam. Hosts
   inject a Resend or SES sender and reuse the product campaign, suppression,
   and audit ports to send rows already moved to `queued`.
+- `campaign_postgres_sequence_progression` provides a DB-backed follow-up
+  generation worker seam. Hosts reuse due `campaign_sequences` rows, packaged
+  or custom sequence prompts, and the product LLM port to queue the next
+  follow-up draft without importing Atlas scheduled-task code.
 - `storage.migration_runner` is product-owned and applies the packaged SQL
   migrations through a host-provided async pool or connection. The
   `scripts/run_extracted_content_pipeline_migrations.py` CLI wires it to

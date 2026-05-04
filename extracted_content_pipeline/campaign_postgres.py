@@ -423,13 +423,20 @@ class PostgresCampaignSequenceRepository:
     ) -> Sequence[JsonDict]:
         rows = await self.pool.fetch(
             """
-            SELECT *
-              FROM campaign_sequences
-             WHERE status = 'active'
-               AND next_step_after IS NOT NULL
-               AND next_step_after <= $1
-               AND recipient_email IS NOT NULL
-             ORDER BY next_step_after ASC
+            SELECT cs.*
+              FROM campaign_sequences cs
+             WHERE cs.status = 'active'
+               AND cs.next_step_after IS NOT NULL
+               AND cs.next_step_after <= $1
+               AND cs.recipient_email IS NOT NULL
+               AND COALESCE(cs.current_step, 0) < COALESCE(cs.max_steps, 0)
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM b2b_campaigns bc
+                    WHERE bc.sequence_id = cs.id
+                      AND bc.status = 'queued'
+               )
+             ORDER BY cs.next_step_after ASC
              LIMIT $2
             """,
             now,
