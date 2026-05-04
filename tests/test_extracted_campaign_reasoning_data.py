@@ -10,6 +10,9 @@ from extracted_content_pipeline.campaign_reasoning_data import (
     load_campaign_reasoning_context_provider,
     load_reasoning_provider_port,
 )
+from extracted_content_pipeline.services.reasoning_provider_port import (
+    CampaignReasoningProviderPort,
+)
 
 
 @pytest.mark.asyncio
@@ -166,4 +169,10 @@ def test_load_reasoning_provider_port_is_protocol_compatible(tmp_path) -> None:
 
     provider = load_reasoning_provider_port(path)
 
+    # Verify the loader returns the concrete File implementation AND that the
+    # implementation satisfies the runtime-checkable Protocol -- this is what
+    # the test name promises. Without the Protocol assertion, the test would
+    # still pass if FileCampaignReasoningContextProvider stopped satisfying
+    # CampaignReasoningProviderPort.
     assert isinstance(provider, FileCampaignReasoningContextProvider)
+    assert isinstance(provider, CampaignReasoningProviderPort)
