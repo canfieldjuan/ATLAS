@@ -225,6 +225,13 @@ python scripts/run_extracted_campaign_generation_postgres.py \
 Use `--skills-root customer_skills` on the Postgres runner for the same
 host-prompt override behavior.
 
+Export generated drafts for review without writing SQL:
+
+```bash
+python scripts/export_extracted_campaign_drafts.py --account-id acct_123 --limit 20
+python scripts/export_extracted_campaign_drafts.py --account-id acct_123 --format csv --output campaign_drafts.csv
+```
+
 ## Import smoke test
 
 ```bash
@@ -307,6 +314,7 @@ Several small utility shims provide product-owned local behavior by default so t
   `PostgresIntelligenceRepository`, `PostgresCampaignRepository`,
   `PipelineLLMClient`, and the local skill registry for DB-backed draft
   generation
+- `campaign_postgres_export.py`: read-only draft export for host review flows
 - `campaign_postgres_import.py`: JSON/CSV customer opportunity import into the
   product `campaign_opportunities` table
 - `storage/repositories/scheduled_task.py`: local execution metadata updater

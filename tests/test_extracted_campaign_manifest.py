@@ -22,6 +22,7 @@ CORE_CAMPAIGN_MIGRATIONS = {
 
 PRODUCT_OWNED_CAMPAIGN_MIGRATIONS = {
     "151_campaign_opportunities.sql",
+    "152_campaign_draft_export_indexes.sql",
 }
 
 DEFERRED_CROSS_PRODUCT_MIGRATIONS = {
@@ -95,9 +96,14 @@ def test_product_owned_campaign_migrations_define_product_tables() -> None:
     migrations_dir = ROOT / "extracted_content_pipeline/storage/migrations"
 
     opportunity_schema = (migrations_dir / "151_campaign_opportunities.sql").read_text()
+    export_indexes_schema = (
+        migrations_dir / "152_campaign_draft_export_indexes.sql"
+    ).read_text()
 
     assert "CREATE TABLE IF NOT EXISTS campaign_opportunities" in opportunity_schema
     assert "idx_campaign_opportunities_account_mode" in opportunity_schema
+    assert "idx_b2b_campaigns_scope_account_created" in export_indexes_schema
+    assert "idx_b2b_campaigns_vendor_created" in export_indexes_schema
 
 
 def test_manifest_tracks_product_owned_adapter_files() -> None:
@@ -113,6 +119,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/campaign_opportunities.py" in owned
     assert "extracted_content_pipeline/settings.py" in owned
     assert "extracted_content_pipeline/storage/migrations/151_campaign_opportunities.sql" in owned
+    assert "extracted_content_pipeline/storage/migrations/152_campaign_draft_export_indexes.sql" in owned
     assert "extracted_content_pipeline/reasoning/archetypes.py" in owned
     assert "extracted_content_pipeline/reasoning/temporal.py" in owned
     assert "extracted_content_pipeline/reasoning/evidence_engine.py" in owned
