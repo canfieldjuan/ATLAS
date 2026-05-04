@@ -34,6 +34,7 @@ pytest \
   tests/test_extracted_reasoning_core_api.py \
   tests/test_extracted_reasoning_core_archetypes.py \
   tests/test_extracted_reasoning_core_evidence_engine.py \
+  tests/test_extracted_reasoning_core_event_trace_ports.py \
   tests/test_extracted_reasoning_core_pack_registry.py \
   tests/test_extracted_reasoning_core_semantic_cache_keys.py \
   tests/test_extracted_reasoning_core_temporal.py \
