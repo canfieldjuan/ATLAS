@@ -15,6 +15,7 @@ on:
       - "tests/test_extracted_competitive_manifest.py"
       - "tests/test_extracted_competitive_cross_vendor_selection.py"
       - "tests/test_extracted_competitive_prompt_contracts.py"
+      - "tests/test_extracted_competitive_ecosystem_port.py"
       # Atlas source paths the manifest snapshots from. If any of these
       # change without a corresponding scaffold sync, the validate step
       # catches the drift.
@@ -51,6 +52,7 @@ on:
       - "tests/test_extracted_competitive_manifest.py"
       - "tests/test_extracted_competitive_cross_vendor_selection.py"
       - "tests/test_extracted_competitive_prompt_contracts.py"
+      - "tests/test_extracted_competitive_ecosystem_port.py"
       - "atlas_brain/mcp/b2b/vendor_registry.py"
       - "atlas_brain/mcp/b2b/displacement.py"
       - "atlas_brain/mcp/b2b/cross_vendor.py"
