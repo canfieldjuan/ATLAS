@@ -23,6 +23,7 @@ MODULES = [
     "extracted_competitive_intelligence.services.protocols",
     "extracted_competitive_intelligence.services.llm_router",
     "extracted_competitive_intelligence.services.vendor_registry",
+    "extracted_competitive_intelligence.services.vendor_target_selection",
     "extracted_competitive_intelligence.services.campaign_sender",
     "extracted_competitive_intelligence.services.crm_provider",
     "extracted_competitive_intelligence.services.email_provider",
@@ -154,6 +155,7 @@ def main() -> int:
 
     owned_files = (
         ROOT / "extracted_competitive_intelligence" / "services" / "vendor_registry.py",
+        ROOT / "extracted_competitive_intelligence" / "services" / "vendor_target_selection.py",
         ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "vendor_registry.py",
         ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "displacement.py",
         ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "cross_vendor.py",

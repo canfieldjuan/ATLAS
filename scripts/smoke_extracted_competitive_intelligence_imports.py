@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 
 MODULES = [
     "extracted_competitive_intelligence.services.vendor_registry",
+    "extracted_competitive_intelligence.services.vendor_target_selection",
     "extracted_competitive_intelligence.mcp.b2b.vendor_registry",
     "extracted_competitive_intelligence.mcp.b2b.displacement",
     "extracted_competitive_intelligence.mcp.b2b.cross_vendor",
