@@ -98,18 +98,15 @@ This is the same pattern PR-C4c (#192) is doing for `EventSink`/`TraceSink` in `
 
 ### M6 / PR-6 — Migration runbook + compatibility matrix
 
+**Status**: ✅ shipped via this PR — `docs/hybrid_reasoning_compatibility_matrix.md`.
+
 **Plan as written**: two new docs (`docs/hybrid_reasoning_migration_runbook.md`, `docs/hybrid_reasoning_compatibility_matrix.md`).
 
-**Reality check**: We already have `docs/reasoning_provider_port_migration.md` (#198) and `docs/hybrid_pr_body_template.md` (#198). Either rename the missing two to those, or fold them into a single runbook. PR-6's value is mostly checklist content — a 2-day doc PR.
+**What shipped instead**: a single consolidated `docs/hybrid_reasoning_compatibility_matrix.md` that contains the matrix, a 4-dimension decision rubric (ontology / evidence / output-contract / lineage), a 5-minute walk-through checklist, anti-patterns, and pointers to the two existing migration / scope-guard docs (`docs/reasoning_provider_port_migration.md` from #198 and `docs/hybrid_scope_guard.md` from #195) rather than duplicating them. The "migration runbook" the plan called for is already covered by those two docs; M6's actual value-add is the *decision* layer that sits above implementation.
 
-Bare-minimum content for the compatibility matrix:
+The matrix is filled out for the 8 known / likely domains: `vendor_pressure`, `call_transcript`, `competitive_intel`, `content_ops`, `company_entity`, `support_ticket`, `contract_clause`, plus a hypothetical graph-reasoning case as the canonical "rebuild" example. Six of the eight resolve to **reuse** with a ~200-line additive PR mirroring `call_transcript`; one is a separate role (`content_ops` data-input port — see PR #235); one is the rebuild escalation path.
 
-| Product | Reasoning ontology | Evidence semantics | Recommended path |
-|---|---|---|---|
-| Churn intelligence | vendor-pressure / displacement | `b2b_review_evidence_atoms` | reuse producer (`b2b_reasoning_synthesis`) |
-| Content ops | campaign-pain / wedge | host-provided via `CampaignReasoningProviderPort` | reuse consumer contract; producer host-owned |
-| Competitive intel | cross-vendor-edge | shared with churn | reuse producer; gate via `_b2b_cross_vendor_synthesis` |
-| New product domain X | (TBD) | (TBD) | rebuild producer if ontology diverges |
+This **closes the M1–M6 hybrid extraction program**. After M6 lands, the next reasoning use case — call transcripts, company entities, support tickets, anything else a user wants — is a small additive PR with no platform-coordination cost.
 
 ---
 
@@ -118,22 +115,22 @@ Bare-minimum content for the compatibility matrix:
 PRs that close out the deferred items from M5-β / M5-γ:
 
 - **Wire b2b regression tests into CI** — *resolved in PR #229
-  (open, awaiting merge)*. Adds the two regression tests to
+  (merged)*. Adds the two regression tests to
   `.github/workflows/extracted_competitive_intelligence_checks.yml`
   (the heavier CI tier that already does
   `pip install -r requirements.txt` and so already carries
   `apscheduler` / `asyncpg` / `mcp` / `torch` — no install-line
   expansion needed).
 - **Lineage / freshness in the typed envelope** — *resolved in PR
-  #232 (open, awaiting merge)*. Threads `view.reference_ids` /
+  #232 (merged)*. Threads `view.reference_ids` /
   `view.as_of_date_iso` (property) /
   `view.confidence("causal_narrative")` through the synthesis-view
   wrapper into `DomainReasoningResult.reference_ids` / `as_of` /
   `confidence_label`. Wire shape preserved (consumer projections
   still don't surface the new fields; that's a follow-up).
 - **Provider-port retyping (`CampaignReasoningProviderPort` →
-  `ReasoningProducerPort[...]`)** — *resolved in this PR (open,
-  awaiting merge) as not-applicable*.
+  `ReasoningProducerPort[...]`)** — *resolved in PR #235 (merged) as
+  not-applicable*.
   On closer inspection, `CampaignReasoningProviderPort` is a
   **data-input provider** for the campaign generator, not a reasoning
   compute port. It returns a `CampaignReasoningContext` (anchor
