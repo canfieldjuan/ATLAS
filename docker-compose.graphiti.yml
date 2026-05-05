@@ -44,7 +44,9 @@ services:
     environment:
       # Override for Docker networking
       NEO4J_URI: bolt://neo4j:7687
-      OPENAI_BASE_URL: http://host.docker.internal:11434/v1
+      # OPENAI_BASE_URL is now sourced from graphiti-wrapper/.env so we
+      # can switch between OpenRouter (default) and local Ollama without
+      # editing this compose file. For Ollama use http://host.docker.internal:11434/v1
       HF_TOKEN: ${HF_TOKEN:-}
       HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /root/.cache/huggingface

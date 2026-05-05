@@ -27,6 +27,7 @@ python -m pytest -q \
   tests/test_extracted_competitive_batch_utils.py \
   tests/test_extracted_competitive_llm_router_bridge.py \
   tests/test_extracted_competitive_battle_card_ports.py \
+  tests/test_extracted_competitive_vendor_briefing_delivery.py \
   tests/test_extracted_competitive_vendor_briefing_ports.py \
   tests/test_extracted_competitive_sets.py \
   tests/test_extracted_competitive_synthesis_packets.py \

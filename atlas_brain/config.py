@@ -14,6 +14,31 @@ ENV_FILES = (".env", ".env.local")
 DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
 
 
+class LLMGatewayConfig(BaseSettings):
+    """LLM Gateway product-level configuration (PR-D6b+).
+
+    Settings that scope to the customer-facing /api/v1/llm/* surface.
+    Distinct from ``b2b_churn`` (atlas's internal pipeline) so flags
+    like the exact cache can be toggled per product without coupling.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_LLM_GATEWAY_",
+        env_file=ENV_FILES,
+        extra="ignore",
+    )
+
+    exact_cache_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable exact-match Postgres caching for customer-facing "
+            "/api/v1/llm/chat calls. Reuses the b2b_llm_exact_cache "
+            "table with namespace='llm_gateway.chat' and per-account "
+            "scoping (PR-D3 migration 314)."
+        ),
+    )
+
+
 class SaaSAuthConfig(BaseSettings):
     """SaaS authentication and billing configuration."""
 
@@ -3055,6 +3080,42 @@ class B2BChurnConfig(BaseSettings):
     vendor_briefing_enabled: bool = Field(default=True, description="Enable vendor intelligence briefing emails")
     vendor_briefing_booking_url: str = Field(default="https://churnsignals.co", description="Booking URL for briefing CTA button")
     vendor_briefing_sender_name: str = Field(default="Atlas Intelligence", description="Display name for briefing sender")
+    vendor_briefing_standard_churn_subject_template: str = Field(
+        default="Churn Intelligence Briefing: {vendor_name}",
+        description="Subject template for standard churn vendor briefings",
+    )
+    vendor_briefing_standard_sales_subject_template: str = Field(
+        default="Sales Intelligence Briefing: {vendor_name}",
+        description="Subject template for standard sales/challenger vendor briefings",
+    )
+    vendor_briefing_prospect_churn_subject_template: str = Field(
+        default="{vendor_name} -- Churn Signals Detected",
+        description="Subject template for prospect-mode churn vendor briefings",
+    )
+    vendor_briefing_prospect_sales_subject_template: str = Field(
+        default="{vendor_name} -- Accounts In Motion",
+        description="Subject template for prospect-mode sales/challenger vendor briefings",
+    )
+    vendor_briefing_gated_churn_subject_template: str = Field(
+        default="Your {vendor_name} Churn Intelligence Report",
+        description="Subject template for gated churn report delivery",
+    )
+    vendor_briefing_gated_sales_subject_template: str = Field(
+        default="Your {vendor_name} Sales Intelligence Report",
+        description="Subject template for gated sales/challenger report delivery",
+    )
+    vendor_briefing_tag_type_name: str = Field(
+        default="type",
+        description="Provider tag name used to identify vendor briefing email type",
+    )
+    vendor_briefing_tag_type_value: str = Field(
+        default="vendor_briefing",
+        description="Provider tag value used to identify vendor briefing emails",
+    )
+    vendor_briefing_tag_vendor_name: str = Field(
+        default="vendor",
+        description="Provider tag name used for the vendor attached to a briefing email",
+    )
     vendor_briefing_cooldown_days: int = Field(default=7, description="Min days between briefings to same vendor")
     vendor_briefing_max_per_batch: int = Field(default=10, description="Max briefings per batch send run")
     vendor_briefing_timeout_seconds: int = Field(default=1800, description="Task timeout for vendor briefing batch")
@@ -5480,6 +5541,7 @@ class Settings(BaseSettings):
     news_intel: NewsIntelligenceConfig = Field(default_factory=NewsIntelligenceConfig)
     provider_cost: ProviderCostConfig = Field(default_factory=ProviderCostConfig)
     saas_auth: SaaSAuthConfig = Field(default_factory=SaaSAuthConfig)
+    llm_gateway: LLMGatewayConfig = Field(default_factory=LLMGatewayConfig)
 
     # Reasoning agent (cross-domain event-driven intelligence)
     @staticmethod

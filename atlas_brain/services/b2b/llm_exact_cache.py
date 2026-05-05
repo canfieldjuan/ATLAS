@@ -30,6 +30,35 @@ def is_b2b_llm_exact_cache_enabled() -> bool:
     return bool(getattr(settings.b2b_churn, "llm_exact_cache_enabled", False))
 
 
+# Namespace prefix that routes to the customer-facing LLM Gateway
+# product (PR-D6b). Cache rows written with ``namespace`` starting
+# with this prefix are gated by ``settings.llm_gateway.exact_cache_enabled``
+# rather than the B2B flag, so atlas's internal pipeline and the
+# Gateway can be toggled independently.
+LLM_GATEWAY_NAMESPACE_PREFIX = "llm_gateway."
+
+
+def is_llm_gateway_exact_cache_enabled() -> bool:
+    """Return whether the LLM Gateway product's exact cache is enabled."""
+    from ...config import settings
+
+    return bool(
+        getattr(
+            getattr(settings, "llm_gateway", None),
+            "exact_cache_enabled",
+            False,
+        )
+    )
+
+
+def _is_cache_enabled_for_namespace(namespace: str) -> bool:
+    """Dispatch the enablement check on the namespace prefix so the
+    B2B and LLM Gateway products own their own feature flags."""
+    if namespace.startswith(LLM_GATEWAY_NAMESPACE_PREFIX):
+        return is_llm_gateway_exact_cache_enabled()
+    return is_b2b_llm_exact_cache_enabled()
+
+
 def _normalize_maybe_json_string(value: str) -> Any:
     stripped = value.strip()
     if stripped and stripped[0] in "{[":
@@ -247,7 +276,7 @@ async def lookup_cached_text(
     so cross-tenant hits are impossible -- the (cache_key, account_id)
     composite PK guarantees isolation at the storage layer.
     """
-    if not namespace or not is_b2b_llm_exact_cache_enabled():
+    if not namespace or not _is_cache_enabled_for_namespace(namespace):
         return None
 
     db_pool = _resolve_pool(pool)
@@ -311,7 +340,7 @@ async def store_cached_text(
         not namespace
         or not response_text
         or not str(response_text).strip()
-        or not is_b2b_llm_exact_cache_enabled()
+        or not _is_cache_enabled_for_namespace(namespace)
     ):
         return False
 
