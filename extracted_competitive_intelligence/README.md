@@ -27,7 +27,7 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | `mcp/b2b/write_intelligence.py` | Write-back MCP tools for persisting conclusions |
 | `services/b2b/source_impact.py` | Source impact ledger (which sources feed which products) |
 | `services/b2b/battle_card_ports.py` | Host port for battle-card shared helper, data-read, synthesis-reader, and webhook support |
-| `services/b2b/vendor_briefing_ports.py` | Host port for vendor briefing evidence, scorecard, and synthesis-reader support |
+| `services/b2b/vendor_briefing_ports.py` | Host port for vendor briefing evidence, scorecard, synthesis-reader, and LLM/cache support |
 | `services/b2b/product_claim.py` | Compatibility surface for `extracted_quality_gate.product_claim` |
 | `autonomous/tasks/b2b_battle_cards.py` | Deterministic battle card builder + LLM overlay (~5K LOC) |
 | `autonomous/tasks/b2b_vendor_briefing.py` | Vendor churn briefing assembly + Resend send |
@@ -45,7 +45,7 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 ## What's out of scope (remaining Phase 3)
 
 - Deep runtime decoupling for remaining battle-card and vendor-briefing task
-  dependencies outside the LLM and vendor-intelligence reader surfaces.
+  dependencies outside the ported LLM/cache and vendor-intelligence reader surfaces.
 - API endpoint extraction beyond the briefing endpoints (`/b2b/win-loss`, dashboard endpoints stay in atlas_brain)
 - Full runtime exercise without `atlas_brain` on `sys.path`; this slice adds the standalone substrate and smoke coverage, but deep task modules still carry Atlas-owned domain dependencies.
 
@@ -53,7 +53,7 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 
 | Dependency | Status | Notes |
 |---|---|---|
-| **LLM Infrastructure** | extracted package available | Standalone bridge delegates to `extracted_llm_infrastructure`; task-level LLM seams remain Phase 3 work |
+| **LLM Infrastructure** | extracted package available | Standalone bridges and support ports delegate to `extracted_llm_infrastructure` where hosts do not provide adapters |
 | **Evidence claims** | atlas-core | `services/b2b/evidence_claim_*.py` is shared with churn intel — keep central |
 | **Campaign suppression** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured `SuppressionPolicy` |
 | **Campaign sender (Resend)** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured campaign sender |
@@ -74,7 +74,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `services/b2b/llm_exact_cache.py` uses `extracted_llm_infrastructure` for standalone battle-card prompt envelopes
 - `services/b2b/anthropic_batch.py` uses `extracted_llm_infrastructure` for standalone battle-card batch overlays
 - `services/b2b/battle_card_ports.py` exposes fail-closed host ports for battle-card shared helper, data-read, churn-scope, execution-progress, synthesis-reader, and webhook support
-- `services/b2b/vendor_briefing_ports.py` exposes fail-closed host ports for vendor briefing evidence, scorecard, and synthesis-reader support
+- `services/b2b/vendor_briefing_ports.py` exposes fail-closed host ports for vendor briefing evidence, scorecard, and synthesis-reader support, plus standalone-safe LLM/cache runtime bridges
 - `services/protocols.py`, `services/llm_router.py`, and `pipelines/llm.py` use `extracted_llm_infrastructure`
 - `services/scraping/sources.py` owns the source enum and classification sets locally
 - MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed
@@ -146,10 +146,12 @@ helpers; Atlas uses the default bridge, while standalone competitive hosts must
 register explicit support adapters.
 
 `services/b2b/vendor_briefing_ports.py` is a product-owned host port for vendor
-briefing evidence, scorecard, and synthesis-reader support. The mapped vendor
-briefing task no longer imports `_b2b_shared.py` or `_b2b_synthesis_reader.py`
-directly for those helpers; Atlas uses the default bridge, while standalone
-competitive hosts must register explicit support adapters.
+briefing evidence, scorecard, synthesis-reader, and LLM/cache support. Evidence
+and synthesis readers fail closed without a host adapter in standalone mode;
+LLM/cache runtime helpers use the existing standalone-safe extracted LLM
+bridges. The mapped vendor briefing task no longer imports `_b2b_shared.py`,
+`_b2b_synthesis_reader.py`, `cache_runner.py`, `pipelines/llm.py`,
+`llm_router.py`, or `protocols.py` directly for those helpers.
 
 `services/b2b/product_claim.py` is a product-owned compatibility surface over
 `extracted_quality_gate.product_claim`. Competitive Intelligence consumes the

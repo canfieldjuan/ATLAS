@@ -167,6 +167,40 @@ class RecordingVendorBriefingPort:
         self.calls.append(("load_prior_reasoning_snapshots", ",".join(vendor_names)))
         return {vendor: {"before_date": before_date} for vendor in vendor_names}
 
+    def normalize_openrouter_model(self, model, *, context=""):
+        self.calls.append(("normalize_openrouter_model", context))
+        return f"normalized:{model}"
+
+    def clean_llm_output(self, text):
+        self.calls.append(("clean_llm_output", text))
+        return text.strip()
+
+    def get_campaign_llm(self):
+        self.calls.append(("get_campaign_llm", "campaign"))
+        return SimpleNamespace(provider="fake", model="fake-model")
+
+    def build_llm_messages(self, system_prompt, user_prompt):
+        self.calls.append(("build_llm_messages", system_prompt))
+        return [
+            SimpleNamespace(role="system", content=system_prompt),
+            SimpleNamespace(role="user", content=user_prompt),
+        ]
+
+    def prepare_b2b_exact_stage_request(self, stage_id, **kwargs):
+        self.calls.append(("prepare_b2b_exact_stage_request", stage_id))
+        return {"stage_id": stage_id, "kwargs": kwargs}
+
+    async def lookup_b2b_exact_stage_text(self, request):
+        self.calls.append(("lookup_b2b_exact_stage_text", request["stage_id"]))
+        return {"response_text": " cached "}
+
+    async def store_b2b_exact_stage_text(self, request, **kwargs):
+        self.calls.append(("store_b2b_exact_stage_text", request["stage_id"]))
+        return bool(kwargs)
+
+    def trace_llm_call(self, span_name, **kwargs):
+        self.calls.append(("trace_llm_call", span_name))
+
 
 def test_vendor_briefing_module_imports_in_standalone_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EXTRACTED_PIPELINE_STANDALONE", "1")
@@ -233,6 +267,7 @@ async def test_vendor_briefing_synthesis_helpers_use_configured_port(
         )
     finally:
         port_module.configure_vendor_briefing_intelligence_port(None)
+        port_module.configure_vendor_briefing_runtime_port(None)
 
     assert entry == {"requested_as_of": "2026-05-05"}
     assert loaded.vendor_name == "Acme"
@@ -247,6 +282,55 @@ async def test_vendor_briefing_synthesis_helpers_use_configured_port(
         ("load_synthesis_view", "Acme"),
         ("load_best_reasoning_view", "Acme"),
         ("load_prior_reasoning_snapshots", "Acme,Beta"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_vendor_briefing_runtime_helpers_use_configured_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXTRACTED_PIPELINE_STANDALONE", "1")
+    port_module = importlib.import_module(
+        "extracted_content_pipeline.services.b2b.vendor_briefing_ports"
+    )
+    port = RecordingVendorBriefingPort()
+    port_module.configure_vendor_briefing_intelligence_port(port)
+
+    try:
+        llm = port_module.get_campaign_llm()
+        messages = port_module.build_llm_messages("system", "user")
+        request = port_module.prepare_b2b_exact_stage_request(
+            "stage.account_card",
+            llm=llm,
+            messages=messages,
+        )
+        cached = await port_module.lookup_b2b_exact_stage_text(request)
+        stored = await port_module.store_b2b_exact_stage_text(
+            request,
+            response_text="raw",
+        )
+        port_module.trace_llm_call("task.vendor_briefing")
+        normalized = port_module.normalize_openrouter_model("model", context="ctx")
+        cleaned = port_module.clean_llm_output(" raw ")
+    finally:
+        port_module.configure_vendor_briefing_intelligence_port(None)
+        port_module.configure_vendor_briefing_runtime_port(None)
+
+    assert normalized == "normalized:model"
+    assert cleaned == "raw"
+    assert messages[0].role == "system"
+    assert request["stage_id"] == "stage.account_card"
+    assert cached == {"response_text": " cached "}
+    assert stored is True
+    assert port.calls == [
+        ("get_campaign_llm", "campaign"),
+        ("build_llm_messages", "system"),
+        ("prepare_b2b_exact_stage_request", "stage.account_card"),
+        ("lookup_b2b_exact_stage_text", "stage.account_card"),
+        ("store_b2b_exact_stage_text", "stage.account_card"),
+        ("trace_llm_call", "task.vendor_briefing"),
+        ("normalize_openrouter_model", "ctx"),
+        ("clean_llm_output", " raw "),
     ]
 
 
