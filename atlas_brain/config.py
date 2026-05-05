@@ -65,10 +65,24 @@ class SaaSAuthConfig(BaseSettings):
     stripe_vendor_standard_price_id: str = Field(default="", description="Stripe Price ID for Vendor Standard ($499/mo)")
     stripe_vendor_pro_price_id: str = Field(default="", description="Stripe Price ID for Vendor Pro ($1,499/mo)")
 
+    # API key (LLM Gateway, PR-D1) -- HMAC pepper for hashing customer API keys.
+    # Pepper is server-wide; raw keys are 160-bit random so a per-key salt
+    # would only add cost. The default sentinel "api-key-pepper-change-me"
+    # is rejected when SaaS auth is enabled.
+    api_key_pepper: str = Field(
+        default="api-key-pepper-change-me",
+        description=(
+            "Server-wide pepper used to HMAC-hash customer API keys "
+            "before storage. Required when SaaS auth is enabled."
+        ),
+    )
+
     @model_validator(mode="after")
     def _validate_secrets(self):
         if self.enabled and self.jwt_secret == "change-me-in-production":
             raise ValueError("ATLAS_SAAS_JWT_SECRET must be set when SaaS auth is enabled")
+        if self.enabled and self.api_key_pepper == "api-key-pepper-change-me":
+            raise ValueError("ATLAS_SAAS_API_KEY_PEPPER must be set when SaaS auth is enabled")
         if self.stripe_secret_key and not self.stripe_webhook_secret:
             import warnings
             warnings.warn(
