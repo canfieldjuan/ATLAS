@@ -455,6 +455,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_postgres_seller_opportunities.py`: prepares Amazon seller
   `campaign_opportunities` rows from seller targets and cached category
   intelligence snapshots
+- `campaign_postgres_seller_category_intelligence.py`: refreshes broad Amazon
+  seller category snapshots from review and product metadata tables
 - `campaign_postgres_send.py`: DB-backed queued send runner that composes the
   campaign, suppression, audit, and sender ports for host worker CLIs
 - `campaign_postgres_analytics.py`: DB-backed analytics refresh runner that

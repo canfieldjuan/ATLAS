@@ -121,6 +121,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/campaign_postgres_review.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_seller_targets.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_seller_opportunities.py" in owned
+    assert "extracted_content_pipeline/campaign_postgres_seller_category_intelligence.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_send.py" in owned
     assert "extracted_content_pipeline/campaign_example.py" in owned
     assert "extracted_content_pipeline/campaign_customer_data.py" in owned
@@ -168,6 +169,7 @@ def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
     assert "extracted_content_pipeline/campaign_postgres_webhooks.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_seller_targets.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_seller_opportunities.py" not in mapped
+    assert "extracted_content_pipeline/campaign_postgres_seller_category_intelligence.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_send.py" not in mapped
     assert "extracted_content_pipeline/campaign_example.py" not in mapped
     assert "extracted_content_pipeline/campaign_customer_data.py" not in mapped

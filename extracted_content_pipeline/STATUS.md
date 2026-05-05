@@ -49,6 +49,10 @@
   `category_intelligence_snapshots`, giving hosts a standalone bridge from
   seller recipients plus category intelligence into the existing campaign
   generation runner.
+- `campaign_postgres_seller_category_intelligence` refreshes broad Amazon
+  seller category snapshots from host `product_reviews` and `product_metadata`
+  tables, so the seller target -> opportunity -> draft loop can run without the
+  Atlas seller scheduled task.
 - `api.seller_campaigns` provides a FastAPI router factory around seller
   targets and seller draft review/export routes. Seller draft review is guarded
   to `target_mode="amazon_seller"`.
