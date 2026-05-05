@@ -27,6 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ..api.billing import LLM_PLAN_LIMITS
 from ..auth.dependencies import AuthUser, require_auth_or_api_key
 from ..services.byok_keys import (
     SUPPORTED_PROVIDERS,
@@ -120,6 +121,35 @@ async def add_key(
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
+    # Enforce per-plan ``byok_keys_max`` (PR-D2 advertised this gate;
+    # PR-D5 review fix wires it). -1 = unlimited (llm_pro). The
+    # provider being rotated does not count -- we revoke + re-insert
+    # for the same (account, provider) atomically below.
+    plan_limits = LLM_PLAN_LIMITS.get(user.plan, {})
+    max_keys = int(plan_limits.get("byok_keys_max", 0))
+    if max_keys != -1:
+        active_count_row = await pool.fetchrow(
+            """
+            SELECT COUNT(*)::int AS active_count
+            FROM byok_keys
+            WHERE account_id = $1
+              AND provider != $2
+              AND revoked_at IS NULL
+            """,
+            _uuid.UUID(user.account_id),
+            body.provider,
+        )
+        active_count = int(active_count_row["active_count"]) if active_count_row else 0
+        if active_count >= max_keys:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Plan '{user.plan}' allows at most {max_keys} BYOK "
+                    f"providers; revoke an existing key before adding a new "
+                    f"one."
+                ),
+            )
+
     try:
         record = await insert_provider_key(
             pool,
@@ -130,6 +160,22 @@ async def add_key(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        # Concurrent rotate/add for the same (account_id, provider)
+        # races on the partial UNIQUE index. asyncpg surfaces this
+        # as ``UniqueViolationError`` (a subclass of IntegrityError).
+        # Catch by class name to avoid importing asyncpg at module
+        # top -- atlas's pool wrapper may use psycopg in some
+        # deployments.
+        if exc.__class__.__name__ in ("UniqueViolationError", "IntegrityError"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Concurrent BYOK key write for provider '{body.provider}' "
+                    "lost the race. Retry the request."
+                ),
+            )
+        raise
 
     return _record_to_view(record)
 

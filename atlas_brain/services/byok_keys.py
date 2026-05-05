@@ -239,6 +239,19 @@ async def lookup_provider_key_async(
     Returns the raw plaintext key or None. None becomes 503 in the
     gateway router. Bumps ``last_used_at`` on a successful DB hit
     (best-effort).
+
+    Fail-closed semantics:
+      - DB query EXCEPTION (transient outage / connection error):
+        return None. We do NOT fall back to env-var because that
+        would silently route customer traffic through atlas's
+        process-level keys during an outage and bill the wrong
+        credentials.
+      - DB row exists but DECRYPT FAILS (KEK rotation drift):
+        return None. Same reason -- env fallback would mask a real
+        configuration breakage.
+      - DB row simply NOT PRESENT: legitimate "not configured" --
+        env-var fallback fires (covers local dev where no DB row
+        was inserted yet).
     """
     if provider not in SUPPORTED_PROVIDERS:
         logger.warning("BYOK lookup: unsupported provider %r", provider)
@@ -262,14 +275,21 @@ async def lookup_provider_key_async(
                 provider,
             )
         except Exception:
-            logger.exception("BYOK lookup: DB query failed")
-            row = None
+            logger.exception("BYOK lookup: DB query failed -- failing closed")
+            return None
 
         if row is not None:
             plaintext = decrypt_secret(bytes(row["encrypted_key"]), row["encryption_kid"])
-            if plaintext:
-                await touch_provider_key(pool, key_id=row["id"])
-                return plaintext
+            if plaintext is None:
+                logger.warning(
+                    "BYOK lookup: decrypt failed for provider=%s account=%s "
+                    "(KEK rotation drift?) -- failing closed",
+                    provider,
+                    account_id,
+                )
+                return None
+            await touch_provider_key(pool, key_id=row["id"])
+            return plaintext
 
     return _env_var_fallback(provider, account_id)
 

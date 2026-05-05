@@ -67,6 +67,7 @@ def parse_kek_string(raw: str) -> list[_KEKEntry]:
             "Set it to a comma-separated list of kid:base64-key pairs."
         )
     entries: list[_KEKEntry] = []
+    seen_kids: set[str] = set()
     for chunk in raw.split(","):
         chunk = chunk.strip()
         if not chunk:
@@ -80,6 +81,16 @@ def parse_kek_string(raw: str) -> list[_KEKEntry]:
         key_b64 = key_b64.strip()
         if not kid or not key_b64:
             raise ValueError(f"Malformed BYOK KEK entry {chunk!r}: empty kid or key")
+        # Reject duplicate kids: two entries with the same kid would
+        # silently break rotation -- ``decrypt_secret`` matches the
+        # FIRST entry by kid, so an older key under the same kid
+        # never gets tried. Fail at startup so ops catch the typo
+        # before rows go undecryptable.
+        if kid in seen_kids:
+            raise ValueError(
+                f"BYOK KEK has duplicate kid={kid!r}; each kid must be unique"
+            )
+        seen_kids.add(kid)
         # Fernet expects base64-encoded 32 bytes; validate up front.
         try:
             decoded = base64.urlsafe_b64decode(key_b64.encode("ascii"))

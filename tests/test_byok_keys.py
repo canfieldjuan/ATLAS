@@ -409,6 +409,153 @@ def test_saas_auth_rejects_kek_missing_colon_when_enabled(monkeypatch):
     importlib.reload(config_mod)
 
 
+# ---- Codex/Copilot review (P1: fail-closed + duplicate-kid + plan-limit + race) ----
+
+
+def test_parse_kek_string_rejects_duplicate_kids(monkeypatch):
+    """Copilot fix: ``v1:new,v1:old`` must raise -- decrypt_secret
+    matches the FIRST entry by kid, so an older key under the same
+    kid never gets tried, leaving rows undecryptable."""
+    from atlas_brain.auth.encryption import generate_kek, parse_kek_string
+
+    k1 = generate_kek()
+    k2 = generate_kek()
+    with pytest.raises(ValueError, match="duplicate kid"):
+        parse_kek_string(f"v1:{k1},v1:{k2}")
+
+
+def test_parse_kek_string_accepts_distinct_kids(monkeypatch):
+    """Sanity: distinct kids are the rotation pattern; must not
+    raise."""
+    from atlas_brain.auth.encryption import generate_kek, parse_kek_string
+
+    k1 = generate_kek()
+    k2 = generate_kek()
+    entries = parse_kek_string(f"v2:{k2},v1:{k1}")
+    assert len(entries) == 2
+
+
+def test_lookup_async_fails_closed_on_db_error(monkeypatch):
+    """Copilot P1: a DB error must NOT silently fall back to env
+    var -- doing so routes customer traffic through atlas's
+    process-level keys during an outage and bills the wrong
+    credentials."""
+    import asyncio
+
+    monkeypatch.setenv(
+        "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
+        "sk-fake-from-env",
+    )
+
+    class _BrokenPool:
+        is_initialized = True
+
+        async def fetchrow(self, *_args, **_kwargs):
+            raise RuntimeError("DB connection lost")
+
+    from atlas_brain.services.byok_keys import lookup_provider_key_async
+
+    result = asyncio.run(
+        lookup_provider_key_async(_BrokenPool(), "anthropic", "00000000-0000-0000-0000-000000000000")
+    )
+    # Even though env-var is set, the DB error must NOT fall back.
+    assert result is None
+
+
+def test_lookup_async_fails_closed_on_decrypt_failure(monkeypatch):
+    """Copilot P1: KEK rotation drift -- a row encrypted under a
+    kid no longer in the configured KEK list -- must NOT fall back
+    to env. Hides real config breakage otherwise."""
+    import asyncio
+    from atlas_brain.auth.encryption import generate_kek
+
+    monkeypatch.setenv(
+        "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
+        "sk-fake-from-env",
+    )
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", f"v1:{generate_kek()}")
+    importlib.reload(__import__("atlas_brain.config", fromlist=["settings"]))
+
+    class _RotationDriftPool:
+        is_initialized = True
+
+        async def fetchrow(self, *_args, **_kwargs):
+            # Row exists with a kid that's NOT in the configured KEK list.
+            return {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "encrypted_key": b"some-ciphertext-bytes",
+                "encryption_kid": "v999-not-configured",
+            }
+
+        async def execute(self, *_args, **_kwargs):
+            return None
+
+    from atlas_brain.services.byok_keys import lookup_provider_key_async
+
+    result = asyncio.run(
+        lookup_provider_key_async(_RotationDriftPool(), "anthropic", "00000000-0000-0000-0000-000000000000")
+    )
+    # Decrypt failed -> None, not env-fallback.
+    assert result is None
+
+
+def test_lookup_async_falls_back_when_no_db_row(monkeypatch):
+    """Sanity: legitimate "no key configured" case (no DB row) DOES
+    use env-var fallback so local dev keeps working."""
+    import asyncio
+
+    monkeypatch.setenv(
+        "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
+        "sk-fake-from-env",
+    )
+
+    class _EmptyPool:
+        is_initialized = True
+
+        async def fetchrow(self, *_args, **_kwargs):
+            return None
+
+    from atlas_brain.services.byok_keys import lookup_provider_key_async
+
+    result = asyncio.run(
+        lookup_provider_key_async(_EmptyPool(), "anthropic", "00000000-0000-0000-0000-000000000000")
+    )
+    assert result == "sk-fake-from-env"
+
+
+def test_byok_router_imports_plan_limits():
+    """Copilot fix: ``add_key`` enforces per-plan ``byok_keys_max``.
+    The handler must reference LLM_PLAN_LIMITS, otherwise plan-tier
+    limits are advertised but never gated."""
+    from atlas_brain.api import byok_keys
+
+    src = inspect.getsource(byok_keys.add_key)
+    assert "LLM_PLAN_LIMITS" in src
+    assert "byok_keys_max" in src
+
+
+def test_byok_router_returns_403_when_at_plan_limit():
+    """Copilot fix: when active count >= max_keys, the handler
+    raises 403 (not just lets the insert happen)."""
+    from atlas_brain.api import byok_keys
+
+    src = inspect.getsource(byok_keys.add_key)
+    assert "status_code=403" in src
+    assert "active_count >= max_keys" in src
+
+
+def test_byok_router_handles_unique_violation_as_409():
+    """Copilot fix: concurrent rotate/add for the same
+    (account_id, provider) races on the partial UNIQUE index. The
+    losing INSERT raises asyncpg.UniqueViolationError; the handler
+    must translate to 409, not let it become a 500."""
+    from atlas_brain.api import byok_keys
+
+    src = inspect.getsource(byok_keys.add_key)
+    assert "UniqueViolationError" in src
+    assert "status_code=409" in src
+
+
 def test_saas_auth_accepts_valid_byok_kek_when_enabled(monkeypatch):
     """Sanity: a real Fernet key passes the validator and the
     config object exposes it."""
