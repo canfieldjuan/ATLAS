@@ -66,7 +66,32 @@ _PROVIDERS_THIS_PR = ("anthropic",)
 
 class ChatMessageBody(BaseModel):
     role: str = Field(..., description="system | user | assistant | tool")
-    content: str = Field(..., max_length=200_000)
+    content: str = Field(..., max_length=64_000)
+    # Tool-use round-trip support (Codex review fix on PR-D4b). The
+    # internal Message dataclass carries these; without threading
+    # them through the schema, customer requests with tool transcripts
+    # were serialized into malformed Anthropic payloads (assistant
+    # tool_calls dropped; tool result tool_call_id missing).
+    tool_calls: Optional[list[dict[str, Any]]] = Field(
+        default=None,
+        description="For assistant messages that invoke tools.",
+    )
+    tool_call_id: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="For tool messages that return a result.",
+    )
+
+
+def _to_internal_message(m: "ChatMessageBody") -> Message:
+    """Convert the API schema to the internal Message dataclass with
+    full tool-use fields preserved."""
+    return Message(
+        role=m.role,
+        content=m.content,
+        tool_calls=m.tool_calls,
+        tool_call_id=m.tool_call_id,
+    )
 
 
 class ChatRequest(BaseModel):
@@ -173,7 +198,7 @@ async def chat(
     from ..services.llm.anthropic import AnthropicLLM
 
     llm = AnthropicLLM(model=body.model, api_key=api_key)
-    messages = [Message(role=m.role, content=m.content) for m in body.messages]
+    messages = [_to_internal_message(m) for m in body.messages]
     system_prompt, api_messages = convert_messages(messages)
 
     create_kwargs: dict[str, Any] = {
@@ -373,7 +398,7 @@ async def _stream_chat_chunks(
 
     llm = AnthropicLLM(model=body.model, api_key=api_key)
 
-    messages = [Message(role=m.role, content=m.content) for m in body.messages]
+    messages = [_to_internal_message(m) for m in body.messages]
     system_prompt, api_messages = convert_messages(messages)
 
     create_kwargs: dict[str, Any] = {
@@ -508,8 +533,15 @@ async def chat_stream(
 
 
 class BatchItemBody(BaseModel):
-    custom_id: str = Field(..., min_length=1, max_length=128)
-    messages: list[ChatMessageBody] = Field(..., min_length=1, max_length=200)
+    # Custom-id capped at 64 chars to match the limit Anthropic accepts
+    # (atlas's existing batch path also sanitizes to 64) -- avoids a
+    # local validation pass + remote rejection on submit. Codex review
+    # fix on PR-D4b.
+    custom_id: str = Field(..., min_length=1, max_length=64)
+    # Messages capped at 50 per item (down from 200) -- a single item
+    # rarely needs more, and the per-message char cap dropped to 64k
+    # in ChatMessageBody so bulk DoS surface is bounded.
+    messages: list[ChatMessageBody] = Field(..., min_length=1, max_length=50)
     max_tokens: int = Field(default=1024, ge=1, le=128_000)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
@@ -517,7 +549,14 @@ class BatchItemBody(BaseModel):
 class BatchSubmitRequest(BaseModel):
     provider: str = Field(..., description="anthropic")
     model: str = Field(..., min_length=1, max_length=128)
-    items: list[BatchItemBody] = Field(..., min_length=1, max_length=10_000)
+    # Items cap dropped from 10k to 1k. Anthropic's hard limit is
+    # higher, but FastAPI/Pydantic deserializes the entire JSON
+    # payload before validators run; combined with the per-item +
+    # per-message caps above, 1k items is still huge (1k items x
+    # 50 messages x 64k chars = ~3 GB worst-case JSON, gated by
+    # downstream FastAPI body limits). Customers needing more
+    # submit multiple batches.
+    items: list[BatchItemBody] = Field(..., min_length=1, max_length=1_000)
 
 
 class BatchView(BaseModel):
@@ -580,20 +619,46 @@ def _require_batch_enabled(user: AuthUser) -> None:
         )
 
 
+def _validate_batch_provider(provider: str) -> None:
+    if provider not in _PROVIDERS_THIS_PR:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Provider '{provider}' is not supported by /api/v1/llm/batch "
+                f"in this release. Supported: {sorted(_PROVIDERS_THIS_PR)}."
+            ),
+        )
+
+
 @router.post("/batch", response_model=BatchView, status_code=202)
 async def submit_batch(
     body: BatchSubmitRequest,
     user: AuthUser = Depends(require_llm_plan("llm_starter")),
 ) -> BatchView:
-    """Submit an Anthropic Message Batch. 202 Accepted: the batch is
-    enqueued and starts processing asynchronously. Customer polls
-    ``GET /batch/{id}`` for status; final results land in
-    ``provider_batch_id`` once Anthropic completes.
+    """Submit an Anthropic Message Batch.
 
-    Anthropic's batch API gives a 50% discount on input + output
-    tokens vs the synchronous endpoint.
+    Anthropic's batch API gives a **50% discount** on input + output
+    tokens vs the synchronous /chat endpoint -- the headline feature
+    of the LLM Gateway product. Submission is async-accept (202): the
+    batch is queued and processing happens upstream. Customer polls
+    ``GET /batch/{id}`` for status; the response includes
+    ``completed_items`` / ``failed_items`` counters and a terminal
+    ``status`` of ``ended`` / ``canceled`` / ``expired`` when done.
+
+    Result content (per-item response text) is not returned by this
+    PR -- a follow-up adds /batch/{id}/results to fetch the JSONL
+    file Anthropic produces. For PR-D4b, customers can pull results
+    via Anthropic's API directly using the ``provider_batch_id``
+    returned here.
+
+    On submit failure (Anthropic rejects, validation error, etc.)
+    the response body still carries the customer's ``id`` /
+    ``provider_batch_id`` (if any) and ``status='submit_failed'``
+    plus ``error_text`` so the caller can debug without losing the
+    handle. Distinct from terminal ``status='ended'`` which means
+    Anthropic finished processing successfully.
     """
-    _validate_chat_provider(body.provider)
+    _validate_batch_provider(body.provider)
     _require_batch_enabled(user)
 
     pool = get_db_pool()
@@ -602,10 +667,19 @@ async def submit_batch(
 
     api_key = await _resolve_byok_or_503(pool, body.provider, user.account_id)
 
+    # Codex review fix on PR-D4b: normalize the model id via
+    # AnthropicLLM's alias map so deprecated names like
+    # ``claude-3-5-haiku-latest`` work on /batch the same way they
+    # work on /chat. Without this, callers see /chat accept the
+    # alias but /batch reject it -- inconsistent gateway surface.
+    from ..services.llm.anthropic import AnthropicLLM as _AnthropicLLM
+
+    normalized_model = _AnthropicLLM(model=body.model).model
+
     customer_items = [
         CustomerBatchItem(
             custom_id=item.custom_id,
-            messages=[Message(role=m.role, content=m.content) for m in item.messages],
+            messages=[_to_internal_message(m) for m in item.messages],
             max_tokens=item.max_tokens,
             temperature=item.temperature,
         )
@@ -617,15 +691,16 @@ async def submit_batch(
             pool,
             account_id=_uuid.UUID(user.account_id),
             api_key=api_key,
-            model=body.model,
+            model=normalized_model,
             items=customer_items,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        logger.warning("llm_gateway.batch submit failed: %s", exc)
-        raise HTTPException(status_code=502, detail="Batch submit failed")
 
+    # ``submit_customer_batch`` no longer raises on Anthropic-side
+    # rejection -- it persists the row with ``status='submit_failed'``
+    # and ``error_text=<reason>`` and returns the record. The customer
+    # receives the batch_id and can read ``error_text`` to debug.
     return _batch_record_to_view(record)
 
 
@@ -658,14 +733,43 @@ async def get_batch(
     if record is None:
         raise HTTPException(status_code=404, detail="Batch not found")
 
-    # Refresh status from Anthropic if not yet terminal. Polling is
-    # gated on having a BYOK key; if the customer revoked their key
-    # after submit, we return the last-known status.
-    if record.status not in ("ended", "canceled", "expired"):
+    # Refresh status from Anthropic if not yet terminal. Codex review
+    # fix on PR-D4b: distinguish "key was revoked" (legitimate; show
+    # stale row) from "DB outage or decrypt failure" (surface 503 so
+    # the customer doesn't see a frozen batch silently). Probe for an
+    # active byok_keys row directly first; if one exists but the
+    # resolver returned None, the failure is on our side.
+    from ..services.llm_gateway_batch import TERMINAL_STATUSES
+
+    if record.status not in TERMINAL_STATUSES:
         api_key = await lookup_provider_key_async(
             pool, record.provider, user.account_id
         )
-        if api_key:
+        if not api_key:
+            has_active_key_row = await pool.fetchval(
+                """
+                SELECT 1 FROM byok_keys
+                WHERE account_id = $1 AND provider = $2
+                  AND revoked_at IS NULL
+                LIMIT 1
+                """,
+                _uuid.UUID(user.account_id),
+                record.provider,
+            )
+            if has_active_key_row:
+                # Row exists but resolver couldn't decrypt it -- KEK
+                # rotation drift, DB transient error, etc. Customer
+                # should retry; we don't silently freeze the batch.
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Could not refresh batch status: BYOK key "
+                        "lookup failed (provider key may need re-add)."
+                    ),
+                )
+            # No active key row -- customer revoked. Return last-
+            # known status; this is legitimate.
+        else:
             refreshed = await refresh_customer_batch_status(
                 pool,
                 account_id=_uuid.UUID(user.account_id),

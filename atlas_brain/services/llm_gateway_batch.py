@@ -12,15 +12,19 @@ Persistence: one row per customer batch in ``llm_gateway_batches``
 account A cannot see B's batch results.
 
 Status mapping (Anthropic SDK -> our status field):
-  in_progress -> "in_progress"
-  ended       -> "ended"      (terminal; results available)
-  canceling   -> "canceling"
-  canceled    -> "canceled"   (terminal; partial results may exist)
-  expired     -> "expired"    (terminal; Anthropic 24h TTL hit)
+  in_progress    -> "in_progress"
+  ended          -> "ended"          (terminal; results available)
+  canceling      -> "canceling"
+  canceled       -> "canceled"       (terminal; partial results may exist)
+  expired        -> "expired"        (terminal; Anthropic 24h TTL hit)
 
-The "queued" status is our internal pre-submit state -- we insert
-the row before calling the Anthropic API so failures during submit
-are still tracked.
+Atlas-internal lifecycle states (NOT Anthropic):
+  queued         -> pre-submit holding state (rare; insert succeeds but
+                    we crash before calling Anthropic)
+  submit_failed  -> Anthropic rejected the submit (validation error,
+                    rate limit, etc.) Distinct from "ended" so
+                    consumers polling by status can tell submit-time
+                    failure from provider-completed batches.
 """
 
 from __future__ import annotations
@@ -37,8 +41,14 @@ from .protocols import Message
 logger = logging.getLogger("atlas.services.llm_gateway_batch")
 
 
-# Terminal statuses (no more polling needed).
-TERMINAL_STATUSES = ("ended", "canceled", "expired")
+# How long to wait for Anthropic's batch SDK calls. Worker latency
+# is bounded so a single slow upstream cannot stack blocked workers.
+ANTHROPIC_SDK_TIMEOUT_SECONDS = 30.0
+
+# Terminal statuses (no more polling needed). ``submit_failed`` is
+# also terminal -- the row never made it to Anthropic, so polling
+# would do nothing useful.
+TERMINAL_STATUSES = ("ended", "canceled", "expired", "submit_failed")
 
 # Provider statuses we treat as in-flight on the read path.
 ACTIVE_STATUSES = ("queued", "in_progress", "canceling")
@@ -160,9 +170,18 @@ async def submit_customer_batch(
     from anthropic import AsyncAnthropic
 
     try:
-        async with AsyncAnthropic(api_key=api_key) as client:
+        async with AsyncAnthropic(
+            api_key=api_key,
+            timeout=ANTHROPIC_SDK_TIMEOUT_SECONDS,
+        ) as client:
             provider_batch = await client.messages.batches.create(requests=requests)
     except Exception as exc:
+        # Codex review fix on PR-D4b: distinct ``submit_failed`` status
+        # so consumers polling by status can tell submit-time failure
+        # from provider-completed (``ended``). The router returns this
+        # record (instead of raising) so customers get the batch_id of
+        # their failed submission and can read ``error_text`` to
+        # debug.
         logger.warning(
             "llm_gateway_batch.submit failed account=%s model=%s items=%d: %s",
             account_id,
@@ -170,17 +189,23 @@ async def submit_customer_batch(
             len(items),
             exc,
         )
-        await pool.execute(
+        failed_row = await pool.fetchrow(
             """
             UPDATE llm_gateway_batches
-            SET status = 'ended', error_text = $2, updated_at = NOW(),
+            SET status = 'submit_failed',
+                error_text = $2,
+                updated_at = NOW(),
                 completed_at = NOW()
             WHERE id = $1
+            RETURNING id, account_id, provider, provider_batch_id, model,
+                      status, total_items, completed_items, failed_items,
+                      error_text, created_at, updated_at, submitted_at,
+                      completed_at
             """,
             row["id"],
             f"Anthropic batch submit failed: {exc}",
         )
-        raise
+        return _row_to_record(failed_row)
 
     provider_batch_id = getattr(provider_batch, "id", None)
     initial_status = getattr(provider_batch, "processing_status", None) or "in_progress"
@@ -261,9 +286,13 @@ async def refresh_customer_batch_status(
 
     # ``async with`` releases the httpx connection pool after each
     # poll -- /llm/batch/{id} is hit repeatedly while a batch is
-    # processing, so leaks compound fast. Codex P2 fix on PR-D4b.
+    # processing, so leaks compound fast. Timeout bounds worker
+    # blocking under provider stalls. Codex P2 fix on PR-D4b.
     try:
-        async with AsyncAnthropic(api_key=api_key) as client:
+        async with AsyncAnthropic(
+            api_key=api_key,
+            timeout=ANTHROPIC_SDK_TIMEOUT_SECONDS,
+        ) as client:
             provider_batch = await client.messages.batches.retrieve(record.provider_batch_id)
     except Exception as exc:
         logger.warning(
@@ -276,8 +305,19 @@ async def refresh_customer_batch_status(
 
     new_status = str(getattr(provider_batch, "processing_status", record.status) or record.status)
     counts = getattr(provider_batch, "request_counts", None)
-    completed = int(getattr(counts, "succeeded", 0) or 0) if counts else record.completed_items
-    failed = int(getattr(counts, "errored", 0) or 0) + int(getattr(counts, "expired", 0) or 0) if counts else record.failed_items
+    if counts:
+        completed = int(getattr(counts, "succeeded", 0) or 0)
+        # Codex review on PR-D4b: include ``canceled`` in failed_items
+        # so completed + failed adds up to total_items even when the
+        # batch was canceled mid-flight.
+        failed = (
+            int(getattr(counts, "errored", 0) or 0)
+            + int(getattr(counts, "expired", 0) or 0)
+            + int(getattr(counts, "canceled", 0) or 0)
+        )
+    else:
+        completed = record.completed_items
+        failed = record.failed_items
 
     is_terminal = new_status in TERMINAL_STATUSES
     completed_at_clause = "NOW()" if is_terminal else "completed_at"

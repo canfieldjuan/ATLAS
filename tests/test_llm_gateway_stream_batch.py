@@ -290,12 +290,11 @@ def test_submit_customer_batch_uses_async_with():
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
-    assert "async with AsyncAnthropic(api_key=api_key)" in src
+    assert "async with AsyncAnthropic(" in src
     # The bare ``client = AsyncAnthropic(...)`` pattern must NOT
     # remain in the file.
-    bare_pattern = "client = AsyncAnthropic(api_key=api_key)"
     full_src = inspect.getsource(llm_gateway_batch)
-    assert bare_pattern not in full_src
+    assert "client = AsyncAnthropic(" not in full_src
 
 
 def test_refresh_customer_batch_uses_async_with():
@@ -304,7 +303,7 @@ def test_refresh_customer_batch_uses_async_with():
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch.refresh_customer_batch_status)
-    assert "async with AsyncAnthropic(api_key=api_key)" in src
+    assert "async with AsyncAnthropic(" in src
 
 
 def test_chat_handler_uses_async_with_anthropic():
@@ -331,3 +330,199 @@ def test_chat_stream_handler_uses_async_with_anthropic():
     assert "async with AsyncAnthropic(api_key=api_key)" in src
     assert "llm._async_client" not in src
     assert "llm.load()" not in src
+
+
+# ---- Codex/Copilot 2nd pass review -------------------------------------
+
+
+def test_submit_failed_status_is_distinct_from_ended():
+    """Codex/Copilot fix: pre-submit failure used to write
+    ``status='ended'``, conflating with provider-completed batches.
+    The new ``submit_failed`` status is distinct so consumers can
+    tell submit-time failure from completion."""
+    from atlas_brain.services.llm_gateway_batch import TERMINAL_STATUSES
+
+    # submit_failed is terminal (no polling can recover it).
+    assert "submit_failed" in TERMINAL_STATUSES
+    # Distinct from the Anthropic terminal states.
+    assert "submit_failed" != "ended"
+
+
+def test_submit_failure_returns_record_not_502():
+    """Customer should get the persisted batch_id + error_text on
+    submit failure, not an opaque 502 -- the row is already saved
+    with status='submit_failed', so returning it lets the caller
+    debug without a list endpoint."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.submit_batch)
+    # The 502 path is gone; submit_customer_batch persists the
+    # failure and returns the record.
+    assert "Batch submit failed" not in src
+    # The record-return is the only success path.
+    assert "_batch_record_to_view(record)" in src
+
+
+def test_submit_customer_batch_returns_failed_record_not_raises():
+    """Service-level: submit failure persists ``status='submit_failed'``
+    and returns the record. No raise. Customers polling /batch/{id}
+    immediately see the error text."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    assert "status = 'submit_failed'" in src
+    assert "return _row_to_record(failed_row)" in src
+
+
+def test_chat_message_body_threads_tool_fields():
+    """Tool-use round-trip: assistant ``tool_calls`` and tool-role
+    ``tool_call_id`` must reach the internal Message dataclass.
+    Without this, batch requests that include tool transcripts get
+    serialized into malformed Anthropic payloads."""
+    from atlas_brain.api.llm_gateway import (
+        ChatMessageBody,
+        _to_internal_message,
+    )
+
+    body = ChatMessageBody(
+        role="assistant",
+        content="calling tool",
+        tool_calls=[{"id": "t1", "function": {"name": "search", "arguments": {}}}],
+    )
+    msg = _to_internal_message(body)
+    assert msg.tool_calls is not None
+    assert msg.tool_calls[0]["id"] == "t1"
+
+    body2 = ChatMessageBody(
+        role="tool", content="result", tool_call_id="t1"
+    )
+    msg2 = _to_internal_message(body2)
+    assert msg2.tool_call_id == "t1"
+
+
+def test_chat_handler_uses_to_internal_message_helper():
+    """All three sites that build Message lists now use the helper
+    so tool fields don't get dropped silently."""
+    from atlas_brain.api import llm_gateway
+
+    chat_src = inspect.getsource(llm_gateway.chat)
+    assert "_to_internal_message" in chat_src
+
+    stream_src = inspect.getsource(llm_gateway._stream_chat_chunks)
+    assert "_to_internal_message" in stream_src
+
+    batch_src = inspect.getsource(llm_gateway.submit_batch)
+    assert "_to_internal_message" in batch_src
+
+
+def test_batch_normalizes_model_alias():
+    """The /batch endpoint must apply AnthropicLLM's alias map so
+    deprecated names work consistently with /chat. Codex review
+    fix: ``claude-3-5-haiku-latest`` worked on chat, failed on
+    batch before this."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.submit_batch)
+    # Normalization happens via AnthropicLLM's alias map.
+    assert "_AnthropicLLM(model=body.model).model" in src
+    assert "normalized_model" in src
+    # The submit call passes the normalized variant.
+    assert "model=normalized_model" in src
+
+
+def test_batch_provider_validator_uses_batch_specific_message():
+    """Error from /batch should not say 'chat endpoint'."""
+    from atlas_brain.api import llm_gateway
+
+    assert hasattr(llm_gateway, "_validate_batch_provider")
+    src = inspect.getsource(llm_gateway._validate_batch_provider)
+    assert "/api/v1/llm/batch" in src
+
+
+def test_failed_items_includes_canceled():
+    """Codex fix: ``failed_items`` was ``errored + expired`` --
+    missing canceled. For canceled batches, completed + failed
+    didn't equal total_items."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.refresh_customer_batch_status)
+    # The sum now covers all 3 non-success terminal states.
+    assert 'getattr(counts, "canceled"' in src
+
+
+def test_anthropic_sdk_calls_use_timeout():
+    """Provider-stall protection: every AsyncAnthropic construction
+    passes a bounded timeout so a slow upstream cannot tie up a
+    FastAPI worker indefinitely."""
+    from atlas_brain.services import llm_gateway_batch
+
+    submit_src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    refresh_src = inspect.getsource(llm_gateway_batch.refresh_customer_batch_status)
+
+    assert "timeout=ANTHROPIC_SDK_TIMEOUT_SECONDS" in submit_src
+    assert "timeout=ANTHROPIC_SDK_TIMEOUT_SECONDS" in refresh_src
+
+
+def test_batch_item_custom_id_capped_at_64():
+    """Match atlas's existing batch path -- avoid local-pass + remote-
+    fail. Codex fix on PR-D4b."""
+    from atlas_brain.api.llm_gateway import BatchItemBody
+
+    field = BatchItemBody.model_fields["custom_id"]
+    assert field.metadata is not None
+    # Pydantic stores constraints in metadata as MaxLen objects.
+    max_len_constraints = [
+        m for m in field.metadata if hasattr(m, "max_length")
+    ]
+    assert max_len_constraints
+    assert max_len_constraints[0].max_length == 64
+
+
+def test_batch_request_caps_dropped_to_safer_levels():
+    """Body-size DoS surface bounded: per-message char cap dropped
+    from 200k to 64k; per-item messages cap from 200 to 50; total
+    items cap from 10k to 1k."""
+    from atlas_brain.api.llm_gateway import (
+        BatchItemBody,
+        BatchSubmitRequest,
+        ChatMessageBody,
+    )
+
+    # Per-message char cap.
+    content_field = ChatMessageBody.model_fields["content"]
+    max_len = next(
+        (m.max_length for m in content_field.metadata if hasattr(m, "max_length")),
+        None,
+    )
+    assert max_len == 64_000
+
+    # Per-item messages cap.
+    messages_field = BatchItemBody.model_fields["messages"]
+    max_msg = next(
+        (m.max_length for m in messages_field.metadata if hasattr(m, "max_length")),
+        None,
+    )
+    assert max_msg == 50
+
+    # Total items cap.
+    items_field = BatchSubmitRequest.model_fields["items"]
+    max_items = next(
+        (m.max_length for m in items_field.metadata if hasattr(m, "max_length")),
+        None,
+    )
+    assert max_items == 1_000
+
+
+def test_batch_status_distinguishes_revoked_from_outage():
+    """Codex fix: when ``lookup_provider_key_async`` returns None,
+    the get_batch handler now probes for an active byok_keys row
+    directly. If one exists but lookup failed (DB outage / decrypt
+    drift), surface 503 instead of silently freezing the batch."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.get_batch)
+    # Direct probe for active row.
+    assert "FROM byok_keys" in src
+    assert "AND revoked_at IS NULL" in src
+    # 503 surfaced when row exists but lookup failed.
+    assert "status_code=503" in src
