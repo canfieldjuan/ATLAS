@@ -201,3 +201,51 @@ def test_saas_auth_accepts_non_default_pepper_when_enabled(monkeypatch):
 
     importlib.reload(config_mod)
     assert config_mod.settings.saas_auth.api_key_pepper == "non-default-pepper"
+
+
+def test_saas_auth_rejects_empty_pepper_when_enabled(monkeypatch):
+    """An empty pepper HMACs every key with a known empty secret --
+    functionally identical to the sentinel default. Reject all
+    blank/whitespace values too (Codex review on PR-D1)."""
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "")
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    with pytest.raises(Exception):
+        importlib.reload(config_mod)
+
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "post-test-pepper")
+    importlib.reload(config_mod)
+
+
+def test_saas_auth_rejects_whitespace_only_pepper_when_enabled(monkeypatch):
+    """A whitespace-only pepper is also a known secret -- ``.strip()``
+    on the validator catches both `"   "` and `"\\t\\n"`."""
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "   ")
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    with pytest.raises(Exception):
+        importlib.reload(config_mod)
+
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "post-test-pepper")
+    importlib.reload(config_mod)
+
+
+def test_saas_auth_allows_empty_pepper_when_disabled(monkeypatch):
+    """Local-dev mode (SaaS auth disabled) does not need a real
+    pepper -- the validator only fires when ``enabled=True``."""
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "false")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "")
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    importlib.reload(config_mod)
+    assert config_mod.settings.saas_auth.enabled is False

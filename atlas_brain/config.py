@@ -81,8 +81,17 @@ class SaaSAuthConfig(BaseSettings):
     def _validate_secrets(self):
         if self.enabled and self.jwt_secret == "change-me-in-production":
             raise ValueError("ATLAS_SAAS_JWT_SECRET must be set when SaaS auth is enabled")
-        if self.enabled and self.api_key_pepper == "api-key-pepper-change-me":
-            raise ValueError("ATLAS_SAAS_API_KEY_PEPPER must be set when SaaS auth is enabled")
+        if self.enabled and (
+            not self.api_key_pepper.strip()
+            or self.api_key_pepper == "api-key-pepper-change-me"
+        ):
+            # Empty / whitespace-only peppers HMAC every key with a known
+            # secret -- functionally identical to the sentinel default.
+            # Reject all three so prod cannot ship with a known pepper.
+            raise ValueError(
+                "ATLAS_SAAS_API_KEY_PEPPER must be set to a non-empty, "
+                "non-default value when SaaS auth is enabled"
+            )
         if self.stripe_secret_key and not self.stripe_webhook_secret:
             import warnings
             warnings.warn(
