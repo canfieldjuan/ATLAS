@@ -7,8 +7,13 @@ fixtures and are gated on a running Postgres.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import uuid as _uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 
 _MIG_DIR = Path(__file__).resolve().parent.parent / "atlas_brain" / "storage" / "migrations"
@@ -285,10 +290,15 @@ def test_persist_batch_usage_writes_directly_via_pool():
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
-    # Direct executemany under explicit transaction.
-    assert "async with pool.acquire() as conn:" in src
-    assert "async with conn.transaction():" in src
+    # Direct executemany under pool.transaction() -- atlas's
+    # DatabasePool.acquire is async-def-returning-connection, NOT
+    # an async context manager, so async-with-acquire would raise
+    # at runtime. pool.transaction() handles the acquire + tx scope
+    # in one block. Codex P1 fix on PR-D4d.
+    assert "async with pool.transaction() as conn:" in src
     assert "await conn.executemany(_BATCH_USAGE_INSERT_SQL" in src
+    # The buggy acquire() pattern must not return.
+    assert "async with pool.acquire()" not in src
     # No more fire-and-forget tracer for batch items.
     # (docstring may reference the old approach by name; what we
     # care about is the absence of an actual call site or import).
@@ -441,3 +451,192 @@ def test_estimate_cost_uses_atlas_pricing_config():
     src = inspect.getsource(llm_gateway_batch._estimate_cost_usd)
     assert "settings.ftl_tracing.pricing.cost_usd" in src
     assert '"anthropic"' in src
+
+
+# ---- Runtime smoke (catches "wrong primitive" class of bugs) -----------
+
+
+class _FakePoolConn:
+    """Records executemany calls so the smoke test can assert the
+    INSERT was issued with the expected args. Mirrors asyncpg's
+    Connection.executemany signature (just enough for our path)."""
+
+    def __init__(self) -> None:
+        self.executemany_calls: list[tuple[str, list[tuple[Any, ...]]]] = []
+
+    async def executemany(self, query: str, args: list[tuple[Any, ...]]) -> None:
+        self.executemany_calls.append((query, args))
+
+
+class _FakePool:
+    """Minimal stand-in for atlas's DatabasePool used to runtime-
+    exercise _persist_batch_usage. Implements:
+      - ``transaction()`` -- async context manager yielding a conn
+        (matches storage/database.py:144).
+      - ``execute()`` -- awaitable for the post-insert flag flip.
+      - DOES NOT implement ``acquire()``, so any code that tries
+        the wrong primitive blows up immediately."""
+
+    def __init__(self) -> None:
+        self.conn = _FakePoolConn()
+        self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield self.conn
+
+    async def execute(self, query: str, *args: Any) -> None:
+        self.execute_calls.append((query, args))
+
+
+class _FakeAnthropicResultEntry:
+    def __init__(self, custom_id: str, input_tokens: int, output_tokens: int):
+        self.custom_id = custom_id
+
+        class _Usage:
+            pass
+        u = _Usage()
+        u.input_tokens = input_tokens
+        u.output_tokens = output_tokens
+        u.cache_read_input_tokens = 0
+        u.cache_creation_input_tokens = 0
+
+        class _Message:
+            pass
+        m = _Message()
+        m.usage = u
+        m.id = f"msg_{custom_id}"
+
+        class _Result:
+            pass
+        r = _Result()
+        r.type = "succeeded"
+        r.message = m
+
+        self.result = r
+
+
+class _FakeAsyncIter:
+    def __init__(self, entries):
+        self._entries = list(entries)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._entries:
+            raise StopAsyncIteration
+        return self._entries.pop(0)
+
+
+class _FakeBatchesResource:
+    def __init__(self, entries):
+        self._entries = entries
+
+    async def results(self, provider_batch_id: str):
+        return _FakeAsyncIter(self._entries)
+
+
+class _FakeMessagesResource:
+    def __init__(self, entries):
+        self.batches = _FakeBatchesResource(entries)
+
+
+class _FakeAsyncAnthropic:
+    """Stands in for AsyncAnthropic. Supports async-with for the
+    connection-pool teardown the real client does."""
+
+    def __init__(self, *args, entries=None, **kwargs):
+        self.messages = _FakeMessagesResource(entries or [])
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def test_persist_batch_usage_runtime_smoke():
+    """Catches the "wrong primitive" class of bug: source-text
+    pins passed for `async with pool.acquire()` but it would have
+    raised at runtime because atlas's DatabasePool.acquire is a
+    plain async-def. This smoke test exercises the full path with
+    a fake pool that only implements the correct interface, so
+    any future regression is caught at test time."""
+    from atlas_brain.services import llm_gateway_batch
+
+    pool = _FakePool()
+    account_id = _uuid.uuid4()
+    batch_id = _uuid.uuid4()
+    entries = [
+        _FakeAnthropicResultEntry("item-1", 100, 50),
+        _FakeAnthropicResultEntry("item-2", 200, 75),
+    ]
+
+    def _fake_anthropic_factory(*args, **kwargs):
+        return _FakeAsyncAnthropic(entries=entries)
+
+    with patch("anthropic.AsyncAnthropic", _fake_anthropic_factory):
+        asyncio.run(llm_gateway_batch._persist_batch_usage(
+            pool,
+            account_id=account_id,
+            batch_id=batch_id,
+            provider_batch_id="msgbatch_test",
+            model="claude-haiku-4-5-20251001",
+            api_key="test-key",
+        ))
+
+    # executemany was called once with both rows.
+    assert len(pool.conn.executemany_calls) == 1
+    sql, args = pool.conn.executemany_calls[0]
+    assert "INSERT INTO llm_usage" in sql
+    assert "ON CONFLICT (account_id, batch_id, custom_id)" in sql
+    assert len(args) == 2
+    # args tuple positions: span_name, model, input_tok, output_tok, total,
+    # billable_in, cached, cache_write, cost, metadata, endpoint,
+    # provider_request_id, account_id, batch_id, custom_id
+    assert args[0][0] == "llm_gateway.batch_item"  # span_name
+    assert args[0][1] == "claude-haiku-4-5-20251001"  # model
+    assert args[0][2] == 100  # input_tokens
+    assert args[0][3] == 50   # output_tokens
+    assert args[0][4] == 150  # total_tokens
+    assert args[0][13] == batch_id  # batch_id
+    assert args[0][14] == "item-1"  # custom_id
+    assert args[1][14] == "item-2"  # custom_id of second item
+
+    # Flag flip ran AFTER the insert -- check both ordering and the
+    # account-scoped predicate.
+    assert len(pool.execute_calls) == 1
+    flag_sql, flag_args = pool.execute_calls[0]
+    assert "SET usage_tracked = TRUE" in flag_sql
+    assert "WHERE id = $1 AND account_id = $2 AND usage_tracked = FALSE" in flag_sql
+    assert flag_args == (batch_id, account_id)
+
+
+def test_persist_batch_usage_skips_db_when_no_succeeded_items():
+    """If the batch had only errored / canceled items, items_to_persist
+    is empty -- we should NOT issue an executemany (asyncpg raises on
+    empty rows-args) but we SHOULD still flip the flag so the
+    refresh path doesn't keep retrying."""
+    from atlas_brain.services import llm_gateway_batch
+
+    pool = _FakePool()
+    # Empty entries iterator -> nothing to persist.
+    def _fake_anthropic_factory(*args, **kwargs):
+        return _FakeAsyncAnthropic(entries=[])
+
+    with patch("anthropic.AsyncAnthropic", _fake_anthropic_factory):
+        asyncio.run(llm_gateway_batch._persist_batch_usage(
+            pool,
+            account_id=_uuid.uuid4(),
+            batch_id=_uuid.uuid4(),
+            provider_batch_id="msgbatch_empty",
+            model="claude-haiku-4-5-20251001",
+            api_key="test-key",
+        ))
+
+    # No executemany call (no rows to write).
+    assert pool.conn.executemany_calls == []
+    # But flag flip still ran -- otherwise refresh keeps retrying.
+    assert len(pool.execute_calls) == 1
+    assert "SET usage_tracked = TRUE" in pool.execute_calls[0][0]

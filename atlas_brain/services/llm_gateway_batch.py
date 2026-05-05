@@ -705,6 +705,13 @@ async def _persist_batch_usage(
     # no-op silently so we never double-count. The whole batch is
     # one transaction so a mid-iteration DB failure leaves no
     # partial state visible to other pollers.
+    #
+    # ``pool.transaction()`` is the right primitive here. atlas's
+    # ``DatabasePool.acquire`` is a plain async-def returning a
+    # connection, NOT an async-context-manager protocol, so async-
+    # with on it would raise at runtime. ``pool.transaction()``
+    # (storage/database.py:144) handles the acquire + release +
+    # BEGIN/COMMIT in one block. Codex P1 fix on PR-D4d.
     if items_to_persist:
         rows_args = []
         for item in items_to_persist:
@@ -739,9 +746,8 @@ async def _persist_batch_usage(
                 batch_id,
                 item["custom_id"],
             ))
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.executemany(_BATCH_USAGE_INSERT_SQL, rows_args)
+        async with pool.transaction() as conn:
+            await conn.executemany(_BATCH_USAGE_INSERT_SQL, rows_args)
 
     # Phase 3: Flip the flag. Account-scoped so cross-account
     # batch_id reuse cannot accidentally mark a foreign row.
