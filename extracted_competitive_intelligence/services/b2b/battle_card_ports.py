@@ -33,6 +33,9 @@ class BattleCardSupportPort(Protocol):
     async def has_complete_core_run_marker(self, pool: Any, report_date: date) -> bool: ...
     async def latest_complete_core_report_date(self, pool: Any) -> date | None: ...
     async def describe_core_run_gap(self, pool: Any, report_date: date) -> str: ...
+    async def update_execution_progress(self, task: Any, *, stage: str, progress_current: int | None = None, progress_total: int | None = None, progress_message: str | None = None, **counters: Any) -> None: ...
+    def normalize_test_vendors(self, raw: Any) -> list[str]: ...
+    def apply_vendor_scope_to_churn_inputs(self, data: dict[str, Any], vendor_names: list[str] | str | None) -> tuple[dict[str, Any], list[str]]: ...
     def _aggregate_competitive_disp(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]: ...
     def _build_deterministic_battle_cards(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]: ...
     def _build_pain_lookup(self, *args: Any, **kwargs: Any) -> dict[str, list[dict]]: ...
@@ -129,6 +132,43 @@ class _BridgeBattleCardSupportPort:
 
     async def describe_core_run_gap(self, pool: Any, report_date: date) -> str:
         return await self._shared().describe_core_run_gap(pool, report_date)
+
+    async def update_execution_progress(
+        self,
+        task: Any,
+        *,
+        stage: str,
+        progress_current: int | None = None,
+        progress_total: int | None = None,
+        progress_message: str | None = None,
+        **counters: Any,
+    ) -> None:
+        from ...autonomous.tasks._execution_progress import _update_execution_progress
+
+        await _update_execution_progress(
+            task,
+            stage=stage,
+            progress_current=progress_current,
+            progress_total=progress_total,
+            progress_message=progress_message,
+            **counters,
+        )
+
+    def normalize_test_vendors(self, raw: Any) -> list[str]:
+        from ...autonomous.tasks.b2b_churn_intelligence import _normalize_test_vendors
+
+        return _normalize_test_vendors(raw)
+
+    def apply_vendor_scope_to_churn_inputs(
+        self,
+        data: dict[str, Any],
+        vendor_names: list[str] | str | None,
+    ) -> tuple[dict[str, Any], list[str]]:
+        from ...autonomous.tasks.b2b_churn_intelligence import (
+            _apply_vendor_scope_to_churn_inputs,
+        )
+
+        return _apply_vendor_scope_to_churn_inputs(data, vendor_names)
 
     def _aggregate_competitive_disp(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._shared()._aggregate_competitive_disp(*args, **kwargs)
@@ -365,6 +405,39 @@ async def describe_core_run_gap(pool: Any, report_date: date) -> str:
     return await get_battle_card_support_port().describe_core_run_gap(pool, report_date)
 
 
+async def update_execution_progress(
+    task: Any,
+    *,
+    stage: str,
+    progress_current: int | None = None,
+    progress_total: int | None = None,
+    progress_message: str | None = None,
+    **counters: Any,
+) -> None:
+    return await get_battle_card_support_port().update_execution_progress(
+        task,
+        stage=stage,
+        progress_current=progress_current,
+        progress_total=progress_total,
+        progress_message=progress_message,
+        **counters,
+    )
+
+
+def normalize_test_vendors(raw: Any) -> list[str]:
+    return get_battle_card_support_port().normalize_test_vendors(raw)
+
+
+def apply_vendor_scope_to_churn_inputs(
+    data: dict[str, Any],
+    vendor_names: list[str] | str | None,
+) -> tuple[dict[str, Any], list[str]]:
+    return get_battle_card_support_port().apply_vendor_scope_to_churn_inputs(
+        data,
+        vendor_names,
+    )
+
+
 def _aggregate_competitive_disp(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
     return get_battle_card_support_port()._aggregate_competitive_disp(*args, **kwargs)
 
@@ -566,6 +639,9 @@ __all__ = [
     "BattleCardSupportPort",
     "BattleCardSupportPortNotConfigured",
     "STANDALONE_ENV_VAR",
+    "apply_vendor_scope_to_churn_inputs",
     "configure_battle_card_support_port",
     "get_battle_card_support_port",
+    "normalize_test_vendors",
+    "update_execution_progress",
 ]

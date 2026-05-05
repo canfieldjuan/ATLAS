@@ -14,6 +14,14 @@ _BATTLE_CARD_MODULE = (
 )
 _EXTRACTED_SHARED_MODULE = "extracted_competitive_intelligence.autonomous.tasks._b2b_shared"
 _ATLAS_SHARED_MODULE = "atlas_brain.autonomous.tasks._b2b_shared"
+_EXTRACTED_CHURN_MODULE = (
+    "extracted_competitive_intelligence.autonomous.tasks.b2b_churn_intelligence"
+)
+_ATLAS_CHURN_MODULE = "atlas_brain.autonomous.tasks.b2b_churn_intelligence"
+_EXTRACTED_PROGRESS_MODULE = (
+    "extracted_competitive_intelligence.autonomous.tasks._execution_progress"
+)
+_ATLAS_PROGRESS_MODULE = "atlas_brain.autonomous.tasks._execution_progress"
 
 
 def _drop_package_attr(package_name: str, attr_name: str) -> None:
@@ -28,12 +36,20 @@ def _reset_modules() -> None:
         _BATTLE_CARD_MODULE,
         _EXTRACTED_SHARED_MODULE,
         _ATLAS_SHARED_MODULE,
+        _EXTRACTED_CHURN_MODULE,
+        _ATLAS_CHURN_MODULE,
+        _EXTRACTED_PROGRESS_MODULE,
+        _ATLAS_PROGRESS_MODULE,
     ):
         sys.modules.pop(module_name, None)
     _drop_package_attr("extracted_competitive_intelligence.services.b2b", "battle_card_ports")
     _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "b2b_battle_cards")
     _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "_b2b_shared")
+    _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "b2b_churn_intelligence")
+    _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "_execution_progress")
     _drop_package_attr("atlas_brain.autonomous.tasks", "_b2b_shared")
+    _drop_package_attr("atlas_brain.autonomous.tasks", "b2b_churn_intelligence")
+    _drop_package_attr("atlas_brain.autonomous.tasks", "_execution_progress")
 
 
 class RecordingPort:
@@ -51,6 +67,33 @@ class RecordingPort:
     async def describe_core_run_gap(self, pool, report_date):
         self.calls.append(("describe_core_run_gap", report_date.isoformat()))
         return "core gap"
+
+    async def update_execution_progress(
+        self,
+        task,
+        *,
+        stage,
+        progress_current=None,
+        progress_total=None,
+        progress_message=None,
+        **counters,
+    ):
+        self.calls.append(("update_execution_progress", stage))
+        task.progress_payload = {
+            "stage": stage,
+            "progress_current": progress_current,
+            "progress_total": progress_total,
+            "progress_message": progress_message,
+            **counters,
+        }
+
+    def normalize_test_vendors(self, raw):
+        self.calls.append(("normalize_test_vendors", str(raw)))
+        return ["Acme"]
+
+    def apply_vendor_scope_to_churn_inputs(self, data, vendor_names):
+        self.calls.append(("apply_vendor_scope", ",".join(vendor_names or [])))
+        return ({"vendor_scores": [{"vendor_name": "Acme"}]}, list(vendor_names or []))
 
     def _build_battle_card_locked_facts(self, card):
         self.calls.append(("locked_facts", str(card.get("vendor") or "")))
@@ -86,6 +129,10 @@ def test_battle_card_support_port_fails_closed_in_standalone(monkeypatch) -> Non
 
     assert _EXTRACTED_SHARED_MODULE not in sys.modules
     assert _ATLAS_SHARED_MODULE not in sys.modules
+    assert _EXTRACTED_CHURN_MODULE not in sys.modules
+    assert _ATLAS_CHURN_MODULE not in sys.modules
+    assert _EXTRACTED_PROGRESS_MODULE not in sys.modules
+    assert _ATLAS_PROGRESS_MODULE not in sys.modules
 
 
 @pytest.mark.asyncio
@@ -106,6 +153,28 @@ async def test_battle_card_task_uses_configured_support_port(monkeypatch) -> Non
     assert await port_module._fetch_pain_distribution(pool, 30) == [
         {"vendor": "Acme", "pain": "support"}
     ]
+    assert port_module.normalize_test_vendors("Acme, Acme") == ["Acme"]
+    assert port_module.apply_vendor_scope_to_churn_inputs(
+        {"vendor_scores": [{"vendor_name": "Acme"}, {"vendor_name": "Other"}]},
+        ["Acme"],
+    ) == ({"vendor_scores": [{"vendor_name": "Acme"}]}, ["Acme"])
+
+    task = type("Task", (), {})()
+    await battle_cards._update_execution_progress(
+        task,
+        stage="loading_inputs",
+        progress_current=1,
+        progress_total=3,
+        progress_message="Loading",
+        cards_built=2,
+    )
+    assert task.progress_payload == {
+        "stage": "loading_inputs",
+        "progress_current": 1,
+        "progress_total": 3,
+        "progress_message": "Loading",
+        "cards_built": 2,
+    }
 
     payload = battle_cards._build_battle_card_render_payload(
         {"vendor": "Acme", "total_reviews": 12}
@@ -114,7 +183,14 @@ async def test_battle_card_task_uses_configured_support_port(monkeypatch) -> Non
     assert payload["metric_ledger"] == [{"label": "Reviews analyzed", "value": 12}]
 
     assert ("has_complete_core_run_marker", date.today().isoformat()) in port.calls
+    assert ("normalize_test_vendors", "Acme, Acme") in port.calls
+    assert ("apply_vendor_scope", "Acme") in port.calls
+    assert ("update_execution_progress", "loading_inputs") in port.calls
     assert ("locked_facts", "Acme") in port.calls
     assert ("metric_ledger", "Acme") in port.calls
     assert _EXTRACTED_SHARED_MODULE not in sys.modules
     assert _ATLAS_SHARED_MODULE not in sys.modules
+    assert _EXTRACTED_CHURN_MODULE not in sys.modules
+    assert _ATLAS_CHURN_MODULE not in sys.modules
+    assert _EXTRACTED_PROGRESS_MODULE not in sys.modules
+    assert _ATLAS_PROGRESS_MODULE not in sys.modules
