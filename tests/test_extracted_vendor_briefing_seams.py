@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from datetime import date
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -116,6 +117,57 @@ class FakeAssignmentAcquirePool:
         return FakeAcquireContext(self.conn)
 
 
+class RecordingVendorBriefingPort:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def inject_synthesis_freshness(self, entry, view, *, requested_as_of=None):
+        self.calls.append(("inject_synthesis_freshness", view.vendor_name))
+        entry["requested_as_of"] = requested_as_of.isoformat()
+
+    def load_synthesis_view(
+        self,
+        raw,
+        vendor_name,
+        schema_version="",
+        as_of_date=None,
+    ):
+        self.calls.append(("load_synthesis_view", vendor_name))
+        return SimpleNamespace(
+            raw=raw,
+            vendor_name=vendor_name,
+            schema_version=schema_version,
+            as_of_date=as_of_date,
+        )
+
+    async def load_best_reasoning_view(
+        self,
+        pool,
+        vendor_name,
+        *,
+        as_of=None,
+        analysis_window_days=30,
+    ):
+        self.calls.append(("load_best_reasoning_view", vendor_name))
+        return SimpleNamespace(
+            pool=pool,
+            vendor_name=vendor_name,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+        )
+
+    async def load_prior_reasoning_snapshots(
+        self,
+        pool,
+        vendor_names,
+        *,
+        before_date=None,
+        analysis_window_days=30,
+    ):
+        self.calls.append(("load_prior_reasoning_snapshots", ",".join(vendor_names)))
+        return {vendor: {"before_date": before_date} for vendor in vendor_names}
+
+
 def test_vendor_briefing_module_imports_in_standalone_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EXTRACTED_PIPELINE_STANDALONE", "1")
 
@@ -137,6 +189,65 @@ def test_vendor_briefing_jwt_secret_uses_env_or_ephemeral_secret(
     assert generated_secret != "dev-secret"
     monkeypatch.setenv("EXTRACTED_VENDOR_BRIEFING_JWT_SECRET", "configured-secret")
     assert build_settings().saas_auth.jwt_secret == "configured-secret"
+
+
+@pytest.mark.asyncio
+async def test_vendor_briefing_synthesis_helpers_use_configured_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXTRACTED_PIPELINE_STANDALONE", "1")
+    port_module = importlib.import_module(
+        "extracted_content_pipeline.services.b2b.vendor_briefing_ports"
+    )
+    port = RecordingVendorBriefingPort()
+    port_module.configure_vendor_briefing_intelligence_port(port)
+
+    try:
+        requested_as_of = date(2026, 5, 5)
+        entry: dict[str, str] = {}
+        view = SimpleNamespace(vendor_name="Acme")
+        pool = object()
+
+        port_module.inject_synthesis_freshness(
+            entry,
+            view,
+            requested_as_of=requested_as_of,
+        )
+        loaded = port_module.load_synthesis_view(
+            {"reasoning": True},
+            "Acme",
+            schema_version="synthesis_v2",
+            as_of_date=requested_as_of,
+        )
+        best_view = await port_module.load_best_reasoning_view(
+            pool,
+            "Acme",
+            as_of=requested_as_of,
+            analysis_window_days=45,
+        )
+        prior = await port_module.load_prior_reasoning_snapshots(
+            pool,
+            ["Acme", "Beta"],
+            before_date=requested_as_of,
+            analysis_window_days=45,
+        )
+    finally:
+        port_module.configure_vendor_briefing_intelligence_port(None)
+
+    assert entry == {"requested_as_of": "2026-05-05"}
+    assert loaded.vendor_name == "Acme"
+    assert loaded.schema_version == "synthesis_v2"
+    assert best_view.analysis_window_days == 45
+    assert prior == {
+        "Acme": {"before_date": requested_as_of},
+        "Beta": {"before_date": requested_as_of},
+    }
+    assert port.calls == [
+        ("inject_synthesis_freshness", "Acme"),
+        ("load_synthesis_view", "Acme"),
+        ("load_best_reasoning_view", "Acme"),
+        ("load_prior_reasoning_snapshots", "Acme,Beta"),
+    ]
 
 
 def test_build_settings_includes_vendor_briefing_runtime_fields(
