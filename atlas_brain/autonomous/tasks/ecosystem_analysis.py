@@ -77,7 +77,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $8
                 )
-                ON CONFLICT (pattern_sig) DO UPDATE SET
+                ON CONFLICT (pattern_sig, account_id) DO UPDATE SET
                     conclusion = EXCLUDED.conclusion,
                     confidence = EXCLUDED.confidence,
                     last_validated_at = EXCLUDED.last_validated_at,
@@ -107,7 +107,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $8
                 )
-                ON CONFLICT (pattern_sig) DO UPDATE SET
+                ON CONFLICT (pattern_sig, account_id) DO UPDATE SET
                     conclusion = EXCLUDED.conclusion,
                     confidence = EXCLUDED.confidence,
                     last_validated_at = EXCLUDED.last_validated_at,
