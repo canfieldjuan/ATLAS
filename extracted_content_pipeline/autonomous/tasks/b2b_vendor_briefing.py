@@ -32,20 +32,21 @@ import jwt as pyjwt
 
 from ...config import settings
 from ...services.campaign_sender import get_campaign_sender
+from ...services.b2b.vendor_briefing_ports import (
+    align_vendor_intelligence_record_to_scorecard as _align_vendor_intelligence_record_to_scorecard,
+    timing_summary_payload as _timing_summary_payload,
+    reasoning_int as _reasoning_int,
+    read_vendor_company_signal_review_queue,
+    read_vendor_intelligence_record,
+    read_vendor_intelligence,
+    read_vendor_quote_evidence,
+    read_vendor_scorecard_detail,
+)
 from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...templates.email.vendor_briefing import render_vendor_briefing_html
-from ._b2b_shared import (
-    _align_vendor_intelligence_record_to_scorecard,
-    _timing_summary_payload,
-    _reasoning_int,
-    read_vendor_company_signal_review_queue,
-    read_vendor_intelligence_record,
-    read_vendor_intelligence,
-    read_vendor_scorecard_detail,
-)
 from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.b2b.vendor_briefing")
@@ -2587,7 +2588,6 @@ async def _fetch_high_urgency_quotes(
     fields (review_id, source, field) and ``quote_origin='review'``
     for downstream audit -- matches the blog producer convention.
     """
-    from ._b2b_shared import read_vendor_quote_evidence
     from ...services.b2b.enrichment_contract import quote_grade_phrases
 
     rows = await read_vendor_quote_evidence(
