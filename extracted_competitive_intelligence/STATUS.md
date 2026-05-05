@@ -51,6 +51,7 @@ Full task/runtime decoupling remains Phase 3.
 | Challenger claim aggregation boundary | ✅ `services/b2b/challenger_dashboard_claims.py` is a fail-closed host adapter port |
 | Competitive-set planner boundary | ✅ `services/b2b_competitive_sets.py` is product-owned and uses `competitive_set_ports.py` for reasoning/task support |
 | Cross-vendor synthesis boundary | ✅ `_b2b_cross_vendor_synthesis.py` is product-owned packet/contract/reader logic with extracted semantic-cache hashing |
+| Vendor target selection boundary | ✅ `services/vendor_target_selection.py` is product-owned deterministic dedupe/prioritization logic |
 
 ### Current audit snapshot
 
@@ -60,7 +61,7 @@ Full task/runtime decoupling remains Phase 3.
 | Manifest mappings | 12 |
 | Manifest Python snapshots | 3 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 21 |
+| Product-owned modules | 22 |
 
 Product-owned modules:
 
@@ -70,6 +71,7 @@ Product-owned modules:
 - `mcp/b2b/write_intelligence.py`
 - `mcp/b2b/write_ports.py`
 - `services/vendor_registry.py`
+- `services/vendor_target_selection.py`
 - `services/scraping/capabilities.py`
 - `services/b2b/source_impact.py`
 - `services/b2b/challenger_dashboard_claims.py`
@@ -102,6 +104,7 @@ Product-owned modules:
 | Scaffold file | Phase 1 (snapshot) | Phase 2 (standalone-ready) | Phase 3 (decoupled) |
 |---|---|---|---|
 | `services/vendor_registry.py` | ✅ | ✅ | 🔲 |
+| `services/vendor_target_selection.py` | n/a | ✅ | ✅ |
 | `mcp/b2b/vendor_registry.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/displacement.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/cross_vendor.py` | ✅ | ✅ | ✅ |

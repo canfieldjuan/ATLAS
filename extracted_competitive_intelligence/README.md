@@ -20,6 +20,7 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | Path | Purpose |
 |---|---|
 | `services/vendor_registry.py` | Canonical vendor names + aliases + cache |
+| `services/vendor_target_selection.py` | Deterministic target-row dedupe and prioritization |
 | `mcp/b2b/vendor_registry.py` | MCP tools for list/search/fuzzy-match |
 | `mcp/b2b/displacement.py` | MCP tools for querying displacement edges |
 | `mcp/b2b/cross_vendor.py` | MCP tools for cross-vendor conclusions |
@@ -79,6 +80,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed
 - `services/b2b/challenger_dashboard_claims.py` uses fail-closed host reader ports for displacement ProductClaim aggregation
 - `services/b2b/product_claim.py` re-exports the `extracted_quality_gate.product_claim` contract instead of bridging to Atlas
+- `services/vendor_target_selection.py` owns deterministic target-row dedupe locally
 - Lazy package fallbacks fail closed in standalone mode instead of silently importing Atlas package namespaces
 
 Standalone adapters that require a host application fail closed until configured.
@@ -102,6 +104,8 @@ snapshot to extracted implementation.
 
 The service-level `services/vendor_registry.py` module is product-owned: it
 uses the extracted storage bridge and is no longer byte-synced from Atlas.
+`services/vendor_target_selection.py` is product-owned deterministic selection
+logic for keeping the strongest row per `(company_name, target_mode)` pair.
 The first owned MCP modules are `vendor_registry.py`, `displacement.py`, and
 `cross_vendor.py`; they are read-oriented surfaces with extracted-owned support
 dependencies. `write_intelligence.py` is also product-owned: simple database

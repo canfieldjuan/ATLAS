@@ -30,6 +30,7 @@ def test_manifest_tracks_product_owned_competitive_modules() -> None:
     assert "extracted_competitive_intelligence/mcp/b2b/cross_vendor.py" in owned
     assert "extracted_competitive_intelligence/mcp/b2b/write_intelligence.py" in owned
     assert "extracted_competitive_intelligence/mcp/b2b/write_ports.py" in owned
+    assert "extracted_competitive_intelligence/services/vendor_target_selection.py" in owned
     assert "extracted_competitive_intelligence/services/scraping/capabilities.py" in owned
     assert "extracted_competitive_intelligence/services/b2b/source_impact.py" in owned
     assert "extracted_competitive_intelligence/services/b2b/challenger_dashboard_claims.py" in owned
@@ -53,6 +54,7 @@ def test_product_owned_competitive_modules_are_not_manifest_synced() -> None:
     assert "extracted_competitive_intelligence/services/vendor_registry.py" not in mapped
     assert "extracted_competitive_intelligence/mcp/b2b/write_intelligence.py" not in mapped
     assert "extracted_competitive_intelligence/mcp/b2b/write_ports.py" not in mapped
+    assert "extracted_competitive_intelligence/services/vendor_target_selection.py" not in mapped
     assert "extracted_competitive_intelligence/services/scraping/capabilities.py" not in mapped
     assert "extracted_competitive_intelligence/services/b2b/source_impact.py" not in mapped
     assert "extracted_competitive_intelligence/services/b2b/challenger_dashboard_claims.py" not in mapped

@@ -1,23 +1,39 @@
-"""Phase 1 bridge: re-exports atlas_brain.services.vendor_target_selection.
+"""Vendor target selection helpers for Competitive Intelligence workflows."""
 
-Programmatically copies every non-dunder name (including underscore-
-prefixed helpers that from X import * would drop). Required because
-many scaffolded modules import private helpers from atlas_brain peers
-via from .X import _foo lazily inside function bodies. Phase 2
-replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
-"""
 from __future__ import annotations
 
-import importlib as _importlib
-
-def _bridge() -> None:
-    src = _importlib.import_module("atlas_brain.services.vendor_target_selection")
-    g = globals()
-    for name in dir(src):
-        if not name.startswith("__"):
-            g[name] = getattr(src, name)
+from typing import Any, Mapping
 
 
-_bridge()
-del _bridge, _importlib
+def _target_key(row: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("company_name") or "").strip().lower(),
+        str(row.get("target_mode") or "").strip().lower(),
+    )
+
+
+def _target_priority(row: Mapping[str, Any]) -> tuple[int, int, str]:
+    freshness = str(row.get("updated_at") or row.get("created_at") or "")
+    return (
+        1 if row.get("account_id") else 0,
+        1 if row.get("contact_email") else 0,
+        freshness,
+    )
+
+
+def dedupe_vendor_target_rows(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the strongest row per ``(company_name, target_mode)`` pair."""
+    best_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for raw_row in rows:
+        row = dict(raw_row)
+        key = _target_key(row)
+        existing = best_by_key.get(key)
+        if existing is None or _target_priority(row) > _target_priority(existing):
+            best_by_key[key] = row
+    return sorted(
+        best_by_key.values(),
+        key=lambda row: (
+            str(row.get("company_name") or "").strip().lower(),
+            str(row.get("target_mode") or "").strip().lower(),
+        ),
+    )
