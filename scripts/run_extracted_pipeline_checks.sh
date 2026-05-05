@@ -22,6 +22,7 @@ pytest \
   tests/test_extracted_campaign_postgres_export.py \
   tests/test_extracted_campaign_postgres_review.py \
   tests/test_extracted_campaign_postgres_seller_targets.py \
+  tests/test_extracted_campaign_postgres_seller_opportunities.py \
   tests/test_extracted_campaign_postgres_send.py \
   tests/test_extracted_campaign_postgres_analytics.py \
   tests/test_extracted_campaign_postgres_webhooks.py \

@@ -44,6 +44,11 @@
 - `campaign_postgres_seller_targets` provides product-owned CRUD/list helpers
   for `seller_targets`, the Amazon seller outreach recipient table copied in
   the product migrations.
+- `campaign_postgres_seller_opportunities` prepares Amazon seller
+  `campaign_opportunities` rows from active `seller_targets` and cached
+  `category_intelligence_snapshots`, giving hosts a standalone bridge from
+  seller recipients plus category intelligence into the existing campaign
+  generation runner.
 - `api.seller_campaigns` provides a FastAPI router factory around seller
   targets and seller draft review/export routes. Seller draft review is guarded
   to `target_mode="amazon_seller"`.

@@ -183,6 +183,13 @@ pool providers, tenant scope, and auth dependencies.
 seller-recipient table seam for Amazon seller outreach. It provides CRUD/list
 helpers over `seller_targets` without importing Atlas seller API code.
 
+`extracted_content_pipeline/campaign_postgres_seller_opportunities.py` owns the
+seller opportunity preparation seam. It converts active `seller_targets` plus
+cached `category_intelligence_snapshots` into normalized
+`campaign_opportunities` rows with `target_mode="amazon_seller"`, so the
+existing DB-backed generator can produce seller drafts without importing the
+Atlas seller scheduled task or product review aggregation code.
+
 `extracted_content_pipeline/api/seller_campaigns.py` owns the host-mounted
 FastAPI surface for seller target management and seller draft review. It keeps
 seller draft list/export/review locked to `target_mode="amazon_seller"` and
