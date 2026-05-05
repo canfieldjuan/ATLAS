@@ -398,7 +398,9 @@ def _operation_readiness(
         and skills_configured
     )
     generation_ready = database_available and (
-        not config.generation_single_pass_reasoning or single_pass_ready
+        explicit_reasoning
+        or not config.generation_single_pass_reasoning
+        or single_pass_ready
     )
     sequence_ready = database_available and bool(_clean(config.sequence_from_email))
     return {

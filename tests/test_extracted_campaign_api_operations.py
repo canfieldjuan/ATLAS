@@ -311,6 +311,23 @@ def test_campaign_operations_router_status_marks_single_pass_ready() -> None:
     assert payload["features"]["draft_generation"] is True
 
 
+def test_campaign_operations_router_status_treats_explicit_reasoning_as_ready() -> None:
+    response = _client(
+        _Pool(),
+        reasoning=_Reasoning(),
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reasoning"] == {
+        "mode": "explicit_provider",
+        "single_pass_configured": True,
+        "single_pass_ready": False,
+    }
+    assert payload["features"]["draft_generation"] is True
+
+
 def test_campaign_operations_router_generates_with_payload_scope(monkeypatch) -> None:
     calls = []
 
