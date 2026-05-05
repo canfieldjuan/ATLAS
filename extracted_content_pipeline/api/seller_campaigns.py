@@ -159,15 +159,21 @@ def _parse_payload_list(value: Any, *, default: Sequence[str] = ()) -> tuple[str
 
 def _payload_categories(payload: Mapping[str, Any]) -> tuple[str, ...]:
     raw_categories = payload.get("categories")
-    if raw_categories is not None and not (
-        isinstance(raw_categories, str)
-        or (
-            isinstance(raw_categories, Sequence)
-            and not isinstance(raw_categories, (bytes, bytearray))
-        )
+    if raw_categories is None:
+        categories: list[str] = []
+    elif isinstance(raw_categories, str):
+        categories = list(dict.fromkeys(_parse_payload_list(raw_categories)))
+    elif isinstance(raw_categories, Sequence) and not isinstance(
+        raw_categories,
+        (bytes, bytearray),
     ):
+        categories = []
+        for item in raw_categories:
+            category = _clean(item)
+            if category and category not in categories:
+                categories.append(category)
+    else:
         raise HTTPException(status_code=400, detail="categories must be a list or string")
-    categories = list(dict.fromkeys(_parse_payload_list(raw_categories)))
     single = _clean(payload.get("category"))
     if single and single not in categories:
         categories.append(single)
