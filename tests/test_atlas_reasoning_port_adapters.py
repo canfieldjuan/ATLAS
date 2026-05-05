@@ -21,6 +21,7 @@ needed and no path that reaches real I/O.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -625,3 +626,51 @@ async def test_atlas_llm_client_complete_returns_dict_for_non_dict_chat_result(
         temperature=0.0,
     )
     assert result == {"response": "raw string response"}
+
+
+@pytest.mark.asyncio
+async def test_atlas_llm_client_enforces_metadata_timeout_via_wait_for(
+    stub_protocols_module,
+) -> None:
+    # Atlas's pre-extraction _llm_generate wrapped chat() in
+    # asyncio.wait_for(timeout=120). PR-C4e2 broke that until the
+    # adapter was taught to honor the metadata timeout itself --
+    # forwarding ``timeout`` to chat() alone isn't enough because
+    # some Provider impls ignore the kwarg or block in non-cooperative
+    # C extensions. Pin the wait_for behavior so a regression here
+    # would surface as a TimeoutError, not an indefinite hang.
+    import time
+
+    class _SlowChatService:
+        def chat(self, **kwargs: Any) -> dict[str, Any]:
+            time.sleep(2.0)  # Longer than our 0.05s timeout below.
+            return {"response": "should never be reached"}
+
+    client = AtlasLLMClient(_SlowChatService())
+    with pytest.raises(asyncio.TimeoutError):
+        await client.complete(
+            [{"role": "user", "content": "x"}],
+            max_tokens=10,
+            temperature=0.0,
+            metadata={"timeout": 0.05},
+        )
+
+
+@pytest.mark.asyncio
+async def test_atlas_llm_client_no_timeout_when_metadata_omits_it(
+    stub_protocols_module,
+) -> None:
+    # Without an explicit timeout in metadata, the adapter awaits the
+    # to_thread coroutine directly -- no outer wait_for. This
+    # preserves backward compat with callers that don't care about
+    # deadlines (and doesn't impose an arbitrary default).
+    fake = _RecordingLLMService(response={"response": "ok"})
+    client = AtlasLLMClient(fake)
+    result = await client.complete(
+        [{"role": "user", "content": "x"}],
+        max_tokens=10,
+        temperature=0.0,
+    )
+    assert result == {"response": "ok"}
+    # Sanity: no timeout kwarg got passed to chat() when none in metadata.
+    assert "timeout" not in fake.calls[0]

@@ -65,6 +65,20 @@ def test_parse_llm_json_raises_on_no_object() -> None:
         parse_llm_json("just prose, no JSON here")
 
 
+def test_parse_llm_json_raises_on_non_dict_result() -> None:
+    # Downstream graph nodes always call ``.get(...)`` on the parsed
+    # result -- a JSON array would AttributeError. Pin the dict-only
+    # contract so a future refactor can't broaden the return type
+    # without an explicit test update.
+    with pytest.raises(json.JSONDecodeError):
+        parse_llm_json("[1, 2, 3]")
+    with pytest.raises(json.JSONDecodeError):
+        parse_llm_json('"plain string"')
+    # Still raises when the array is fenced or embedded.
+    with pytest.raises(json.JSONDecodeError):
+        parse_llm_json("```json\n[1, 2]\n```")
+
+
 # ----------------------------------------------------------------------
 # valid_uuid_str
 # ----------------------------------------------------------------------
@@ -384,6 +398,7 @@ async def test_complete_with_json_round_trip() -> None:
     assert result["response"] == '{"answer": 42}'
     assert result["usage"] == {"input_tokens": 3, "output_tokens": 1}
     assert result["parsed"] == {"answer": 42}
+    assert result["parse_ok"] is True
 
     # Metadata carries json_mode + response_format so the atlas adapter
     # can lift them into chat()'s typed kwargs.
@@ -392,7 +407,7 @@ async def test_complete_with_json_round_trip() -> None:
 
 
 @pytest.mark.asyncio
-async def test_complete_with_json_returns_empty_parsed_on_malformed_json() -> None:
+async def test_complete_with_json_signals_parse_failure() -> None:
     fake = _FakeJSONClient("not valid JSON at all")
     result = await complete_with_json(
         fake, "system", "user", max_tokens=64, temperature=0.0,
@@ -400,8 +415,36 @@ async def test_complete_with_json_returns_empty_parsed_on_malformed_json() -> No
     # Raw response is preserved -- caller can fall back to it.
     assert result["response"] == "not valid JSON at all"
     # parsed is empty rather than raising, so call sites can check
-    # truthiness rather than wrap in try/except.
+    # parse_ok rather than wrap in try/except.
     assert result["parsed"] == {}
+    assert result["parse_ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_complete_with_json_distinguishes_empty_object_from_parse_failure() -> None:
+    # A model returning a *valid* empty JSON object ``{}`` should be
+    # distinguishable from a parse failure -- the graph nodes' "force
+    # notify on parse failure" semantics require it. parse_ok is the
+    # source of truth, not parsed-truthiness.
+    fake = _FakeJSONClient("{}")
+    result = await complete_with_json(
+        fake, "system", "user", max_tokens=64, temperature=0.0,
+    )
+    assert result["parsed"] == {}
+    assert result["parse_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_complete_with_json_signals_parse_failure_on_non_object() -> None:
+    # parse_llm_json now raises on JSON arrays/scalars; complete_with_json
+    # must surface that as parse_ok=False rather than letting the array
+    # leak through and crash the caller's ``.get(...)``.
+    fake = _FakeJSONClient("[1, 2, 3]")
+    result = await complete_with_json(
+        fake, "system", "user", max_tokens=64, temperature=0.0,
+    )
+    assert result["parsed"] == {}
+    assert result["parse_ok"] is False
 
 
 @pytest.mark.asyncio

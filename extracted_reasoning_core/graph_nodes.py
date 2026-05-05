@@ -61,6 +61,7 @@ async def node_triage(
     *,
     triage_system_prompt: str,
     max_tokens: int = _TRIAGE_MAX_TOKENS_DEFAULT,
+    timeout: float | None = None,
 ) -> ReasoningAgentState:
     """Classify event priority and whether reasoning is needed.
 
@@ -94,6 +95,7 @@ async def node_triage(
             max_tokens=max_tokens,
             temperature=_TRIAGE_TEMPERATURE,
             json_mode=True,
+            timeout=timeout,
         )
     except Exception:
         logger.warning("Triage failed, defaulting to reason", exc_info=True)
@@ -109,6 +111,19 @@ async def node_triage(
     state["total_output_tokens"] = (
         state.get("total_output_tokens", 0) + int(usage.get("output_tokens", 0) or 0)
     )
+
+    if not result["parse_ok"]:
+        # Atlas's pre-extraction _node_triage caught the
+        # JSONDecodeError raised by _parse_llm_json and applied this
+        # exact fallback. ``complete_with_json`` swallows the error
+        # and signals via ``parse_ok=False`` so we apply the fallback
+        # here instead -- preserving the "default to reason on
+        # malformed triage" safety property.
+        logger.warning("Triage produced unparseable output, defaulting to reason")
+        state["triage_priority"] = "medium"
+        state["needs_reasoning"] = True
+        state["triage_reasoning"] = "Triage parse error, defaulting to reason"
+        return state
 
     parsed = result["parsed"]
     state["triage_priority"] = parsed.get("priority", "medium")
@@ -131,6 +146,7 @@ async def node_synthesize(
     synthesis_system_prompt: str,
     max_tokens: int = _SYNTH_MAX_TOKENS_DEFAULT,
     temperature: float = _SYNTH_TEMPERATURE_DEFAULT,
+    timeout: float | None = None,
 ) -> ReasoningAgentState:
     """Generate a human-readable summary for notification.
 
@@ -160,10 +176,12 @@ async def node_synthesize(
 
     try:
         messages = make_chat_messages(synthesis_system_prompt, context)
+        metadata = {"timeout": timeout} if timeout is not None else None
         result = await llm.complete(
             messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            metadata=metadata,
         )
     except Exception:
         logger.warning("Synthesis failed, using deterministic fallback", exc_info=True)

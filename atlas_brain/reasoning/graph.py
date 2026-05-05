@@ -34,6 +34,13 @@ from .state import ReasoningAgentState
 
 logger = logging.getLogger("atlas.reasoning.graph")
 
+# Per-call deadline for the graph's LLM round-trips. Atlas's pre-
+# extraction ``_llm_generate`` enforced 120s via ``asyncio.wait_for``;
+# the new path threads this through Port metadata so ``AtlasLLMClient``
+# can apply the same outer ``wait_for`` (and forward it to ``chat`` as
+# a kwarg, in case the underlying client honors timeouts natively).
+_GRAPH_LLM_TIMEOUT_S: float = 120.0
+
 
 def _resolve_graph_llm(workload: str, *, use_model_override: bool = False):
     """Resolve reasoning-graph LLMs through the pipeline router.
@@ -163,6 +170,7 @@ async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
         client,
         triage_system_prompt=TRIAGE_SYSTEM,
         max_tokens=settings.reasoning.triage_max_tokens,
+        timeout=_GRAPH_LLM_TIMEOUT_S,
     )
 
 
@@ -318,6 +326,7 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
             max_tokens=settings.reasoning.max_tokens,
             temperature=settings.reasoning.temperature,
             json_mode=True,
+            timeout=_GRAPH_LLM_TIMEOUT_S,
         )
     except Exception:
         logger.error("Reasoning node failed", exc_info=True)
@@ -338,17 +347,20 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
 
     state["reasoning_output"] = text
 
-    parsed = result["parsed"]
-    if parsed:
+    if result["parse_ok"]:
+        parsed = result["parsed"]
         state["connections_found"] = parsed.get("connections", [])
         state["recommended_actions"] = parsed.get("actions", [])
         state["rationale"] = parsed.get("rationale", "")
         state["should_notify"] = parsed.get("should_notify", False)
     else:
-        # ``complete_with_json`` returns ``parsed={}`` on JSON-decode
-        # failure. Preserve atlas's pre-extraction behavior: surface
-        # the raw text as rationale + force notify so the human sees
-        # the unparsed reasoning output.
+        # ``complete_with_json`` returns ``parse_ok=False`` on
+        # JSON-decode failure (or non-object JSON / empty response).
+        # Preserve atlas's pre-extraction behavior: surface the raw
+        # text as rationale + force notify so the human sees the
+        # unparsed reasoning output. ``parse_ok=False`` distinguishes
+        # this from a *valid* empty JSON object, which would
+        # mistakenly trip the same fallback under a truthiness check.
         state["connections_found"] = []
         state["recommended_actions"] = []
         state["rationale"] = text
@@ -441,6 +453,7 @@ async def _node_synthesize(state: ReasoningAgentState) -> ReasoningAgentState:
         state,
         client,
         synthesis_system_prompt=SYNTHESIS_SYSTEM,
+        timeout=_GRAPH_LLM_TIMEOUT_S,
     )
 
 

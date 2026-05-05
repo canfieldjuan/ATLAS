@@ -125,15 +125,64 @@ async def test_node_triage_falls_back_when_llm_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_node_triage_default_priority_when_parsed_keys_missing() -> None:
-    # If the model returns valid JSON but no ``priority`` field, fall
-    # back to ``medium`` priority + needs_reasoning. This protects
-    # against models that occasionally emit ``{}`` or partial objects.
+    # If the model returns valid JSON ``{}`` (no ``priority`` field),
+    # fall back to ``medium`` priority + needs_reasoning via the
+    # parsed-key defaults. parse_ok is True here -- the response
+    # parsed cleanly, just had no fields.
     fake = _RecordingLLMClient(response_text="{}")
     state: dict = {"event_type": "system.tick"}
     await node_triage(state, fake, triage_system_prompt=_TRIAGE_PROMPT)
     assert state["triage_priority"] == "medium"
     assert state["needs_reasoning"] is True
     assert state["triage_reasoning"] == ""
+
+
+@pytest.mark.asyncio
+async def test_node_triage_falls_back_on_unparseable_output() -> None:
+    # The model returned a non-JSON response. complete_with_json
+    # swallows the JSONDecodeError and signals via parse_ok=False;
+    # node_triage must apply the same "default to reason on parse
+    # failure" fallback atlas's pre-extraction code did. Without
+    # this branch, malformed triage output would silently leak
+    # through with empty triage_reasoning.
+    fake = _RecordingLLMClient(response_text="not JSON at all")
+    state: dict = {"event_type": "system.tick"}
+    await node_triage(state, fake, triage_system_prompt=_TRIAGE_PROMPT)
+    assert state["triage_priority"] == "medium"
+    assert state["needs_reasoning"] is True
+    assert "Triage parse error" in state["triage_reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_node_triage_threads_timeout_through_metadata() -> None:
+    fake = _RecordingLLMClient(response_text='{"priority": "low"}')
+    state: dict = {"event_type": "system.tick"}
+    await node_triage(
+        state, fake,
+        triage_system_prompt=_TRIAGE_PROMPT,
+        timeout=45.0,
+    )
+    # Timeout reaches the LLMClient via metadata so the adapter can
+    # apply the deadline (asyncio.wait_for + chat kwarg).
+    assert fake.calls[0]["metadata"]["timeout"] == 45.0
+
+
+@pytest.mark.asyncio
+async def test_node_synthesize_threads_timeout_through_metadata() -> None:
+    fake = _RecordingLLMClient(response_text="A summary line.")
+    state: dict = {
+        "should_notify": True,
+        "event_type": "vendor.churn",
+        "action_results": [],
+        "rationale": "...",
+        "connections_found": [],
+    }
+    await node_synthesize(
+        state, fake,
+        synthesis_system_prompt=_SYNTH_PROMPT,
+        timeout=30.0,
+    )
+    assert fake.calls[0]["metadata"]["timeout"] == 30.0
 
 
 # ----------------------------------------------------------------------

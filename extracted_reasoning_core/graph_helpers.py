@@ -79,28 +79,40 @@ _PLAN_MIN_CONFIDENCE: float = 0.5
 
 
 def parse_llm_json(text: str) -> dict[str, Any]:
-    """Extract and parse JSON from an LLM response.
+    """Extract and parse a JSON *object* from an LLM response.
 
     Handles raw JSON, markdown-fenced JSON, and JSON embedded in prose.
-    Raises ``json.JSONDecodeError`` if no valid object is found.
+    Raises ``json.JSONDecodeError`` if no valid object is found, or if
+    the parsed result isn't a dict (the LLM returned a JSON array,
+    string, or scalar -- downstream graph nodes always expect an
+    object and would ``AttributeError`` on ``.get(...)`` against a
+    list).
     """
     text = text.strip()
     if not text:
         raise json.JSONDecodeError("Empty response", text, 0)
 
+    parsed: Any
     if text.startswith("{"):
-        return json.loads(text)
-
-    m = _JSON_FENCE_RE.search(text)
-    if m:
-        return json.loads(m.group(1).strip())
-
-    first = text.find("{")
-    last = text.rfind("}")
-    if first != -1 and last > first:
-        return json.loads(text[first : last + 1])
-
-    raise json.JSONDecodeError("No JSON object found in response", text, 0)
+        parsed = json.loads(text)
+    else:
+        m = _JSON_FENCE_RE.search(text)
+        if m:
+            parsed = json.loads(m.group(1).strip())
+        else:
+            first = text.find("{")
+            last = text.rfind("}")
+            if first != -1 and last > first:
+                parsed = json.loads(text[first : last + 1])
+            else:
+                raise json.JSONDecodeError(
+                    "No JSON object found in response", text, 0
+                )
+    if not isinstance(parsed, dict):
+        raise json.JSONDecodeError(
+            f"Expected JSON object, got {type(parsed).__name__}", text, 0
+        )
+    return parsed
 
 
 def valid_uuid_str(value: Any) -> str | None:
@@ -293,8 +305,19 @@ async def complete_with_json(
 ) -> dict[str, Any]:
     """Issue a chat completion expecting JSON; return raw + parsed.
 
-    Returns a dict with keys ``response`` (str), ``usage`` (dict), and
-    ``parsed`` (dict, or ``{}`` if the response wasn't valid JSON).
+    Returns a dict with keys:
+
+    - ``response`` (str) -- the raw LLM output
+    - ``usage`` (dict) -- token-usage metrics (may be empty)
+    - ``parsed`` (dict) -- the parsed JSON object, or ``{}`` if the
+      response wasn't valid JSON. Callers that need to distinguish
+      "valid empty JSON object ``{}``" from "parse failure" must read
+      the ``parse_ok`` flag rather than truthiness-check ``parsed``.
+    - ``parse_ok`` (bool) -- ``True`` iff the response parsed cleanly.
+      ``False`` covers empty response, JSON-decode error, and
+      non-object JSON (array/scalar). The graph nodes' "force notify
+      on parse failure" semantics depend on this distinction.
+
     Hides three boilerplate concerns the LLM-driven graph nodes all
     need:
 
@@ -303,7 +326,8 @@ async def complete_with_json(
       atlas-side adapter can lift them out (see
       :class:`atlas_brain.reasoning.port_adapters.AtlasLLMClient`)
     - tolerating malformed JSON without raising (returns
-      ``parsed={}`` and lets the node decide whether to fall back)
+      ``parsed={}, parse_ok=False`` and lets the node decide whether
+      to fall back)
     """
     messages = make_chat_messages(system_prompt, user_prompt)
     metadata: dict[str, Any] = {}
@@ -320,12 +344,20 @@ async def complete_with_json(
     )
     response, usage = extract_completion_text(result)
     parsed: dict[str, Any] = {}
+    parse_ok = False
     if response:
         try:
             parsed = parse_llm_json(response)
+            parse_ok = True
         except json.JSONDecodeError:
             parsed = {}
-    return {"response": response, "usage": usage, "parsed": parsed}
+            parse_ok = False
+    return {
+        "response": response,
+        "usage": usage,
+        "parsed": parsed,
+        "parse_ok": parse_ok,
+    }
 
 
 __all__ = [
