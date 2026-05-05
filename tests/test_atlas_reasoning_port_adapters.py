@@ -146,7 +146,12 @@ async def test_atlas_event_sink_emit_translates_args_and_stringifies_uuid() -> N
 
 
 @pytest.mark.asyncio
-async def test_atlas_event_sink_emit_omits_optional_entity_kwargs() -> None:
+async def test_atlas_event_sink_emit_propagates_none_when_entity_kwargs_unset() -> None:
+    # When the caller doesn't supply entity_type/entity_id, the adapter
+    # must propagate them as ``None`` to atlas's ``emit_event`` (matching
+    # atlas's ``Optional[str] = None`` parameter contract). The Port
+    # signature also marks both as optional, so tests must pin that the
+    # default flows through unchanged.
     fake = _RecordingEmit(UUID(int=0))
     sink = AtlasEventSink(emit_event=fake)
 
