@@ -21,6 +21,7 @@ MODULES = [
     "extracted_competitive_intelligence.storage.database",
     "extracted_competitive_intelligence.auth.dependencies",
     "extracted_competitive_intelligence.services.protocols",
+    "extracted_competitive_intelligence.services.llm_router",
     "extracted_competitive_intelligence.services.vendor_registry",
     "extracted_competitive_intelligence.services.campaign_sender",
     "extracted_competitive_intelligence.services.crm_provider",
@@ -89,6 +90,11 @@ def main() -> int:
             "extracted_competitive_intelligence.services.protocols",
             "Message",
             "extracted_llm_infrastructure._standalone.protocols",
+        ),
+        (
+            "extracted_competitive_intelligence.services.llm_router",
+            "get_llm",
+            "extracted_llm_infrastructure.services.llm_router",
         ),
         (
             "extracted_competitive_intelligence.services.scraping.sources",
