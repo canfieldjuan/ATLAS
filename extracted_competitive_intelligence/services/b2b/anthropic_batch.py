@@ -1,23 +1,27 @@
-"""Phase 1 bridge: re-exports atlas_brain.services.b2b.anthropic_batch.
+"""Anthropic batch bridge for extracted competitive intelligence.
 
-Programmatically copies every non-dunder name (including underscore-
-prefixed helpers that from X import * would drop). Required because
-many scaffolded modules import private helpers from atlas_brain peers
-via from .X import _foo lazily inside function bodies. Phase 2
-replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
+Default mode re-exports atlas_brain.services.b2b.anthropic_batch.
+Standalone mode delegates to extracted_llm_infrastructure so battle-card
+batch overlays use the extracted LLM substrate instead of Atlas.
 """
 from __future__ import annotations
 
 import importlib as _importlib
+import os as _os
 
-def _bridge() -> None:
-    src = _importlib.import_module("atlas_brain.services.b2b.anthropic_batch")
-    g = globals()
-    for name in dir(src):
-        if not name.startswith("__"):
-            g[name] = getattr(src, name)
+if _os.environ.get("EXTRACTED_COMP_INTEL_STANDALONE") == "1":
+    _os.environ.setdefault("EXTRACTED_LLM_INFRA_STANDALONE", "1")
+    from extracted_llm_infrastructure.services.b2b.anthropic_batch import *  # noqa: F401,F403
+else:
+    def _bridge() -> None:
+        src = _importlib.import_module("atlas_brain.services.b2b.anthropic_batch")
+        g = globals()
+        for name in dir(src):
+            if not name.startswith("__"):
+                g[name] = getattr(src, name)
 
 
-_bridge()
-del _bridge, _importlib
+    _bridge()
+    del _bridge
+
+del _importlib, _os
