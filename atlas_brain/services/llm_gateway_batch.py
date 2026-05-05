@@ -664,6 +664,23 @@ async def _persist_batch_usage(
     ``/api/v1/llm/usage`` -- matches what Anthropic actually
     charges them.
     """
+    # Short-circuit: if a concurrent poller already persisted
+    # usage for this batch, skip the (potentially expensive)
+    # Anthropic results fetch. The flag flip in phase 3 is
+    # account-scoped + idempotent, so this is purely a
+    # cost-saving check -- correctness is preserved either way.
+    # Copilot on PR-D4d.
+    already_tracked = await pool.fetchval(
+        """
+        SELECT usage_tracked FROM llm_gateway_batches
+        WHERE id = $1 AND account_id = $2
+        """,
+        batch_id,
+        account_id,
+    )
+    if already_tracked is True:
+        return
+
     # Phase 1: Pre-fetch results from Anthropic. Materialize the
     # async iterator into memory BEFORE we touch the DB. The SDK
     # call is the most likely failure point (network, provider
@@ -699,6 +716,29 @@ async def _persist_batch_usage(
                 "cache_write_tokens": int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
                 "provider_request_id": getattr(message, "id", None),
             })
+
+    # Validate custom_ids before any DB write. A blank or
+    # duplicate custom_id would be silently absorbed by ON
+    # CONFLICT DO NOTHING (NULLs are distinct in UNIQUE indexes;
+    # duplicates collapse), but we'd still flip usage_tracked to
+    # TRUE and undercount the customer. Raise instead so
+    # usage_tracked stays FALSE and the next poll retries (or
+    # ops investigates the malformed payload). Copilot on PR-D4d.
+    seen_custom_ids: set[str] = set()
+    for item in items_to_persist:
+        cid = item["custom_id"]
+        if not cid:
+            raise ValueError(
+                f"_persist_batch_usage: blank custom_id from "
+                f"provider for batch={batch_id}; refusing to write"
+            )
+        if cid in seen_custom_ids:
+            raise ValueError(
+                f"_persist_batch_usage: duplicate custom_id "
+                f"{cid!r} from provider for batch={batch_id}; "
+                "refusing to write"
+            )
+        seen_custom_ids.add(cid)
 
     # Phase 2: Direct INSERT each per-item row. Conflicts (a prior
     # retry that wrote the same (account_id, batch_id, custom_id))

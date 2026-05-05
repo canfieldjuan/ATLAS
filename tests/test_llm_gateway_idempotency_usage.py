@@ -71,6 +71,22 @@ def test_migration_319_adds_batch_columns_and_unique_index():
     assert "WHERE batch_id IS NOT NULL" in sql
 
 
+def test_migration_319_check_constraint_blocks_null_or_blank_custom_id():
+    """Copilot on PR-D4d: a NULL custom_id is treated as distinct
+    in UNIQUE indexes, so the partial UNIQUE alone doesn't prevent
+    double-write. CHECK constraint enforces the invariant at the
+    DB level: any row with batch_id set MUST have a non-empty
+    custom_id."""
+    sql = _read_migration("319_llm_usage_batch_uniqueness.sql")
+    assert "llm_usage_batch_requires_custom_id" in sql
+    assert (
+        "CHECK (\n"
+        "            batch_id IS NULL\n"
+        "            OR (custom_id IS NOT NULL AND custom_id <> '')\n"
+        "        )"
+    ) in sql
+
+
 # ---- submit_customer_batch idempotency ----------------------------------
 
 
@@ -474,12 +490,16 @@ class _FakePool:
       - ``transaction()`` -- async context manager yielding a conn
         (matches storage/database.py:144).
       - ``execute()`` -- awaitable for the post-insert flag flip.
+      - ``fetchval()`` -- awaitable for the short-circuit check
+        on ``usage_tracked`` (PR-D4d Copilot).
       - DOES NOT implement ``acquire()``, so any code that tries
         the wrong primitive blows up immediately."""
 
-    def __init__(self) -> None:
+    def __init__(self, usage_tracked: bool = False) -> None:
         self.conn = _FakePoolConn()
         self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchval_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self._usage_tracked = usage_tracked
 
     @asynccontextmanager
     async def transaction(self):
@@ -487,6 +507,14 @@ class _FakePool:
 
     async def execute(self, query: str, *args: Any) -> None:
         self.execute_calls.append((query, args))
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        self.fetchval_calls.append((query, args))
+        # Mirror real DB behaviour: SELECT usage_tracked returns the
+        # column's bool value (or None if no matching row).
+        if "SELECT usage_tracked" in query:
+            return self._usage_tracked
+        return None
 
 
 class _FakeAnthropicResultEntry:
@@ -611,6 +639,112 @@ def test_persist_batch_usage_runtime_smoke():
     assert "SET usage_tracked = TRUE" in flag_sql
     assert "WHERE id = $1 AND account_id = $2 AND usage_tracked = FALSE" in flag_sql
     assert flag_args == (batch_id, account_id)
+
+
+def test_persist_batch_usage_short_circuits_when_already_tracked():
+    """Copilot on PR-D4d: when a concurrent poller already
+    persisted usage and flipped the flag, _persist_batch_usage
+    should skip the (potentially expensive) Anthropic results
+    fetch and exit immediately. Saves provider calls under
+    polling races; correctness is preserved either way (the flag
+    flip is idempotent + account-scoped)."""
+    from atlas_brain.services import llm_gateway_batch
+
+    pool = _FakePool(usage_tracked=True)
+
+    # Anthropic factory shouldn't be touched because the short-
+    # circuit fires first. Wire one that asserts if called.
+    sentinel: dict[str, bool] = {"sdk_called": False}
+
+    def _exploding_anthropic_factory(*args, **kwargs):
+        sentinel["sdk_called"] = True
+        return _FakeAsyncAnthropic(entries=[])
+
+    with patch("anthropic.AsyncAnthropic", _exploding_anthropic_factory):
+        asyncio.run(llm_gateway_batch._persist_batch_usage(
+            pool,
+            account_id=_uuid.uuid4(),
+            batch_id=_uuid.uuid4(),
+            provider_batch_id="msgbatch_already_tracked",
+            model="claude-haiku-4-5-20251001",
+            api_key="test-key",
+        ))
+
+    # Pre-check ran.
+    assert len(pool.fetchval_calls) == 1
+    assert "SELECT usage_tracked" in pool.fetchval_calls[0][0]
+    # SDK was NOT called.
+    assert sentinel["sdk_called"] is False
+    # No inserts, no flag flip.
+    assert pool.conn.executemany_calls == []
+    assert pool.execute_calls == []
+
+
+def test_persist_batch_usage_rejects_blank_custom_id():
+    """Copilot on PR-D4d: a blank custom_id from the provider
+    would be silently absorbed by ON CONFLICT (NULL/'' treated as
+    distinct in the UNIQUE index), but we'd still flip
+    usage_tracked TRUE and undercount. Raise instead so the flag
+    stays FALSE for retry / ops triage."""
+    from atlas_brain.services import llm_gateway_batch
+
+    pool = _FakePool()
+    entries = [_FakeAnthropicResultEntry("", 100, 50)]
+
+    def _fake_anthropic_factory(*args, **kwargs):
+        return _FakeAsyncAnthropic(entries=entries)
+
+    with patch("anthropic.AsyncAnthropic", _fake_anthropic_factory):
+        try:
+            asyncio.run(llm_gateway_batch._persist_batch_usage(
+                pool,
+                account_id=_uuid.uuid4(),
+                batch_id=_uuid.uuid4(),
+                provider_batch_id="msgbatch_blank",
+                model="claude-haiku-4-5-20251001",
+                api_key="test-key",
+            ))
+            raise AssertionError("expected ValueError")
+        except ValueError as exc:
+            assert "blank custom_id" in str(exc)
+
+    # No inserts, no flag flip -- usage_tracked stays FALSE so retry works.
+    assert pool.conn.executemany_calls == []
+    assert pool.execute_calls == []
+
+
+def test_persist_batch_usage_rejects_duplicate_custom_id():
+    """Copilot on PR-D4d: duplicate custom_id within a single
+    batch result set would have the second row absorbed by
+    ON CONFLICT, again undercounting silently. Detect at the
+    Python layer before any DB write."""
+    from atlas_brain.services import llm_gateway_batch
+
+    pool = _FakePool()
+    entries = [
+        _FakeAnthropicResultEntry("dup", 100, 50),
+        _FakeAnthropicResultEntry("dup", 200, 75),
+    ]
+
+    def _fake_anthropic_factory(*args, **kwargs):
+        return _FakeAsyncAnthropic(entries=entries)
+
+    with patch("anthropic.AsyncAnthropic", _fake_anthropic_factory):
+        try:
+            asyncio.run(llm_gateway_batch._persist_batch_usage(
+                pool,
+                account_id=_uuid.uuid4(),
+                batch_id=_uuid.uuid4(),
+                provider_batch_id="msgbatch_dup",
+                model="claude-haiku-4-5-20251001",
+                api_key="test-key",
+            ))
+            raise AssertionError("expected ValueError")
+        except ValueError as exc:
+            assert "duplicate custom_id" in str(exc)
+
+    assert pool.conn.executemany_calls == []
+    assert pool.execute_calls == []
 
 
 def test_persist_batch_usage_skips_db_when_no_succeeded_items():

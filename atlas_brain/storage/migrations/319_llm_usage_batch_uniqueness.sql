@@ -27,6 +27,29 @@ ALTER TABLE llm_usage
     ADD COLUMN IF NOT EXISTS batch_id  UUID,
     ADD COLUMN IF NOT EXISTS custom_id TEXT;
 
+-- Copilot on PR-D4d: a NULL custom_id is treated as distinct in
+-- the UNIQUE index, so without this CHECK two retries with NULL
+-- custom_id under the same batch_id could both insert -- exactly
+-- the double-write the index is meant to prevent. Empty string
+-- gets the same treatment because Anthropic shouldn't return one
+-- and we'd rather fail loud than silently group all blanks
+-- together as one item. Postgres rejects empty CHECK names so
+-- we use a DO-block guard for re-run safety.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'llm_usage_batch_requires_custom_id'
+    ) THEN
+        ALTER TABLE llm_usage
+        ADD CONSTRAINT llm_usage_batch_requires_custom_id
+        CHECK (
+            batch_id IS NULL
+            OR (custom_id IS NOT NULL AND custom_id <> '')
+        );
+    END IF;
+END $$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_usage_batch_item
     ON llm_usage (account_id, batch_id, custom_id)
     WHERE batch_id IS NOT NULL;
