@@ -87,6 +87,9 @@ atlas-ui/.vite/
 # Progress logs (session artifacts)
 PROGRESS_*.md
 
+# Hybrid reasoning checks JSON report output
+artifacts/
+
 # Pip freeze backups
 requirements.freeze.bak
 
