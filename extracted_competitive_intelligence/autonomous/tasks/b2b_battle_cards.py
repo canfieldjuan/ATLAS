@@ -19,9 +19,11 @@ from ...services.b2b.challenger_dashboard_claims import (
     aggregate_direct_displacement_claims_for_incumbent,
 )
 from ...services.b2b.product_claim import ProductClaim, SuppressionReason
+from ...services.b2b.battle_card_ports import (
+    update_execution_progress as _update_execution_progress,
+)
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_battle_cards")
 
@@ -2650,9 +2652,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_contract_context_distribution,
         _fetch_competitive_displacement_source_of_truth,
     )
-    from .b2b_churn_intelligence import (
-        _apply_vendor_scope_to_churn_inputs,
-        _normalize_test_vendors,
+    from ...services.b2b.battle_card_ports import (
+        apply_vendor_scope_to_churn_inputs as _apply_vendor_scope_to_churn_inputs,
+        normalize_test_vendors as _normalize_test_vendors,
     )
 
     window_days = cfg.intelligence_window_days
