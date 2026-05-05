@@ -27,6 +27,30 @@ _DEFAULT_PLACEHOLDER_BRAND_NAMES = (
     "unknown",
     "unbranded",
 )
+_DEFAULT_COMPARISON_NOISE_TERMS = (
+    "accessories",
+    "accessory",
+    "amazon",
+    "batteries",
+    "battery",
+    "bottle",
+    "case",
+    "charger",
+    "cover",
+    "filter",
+    "generic",
+    "kit",
+    "n/a",
+    "na",
+    "other",
+    "pack",
+    "product",
+    "refill",
+    "replacement",
+    "set",
+    "unknown",
+    "unbranded",
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +93,7 @@ class CategoryIntelligenceLimits:
     health_score_precision: int = 1
     competitive_adjacency_directions: tuple[str, ...] = _DEFAULT_ADJACENCY_DIRECTIONS
     placeholder_brand_names: tuple[str, ...] = _DEFAULT_PLACEHOLDER_BRAND_NAMES
+    comparison_noise_terms: tuple[str, ...] = _DEFAULT_COMPARISON_NOISE_TERMS
 
 
 async def refresh_seller_category_intelligence(
@@ -287,8 +312,8 @@ async def _fetch_brand_rows(
         SELECT
             pm.brand,
             COUNT(*) AS total_reviews,
-            COUNT(*) FILTER (WHERE pr.would_repurchase IS TRUE) AS repurchase_yes,
-            COUNT(*) FILTER (WHERE pr.would_repurchase IS FALSE) AS repurchase_no,
+            COUNT(*) FILTER (WHERE pr.deep_extraction->>'would_repurchase' = 'true') AS repurchase_yes,
+            COUNT(*) FILTER (WHERE pr.deep_extraction->>'would_repurchase' = 'false') AS repurchase_no,
             COUNT(*) FILTER (
                 WHERE pr.deep_extraction->'safety_flag'->>'flagged' = 'true'
             ) AS safety_count,
@@ -448,7 +473,26 @@ def _normalize_known_brand(
         matched = known_brands.get(candidate_key)
         if matched:
             return matched
-    return ""
+    return _fallback_competitor_brand(text, limits)
+
+
+def _fallback_competitor_brand(
+    value: Any,
+    limits: CategoryIntelligenceLimits,
+) -> str:
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return ""
+    key = _brand_key(text)
+    noise_terms = {_brand_key(value) for value in limits.comparison_noise_terms}
+    if key in noise_terms:
+        return ""
+    words = text.split()
+    if any(_brand_key(word) in noise_terms for word in words):
+        return ""
+    if len(words) == 1 and len(words[0]) < 4:
+        return ""
+    return text.title()
 
 
 def _brand_key(value: Any) -> str:
@@ -503,15 +547,17 @@ async def _fetch_competitive_flows(
             continue
         if direction == "switched_from":
             from_brand, to_brand = compared_brand, reviewed_brand
+            normalized_direction = "switched_to"
         else:
             from_brand, to_brand = reviewed_brand, compared_brand
-        key = (from_brand, to_brand, direction)
+            normalized_direction = direction
+        key = (from_brand, to_brand, normalized_direction)
         entry = merged.setdefault(
             key,
             {
                 "from_brand": from_brand,
                 "to_brand": to_brand,
-                "direction": direction,
+                "direction": normalized_direction,
                 "count": 0,
             },
         )

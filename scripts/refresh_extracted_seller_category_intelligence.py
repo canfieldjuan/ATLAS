@@ -88,7 +88,7 @@ async def _main() -> int:
         args.output.write_text(f"{output}\n", encoding="utf-8")
     else:
         print(output)
-    return 0
+    return 1 if result.failed else 0
 
 
 if __name__ == "__main__":

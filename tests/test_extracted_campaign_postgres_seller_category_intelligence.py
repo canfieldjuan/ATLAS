@@ -107,6 +107,12 @@ def _seed_aggregate_results(
                 "count": 2,
             },
             {
+                "reviewed_brand": "Brand B",
+                "compared_product": "Brand A",
+                "direction": "switched_from",
+                "count": 1,
+            },
+            {
                 "reviewed_brand": "Brand A",
                 "compared_product": "Brand C Charger",
                 "direction": "used_with",
@@ -159,12 +165,20 @@ async def test_aggregate_seller_category_intelligence_builds_snapshot() -> None:
     }
     assert snapshot["top_pain_points"][0]["severity"] == "medium"
     assert snapshot["feature_gaps"][0]["avg_rating"] == 2.8
-    assert snapshot["competitive_flows"] == [{
-        "from_brand": "Brand A",
-        "to_brand": "Brand B",
-        "direction": "switched_to",
-        "count": 3,
-    }]
+    assert snapshot["competitive_flows"] == [
+        {
+            "from_brand": "Brand A",
+            "to_brand": "Brand B",
+            "direction": "switched_to",
+            "count": 4,
+        },
+        {
+            "from_brand": "Brand A",
+            "to_brand": "Unmodeled Competitor",
+            "direction": "switched_to",
+            "count": 2,
+        },
+    ]
     assert snapshot["brand_health"][0]["trend"] == "rising"
 
     brand_query, brand_args = pool.fetch_calls[0]
@@ -177,6 +191,9 @@ async def test_aggregate_seller_category_intelligence_builds_snapshot() -> None:
     assert "from_product" not in flow_query
     assert "to_product" not in flow_query
     assert flow_args == ("supplements",)
+    brand_row_query, _brand_row_args = pool.fetch_calls[1]
+    assert "pr.would_repurchase" not in brand_row_query
+    assert "pr.deep_extraction->>'would_repurchase'" in brand_row_query
 
 
 @pytest.mark.asyncio
@@ -438,3 +455,34 @@ async def test_refresh_cli_wires_pool_and_result(monkeypatch, capsys) -> None:
     output = json.loads(capsys.readouterr().out)
     assert output["refreshed"] == 1
     assert output["categories"] == ["supplements"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_cli_returns_nonzero_when_categories_fail(monkeypatch, capsys) -> None:
+    cli = _load_cli_module()
+    pool = _Pool()
+    pool.fetch_results = [_known_brand_rows()]
+    pool.fetchrow_results.append(RuntimeError("stats failed"))
+
+    async def create_pool(database_url):
+        return pool
+
+    monkeypatch.setattr(cli, "_create_pool", create_pool)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "run",
+            "--database-url",
+            "postgres://example",
+            "--category",
+            "broken",
+        ],
+    )
+
+    exit_code = await cli._main()
+
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["failed"] == 1
+    assert output["errors"] == ["broken: stats failed"]
