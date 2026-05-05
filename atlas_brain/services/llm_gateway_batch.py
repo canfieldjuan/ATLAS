@@ -29,6 +29,7 @@ Atlas-internal lifecycle states (NOT Anthropic):
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid as _uuid
 from dataclasses import dataclass
@@ -54,6 +55,17 @@ TERMINAL_STATUSES = ("ended", "canceled", "expired", "submit_failed")
 
 # Provider statuses we treat as in-flight on the read path.
 ACTIVE_STATUSES = ("queued", "in_progress", "canceling")
+
+# Span name written into the ``span_name`` column of ``llm_usage``
+# for batch-item rows. Stable identifier so /api/v1/llm/usage
+# rollups can split batch traffic vs synchronous /chat traffic
+# without joining ``llm_gateway_batches``.
+_BATCH_ITEM_SPAN_NAME = "llm_gateway.batch_item"
+
+# Endpoint marker for batch-item rows. Mirrors the ``endpoint``
+# label written for sync /chat traffic so the same rollup queries
+# can group both lanes.
+_BATCH_ITEM_ENDPOINT = "llm_gateway.batch"
 
 
 @dataclass(frozen=True)
@@ -226,15 +238,35 @@ async def submit_customer_batch(
                 # Recent queued (< 60s old) or another retry already
                 # claimed it. Replay -- the customer polls /batch/{id}
                 # either way.
+                #
+                # PR-D4d post-audit: re-read the row before returning.
+                # The ``existing`` snapshot was taken before the resume
+                # claim attempt; if a concurrent retry just succeeded
+                # (set provider_batch_id, transitioned to in_progress),
+                # ``existing`` is stale. Fetching fresh state means the
+                # caller sees the current row instead of the snapshot.
+                latest = await pool.fetchrow(
+                    """
+                    SELECT id, account_id, provider, provider_batch_id, model,
+                           status, total_items, completed_items, failed_items,
+                           error_text, created_at, updated_at, submitted_at,
+                           completed_at, usage_tracked
+                    FROM llm_gateway_batches
+                    WHERE id = $1 AND account_id = $2
+                    """,
+                    existing["id"],
+                    account_id,
+                )
+                replay_row = latest if latest is not None else existing
                 logger.info(
                     "llm_gateway_batch.submit replay (in-flight) "
                     "account=%s key=%s id=%s status=%s",
                     account_id,
                     normalized_key,
-                    existing["id"],
-                    existing["status"],
+                    replay_row["id"],
+                    replay_row["status"],
                 )
-                return _row_to_record(existing)
+                return _row_to_record(replay_row)
             logger.info(
                 "llm_gateway_batch.submit resume pre-submit "
                 "account=%s key=%s id=%s prior_status=%s",
@@ -569,6 +601,28 @@ async def refresh_customer_batch_status(
 _BATCH_DISCOUNT_FACTOR = 0.5
 
 
+_BATCH_USAGE_INSERT_SQL = """
+INSERT INTO llm_usage (
+    span_name, operation_type, model_name, model_provider,
+    input_tokens, output_tokens, total_tokens,
+    billable_input_tokens, cached_tokens, cache_write_tokens,
+    cost_usd, status, metadata,
+    api_endpoint, provider_request_id, account_id,
+    batch_id, custom_id
+) VALUES (
+    $1, 'llm_call', $2, 'anthropic',
+    $3, $4, $5,
+    $6, $7, $8,
+    $9, 'completed', $10::jsonb,
+    $11, $12, $13,
+    $14, $15
+)
+ON CONFLICT (account_id, batch_id, custom_id)
+WHERE batch_id IS NOT NULL
+DO NOTHING
+"""
+
+
 async def _persist_batch_usage(
     pool,
     *,
@@ -580,20 +634,30 @@ async def _persist_batch_usage(
 ) -> None:
     """Write per-item ``llm_usage`` rows for a completed batch.
 
-    Two-phase design (Codex P1 + Copilot on PR-D4c):
+    Three-phase design (PR-D4d, post-audit):
 
     1. Pre-fetch all results from Anthropic into memory. No DB
        writes happen yet -- if the SDK iteration fails mid-stream,
-       the usage_tracked flag stays FALSE and the next poll retries
-       cleanly.
-    2. Atomic claim flips usage_tracked FALSE->TRUE under
-       (id, account_id) so concurrent pollers and cross-account
-       batch_id misrouting both no-op.
-    3. Then persist. Trace_llm_call failures here are logged but
-       NOT rolled back, because the rollback + retry pattern would
-       re-emit the items that already landed and double-count
-       against the customer. Failure to write a single item is
-       recovered by ops (the partial-write is logged loudly).
+       ``usage_tracked`` stays FALSE and the next poll retries
+       from a clean slate.
+    2. Direct INSERT each per-item row via ``pool.executemany``
+       under a transaction. Each row uses ``ON CONFLICT
+       (account_id, batch_id, custom_id) DO NOTHING`` (migration
+       319) so retries are safe -- if a partial set of rows
+       already landed, conflicts no-op silently.
+    3. Flip ``usage_tracked = TRUE`` only AFTER the inserts
+       commit. A concurrent poller racing on the same batch hits
+       the same ON CONFLICT predicate (no double-write), and the
+       UPDATE-at-end is account-scoped so cross-account batch_id
+       reuse can never flip a foreign row.
+
+    PR-D4c routed per-item writes through ``trace_llm_call``,
+    which calls ``tracer.end_span`` -> ``loop.create_task`` --
+    fire-and-forget. That meant the persist phase could not catch
+    DB failures and ``usage_tracked = TRUE`` was set BEFORE writes
+    actually landed. PR-D4d issues writes directly so failures
+    surface synchronously and the flag flip honestly reflects
+    "all rows landed."
 
     Per-item cost applies the 50% Anthropic batch discount.
     Customers see the discounted figure in
@@ -604,7 +668,7 @@ async def _persist_batch_usage(
     # async iterator into memory BEFORE we touch the DB. The SDK
     # call is the most likely failure point (network, provider
     # stall, rate limit), and surfacing the failure here means we
-    # never claim the batch -- next poll retries on a clean slate.
+    # never write a partial set -- next poll retries cleanly.
     from anthropic import AsyncAnthropic
 
     items_to_persist: list[dict[str, Any]] = []
@@ -636,76 +700,63 @@ async def _persist_batch_usage(
                 "provider_request_id": getattr(message, "id", None),
             })
 
-    # Phase 2: Atomic claim. Only proceed when usage_tracked
-    # transitions FALSE -> TRUE. The ``account_id`` predicate
-    # (Copilot on PR-D4c) defends against batch_id reuse or
-    # misrouting flipping the flag on a row outside the caller's
-    # account.
-    claim = await pool.fetchrow(
-        """
-        UPDATE llm_gateway_batches
-        SET usage_tracked = TRUE
-        WHERE id = $1 AND account_id = $2 AND usage_tracked = FALSE
-        RETURNING id
-        """,
-        batch_id,
-        account_id,
-    )
-    if claim is None:
-        return  # Already tracked by an earlier poll, or wrong account.
-
-    # Phase 3: Persist. Trace_llm_call failures are logged but we
-    # do NOT roll back the claim -- the rollback-and-retry pattern
-    # would re-emit the items already written and double-count
-    # against the customer. The pending-usage index in migration
-    # 318 lets ops scan for any straggler rows that need a
-    # follow-up.
-    from ..pipelines.llm import trace_llm_call
-
-    persisted = 0
-    for item in items_to_persist:
-        try:
-            trace_llm_call(
-                span_name="llm_gateway.batch_item",
+    # Phase 2: Direct INSERT each per-item row. Conflicts (a prior
+    # retry that wrote the same (account_id, batch_id, custom_id))
+    # no-op silently so we never double-count. The whole batch is
+    # one transaction so a mid-iteration DB failure leaves no
+    # partial state visible to other pollers.
+    if items_to_persist:
+        rows_args = []
+        for item in items_to_persist:
+            cost_usd = _BATCH_DISCOUNT_FACTOR * _estimate_cost_usd(
+                model=model,
                 input_tokens=item["input_tokens"],
                 output_tokens=item["output_tokens"],
                 cached_tokens=item["cached_tokens"],
                 cache_write_tokens=item["cache_write_tokens"],
-                billable_input_tokens=item["input_tokens"],
-                model=model,
-                provider="anthropic",
-                provider_request_id=(
-                    str(item["provider_request_id"])
-                    if item["provider_request_id"]
-                    else None
-                ),
-                cost_usd_override=_BATCH_DISCOUNT_FACTOR
-                * _estimate_cost_usd(
-                    model=model,
-                    input_tokens=item["input_tokens"],
-                    output_tokens=item["output_tokens"],
-                    cached_tokens=item["cached_tokens"],
-                    cache_write_tokens=item["cache_write_tokens"],
-                ),
-                metadata={
-                    "account_id": str(account_id),
-                    "batch_id": str(batch_id),
-                    "custom_id": item["custom_id"],
-                    "endpoint": "llm_gateway.batch",
-                },
             )
-            persisted += 1
-        except Exception:
-            logger.exception(
-                "llm_gateway_batch.persist_usage: trace_llm_call failed "
-                "account=%s batch=%s custom_id=%s persisted=%d/%d",
-                account_id,
+            metadata = json.dumps({
+                "account_id": str(account_id),
+                "batch_id": str(batch_id),
+                "custom_id": item["custom_id"],
+                "endpoint": _BATCH_ITEM_ENDPOINT,
+            })
+            total_tokens = item["input_tokens"] + item["output_tokens"]
+            rows_args.append((
+                _BATCH_ITEM_SPAN_NAME,
+                model,
+                item["input_tokens"],
+                item["output_tokens"],
+                total_tokens,
+                item["input_tokens"],  # billable_input_tokens
+                item["cached_tokens"],
+                item["cache_write_tokens"],
+                cost_usd,
+                metadata,
+                _BATCH_ITEM_ENDPOINT,
+                str(item["provider_request_id"]) if item["provider_request_id"] else None,
+                str(account_id),
                 batch_id,
                 item["custom_id"],
-                persisted,
-                len(items_to_persist),
-            )
-            # Keep going. Partial loss > double-count.
+            ))
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.executemany(_BATCH_USAGE_INSERT_SQL, rows_args)
+
+    # Phase 3: Flip the flag. Account-scoped so cross-account
+    # batch_id reuse cannot accidentally mark a foreign row.
+    # ``usage_tracked = FALSE`` precondition makes the UPDATE
+    # idempotent under concurrent pollers (loser sees no rows
+    # to update; the inserts already succeeded via ON CONFLICT).
+    await pool.execute(
+        """
+        UPDATE llm_gateway_batches
+        SET usage_tracked = TRUE
+        WHERE id = $1 AND account_id = $2 AND usage_tracked = FALSE
+        """,
+        batch_id,
+        account_id,
+    )
 
 
 def _estimate_cost_usd(

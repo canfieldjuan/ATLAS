@@ -47,6 +47,25 @@ def test_migration_318_index_for_pending_usage_writes():
     assert "AND status IN ('ended', 'canceled', 'expired')" in sql
 
 
+# ---- Migration 319: per-item llm_usage uniqueness ----------------------
+
+
+def test_migration_319_adds_batch_columns_and_unique_index():
+    """PR-D4d post-audit: per-item idempotency at the DB level.
+    batch_id + custom_id columns + partial UNIQUE index on
+    (account_id, batch_id, custom_id) WHERE batch_id IS NOT NULL
+    so retries of _persist_batch_usage can ON CONFLICT DO NOTHING
+    on rows that already landed."""
+    sql = _read_migration("319_llm_usage_batch_uniqueness.sql")
+    # New columns nullable so existing /chat traffic still inserts cleanly.
+    assert "ADD COLUMN IF NOT EXISTS batch_id  UUID" in sql
+    assert "ADD COLUMN IF NOT EXISTS custom_id TEXT" in sql
+    # Partial UNIQUE index scoped to batch rows only.
+    assert "uq_llm_usage_batch_item" in sql
+    assert "(account_id, batch_id, custom_id)" in sql
+    assert "WHERE batch_id IS NOT NULL" in sql
+
+
 # ---- submit_customer_batch idempotency ----------------------------------
 
 
@@ -159,6 +178,30 @@ def test_submit_customer_batch_replay_only_when_provider_batch_id_set():
     assert 'or existing["status"] != "queued"' not in src
 
 
+def test_in_flight_replay_re_reads_row_before_returning():
+    """PR-D4d post-audit: when the resume claim returns None
+    (recent in-flight call or another retry already claimed it),
+    we must re-read the row before returning. The original
+    ``existing`` snapshot was taken before the claim attempt,
+    so a concurrent retry that just succeeded (set
+    provider_batch_id, transitioned to in_progress) would be
+    invisible to the snapshot. Customer would see stale data."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    in_flight_idx = src.find("if resumed is None:")
+    re_read_idx = src.find("latest = await pool.fetchrow(")
+    log_idx = src.find('"llm_gateway_batch.submit replay (in-flight) "')
+    return_idx = src.rfind("return _row_to_record(replay_row)")
+    assert in_flight_idx > 0 and re_read_idx > 0
+    assert in_flight_idx < re_read_idx < log_idx
+    assert log_idx < return_idx
+    # The returned record uses the freshly-read row (or the
+    # snapshot as a defensive fallback if the row vanished --
+    # which shouldn't happen under normal flow).
+    assert "replay_row = latest if latest is not None else existing" in src
+
+
 # ---- Router Idempotency-Key header --------------------------------------
 
 
@@ -194,58 +237,81 @@ def test_persist_batch_usage_helper_exists():
     assert inspect.iscoroutinefunction(llm_gateway_batch._persist_batch_usage)
 
 
-def test_persist_batch_usage_idempotent_via_atomic_claim():
-    """The function must atomically transition usage_tracked
-    FALSE->TRUE before doing the work. A concurrent poller losing
-    the race is a no-op (claim returns no rows). Codex P1 + Copilot
-    on PR-D4c: claim is also account-scoped so a misrouted batch_id
-    can never flip the flag on a row outside the caller's account."""
+def test_persist_batch_usage_idempotent_via_on_conflict():
+    """PR-D4d post-audit: per-item idempotency comes from the
+    UNIQUE (account_id, batch_id, custom_id) partial index in
+    migration 319 + ``ON CONFLICT DO NOTHING`` on the INSERT.
+    A retry that hits an already-written row no-ops at the DB
+    level instead of double-writing. The ``usage_tracked`` flag
+    flip at the end is account-scoped so cross-account batch_id
+    reuse can never flip a foreign row."""
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
+    # Per-item dedup at DB level.
+    assert "ON CONFLICT (account_id, batch_id, custom_id)" in llm_gateway_batch._BATCH_USAGE_INSERT_SQL
+    assert "WHERE batch_id IS NOT NULL" in llm_gateway_batch._BATCH_USAGE_INSERT_SQL
+    assert "DO NOTHING" in llm_gateway_batch._BATCH_USAGE_INSERT_SQL
+    # Account-scoped flag flip.
     assert "WHERE id = $1 AND account_id = $2 AND usage_tracked = FALSE" in src
-    assert "RETURNING id" in src
-    # Loser path returns cleanly.
-    assert "if claim is None:" in src
 
 
-def test_persist_batch_usage_pre_fetches_before_claiming():
-    """Codex P1 + Copilot fix on PR-D4c: the SDK results fetch must
-    happen BEFORE the atomic claim, not after. Otherwise a transient
-    SDK error mid-iteration would happen with usage_tracked already
-    flipped to TRUE -- the rollback-then-retry pattern would re-emit
-    the items that already landed and double-count against the
-    customer. Pre-fetching means failures here leave usage_tracked
-    FALSE (no claim was made) so the next poll retries cleanly."""
+def test_persist_batch_usage_pre_fetches_before_writing():
+    """PR-D4d: the Anthropic results fetch must happen BEFORE any
+    DB writes. SDK failures during the fetch leave usage_tracked
+    FALSE so the next poll retries cleanly with no partial DB
+    state visible."""
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
     fetch_idx = src.find("client.messages.batches.results")
-    claim_idx = src.find("SET usage_tracked = TRUE")
-    assert fetch_idx > 0 and claim_idx > 0, "Both phases must be present"
-    assert fetch_idx < claim_idx, (
-        "Results fetch must precede the atomic claim so SDK failures "
-        "don't leave the row in an unrecoverable claimed state."
+    insert_idx = src.find("conn.executemany(")
+    flag_idx = src.find("SET usage_tracked = TRUE")
+    assert fetch_idx > 0 and insert_idx > 0 and flag_idx > 0
+    assert fetch_idx < insert_idx < flag_idx, (
+        "Order must be: fetch results -> insert rows -> flip flag. "
+        "Any other ordering re-introduces the partial-write loss the "
+        "PR-D4d audit found."
     )
 
 
-def test_persist_batch_usage_does_not_roll_back_after_claim():
-    """Codex P1 + Copilot on PR-D4c: once the claim flips
-    usage_tracked to TRUE, we must NOT roll it back to FALSE on
-    subsequent failures. trace_llm_call failures during the persist
-    phase are logged loudly but the claim stays TRUE so retries
-    can't double-emit the items that already landed. A pending-
-    usage index in migration 318 lets ops scan for orphaned
-    partial-write batches."""
+def test_persist_batch_usage_writes_directly_via_pool():
+    """PR-D4d post-audit fix: PR-D4c routed per-item writes through
+    ``trace_llm_call`` -> tracer.end_span -> loop.create_task --
+    fire-and-forget, so DB failures could not be caught and the
+    flag was flipped before writes actually landed. PR-D4d issues
+    the INSERT directly via pool.executemany under a transaction
+    so failures surface synchronously."""
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
-    # No rollback statement.
-    assert "SET usage_tracked = FALSE" not in src
-    # But trace_llm_call failures still log so ops can see them.
-    assert (
-        'logger.exception(\n                '
-        '"llm_gateway_batch.persist_usage: trace_llm_call failed' in src
+    # Direct executemany under explicit transaction.
+    assert "async with pool.acquire() as conn:" in src
+    assert "async with conn.transaction():" in src
+    assert "await conn.executemany(_BATCH_USAGE_INSERT_SQL" in src
+    # No more fire-and-forget tracer for batch items.
+    # (docstring may reference the old approach by name; what we
+    # care about is the absence of an actual call site or import).
+    assert "trace_llm_call(" not in src
+    assert "from ..pipelines.llm import trace_llm_call" not in src
+
+
+def test_persist_batch_usage_flips_flag_only_after_inserts():
+    """PR-D4d: the usage_tracked flip happens AFTER conn.executemany
+    returns successfully. If the inserts raise (transient asyncpg
+    error, schema drift), the flag stays FALSE so a retry can
+    re-attempt. Conflicts on already-written items are absorbed
+    by ON CONFLICT DO NOTHING, not by skipping the flip."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
+    insert_idx = src.find("conn.executemany(_BATCH_USAGE_INSERT_SQL")
+    flag_update_idx = src.find("SET usage_tracked = TRUE")
+    assert insert_idx > 0 and flag_update_idx > 0
+    assert insert_idx < flag_update_idx, (
+        "The flag must flip only after inserts commit. Otherwise the "
+        "round-trip through the fire-and-forget tracer reintroduces "
+        "the partial-write loss the audit caught."
     )
 
 
@@ -271,16 +337,29 @@ def test_persist_batch_usage_applies_50_percent_discount():
     assert "_BATCH_DISCOUNT_FACTOR" in src
 
 
-def test_persist_batch_usage_threads_account_id_into_metadata():
-    """Same metadata pattern as /chat -- per-account scoping in
-    llm_usage requires account_id in the trace metadata so PR-D3's
-    INSERT picks it up."""
+def test_persist_batch_usage_threads_account_id_into_row():
+    """PR-D3 per-account scoping requires account_id on each
+    llm_usage row. PR-D4d writes the column directly (rather than
+    through tracer metadata) and also records batch_id + custom_id
+    natively so the partial UNIQUE index can dedup retries."""
     from atlas_brain.services import llm_gateway_batch
 
+    sql = llm_gateway_batch._BATCH_USAGE_INSERT_SQL
     src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
+    # account_id, batch_id, custom_id are explicit columns now.
+    assert "account_id" in sql
+    assert "batch_id" in sql
+    assert "custom_id" in sql
+    # Args tuple threads them into the INSERT.
+    assert "str(account_id)" in src
+    assert "batch_id" in src
+    assert 'item["custom_id"]' in src
+    # Metadata payload still carries the same triplet so /api/v1/llm/usage
+    # consumers that read metadata.endpoint / metadata.batch_id keep
+    # working (non-breaking change for any downstream rollups).
     assert '"account_id": str(account_id)' in src
     assert '"batch_id": str(batch_id)' in src
-    assert '"custom_id": custom_id' in src
+    assert '"custom_id": item["custom_id"]' in src
 
 
 def test_persist_batch_usage_uses_async_with():
