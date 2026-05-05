@@ -113,6 +113,46 @@ Bare-minimum content for the compatibility matrix:
 
 ---
 
+## Followup-resolution log
+
+PRs that close out the deferred items from M5-β / M5-γ:
+
+- **Wire b2b regression tests into CI** — *resolved* by adding the
+  two regression tests to `extracted_competitive_intelligence_checks.yml`
+  (the heavier CI tier that already does `pip install -r requirements.txt`).
+  PR for this followup is open (it sits on the same workflow that already
+  installs `apscheduler` / `asyncpg` / `mcp` / `torch`, so no install-line
+  expansion needed).
+- **Lineage / freshness in the typed envelope** — *resolved* by
+  threading `view.reference_ids` / `view.as_of_date_iso()` /
+  `view.confidence("causal_narrative")` through the synthesis-view
+  wrapper into `DomainReasoningResult.reference_ids` / `as_of` /
+  `confidence_label`. PR open. Wire shape preserved (consumer
+  projections still don't surface the new fields; that's a follow-up).
+- **Provider-port retyping (`CampaignReasoningProviderPort` →
+  `ReasoningProducerPort[...]`)** — *resolved as not-applicable*.
+  On closer inspection, `CampaignReasoningProviderPort` is a
+  **data-input provider** for the campaign generator, not a reasoning
+  compute port. It returns a `CampaignReasoningContext` (anchor
+  examples, witness highlights, top theses, account signals, proof
+  points -- a vendor-pressure-domain-shaped input bundle), whereas
+  `ReasoningProducerPort` returns a `DomainReasoningResult[PayloadT]`
+  (typed reasoning envelope). Different role, different return type.
+  Forcing one to be a Protocol-level specialization of the other would
+  break every implementer. Resolution: **document the role
+  distinction in `extracted_content_pipeline/services/reasoning_provider_port.py`**
+  so the next reader doesn't repeat the conflation. Future
+  enrichment can let `CampaignReasoningContext` carry a typed
+  envelope as it gains production-side use; that's enrichment-of-the-
+  bundle, not retyping-of-the-port.
+- **`VendorPressurePayload` enrichment** — deferred. Add
+  displacement narrative / account-signals / proof-points fields when
+  a producer-side caller needs them.
+- **Second-domain proof-of-life** — *resolved* by M5-γ
+  (`call_transcript`) — already merged.
+
+---
+
 ## Lessons from the codex-cloud loop
 
 This is for the record so we don't repeat the pattern:
