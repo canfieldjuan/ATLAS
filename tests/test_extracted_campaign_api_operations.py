@@ -330,6 +330,36 @@ def test_campaign_operations_router_rejects_single_pass_without_skills(
     assert calls == []
 
 
+def test_campaign_operations_router_maps_single_pass_config_errors(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(generated=1)
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        llm=_LLM(),
+        skills=_Skills(),
+        config=CampaignOperationsApiConfig(
+            generation_single_pass_reasoning=True,
+            generation_reasoning_temperature="not-a-number",  # type: ignore[arg-type]
+        ),
+    ).post("/campaigns/operations/drafts/generate", json={"limit": 1})
+
+    assert response.status_code == 400
+    assert "not-a-number" in response.json()["detail"]
+    assert calls == []
+
+
 def test_campaign_operations_router_rejects_generation_scope_mismatch(
     monkeypatch,
 ) -> None:

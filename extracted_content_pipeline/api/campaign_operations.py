@@ -411,13 +411,14 @@ def create_campaign_operations_router(
         pool = await _resolve_pool(pool_provider)
         llm = await _resolve_optional(llm_provider)
         skills = await _resolve_optional(skills_provider)
-        reasoning_context = _generation_reasoning_context(
-            resolved_config,
-            explicit_reasoning_context=await _resolve_optional(reasoning_context_provider),
-            llm=llm,
-            skills=skills,
-        )
+        explicit_reasoning_context = await _resolve_optional(reasoning_context_provider)
         try:
+            reasoning_context = _generation_reasoning_context(
+                resolved_config,
+                explicit_reasoning_context=explicit_reasoning_context,
+                llm=llm,
+                skills=skills,
+            )
             result = await generate_campaign_drafts_from_postgres(
                 pool,
                 scope=scope,
