@@ -111,6 +111,23 @@ def test_migration_321_creates_lookup_index_concurrently():
     assert "WHERE batch_id IS NOT NULL" in sql
 
 
+def test_migration_322_adds_resume_safety_columns():
+    """PR-D4e migration 322:
+      - anthropic_call_initiated_at: stamped before
+        AsyncAnthropic.batches.create so the resume claim can
+        distinguish 'never reached Anthropic' (safe to resubmit)
+        from 'Anthropic may have accepted, our local UPDATE
+        crashed' (ambiguous orphan, do not auto-resubmit -- this
+        was the duplicate-pay window the audit flagged).
+      - last_usage_retry_at: timestamp of the most recent
+        _persist_batch_usage retry from refresh_customer_batch_status
+        so the cooldown predicate can skip retries inside the
+        window."""
+    sql = _read_migration("322_llm_gateway_batches_resume_safety.sql")
+    assert "ADD COLUMN IF NOT EXISTS anthropic_call_initiated_at TIMESTAMPTZ" in sql
+    assert "ADD COLUMN IF NOT EXISTS last_usage_retry_at TIMESTAMPTZ" in sql
+
+
 # ---- submit_customer_batch idempotency ----------------------------------
 
 
@@ -205,6 +222,139 @@ def test_submit_customer_batch_resumes_stale_pre_submit_atomically():
     # Distinct log lines for each branch so ops can spot leaks.
     assert "submit replay (in-flight)" in src
     assert "submit resume pre-submit" in src
+
+
+def test_resume_claim_requires_anthropic_call_never_initiated():
+    """PR-D4e: the audit flagged a duplicate-pay window where
+    Anthropic accepted batches.create but our local UPDATE writing
+    provider_batch_id failed (asyncpg transient, container
+    restart). After 60s, the resume claim would treat the row as
+    'crashed pre-submit' and resubmit -- billing the customer
+    twice for the same logical batch. Fix: narrow the resume
+    predicate to ``anthropic_call_initiated_at IS NULL`` so we
+    only auto-resume rows that demonstrably never reached
+    Anthropic."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    # New predicate -- only rows where Anthropic was never contacted.
+    assert "AND anthropic_call_initiated_at IS NULL" in src
+
+
+def test_resume_claim_updates_total_items_and_model():
+    """PR-D4e: resume reuses the existing row id but the customer's
+    retry has the current call's items/model. Update those fields
+    on the row so the persisted state matches what's actually
+    submitted (idempotency contract says retries match, but the
+    row should be authoritative either way)."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    # Resume UPDATE bumps total_items and model.
+    assert "total_items = $3" in src
+    assert "model = $4" in src
+
+
+def test_anthropic_call_stamped_before_create():
+    """PR-D4e: the audit fix relies on
+    ``anthropic_call_initiated_at`` being set BEFORE the
+    AsyncAnthropic.batches.create call -- otherwise a crash
+    between the stamp and the call could still result in an
+    ambiguous orphan being mis-classified as 'never initiated'.
+    Source-text pin verifies the ordering."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    stamp_idx = src.find("SET anthropic_call_initiated_at = NOW()")
+    create_idx = src.find("client.messages.batches.create(")
+    assert stamp_idx > 0 and create_idx > 0
+    assert stamp_idx < create_idx, (
+        "anthropic_call_initiated_at must be stamped BEFORE "
+        "batches.create() or the resume safety predicate is "
+        "useless under crash-between-stamp-and-call."
+    )
+
+
+def test_success_update_clears_completed_at():
+    """PR-D4e minor fix: a submit_failed row carries
+    completed_at = NOW() from the failure UPDATE. A successful
+    resume retry transitions to in_progress; completed_at must
+    be cleared so the row's display state matches its lifecycle
+    (in_progress rows shouldn't show a completed_at)."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    # Success UPDATE clears completed_at alongside the other fields.
+    success_block = src.split("provider_batch_id = $2,")[1].split('"""', 2)[0]
+    assert "completed_at = NULL" in success_block, (
+        "Success UPDATE must clear completed_at so a resumed-from-"
+        "submit_failed row doesn't display stale completion time."
+    )
+
+
+def test_ambiguous_orphan_logs_warning_for_ops():
+    """PR-D4e: when the resume claim returns None and the row's
+    ``anthropic_call_initiated_at`` is set with no
+    provider_batch_id, the row is in an ambiguous state --
+    Anthropic may have accepted but our UPDATE crashed. Customer
+    can't recover automatically; ops needs to find the row.
+    Distinct WARN log line for that case."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    # Distinct log line for the ambiguous case.
+    assert "ambiguous-orphan" in src
+    # WARN level (not info) so it surfaces in ops alerts.
+    assert "logger.warning" in src
+    # Detection condition explicit.
+    assert 'replay_row["provider_batch_id"] is None' in src
+    assert 'replay_row["anthropic_call_initiated_at"] is not None' in src
+
+
+def test_refresh_retry_on_terminal_uses_cooldown():
+    """PR-D4e: a 1Hz /batch/{id} poll loop under transient
+    SDK failures would fire _persist_batch_usage every poll
+    without a cooldown. last_usage_retry_at + 30s window
+    bounds the storm. Cooldown query uses make_interval so the
+    threshold parameterizes via _USAGE_RETRY_COOLDOWN_SECONDS."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.refresh_customer_batch_status)
+    # Cooldown predicate present.
+    assert "last_usage_retry_at" in src
+    assert "make_interval(secs => $3)" in src
+    assert "_USAGE_RETRY_COOLDOWN_SECONDS" in src
+    # Constant value reasonable.
+    assert llm_gateway_batch._USAGE_RETRY_COOLDOWN_SECONDS == 30
+
+
+def test_refresh_stamps_retry_timestamp_before_persist():
+    """PR-D4e: the timestamp must be stamped BEFORE _persist_batch_usage
+    runs so a concurrent poller in the same window sees the cooldown
+    is active and skips. Stamping after would race."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.refresh_customer_batch_status)
+    stamp_idx = src.find("SET last_usage_retry_at = NOW()")
+    persist_idx = src.find("await _persist_batch_usage(")
+    assert stamp_idx > 0 and persist_idx > 0
+    assert stamp_idx < persist_idx, (
+        "Cooldown stamp must precede _persist_batch_usage call so "
+        "concurrent pollers see it within the window."
+    )
+
+
+def test_customer_batch_record_exposes_resume_safety_fields():
+    """PR-D4e adds two fields to the dataclass for the refresh +
+    submit paths to read. Defaults None so test mocks that don't
+    include the columns still construct cleanly."""
+    from atlas_brain.services.llm_gateway_batch import CustomerBatchRecord
+
+    fields = CustomerBatchRecord.__dataclass_fields__
+    assert "anthropic_call_initiated_at" in fields
+    assert "last_usage_retry_at" in fields
+    assert fields["anthropic_call_initiated_at"].default is None
+    assert fields["last_usage_retry_at"].default is None
 
 
 def test_submit_customer_batch_replay_only_when_provider_batch_id_set():
