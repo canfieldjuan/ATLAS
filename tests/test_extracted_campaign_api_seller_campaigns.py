@@ -453,6 +453,48 @@ def test_seller_campaign_router_rejects_invalid_continue_flag_before_refresh(
     assert calls == []
 
 
+def test_seller_campaign_router_rejects_malformed_refresh_categories(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _refresh(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(refreshed=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+
+    response = _client(_Pool()).post(
+        "/seller/intelligence/refresh",
+        json={"categories": {"name": "beauty"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "categories must be a list or string"
+    assert calls == []
+
+
+def test_seller_campaign_router_rejects_malformed_combined_categories(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _refresh(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(refreshed=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+
+    response = _client(_Pool()).post(
+        "/seller/operations/refresh-and-prepare",
+        json={"categories": 123},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "categories must be a list or string"
+    assert calls == []
+
+
 def test_seller_campaign_router_rejects_boolean_numeric_payload(monkeypatch) -> None:
     calls = []
 
