@@ -29,10 +29,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_gateway_batches_idempotency
     ON llm_gateway_batches (account_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 
--- Used by the poll-completion path to find batches that are
--- terminal but whose usage hasn't been written yet -- rare in
--- practice (we write inline on the transition) but covers a
--- case where atlas crashed mid-write.
+-- Surfaces batches that ended/canceled/expired but whose
+-- ``usage_tracked`` flag is still FALSE. This catches the case
+-- where the Anthropic results pre-fetch failed (network /
+-- rate-limit / SDK timeout) so the atomic claim was never made.
+-- The refresh path retries on the next /batch/{id} poll, but a
+-- batch a customer never polls again could otherwise stay
+-- pending forever -- a future cron worker can scan this index
+-- and run _persist_batch_usage on stragglers.
+--
+-- NOTE: this index does NOT catch partial-write loss after the
+-- claim. trace_llm_call exceptions during the persist phase are
+-- logged but do not roll back the flag, because rolling back
+-- would let the next retry double-count the items that already
+-- landed. Per-item idempotency (unique key on llm_usage by
+-- account_id+batch_id+custom_id) is the proper fix and is
+-- planned as a follow-up; until then, partial-loss > double-
+-- count is the deliberate trade-off.
 CREATE INDEX IF NOT EXISTS idx_llm_gateway_batches_usage_pending
     ON llm_gateway_batches (status, updated_at DESC)
     WHERE usage_tracked = FALSE

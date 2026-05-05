@@ -87,8 +87,8 @@ class CustomerBatchRecord:
     submitted_at: Optional[datetime]
     completed_at: Optional[datetime]
     # PR-D4c Codex P1: surfaced so the refresh path can detect a
-    # terminal row whose usage write never landed (atomic claim
-    # failed mid-iteration -> rolled back to FALSE) and retry.
+    # terminal row whose usage write never landed (results pre-fetch
+    # failed before the atomic claim could flip the flag) and retry.
     usage_tracked: bool = False
 
 
@@ -169,11 +169,11 @@ async def submit_customer_batch(
             normalized_key,
         )
         if existing:
-            settled = (
-                existing["provider_batch_id"]
-                or existing["status"] != "queued"
-            )
-            if settled:
+            # "Settled" = Anthropic accepted the submission. We have a
+            # provider_batch_id to point the customer at, regardless
+            # of whether the batch ended/canceled/expired. A retry
+            # with the same key gets the prior result back.
+            if existing["provider_batch_id"]:
                 logger.info(
                     "llm_gateway_batch.submit replay account=%s key=%s id=%s",
                     account_id,
@@ -182,28 +182,38 @@ async def submit_customer_batch(
                 )
                 return _row_to_record(existing)
 
-            # Codex P1 round 3 on PR-D4c: pre-submit row (queued
-            # with no provider_batch_id). Two cases:
-            #   a) An earlier attempt crashed between INSERT and
-            #      the Anthropic call -- naive replay would loop
-            #      forever returning the stale 'queued' row. Need
-            #      to genuinely re-submit.
-            #   b) A concurrent retry is in-flight to Anthropic
-            #      right now. Re-submitting would duplicate-pay.
-            # Distinguish via updated_at age, and do the
-            # decision atomically in SQL so two concurrent
-            # resumes can't both win. Threshold = 2x
-            # ANTHROPIC_SDK_TIMEOUT_SECONDS (30s) so an in-flight
-            # call has had time to either succeed or hit timeout.
+            # No provider_batch_id means the prior attempt never
+            # made it to Anthropic. Two cases:
+            #   a) status='queued', updated recently -- a concurrent
+            #      retry is in flight right now; re-submitting would
+            #      duplicate-pay. Replay so the customer polls.
+            #   b) status='queued' but stale (updated_at >
+            #      2x ANTHROPIC_SDK_TIMEOUT_SECONDS ago), OR
+            #      status='submit_failed' -- the prior attempt
+            #      crashed pre-submit (a) or Anthropic rejected /
+            #      timed out (b). Either way, the customer's batch
+            #      never landed; resume so the retry actually
+            #      submits. Codex P1 rounds 3+4 on PR-D4c.
+            #
+            # The decision is made atomically in SQL so two
+            # concurrent resumes can't both win. Threshold = 60s =
+            # 2x ANTHROPIC_SDK_TIMEOUT_SECONDS so an in-flight call
+            # has had time to either succeed or hit the SDK timeout
+            # (which would have updated the row to submit_failed).
             resumed = await pool.fetchrow(
                 """
                 UPDATE llm_gateway_batches
-                SET updated_at = NOW()
+                SET updated_at = NOW(),
+                    status = 'queued',
+                    error_text = NULL
                 WHERE id = $1
                   AND account_id = $2
-                  AND status = 'queued'
                   AND provider_batch_id IS NULL
-                  AND updated_at < NOW() - INTERVAL '60 seconds'
+                  AND (
+                    status = 'submit_failed'
+                    OR (status = 'queued'
+                        AND updated_at < NOW() - INTERVAL '60 seconds')
+                  )
                 RETURNING id, account_id, provider, provider_batch_id, model,
                           status, total_items, completed_items, failed_items,
                           error_text, created_at, updated_at, submitted_at,
@@ -213,23 +223,25 @@ async def submit_customer_batch(
                 account_id,
             )
             if resumed is None:
-                # Still in-flight (< 60s old) or another retry
-                # already claimed it. Replay -- the customer
-                # polls /batch/{id} either way.
+                # Recent queued (< 60s old) or another retry already
+                # claimed it. Replay -- the customer polls /batch/{id}
+                # either way.
                 logger.info(
                     "llm_gateway_batch.submit replay (in-flight) "
-                    "account=%s key=%s id=%s",
+                    "account=%s key=%s id=%s status=%s",
                     account_id,
                     normalized_key,
                     existing["id"],
+                    existing["status"],
                 )
                 return _row_to_record(existing)
             logger.info(
                 "llm_gateway_batch.submit resume pre-submit "
-                "account=%s key=%s id=%s",
+                "account=%s key=%s id=%s prior_status=%s",
                 account_id,
                 normalized_key,
                 existing["id"],
+                existing["status"],
             )
             row = resumed
 
@@ -423,13 +435,14 @@ async def refresh_customer_batch_status(
         return None
     if record.status in TERMINAL_STATUSES:
         # Codex P1 on PR-D4c: a terminal row whose usage write has
-        # not landed yet means the previous attempt failed mid-
-        # iteration and rolled ``usage_tracked`` back to FALSE. We
-        # must retry here -- the only other place that triggers a
-        # write is the non-terminal->terminal transition above, and
-        # that won't fire again. Without this branch, a single
-        # transient SDK error would silently lose the customer's
-        # usage data forever.
+        # not landed yet means the prior _persist_batch_usage call
+        # failed during the Anthropic results pre-fetch (so the
+        # atomic claim was never made and usage_tracked stayed
+        # FALSE). We must retry here -- the only other place that
+        # triggers a write is the non-terminal->terminal transition
+        # below, and that won't fire again. Without this branch, a
+        # single transient SDK error would silently lose the
+        # customer's usage data forever.
         if (
             not record.usage_tracked
             and record.status in ("ended", "canceled", "expired")

@@ -10,8 +10,6 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
-import pytest
-
 
 _MIG_DIR = Path(__file__).resolve().parent.parent / "atlas_brain" / "storage" / "migrations"
 
@@ -116,28 +114,49 @@ def test_submit_customer_batch_handles_unique_violation_race():
 
 
 def test_submit_customer_batch_resumes_stale_pre_submit_atomically():
-    """Codex P1 round 3 on PR-D4c: a row stuck in pre-submit state
-    ('queued', no provider_batch_id) means a previous attempt
-    crashed between INSERT and the Anthropic call. Naive replay
-    would loop forever returning the stale row -- the customer's
-    batch never actually submits. Resume via an atomic SQL claim
-    that flips updated_at; concurrent in-flight calls are
-    distinguished from stuck rows via updated_at age (60s = 2x
-    SDK timeout). Two concurrent resumes can't both win because
+    """Codex P1 rounds 3+4 on PR-D4c: a row without provider_batch_id
+    means the prior attempt never landed on Anthropic. Either it
+    crashed pre-submit (status='queued', stale) or Anthropic
+    rejected/timed out (status='submit_failed'). Both are resumable
+    -- naive replay would loop forever returning the dead row, so
+    the customer's batch never actually submits. Resume via an
+    atomic SQL claim; concurrent in-flight queued calls are
+    distinguished from stuck queued rows via updated_at age (60s =
+    2x SDK timeout). Two concurrent resumes can't both win because
     the UPDATE is atomic."""
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
-    # Atomic SQL claim with the staleness predicate.
-    assert "AND status = 'queued'" in src
+    # Atomic SQL claim covers BOTH submit_failed and stale-queued.
     assert "AND provider_batch_id IS NULL" in src
+    assert "status = 'submit_failed'" in src
+    assert "OR (status = 'queued'" in src
     assert "AND updated_at < NOW() - INTERVAL '60 seconds'" in src
     # account_id is in the WHERE (defense-in-depth, same pattern
     # as _persist_batch_usage's atomic claim).
     assert "WHERE id = $1\n                  AND account_id = $2" in src
+    # Resume clears stale error_text (submit_failed sets it) and
+    # bumps status back to queued so the row looks freshly-INSERTed.
+    assert "SET updated_at = NOW(),\n                    status = 'queued',\n                    error_text = NULL" in src
     # Distinct log lines for each branch so ops can spot leaks.
     assert "submit replay (in-flight)" in src
     assert "submit resume pre-submit" in src
+
+
+def test_submit_customer_batch_replay_only_when_provider_batch_id_set():
+    """The fast-path replay must check provider_batch_id, not just
+    status. A retry with the same key against a settled row
+    (Anthropic accepted the submission) returns immediately;
+    everything else falls through to the resume claim. Codex P1
+    round 4 on PR-D4c -- the prior `status != 'queued'` check
+    incorrectly treated submit_failed as settled."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    # Replay guard keys on provider_batch_id only.
+    assert 'if existing["provider_batch_id"]:' in src
+    # No spurious status check before the replay return.
+    assert 'or existing["status"] != "queued"' not in src
 
 
 # ---- Router Idempotency-Key header --------------------------------------
