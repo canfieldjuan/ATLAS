@@ -479,9 +479,15 @@ async def usage(
         raise HTTPException(status_code=503, detail="Database not ready")
 
     # PR-D6c: cache_savings_usd is summed from the metadata field
-    # stamped on each cache-hit row at hit time. Cast via NULLIF
-    # so non-cache rows (no metadata key) and malformed values
-    # contribute 0 instead of erroring.
+    # stamped on each cache-hit row at hit time. The
+    # ``jsonb_typeof = 'number'`` guard handles three cases that
+    # would otherwise raise ``invalid input syntax for type
+    # double precision`` and break /usage for the whole period:
+    #   - missing key (typeof returns NULL)
+    #   - non-cache rows (typeof returns NULL)
+    #   - malformed string value, e.g. {"cache_savings_usd": "n/a"}
+    #     (typeof returns 'string', not 'number')
+    # Codex P2 fix on PR-D6c.
     rows = await pool.fetch(
         """
         SELECT model_provider, model_name,
@@ -490,7 +496,11 @@ async def usage(
                COALESCE(SUM(total_tokens), 0)::bigint  AS total_tokens,
                COALESCE(SUM(cost_usd), 0)::float       AS cost_usd,
                COALESCE(SUM(
-                   NULLIF(metadata->>'cache_savings_usd', '')::float
+                   CASE
+                       WHEN jsonb_typeof(metadata->'cache_savings_usd') = 'number'
+                       THEN (metadata->>'cache_savings_usd')::float
+                       ELSE 0
+                   END
                ), 0)::float                            AS cache_savings_usd,
                COUNT(*)::bigint                         AS call_count,
                MIN(created_at)                          AS period_start,

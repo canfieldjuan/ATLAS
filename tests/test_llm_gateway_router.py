@@ -772,13 +772,20 @@ def test_usage_breakdown_row_exposes_per_group_savings():
 
 def test_usage_sql_aggregates_cache_savings_per_group():
     """Source-text pin on the rollup SQL: SUM the metadata field
-    per (provider, model) group. NULLIF guards rows that don't
-    have the metadata key (everything other than cache hits) so
-    the SUM doesn't error on cast."""
+    per (provider, model) group. The jsonb_typeof guard (Codex
+    P2 fix on PR-D6c) ensures only actual JSON numbers get cast,
+    so a malformed string value like {"cache_savings_usd": "n/a"}
+    contributes 0 instead of raising ``invalid input syntax for
+    type double precision`` and breaking /usage for the period."""
     from atlas_brain.api import llm_gateway
 
     src = inspect.getsource(llm_gateway.usage)
-    assert "NULLIF(metadata->>'cache_savings_usd', '')::float" in src
+    # Cast only when the JSONB value is actually a number.
+    assert "jsonb_typeof(metadata->'cache_savings_usd') = 'number'" in src
+    assert "(metadata->>'cache_savings_usd')::float" in src
+    # The racy NULLIF-only pattern from the initial commit must
+    # not return -- it doesn't catch malformed strings.
+    assert "NULLIF(metadata->>'cache_savings_usd'" not in src
     assert "AS cache_savings_usd" in src
 
 
