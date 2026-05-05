@@ -504,6 +504,27 @@ async def _emit_operation_event(
         logger.warning("Campaign operation visibility emit failed", exc_info=True)
 
 
+async def _emit_operation_failure(
+    visibility: VisibilitySink | None,
+    operation: str,
+    payload: Mapping[str, Any],
+    exc: Exception,
+) -> None:
+    event_payload: dict[str, Any] = {
+        **dict(payload),
+        "error_type": type(exc).__name__,
+    }
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        event_payload["status_code"] = status_code
+    await _emit_operation_event(
+        visibility,
+        _OPERATION_FAILED_EVENT,
+        operation,
+        event_payload,
+    )
+
+
 def _visibility_result_summary(data: Mapping[str, Any]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     for key, value in data.items():
@@ -578,22 +599,32 @@ def create_campaign_operations_router(
             resolved_payload,
             resolved_config.generation_channels,
         )
-        scope = _generation_scope(
-            await _resolve_scope(scope_provider),
-            resolved_payload,
-        )
-        pool = await _resolve_pool(pool_provider)
-        llm = await _resolve_optional(llm_provider)
-        skills = await _resolve_optional(skills_provider)
-        explicit_reasoning_context = await _resolve_optional(reasoning_context_provider)
         visibility = await _resolve_visibility(visibility_provider)
         operation_payload = {
             "limit": limit,
             "target_mode": target_mode,
             "channel": channel,
             "channels": list(channels),
-            "account_id": _scope_account_id(scope),
+            "account_id": _clean(resolved_payload.get("account_id")) or None,
         }
+        try:
+            scope = _generation_scope(
+                await _resolve_scope(scope_provider),
+                resolved_payload,
+            )
+            operation_payload["account_id"] = _scope_account_id(scope)
+            pool = await _resolve_pool(pool_provider)
+            llm = await _resolve_optional(llm_provider)
+            skills = await _resolve_optional(skills_provider)
+            explicit_reasoning_context = await _resolve_optional(reasoning_context_provider)
+        except Exception as exc:
+            await _emit_operation_failure(
+                visibility,
+                "draft_generation",
+                operation_payload,
+                exc,
+            )
+            raise
         await _emit_operation_event(
             visibility,
             _OPERATION_STARTED_EVENT,
@@ -663,10 +694,19 @@ def create_campaign_operations_router(
             resolved_config.default_send_limit,
             max_value=resolved_config.max_send_limit,
         )
-        pool = await _resolve_pool(pool_provider)
-        sender = await _resolve_sender(sender_provider)
         visibility = await _resolve_visibility(visibility_provider)
         operation_payload = {"limit": limit}
+        try:
+            pool = await _resolve_pool(pool_provider)
+            sender = await _resolve_sender(sender_provider)
+        except Exception as exc:
+            await _emit_operation_failure(
+                visibility,
+                "send_queued",
+                operation_payload,
+                exc,
+            )
+            raise
         await _emit_operation_event(
             visibility,
             _OPERATION_STARTED_EVENT,
@@ -714,16 +754,25 @@ def create_campaign_operations_router(
             resolved_config.default_sequence_max_steps,
             max_value=resolved_config.max_sequence_steps,
         )
-        sequence_config = _sequence_config(
-            resolved_config,
-            limit=limit,
-            max_steps=max_steps,
-        )
-        pool = await _resolve_pool(pool_provider)
-        llm = await _resolve_optional(llm_provider)
-        skills = await _resolve_optional(skills_provider)
         visibility = await _resolve_visibility(visibility_provider)
         operation_payload = {"limit": limit, "max_steps": max_steps}
+        try:
+            sequence_config = _sequence_config(
+                resolved_config,
+                limit=limit,
+                max_steps=max_steps,
+            )
+            pool = await _resolve_pool(pool_provider)
+            llm = await _resolve_optional(llm_provider)
+            skills = await _resolve_optional(skills_provider)
+        except Exception as exc:
+            await _emit_operation_failure(
+                visibility,
+                "sequence_progression",
+                operation_payload,
+                exc,
+            )
+            raise
         await _emit_operation_event(
             visibility,
             _OPERATION_STARTED_EVENT,
@@ -759,9 +808,18 @@ def create_campaign_operations_router(
         payload: dict[str, Any] | None = Body(None),
     ) -> dict[str, Any]:
         _ = payload
-        pool = await _resolve_pool(pool_provider)
         visibility = await _resolve_visibility(visibility_provider)
         operation_payload: dict[str, Any] = {}
+        try:
+            pool = await _resolve_pool(pool_provider)
+        except Exception as exc:
+            await _emit_operation_failure(
+                visibility,
+                "analytics_refresh",
+                operation_payload,
+                exc,
+            )
+            raise
         await _emit_operation_event(
             visibility,
             _OPERATION_STARTED_EVENT,

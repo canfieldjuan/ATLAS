@@ -1090,6 +1090,109 @@ def test_campaign_operations_router_emits_failed_visibility_for_analytics_error(
     ]
 
 
+def test_campaign_operations_router_emits_failed_visibility_for_generation_preflight() -> None:
+    visibility = _Visibility()
+
+    response = _client(
+        _Pool(initialized=False),
+        visibility=visibility,
+    ).post(
+        "/campaigns/operations/drafts/generate",
+        json={"account_id": "acct_1", "limit": 3},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Database unavailable"
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_FAILED_EVENT,
+            {
+                "operation": "draft_generation",
+                "limit": 3,
+                "target_mode": "vendor_retention",
+                "channel": "email",
+                "channels": [],
+                "account_id": "acct_1",
+                "error_type": "HTTPException",
+                "status_code": 503,
+            },
+        ),
+    ]
+
+
+def test_campaign_operations_router_emits_failed_visibility_for_send_preflight() -> None:
+    visibility = _Visibility()
+
+    response = _client(
+        _Pool(initialized=False),
+        sender=_Sender(),
+        visibility=visibility,
+    ).post("/campaigns/operations/send/queued", json={"limit": 4})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Database unavailable"
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_FAILED_EVENT,
+            {
+                "operation": "send_queued",
+                "limit": 4,
+                "error_type": "HTTPException",
+                "status_code": 503,
+            },
+        ),
+    ]
+
+
+def test_campaign_operations_router_emits_failed_visibility_for_sequence_preflight() -> None:
+    visibility = _Visibility()
+
+    response = _client(
+        _Pool(),
+        visibility=visibility,
+    ).post(
+        "/campaigns/operations/sequences/progress",
+        json={"limit": 5, "max_steps": 2},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Campaign sequence from_email is not configured"
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_FAILED_EVENT,
+            {
+                "operation": "sequence_progression",
+                "limit": 5,
+                "max_steps": 2,
+                "error_type": "HTTPException",
+                "status_code": 503,
+            },
+        ),
+    ]
+
+
+def test_campaign_operations_router_emits_failed_visibility_for_analytics_preflight() -> None:
+    visibility = _Visibility()
+
+    response = _client(
+        _Pool(initialized=False),
+        visibility=visibility,
+    ).post("/campaigns/operations/analytics/refresh")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Database unavailable"
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_FAILED_EVENT,
+            {
+                "operation": "analytics_refresh",
+                "error_type": "HTTPException",
+                "status_code": 503,
+            },
+        ),
+    ]
+
+
 def test_campaign_operations_router_requires_database() -> None:
     response = _client(_Pool(initialized=False), sender=_Sender()).post(
         "/campaigns/operations/send/queued"
