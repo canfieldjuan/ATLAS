@@ -55,7 +55,12 @@ class _Pool:
 
 
 def _known_brand_rows() -> list[dict[str, str]]:
-    return [{"brand": "Brand A"}, {"brand": "Brand B"}, {"brand": "Brand C"}]
+    return [
+        {"brand": "Brand A"},
+        {"brand": "Brand B"},
+        {"brand": "Brand C"},
+        {"brand": "Other"},
+    ]
 
 
 def _seed_aggregate_results(
@@ -109,6 +114,12 @@ def _seed_aggregate_results(
                 "compared_product": "unmodeled competitor",
                 "direction": "switched_to",
                 "count": 2,
+            },
+            {
+                "reviewed_brand": "Brand A",
+                "compared_product": "other",
+                "direction": "switched_to",
+                "count": 4,
             },
         ],
         [{"brand": "Brand A", "category": "labeling", "description": "missing", "flagged_count": 2}],

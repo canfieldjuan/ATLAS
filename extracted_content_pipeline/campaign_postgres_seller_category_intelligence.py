@@ -16,6 +16,17 @@ _DEFAULT_ADJACENCY_DIRECTIONS = (
     "tested_with",
     "compatible_with",
 )
+_DEFAULT_PLACEHOLDER_BRAND_NAMES = (
+    "generic",
+    "n/a",
+    "na",
+    "no brand",
+    "none",
+    "not specified",
+    "other",
+    "unknown",
+    "unbranded",
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +64,7 @@ class CategoryIntelligenceLimits:
     health_score_scale: float = 100
     health_score_precision: int = 1
     competitive_adjacency_directions: tuple[str, ...] = _DEFAULT_ADJACENCY_DIRECTIONS
+    placeholder_brand_names: tuple[str, ...] = _DEFAULT_PLACEHOLDER_BRAND_NAMES
 
 
 async def refresh_seller_category_intelligence(
@@ -78,8 +90,9 @@ async def refresh_seller_category_intelligence(
             limit=normalized_limit,
             reviews_table=reviews_table,
         )
+    limits = intelligence_limits or CategoryIntelligenceLimits()
     known_brands = (
-        await _fetch_known_brands(pool, _identifier(metadata_table))
+        await _fetch_known_brands(pool, _identifier(metadata_table), limits)
         if category_names
         else {}
     )
@@ -92,7 +105,7 @@ async def refresh_seller_category_intelligence(
             min_reviews=normalized_min_reviews,
             reviews_table=reviews_table,
             metadata_table=metadata_table,
-            intelligence_limits=intelligence_limits,
+            intelligence_limits=limits,
             known_brands=known_brands,
         )
         if not snapshot:
@@ -145,7 +158,7 @@ async def aggregate_seller_category_intelligence(
     brand_lookup = (
         dict(known_brands)
         if known_brands is not None
-        else await _fetch_known_brands(pool, metadata)
+        else await _fetch_known_brands(pool, metadata, limits)
     )
     brand_rows = await _fetch_brand_rows(pool, clean_category, reviews, metadata, limits)
     return {
@@ -376,7 +389,11 @@ async def _fetch_feature_gaps(
     ]
 
 
-async def _fetch_known_brands(pool: Any, metadata: str) -> dict[str, str]:
+async def _fetch_known_brands(
+    pool: Any,
+    metadata: str,
+    limits: CategoryIntelligenceLimits,
+) -> dict[str, str]:
     rows = await pool.fetch(
         f"""
         SELECT brand
@@ -385,16 +402,26 @@ async def _fetch_known_brands(pool: Any, metadata: str) -> dict[str, str]:
          GROUP BY brand
         """
     )
-    return {
-        _brand_key(row.get("brand")): str(row.get("brand")).strip()
-        for row in (_row_dict(item) for item in rows)
-        if _brand_key(row.get("brand"))
-    }
+    placeholders = {_brand_key(value) for value in limits.placeholder_brand_names}
+    known: dict[str, str] = {}
+    for row in (_row_dict(item) for item in rows):
+        key = _brand_key(row.get("brand"))
+        if not key or key in placeholders:
+            continue
+        known[key] = str(row.get("brand")).strip()
+    return known
 
 
-def _normalize_known_brand(value: Any, known_brands: Mapping[str, str]) -> str:
+def _normalize_known_brand(
+    value: Any,
+    known_brands: Mapping[str, str],
+    limits: CategoryIntelligenceLimits,
+) -> str:
     text = str(value or "").strip()
     if not text:
+        return ""
+    placeholders = {_brand_key(value) for value in limits.placeholder_brand_names}
+    if _brand_key(text) in placeholders:
         return ""
     exact = known_brands.get(_brand_key(text))
     if exact:
@@ -402,7 +429,10 @@ def _normalize_known_brand(value: Any, known_brands: Mapping[str, str]) -> str:
     words = text.split()
     for size in range(len(words), 0, -1):
         candidate = " ".join(words[:size])
-        matched = known_brands.get(_brand_key(candidate))
+        candidate_key = _brand_key(candidate)
+        if candidate_key in placeholders:
+            return ""
+        matched = known_brands.get(candidate_key)
         if matched:
             return matched
     return " ".join(words).title()
@@ -448,8 +478,12 @@ async def _fetch_competitive_flows(
         direction = str(row.get("direction") or "compared").strip().lower()
         if direction in adjacency:
             continue
-        reviewed_brand = _normalize_known_brand(row.get("reviewed_brand"), known_brands)
-        compared_brand = _normalize_known_brand(row.get("compared_product"), known_brands)
+        reviewed_brand = _normalize_known_brand(
+            row.get("reviewed_brand"), known_brands, limits
+        )
+        compared_brand = _normalize_known_brand(
+            row.get("compared_product"), known_brands, limits
+        )
         if not reviewed_brand or not compared_brand:
             continue
         if reviewed_brand.lower() == compared_brand.lower():
