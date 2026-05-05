@@ -35,14 +35,20 @@ The four dimensions that matter:
 
 These are genuinely different ontologies. A vendor-pressure producer cannot output "topics + sentiment" without violating its own contract. Conversely, a transcript producer cannot meaningfully output "wedge + displacement_narrative".
 
-**Compatible:** ontology overlaps ≥ ~70% with an existing domain payload.
-**Incompatible:** ontology centers on different concepts. Build a new producer + payload.
+**Two reuse modes** — distinguish them when reading the rest of this doc:
+
+* **Reuse an existing domain's producer + consumer** (e.g. you genuinely have *vendor pressure* — same wedge / displacement / proof-points ontology — and just want a new consumer surface). Requires ontology to **overlap** with an existing domain payload (≥ ~70% in practice).
+* **Reuse the M5-α envelope abstraction** (you have a *different* ontology — call transcripts, company entities, contracts — but want the typed `DomainReasoningResult[PayloadT]` envelope, registry, producer/consumer Protocols, lineage block). This is the path almost every new domain wants. Requires only that your conclusions can be expressed as a small fixed-shape dataclass — see dimensions 2–4.
+
+**Incompatible (with the M5-α envelope itself):** your reasoning genuinely doesn't produce "subject → typed conclusions + evidence lineage" shaped output. E.g. graph reasoning that emits edges-with-traces, not subject-scoped envelopes. That's the rare rebuild-the-core path; coordinate with platform.
+
+The original plan-status doc and PR #211 demonstrate that ontology divergence between `vendor_pressure` and `call_transcript` is **not** an envelope incompatibility — it's exactly what the typed `domain_payload` slot is for.
 
 ### 2. Evidence semantics
 
 **Question:** what counts as "evidence" in your domain, and where does it live?
 
-- **Vendor pressure** evidence: review atoms (`b2b_review_evidence_atoms`), pricing mentions, exec-change signals — discrete witnessed claims with metric IDs and witness IDs.
+- **Vendor pressure** evidence: persisted in `b2b_evidence_vault`, `b2b_vendor_witnesses`, and `b2b_vendor_reasoning_packets` (witness-backed evidence artifacts) — discrete witnessed claims with metric IDs and witness IDs.
 - **Call transcript** evidence: spans of text within the transcript itself, with timestamps + speaker IDs.
 - **Company entity** evidence: rows from CRM / contract / contacts tables, with source-system IDs.
 
@@ -77,9 +83,9 @@ The M5-α envelope carries `reference_ids: ReferenceIds(metric_ids, witness_ids)
 
 | Domain | Status | Ontology | Evidence | Consumer | Lineage | Recommended path |
 |---|---|---|---|---|---|---|
-| `vendor_pressure` | ✅ shipped (M5-β) | vendor-displacement / wedge | `b2b_review_evidence_atoms` (review atoms, metric ledger, witness pack) | `signals.py` MCP overlay (flat dict) | `metric_ids` / `witness_ids` from `SynthesisView.reference_ids` | **Reuse**. `vendor_pressure_result_from_synthesis_view` already wraps the producer. |
+| `vendor_pressure` | ✅ shipped (M5-β) | vendor-displacement / wedge | `b2b_evidence_vault` + `b2b_vendor_witnesses` + `b2b_vendor_reasoning_packets` (witness-backed evidence artifacts; metric ledger; witness pack) | `signals.py` MCP overlay (flat dict) | `metric_ids` / `witness_ids` from `SynthesisView.reference_ids` | **Reuse**. `vendor_pressure_result_from_synthesis_view` already wraps the producer. |
 | `call_transcript` | ✅ shipped (M5-γ) | topics / sentiment / action_items | per-transcript span (no formal evidence atoms yet) | transcript-detail overlay (flat dict) | optional; supported via nested `reference_ids` | **Reuse**. M5-γ ships the proof-of-life. A real producer reads the transcript and calls `call_transcript_result_from_entry`. |
-| `competitive_intel` (cross-vendor) | partial | cross-vendor-edge / displacement-direction | shared with `vendor_pressure` (review atoms) | battle-card / vendor-briefing renderers | shared with `vendor_pressure` | **Reuse**. Same producer (`b2b_reasoning_synthesis`); consumer-side decoupling is the M5 / phase-3 work that's on the competitive-intel STATUS roadmap. |
+| `competitive_intel` (cross-vendor) | partial | cross-vendor-edge / displacement-direction | shared with `vendor_pressure` (witness-backed evidence artifacts) | battle-card / vendor-briefing renderers | shared with `vendor_pressure` | **Reuse**. Same producer (`b2b_reasoning_synthesis`); consumer-side decoupling is the M5 / phase-3 work that's on the competitive-intel STATUS roadmap. |
 | `content_ops` (campaign generation) | shipped (#189) but **not** typed-envelope | campaign-pain / wedge / proof-points | host-provided (`CampaignReasoningProviderPort` data-input bundle) | campaign generator's prompt builder | implicit in the bundle | **Reuse the data-input port**, not the typed envelope. Different role — see PR #235 role-distinction doc. |
 | `company_entity` | not yet shipped | reconciled facts / coverage gaps / source authority | rows across CRM / contracts / contacts tables, with source-system IDs | company-detail UI overlay | per-fact `metric_ids` (the source-row IDs) and `witness_ids` (corroborating sources) | **Reuse** the typed envelope; build a domain payload that carries `reconciled_facts: tuple[FactDecision, ...]` / `coverage_gaps`. ~250-line additive PR mirroring `call_transcript`. |
 | `support_ticket` | not yet shipped | severity / escalation / related-tickets / root-cause-hypotheses | ticket history rows + linked customer-success records | ticket-detail UI overlay or alerting card | optional | **Reuse**. Same shape as `call_transcript` — a payload with `severity`, `escalation_path`, `related_ticket_ids`, `root_cause_hypotheses`. |
@@ -94,7 +100,7 @@ Use this checklist when scoping a new use case. Most rows answer "yes" → reuse
 
 ```
 [ ] Subject has a stable id and a domain identifier             (yes -> ReasoningSubject works)
-[ ] Conclusions fit a small fixed set of fields (≤ ~10)         (yes -> DomainPayload works)
+[ ] Conclusions fit a small fixed set of fields (≤ ~10)         (yes -> domain_payload PayloadT dataclass works)
 [ ] Evidence shape fits {source_type, source_id, text,          (yes -> existing EvidenceItem works)
     metrics, metadata}
 [ ] Consumer surface is flat dict or projects to one            (yes -> ReasoningConsumerPort works)
