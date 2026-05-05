@@ -281,6 +281,21 @@ app.include_router(
 )
 ```
 
+Before generating seller drafts, prepare seller opportunities from active
+seller targets and cached category intelligence:
+
+```bash
+python scripts/prepare_extracted_seller_campaign_opportunities.py \
+  --account-id acct_123 \
+  --category supplements \
+  --replace-existing
+
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --target-mode amazon_seller \
+  --channels email_cold,email_followup
+```
+
 Send queued drafts through the configured provider:
 
 ```bash
@@ -437,6 +452,9 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_postgres_export.py`: read-only draft export for host review flows
 - `campaign_postgres_seller_targets.py`: seller target CRUD/list helpers for
   Amazon seller campaign installs
+- `campaign_postgres_seller_opportunities.py`: prepares Amazon seller
+  `campaign_opportunities` rows from seller targets and cached category
+  intelligence snapshots
 - `campaign_postgres_send.py`: DB-backed queued send runner that composes the
   campaign, suppression, audit, and sender ports for host worker CLIs
 - `campaign_postgres_analytics.py`: DB-backed analytics refresh runner that
