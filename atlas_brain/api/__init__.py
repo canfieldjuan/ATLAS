@@ -46,6 +46,7 @@ from .api_keys import router as api_keys_router
 from .auth import router as auth_router
 from .billing import router as billing_router
 from .blog_admin import router as blog_admin_router
+from .llm_gateway import router as llm_gateway_router
 from .blog_public import router as blog_public_router
 from .prospects import router as prospects_router
 from .b2b_vendor_briefing import router as b2b_vendor_briefing_router
@@ -116,6 +117,7 @@ router.include_router(seller_campaigns_router)
 router.include_router(api_keys_router)
 router.include_router(auth_router)
 router.include_router(billing_router)
+router.include_router(llm_gateway_router)
 router.include_router(blog_admin_router)
 router.include_router(blog_public_router)
 router.include_router(prospects_router)
