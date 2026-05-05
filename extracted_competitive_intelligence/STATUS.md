@@ -32,8 +32,9 @@ Full task/runtime decoupling remains Phase 3.
 | LLM exact-cache bridge | ✅ `services.b2b.llm_exact_cache` routes to extracted LLM infrastructure in standalone mode |
 | Anthropic batch bridge | ✅ `services.b2b.anthropic_batch` routes to extracted LLM infrastructure in standalone mode |
 | Anthropic batch helper boundary | ✅ `autonomous.tasks._b2b_batch_utils` is product-owned helper logic |
+| Campaign LLM router bridge | ✅ `services.llm_router` routes vendor-briefing campaign LLM selection through extracted LLM infrastructure in standalone mode |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
-| Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM bridge, and service package fallback |
+| Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM pipeline/router bridges, and service package fallback |
 | Standalone smoke script + CI | ✅ `smoke_extracted_competitive_intelligence_standalone.py` runs in the local check driver |
 | MCP package import boundary | ✅ extracted MCP server/shared helpers no longer import `atlas_brain.mcp.b2b` just to import tool modules |
 | Source registry support module | ✅ `services.scraping.sources` is extracted-owned instead of an Atlas bridge |
@@ -83,7 +84,7 @@ Product-owned modules:
 
 | Task | Source file referenced |
 |---|---|
-| Rewire remaining battle-card/vendor-briefing LLM calls to consume `extracted_llm_infrastructure` directly | `autonomous/tasks/b2b_battle_cards.py:3140` (`call_llm_with_skill`, `get_pipeline_llm` already routes through `pipelines.llm`; exact-cache and Anthropic batch bridges now route through extracted LLM infra), `b2b_vendor_briefing.py:1199-1202` (`get_llm`) |
+| Rewire remaining non-LLM battle-card/vendor-briefing host dependencies | LLM calls now route through `pipelines.llm` / `services.llm_router` into extracted LLM infrastructure in standalone mode. Remaining blockers are task/runtime host dependencies outside the LLM surface. |
 | Replace `_b2b_shared.py` cross-imports with explicit `Protocol`-based interfaces | `vendor_briefing.py:40-47` reads from `_b2b_shared` for vendor intelligence records |
 | Provide host adapters for write-tool builders | `mcp/b2b/write_ports.py` defines ports for challenger brief and accounts-in-motion builders |
 | Generic `EvidenceClaimReader` Protocol | `services/b2b/evidence_claim_*.py` stays in atlas-core; scaffold consumes via Protocol |
