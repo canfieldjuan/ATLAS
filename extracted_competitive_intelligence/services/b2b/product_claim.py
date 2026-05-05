@@ -1,23 +1,47 @@
-"""Phase 1 bridge: re-exports atlas_brain.services.b2b.product_claim.
+"""Competitive Intelligence ProductClaim compatibility surface.
 
-Programmatically copies every non-dunder name (including underscore-
-prefixed helpers that from X import * would drop). Required because
-many scaffolded modules import private helpers from atlas_brain peers
-via from .X import _foo lazily inside function bodies. Phase 2
-replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
+The ProductClaim contract is owned by ``extracted_quality_gate``. Competitive
+Intelligence re-exports the public contract here so existing package imports
+keep working without importing Atlas internals.
 """
+
 from __future__ import annotations
 
-import importlib as _importlib
+from extracted_quality_gate.product_claim import (
+    ClaimGatePolicy,
+    ClaimScope,
+    ConfidenceLabel,
+    EvidencePosture,
+    MissingClaimGatePolicyError,
+    ProductClaim,
+    SuppressionReason,
+    build_product_claim,
+    compute_claim_id,
+    decide_render_gates,
+    derive_confidence,
+    derive_evidence_posture,
+    get_policy,
+    get_registered_policy,
+    register_policy,
+    reset_policy_registry,
+)
 
-def _bridge() -> None:
-    src = _importlib.import_module("atlas_brain.services.b2b.product_claim")
-    g = globals()
-    for name in dir(src):
-        if not name.startswith("__"):
-            g[name] = getattr(src, name)
 
-
-_bridge()
-del _bridge, _importlib
+__all__ = [
+    "ClaimScope",
+    "EvidencePosture",
+    "ConfidenceLabel",
+    "SuppressionReason",
+    "ClaimGatePolicy",
+    "ProductClaim",
+    "MissingClaimGatePolicyError",
+    "register_policy",
+    "get_policy",
+    "get_registered_policy",
+    "reset_policy_registry",
+    "compute_claim_id",
+    "derive_evidence_posture",
+    "derive_confidence",
+    "decide_render_gates",
+    "build_product_claim",
+]

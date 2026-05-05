@@ -16,6 +16,7 @@ python -m pytest -q \
   tests/test_extracted_competitive_prompt_contracts.py \
   tests/test_extracted_competitive_ecosystem_port.py \
   tests/test_extracted_competitive_challenger_claims_port.py \
+  tests/test_extracted_competitive_product_claim.py \
   tests/test_extracted_competitive_crm_provider_port.py \
   tests/test_extracted_competitive_email_provider_port.py \
   tests/test_extracted_competitive_pdf_renderer_port.py \
