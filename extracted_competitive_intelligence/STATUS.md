@@ -31,6 +31,7 @@ Full task/runtime decoupling remains Phase 3.
 | Gated report PDF renderer Protocol | ✅ `services.b2b.pdf_renderer` routes to an injectable standalone PDF renderer |
 | LLM exact-cache bridge | ✅ `services.b2b.llm_exact_cache` routes to extracted LLM infrastructure in standalone mode |
 | Anthropic batch bridge | ✅ `services.b2b.anthropic_batch` routes to extracted LLM infrastructure in standalone mode |
+| Anthropic batch helper boundary | ✅ `autonomous.tasks._b2b_batch_utils` is product-owned helper logic |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
 | Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM bridge, and service package fallback |
 | Standalone smoke script + CI | ✅ `smoke_extracted_competitive_intelligence_standalone.py` runs in the local check driver |
@@ -55,7 +56,7 @@ Full task/runtime decoupling remains Phase 3.
 | Manifest mappings | 12 |
 | Manifest Python snapshots | 3 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 17 |
+| Product-owned modules | 18 |
 
 Product-owned modules:
 
@@ -70,6 +71,7 @@ Product-owned modules:
 - `services/b2b/challenger_dashboard_claims.py`
 - `services/b2b/competitive_set_ports.py`
 - `services/b2b_competitive_sets.py`
+- `autonomous/tasks/_b2b_batch_utils.py`
 - `autonomous/tasks/_b2b_cross_vendor_synthesis.py`
 - `templates/email/vendor_briefing.py`
 - `reasoning/ecosystem.py`
@@ -103,6 +105,7 @@ Product-owned modules:
 | `services/b2b/challenger_dashboard_claims.py` | ✅ | ✅ | ✅ |
 | `services/scraping/sources.py` | n/a | ✅ | ✅ |
 | `reasoning/ecosystem.py` | n/a | ✅ | ✅ |
+| `autonomous/tasks/_b2b_batch_utils.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | ✅ | ✅ |
