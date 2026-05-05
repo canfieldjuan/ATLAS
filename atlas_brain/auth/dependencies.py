@@ -12,6 +12,7 @@ from .jwt import decode_token
 
 PLAN_ORDER = ["trial", "starter", "growth", "pro"]
 B2B_PLAN_ORDER = ["b2b_trial", "b2b_starter", "b2b_growth", "b2b_pro"]
+LLM_GATEWAY_PLAN_ORDER = ["llm_trial", "llm_starter", "llm_growth", "llm_pro"]
 
 
 @dataclass
@@ -100,9 +101,10 @@ async def require_auth(request: Request) -> AuthUser:
     if row["plan_status"] == "canceled":
         raise HTTPException(status_code=403, detail="Subscription canceled")
 
-    # Check trial expiration
+    # Check trial expiration -- includes llm_trial (PR-D2) so LLM
+    # Gateway trial accounts also expire after trial_days.
     trial_ends = row["trial_ends_at"]
-    if row["plan"] in ("trial", "b2b_trial") and trial_ends:
+    if row["plan"] in ("trial", "b2b_trial", "llm_trial") and trial_ends:
         # Ensure timezone-aware comparison
         te = trial_ends if trial_ends.tzinfo else trial_ends.replace(tzinfo=timezone.utc)
         if te < datetime.now(timezone.utc):
@@ -236,6 +238,46 @@ def require_b2b_plan(min_plan: str):
     return _check
 
 
+def require_llm_plan(min_plan: str):
+    """Return a dependency that enforces a minimum LLM-Gateway plan tier.
+
+    Mirrors ``require_b2b_plan``: enforces both the product binding
+    (``user.product == "llm_gateway"``) and the plan ordering. Used
+    by PR-D4's ``/api/v1/llm/*`` router to gate per-tier feature
+    access.
+    """
+    if min_plan not in LLM_GATEWAY_PLAN_ORDER:
+        raise ValueError(
+            f"Invalid LLM Gateway plan tier '{min_plan}'. Expected one of {LLM_GATEWAY_PLAN_ORDER}"
+        )
+    min_idx = LLM_GATEWAY_PLAN_ORDER.index(min_plan)
+
+    async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
+        if user.plan_status == "past_due":
+            raise HTTPException(
+                status_code=402,
+                detail="Payment past due",
+            )
+        if user.product != "llm_gateway":
+            raise HTTPException(
+                status_code=403,
+                detail="LLM Gateway product required",
+            )
+        user_idx = (
+            LLM_GATEWAY_PLAN_ORDER.index(user.plan)
+            if user.plan in LLM_GATEWAY_PLAN_ORDER
+            else -1
+        )
+        if user_idx < min_idx:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Plan '{min_plan}' or higher required (current: '{user.plan}')",
+            )
+        return user
+
+    return _check
+
+
 def _extract_api_key(request: Request) -> Optional[str]:
     """Extract a customer API key from the Authorization header.
 
@@ -295,8 +337,10 @@ async def require_api_key(request: Request) -> AuthUser:
     if account_row["plan_status"] == "canceled":
         raise HTTPException(status_code=403, detail="Subscription canceled")
 
+    # Trial expiration check includes llm_trial (PR-D2). Mirrors the
+    # same check in require_auth so JWT and API-key paths are consistent.
     trial_ends = account_row["trial_ends_at"]
-    if account_row["plan"] in ("trial", "b2b_trial") and trial_ends:
+    if account_row["plan"] in ("trial", "b2b_trial", "llm_trial") and trial_ends:
         te = trial_ends if trial_ends.tzinfo else trial_ends.replace(tzinfo=timezone.utc)
         if te < datetime.now(timezone.utc):
             raise HTTPException(status_code=403, detail="Trial expired")
