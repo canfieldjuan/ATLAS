@@ -32,7 +32,7 @@ import time
 import uuid as _uuid
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -634,6 +634,17 @@ def _validate_batch_provider(provider: str) -> None:
 async def submit_batch(
     body: BatchSubmitRequest,
     user: AuthUser = Depends(require_llm_plan("llm_starter")),
+    idempotency_key: Optional[str] = Header(
+        default=None,
+        alias="Idempotency-Key",
+        max_length=128,
+        description=(
+            "Optional dedup token. If a prior submit used the same "
+            "key for this account, the original record is replayed "
+            "without a new Anthropic call -- prevents duplicate paid "
+            "batches on retry after timeout/network errors."
+        ),
+    ),
 ) -> BatchView:
     """Submit an Anthropic Message Batch.
 
@@ -649,7 +660,9 @@ async def submit_batch(
     PR -- a follow-up adds /batch/{id}/results to fetch the JSONL
     file Anthropic produces. For PR-D4b, customers can pull results
     via Anthropic's API directly using the ``provider_batch_id``
-    returned here.
+    returned here. Per-item usage IS persisted to ``llm_usage`` once
+    the batch reaches a terminal state (PR-D4c) so /api/v1/llm/usage
+    rollups include batch traffic.
 
     On submit failure (Anthropic rejects, validation error, etc.)
     the response body still carries the customer's ``id`` /
@@ -657,6 +670,11 @@ async def submit_batch(
     plus ``error_text`` so the caller can debug without losing the
     handle. Distinct from terminal ``status='ended'`` which means
     Anthropic finished processing successfully.
+
+    Idempotency: send an ``Idempotency-Key`` header (any 1-128 char
+    string; UUIDs recommended) to dedup retries. A prior submit
+    under the same key for the same account replays the original
+    record -- safe to retry without creating duplicate paid batches.
     """
     _validate_batch_provider(body.provider)
     _require_batch_enabled(user)
@@ -693,6 +711,7 @@ async def submit_batch(
             api_key=api_key,
             model=normalized_model,
             items=customer_items,
+            idempotency_key=idempotency_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

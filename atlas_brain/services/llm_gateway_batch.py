@@ -115,28 +115,66 @@ async def submit_customer_batch(
     api_key: str,
     model: str,
     items: Sequence[CustomerBatchItem],
+    idempotency_key: Optional[str] = None,
 ) -> CustomerBatchRecord:
     """Submit a batch to Anthropic with the customer's BYOK key.
 
     Inserts a tracking row first (status="queued"), calls Anthropic's
     batches.create, persists ``provider_batch_id`` + status="in_progress"
-    on success, persists ``error_text`` + status="ended" on failure.
-    Returns the persisted record.
+    on success, persists ``error_text`` + status="submit_failed" on
+    failure. Returns the persisted record.
+
+    When ``idempotency_key`` is provided, a prior submit with the same
+    key for the same account replays the original record -- no new
+    Anthropic call. Closes the accepted-upstream-but-timeout-locally
+    retry case where a customer would otherwise create duplicate paid
+    batches. PR-D4c.
     """
     if not items:
         raise ValueError("submit_customer_batch: items list is empty")
     if not api_key:
         raise ValueError("submit_customer_batch: api_key is required")
 
+    # Idempotency replay: if the customer already submitted under this
+    # key for this account, return the existing record without calling
+    # Anthropic again. Per-account UNIQUE constraint enforced at the
+    # DB level (migration 318). The empty-string key is treated as
+    # "no key supplied" so customers don't accidentally collide on it.
+    normalized_key = idempotency_key.strip() if idempotency_key else None
+    if not normalized_key:
+        normalized_key = None
+    if normalized_key:
+        existing = await pool.fetchrow(
+            """
+            SELECT id, account_id, provider, provider_batch_id, model,
+                   status, total_items, completed_items, failed_items,
+                   error_text, created_at, updated_at, submitted_at,
+                   completed_at
+            FROM llm_gateway_batches
+            WHERE account_id = $1 AND idempotency_key = $2
+            """,
+            account_id,
+            normalized_key,
+        )
+        if existing:
+            logger.info(
+                "llm_gateway_batch.submit replay account=%s key=%s id=%s",
+                account_id,
+                normalized_key,
+                existing["id"],
+            )
+            return _row_to_record(existing)
+
     # Insert pre-submit so a crash mid-call still leaves a queued row
-    # the customer can see.
+    # the customer can see. The idempotency_key column is NULL when
+    # no header was sent -- the partial UNIQUE index ignores NULL.
     async with pool.transaction() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO llm_gateway_batches (
-                account_id, provider, model, status, total_items
+                account_id, provider, model, status, total_items, idempotency_key
             ) VALUES (
-                $1, 'anthropic', $2, 'queued', $3
+                $1, 'anthropic', $2, 'queued', $3, $4
             )
             RETURNING id, account_id, provider, provider_batch_id, model,
                       status, total_items, completed_items, failed_items,
@@ -146,6 +184,7 @@ async def submit_customer_batch(
             account_id,
             model,
             len(items),
+            normalized_key,
         )
 
     requests = []
@@ -340,4 +379,166 @@ async def refresh_customer_batch_status(
         completed,
         failed,
     )
-    return _row_to_record(updated)
+    refreshed = _row_to_record(updated)
+
+    # PR-D4c: when a batch transitions to a real Anthropic terminal
+    # state (ended/canceled/expired -- NOT submit_failed), fetch the
+    # per-item results from Anthropic and write llm_usage rows so the
+    # batch traffic shows up in /api/v1/llm/usage. Idempotent via the
+    # ``usage_tracked`` column -- repeat polls don't double-count.
+    if is_terminal and new_status in ("ended", "canceled", "expired"):
+        try:
+            await _persist_batch_usage(
+                pool,
+                account_id=account_id,
+                batch_id=batch_id,
+                provider_batch_id=record.provider_batch_id,
+                model=record.model,
+                api_key=api_key,
+            )
+        except Exception:
+            logger.exception(
+                "llm_gateway_batch.refresh: usage write failed account=%s batch=%s",
+                account_id,
+                batch_id,
+            )
+
+    return refreshed
+
+
+# ---- Batch usage persistence -------------------------------------------
+
+
+# Anthropic batch discount factor: tokens billed at 50% of the
+# synchronous rate. Mirrors the same factor in atlas's existing
+# ``services/b2b/anthropic_batch.py`` -- kept as a module-level
+# constant so any future Anthropic pricing change updates one place.
+_BATCH_DISCOUNT_FACTOR = 0.5
+
+
+async def _persist_batch_usage(
+    pool,
+    *,
+    account_id: _uuid.UUID,
+    batch_id: _uuid.UUID,
+    provider_batch_id: str,
+    model: str,
+    api_key: str,
+) -> None:
+    """Write per-item ``llm_usage`` rows for a completed batch.
+
+    Idempotent: runs at most once per batch via the
+    ``usage_tracked=FALSE`` precondition in the UPDATE that flips
+    the flag. A concurrent poller losing the race is a no-op
+    (conditional update returns 0 rows).
+
+    Per-item cost calculation applies the 50% Anthropic batch
+    discount. Customers see the discounted figure in their
+    ``/api/v1/llm/usage`` rollup -- which matches what Anthropic
+    actually charges them.
+    """
+    # Atomic claim: only proceed when usage_tracked transitions
+    # FALSE -> TRUE. A concurrent poller wins the race and the
+    # loser exits cleanly.
+    claim = await pool.fetchrow(
+        """
+        UPDATE llm_gateway_batches
+        SET usage_tracked = TRUE
+        WHERE id = $1 AND usage_tracked = FALSE
+        RETURNING id
+        """,
+        batch_id,
+    )
+    if claim is None:
+        return  # Already tracked by an earlier poll.
+
+    from anthropic import AsyncAnthropic
+
+    from ..pipelines.llm import trace_llm_call
+
+    try:
+        async with AsyncAnthropic(
+            api_key=api_key,
+            timeout=ANTHROPIC_SDK_TIMEOUT_SECONDS,
+        ) as client:
+            results_iter = await client.messages.batches.results(provider_batch_id)
+            async for entry in results_iter:
+                custom_id = getattr(entry, "custom_id", "") or ""
+                result = getattr(entry, "result", None)
+                rtype = getattr(result, "type", None) if result else None
+                if rtype != "succeeded":
+                    # Only successful items consumed tokens billed by
+                    # Anthropic. Errored / canceled / expired items
+                    # show in the failed_items counter but don't add
+                    # to llm_usage.
+                    continue
+                message = getattr(result, "message", None)
+                usage = getattr(message, "usage", None) if message else None
+                if usage is None:
+                    continue
+                input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+                output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+                cached_tokens = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+                cache_write_tokens = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+                provider_request_id = getattr(message, "id", None)
+                trace_llm_call(
+                    span_name="llm_gateway.batch_item",
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cached_tokens=cached_tokens,
+                    cache_write_tokens=cache_write_tokens,
+                    billable_input_tokens=input_tokens,
+                    model=model,
+                    provider="anthropic",
+                    provider_request_id=str(provider_request_id) if provider_request_id else None,
+                    cost_usd_override=_BATCH_DISCOUNT_FACTOR
+                    * _estimate_cost_usd(
+                        model=model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cached_tokens=cached_tokens,
+                        cache_write_tokens=cache_write_tokens,
+                    ),
+                    metadata={
+                        "account_id": str(account_id),
+                        "batch_id": str(batch_id),
+                        "custom_id": custom_id,
+                        "endpoint": "llm_gateway.batch",
+                    },
+                )
+    except Exception:
+        # Roll the claim back so a future poll retries the usage
+        # write. Otherwise a transient SDK error during
+        # results-fetch would lose the usage permanently.
+        await pool.execute(
+            "UPDATE llm_gateway_batches SET usage_tracked = FALSE WHERE id = $1",
+            batch_id,
+        )
+        raise
+
+
+def _estimate_cost_usd(
+    *,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float:
+    """Compute the synchronous-tier cost for a token mix using
+    atlas's existing pricing config. The caller multiplies by
+    ``_BATCH_DISCOUNT_FACTOR`` to get the actual batch cost.
+    """
+    from ..config import settings
+
+    return float(
+        settings.ftl_tracing.pricing.cost_usd(
+            "anthropic",
+            model,
+            input_tokens,
+            output_tokens,
+            cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+            billable_input_tokens=input_tokens,
+        )
+    )
