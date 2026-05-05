@@ -147,6 +147,27 @@ def _client(
     return TestClient(app)
 
 
+@pytest.mark.parametrize(
+    ("field", "message"),
+    (
+        (
+            "default_category_refresh_limit",
+            "default_category_refresh_limit must be less than or equal to max_limit",
+        ),
+        (
+            "default_opportunity_limit",
+            "default_opportunity_limit must be less than or equal to max_limit",
+        ),
+    ),
+)
+def test_seller_campaign_api_config_rejects_operation_defaults_above_cap(
+    field: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        SellerCampaignApiConfig(max_limit=60, **{field: 61})
+
+
 def test_seller_campaign_router_lists_targets() -> None:
     pool = _Pool(rows=[_target_row()], total=1)
 
@@ -600,7 +621,10 @@ def test_seller_campaign_router_rejects_refresh_limit_above_configured_cap(
 
     monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
 
-    response = _client(_Pool(), config=SellerCampaignApiConfig(max_limit=60)).post(
+    response = _client(
+        _Pool(),
+        config=SellerCampaignApiConfig(max_limit=60, default_opportunity_limit=60),
+    ).post(
         "/seller/intelligence/refresh",
         json={"category": "supplements", "limit": 61},
     )
@@ -621,7 +645,10 @@ def test_seller_campaign_router_rejects_prepare_limit_above_configured_cap(
 
     monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
 
-    response = _client(_Pool(), config=SellerCampaignApiConfig(max_limit=60)).post(
+    response = _client(
+        _Pool(),
+        config=SellerCampaignApiConfig(max_limit=60, default_opportunity_limit=60),
+    ).post(
         "/seller/opportunities/prepare",
         json={"category": "supplements", "limit": 61},
     )

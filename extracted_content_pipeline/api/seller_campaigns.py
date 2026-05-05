@@ -81,8 +81,16 @@ class SellerCampaignApiConfig:
             raise ValueError("default_category_min_reviews must be non-negative")
         if self.default_category_refresh_limit < 0:
             raise ValueError("default_category_refresh_limit must be non-negative")
+        if self.default_category_refresh_limit > self.max_limit:
+            raise ValueError(
+                "default_category_refresh_limit must be less than or equal to max_limit"
+            )
         if self.default_opportunity_limit < 0:
             raise ValueError("default_opportunity_limit must be non-negative")
+        if self.default_opportunity_limit > self.max_limit:
+            raise ValueError(
+                "default_opportunity_limit must be less than or equal to max_limit"
+            )
         if not _clean(self.default_seller_status):
             raise ValueError("default_seller_status is required")
 
