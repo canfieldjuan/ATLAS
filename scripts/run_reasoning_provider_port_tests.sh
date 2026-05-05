@@ -9,7 +9,7 @@ import importlib.util
 raise SystemExit(0 if importlib.util.find_spec('pytest_asyncio') else 1)
 PY
 then
-  pytest -q \
+  python -m pytest -q \
     tests/test_b2b_reasoning_consumer_adapter.py \
     tests/test_b2b_mcp_signals_overlay_contract.py \
     tests/test_extracted_campaign_reasoning_data.py \
