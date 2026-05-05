@@ -156,20 +156,12 @@ async def test_aggregate_seller_category_intelligence_builds_snapshot() -> None:
     }
     assert snapshot["top_pain_points"][0]["severity"] == "medium"
     assert snapshot["feature_gaps"][0]["avg_rating"] == 2.8
-    assert snapshot["competitive_flows"] == [
-        {
-            "from_brand": "Brand A",
-            "to_brand": "Brand B",
-            "direction": "switched_to",
-            "count": 3,
-        },
-        {
-            "from_brand": "Brand A",
-            "to_brand": "Unmodeled Competitor",
-            "direction": "switched_to",
-            "count": 2,
-        },
-    ]
+    assert snapshot["competitive_flows"] == [{
+        "from_brand": "Brand A",
+        "to_brand": "Brand B",
+        "direction": "switched_to",
+        "count": 3,
+    }]
     assert snapshot["brand_health"][0]["trend"] == "rising"
 
     brand_query, brand_args = pool.fetch_calls[0]
@@ -218,6 +210,37 @@ async def test_aggregate_seller_category_intelligence_accepts_custom_limits() ->
     brand_query, brand_args = pool.fetch_calls[1]
     assert "HAVING COUNT(*) >= $2" in brand_query
     assert brand_args == ("supplements", 3, 7)
+
+
+@pytest.mark.asyncio
+async def test_aggregate_can_opt_into_unmatched_competitor_names() -> None:
+    pool = _Pool()
+    _seed_aggregate_results(pool)
+
+    snapshot = await aggregate_seller_category_intelligence(
+        pool,
+        "supplements",
+        min_reviews=50,
+        intelligence_limits=CategoryIntelligenceLimits(
+            allow_unmatched_competitor_names=True,
+        ),
+    )
+
+    assert snapshot is not None
+    assert snapshot["competitive_flows"] == [
+        {
+            "from_brand": "Brand A",
+            "to_brand": "Brand B",
+            "direction": "switched_to",
+            "count": 3,
+        },
+        {
+            "from_brand": "Brand A",
+            "to_brand": "Unmodeled Competitor",
+            "direction": "switched_to",
+            "count": 2,
+        },
+    ]
 
 
 @pytest.mark.asyncio

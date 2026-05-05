@@ -90,6 +90,7 @@ class CategoryIntelligenceLimits:
     competitive_adjacency_directions: tuple[str, ...] = _DEFAULT_ADJACENCY_DIRECTIONS
     placeholder_brand_names: tuple[str, ...] = _DEFAULT_PLACEHOLDER_BRAND_NAMES
     comparison_noise_terms: tuple[str, ...] = _DEFAULT_COMPARISON_NOISE_TERMS
+    allow_unmatched_competitor_names: bool = False
 
 
 async def refresh_seller_category_intelligence(
@@ -460,6 +461,8 @@ def _normalize_known_brand(
         matched = known_brands.get(candidate_key)
         if matched:
             return matched
+    if not limits.allow_unmatched_competitor_names:
+        return ""
     noise_terms = {_brand_key(value) for value in limits.comparison_noise_terms}
     if _brand_key(text) in noise_terms:
         return ""
