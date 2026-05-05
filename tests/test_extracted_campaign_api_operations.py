@@ -190,6 +190,127 @@ def test_campaign_operations_router_generates_campaign_drafts(monkeypatch) -> No
     assert config.temperature == 0.3
 
 
+def test_campaign_operations_router_reports_status() -> None:
+    counters: dict[str, int] = {}
+    response = _client(
+        _Pool(),
+        sender=_Sender(),
+        llm=_LLM(),
+        skills=_Skills(),
+        reasoning=_Reasoning(),
+        counters=counters,
+        config=CampaignOperationsApiConfig(
+            default_generation_limit=7,
+            max_generation_limit=70,
+            generation_target_mode="vendor_retention",
+            generation_channel="email",
+            generation_channels=("email_cold", "email_followup"),
+            default_send_limit=8,
+            max_send_limit=80,
+            default_sequence_limit=9,
+            max_sequence_limit=90,
+            default_sequence_max_steps=4,
+            max_sequence_steps=12,
+            sequence_from_email="audit@example.com",
+        ),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "database": {"configured": True, "available": True},
+        "providers": {
+            "database": True,
+            "sender": True,
+            "llm": True,
+            "skills": True,
+            "reasoning": True,
+        },
+        "reasoning": {
+            "mode": "explicit_provider",
+            "single_pass_configured": False,
+            "single_pass_ready": False,
+        },
+        "features": {
+            "draft_generation": True,
+            "send_queued": True,
+            "sequence_progression": True,
+            "analytics_refresh": True,
+        },
+        "limits": {
+            "generation": {
+                "default_limit": 7,
+                "max_limit": 70,
+                "target_mode": "vendor_retention",
+                "channel": "email",
+                "channels": ["email_cold", "email_followup"],
+            },
+            "send": {"default_limit": 8, "max_limit": 80},
+            "sequence": {
+                "default_limit": 9,
+                "max_limit": 90,
+                "default_max_steps": 4,
+                "max_steps": 12,
+            },
+        },
+    }
+    assert counters == {"pool": 1}
+
+
+def test_campaign_operations_router_status_reports_degraded_database() -> None:
+    response = _client(_Pool(initialized=False)).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["database"] == {
+        "configured": True,
+        "available": False,
+        "reason": "pool_uninitialized",
+    }
+    assert payload["features"] == {
+        "draft_generation": False,
+        "send_queued": False,
+        "sequence_progression": False,
+        "analytics_refresh": False,
+    }
+
+
+def test_campaign_operations_router_status_reports_single_pass_readiness() -> None:
+    response = _client(
+        _Pool(),
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["reasoning"] == {
+        "mode": "single_pass",
+        "single_pass_configured": True,
+        "single_pass_ready": False,
+    }
+    assert payload["features"]["draft_generation"] is False
+
+
+def test_campaign_operations_router_status_marks_single_pass_ready() -> None:
+    response = _client(
+        _Pool(),
+        llm=_LLM(),
+        skills=_Skills(),
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reasoning"] == {
+        "mode": "single_pass",
+        "single_pass_configured": True,
+        "single_pass_ready": True,
+    }
+    assert payload["features"]["draft_generation"] is True
+
+
 def test_campaign_operations_router_generates_with_payload_scope(monkeypatch) -> None:
     calls = []
 

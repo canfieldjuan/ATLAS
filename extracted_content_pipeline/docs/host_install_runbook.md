@@ -483,6 +483,7 @@ runner. Explicit `reasoning_context_provider` injection still takes precedence.
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/campaigns/operations/status` | Report database availability, provider presence, feature readiness, and configured limits for admin dashboards. |
 | `POST` | `/campaigns/operations/drafts/generate` | Generate and persist campaign drafts from `campaign_opportunities`. |
 | `POST` | `/campaigns/operations/send/queued` | Send queued campaign rows through the injected sender. |
 | `POST` | `/campaigns/operations/sequences/progress` | Generate and queue due follow-up sequence steps. |
@@ -491,13 +492,15 @@ runner. Explicit `reasoning_context_provider` injection still takes precedence.
 For B2B installs, mount this router beside `create_b2b_campaign_router` and run
 the hosted admin sequence in order:
 
-1. Generate drafts from active opportunities with
+1. Check `/campaigns/operations/status` so the admin UI only enables ready
+   actions.
+2. Generate drafts from active opportunities with
    `/campaigns/operations/drafts/generate`.
-2. Inspect generated rows with `/b2b/campaigns/drafts` or
+3. Inspect generated rows with `/b2b/campaigns/drafts` or
    `/b2b/campaigns/drafts/export`.
-3. Approve and queue selected rows with `/b2b/campaigns/drafts/review`.
-4. Send queued rows with `/campaigns/operations/send/queued`.
-5. Refresh reporting with `/campaigns/operations/analytics/refresh`.
+4. Approve and queue selected rows with `/b2b/campaigns/drafts/review`.
+5. Send queued rows with `/campaigns/operations/send/queued`.
+6. Refresh reporting with `/campaigns/operations/analytics/refresh`.
 
 Reject a draft without deleting it:
 
