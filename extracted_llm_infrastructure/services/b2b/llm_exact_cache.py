@@ -225,13 +225,28 @@ def _json_field_to_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
+# Sentinel account UUID for atlas's internal pipeline calls (PR-D3).
+# Atlas's existing pipeline writes to this cache 100k+ times/month
+# without knowing about accounts; the sentinel marks those rows so
+# customer cache hits cannot leak across tenants.
+SENTINEL_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"
+
+
 async def lookup_cached_text(
     namespace: str,
     request_envelope: dict[str, Any],
     *,
     pool: Any | None = None,
+    account_id: str = SENTINEL_ACCOUNT_ID,
 ) -> B2BLLMExactCacheHit | None:
-    """Return the cached text for an exact request envelope."""
+    """Return the cached text for an exact request envelope.
+
+    ``account_id`` defaults to the SENTINEL so atlas's existing
+    pipeline keeps working unmodified. Customer-facing callers
+    (PR-D4 LLM Gateway router) pass the requesting account's UUID
+    so cross-tenant hits are impossible -- the (cache_key, account_id)
+    composite PK guarantees isolation at the storage layer.
+    """
     if not namespace or not is_b2b_llm_exact_cache_enabled():
         return None
 
@@ -246,7 +261,7 @@ async def lookup_cached_text(
             UPDATE b2b_llm_exact_cache
             SET last_hit_at = NOW(),
                 hit_count = hit_count + 1
-            WHERE cache_key = $1
+            WHERE cache_key = $1 AND account_id = $2
             RETURNING cache_key, namespace, provider, model,
                       response_text, usage_json, metadata,
                       created_at, last_hit_at, hit_count
@@ -254,6 +269,7 @@ async def lookup_cached_text(
         SELECT * FROM hit
         """,
         cache_key,
+        account_id,
     )
     if row is None:
         return None
@@ -283,8 +299,14 @@ async def store_cached_text(
     usage: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     pool: Any | None = None,
+    account_id: str = SENTINEL_ACCOUNT_ID,
 ) -> bool:
-    """Store a successful exact-match response."""
+    """Store a successful exact-match response.
+
+    ``account_id`` defaults to the SENTINEL so atlas's existing
+    pipeline keeps writing to its own cache namespace. Customer-
+    facing callers pass the requesting account's UUID.
+    """
     if (
         not namespace
         or not response_text
@@ -305,11 +327,12 @@ async def store_cached_text(
     await db_pool.execute(
         """
         INSERT INTO b2b_llm_exact_cache (
-            cache_key, namespace, provider, model, response_text, usage_json, metadata
+            cache_key, account_id, namespace, provider, model,
+            response_text, usage_json, metadata
         ) VALUES (
-            $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb
+            $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb
         )
-        ON CONFLICT (cache_key) DO UPDATE SET
+        ON CONFLICT (cache_key, account_id) DO UPDATE SET
             provider = EXCLUDED.provider,
             model = EXCLUDED.model,
             response_text = EXCLUDED.response_text,
@@ -317,6 +340,7 @@ async def store_cached_text(
             metadata = EXCLUDED.metadata
         """,
         cache_key,
+        account_id,
         namespace,
         str(provider or ""),
         str(model or ""),
