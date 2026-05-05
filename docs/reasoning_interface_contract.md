@@ -178,3 +178,41 @@ Each adapter/producer PR must validate:
 2. Classify as additive (minor) or breaking (major).
 3. Update this contract and linked execution board in same PR.
 4. Run schema/regression checks before merge.
+
+## Domain-agnostic envelope (M5-alpha)
+
+The vendor-pressure-flavored canonical payload above is the v1 contract for
+the churn-reasoning domain. M5-alpha (`docs/hybrid_extraction_plan_status_2026-05-05.md`)
+introduces a domain-agnostic envelope so the same producer/consumer pattern
+can be applied to other domains (call transcripts, internal company entities,
+etc.) without rewriting the core.
+
+The envelope lives in `extracted_reasoning_core.domains`:
+
+- `ReasoningSubject` Protocol -- anything reasoning is performed over (`id`,
+  `domain`, `payload`).
+- `DomainReasoningResult[PayloadT]` -- universal core fields (`confidence`,
+  `executive_summary`, `key_signals`, `uncertainty_sources`,
+  `falsification_conditions`, `reference_ids`, etc.) plus a typed
+  `domain_payload`.
+- `ReasoningProducerPort[SubjectT, PayloadT]` and
+  `ReasoningConsumerPort[PayloadT]` -- Protocols for the producer (subject
+  in, result out) and consumer (result in, overlay-fields dict out) sides.
+- `register_domain(name, subject_type, payload_type)` -- registry so each
+  new domain ships its own typed triple without touching the core.
+
+The vendor-pressure flow (current churn reasoning) becomes one specialization
+of this envelope in M5-beta:
+
+- `domain="vendor_pressure"`, `domain_payload=VendorPressurePayload(wedge=...,
+  proof_points=..., account_signals=..., ...)`.
+- `CampaignReasoningProviderPort` becomes
+  `ReasoningProducerPort[VendorOpportunity, VendorPressurePayload]`.
+- The vendor-specific `reasoning_contracts` keys (`vendor_core_reasoning`,
+  `displacement_reasoning`, `category_reasoning`, `account_reasoning`) move
+  under `domain_payload`; the universal core stays at the envelope level.
+
+A second domain ships purely additively: define a new
+`Subject` / `Payload` / `Producer` / `Consumer` triple, call
+`register_domain`, and consumers that only need universal fields work without
+code changes.
