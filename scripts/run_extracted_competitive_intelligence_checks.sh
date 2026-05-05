@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 bash scripts/validate_extracted_competitive_intelligence.sh
 bash scripts/check_ascii_python_competitive_intelligence.sh
 python scripts/check_extracted_competitive_intelligence_imports.py
+python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_competitive_intelligence
 python scripts/smoke_extracted_competitive_intelligence_imports.py
 python scripts/smoke_extracted_competitive_intelligence_standalone.py
 python -m pytest -q \

@@ -1,38 +1,18 @@
-"""Phase 1 package bridge: lazily exposes names from atlas_brain.reasoning.
+"""Competitive Intelligence reasoning package.
 
-PEP 562 ``__getattr__`` resolves ``from PACKAGE import some_name`` at
-runtime by delegating to the atlas_brain peer package's __init__
-namespace. This avoids triggering the atlas_brain peer's heavy import
-chain at scaffold-load time -- e.g., importing
-``extracted_competitive_intelligence.services.vendor_registry`` no
-longer eagerly loads ``atlas_brain.services`` (which pulls in the
-torch/llm chain) just to satisfy a hypothetical
-``from ...services import llm_registry`` runtime fallback.
+Submodule imports are handled by Python's native import machinery from
+the scaffold filesystem -- importing
+``extracted_competitive_intelligence.reasoning.semantic_cache`` /
+``...wedge_registry`` / ``...single_pass_prompts.cross_vendor_battle``
+resolves directly to those files.
 
-Submodule imports of the form ``from PACKAGE import submodule_name``
-are handled by Python's native import machinery from the scaffold
-filesystem; this hook only fires for non-submodule attributes.
-
-Phase 2 replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
+PR-D7a removed the Phase-1 ``__getattr__`` bridge that previously
+lazy-delegated to ``atlas_brain.reasoning`` for non-submodule
+attribute access. Nothing inside the codebase actually triggered that
+hook (every consumer reaches into a concrete submodule), and the
+post-PR-C4 reasoning core now provides everything reasoning-side,
+so the bridge was dead code that also blocked the audit's
+"no runtime atlas_brain.reasoning imports" acceptance criterion.
+Submodule access is unaffected.
 """
 from __future__ import annotations
-
-import importlib
-import os
-from typing import Any
-
-
-def __getattr__(name: str) -> Any:
-    if os.environ.get("EXTRACTED_COMP_INTEL_STANDALONE") == "1":
-        raise AttributeError(
-            f"module {__name__!r} has no standalone attribute {name!r}; "
-            "import an extracted reasoning module explicitly"
-        )
-    src = importlib.import_module("atlas_brain.reasoning")
-    try:
-        return getattr(src, name)
-    except AttributeError:
-        raise AttributeError(
-            f"module {__name__!r} has no attribute {name!r}"
-        ) from None

@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 bash scripts/validate_extracted_llm_infrastructure.sh
 bash scripts/check_ascii_python_llm_infrastructure.sh
 python scripts/check_extracted_llm_infrastructure_imports.py
+python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_llm_infrastructure
 
 # Smoke imports run in two modes:
 # - delegate (default): verifies the scaffold imports cleanly when
