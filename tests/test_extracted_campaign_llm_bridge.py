@@ -11,6 +11,7 @@ LLM_BRIDGE_PATHS = [
     "extracted_content_pipeline/pipelines/llm.py",
     "extracted_content_pipeline/services/b2b/anthropic_batch.py",
     "extracted_content_pipeline/services/llm/anthropic.py",
+    "extracted_content_pipeline/services/llm_router.py",
 ]
 
 LOCAL_UTILITY_SHIM_PATHS = [

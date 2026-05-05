@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from atlas_brain.api import b2b_vendor_briefing as briefing_api
 from atlas_brain.auth.dependencies import AuthUser, require_auth
 from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
+from atlas_brain.services.b2b import vendor_briefing_ports as briefing_ports
 
 
 def _auth_user() -> AuthUser:
@@ -32,6 +33,46 @@ def _make_app():
     return app
 
 
+class RuntimePort:
+    def __init__(self):
+        self.calls = []
+
+    def normalize_openrouter_model(self, model, *, context=""):
+        self.calls.append(("normalize_openrouter_model", context))
+        return str(model or "")
+
+    def clean_llm_output(self, text):
+        self.calls.append(("clean_llm_output", ""))
+        return str(text).strip()
+
+    def get_campaign_llm(self):
+        self.calls.append(("get_campaign_llm", "campaign"))
+        return SimpleNamespace(model="campaign-model")
+
+    def build_llm_messages(self, system_prompt, user_prompt):
+        self.calls.append(("build_llm_messages", system_prompt))
+        return [
+            SimpleNamespace(role="system", content=system_prompt),
+            SimpleNamespace(role="user", content=user_prompt),
+        ]
+
+    def prepare_b2b_exact_stage_request(self, stage_id, **kwargs):
+        self.calls.append(("prepare_b2b_exact_stage_request", stage_id))
+        return SimpleNamespace(stage_id=stage_id, model="runtime-model")
+
+    async def lookup_b2b_exact_stage_text(self, request):
+        self.calls.append(("lookup_b2b_exact_stage_text", request.stage_id))
+        return {"response_text": "{\"summary\":\"cached\"}"}
+
+    async def store_b2b_exact_stage_text(self, request, **kwargs):
+        self.calls.append(("store_b2b_exact_stage_text", request.stage_id))
+        self.store_kwargs = kwargs
+        return True
+
+    def trace_llm_call(self, span_name, **kwargs):
+        self.calls.append(("trace_llm_call", span_name))
+
+
 def test_generate_briefing_trims_vendor_name_and_blank_email(monkeypatch):
     monkeypatch.setattr(briefing_api.settings.b2b_churn, "vendor_briefing_enabled", True, raising=False)
     generate = AsyncMock(return_value={"status": "ok"})
@@ -46,6 +87,35 @@ def test_generate_briefing_trims_vendor_name_and_blank_email(monkeypatch):
 
     assert response.status_code == 200
     assert generate.await_args.kwargs == {"vendor_name": "Zendesk", "to_email": None}
+
+
+@pytest.mark.asyncio
+async def test_llm_call_routes_through_vendor_briefing_runtime_port():
+    port = RuntimePort()
+    briefing_ports.configure_vendor_briefing_runtime_port(port)
+
+    try:
+        result = await briefing_mod._llm_call(
+            SimpleNamespace(model="unused"),
+            "system",
+            "user",
+            cache_metadata={"vendor": "Acme"},
+        )
+    finally:
+        briefing_ports.configure_vendor_briefing_runtime_port(None)
+
+    assert result == {
+        "data": {"summary": "cached"},
+        "model": "runtime-model",
+        "token_usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+    assert port.store_kwargs["metadata"] == {"vendor": "Acme"}
+    assert port.calls == [
+        ("build_llm_messages", "system"),
+        ("prepare_b2b_exact_stage_request", "b2b_vendor_briefing.account_card"),
+        ("lookup_b2b_exact_stage_text", "b2b_vendor_briefing.account_card"),
+        ("store_b2b_exact_stage_text", "b2b_vendor_briefing.account_card"),
+    ]
 
 
 def test_briefing_gate_rejects_blank_email_before_db_touch(monkeypatch):

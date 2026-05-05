@@ -11,6 +11,9 @@ if os.getenv("EXTRACTED_PIPELINE_STANDALONE", "0") == "1":
     def clean_llm_output(text: str) -> str:
         return (text or "").strip()
 
+    def normalize_openrouter_model(model: Any | None, *, context: str = "") -> str:
+        return str(model or "").strip()
+
     def parse_json_response(text: str) -> dict[str, Any] | list[Any] | None:
         cleaned = clean_llm_output(text)
         if not cleaned:
