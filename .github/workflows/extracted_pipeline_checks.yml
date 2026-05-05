@@ -15,6 +15,7 @@ on:
       - "atlas_brain/reasoning/wedge_registry.py"
       - "atlas_brain/reasoning/temporal.py"
       - "atlas_brain/reasoning/archetypes.py"
+      - "atlas_brain/reasoning/evidence_engine.py"
       - "atlas_brain/reasoning/graph.py"
       - "atlas_brain/autonomous/tasks/_b2b_reasoning_consumer_adapter.py"
       - "atlas_brain/mcp/b2b/signals.py"
@@ -41,6 +42,7 @@ on:
       - "tests/test_atlas_reasoning_wedge_registry_aliases.py"
       - "tests/test_atlas_reasoning_temporal_aliases.py"
       - "tests/test_atlas_reasoning_archetypes_aliases.py"
+      - "tests/test_atlas_reasoning_evidence_engine_aliases.py"
       - "tests/test_forbid_atlas_reasoning_imports.py"
       - "extracted/_shared/scripts/forbid_atlas_reasoning_imports.py"
   push:
@@ -57,6 +59,7 @@ on:
       - "atlas_brain/reasoning/wedge_registry.py"
       - "atlas_brain/reasoning/temporal.py"
       - "atlas_brain/reasoning/archetypes.py"
+      - "atlas_brain/reasoning/evidence_engine.py"
       - "atlas_brain/reasoning/graph.py"
       - "atlas_brain/autonomous/tasks/_b2b_reasoning_consumer_adapter.py"
       - "atlas_brain/mcp/b2b/signals.py"
@@ -83,6 +86,7 @@ on:
       - "tests/test_atlas_reasoning_wedge_registry_aliases.py"
       - "tests/test_atlas_reasoning_temporal_aliases.py"
       - "tests/test_atlas_reasoning_archetypes_aliases.py"
+      - "tests/test_atlas_reasoning_evidence_engine_aliases.py"
       - "tests/test_forbid_atlas_reasoning_imports.py"
       - "extracted/_shared/scripts/forbid_atlas_reasoning_imports.py"
 
