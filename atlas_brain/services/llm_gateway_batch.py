@@ -48,6 +48,16 @@ logger = logging.getLogger("atlas.services.llm_gateway_batch")
 # is bounded so a single slow upstream cannot stack blocked workers.
 ANTHROPIC_SDK_TIMEOUT_SECONDS = 30.0
 
+# Cooldown between automatic retries of _persist_batch_usage on
+# a terminal row whose usage_tracked flag is still FALSE. Without
+# it, a 1Hz /batch/{id} poll loop fires _persist_batch_usage
+# every poll under transient SDK failures, hammering Anthropic's
+# results endpoint. 30s is shorter than the 60s resume threshold
+# (so customers still see retry happen on a typical poll cadence)
+# but long enough that a sustained transient failure doesn't
+# storm the upstream. PR-D4e.
+_USAGE_RETRY_COOLDOWN_SECONDS = 30
+
 # Terminal statuses (no more polling needed). ``submit_failed`` is
 # also terminal -- the row never made it to Anthropic, so polling
 # would do nothing useful.
@@ -102,6 +112,15 @@ class CustomerBatchRecord:
     # terminal row whose usage write never landed (results pre-fetch
     # failed before the atomic claim could flip the flag) and retry.
     usage_tracked: bool = False
+    # PR-D4e: set BEFORE the AsyncAnthropic.batches.create call.
+    # NULL means we never started the Anthropic side -- the resume
+    # claim relies on this to distinguish "safe to re-submit" from
+    # "may have created a duplicate paid batch already".
+    anthropic_call_initiated_at: Optional[datetime] = None
+    # PR-D4e: timestamp of the most recent _persist_batch_usage
+    # retry attempt. The refresh path skips retry when this is
+    # within the cooldown window, preventing poll-storms.
+    last_usage_retry_at: Optional[datetime] = None
 
 
 def _row_to_record(row: Any) -> CustomerBatchRecord:
@@ -125,6 +144,18 @@ def _row_to_record(row: Any) -> CustomerBatchRecord:
         # row mocks still work (the column defaults FALSE in the
         # migration, so missing == not-yet-tracked).
         usage_tracked=bool(row["usage_tracked"]) if "usage_tracked" in row.keys() else False,
+        # PR-D4e migration 322 added these. Same defensive pattern
+        # for mocks that don't include the columns.
+        anthropic_call_initiated_at=(
+            row["anthropic_call_initiated_at"]
+            if "anthropic_call_initiated_at" in row.keys()
+            else None
+        ),
+        last_usage_retry_at=(
+            row["last_usage_retry_at"]
+            if "last_usage_retry_at" in row.keys()
+            else None
+        ),
     )
 
 
@@ -173,7 +204,8 @@ async def submit_customer_batch(
             SELECT id, account_id, provider, provider_batch_id, model,
                    status, total_items, completed_items, failed_items,
                    error_text, created_at, updated_at, submitted_at,
-                   completed_at, usage_tracked
+                   completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
             FROM llm_gateway_batches
             WHERE account_id = $1 AND idempotency_key = $2
             """,
@@ -195,32 +227,48 @@ async def submit_customer_batch(
                 return _row_to_record(existing)
 
             # No provider_batch_id means the prior attempt never
-            # made it to Anthropic. Two cases:
-            #   a) status='queued', updated recently -- a concurrent
-            #      retry is in flight right now; re-submitting would
-            #      duplicate-pay. Replay so the customer polls.
-            #   b) status='queued' but stale (updated_at >
-            #      2x ANTHROPIC_SDK_TIMEOUT_SECONDS ago), OR
-            #      status='submit_failed' -- the prior attempt
-            #      crashed pre-submit (a) or Anthropic rejected /
-            #      timed out (b). Either way, the customer's batch
-            #      never landed; resume so the retry actually
-            #      submits. Codex P1 rounds 3+4 on PR-D4c.
+            # made it to Anthropic. Three sub-cases distinguished
+            # by ``anthropic_call_initiated_at`` (PR-D4e migration
+            # 322 -- set just before AsyncAnthropic.batches.create
+            # below):
+            #   a) initiated_at IS NULL, status='queued', recent --
+            #      another retry is in flight right now; replay.
+            #   b) initiated_at IS NULL, status='queued' or
+            #      'submit_failed' AND stale -- the prior attempt
+            #      crashed before reaching Anthropic. SAFE to
+            #      resume because the batch never existed on
+            #      Anthropic's side.
+            #   c) initiated_at IS NOT NULL -- AMBIGUOUS. Anthropic
+            #      may have accepted the create call before the
+            #      crash; auto-resubmitting would duplicate-pay.
+            #      Resume claim falls through to the in-flight
+            #      replay path; ops gets a WARN log for manual
+            #      recovery.
             #
             # The decision is made atomically in SQL so two
             # concurrent resumes can't both win. Threshold = 60s =
             # 2x ANTHROPIC_SDK_TIMEOUT_SECONDS so an in-flight call
             # has had time to either succeed or hit the SDK timeout
             # (which would have updated the row to submit_failed).
+            #
+            # ``total_items`` and ``model`` are bumped to the
+            # current call's values on resume so the row reflects
+            # what's actually being submitted (the original values
+            # would normally match per the idempotency contract,
+            # but enforcing here keeps the row truthful even if a
+            # customer reuses a key with different inputs).
             resumed = await pool.fetchrow(
                 """
                 UPDATE llm_gateway_batches
                 SET updated_at = NOW(),
                     status = 'queued',
-                    error_text = NULL
+                    error_text = NULL,
+                    total_items = $3,
+                    model = $4
                 WHERE id = $1
                   AND account_id = $2
                   AND provider_batch_id IS NULL
+                  AND anthropic_call_initiated_at IS NULL
                   AND (
                     status = 'submit_failed'
                     OR (status = 'queued'
@@ -229,10 +277,13 @@ async def submit_customer_batch(
                 RETURNING id, account_id, provider, provider_batch_id, model,
                           status, total_items, completed_items, failed_items,
                           error_text, created_at, updated_at, submitted_at,
-                          completed_at, usage_tracked
+                          completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
                 """,
                 existing["id"],
                 account_id,
+                len(items),
+                model,
             )
             if resumed is None:
                 # Recent queued (< 60s old) or another retry already
@@ -250,7 +301,8 @@ async def submit_customer_batch(
                     SELECT id, account_id, provider, provider_batch_id, model,
                            status, total_items, completed_items, failed_items,
                            error_text, created_at, updated_at, submitted_at,
-                           completed_at, usage_tracked
+                           completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
                     FROM llm_gateway_batches
                     WHERE id = $1 AND account_id = $2
                     """,
@@ -258,14 +310,38 @@ async def submit_customer_batch(
                     account_id,
                 )
                 replay_row = latest if latest is not None else existing
-                logger.info(
-                    "llm_gateway_batch.submit replay (in-flight) "
-                    "account=%s key=%s id=%s status=%s",
-                    account_id,
-                    normalized_key,
-                    replay_row["id"],
-                    replay_row["status"],
-                )
+                # PR-D4e: distinguish in-flight replay (recent
+                # concurrent retry, replay is correct) from
+                # ambiguous-orphan (anthropic_call_initiated_at
+                # set but no provider_batch_id -- we can't tell
+                # if Anthropic accepted; auto-resume is unsafe).
+                # The latter requires manual recovery; WARN so
+                # ops can find these rows.
+                if (
+                    replay_row["provider_batch_id"] is None
+                    and replay_row["anthropic_call_initiated_at"] is not None
+                ):
+                    logger.warning(
+                        "llm_gateway_batch.submit ambiguous-orphan "
+                        "account=%s key=%s id=%s status=%s "
+                        "anthropic_call_initiated_at=%s -- Anthropic "
+                        "may have accepted the prior submit; manual "
+                        "recovery required (do not auto-resume)",
+                        account_id,
+                        normalized_key,
+                        replay_row["id"],
+                        replay_row["status"],
+                        replay_row["anthropic_call_initiated_at"],
+                    )
+                else:
+                    logger.info(
+                        "llm_gateway_batch.submit replay (in-flight) "
+                        "account=%s key=%s id=%s status=%s",
+                        account_id,
+                        normalized_key,
+                        replay_row["id"],
+                        replay_row["status"],
+                    )
                 return _row_to_record(replay_row)
             logger.info(
                 "llm_gateway_batch.submit resume pre-submit "
@@ -300,7 +376,8 @@ async def submit_customer_batch(
                     RETURNING id, account_id, provider, provider_batch_id, model,
                               status, total_items, completed_items, failed_items,
                               error_text, created_at, updated_at, submitted_at,
-                              completed_at, usage_tracked
+                              completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
                     """,
                     account_id,
                     model,
@@ -317,7 +394,8 @@ async def submit_customer_batch(
                 SELECT id, account_id, provider, provider_batch_id, model,
                        status, total_items, completed_items, failed_items,
                        error_text, created_at, updated_at, submitted_at,
-                       completed_at, usage_tracked
+                       completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
                 FROM llm_gateway_batches
                 WHERE account_id = $1 AND idempotency_key = $2
                 """,
@@ -350,6 +428,23 @@ async def submit_customer_batch(
         if system_prompt:
             params["system"] = system_prompt
         requests.append({"custom_id": item.custom_id, "params": params})
+
+    # PR-D4e: stamp ``anthropic_call_initiated_at`` BEFORE the
+    # AsyncAnthropic call. The resume claim treats a row with
+    # this stamp set + no provider_batch_id as an ambiguous
+    # orphan (Anthropic may have accepted but our local UPDATE
+    # never landed) -- without this, a stale ``queued`` row
+    # would auto-resume and risk a duplicate paid batch.
+    await pool.execute(
+        """
+        UPDATE llm_gateway_batches
+        SET anthropic_call_initiated_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1 AND account_id = $2
+        """,
+        row["id"],
+        account_id,
+    )
 
     # Call Anthropic. Imported lazily so unit tests can stub the
     # client without dragging the SDK into module load.
@@ -390,7 +485,8 @@ async def submit_customer_batch(
             RETURNING id, account_id, provider, provider_batch_id, model,
                       status, total_items, completed_items, failed_items,
                       error_text, created_at, updated_at, submitted_at,
-                      completed_at, usage_tracked
+                      completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
             """,
             row["id"],
             f"Anthropic batch submit failed: {exc}",
@@ -400,18 +496,25 @@ async def submit_customer_batch(
     provider_batch_id = getattr(provider_batch, "id", None)
     initial_status = getattr(provider_batch, "processing_status", None) or "in_progress"
 
+    # Success UPDATE. PR-D4e: clear ``completed_at`` (a prior
+    # submit_failed attempt sets it to NOW() at line ~488; a
+    # successful resume retry must clear it so the row's display
+    # state matches its actual lifecycle -- in_progress rows
+    # shouldn't carry a completed_at from a stale failure).
     updated_row = await pool.fetchrow(
         """
         UPDATE llm_gateway_batches
         SET provider_batch_id = $2,
             status = $3,
             submitted_at = NOW(),
-            updated_at = NOW()
+            updated_at = NOW(),
+            completed_at = NULL
         WHERE id = $1
         RETURNING id, account_id, provider, provider_batch_id, model,
                   status, total_items, completed_items, failed_items,
                   error_text, created_at, updated_at, submitted_at,
-                  completed_at, usage_tracked
+                  completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
         """,
         row["id"],
         str(provider_batch_id) if provider_batch_id else None,
@@ -438,7 +541,8 @@ async def get_customer_batch(
         SELECT id, account_id, provider, provider_batch_id, model,
                status, total_items, completed_items, failed_items,
                error_text, created_at, updated_at, submitted_at,
-               completed_at, usage_tracked
+               completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
         FROM llm_gateway_batches
         WHERE id = $1 AND account_id = $2
         """,
@@ -480,6 +584,33 @@ async def refresh_customer_batch_status(
             and record.status in ("ended", "canceled", "expired")
             and record.provider_batch_id
         ):
+            # PR-D4e cooldown (Codex P2): atomic claim collapses
+            # the cooldown check + stamp into a single conditional
+            # UPDATE so two concurrent pollers can't both observe
+            # cooldown_active=false and race into _persist_batch_usage.
+            # Returns a row if the claim won (this poller proceeds);
+            # returns None if the cooldown is active OR another
+            # concurrent poller already claimed the slot (this poller
+            # returns the current record so the customer keeps
+            # polling -- the next attempt outside the window retries).
+            claim = await pool.fetchrow(
+                """
+                UPDATE llm_gateway_batches
+                SET last_usage_retry_at = NOW()
+                WHERE id = $1 AND account_id = $2
+                  AND (
+                    last_usage_retry_at IS NULL
+                    OR last_usage_retry_at <=
+                        NOW() - make_interval(secs => $3)
+                  )
+                RETURNING id
+                """,
+                batch_id,
+                account_id,
+                _USAGE_RETRY_COOLDOWN_SECONDS,
+            )
+            if claim is None:
+                return record
             try:
                 await _persist_batch_usage(
                     pool,
@@ -557,7 +688,8 @@ async def refresh_customer_batch_status(
         RETURNING id, account_id, provider, provider_batch_id, model,
                   status, total_items, completed_items, failed_items,
                   error_text, created_at, updated_at, submitted_at,
-                  completed_at, usage_tracked
+                  completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at
         """,
         batch_id,
         new_status,
