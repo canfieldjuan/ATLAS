@@ -89,6 +89,10 @@ PLAN_NAME_TO_CONFIG_KEY = {
     "b2b_starter": "stripe_b2b_starter_price_id",
     "b2b_growth": "stripe_b2b_growth_price_id",
     "b2b_pro": "stripe_b2b_pro_price_id",
+    # LLM Gateway plan tiers (PR-D2)
+    "llm_starter": "stripe_llm_starter_price_id",
+    "llm_growth": "stripe_llm_growth_price_id",
+    "llm_pro": "stripe_llm_pro_price_id",
 }
 
 
@@ -147,6 +151,8 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
         v for v in [
             _cfg.stripe_starter_price_id, _cfg.stripe_growth_price_id, _cfg.stripe_pro_price_id,
             _cfg.stripe_b2b_starter_price_id, _cfg.stripe_b2b_growth_price_id, _cfg.stripe_b2b_pro_price_id,
+            # LLM Gateway plan tiers (PR-D2)
+            _cfg.stripe_llm_starter_price_id, _cfg.stripe_llm_growth_price_id, _cfg.stripe_llm_pro_price_id,
         ]
         if v
     }

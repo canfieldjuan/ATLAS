@@ -101,9 +101,10 @@ async def require_auth(request: Request) -> AuthUser:
     if row["plan_status"] == "canceled":
         raise HTTPException(status_code=403, detail="Subscription canceled")
 
-    # Check trial expiration
+    # Check trial expiration -- includes llm_trial (PR-D2) so LLM
+    # Gateway trial accounts also expire after trial_days.
     trial_ends = row["trial_ends_at"]
-    if row["plan"] in ("trial", "b2b_trial") and trial_ends:
+    if row["plan"] in ("trial", "b2b_trial", "llm_trial") and trial_ends:
         # Ensure timezone-aware comparison
         te = trial_ends if trial_ends.tzinfo else trial_ends.replace(tzinfo=timezone.utc)
         if te < datetime.now(timezone.utc):
@@ -336,8 +337,10 @@ async def require_api_key(request: Request) -> AuthUser:
     if account_row["plan_status"] == "canceled":
         raise HTTPException(status_code=403, detail="Subscription canceled")
 
+    # Trial expiration check includes llm_trial (PR-D2). Mirrors the
+    # same check in require_auth so JWT and API-key paths are consistent.
     trial_ends = account_row["trial_ends_at"]
-    if account_row["plan"] in ("trial", "b2b_trial") and trial_ends:
+    if account_row["plan"] in ("trial", "b2b_trial", "llm_trial") and trial_ends:
         te = trial_ends if trial_ends.tzinfo else trial_ends.replace(tzinfo=timezone.utc)
         if te < datetime.now(timezone.utc):
             raise HTTPException(status_code=403, detail="Trial expired")

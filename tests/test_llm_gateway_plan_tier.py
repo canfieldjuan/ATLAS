@@ -185,3 +185,53 @@ def test_init_price_map_picks_up_llm_price_ids(monkeypatch):
     assert billing_mod.PRICE_TO_PLAN["price_starter_test"] == "llm_starter"
     assert billing_mod.PRICE_TO_PLAN["price_growth_test"] == "llm_growth"
     assert billing_mod.PRICE_TO_PLAN["price_pro_test"] == "llm_pro"
+
+
+# ---- Codex fixes (post-review on PR-D2) ----------------------------------
+
+
+def test_plan_name_to_config_key_covers_llm_tiers():
+    """Codex P1 #2 fix: ``create_checkout`` resolves ``plan='llm_*'``
+    via this dict. Without the mapping, customers cannot upgrade from
+    llm_trial to a paid LLM tier through the normal checkout path."""
+    from atlas_brain.api.billing import PLAN_NAME_TO_CONFIG_KEY
+
+    assert PLAN_NAME_TO_CONFIG_KEY["llm_starter"] == "stripe_llm_starter_price_id"
+    assert PLAN_NAME_TO_CONFIG_KEY["llm_growth"] == "stripe_llm_growth_price_id"
+    assert PLAN_NAME_TO_CONFIG_KEY["llm_pro"] == "stripe_llm_pro_price_id"
+
+
+def test_register_assigns_llm_trial_for_llm_gateway_product():
+    """Codex P1 #1 fix: a new account with ``product=llm_gateway``
+    must land on the ``llm_trial`` plan -- otherwise
+    ``require_llm_plan('llm_trial')`` rejects the brand-new self-serve
+    user because plan='trial' (consumer) is not in
+    LLM_GATEWAY_PLAN_ORDER. We verify the assignment logic at the
+    source-text level since the actual registration flow is DB-bound;
+    integration tests against a live Postgres are a separate fixture."""
+    import inspect
+
+    from atlas_brain.api.auth import register
+
+    src = inspect.getsource(register)
+    assert 'is_llm_gateway = product == "llm_gateway"' in src
+    assert 'plan = "llm_trial"' in src
+
+
+def test_trial_expiration_check_includes_llm_trial():
+    """Codex P2 fix: trial-expiration checks in both ``require_auth``
+    and ``require_api_key`` must include ``llm_trial`` so an expired
+    LLM trial cannot keep authenticating after ``trial_ends_at``."""
+    import inspect
+
+    from atlas_brain.auth.dependencies import require_auth, require_api_key
+
+    auth_src = inspect.getsource(require_auth)
+    api_src = inspect.getsource(require_api_key)
+
+    assert '"llm_trial"' in auth_src, (
+        "require_auth's trial-expiration check must include llm_trial"
+    )
+    assert '"llm_trial"' in api_src, (
+        "require_api_key's trial-expiration check must include llm_trial"
+    )

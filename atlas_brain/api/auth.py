@@ -126,13 +126,21 @@ async def register(req: RegisterRequest):
 
     product = req.product if req.product in VALID_PRODUCTS else "consumer"
     is_b2b = product in ("b2b_retention", "b2b_challenger")
+    is_llm_gateway = product == "llm_gateway"
 
     cfg = settings.saas_auth
     trial_ends = datetime.now(timezone.utc) + timedelta(days=cfg.trial_days)
     trial_asin_limit = PLAN_LIMITS.get("trial", {}).get("asins", 5)
 
-    # B2B accounts get b2b_trial plan with 1 vendor; consumer gets trial with ASINs
-    plan = "b2b_trial" if is_b2b else "trial"
+    # Trial plan is product-specific so the corresponding require_*_plan
+    # gate accepts the new account. B2B -> b2b_trial; LLM Gateway ->
+    # llm_trial; consumer (default) -> trial.
+    if is_llm_gateway:
+        plan = "llm_trial"
+    elif is_b2b:
+        plan = "b2b_trial"
+    else:
+        plan = "trial"
     vendor_limit = 1
 
     # Use a transaction so account + user are created atomically
