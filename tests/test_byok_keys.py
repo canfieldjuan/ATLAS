@@ -372,3 +372,58 @@ def test_saas_auth_rejects_empty_byok_kek_when_enabled(monkeypatch):
 
     monkeypatch.setenv("ATLAS_SAAS_ENABLED", "false")
     importlib.reload(config_mod)
+
+
+def test_saas_auth_rejects_malformed_byok_kek_when_enabled(monkeypatch):
+    """Codex P2 fix: a malformed KEK like ``v1:not-base64`` used to
+    pass startup and crash on first encrypt/decrypt. Validate at
+    config load so ops catch typos at boot, not runtime."""
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    # Malformed: not valid base64 for a 32-byte Fernet key.
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", "v1:not-base64-at-all!!")
+
+    import atlas_brain.config as config_mod
+
+    with pytest.raises(Exception, match="BYOK_ENCRYPTION_KEK invalid"):
+        importlib.reload(config_mod)
+
+    # Restore valid env so other tests don't inherit a half-loaded module.
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "false")
+    importlib.reload(config_mod)
+
+
+def test_saas_auth_rejects_kek_missing_colon_when_enabled(monkeypatch):
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", "no-colon-here-just-key")
+
+    import atlas_brain.config as config_mod
+
+    with pytest.raises(Exception, match="BYOK_ENCRYPTION_KEK invalid"):
+        importlib.reload(config_mod)
+
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "false")
+    importlib.reload(config_mod)
+
+
+def test_saas_auth_accepts_valid_byok_kek_when_enabled(monkeypatch):
+    """Sanity: a real Fernet key passes the validator and the
+    config object exposes it."""
+    from atlas_brain.auth.encryption import generate_kek
+
+    valid_kek = generate_kek()
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", f"v1:{valid_kek}")
+
+    import atlas_brain.config as config_mod
+
+    importlib.reload(config_mod)
+    assert config_mod.settings.saas_auth.byok_encryption_kek == f"v1:{valid_kek}"
+
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "false")
+    importlib.reload(config_mod)

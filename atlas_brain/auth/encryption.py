@@ -51,7 +51,7 @@ class _KEKEntry:
     fernet: Fernet
 
 
-def _parse_kek_string(raw: str) -> list[_KEKEntry]:
+def parse_kek_string(raw: str) -> list[_KEKEntry]:
     """Parse the ``ATLAS_SAAS_BYOK_ENCRYPTION_KEK`` env value.
 
     Format: ``kid1:base64key1,kid2:base64key2,...`` -- whitespace
@@ -105,7 +105,7 @@ def _load_keks() -> list[_KEKEntry]:
     from .. import config as _config
 
     raw = getattr(_config.settings.saas_auth, "byok_encryption_kek", "") or ""
-    return _parse_kek_string(raw)
+    return parse_kek_string(raw)
 
 
 def _write_kek() -> _KEKEntry:
