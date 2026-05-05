@@ -36,6 +36,8 @@ class BattleCardSupportPort(Protocol):
     async def update_execution_progress(self, task: Any, *, stage: str, progress_current: int | None = None, progress_total: int | None = None, progress_message: str | None = None, **counters: Any) -> None: ...
     def normalize_test_vendors(self, raw: Any) -> list[str]: ...
     def apply_vendor_scope_to_churn_inputs(self, data: dict[str, Any], vendor_names: list[str] | str | None) -> tuple[dict[str, Any], list[str]]: ...
+    async def load_best_reasoning_views(self, pool: Any, vendor_names: list[str], *, as_of: date | None = None, analysis_window_days: int = 30) -> dict[str, Any]: ...
+    def build_reasoning_lookup_from_views(self, synthesis_views: dict[str, Any]) -> dict[str, dict[str, Any]]: ...
     def _aggregate_competitive_disp(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]: ...
     def _build_deterministic_battle_cards(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]: ...
     def _build_pain_lookup(self, *args: Any, **kwargs: Any) -> dict[str, list[dict]]: ...
@@ -169,6 +171,33 @@ class _BridgeBattleCardSupportPort:
         )
 
         return _apply_vendor_scope_to_churn_inputs(data, vendor_names)
+
+    async def load_best_reasoning_views(
+        self,
+        pool: Any,
+        vendor_names: list[str],
+        *,
+        as_of: date | None = None,
+        analysis_window_days: int = 30,
+    ) -> dict[str, Any]:
+        from ...autonomous.tasks._b2b_synthesis_reader import load_best_reasoning_views
+
+        return await load_best_reasoning_views(
+            pool,
+            vendor_names,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+        )
+
+    def build_reasoning_lookup_from_views(
+        self,
+        synthesis_views: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        from ...autonomous.tasks._b2b_synthesis_reader import (
+            build_reasoning_lookup_from_views,
+        )
+
+        return build_reasoning_lookup_from_views(synthesis_views)
 
     def _aggregate_competitive_disp(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._shared()._aggregate_competitive_disp(*args, **kwargs)
@@ -438,6 +467,29 @@ def apply_vendor_scope_to_churn_inputs(
     )
 
 
+async def load_best_reasoning_views(
+    pool: Any,
+    vendor_names: list[str],
+    *,
+    as_of: date | None = None,
+    analysis_window_days: int = 30,
+) -> dict[str, Any]:
+    return await get_battle_card_support_port().load_best_reasoning_views(
+        pool,
+        vendor_names,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+    )
+
+
+def build_reasoning_lookup_from_views(
+    synthesis_views: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return get_battle_card_support_port().build_reasoning_lookup_from_views(
+        synthesis_views
+    )
+
+
 def _aggregate_competitive_disp(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
     return get_battle_card_support_port()._aggregate_competitive_disp(*args, **kwargs)
 
@@ -640,8 +692,10 @@ __all__ = [
     "BattleCardSupportPortNotConfigured",
     "STANDALONE_ENV_VAR",
     "apply_vendor_scope_to_churn_inputs",
+    "build_reasoning_lookup_from_views",
     "configure_battle_card_support_port",
     "get_battle_card_support_port",
+    "load_best_reasoning_views",
     "normalize_test_vendors",
     "update_execution_progress",
 ]

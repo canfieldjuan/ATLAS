@@ -25,7 +25,7 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | `mcp/b2b/cross_vendor.py` | MCP tools for cross-vendor conclusions |
 | `mcp/b2b/write_intelligence.py` | Write-back MCP tools for persisting conclusions |
 | `services/b2b/source_impact.py` | Source impact ledger (which sources feed which products) |
-| `services/b2b/battle_card_ports.py` | Host port for battle-card shared helper and data-read support |
+| `services/b2b/battle_card_ports.py` | Host port for battle-card shared helper, data-read, and synthesis-reader support |
 | `services/b2b/vendor_briefing_ports.py` | Host port for vendor briefing evidence and scorecard readers |
 | `autonomous/tasks/b2b_battle_cards.py` | Deterministic battle card builder + LLM overlay (~5K LOC) |
 | `autonomous/tasks/b2b_vendor_briefing.py` | Vendor churn briefing assembly + Resend send |
@@ -71,7 +71,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `services/b2b/pdf_renderer.py` uses an injectable PDF renderer port for standalone gated report delivery
 - `services/b2b/llm_exact_cache.py` uses `extracted_llm_infrastructure` for standalone battle-card prompt envelopes
 - `services/b2b/anthropic_batch.py` uses `extracted_llm_infrastructure` for standalone battle-card batch overlays
-- `services/b2b/battle_card_ports.py` exposes fail-closed host ports for battle-card shared helper, data-read, churn-scope, and execution-progress support
+- `services/b2b/battle_card_ports.py` exposes fail-closed host ports for battle-card shared helper, data-read, churn-scope, execution-progress, and synthesis-reader support
 - `services/b2b/vendor_briefing_ports.py` exposes fail-closed host ports for vendor briefing evidence and scorecard readers
 - `services/protocols.py`, `services/llm_router.py`, and `pipelines/llm.py` use `extracted_llm_infrastructure`
 - `services/scraping/sources.py` owns the source enum and classification sets locally
@@ -132,11 +132,12 @@ enablement and reconciliation helper logic. In standalone mode it resolves
 auxiliary Anthropic LLM slots through `extracted_llm_infrastructure`.
 
 `services/b2b/battle_card_ports.py` is a product-owned host port for
-battle-card shared helper, data-read, churn-scope, and execution-progress
-support. The mapped battle-card task no longer imports `_b2b_shared.py`,
-`b2b_churn_intelligence.py`, or `_execution_progress.py` directly for those
-helpers; Atlas uses the default bridge, while standalone competitive hosts must
-register explicit support adapters.
+battle-card shared helper, data-read, churn-scope, execution-progress, and
+synthesis-reader support. The mapped battle-card task no longer imports
+`_b2b_shared.py`, `b2b_churn_intelligence.py`, `_execution_progress.py`, or
+`_b2b_synthesis_reader.py` directly for those helpers; Atlas uses the default
+bridge, while standalone competitive hosts must register explicit support
+adapters.
 
 `templates/email/vendor_briefing.py` is a product-owned customer-facing
 renderer. It no longer imports runtime settings; hosts configure the fallback

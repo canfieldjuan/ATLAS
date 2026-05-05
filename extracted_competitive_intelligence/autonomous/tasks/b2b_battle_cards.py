@@ -2797,7 +2797,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     })
 
     # --- Load reasoning views (synthesis-first, legacy fallback) ---
-    from ._b2b_synthesis_reader import (
+    from ...services.b2b.battle_card_ports import (
         build_reasoning_lookup_from_views,
         load_best_reasoning_views,
     )
