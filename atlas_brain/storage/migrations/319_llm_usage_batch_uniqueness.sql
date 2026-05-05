@@ -50,13 +50,9 @@ BEGIN
     END IF;
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_usage_batch_item
-    ON llm_usage (account_id, batch_id, custom_id)
-    WHERE batch_id IS NOT NULL;
-
--- Lookup-by-batch helper (used by /api/v1/llm/usage rollups that
--- want to break out batch traffic by submission). Cheap to add and
--- gives the planner an option for the partial-aggregate query.
-CREATE INDEX IF NOT EXISTS idx_llm_usage_batch_id
-    ON llm_usage (batch_id, created_at DESC)
-    WHERE batch_id IS NOT NULL;
+-- Indexes are created in companion migrations 320 and 321 with
+-- ``CREATE INDEX CONCURRENTLY`` so the build doesn't take an
+-- ACCESS EXCLUSIVE lock on llm_usage and block live inserts.
+-- ``CREATE INDEX CONCURRENTLY`` cannot run inside a transaction
+-- block, so each one needs its own migration file (same pattern
+-- as migration 090). Copilot on PR-D4d.

@@ -618,7 +618,7 @@ INSERT INTO llm_usage (
     $14, $15
 )
 ON CONFLICT (account_id, batch_id, custom_id)
-WHERE batch_id IS NOT NULL
+WHERE batch_id IS NOT NULL AND custom_id IS NOT NULL
 DO NOTHING
 """
 
@@ -704,6 +704,21 @@ async def _persist_batch_usage(
                 # show in the failed_items counter but don't add
                 # to llm_usage.
                 continue
+            # Fail loud on a malformed succeeded item rather than
+            # falling back to provider message id or silently
+            # absorbing the row via ON CONFLICT later. Anthropic
+            # echoes the customer-supplied custom_id verbatim, so
+            # an empty value here means either Anthropic violated
+            # contract or the customer submitted blanks (which we
+            # should also refuse). usage_tracked stays FALSE so
+            # the next poll retries (or ops investigates).
+            # Copilot on PR-D4d.
+            if not custom_id:
+                raise ValueError(
+                    f"_persist_batch_usage: succeeded item with "
+                    f"blank custom_id from provider for batch="
+                    f"{batch_id}; refusing to write"
+                )
             message = getattr(result, "message", None)
             usage = getattr(message, "usage", None) if message else None
             if usage is None:

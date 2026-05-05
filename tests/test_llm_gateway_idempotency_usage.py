@@ -55,20 +55,18 @@ def test_migration_318_index_for_pending_usage_writes():
 # ---- Migration 319: per-item llm_usage uniqueness ----------------------
 
 
-def test_migration_319_adds_batch_columns_and_unique_index():
-    """PR-D4d post-audit: per-item idempotency at the DB level.
-    batch_id + custom_id columns + partial UNIQUE index on
-    (account_id, batch_id, custom_id) WHERE batch_id IS NOT NULL
-    so retries of _persist_batch_usage can ON CONFLICT DO NOTHING
-    on rows that already landed."""
+def test_migration_319_adds_batch_columns():
+    """PR-D4d post-audit: batch_id + custom_id columns on llm_usage
+    so per-item batch rows have a natural key. Index creates moved
+    to migrations 320/321 (CONCURRENTLY can't share a transaction
+    with other DDL)."""
     sql = _read_migration("319_llm_usage_batch_uniqueness.sql")
     # New columns nullable so existing /chat traffic still inserts cleanly.
     assert "ADD COLUMN IF NOT EXISTS batch_id  UUID" in sql
     assert "ADD COLUMN IF NOT EXISTS custom_id TEXT" in sql
-    # Partial UNIQUE index scoped to batch rows only.
-    assert "uq_llm_usage_batch_item" in sql
-    assert "(account_id, batch_id, custom_id)" in sql
-    assert "WHERE batch_id IS NOT NULL" in sql
+    # Indexes deliberately NOT in this migration (see 320, 321).
+    assert "uq_llm_usage_batch_item" not in sql
+    assert "idx_llm_usage_batch_id" not in sql
 
 
 def test_migration_319_check_constraint_blocks_null_or_blank_custom_id():
@@ -85,6 +83,32 @@ def test_migration_319_check_constraint_blocks_null_or_blank_custom_id():
         "            OR (custom_id IS NOT NULL AND custom_id <> '')\n"
         "        )"
     ) in sql
+
+
+def test_migration_320_creates_unique_index_concurrently():
+    """Copilot on PR-D4d: CREATE UNIQUE INDEX without CONCURRENTLY
+    takes ACCESS EXCLUSIVE on llm_usage and blocks live inserts.
+    Migration 320 isolates the index build so it uses
+    CONCURRENTLY (which can't share a transaction with other DDL).
+    Predicate also filters custom_id IS NOT NULL as defense-in-
+    depth -- the CHECK in 319 enforces it but the index predicate
+    keeps the safety even if the constraint is ever NOT VALID."""
+    sql = _read_migration("320_llm_usage_batch_unique_index.sql")
+    assert "CREATE UNIQUE INDEX CONCURRENTLY" in sql
+    assert "uq_llm_usage_batch_item" in sql
+    assert "(account_id, batch_id, custom_id)" in sql
+    assert "WHERE batch_id IS NOT NULL AND custom_id IS NOT NULL" in sql
+
+
+def test_migration_321_creates_lookup_index_concurrently():
+    """Companion lookup index for /api/v1/llm/usage rollups that
+    break out batch traffic by submission. CONCURRENTLY for the
+    same production-safety reason as 320."""
+    sql = _read_migration("321_llm_usage_batch_lookup_index.sql")
+    assert "CREATE INDEX CONCURRENTLY" in sql
+    assert "idx_llm_usage_batch_id" in sql
+    assert "(batch_id, created_at DESC)" in sql
+    assert "WHERE batch_id IS NOT NULL" in sql
 
 
 # ---- submit_customer_batch idempotency ----------------------------------
@@ -269,9 +293,11 @@ def test_persist_batch_usage_idempotent_via_on_conflict():
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
-    # Per-item dedup at DB level.
+    # Per-item dedup at DB level. ON CONFLICT predicate must match
+    # migration 320's index predicate exactly or Postgres can't
+    # use the index for conflict resolution.
     assert "ON CONFLICT (account_id, batch_id, custom_id)" in llm_gateway_batch._BATCH_USAGE_INSERT_SQL
-    assert "WHERE batch_id IS NOT NULL" in llm_gateway_batch._BATCH_USAGE_INSERT_SQL
+    assert "WHERE batch_id IS NOT NULL AND custom_id IS NOT NULL" in llm_gateway_batch._BATCH_USAGE_INSERT_SQL
     assert "DO NOTHING" in llm_gateway_batch._BATCH_USAGE_INSERT_SQL
     # Account-scoped flag flip.
     assert "WHERE id = $1 AND account_id = $2 AND usage_tracked = FALSE" in src
