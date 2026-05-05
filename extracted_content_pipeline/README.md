@@ -373,6 +373,41 @@ python scripts/progress_extracted_campaign_sequences.py \
   --json
 ```
 
+Hosts with FastAPI apps can mount the same send, sequence progression, and
+analytics worker triggers through a hosted operations router. The host injects
+its database pool, sender, optional LLM/skill providers, and auth dependencies;
+request payloads only control batch limits.
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.campaign_operations import (
+    CampaignOperationsApiConfig,
+    create_campaign_operations_router,
+)
+
+
+app.include_router(
+    create_campaign_operations_router(
+        pool_provider=get_pool,
+        sender_provider=get_campaign_sender,
+        llm_provider=get_campaign_llm,
+        skills_provider=get_campaign_skills,
+        config=CampaignOperationsApiConfig(
+            send_default_from_email="audit@customer.com",
+            sequence_from_email="audit@customer.com",
+        ),
+        dependencies=[Depends(require_content_ops_admin)],
+    )
+)
+```
+
+This adds `POST /campaigns/operations/send/queued`,
+`POST /campaigns/operations/sequences/progress`, and
+`POST /campaigns/operations/analytics/refresh` without exposing provider
+credentials, sender identity, unsubscribe policy, or LLM configuration through
+HTTP payloads.
+
 ## Import smoke test
 
 ```bash
@@ -472,6 +507,8 @@ Several small utility shims provide product-owned local behavior by default so t
   host worker CLIs
 - `api/campaign_webhooks.py`: optional FastAPI router factory for host-mounted
   campaign webhook and unsubscribe routes
+- `api/campaign_operations.py`: optional FastAPI router factory for
+  host-mounted send, sequence progression, and analytics operation triggers
 - `api/b2b_campaigns.py`: optional FastAPI router factory for host-mounted
   B2B draft list/export/review routes
 - `api/seller_campaigns.py`: optional FastAPI router factory for host-mounted
