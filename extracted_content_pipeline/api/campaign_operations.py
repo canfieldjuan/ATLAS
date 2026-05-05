@@ -27,6 +27,11 @@ from ..campaign_postgres_sequence_progression import (
 )
 from ..campaign_send import CampaignSendConfig
 from ..campaign_sequence_progression import CampaignSequenceProgressionConfig
+from ..services.single_pass_reasoning_provider import (
+    DEFAULT_REASONING_SKILL_NAME,
+    SinglePassCampaignReasoningProvider,
+    SinglePassReasoningConfig,
+)
 
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
@@ -71,6 +76,11 @@ class CampaignOperationsApiConfig:
     generation_include_source_opportunity: bool = True
     generation_opportunity_table: str = "campaign_opportunities"
     generation_vendor_targets_table: str = "vendor_targets"
+    generation_single_pass_reasoning: bool = False
+    generation_reasoning_skill_name: str = DEFAULT_REASONING_SKILL_NAME
+    generation_reasoning_max_tokens: int = 900
+    generation_reasoning_temperature: float = 0.2
+    generation_reasoning_include_source_opportunity: bool = True
 
     def __post_init__(self) -> None:
         _validate_default_limit(
@@ -105,6 +115,11 @@ class CampaignOperationsApiConfig:
             raise ValueError("generation_skill_name is required")
         if self.generation_max_tokens <= 0:
             raise ValueError("generation_max_tokens must be positive")
+        if self.generation_single_pass_reasoning:
+            if not _clean(self.generation_reasoning_skill_name):
+                raise ValueError("generation_reasoning_skill_name is required")
+            if self.generation_reasoning_max_tokens <= 0:
+                raise ValueError("generation_reasoning_max_tokens must be positive")
 
 
 def _require_fastapi() -> None:
@@ -129,6 +144,31 @@ async def _resolve_pool(pool_provider: PoolProvider) -> Any:
     if getattr(pool, "is_initialized", True) is False:
         raise HTTPException(status_code=503, detail="Database unavailable")
     return pool
+
+
+async def _pool_status(pool_provider: PoolProvider) -> dict[str, Any]:
+    try:
+        pool = await _maybe_await(pool_provider())
+    except Exception:  # pragma: no cover - exact host provider failures vary.
+        logger.warning("Campaign operations database status check failed", exc_info=True)
+        return {
+            "configured": True,
+            "available": False,
+            "reason": "provider_error",
+        }
+    if pool is None:
+        return {
+            "configured": True,
+            "available": False,
+            "reason": "missing_pool",
+        }
+    if getattr(pool, "is_initialized", True) is False:
+        return {
+            "configured": True,
+            "available": False,
+            "reason": "pool_uninitialized",
+        }
+    return {"configured": True, "available": True}
 
 
 async def _resolve_sender(
@@ -307,6 +347,110 @@ def _generation_config(
     )
 
 
+def _generation_reasoning_config(
+    config: CampaignOperationsApiConfig,
+) -> SinglePassReasoningConfig:
+    return SinglePassReasoningConfig(
+        skill_name=config.generation_reasoning_skill_name,
+        max_tokens=config.generation_reasoning_max_tokens,
+        temperature=float(config.generation_reasoning_temperature),
+        include_source_opportunity=config.generation_reasoning_include_source_opportunity,
+    )
+
+
+def _generation_reasoning_context(
+    config: CampaignOperationsApiConfig,
+    *,
+    explicit_reasoning_context: Any,
+    llm: LLMClient | None,
+    skills: SkillStore | None,
+) -> Any:
+    if explicit_reasoning_context is not None:
+        return explicit_reasoning_context
+    if not config.generation_single_pass_reasoning:
+        return None
+    if llm is None:
+        raise HTTPException(status_code=503, detail="Campaign reasoning LLM unavailable")
+    if skills is None:
+        raise HTTPException(status_code=503, detail="Campaign reasoning skills unavailable")
+    return SinglePassCampaignReasoningProvider(
+        llm=llm,
+        skills=skills,
+        config=_generation_reasoning_config(config),
+    )
+
+
+def _operation_readiness(
+    config: CampaignOperationsApiConfig,
+    *,
+    database_available: bool,
+    sender_provider: SenderProvider | None,
+    llm_provider: LLMProvider | None,
+    skills_provider: SkillsProvider | None,
+    reasoning_context_provider: ReasoningProvider | None,
+) -> dict[str, Any]:
+    llm_configured = llm_provider is not None
+    skills_configured = skills_provider is not None
+    explicit_reasoning = reasoning_context_provider is not None
+    single_pass_ready = (
+        bool(config.generation_single_pass_reasoning)
+        and llm_configured
+        and skills_configured
+    )
+    generation_ready = database_available and (
+        explicit_reasoning
+        or not config.generation_single_pass_reasoning
+        or single_pass_ready
+    )
+    sequence_ready = database_available and bool(_clean(config.sequence_from_email))
+    return {
+        "providers": {
+            "database": database_available,
+            "sender": sender_provider is not None,
+            "llm": llm_configured,
+            "skills": skills_configured,
+            "reasoning": explicit_reasoning,
+        },
+        "reasoning": {
+            "mode": (
+                "explicit_provider"
+                if explicit_reasoning
+                else ("single_pass" if config.generation_single_pass_reasoning else "none")
+            ),
+            "single_pass_configured": bool(config.generation_single_pass_reasoning),
+            "single_pass_ready": single_pass_ready,
+        },
+        "features": {
+            "draft_generation": generation_ready,
+            "send_queued": database_available and sender_provider is not None,
+            "sequence_progression": sequence_ready,
+            "analytics_refresh": database_available,
+        },
+    }
+
+
+def _operation_limits(config: CampaignOperationsApiConfig) -> dict[str, Any]:
+    return {
+        "generation": {
+            "default_limit": config.default_generation_limit,
+            "max_limit": config.max_generation_limit,
+            "target_mode": config.generation_target_mode,
+            "channel": config.generation_channel,
+            "channels": list(config.generation_channels),
+        },
+        "send": {
+            "default_limit": config.default_send_limit,
+            "max_limit": config.max_send_limit,
+        },
+        "sequence": {
+            "default_limit": config.default_sequence_limit,
+            "max_limit": config.max_sequence_limit,
+            "default_max_steps": config.default_sequence_max_steps,
+            "max_steps": config.max_sequence_steps,
+        },
+    }
+
+
 def _public_analytics_result(result: Any) -> dict[str, Any]:
     data = result.as_dict()
     if data.get("error"):
@@ -334,6 +478,24 @@ def create_campaign_operations_router(
         tags=list(resolved_config.tags),
         dependencies=list(dependencies or ()),
     )
+
+    @router.get("/status")
+    async def operations_status() -> dict[str, Any]:
+        database = await _pool_status(pool_provider)
+        database_available = bool(database.get("available"))
+        return {
+            "status": "ready" if database_available else "degraded",
+            "database": database,
+            **_operation_readiness(
+                resolved_config,
+                database_available=database_available,
+                sender_provider=sender_provider,
+                llm_provider=llm_provider,
+                skills_provider=skills_provider,
+                reasoning_context_provider=reasoning_context_provider,
+            ),
+            "limits": _operation_limits(resolved_config),
+        }
 
     @router.post("/drafts/generate")
     async def generate_drafts(
@@ -363,8 +525,14 @@ def create_campaign_operations_router(
         pool = await _resolve_pool(pool_provider)
         llm = await _resolve_optional(llm_provider)
         skills = await _resolve_optional(skills_provider)
-        reasoning_context = await _resolve_optional(reasoning_context_provider)
+        explicit_reasoning_context = await _resolve_optional(reasoning_context_provider)
         try:
+            reasoning_context = _generation_reasoning_context(
+                resolved_config,
+                explicit_reasoning_context=explicit_reasoning_context,
+                llm=llm,
+                skills=skills,
+            )
             result = await generate_campaign_drafts_from_postgres(
                 pool,
                 scope=scope,

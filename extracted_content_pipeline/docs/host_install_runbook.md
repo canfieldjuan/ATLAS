@@ -181,6 +181,27 @@ The file-backed reasoning adapter matches rows by target id, company, email, or
 vendor. The generator still works without this file, but output quality is lower
 because prompts only see the opportunity row.
 
+If a host does not already have reasoning JSON, it can configure
+`SinglePassCampaignReasoningProvider` from
+`extracted_content_pipeline.services.single_pass_reasoning_provider`. The
+provider uses the same LLM and skill ports as campaign generation, calls the
+packaged `digest/b2b_campaign_reasoning_context` prompt once per opportunity,
+and returns the same normalized context shape. This improves specificity
+without importing Atlas reasoning producers or long-running graph state.
+
+The Postgres generation runner wires that provider directly when the product
+LLM adapter is configured:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --single-pass-reasoning
+```
+
+Use `--reasoning-skill-name`, `--reasoning-max-tokens`, and
+`--reasoning-temperature` to tune the provider, or `--skills-root` to override
+the packaged reasoning prompt.
+
 See `reasoning_handoff_contract.md` for the accepted shape and the no-direct-
 import rule. AI Content Ops consumes compressed reasoning; it does not import a
 reasoning engine.
@@ -454,8 +475,15 @@ tenant scope, target/channel, filters, `limit`, and, for sequence progression,
 `max_steps`; provider credentials, sender identity, unsubscribe policy, LLM
 client, skill roots, and reasoning providers stay host-configured.
 
+For lightweight hosted installs without a separate reasoning provider, set
+`generation_single_pass_reasoning=True` on `CampaignOperationsApiConfig`. The
+draft generation route then builds `SinglePassCampaignReasoningProvider` from
+the injected LLM and skill providers before calling the Postgres generation
+runner. Explicit `reasoning_context_provider` injection still takes precedence.
+
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/campaigns/operations/status` | Report database availability, provider presence, feature readiness, and configured limits for admin dashboards. |
 | `POST` | `/campaigns/operations/drafts/generate` | Generate and persist campaign drafts from `campaign_opportunities`. |
 | `POST` | `/campaigns/operations/send/queued` | Send queued campaign rows through the injected sender. |
 | `POST` | `/campaigns/operations/sequences/progress` | Generate and queue due follow-up sequence steps. |
@@ -464,13 +492,15 @@ client, skill roots, and reasoning providers stay host-configured.
 For B2B installs, mount this router beside `create_b2b_campaign_router` and run
 the hosted admin sequence in order:
 
-1. Generate drafts from active opportunities with
+1. Check `/campaigns/operations/status` so the admin UI only enables ready
+   actions.
+2. Generate drafts from active opportunities with
    `/campaigns/operations/drafts/generate`.
-2. Inspect generated rows with `/b2b/campaigns/drafts` or
+3. Inspect generated rows with `/b2b/campaigns/drafts` or
    `/b2b/campaigns/drafts/export`.
-3. Approve and queue selected rows with `/b2b/campaigns/drafts/review`.
-4. Send queued rows with `/campaigns/operations/send/queued`.
-5. Refresh reporting with `/campaigns/operations/analytics/refresh`.
+4. Approve and queue selected rows with `/b2b/campaigns/drafts/review`.
+5. Send queued rows with `/campaigns/operations/send/queued`.
+6. Refresh reporting with `/campaigns/operations/analytics/refresh`.
 
 Reject a draft without deleting it:
 
@@ -508,5 +538,6 @@ DELETE FROM campaign_opportunities WHERE account_id = 'acct_123';
   path yet. Host apps inject auth dependencies into the packaged routers.
 - The runbook covers campaign opportunity generation, not blog generation or
   vendor briefing delivery.
-- Reasoning production remains host-owned. This product accepts reasoning
-  context; it does not compute long-running graph state.
+- Long-running reasoning production remains host-owned. The product includes a
+  single-pass opportunity-level provider for lightweight installs, but it does
+  not compute graph state or multi-hop synthesis.
