@@ -40,7 +40,10 @@ class _Pool:
 
     async def fetchrow(self, query, *args):
         self.fetchrow_calls.append((str(query), args))
-        return self.fetchrow_results.pop(0) if self.fetchrow_results else None
+        result = self.fetchrow_results.pop(0) if self.fetchrow_results else None
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
     async def fetch(self, query, *args):
         self.fetch_calls.append((str(query), args))
@@ -258,7 +261,9 @@ async def test_refresh_discovers_categories_and_saves_snapshots() -> None:
     assert result.as_dict() == {
         "refreshed": 1,
         "skipped": 0,
+        "failed": 0,
         "categories": ["supplements"],
+        "errors": [],
     }
     assert pool.execute_calls
 
@@ -304,7 +309,9 @@ async def test_refresh_does_not_limit_explicit_categories() -> None:
     assert result.as_dict() == {
         "refreshed": 3,
         "skipped": 0,
+        "failed": 0,
         "categories": ["supplements", "skincare", "coffee"],
+        "errors": [],
     }
     known_brand_queries = [
         query
@@ -334,7 +341,35 @@ async def test_refresh_deduplicates_explicit_categories() -> None:
     assert result.as_dict() == {
         "refreshed": 2,
         "skipped": 0,
+        "failed": 0,
         "categories": ["supplements", "skincare"],
+        "errors": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_refresh_continues_after_category_failure() -> None:
+    pool = _Pool()
+    pool.fetch_results = [_known_brand_rows()]
+    pool.fetchrow_results.append(RuntimeError("stats failed"))
+    _seed_aggregate_results(pool, include_known_brands=False)
+
+    result = await refresh_seller_category_intelligence(
+        pool,
+        categories=("broken", "supplements"),
+        min_reviews=50,
+    )
+
+    assert [args for _query, args in pool.fetchrow_calls] == [
+        ("broken",),
+        ("supplements",),
+    ]
+    assert result.as_dict() == {
+        "refreshed": 1,
+        "skipped": 0,
+        "failed": 1,
+        "categories": ["supplements"],
+        "errors": ["broken: stats failed"],
     }
 
 

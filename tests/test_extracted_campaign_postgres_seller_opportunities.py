@@ -92,6 +92,7 @@ async def test_prepare_seller_opportunities_reads_targets_and_snapshots() -> Non
     query, args = pool.fetch_calls[0]
     assert "FROM \"seller_targets\" st" in query
     assert "FROM \"category_intelligence_snapshots\" cis" in query
+    assert "cis.subcategory IS NULL" in query
     assert "st.status = $1" in query
     assert "$2 = ANY(st.categories)" in query
     assert args == ("active", "supplements", 7)

@@ -33,13 +33,17 @@ _DEFAULT_PLACEHOLDER_BRAND_NAMES = (
 class CategoryIntelligenceRefreshResult:
     refreshed: int = 0
     skipped: int = 0
+    failed: int = 0
     categories: tuple[str, ...] = field(default_factory=tuple)
+    errors: tuple[str, ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "refreshed": self.refreshed,
             "skipped": self.skipped,
+            "failed": self.failed,
             "categories": list(self.categories),
+            "errors": list(self.errors),
         }
 
 
@@ -90,6 +94,9 @@ async def refresh_seller_category_intelligence(
             limit=normalized_limit,
             reviews_table=reviews_table,
         )
+    _identifier(reviews_table)
+    _identifier(metadata_table)
+    _identifier(snapshots_table)
     limits = intelligence_limits or CategoryIntelligenceLimits()
     known_brands = (
         await _fetch_known_brands(pool, _identifier(metadata_table), limits)
@@ -97,30 +104,36 @@ async def refresh_seller_category_intelligence(
         else {}
     )
     refreshed: list[str] = []
+    errors: list[str] = []
     skipped = 0
     for category in category_names:
-        snapshot = await aggregate_seller_category_intelligence(
-            pool,
-            category,
-            min_reviews=normalized_min_reviews,
-            reviews_table=reviews_table,
-            metadata_table=metadata_table,
-            intelligence_limits=limits,
-            known_brands=known_brands,
-        )
-        if not snapshot:
-            skipped += 1
-            continue
-        await save_seller_category_intelligence_snapshot(
-            pool,
-            snapshot,
-            snapshots_table=snapshots_table,
-        )
-        refreshed.append(category)
+        try:
+            snapshot = await aggregate_seller_category_intelligence(
+                pool,
+                category,
+                min_reviews=normalized_min_reviews,
+                reviews_table=reviews_table,
+                metadata_table=metadata_table,
+                intelligence_limits=limits,
+                known_brands=known_brands,
+            )
+            if not snapshot:
+                skipped += 1
+                continue
+            await save_seller_category_intelligence_snapshot(
+                pool,
+                snapshot,
+                snapshots_table=snapshots_table,
+            )
+            refreshed.append(category)
+        except Exception as exc:
+            errors.append(f"{category}: {exc}")
     return CategoryIntelligenceRefreshResult(
         refreshed=len(refreshed),
         skipped=skipped,
+        failed=len(errors),
         categories=tuple(refreshed),
+        errors=tuple(errors),
     )
 
 
