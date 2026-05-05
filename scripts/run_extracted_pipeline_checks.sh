@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 bash scripts/validate_extracted_content_pipeline.sh
 bash scripts/check_ascii_python.sh
 python scripts/check_extracted_imports.py
+python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
 python scripts/smoke_extracted_pipeline_imports.py
 python scripts/audit_extracted_standalone.py --fail-on-debt
 pytest \
@@ -58,6 +59,7 @@ pytest \
   tests/test_atlas_reasoning_reflection_tracing.py \
   tests/test_atlas_reasoning_graph_aliases.py \
   tests/test_atlas_reasoning_run_reasoning_graph_wiring.py \
+  tests/test_forbid_atlas_reasoning_imports.py \
   tests/test_extracted_product_utilities.py \
   tests/test_extracted_b2b_batch_utils.py \
   tests/test_extracted_blog_matching.py \
