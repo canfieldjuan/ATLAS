@@ -162,3 +162,34 @@ This board operationalizes `docs/hybrid_extraction_implementation_plan.md` into 
 - [ ] CI jobs mapped to acceptance tests for each PR.
 - [ ] Product leads aligned on reuse-vs-rebuild decision criteria.
 - [ ] Baseline output fixtures captured for affected reasoning surfaces.
+
+
+## Progress ledger
+
+### Completed slices
+
+- [x] PR-1 contract foundation
+  - Added `docs/reasoning_interface_contract.md`.
+- [x] PR-2 consumer adapter seam
+  - Added `atlas_brain/autonomous/tasks/_b2b_reasoning_consumer_adapter.py`.
+  - Wired MCP overlays in `atlas_brain/mcp/b2b/signals.py`.
+  - Added adapter + overlay regression tests.
+- [x] PR-3 provider-port groundwork
+  - Added `extracted_content_pipeline/services/reasoning_provider_port.py`.
+  - Added `load_reasoning_provider_port(...)` wrapper.
+  - Wired example/postgres generation entrypoints and CLI runners.
+  - Added compatibility tests and migration docs.
+
+### Remaining slices (current scope)
+
+- [x] Add one consolidated compatibility test matrix run target for provider-port paths (`scripts/run_reasoning_provider_port_compat_checks.sh`).
+- [x] Add execution-board CI checklist links to each acceptance test command.
+- [x] Keep contract-impact annotations in every new PR body (scope guard compliance).
+
+### Deferred (explicitly out of current slice)
+
+- [ ] Producer internals rewrite (`b2b_reasoning_synthesis`, pool compression).
+- [ ] Contract-breaking schema changes.
+- [ ] New persistence artifacts for reasoning.
+
+- `scripts/run_reasoning_provider_port_tests.sh` runs scoped pytest checks when `pytest_asyncio` is available, and prints a deterministic skip message otherwise.
