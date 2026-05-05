@@ -2,6 +2,15 @@
 
 This is a manual state machine (no langgraph dependency required).
 Nodes are async functions that transform ReasoningAgentState.
+
+PR-C4e1 promoted the host-agnostic helpers (regex constants, summary
+text post-processing, JSON parsing, UUID validation, the
+``plan_actions`` filter) into ``extracted_reasoning_core.graph_helpers``.
+This module re-exports them under their existing private names so
+internal callers (notably ``reflection.py`` which imports
+``_parse_llm_json``) keep working without touching their import sites.
+The next sub-slices (PR-C4e2/e3) will move the LLM-driven nodes and
+the orchestrator behind those imports.
 """
 
 from __future__ import annotations
@@ -9,37 +18,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
-from uuid import UUID
 from typing import Any
+
+from extracted_reasoning_core.graph_helpers import (
+    build_notification_fallback as _build_notification_fallback,
+    clean_summary_text as _clean_summary_text,
+    has_suspicious_trailing_fragment as _has_suspicious_trailing_fragment,
+    parse_llm_json as _parse_llm_json,
+    plan_actions as _node_plan_actions,
+    sanitize_notification_summary as _sanitize_notification_summary,
+    valid_uuid_str as _valid_uuid,
+)
 
 from .state import ReasoningAgentState
 
 logger = logging.getLogger("atlas.reasoning.graph")
-
-# Regex to strip markdown code fences from LLM output
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
-_SUMMARY_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
-_SUMMARY_META_LINE_RE = re.compile(
-    r"^\s*(summarizing|refining|drafting|thinking|updating|notifying)\b",
-    re.IGNORECASE,
-)
-_SUMMARY_FIRST_PERSON_RE = re.compile(
-    r"\b(i|i'm|i am|i need|i should|we should)\b",
-    re.IGNORECASE,
-)
-_SUMMARY_META_CONTENT_RE = re.compile(
-    r"\b(the user wants|this event is about|the event is about|push notification|summary of|reasoning agent)\b",
-    re.IGNORECASE,
-)
-_SUMMARY_GENERIC_OPEN_RE = re.compile(
-    r"^\s*(assessing|reviewing|monitoring|evaluating|considering|tracking)\b",
-    re.IGNORECASE,
-)
-_MARKDOWN_RE = re.compile(r"[*_`#>]+")
-_COMMON_SHORT_FINAL_WORDS = frozenset({
-    "and", "for", "the", "you", "aws", "gcp", "crm", "b2b",
-})
 
 
 def _resolve_graph_llm(workload: str, *, use_model_override: bool = False):
@@ -61,100 +54,6 @@ def _resolve_graph_llm(workload: str, *, use_model_override: bool = False):
         auto_activate_ollama=False,
         openrouter_model=model_override,
     )
-
-
-def _clean_summary_text(text: str) -> str:
-    """Normalize graph synthesis output into plain notification text."""
-    cleaned = _JSON_FENCE_RE.sub(r"\1", text or "")
-    cleaned = _MARKDOWN_RE.sub("", cleaned)
-    cleaned = re.sub(r"\r\n?", "\n", cleaned)
-    cleaned = re.sub(r"[ \t]+", " ", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned
-
-
-def _build_notification_fallback(state: ReasoningAgentState) -> str:
-    """Build a deterministic fallback summary from actions and rationale."""
-    results = state.get("action_results", [])
-    successful = [
-        r.get("tool", "").replace("_", " ")
-        for r in results
-        if r.get("success") and r.get("tool")
-    ]
-    action_phrase = ""
-    if successful:
-        action_phrase = " Actions completed: " + ", ".join(successful[:3]) + "."
-    connections = state.get("connections_found", []) or []
-    connection_phrase = ""
-    if connections:
-        top_connection = re.sub(r"\s+", " ", str(connections[0])).strip()
-        if top_connection:
-            connection_phrase = top_connection[:220].rstrip(". ") + "."
-    rationale = (state.get("rationale", "") or "").strip()
-    rationale = re.sub(r"\s+", " ", rationale)
-    if connection_phrase:
-        return (connection_phrase + action_phrase).strip()
-    if rationale:
-        return (rationale[:220].rstrip(". ") + "." + action_phrase).strip()
-    if action_phrase:
-        return ("Atlas completed follow-up actions." + action_phrase).strip()
-    return "Atlas completed reasoning and flagged this event for review."
-
-
-def _has_suspicious_trailing_fragment(text: str) -> bool:
-    """Detect likely truncated sentence endings like 'bef.'."""
-    match = re.search(r"\b([A-Za-z]{1,3})[.!?]?$", text.strip())
-    if not match:
-        return False
-    token = match.group(1)
-    if token.lower() in _COMMON_SHORT_FINAL_WORDS:
-        return False
-    return token.islower()
-
-
-def _sanitize_notification_summary(text: str, state: ReasoningAgentState) -> str:
-    """Remove meta narration and keep a short owner-facing summary."""
-    cleaned = _clean_summary_text(text)
-    pieces: list[str] = []
-    for line in cleaned.splitlines():
-        stripped = line.strip(' "\'')
-        if not stripped:
-            continue
-        for sentence in _SUMMARY_SENTENCE_RE.split(stripped):
-            if sentence.strip():
-                pieces.append(sentence.strip())
-    kept: list[str] = []
-    for piece in pieces:
-        candidate = piece.strip(' "\'')
-        if not candidate:
-            continue
-        if _SUMMARY_META_LINE_RE.match(candidate):
-            continue
-        if _SUMMARY_FIRST_PERSON_RE.search(candidate):
-            continue
-        if _SUMMARY_META_CONTENT_RE.search(candidate):
-            continue
-        if _SUMMARY_GENERIC_OPEN_RE.match(candidate):
-            continue
-        if _has_suspicious_trailing_fragment(candidate):
-            continue
-        kept.append(candidate)
-        if len(kept) >= 2:
-            break
-    if not kept:
-        return _build_notification_fallback(state)
-    summary = " ".join(s.rstrip(".!?") + "." for s in kept)
-    return summary[:320].rstrip()
-
-
-def _valid_uuid(value: Any) -> str | None:
-    """Return canonical UUID string when value is a valid UUID-like input."""
-    if not value:
-        return None
-    try:
-        return str(UUID(str(value)))
-    except (TypeError, ValueError, AttributeError):
-        return None
 
 
 async def _llm_generate(llm, prompt: str, system_prompt: str,
@@ -197,34 +96,6 @@ async def _llm_generate(llm, prompt: str, system_prompt: str,
         "response": result.get("response", ""),
         "usage": result.get("usage", {}),
     }
-
-
-def _parse_llm_json(text: str) -> dict[str, Any]:
-    """Extract and parse JSON from an LLM response.
-
-    Handles: raw JSON, markdown-fenced JSON, JSON embedded in prose.
-    Raises JSONDecodeError if no valid JSON found.
-    """
-    text = text.strip()
-    if not text:
-        raise json.JSONDecodeError("Empty response", text, 0)
-
-    # 1. Try raw parse first (ideal case)
-    if text.startswith("{"):
-        return json.loads(text)
-
-    # 2. Try stripping markdown code fences
-    m = _JSON_FENCE_RE.search(text)
-    if m:
-        return json.loads(m.group(1).strip())
-
-    # 3. Try finding first { ... last } in the text
-    first = text.find("{")
-    last = text.rfind("}")
-    if first != -1 and last > first:
-        return json.loads(text[first : last + 1])
-
-    raise json.JSONDecodeError("No JSON object found in response", text, 0)
 
 
 async def run_reasoning_graph(state: ReasoningAgentState) -> ReasoningAgentState:
@@ -483,32 +354,6 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
         state["recommended_actions"] = []
         state["rationale"] = "Reasoning failed"
 
-    return state
-
-
-async def _node_plan_actions(state: ReasoningAgentState) -> ReasoningAgentState:
-    """Convert reasoning recommendations into executable action plan.
-
-    Safety: never auto-send email (only draft), never delete,
-    never modify CRM without logging.
-    """
-    SAFE_ACTIONS = {
-        "generate_draft", "show_slots", "log_interaction",
-        "create_reminder", "send_notification",
-    }
-
-    planned = []
-    for action in state.get("recommended_actions", []):
-        tool = action.get("tool", "")
-        if tool not in SAFE_ACTIONS:
-            logger.warning("Skipping unsafe action: %s", tool)
-            continue
-        if action.get("confidence", 0) < 0.5:
-            logger.debug("Skipping low-confidence action: %s (%.2f)", tool, action.get("confidence", 0))
-            continue
-        planned.append(action)
-
-    state["planned_actions"] = planned
     return state
 
 
