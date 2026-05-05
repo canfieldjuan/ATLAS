@@ -421,6 +421,46 @@ python scripts/progress_extracted_campaign_sequences.py \
   --limit 10
 ```
 
+Or mount the hosted operations router in a FastAPI app for admin-triggered
+draft generation, send, sequence progression, and analytics refresh actions:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.campaign_operations import (
+    CampaignOperationsApiConfig,
+    create_campaign_operations_router,
+)
+
+
+app.include_router(
+    create_campaign_operations_router(
+        pool_provider=get_pool,
+        sender_provider=get_campaign_sender,
+        llm_provider=get_campaign_llm,
+        skills_provider=get_campaign_skills,
+        reasoning_context_provider=get_campaign_reasoning_context,
+        config=CampaignOperationsApiConfig(
+            send_default_from_email="audit@customer.com",
+            sequence_from_email="audit@customer.com",
+        ),
+        dependencies=[Depends(require_content_ops_admin)],
+    )
+)
+```
+
+The hosted operations payloads are intentionally narrow. Callers may set
+tenant scope, target/channel, filters, `limit`, and, for sequence progression,
+`max_steps`; provider credentials, sender identity, unsubscribe policy, LLM
+client, skill roots, and reasoning providers stay host-configured.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/campaigns/operations/drafts/generate` | Generate and persist campaign drafts from `campaign_opportunities`. |
+| `POST` | `/campaigns/operations/send/queued` | Send queued campaign rows through the injected sender. |
+| `POST` | `/campaigns/operations/sequences/progress` | Generate and queue due follow-up sequence steps. |
+| `POST` | `/campaigns/operations/analytics/refresh` | Refresh packaged campaign analytics aggregates. |
+
 Reject a draft without deleting it:
 
 ```bash
