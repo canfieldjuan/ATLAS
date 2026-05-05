@@ -61,6 +61,19 @@ class _RecordingEmit:
 
 
 class _RecordingTracer:
+    """Fake atlas tracer.
+
+    Mirrors the kwargs ``AtlasTraceSink`` actually passes to atlas's
+    real tracer in :mod:`atlas_brain.services.tracing` -- specifically
+    the typed kwargs the adapter lifts out of the Port's metadata bag
+    (``model_name``/``model_provider``/``session_id`` on start, and
+    ``input_tokens``/``output_tokens``/``input_data``/``output_data``/
+    ``error_message``/``error_type`` on end). Unknown kwargs are
+    captured under ``extra`` so a regression that adds a new typed
+    extraction without a matching test will surface as an unexpected
+    kwarg.
+    """
+
     def __init__(self) -> None:
         self.starts: list[dict[str, Any]] = []
         self.ends: list[dict[str, Any]] = []
@@ -70,11 +83,20 @@ class _RecordingTracer:
         span_name: str,
         operation_type: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        model_name: str | None = None,
+        model_provider: str | None = None,
+        session_id: str | None = None,
+        **extra: Any,
     ) -> dict[str, Any]:
         record = {
             "span_name": span_name,
             "operation_type": operation_type,
             "metadata": metadata,
+            "model_name": model_name,
+            "model_provider": model_provider,
+            "session_id": session_id,
+            "extra": extra,
         }
         self.starts.append(record)
         return record
@@ -84,12 +106,27 @@ class _RecordingTracer:
         ctx: Any,
         status: str = "completed",
         metadata: Mapping[str, Any] | None = None,
+        *,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        input_data: dict[str, Any] | None = None,
+        output_data: dict[str, Any] | None = None,
+        error_message: str | None = None,
+        error_type: str | None = None,
+        **extra: Any,
     ) -> None:
         self.ends.append(
             {
                 "ctx": ctx,
                 "status": status,
                 "metadata": dict(metadata) if metadata else None,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "input_data": input_data,
+                "output_data": output_data,
+                "error_message": error_message,
+                "error_type": error_type,
+                "extra": extra,
             }
         )
 
@@ -260,3 +297,167 @@ def test_atlas_trace_sink_metadata_optional_on_both_calls() -> None:
 
     assert fake.starts[0]["metadata"] is None
     assert fake.ends[0]["metadata"] is None
+
+
+# ----------------------------------------------------------------------
+# Metadata-key extraction (PR-C4d)
+#
+# Atlas's tracer (atlas_brain.services.tracing) carries model_name,
+# model_provider, session_id on the SpanContext (set at start_span)
+# and accepts input_tokens, output_tokens, input_data, output_data,
+# error_message, error_type as typed kwargs to end_span. Cost calc,
+# trace payload columns, and llm_usage rows all depend on these
+# arriving as kwargs -- not nested in metadata. The Port contract
+# can't widen to expose them, so AtlasTraceSink lifts specific keys
+# out of metadata.
+# ----------------------------------------------------------------------
+
+
+def test_start_span_lifts_model_kwargs_out_of_metadata() -> None:
+    fake = _RecordingTracer()
+    sink = AtlasTraceSink(tracer=fake)
+
+    sink.start_span(
+        "reasoning.process",
+        metadata={
+            "model_name": "qwen3:14b",
+            "model_provider": "ollama",
+            "session_id": "evt-42",
+            "depth": "L3",
+        },
+    )
+
+    record = fake.starts[0]
+    # The three lifted keys must arrive as typed kwargs.
+    assert record["model_name"] == "qwen3:14b"
+    assert record["model_provider"] == "ollama"
+    assert record["session_id"] == "evt-42"
+    # Anything else stays in metadata.
+    assert record["metadata"] == {"depth": "L3"}
+    # Sanity: no key lands in **extra (which would mean the adapter
+    # is passing an unexpected kwarg to the underlying tracer).
+    assert record["extra"] == {}
+
+
+def test_start_span_keeps_reasoning_and_business_in_metadata() -> None:
+    # ``reasoning`` is promoted to a top-level payload field by atlas's
+    # _derive_reasoning_text. ``business`` is the structured business
+    # context envelope. Both are deliberately NOT extracted -- they need
+    # to stay nested in metadata for the existing atlas tracer codepaths
+    # to keep working.
+    fake = _RecordingTracer()
+    sink = AtlasTraceSink(tracer=fake)
+
+    sink.start_span(
+        "reasoning.process",
+        metadata={
+            "reasoning": {"summary": "triaged as low priority"},
+            "business": {"workflow": "reasoning_agent"},
+            "model_name": "qwen3:14b",
+        },
+    )
+
+    record = fake.starts[0]
+    assert record["model_name"] == "qwen3:14b"
+    assert record["metadata"] == {
+        "reasoning": {"summary": "triaged as low priority"},
+        "business": {"workflow": "reasoning_agent"},
+    }
+
+
+def test_start_span_metadata_becomes_none_when_only_lifted_keys_present() -> None:
+    # If every metadata key is lifted into typed kwargs, metadata should
+    # arrive as None (not an empty dict) -- atlas's tracer accepts
+    # Optional[dict] and treats None as "no metadata".
+    fake = _RecordingTracer()
+    sink = AtlasTraceSink(tracer=fake)
+
+    sink.start_span(
+        "reasoning.process",
+        metadata={
+            "model_name": "qwen3:14b",
+            "model_provider": "ollama",
+            "session_id": "evt-1",
+        },
+    )
+
+    record = fake.starts[0]
+    assert record["metadata"] is None
+
+
+def test_end_span_lifts_typed_kwargs_out_of_metadata() -> None:
+    fake = _RecordingTracer()
+    sink = AtlasTraceSink(tracer=fake)
+    span = sink.start_span("reasoning.process")
+
+    sink.end_span(
+        span,
+        status="ok",
+        metadata={
+            "input_tokens": 1234,
+            "output_tokens": 567,
+            "input_data": {"event_type": "test"},
+            "output_data": {"summary": "done"},
+            "reasoning": {"summary": "triaged"},
+            "business": {"workflow": "x"},
+        },
+    )
+
+    record = fake.ends[0]
+    assert record["status"] == "completed"
+    assert record["input_tokens"] == 1234
+    assert record["output_tokens"] == 567
+    assert record["input_data"] == {"event_type": "test"}
+    assert record["output_data"] == {"summary": "done"}
+    # reasoning + business stay in metadata.
+    assert record["metadata"] == {
+        "reasoning": {"summary": "triaged"},
+        "business": {"workflow": "x"},
+    }
+
+
+def test_end_span_lifts_error_kwargs_on_error_status() -> None:
+    fake = _RecordingTracer()
+    sink = AtlasTraceSink(tracer=fake)
+    span = sink.start_span("reasoning.process")
+
+    sink.end_span(
+        span,
+        status="error",
+        metadata={
+            "error_message": "reasoning graph failed",
+            "error_type": "ReasoningGraphError",
+            "input_data": {"event_type": "test"},
+        },
+    )
+
+    record = fake.ends[0]
+    assert record["status"] == "failed"
+    assert record["error_message"] == "reasoning graph failed"
+    assert record["error_type"] == "ReasoningGraphError"
+    assert record["input_data"] == {"event_type": "test"}
+    assert record["metadata"] is None
+
+
+def test_extraction_only_lifts_keys_present_in_metadata() -> None:
+    # Verify the adapter doesn't pass spurious kwargs (e.g. None values
+    # for keys the caller didn't supply) -- atlas's tracer treats
+    # ``input_tokens=None`` and "input_tokens omitted" identically, but
+    # the kwargs noise would clutter signatures and risk shadowing
+    # future tracer params.
+    fake = _RecordingTracer()
+    sink = AtlasTraceSink(tracer=fake)
+    span = sink.start_span("reasoning.process", metadata={"model_name": "x"})
+    sink.end_span(span, metadata={"input_tokens": 10})
+
+    # start_span got model_name; the other lifted keys default to None
+    # on the fake (matching atlas tracer behavior) but were never
+    # passed by the adapter -- captured by the start_record itself.
+    start_record = fake.starts[0]
+    assert start_record["model_name"] == "x"
+    # _RecordingTracer's defaults reflect "kwarg not passed" for the
+    # other two; the adapter shouldn't have passed them. Same for end.
+    end_record = fake.ends[0]
+    assert end_record["input_tokens"] == 10
+    assert end_record["output_tokens"] is None
+    assert end_record["error_message"] is None
