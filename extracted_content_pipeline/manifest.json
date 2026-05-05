@@ -173,6 +173,9 @@
       "target": "extracted_content_pipeline/campaign_ports.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_visibility.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_generation.py"
     },
     {

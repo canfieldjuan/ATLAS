@@ -33,6 +33,7 @@ MODULES = [
     "extracted_content_pipeline.api.campaign_operations",
     "extracted_content_pipeline.api.b2b_campaigns",
     "extracted_content_pipeline.api.seller_campaigns",
+    "extracted_content_pipeline.campaign_visibility",
     "extracted_content_pipeline.campaign_postgres_seller_opportunities",
     "extracted_content_pipeline.campaign_postgres_seller_category_intelligence",
 ]

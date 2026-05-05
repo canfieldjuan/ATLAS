@@ -455,6 +455,22 @@ the `VisibilitySink` port so dashboards can show worker activity without the
 content product owning a dashboard store. Sink failures are logged and do not
 change operation responses.
 
+For local dashboards or host audit logs, wire a product-owned visibility sink:
+
+```python
+from extracted_content_pipeline.campaign_visibility import JsonlVisibilitySink
+
+visibility = JsonlVisibilitySink("/var/log/content-ops/campaign-events.jsonl")
+
+app.include_router(
+    create_campaign_operations_router(
+        pool_provider=get_pool,
+        sender_provider=get_campaign_sender,
+        visibility_provider=lambda: visibility,
+    )
+)
+```
+
 Mount this router beside `create_b2b_campaign_router` to run the hosted B2B
 flow without SQL in the admin UI:
 
@@ -545,6 +561,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services, with product-owned
   provider routing config
+- `campaign_visibility.py`: reference in-memory and JSONL `VisibilitySink`
+  adapters for hosted operations telemetry
 - `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
 - `campaign_postgres.py`: async Postgres adapters for intelligence,
   campaign, sequence, suppression, and audit ports, including the product-owned
