@@ -155,8 +155,10 @@ python scripts/run_extracted_campaign_generation_postgres.py \
 ```
 
 The file-backed reasoning adapter matches rows by target id, company, email, or
-vendor. The generator still works without this file, but output quality is lower
-because prompts only see the opportunity row.
+vendor. CLI runners load it through
+`campaign_reasoning_data.load_reasoning_provider_port(...)` so hosts stay on the
+provider-port boundary. The generator still works without this file, but output
+quality is lower because prompts only see the opportunity row.
 
 See `reasoning_handoff_contract.md` for the accepted shape and the no-direct-
 import rule. AI Content Ops consumes compressed reasoning; it does not import a
