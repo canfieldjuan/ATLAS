@@ -366,6 +366,92 @@ def test_seller_campaign_router_combined_operation_can_continue_after_refresh_fa
     assert calls[1][2]["replace_existing"] is True
 
 
+def test_seller_campaign_router_rejects_boolean_numeric_payload(monkeypatch) -> None:
+    calls = []
+
+    async def _refresh(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(refreshed=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+
+    response = _client(_Pool()).post(
+        "/seller/intelligence/refresh",
+        json={"category": "supplements", "min_reviews": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "min_reviews must be an integer"
+    assert calls == []
+
+
+def test_seller_campaign_router_rejects_unknown_boolean_payload(monkeypatch) -> None:
+    calls = []
+
+    async def _prepare(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool()).post(
+        "/seller/opportunities/prepare",
+        json={"replace_existing": "maybe"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "replace_existing must be a boolean"
+    assert calls == []
+
+
+def test_seller_campaign_router_combined_operation_resolves_dependencies_once(
+    monkeypatch,
+) -> None:
+    pool = _Pool()
+    pool_calls = 0
+    scope_calls = 0
+
+    async def _refresh(received_pool, **_kwargs):
+        assert received_pool is pool
+        return _Result(refreshed=1, failed=0)
+
+    async def _prepare(received_pool, **kwargs):
+        assert received_pool is pool
+        assert kwargs["account_id"] == "acct_1"
+        return _Result(prepared=1)
+
+    async def pool_provider():
+        nonlocal pool_calls
+        pool_calls += 1
+        return pool
+
+    async def scope_provider():
+        nonlocal scope_calls
+        scope_calls += 1
+        return {"account_id": "acct_1"}
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    app = FastAPI()
+    app.include_router(
+        create_seller_campaign_router(
+            pool_provider=pool_provider,
+            scope_provider=scope_provider,
+        )
+    )
+
+    response = TestClient(app).post(
+        "/seller/operations/refresh-and-prepare",
+        json={"category": "supplements"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["prepare"] == {"prepared": 1}
+    assert pool_calls == 1
+    assert scope_calls == 1
+
+
 def test_seller_campaign_router_lists_seller_drafts() -> None:
     pool = _Pool(rows=[_campaign_row()])
 

@@ -167,6 +167,8 @@ def _payload_limit(
     default: int,
 ) -> int:
     raw_value = payload.get(key)
+    if isinstance(raw_value, bool):
+        raise HTTPException(status_code=400, detail=f"{key} must be an integer")
     try:
         value = default if raw_value is None else int(raw_value)
     except (TypeError, ValueError) as exc:
@@ -188,7 +190,12 @@ def _payload_bool(payload: Mapping[str, Any], key: str) -> bool:
             return True
         if value in {"0", "false", "no", "off", ""}:
             return False
-    return bool(raw_value)
+        raise HTTPException(status_code=400, detail=f"{key} must be a boolean")
+    if isinstance(raw_value, int):
+        if raw_value in {0, 1}:
+            return bool(raw_value)
+        raise HTTPException(status_code=400, detail=f"{key} must be a boolean")
+    raise HTTPException(status_code=400, detail=f"{key} must be a boolean")
 
 
 def _scope_account_id(scope: TenantScope | Mapping[str, Any] | None) -> str | None:
@@ -233,6 +240,53 @@ def create_seller_campaign_router(
         tags=list(resolved_config.tags),
         dependencies=list(dependencies or ()),
     )
+
+    async def _refresh_operation(
+        pool: Any,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        result = await refresh_seller_category_intelligence(
+            pool,
+            categories=_payload_categories(payload),
+            min_reviews=_payload_limit(
+                payload,
+                "min_reviews",
+                resolved_config.default_category_min_reviews,
+            ),
+            limit=_payload_limit(
+                payload,
+                "limit",
+                resolved_config.default_category_refresh_limit,
+            ),
+            reviews_table=resolved_config.category_reviews_table,
+            metadata_table=resolved_config.category_metadata_table,
+            snapshots_table=resolved_config.category_snapshots_table,
+        )
+        return result.as_dict()
+
+    async def _prepare_operation(
+        pool: Any,
+        scope: TenantScope | Mapping[str, Any] | None,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        result = await prepare_seller_campaign_opportunities(
+            pool,
+            account_id=_clean(payload.get("account_id")) or _scope_account_id(scope),
+            category=_clean(payload.get("category")) or None,
+            seller_status=_clean(payload.get("seller_status"))
+            or resolved_config.default_seller_status,
+            limit=_payload_limit(
+                payload,
+                "limit",
+                resolved_config.default_opportunity_limit,
+            ),
+            replace_existing=_payload_bool(payload, "replace_existing"),
+            target_mode=_clean(payload.get("target_mode")) or resolved_config.target_mode,
+            seller_targets_table=resolved_config.seller_targets_table,
+            category_snapshots_table=resolved_config.category_snapshots_table,
+            opportunities_table=resolved_config.opportunities_table,
+        )
+        return result.as_dict()
 
     @router.get("/targets")
     async def list_targets(
@@ -332,26 +386,9 @@ def create_seller_campaign_router(
         resolved_payload = payload or {}
         pool = await _resolve_pool(pool_provider)
         try:
-            result = await refresh_seller_category_intelligence(
-                pool,
-                categories=_payload_categories(resolved_payload),
-                min_reviews=_payload_limit(
-                    resolved_payload,
-                    "min_reviews",
-                    resolved_config.default_category_min_reviews,
-                ),
-                limit=_payload_limit(
-                    resolved_payload,
-                    "limit",
-                    resolved_config.default_category_refresh_limit,
-                ),
-                reviews_table=resolved_config.category_reviews_table,
-                metadata_table=resolved_config.category_metadata_table,
-                snapshots_table=resolved_config.category_snapshots_table,
-            )
+            return await _refresh_operation(pool, resolved_payload)
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return result.as_dict()
 
     @router.post("/opportunities/prepare")
     async def prepare_opportunities(
@@ -361,49 +398,35 @@ def create_seller_campaign_router(
         pool = await _resolve_pool(pool_provider)
         scope = await _resolve_scope(scope_provider)
         try:
-            result = await prepare_seller_campaign_opportunities(
-                pool,
-                account_id=_clean(resolved_payload.get("account_id"))
-                or _scope_account_id(scope),
-                category=_clean(resolved_payload.get("category")) or None,
-                seller_status=_clean(resolved_payload.get("seller_status"))
-                or resolved_config.default_seller_status,
-                limit=_payload_limit(
-                    resolved_payload,
-                    "limit",
-                    resolved_config.default_opportunity_limit,
-                ),
-                replace_existing=_payload_bool(resolved_payload, "replace_existing"),
-                target_mode=_clean(resolved_payload.get("target_mode"))
-                or resolved_config.target_mode,
-                seller_targets_table=resolved_config.seller_targets_table,
-                category_snapshots_table=resolved_config.category_snapshots_table,
-                opportunities_table=resolved_config.opportunities_table,
-            )
+            return await _prepare_operation(pool, scope, resolved_payload)
         except ValueError as exc:
             raise _bad_request(exc) from exc
-        return result.as_dict()
 
     @router.post("/operations/refresh-and-prepare")
     async def refresh_and_prepare(
         payload: dict[str, Any] | None = Body(None),
     ) -> dict[str, Any]:
         resolved_payload = payload or {}
-        refresh_result = await refresh_intelligence(resolved_payload)
-        if refresh_result.get("failed") and not _payload_bool(
-            resolved_payload, "continue_on_refresh_failure"
-        ):
+        pool = await _resolve_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        try:
+            refresh_result = await _refresh_operation(pool, resolved_payload)
+            if refresh_result.get("failed") and not _payload_bool(
+                resolved_payload, "continue_on_refresh_failure"
+            ):
+                return {
+                    "refresh": refresh_result,
+                    "prepare": None,
+                    "prepare_skipped": True,
+                }
+            prepare_result = await _prepare_operation(pool, scope, resolved_payload)
             return {
                 "refresh": refresh_result,
-                "prepare": None,
-                "prepare_skipped": True,
+                "prepare": prepare_result,
+                "prepare_skipped": False,
             }
-        prepare_result = await prepare_opportunities(resolved_payload)
-        return {
-            "refresh": refresh_result,
-            "prepare": prepare_result,
-            "prepare_skipped": False,
-        }
+        except ValueError as exc:
+            raise _bad_request(exc) from exc
 
     @router.get("/campaigns/drafts")
     async def list_drafts(
