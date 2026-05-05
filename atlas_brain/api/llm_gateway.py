@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_llm_plan
 from ..pipelines.llm import trace_llm_call
-from ..services.byok_keys import lookup_provider_key
+from ..services.byok_keys import lookup_provider_key_async
 from ..services.llm.anthropic import convert_messages
 from ..services.protocols import Message
 from ..storage.database import get_db_pool
@@ -116,11 +116,16 @@ def _validate_chat_provider(provider: str) -> None:
         )
 
 
-def _resolve_byok_or_503(provider: str, account_id: str) -> str:
+async def _resolve_byok_or_503(pool, provider: str, account_id: str) -> str:
     """Look up the customer's stored BYOK key for ``provider``. Raises
-    HTTPException 503 when no key is configured -- the dashboard
-    (PR-D5) is the customer-facing path to set one."""
-    raw = lookup_provider_key(provider, account_id)
+    HTTPException 503 when no key is configured.
+
+    Calls the async DB-backed resolver so keys added via
+    ``POST /api/v1/byok-keys`` are honored for live gateway calls.
+    The resolver also has an env-var fallback for local dev where
+    the DB has no row yet.
+    """
+    raw = await lookup_provider_key_async(pool, provider, account_id)
     if not raw:
         raise HTTPException(
             status_code=503,
@@ -145,7 +150,8 @@ async def chat(
     (PR-D1) and plan-gated to llm_trial+ (PR-D2)."""
     _validate_chat_provider(body.provider)
 
-    api_key = _resolve_byok_or_503(body.provider, user.account_id)
+    pool = get_db_pool()
+    api_key = await _resolve_byok_or_503(pool, body.provider, user.account_id)
 
     from ..services.llm.anthropic import AnthropicLLM
 

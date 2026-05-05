@@ -34,6 +34,13 @@ from .state import ReasoningAgentState
 
 logger = logging.getLogger("atlas.reasoning.graph")
 
+# Per-call deadline for the graph's LLM round-trips. Atlas's pre-
+# extraction ``_llm_generate`` enforced 120s via ``asyncio.wait_for``;
+# the new path threads this through Port metadata so ``AtlasLLMClient``
+# can apply the same outer ``wait_for`` (and forward it to ``chat`` as
+# a kwarg, in case the underlying client honors timeouts natively).
+_GRAPH_LLM_TIMEOUT_S: float = 120.0
+
 
 def _resolve_graph_llm(workload: str, *, use_model_override: bool = False):
     """Resolve reasoning-graph LLMs through the pipeline router.
@@ -143,54 +150,28 @@ async def run_reasoning_graph(state: ReasoningAgentState) -> ReasoningAgentState
 
 
 async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
-    """Classify event priority and whether reasoning is needed."""
+    """Classify event priority and whether reasoning is needed.
+
+    Thin wrapper around :func:`extracted_reasoning_core.graph_nodes.node_triage`
+    -- atlas resolves the triage-workload LLM via ``_resolve_graph_llm``,
+    wraps it in :class:`AtlasLLMClient`, and delegates. Atlas owns the
+    workload-routing decision; core owns the prompt construction and
+    response parsing.
+    """
+    from extracted_reasoning_core.graph_nodes import node_triage
     from .graph_prompts import TRIAGE_SYSTEM
+    from .port_adapters import AtlasLLMClient
     from ..config import settings
 
-    event_desc = (
-        f"Event: {state.get('event_type')}\n"
-        f"Source: {state.get('source')}\n"
-        f"Entity: {state.get('entity_type')}/{state.get('entity_id')}\n"
-        f"Payload: {json.dumps(state.get('payload', {}), default=str)[:2000]}"
+    llm_service = _resolve_graph_llm(settings.reasoning.graph_triage_workload)
+    client = AtlasLLMClient(llm_service) if llm_service else None
+    return await node_triage(
+        state,
+        client,
+        triage_system_prompt=TRIAGE_SYSTEM,
+        max_tokens=settings.reasoning.triage_max_tokens,
+        timeout=_GRAPH_LLM_TIMEOUT_S,
     )
-
-    llm = _resolve_graph_llm(settings.reasoning.graph_triage_workload)
-    if not llm:
-        # No triage LLM -- default to reasoning everything
-        state["triage_priority"] = "medium"
-        state["needs_reasoning"] = True
-        state["triage_reasoning"] = "Triage LLM unavailable, defaulting to reason"
-        return state
-
-    try:
-        result = await _llm_generate(
-            llm, event_desc, TRIAGE_SYSTEM,
-            max_tokens=settings.reasoning.triage_max_tokens,
-            temperature=0.1,
-            json_mode=True,
-        )
-        text = result["response"]
-        usage = result.get("usage", {})
-        state["total_input_tokens"] = state.get("total_input_tokens", 0) + usage.get("input_tokens", 0)
-        state["total_output_tokens"] = state.get("total_output_tokens", 0) + usage.get("output_tokens", 0)
-
-        parsed = _parse_llm_json(text)
-        state["triage_priority"] = parsed.get("priority", "medium")
-        state["needs_reasoning"] = parsed.get("needs_reasoning", True)
-        state["triage_reasoning"] = parsed.get("reasoning", "")
-    except Exception:
-        logger.warning("Triage failed, defaulting to reason", exc_info=True)
-        state["triage_priority"] = "medium"
-        state["needs_reasoning"] = True
-        state["triage_reasoning"] = "Triage parse error, defaulting to reason"
-
-    logger.info(
-        "Triage: %s priority=%s needs_reasoning=%s",
-        state.get("event_type"),
-        state.get("triage_priority"),
-        state.get("needs_reasoning"),
-    )
-    return state
 
 
 async def _node_aggregate_context(
@@ -257,17 +238,26 @@ async def _node_check_lock(state: ReasoningAgentState) -> ReasoningAgentState:
 
 
 async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
-    """Deep reasoning with full context via pipeline-configured LLM routing."""
+    """Deep reasoning with full context via pipeline-configured LLM routing.
+
+    Atlas keeps the prompt builder here because it reads atlas-specific
+    extended-state fields (``crm_context``, ``b2b_churn``, ``voice_turns``,
+    etc. -- the slots atlas's ``ReasoningAgentState`` adds on top of
+    core's TypedDict per PR-C4b). The LLM round-trip itself goes through
+    core's ``complete_with_json`` helper via the ``AtlasLLMClient``
+    adapter.
+    """
+    from extracted_reasoning_core.graph_helpers import complete_with_json
     from .graph_prompts import REASONING_SYSTEM
+    from .port_adapters import AtlasLLMClient
     from ..config import settings
 
-    # Build context prompt
+    # Build context prompt from atlas-specific extended state.
     sections = [
         f"## Event\nType: {state.get('event_type')}\n"
         f"Source: {state.get('source')}\n"
         f"Payload: {json.dumps(state.get('payload', {}), default=str)[:3000]}",
     ]
-
     if state.get("crm_context"):
         sections.append(
             f"## CRM Context\n{json.dumps(state['crm_context'], default=str)[:2000]}"
@@ -315,44 +305,66 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
 
     prompt = "\n\n".join(sections)
 
-    llm = _resolve_graph_llm(settings.reasoning.graph_reasoning_workload, use_model_override=True)
-    if not llm:
+    llm_service = _resolve_graph_llm(
+        settings.reasoning.graph_reasoning_workload,
+        use_model_override=True,
+    )
+    if not llm_service:
         state["reasoning_output"] = ""
         state["connections_found"] = []
         state["recommended_actions"] = []
         state["rationale"] = "Reasoning LLM unavailable"
         return state
 
+    client = AtlasLLMClient(llm_service)
+
     try:
-        result = await _llm_generate(
-            llm, prompt, REASONING_SYSTEM,
+        result = await complete_with_json(
+            client,
+            REASONING_SYSTEM,
+            prompt,
             max_tokens=settings.reasoning.max_tokens,
             temperature=settings.reasoning.temperature,
             json_mode=True,
+            timeout=_GRAPH_LLM_TIMEOUT_S,
         )
-        text = result["response"]
-        usage = result.get("usage", {})
-        state["total_input_tokens"] = state.get("total_input_tokens", 0) + usage.get("input_tokens", 0)
-        state["total_output_tokens"] = state.get("total_output_tokens", 0) + usage.get("output_tokens", 0)
-
-        state["reasoning_output"] = text
-
-        parsed = _parse_llm_json(text)
-        state["connections_found"] = parsed.get("connections", [])
-        state["recommended_actions"] = parsed.get("actions", [])
-        state["rationale"] = parsed.get("rationale", "")
-        state["should_notify"] = parsed.get("should_notify", False)
-    except json.JSONDecodeError:
-        state["connections_found"] = []
-        state["recommended_actions"] = []
-        state["rationale"] = state.get("reasoning_output", "")
-        state["should_notify"] = True
     except Exception:
         logger.error("Reasoning node failed", exc_info=True)
         state["reasoning_output"] = ""
         state["connections_found"] = []
         state["recommended_actions"] = []
         state["rationale"] = "Reasoning failed"
+        return state
+
+    text = result["response"]
+    usage = result["usage"]
+    state["total_input_tokens"] = (
+        state.get("total_input_tokens", 0) + int(usage.get("input_tokens", 0) or 0)
+    )
+    state["total_output_tokens"] = (
+        state.get("total_output_tokens", 0) + int(usage.get("output_tokens", 0) or 0)
+    )
+
+    state["reasoning_output"] = text
+
+    if result["parse_ok"]:
+        parsed = result["parsed"]
+        state["connections_found"] = parsed.get("connections", [])
+        state["recommended_actions"] = parsed.get("actions", [])
+        state["rationale"] = parsed.get("rationale", "")
+        state["should_notify"] = parsed.get("should_notify", False)
+    else:
+        # ``complete_with_json`` returns ``parse_ok=False`` on
+        # JSON-decode failure (or non-object JSON / empty response).
+        # Preserve atlas's pre-extraction behavior: surface the raw
+        # text as rationale + force notify so the human sees the
+        # unparsed reasoning output. ``parse_ok=False`` distinguishes
+        # this from a *valid* empty JSON object, which would
+        # mistakenly trip the same fallback under a truthiness check.
+        state["connections_found"] = []
+        state["recommended_actions"] = []
+        state["rationale"] = text
+        state["should_notify"] = True
 
     return state
 
@@ -423,40 +435,26 @@ async def _execute_single_action(
 
 
 async def _node_synthesize(state: ReasoningAgentState) -> ReasoningAgentState:
-    """Generate a human-readable summary for notification."""
-    if not state.get("should_notify"):
-        state["summary"] = ""
-        return state
+    """Generate a human-readable summary for notification.
 
+    Thin wrapper around :func:`extracted_reasoning_core.graph_nodes.node_synthesize`
+    -- atlas resolves the synthesis-workload LLM, wraps it in
+    :class:`AtlasLLMClient`, and delegates. Fallback to deterministic
+    summary text on LLM-unavailable lives in core.
+    """
+    from extracted_reasoning_core.graph_nodes import node_synthesize
     from .graph_prompts import SYNTHESIS_SYSTEM
+    from .port_adapters import AtlasLLMClient
     from ..config import settings
 
-    context = (
-        f"Event: {state.get('event_type')}\n"
-        f"Actions taken: {json.dumps(state.get('action_results', []), default=str)[:1000]}\n"
-        f"Rationale: {state.get('rationale', '')[:500]}"
+    llm_service = _resolve_graph_llm(settings.reasoning.graph_synthesis_workload)
+    client = AtlasLLMClient(llm_service) if llm_service else None
+    return await node_synthesize(
+        state,
+        client,
+        synthesis_system_prompt=SYNTHESIS_SYSTEM,
+        timeout=_GRAPH_LLM_TIMEOUT_S,
     )
-
-    llm = _resolve_graph_llm(settings.reasoning.graph_synthesis_workload)
-    if not llm:
-        state["summary"] = _build_notification_fallback(state)
-        return state
-
-    try:
-        result = await _llm_generate(
-            llm, context, SYNTHESIS_SYSTEM,
-            max_tokens=256, temperature=0.3,
-        )
-        text = result["response"]
-        usage = result.get("usage", {})
-        state["total_input_tokens"] = state.get("total_input_tokens", 0) + usage.get("input_tokens", 0)
-        state["total_output_tokens"] = state.get("total_output_tokens", 0) + usage.get("output_tokens", 0)
-
-        state["summary"] = _sanitize_notification_summary(text, state)
-    except Exception:
-        state["summary"] = _build_notification_fallback(state)
-
-    return state
 
 
 async def _node_notify(state: ReasoningAgentState) -> ReasoningAgentState:

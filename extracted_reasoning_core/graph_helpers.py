@@ -35,6 +35,7 @@ import re
 from typing import Any
 from uuid import UUID
 
+from .ports import LLMClient
 from .state import ReasoningAgentState
 
 logger = logging.getLogger("extracted_reasoning_core.graph_helpers")
@@ -78,28 +79,40 @@ _PLAN_MIN_CONFIDENCE: float = 0.5
 
 
 def parse_llm_json(text: str) -> dict[str, Any]:
-    """Extract and parse JSON from an LLM response.
+    """Extract and parse a JSON *object* from an LLM response.
 
     Handles raw JSON, markdown-fenced JSON, and JSON embedded in prose.
-    Raises ``json.JSONDecodeError`` if no valid object is found.
+    Raises ``json.JSONDecodeError`` if no valid object is found, or if
+    the parsed result isn't a dict (the LLM returned a JSON array,
+    string, or scalar -- downstream graph nodes always expect an
+    object and would ``AttributeError`` on ``.get(...)`` against a
+    list).
     """
     text = text.strip()
     if not text:
         raise json.JSONDecodeError("Empty response", text, 0)
 
+    parsed: Any
     if text.startswith("{"):
-        return json.loads(text)
-
-    m = _JSON_FENCE_RE.search(text)
-    if m:
-        return json.loads(m.group(1).strip())
-
-    first = text.find("{")
-    last = text.rfind("}")
-    if first != -1 and last > first:
-        return json.loads(text[first : last + 1])
-
-    raise json.JSONDecodeError("No JSON object found in response", text, 0)
+        parsed = json.loads(text)
+    else:
+        m = _JSON_FENCE_RE.search(text)
+        if m:
+            parsed = json.loads(m.group(1).strip())
+        else:
+            first = text.find("{")
+            last = text.rfind("}")
+            if first != -1 and last > first:
+                parsed = json.loads(text[first : last + 1])
+            else:
+                raise json.JSONDecodeError(
+                    "No JSON object found in response", text, 0
+                )
+    if not isinstance(parsed, dict):
+        raise json.JSONDecodeError(
+            f"Expected JSON object, got {type(parsed).__name__}", text, 0
+        )
+    return parsed
 
 
 def valid_uuid_str(value: Any) -> str | None:
@@ -232,11 +245,129 @@ async def plan_actions(state: ReasoningAgentState) -> ReasoningAgentState:
     return state
 
 
+def make_chat_messages(
+    system_prompt: str,
+    user_prompt: str,
+) -> list[dict[str, str]]:
+    """Build the ``messages`` list a chat-completion LLMClient expects.
+
+    Returns a freshly-constructed list each call so callers can mutate
+    safely. The shape (``[{"role": ..., "content": ...}, ...]``) is the
+    OpenAI/Anthropic-compatible wire format that
+    :class:`extracted_reasoning_core.ports.LLMClient` accepts.
+    """
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def extract_completion_text(
+    result: Any,
+) -> tuple[str, dict[str, Any]]:
+    """Pull ``(response_text, usage_dict)`` out of an LLMClient result.
+
+    Tolerates both the canonical ``{"response": ..., "usage": ...}``
+    shape atlas's ``LLMService.chat`` produces and the simpler
+    ``{"content": ...}`` mappings some Provider clients return. Missing
+    fields default to empty -- callers that need usage metrics should
+    check the dict for emptiness rather than rely on KeyError.
+    """
+    if not isinstance(result, dict):
+        return "", {}
+    response = result.get("response")
+    if response is None:
+        # Fall back to OpenAI-style choices[0].message.content if present.
+        choices = result.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                msg = first.get("message")
+                if isinstance(msg, dict):
+                    response = msg.get("content")
+    if response is None:
+        response = result.get("content", "")
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    return str(response or ""), usage
+
+
+async def complete_with_json(
+    client: LLMClient,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+    json_mode: bool = True,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Issue a chat completion expecting JSON; return raw + parsed.
+
+    Returns a dict with keys:
+
+    - ``response`` (str) -- the raw LLM output
+    - ``usage`` (dict) -- token-usage metrics (may be empty)
+    - ``parsed`` (dict) -- the parsed JSON object, or ``{}`` if the
+      response wasn't valid JSON. Callers that need to distinguish
+      "valid empty JSON object ``{}``" from "parse failure" must read
+      the ``parse_ok`` flag rather than truthiness-check ``parsed``.
+    - ``parse_ok`` (bool) -- ``True`` iff the response parsed cleanly.
+      ``False`` covers empty response, JSON-decode error, and
+      non-object JSON (array/scalar). The graph nodes' "force notify
+      on parse failure" semantics depend on this distinction.
+
+    Hides three boilerplate concerns the LLM-driven graph nodes all
+    need:
+
+    - building the ``messages`` list from system+user prompts
+    - threading ``json_mode``/``timeout`` through metadata so the
+      atlas-side adapter can lift them out (see
+      :class:`atlas_brain.reasoning.port_adapters.AtlasLLMClient`)
+    - tolerating malformed JSON without raising (returns
+      ``parsed={}, parse_ok=False`` and lets the node decide whether
+      to fall back)
+    """
+    messages = make_chat_messages(system_prompt, user_prompt)
+    metadata: dict[str, Any] = {}
+    if json_mode:
+        metadata["json_mode"] = True
+        metadata["response_format"] = {"type": "json_object"}
+    if timeout is not None:
+        metadata["timeout"] = timeout
+    result = await client.complete(
+        messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        metadata=metadata or None,
+    )
+    response, usage = extract_completion_text(result)
+    parsed: dict[str, Any] = {}
+    parse_ok = False
+    if response:
+        try:
+            parsed = parse_llm_json(response)
+            parse_ok = True
+        except json.JSONDecodeError:
+            parsed = {}
+            parse_ok = False
+    return {
+        "response": response,
+        "usage": usage,
+        "parsed": parsed,
+        "parse_ok": parse_ok,
+    }
+
+
 __all__ = [
     "SAFE_ACTIONS",
     "build_notification_fallback",
     "clean_summary_text",
+    "complete_with_json",
+    "extract_completion_text",
     "has_suspicious_trailing_fragment",
+    "make_chat_messages",
     "parse_llm_json",
     "plan_actions",
     "sanitize_notification_summary",

@@ -84,6 +84,20 @@ class SaaSAuthConfig(BaseSettings):
         ),
     )
 
+    # BYOK provider-key encryption (PR-D5). Comma-separated list of
+    # ``kid:base64-fernet-key`` entries. First entry is the active
+    # write key; all are tried on decrypt for rotation.
+    # Generate with:
+    #   python -c "from atlas_brain.auth.encryption import generate_kek; print(generate_kek())"
+    byok_encryption_kek: str = Field(
+        default="byok-kek-change-me",
+        description=(
+            "BYOK provider-key encryption KEK list. Format: "
+            "'kid1:base64key1,kid2:base64key2,...'. Required when "
+            "SaaS auth is enabled."
+        ),
+    )
+
     @model_validator(mode="after")
     def _validate_secrets(self):
         if self.enabled and self.jwt_secret == "change-me-in-production":
@@ -99,6 +113,29 @@ class SaaSAuthConfig(BaseSettings):
                 "ATLAS_SAAS_API_KEY_PEPPER must be set to a non-empty, "
                 "non-default value when SaaS auth is enabled"
             )
+        if self.enabled and (
+            not self.byok_encryption_kek.strip()
+            or self.byok_encryption_kek == "byok-kek-change-me"
+        ):
+            raise ValueError(
+                "ATLAS_SAAS_BYOK_ENCRYPTION_KEK must be set to a "
+                "non-empty, non-default value when SaaS auth is enabled. "
+                "Format: 'kid1:base64key1,kid2:base64key2,...'"
+            )
+        if self.enabled:
+            # Fail fast on malformed KEK (bad base64, wrong key length,
+            # missing colon, etc.) so deployment misconfigs surface at
+            # boot, not on first encrypt request. Late-import to avoid
+            # a circular dependency: auth.encryption late-imports config
+            # in its module-level setting reads.
+            from .auth.encryption import parse_kek_string
+
+            try:
+                parse_kek_string(self.byok_encryption_kek)
+            except ValueError as exc:
+                raise ValueError(
+                    f"ATLAS_SAAS_BYOK_ENCRYPTION_KEK invalid: {exc}"
+                )
         if self.stripe_secret_key and not self.stripe_webhook_secret:
             import warnings
             warnings.warn(
