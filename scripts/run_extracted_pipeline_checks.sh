@@ -48,6 +48,9 @@ pytest \
   tests/test_extracted_reasoning_core_wedge_registry.py \
   tests/test_atlas_reasoning_state_inherits_core.py \
   tests/test_atlas_reasoning_port_adapters.py \
+  tests/test_atlas_reasoning_vendor_pressure.py \
+  tests/test_b2b_reasoning_consumer_adapter.py \
+  tests/test_b2b_mcp_signals_overlay_contract.py \
   tests/test_extracted_product_utilities.py \
   tests/test_extracted_b2b_batch_utils.py \
   tests/test_extracted_blog_matching.py \

@@ -1,7 +1,15 @@
 """Consumer adapter helpers for reasoning payload overlays.
 
-Additive adapter layer used by MCP/API consumers to derive stable reasoning
-fields from a synthesis view without changing existing response contracts.
+Thin compatibility shim for MCP/API consumers that overlay reasoning
+fields onto response payloads. Existing callers (MCP signals overlay,
+adapter regression tests) keep their two-function surface; the actual
+projection logic now lives behind the M5-alpha typed envelope in
+``atlas_brain.reasoning.vendor_pressure``.
+
+Wire shape preserved bit-for-bit: ``reasoning_summary_fields_from_view``
+and ``reasoning_detail_fields_from_view`` return the same flat dicts
+they always have, including the sparse-entry contract from PR #184
+(stable 8-key set, ``None`` scalars, empty lists).
 """
 
 from __future__ import annotations
@@ -11,34 +19,27 @@ from typing import Any
 
 def reasoning_summary_fields_from_view(view: object) -> dict[str, Any]:
     """Return stable reasoning summary fields derived from a synthesis view."""
-    from ._b2b_synthesis_reader import synthesis_view_to_reasoning_entry
+    from atlas_brain.reasoning.vendor_pressure import (
+        VendorPressureConsumer,
+        vendor_pressure_result_from_synthesis_view,
+    )
 
-    entry = synthesis_view_to_reasoning_entry(view)
-    return {
-        "archetype": entry.get("archetype"),
-        "archetype_confidence": entry.get("confidence"),
-        "reasoning_mode": entry.get("mode"),
-        "reasoning_risk_level": entry.get("risk_level"),
-    }
+    result = vendor_pressure_result_from_synthesis_view(view)
+    return dict(VendorPressureConsumer().to_summary_fields(result))
 
 
 def reasoning_detail_fields_from_view(view: object) -> dict[str, Any]:
     """Return stable reasoning detail fields derived from a synthesis view.
 
-    List-valued fields are guaranteed to be lists (never None) even when the
-    upstream entry has explicit null values for those keys -- dict.get(k, [])
-    only falls back to [] when k is missing, NOT when k is present-but-null.
+    List-valued fields are guaranteed to be lists (never None) even when
+    the upstream entry has explicit null values for those keys -- the
+    typed envelope pathway preserves the same sparse-entry guard the
+    legacy implementation provided (PR #184).
     """
-    from ._b2b_synthesis_reader import synthesis_view_to_reasoning_entry
+    from atlas_brain.reasoning.vendor_pressure import (
+        VendorPressureConsumer,
+        vendor_pressure_result_from_synthesis_view,
+    )
 
-    entry = synthesis_view_to_reasoning_entry(view)
-    return {
-        "archetype": entry.get("archetype"),
-        "archetype_confidence": entry.get("confidence"),
-        "reasoning_mode": entry.get("mode"),
-        "reasoning_risk_level": entry.get("risk_level"),
-        "reasoning_executive_summary": entry.get("executive_summary"),
-        "reasoning_key_signals": entry.get("key_signals") or [],
-        "reasoning_uncertainty_sources": entry.get("uncertainty_sources") or [],
-        "falsification_conditions": entry.get("falsification_conditions") or [],
-    }
+    result = vendor_pressure_result_from_synthesis_view(view)
+    return dict(VendorPressureConsumer().to_detail_fields(result))

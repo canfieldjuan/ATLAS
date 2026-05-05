@@ -102,8 +102,14 @@ class DomainReasoningResult(Generic[PayloadT_co]):
 
     subject_id: str
     domain: str
-    confidence: float
     domain_payload: PayloadT_co
+
+    # ``confidence`` is optional because real producers have cases where
+    # confidence is genuinely unknown (sparse evidence, insufficient pool
+    # depth, etc.). A producer that is confident asserts a float in [0, 1];
+    # a producer that has no signal sets None. ``confidence_label`` is the
+    # categorical band ('high'/'medium'/'low'/...) when known.
+    confidence: float | None = None
 
     # Optional universal fields -- present when the producer can compute
     # them, omitted (None / empty tuple) otherwise.
