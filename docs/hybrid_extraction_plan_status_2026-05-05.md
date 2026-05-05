@@ -117,20 +117,23 @@ Bare-minimum content for the compatibility matrix:
 
 PRs that close out the deferred items from M5-β / M5-γ:
 
-- **Wire b2b regression tests into CI** — *resolved* by adding the
-  two regression tests to `extracted_competitive_intelligence_checks.yml`
-  (the heavier CI tier that already does `pip install -r requirements.txt`).
-  PR for this followup is open (it sits on the same workflow that already
-  installs `apscheduler` / `asyncpg` / `mcp` / `torch`, so no install-line
+- **Wire b2b regression tests into CI** — *resolved in PR #229
+  (open, awaiting merge)*. Adds the two regression tests to
+  `.github/workflows/extracted_competitive_intelligence_checks.yml`
+  (the heavier CI tier that already does
+  `pip install -r requirements.txt` and so already carries
+  `apscheduler` / `asyncpg` / `mcp` / `torch` — no install-line
   expansion needed).
-- **Lineage / freshness in the typed envelope** — *resolved* by
-  threading `view.reference_ids` / `view.as_of_date_iso()` /
+- **Lineage / freshness in the typed envelope** — *resolved in PR
+  #232 (open, awaiting merge)*. Threads `view.reference_ids` /
+  `view.as_of_date_iso` (property) /
   `view.confidence("causal_narrative")` through the synthesis-view
   wrapper into `DomainReasoningResult.reference_ids` / `as_of` /
-  `confidence_label`. PR open. Wire shape preserved (consumer
-  projections still don't surface the new fields; that's a follow-up).
+  `confidence_label`. Wire shape preserved (consumer projections
+  still don't surface the new fields; that's a follow-up).
 - **Provider-port retyping (`CampaignReasoningProviderPort` →
-  `ReasoningProducerPort[...]`)** — *resolved as not-applicable*.
+  `ReasoningProducerPort[...]`)** — *resolved in this PR (open,
+  awaiting merge) as not-applicable*.
   On closer inspection, `CampaignReasoningProviderPort` is a
   **data-input provider** for the campaign generator, not a reasoning
   compute port. It returns a `CampaignReasoningContext` (anchor

@@ -23,13 +23,13 @@ are **different architectural roles** that happen to share the word
 
 So a typical end-to-end flow looks like:
 
-    1. A reasoning producer (vendor-pressure, call-transcript, ...)
-       implements ``ReasoningProducerPort`` and emits a typed
+    1. A reasoning producer (``vendor_pressure``, ``call_transcript``,
+       ...) implements ``ReasoningProducerPort`` and emits a typed
        envelope per subject.
     2. A host pipeline persists / indexes that envelope.
     3. ``CampaignReasoningProviderPort`` (a *separate* component)
-       reads back the persisted vendor-pressure data shaped as a
-       ``CampaignReasoningContext`` so the campaign generator can
+       reads back the persisted ``vendor_pressure`` data shaped as
+       a ``CampaignReasoningContext`` so the campaign generator can
        consume it.
 
 A future enrichment can grow ``CampaignReasoningContext`` to carry a
