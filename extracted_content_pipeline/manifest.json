@@ -196,6 +196,9 @@
       "target": "extracted_content_pipeline/campaign_postgres_seller_targets.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_postgres_seller_opportunities.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_postgres_send.py"
     },
     {

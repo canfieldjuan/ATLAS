@@ -144,6 +144,22 @@ python scripts/load_extracted_campaign_opportunities.py \
 `--replace-existing` only deletes rows with matching target ids inside the
 selected `account_id` and `target_mode`; it does not truncate the table.
 
+Amazon seller installs can prepare opportunities from active seller targets and
+cached category intelligence snapshots:
+
+```bash
+python scripts/prepare_extracted_seller_campaign_opportunities.py \
+  --account-id acct_123 \
+  --category supplements \
+  --replace-existing
+```
+
+The seller preparation command reads `seller_targets` and the latest
+`category_intelligence_snapshots` row per category, then writes normalized
+`campaign_opportunities` rows with `target_mode="amazon_seller"`. It does not
+aggregate raw product reviews; hosts should refresh category snapshots through
+their own intelligence producer until that producer is extracted.
+
 ## Step 5: Add Optional Reasoning Context
 
 If a host already has account reasoning output, pass it as JSON:
@@ -197,6 +213,16 @@ python scripts/run_extracted_campaign_generation_postgres.py \
 
 The runner reads active `campaign_opportunities`, builds drafts through
 `CampaignGenerationService`, and persists them to `b2b_campaigns`.
+
+For Amazon seller drafts, use the seller target mode after the preparation step:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --target-mode amazon_seller \
+  --channels email_cold,email_followup \
+  --limit 10
+```
 
 ## Step 8: Verify Output
 
