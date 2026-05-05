@@ -1,23 +1,27 @@
-"""Phase 1 bridge: re-exports atlas_brain.services.llm_router.
+"""LLM router bridge for extracted competitive intelligence.
 
-Programmatically copies every non-dunder name (including underscore-
-prefixed helpers that from X import * would drop). Required because
-many scaffolded modules import private helpers from atlas_brain peers
-via from .X import _foo lazily inside function bodies. Phase 2
-replaces this with a standalone implementation gated on
-EXTRACTED_COMP_INTEL_STANDALONE=1.
+Default mode preserves Atlas routing. Standalone mode delegates to
+extracted_llm_infrastructure so competitive intelligence does not import
+the monolith for campaign/vendor briefing LLM selection.
 """
 from __future__ import annotations
 
 import importlib as _importlib
+import os as _os
 
-def _bridge() -> None:
-    src = _importlib.import_module("atlas_brain.services.llm_router")
-    g = globals()
+
+def _bridge(module_name: str) -> None:
+    src = _importlib.import_module(module_name)
+    globals_dict = globals()
     for name in dir(src):
         if not name.startswith("__"):
-            g[name] = getattr(src, name)
+            globals_dict[name] = getattr(src, name)
 
 
-_bridge()
-del _bridge, _importlib
+if _os.environ.get("EXTRACTED_COMP_INTEL_STANDALONE") == "1":
+    _os.environ.setdefault("EXTRACTED_LLM_INFRA_STANDALONE", "1")
+    _bridge("extracted_llm_infrastructure.services.llm_router")
+else:
+    _bridge("atlas_brain.services.llm_router")
+
+del _bridge, _importlib, _os

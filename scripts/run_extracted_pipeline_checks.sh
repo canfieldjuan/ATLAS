@@ -45,6 +45,7 @@ pytest \
   tests/test_extracted_reasoning_core_semantic_cache_keys.py \
   tests/test_extracted_reasoning_core_temporal.py \
   tests/test_extracted_reasoning_core_types.py \
+  tests/test_extracted_reasoning_core_domains.py \
   tests/test_extracted_reasoning_core_wedge_registry.py \
   tests/test_atlas_reasoning_state_inherits_core.py \
   tests/test_atlas_reasoning_port_adapters.py \

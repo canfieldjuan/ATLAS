@@ -1199,11 +1199,7 @@ def _mode_instruction(target_mode: str) -> str:
 def _get_llm() -> Any:
     """Get LLM instance for account card enrichment."""
     from ...services.llm_router import get_llm
-    llm = get_llm("campaign")
-    if llm is None:
-        from ...services import llm_registry
-        llm = llm_registry.get_active()
-    return llm
+    return get_llm("campaign")
 
 
 async def _llm_call(

@@ -18,6 +18,13 @@ PLAN_RATE_LIMITS: dict[str, str] = {
     "starter": "100/hour",
     "growth": "1000/hour",
     "pro": "10000/hour",
+    # LLM Gateway plan tiers (PR-D2). The gateway endpoints
+    # (PR-D4) are higher-throughput than dashboard reads -- bumped
+    # an order of magnitude over consumer/B2B equivalents.
+    "llm_trial": "100/hour",
+    "llm_starter": "1000/hour",
+    "llm_growth": "10000/hour",
+    "llm_pro": "100000/hour",
 }
 
 _DEFAULT_LIMIT = "100/hour"
