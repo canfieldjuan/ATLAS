@@ -23,6 +23,7 @@ jobs:
       - name: Validate shared extraction scripts
         run: |
           python -m py_compile extracted/_shared/scripts/check_extracted_imports.py
+          python -m py_compile extracted/_shared/scripts/forbid_atlas_reasoning_imports.py
           bash extracted/_shared/scripts/validate_extracted.sh extracted_competitive_intelligence
           bash extracted/_shared/scripts/validate_extracted.sh extracted_llm_infrastructure
           bash extracted/_shared/scripts/validate_extracted.sh extracted_content_pipeline
@@ -31,3 +32,7 @@ jobs:
           python extracted/_shared/scripts/check_extracted_imports.py --no-atlas-fallback extracted_competitive_intelligence
           python extracted/_shared/scripts/check_extracted_imports.py extracted_llm_infrastructure
           python extracted/_shared/scripts/check_extracted_imports.py extracted_content_pipeline
+          python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_competitive_intelligence
+          python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_llm_infrastructure
+          python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
+          python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_reasoning_core
