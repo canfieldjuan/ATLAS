@@ -27,6 +27,30 @@ _DEFAULT_PLACEHOLDER_BRAND_NAMES = (
     "unknown",
     "unbranded",
 )
+_DEFAULT_COMPARISON_NOISE_TERMS = (
+    "accessories",
+    "accessory",
+    "amazon",
+    "batteries",
+    "battery",
+    "bottle",
+    "case",
+    "charger",
+    "cover",
+    "filter",
+    "generic",
+    "kit",
+    "n/a",
+    "na",
+    "other",
+    "pack",
+    "product",
+    "refill",
+    "replacement",
+    "set",
+    "unknown",
+    "unbranded",
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +89,7 @@ class CategoryIntelligenceLimits:
     health_score_precision: int = 1
     competitive_adjacency_directions: tuple[str, ...] = _DEFAULT_ADJACENCY_DIRECTIONS
     placeholder_brand_names: tuple[str, ...] = _DEFAULT_PLACEHOLDER_BRAND_NAMES
+    comparison_noise_terms: tuple[str, ...] = _DEFAULT_COMPARISON_NOISE_TERMS
 
 
 async def refresh_seller_category_intelligence(
@@ -435,6 +460,9 @@ def _normalize_known_brand(
         matched = known_brands.get(candidate_key)
         if matched:
             return matched
+    noise_terms = {_brand_key(value) for value in limits.comparison_noise_terms}
+    if _brand_key(text) in noise_terms:
+        return ""
     return " ".join(words).title()
 
 

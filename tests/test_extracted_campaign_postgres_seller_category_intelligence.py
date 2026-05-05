@@ -121,6 +121,12 @@ def _seed_aggregate_results(
                 "direction": "switched_to",
                 "count": 4,
             },
+            {
+                "reviewed_brand": "Brand A",
+                "compared_product": "charger",
+                "direction": "switched_to",
+                "count": 5,
+            },
         ],
         [{"brand": "Brand A", "category": "labeling", "description": "missing", "flagged_count": 2}],
         [{"suggestion": "better seal", "count": 3, "affected_asins": ["a1", "a2"]}],

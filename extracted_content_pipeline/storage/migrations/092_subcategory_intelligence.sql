@@ -1,9 +1,8 @@
--- Subcategory-level intelligence: GIN index for JSONB containment queries
--- on product_metadata.categories, and subcategory tracking on snapshots.
-
--- Fast containment queries: WHERE pm.categories @> '["Coffee, Tea & Espresso"]'::jsonb
-CREATE INDEX IF NOT EXISTS idx_product_metadata_categories_gin
-    ON product_metadata USING GIN (categories);
+-- Subcategory tracking on seller category intelligence snapshots.
+--
+-- This product-owned migration keeps the extracted schema compatible with the
+-- current broad/subcategory snapshot conflict target without requiring hosts to
+-- install Atlas-only metadata category columns.
 
 -- Add subcategory tracking to existing snapshots table
 ALTER TABLE category_intelligence_snapshots
