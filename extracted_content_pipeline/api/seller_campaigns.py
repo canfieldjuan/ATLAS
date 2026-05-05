@@ -342,8 +342,15 @@ def create_seller_campaign_router(
                 status_code=400,
                 detail="target_mode must match configured seller target mode",
             )
+        account_id = scoped_account_id or payload_account_id
+        replace_existing = _payload_bool(payload, "replace_existing")
+        if replace_existing and not account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="account_id is required when replace_existing is true",
+            )
         return {
-            "account_id": scoped_account_id or payload_account_id,
+            "account_id": account_id,
             "category": _clean(payload.get("category")) or None,
             "seller_status": _clean(payload.get("seller_status"))
             or resolved_config.default_seller_status,
@@ -353,7 +360,7 @@ def create_seller_campaign_router(
                 resolved_config.default_opportunity_limit,
                 max_value=resolved_config.max_limit,
             ),
-            "replace_existing": _payload_bool(payload, "replace_existing"),
+            "replace_existing": replace_existing,
         }
 
     async def _prepare_operation(

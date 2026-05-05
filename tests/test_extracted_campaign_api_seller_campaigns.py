@@ -699,6 +699,29 @@ def test_seller_campaign_router_rejects_unknown_boolean_payload(monkeypatch) -> 
     assert calls == []
 
 
+def test_seller_campaign_router_requires_account_to_replace_opportunities(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _prepare(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool()).post(
+        "/seller/opportunities/prepare",
+        json={"replace_existing": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "account_id is required when replace_existing is true"
+    )
+    assert calls == []
+
+
 def test_seller_campaign_router_rejects_account_id_scope_mismatch(
     monkeypatch,
 ) -> None:
@@ -749,6 +772,12 @@ def test_seller_campaign_router_rejects_target_mode_override(monkeypatch) -> Non
             None,
             400,
             "replace_existing must be a boolean",
+        ),
+        (
+            {"replace_existing": True},
+            None,
+            400,
+            "account_id is required when replace_existing is true",
         ),
         (
             {"target_mode": "vendor_retention"},
