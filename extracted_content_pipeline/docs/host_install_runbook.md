@@ -144,8 +144,17 @@ python scripts/load_extracted_campaign_opportunities.py \
 `--replace-existing` only deletes rows with matching target ids inside the
 selected `account_id` and `target_mode`; it does not truncate the table.
 
-Amazon seller installs can prepare opportunities from active seller targets and
-cached category intelligence snapshots:
+Amazon seller installs can refresh broad category intelligence from review data
+before preparing opportunities:
+
+```bash
+python scripts/refresh_extracted_seller_category_intelligence.py \
+  --category supplements \
+  --min-reviews 50
+```
+
+Then prepare opportunities from active seller targets and cached category
+intelligence snapshots:
 
 ```bash
 python scripts/prepare_extracted_seller_campaign_opportunities.py \
@@ -156,9 +165,7 @@ python scripts/prepare_extracted_seller_campaign_opportunities.py \
 
 The seller preparation command reads `seller_targets` and the latest
 `category_intelligence_snapshots` row per category, then writes normalized
-`campaign_opportunities` rows with `target_mode="amazon_seller"`. It does not
-aggregate raw product reviews; hosts should refresh category snapshots through
-their own intelligence producer until that producer is extracted.
+`campaign_opportunities` rows with `target_mode="amazon_seller"`.
 
 ## Step 5: Add Optional Reasoning Context
 

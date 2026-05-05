@@ -23,6 +23,7 @@ pytest \
   tests/test_extracted_campaign_postgres_review.py \
   tests/test_extracted_campaign_postgres_seller_targets.py \
   tests/test_extracted_campaign_postgres_seller_opportunities.py \
+  tests/test_extracted_campaign_postgres_seller_category_intelligence.py \
   tests/test_extracted_campaign_postgres_send.py \
   tests/test_extracted_campaign_postgres_analytics.py \
   tests/test_extracted_campaign_postgres_webhooks.py \
@@ -50,6 +51,7 @@ pytest \
   tests/test_atlas_reasoning_state_inherits_core.py \
   tests/test_atlas_reasoning_port_adapters.py \
   tests/test_atlas_reasoning_vendor_pressure.py \
+  tests/test_atlas_reasoning_call_transcript.py \
   tests/test_atlas_reasoning_agent_port_consumption.py \
   tests/test_atlas_reasoning_reflection_tracing.py \
   tests/test_atlas_reasoning_graph_aliases.py \

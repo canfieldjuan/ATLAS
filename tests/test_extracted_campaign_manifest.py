@@ -23,6 +23,7 @@ CORE_CAMPAIGN_MIGRATIONS = {
 PRODUCT_OWNED_CAMPAIGN_MIGRATIONS = {
     "151_campaign_opportunities.sql",
     "152_campaign_draft_export_indexes.sql",
+    "092_subcategory_intelligence.sql",
 }
 
 DEFERRED_CROSS_PRODUCT_MIGRATIONS = {
@@ -99,11 +100,16 @@ def test_product_owned_campaign_migrations_define_product_tables() -> None:
     export_indexes_schema = (
         migrations_dir / "152_campaign_draft_export_indexes.sql"
     ).read_text()
+    subcategory_schema = (
+        migrations_dir / "092_subcategory_intelligence.sql"
+    ).read_text()
 
     assert "CREATE TABLE IF NOT EXISTS campaign_opportunities" in opportunity_schema
     assert "idx_campaign_opportunities_account_mode" in opportunity_schema
     assert "idx_b2b_campaigns_scope_account_created" in export_indexes_schema
     assert "idx_b2b_campaigns_vendor_created" in export_indexes_schema
+    assert "ADD COLUMN IF NOT EXISTS subcategory TEXT" in subcategory_schema
+    assert "product_metadata" not in subcategory_schema
 
 
 def test_manifest_tracks_product_owned_adapter_files() -> None:
@@ -121,6 +127,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/campaign_postgres_review.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_seller_targets.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_seller_opportunities.py" in owned
+    assert "extracted_content_pipeline/campaign_postgres_seller_category_intelligence.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_send.py" in owned
     assert "extracted_content_pipeline/campaign_example.py" in owned
     assert "extracted_content_pipeline/campaign_customer_data.py" in owned
@@ -132,6 +139,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/api/seller_campaigns.py" in owned
     assert "extracted_content_pipeline/storage/migrations/151_campaign_opportunities.sql" in owned
     assert "extracted_content_pipeline/storage/migrations/152_campaign_draft_export_indexes.sql" in owned
+    assert "extracted_content_pipeline/storage/migrations/092_subcategory_intelligence.sql" in owned
     assert "extracted_content_pipeline/reasoning/archetypes.py" in owned
     assert "extracted_content_pipeline/reasoning/temporal.py" in owned
     assert "extracted_content_pipeline/reasoning/evidence_engine.py" in owned
@@ -169,6 +177,7 @@ def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
     assert "extracted_content_pipeline/campaign_postgres_webhooks.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_seller_targets.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_seller_opportunities.py" not in mapped
+    assert "extracted_content_pipeline/campaign_postgres_seller_category_intelligence.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_send.py" not in mapped
     assert "extracted_content_pipeline/campaign_example.py" not in mapped
     assert "extracted_content_pipeline/campaign_customer_data.py" not in mapped
