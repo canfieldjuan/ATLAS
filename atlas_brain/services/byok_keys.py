@@ -20,10 +20,11 @@ Resolver order (in ``lookup_provider_key_async``):
      Stays for local dev so the same env-var plumbing PR-D4 used
      keeps working when no DB row is present.
 
-Sync ``lookup_provider_key`` is kept for backward-compat with PR-D4's
-existing call site -- it only checks the env-var fallback. The PR-D4
-gateway router will switch to the async resolver in a follow-up commit
-(or PR-D4b) so DB-stored keys are actually honored.
+The LLM Gateway router (``api/llm_gateway.py``) calls the async
+resolver so DB-stored keys ARE honored. The sync
+``lookup_provider_key`` helper is kept for backward-compat with any
+external caller that imports the legacy name; it only checks the
+env-var fallback (no DB lookup).
 """
 
 from __future__ import annotations
@@ -83,6 +84,12 @@ def _validate_provider(provider: str) -> None:
 # ---- DB-backed CRUD -----------------------------------------------------
 
 
+class BYOKKeyLimitExceeded(Exception):
+    """Raised by ``insert_provider_key`` when the caller's plan caps
+    the number of active BYOK providers and adding a new one would
+    exceed the cap. The router translates this to 403."""
+
+
 async def insert_provider_key(
     pool,
     *,
@@ -90,12 +97,22 @@ async def insert_provider_key(
     provider: str,
     raw_key: str,
     label: str = "",
+    max_keys: Optional[int] = None,
 ) -> BYOKKeyRecord:
     """Encrypt + persist a customer's provider key.
 
     If an active row already exists for (account_id, provider), it is
     revoked first (transactionally) so the unique-active partial
     index holds. The customer can rotate keys without explicit revoke.
+
+    When ``max_keys`` is supplied (and != -1), enforces a per-account
+    cap on the number of active BYOK providers. The check + insert
+    run inside a single transaction with ``SELECT ... FOR UPDATE``
+    on the ``saas_accounts`` row, which serializes concurrent BYOK
+    writes per account and closes the COUNT-then-INSERT race that
+    would otherwise let two concurrent submissions both pass the
+    count check. Raises ``BYOKKeyLimitExceeded`` when the cap is
+    reached -- excludes the provider being rotated from the count.
     """
     _validate_provider(provider)
     if not raw_key or not str(raw_key).strip():
@@ -105,6 +122,33 @@ async def insert_provider_key(
     prefix = raw_key[:KEY_PREFIX_LEN]
 
     async with pool.transaction() as conn:
+        # Serialize concurrent BYOK writes per account so the
+        # plan-limit count check below cannot race. Other accounts'
+        # writes proceed in parallel.
+        await conn.execute(
+            "SELECT id FROM saas_accounts WHERE id = $1 FOR UPDATE",
+            account_id,
+        )
+
+        if max_keys is not None and max_keys != -1:
+            count_row = await conn.fetchrow(
+                """
+                SELECT COUNT(*)::int AS active_count
+                FROM byok_keys
+                WHERE account_id = $1
+                  AND provider != $2
+                  AND revoked_at IS NULL
+                """,
+                account_id,
+                provider,
+            )
+            active_count = int(count_row["active_count"]) if count_row else 0
+            if active_count >= max_keys:
+                raise BYOKKeyLimitExceeded(
+                    f"Account already has {active_count} active BYOK "
+                    f"providers; plan cap is {max_keys}."
+                )
+
         await conn.execute(
             """
             UPDATE byok_keys
@@ -223,8 +267,24 @@ async def touch_provider_key(
 
 
 def _env_var_fallback(provider: str, account_id: str) -> Optional[str]:
-    """PR-D4 dev fallback. Used by both resolvers when no DB row
-    exists -- keeps local-dev workflows functional without DB."""
+    """Local-dev fallback only. Returns None when SaaS auth is
+    enabled (prod) so a DB outage / unconfigured pool can never
+    silently route customer traffic through atlas's process-level
+    ``ATLAS_BYOK_*`` keys.
+
+    PR-D5 review fix on top of the prior fail-closed work: the
+    earlier patch addressed exceptions during DB query / decrypt,
+    but ``pool.is_initialized=False`` still skipped the DB block
+    entirely and reached this fallback. Tying the fallback to the
+    SaaS-auth flag closes that path -- prod always has saas_auth
+    enabled; local dev runs with it off.
+    """
+    from .. import config as _config
+
+    if _config.settings.saas_auth.enabled:
+        # Production: no env fallback. Customers must configure their
+        # provider keys via /api/v1/byok-keys.
+        return None
     raw = os.environ.get(_env_var_name(provider, account_id), "").strip()
     return raw or None
 

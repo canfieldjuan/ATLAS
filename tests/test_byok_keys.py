@@ -536,12 +536,171 @@ def test_byok_router_imports_plan_limits():
 
 def test_byok_router_returns_403_when_at_plan_limit():
     """Copilot fix: when active count >= max_keys, the handler
-    raises 403 (not just lets the insert happen)."""
+    raises 403 (not just lets the insert happen). The actual count
+    check moved into ``insert_provider_key`` (FOR UPDATE on
+    saas_accounts row) to close the COUNT-then-INSERT race; the
+    router catches the resulting BYOKKeyLimitExceeded and translates
+    it to 403."""
     from atlas_brain.api import byok_keys
 
     src = inspect.getsource(byok_keys.add_key)
     assert "status_code=403" in src
-    assert "active_count >= max_keys" in src
+    assert "BYOKKeyLimitExceeded" in src
+
+
+# ---- Codex/Copilot third pass (race + DB-skip + stale doc) ------------
+
+
+def test_env_fallback_returns_none_when_saas_auth_enabled(monkeypatch):
+    """Copilot fix: when SaaS auth is enabled (prod), the env-var
+    fallback must return None -- otherwise a DB outage with
+    pool.is_initialized=False silently routes through atlas's
+    process-level keys."""
+    monkeypatch.setenv(
+        "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
+        "sk-ant-from-env",
+    )
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    from atlas_brain.auth.encryption import generate_kek
+
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", f"v1:{generate_kek()}")
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    importlib.reload(config_mod)
+
+    from atlas_brain.services.byok_keys import _env_var_fallback
+
+    # Env var is set, but SaaS auth is enabled -> fallback must NOT fire.
+    assert _env_var_fallback("anthropic", "00000000-0000-0000-0000-000000000000") is None
+
+    # Cleanup
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "false")
+    importlib.reload(config_mod)
+
+
+def test_env_fallback_works_when_saas_auth_disabled(monkeypatch):
+    """Sanity: local-dev path (SaaS auth off) keeps env fallback."""
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "false")
+    monkeypatch.setenv(
+        "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
+        "sk-ant-from-env",
+    )
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    importlib.reload(config_mod)
+
+    from atlas_brain.services.byok_keys import _env_var_fallback
+
+    assert _env_var_fallback("anthropic", "00000000-0000-0000-0000-000000000000") == "sk-ant-from-env"
+
+
+def test_lookup_async_skips_db_when_pool_uninitialized(monkeypatch):
+    """When ``pool.is_initialized=False`` (DB outage / startup fail),
+    ``lookup_provider_key_async`` skips the DB path and falls through
+    to ``_env_var_fallback``. Combined with the SaaS-auth gate above,
+    this means prod fails closed (env returns None) while dev still
+    works (env returns the configured key)."""
+    import asyncio
+
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    from atlas_brain.auth.encryption import generate_kek
+
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", f"v1:{generate_kek()}")
+    monkeypatch.setenv(
+        "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
+        "sk-from-env",
+    )
+
+    import importlib
+    import atlas_brain.config as config_mod
+
+    importlib.reload(config_mod)
+
+    class _UninitializedPool:
+        is_initialized = False
+
+    from atlas_brain.services.byok_keys import lookup_provider_key_async
+
+    result = asyncio.run(
+        lookup_provider_key_async(
+            _UninitializedPool(), "anthropic", "00000000-0000-0000-0000-000000000000"
+        )
+    )
+    # Prod (SaaS enabled) + uninitialized pool -> None (fail closed).
+    assert result is None
+
+    monkeypatch.setenv("ATLAS_SAAS_ENABLED", "false")
+    importlib.reload(config_mod)
+
+
+def test_byok_key_limit_exceeded_exception_exported():
+    """The router catches BYOKKeyLimitExceeded specifically. Pin
+    that the public name exists."""
+    from atlas_brain.services.byok_keys import BYOKKeyLimitExceeded
+
+    assert issubclass(BYOKKeyLimitExceeded, Exception)
+
+
+def test_insert_provider_key_signature_accepts_max_keys():
+    """The plan-limit cap moved INTO the insert transaction (FOR
+    UPDATE on saas_accounts) to close the COUNT-then-INSERT race.
+    Pin the new ``max_keys`` kwarg."""
+    import inspect
+
+    from atlas_brain.services.byok_keys import insert_provider_key
+
+    sig = inspect.signature(insert_provider_key)
+    assert "max_keys" in sig.parameters
+    assert sig.parameters["max_keys"].default is None
+
+
+def test_insert_provider_key_locks_saas_accounts_row():
+    """Source-text inspection: insert_provider_key must lock the
+    saas_accounts row before counting+inserting so concurrent
+    submissions for the same account serialize."""
+    import inspect
+
+    from atlas_brain.services import byok_keys
+
+    src = inspect.getsource(byok_keys.insert_provider_key)
+    assert "FOR UPDATE" in src
+    assert "saas_accounts WHERE id = $1" in src
+
+
+def test_byok_router_passes_max_keys_to_service():
+    """Router pulls ``byok_keys_max`` from LLM_PLAN_LIMITS and
+    passes it through; the service does the count check inside the
+    transaction. The router must NOT do its own pre-count (that
+    was the racy pattern)."""
+    import inspect
+
+    from atlas_brain.api import byok_keys
+
+    src = inspect.getsource(byok_keys.add_key)
+    # Must pass max_keys to the service.
+    assert "max_keys=max_keys" in src
+    # Must NOT do the racy COUNT + insert pattern in the route.
+    assert "active_count_row = await pool.fetchrow" not in src
+
+
+def test_byok_router_translates_limit_exception_to_403():
+    """``BYOKKeyLimitExceeded`` is caught and translated to 403 so
+    the customer sees a deterministic plan-limit response."""
+    import inspect
+
+    from atlas_brain.api import byok_keys
+
+    src = inspect.getsource(byok_keys.add_key)
+    assert "BYOKKeyLimitExceeded" in src
+    assert "status_code=403" in src
 
 
 def test_byok_router_handles_unique_violation_as_409():
