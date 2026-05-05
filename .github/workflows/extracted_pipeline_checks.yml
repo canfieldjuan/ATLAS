@@ -11,6 +11,7 @@ on:
       - "atlas_brain/reasoning/call_transcript.py"
       - "atlas_brain/reasoning/agent.py"
       - "atlas_brain/reasoning/reflection.py"
+      - "atlas_brain/reasoning/graph.py"
       - "atlas_brain/autonomous/tasks/_b2b_reasoning_consumer_adapter.py"
       - "atlas_brain/mcp/b2b/signals.py"
       - "scripts/sync_extracted_content_pipeline.sh"
@@ -30,6 +31,7 @@ on:
       - "tests/test_atlas_reasoning_call_transcript.py"
       - "tests/test_atlas_reasoning_agent_port_consumption.py"
       - "tests/test_atlas_reasoning_reflection_tracing.py"
+      - "tests/test_atlas_reasoning_graph_aliases.py"
   push:
     paths:
       - "extracted_content_pipeline/**"
@@ -40,6 +42,7 @@ on:
       - "atlas_brain/reasoning/call_transcript.py"
       - "atlas_brain/reasoning/agent.py"
       - "atlas_brain/reasoning/reflection.py"
+      - "atlas_brain/reasoning/graph.py"
       - "atlas_brain/autonomous/tasks/_b2b_reasoning_consumer_adapter.py"
       - "atlas_brain/mcp/b2b/signals.py"
       - "scripts/sync_extracted_content_pipeline.sh"
@@ -59,6 +62,7 @@ on:
       - "tests/test_atlas_reasoning_call_transcript.py"
       - "tests/test_atlas_reasoning_agent_port_consumption.py"
       - "tests/test_atlas_reasoning_reflection_tracing.py"
+      - "tests/test_atlas_reasoning_graph_aliases.py"
 
 jobs:
   extracted-checks:
