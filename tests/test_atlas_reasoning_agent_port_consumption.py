@@ -38,20 +38,20 @@ import pytest
 # ----------------------------------------------------------------------
 
 
-def _install_atlas_stubs() -> None:
-    """Stub the atlas modules ``agent.process_event`` lazy-imports.
+_STUBBED_MODULE_NAMES = (
+    "atlas_brain.services",
+    "atlas_brain.services.tracing",
+    "atlas_brain.pipelines",
+    "atlas_brain.pipelines.llm",
+    "atlas_brain.config",
+)
 
-    Idempotent. Called from a session-scoped fixture so every test in
-    the file shares the same stub state. We don't unwind on teardown
-    because the tests are read-only against these modules and the
-    stubs match the real interface.
-    """
-    if "atlas_brain.services.tracing" in sys.modules:
-        return  # already installed
 
+def _build_atlas_stubs() -> dict[str, types.ModuleType]:
+    """Construct stub modules matching the interface ``agent.process_event``
+    lazy-imports. Returns a name->module dict for the fixture to install."""
     services_pkg = types.ModuleType("atlas_brain.services")
     services_pkg.__path__ = []  # mark as package for submodule imports
-    sys.modules["atlas_brain.services"] = services_pkg
 
     tracing_mod = types.ModuleType("atlas_brain.services.tracing")
     tracing_mod.tracer = object()  # never used; default-builder path is bypassed
@@ -61,11 +61,9 @@ def _install_atlas_stubs() -> None:
     tracing_mod.build_reasoning_trace_context = lambda **kwargs: {
         k: v for k, v in kwargs.items() if v is not None
     }
-    sys.modules["atlas_brain.services.tracing"] = tracing_mod
 
     pipelines_pkg = types.ModuleType("atlas_brain.pipelines")
     pipelines_pkg.__path__ = []
-    sys.modules["atlas_brain.pipelines"] = pipelines_pkg
 
     pipelines_llm_mod = types.ModuleType("atlas_brain.pipelines.llm")
 
@@ -74,7 +72,6 @@ def _install_atlas_stubs() -> None:
         name = "stub-provider"
 
     pipelines_llm_mod.get_pipeline_llm = lambda **kwargs: _StubLLM()
-    sys.modules["atlas_brain.pipelines.llm"] = pipelines_llm_mod
 
     config_mod = types.ModuleType("atlas_brain.config")
 
@@ -86,12 +83,44 @@ def _install_atlas_stubs() -> None:
         reasoning = _StubReasoning()
 
     config_mod.settings = _StubSettings()
-    sys.modules["atlas_brain.config"] = config_mod
+
+    return {
+        "atlas_brain.services": services_pkg,
+        "atlas_brain.services.tracing": tracing_mod,
+        "atlas_brain.pipelines": pipelines_pkg,
+        "atlas_brain.pipelines.llm": pipelines_llm_mod,
+        "atlas_brain.config": config_mod,
+    }
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _stub_atlas_chain() -> None:
-    _install_atlas_stubs()
+def _stub_atlas_chain():
+    """Install stubs for the test module, restore originals on teardown.
+
+    Without restoration, ``sys.modules`` would carry the stubs into
+    sibling test files in the same pytest invocation -- e.g. a future
+    ``tests/test_tracing_context.py`` that imports the real
+    ``atlas_brain.services.tracing.build_business_trace_context``
+    would see this file's stub instead. Save the prior entries (or
+    record which names were absent), install the stubs, and on
+    teardown either put the originals back or remove the stub entries.
+    """
+    saved: dict[str, types.ModuleType | None] = {
+        name: sys.modules.get(name) for name in _STUBBED_MODULE_NAMES
+    }
+
+    stubs = _build_atlas_stubs()
+    for name, mod in stubs.items():
+        sys.modules[name] = mod
+
+    try:
+        yield
+    finally:
+        for name, original in saved.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
 
 
 # ----------------------------------------------------------------------
