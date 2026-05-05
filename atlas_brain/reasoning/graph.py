@@ -105,43 +105,46 @@ async def _llm_generate(llm, prompt: str, system_prompt: str,
     }
 
 
-async def run_reasoning_graph(state: ReasoningAgentState) -> ReasoningAgentState:
-    """Execute the full reasoning graph: triage -> context -> lock check ->
-    reason -> plan -> execute -> synthesize -> notify.
+def _build_atlas_graph_nodes() -> "GraphNodes":
+    """Bundle atlas's eight ``_node_*`` callables for core's orchestrator.
+
+    Two of the eight (``triage``, ``synthesize``) are atlas wrappers
+    around core's ``node_triage`` / ``node_synthesize`` from PR-C4e2;
+    one (``plan_actions``) is the alias for core's ``plan_actions``
+    helper from PR-C4e1; the remaining four (``aggregate_context``,
+    ``check_lock``, ``execute_actions``, ``notify``) are
+    atlas-coupled and stay host-side per the audit's "atlas-specific
+    stays in adapters" criterion.
     """
-    # Initialize token tracking
-    state["total_input_tokens"] = 0
-    state["total_output_tokens"] = 0
+    from extracted_reasoning_core.graph import GraphNodes
 
-    # 1. Triage
-    state = await _node_triage(state)
-    if not state.get("needs_reasoning"):
-        return state
+    return GraphNodes(
+        triage=_node_triage,
+        aggregate_context=_node_aggregate_context,
+        check_lock=_node_check_lock,
+        reason=_node_reason,
+        plan_actions=_node_plan_actions,
+        execute_actions=_node_execute_actions,
+        synthesize=_node_synthesize,
+        notify=_node_notify,
+    )
 
-    # 2. Aggregate context
-    state = await _node_aggregate_context(state)
 
-    # 3. Check entity lock
-    state = await _node_check_lock(state)
-    if state.get("queued"):
-        return state
+async def run_reasoning_graph(state: ReasoningAgentState) -> ReasoningAgentState:
+    """Execute the full reasoning graph via core's orchestrator.
 
-    # 4. Reason
-    state = await _node_reason(state)
+    Atlas wrapper: builds a ``GraphNodes`` bundle from its
+    ``_node_*`` callables and delegates to
+    :func:`extracted_reasoning_core.graph.run_graph`. The orchestrator
+    contract -- triage -> context -> lock check -> reason -> plan ->
+    execute -> synthesize -> notify with two early-exit branches
+    (``needs_reasoning=False`` after triage, ``queued=True`` after
+    lock check) -- lives in core. The atlas-specific node
+    implementations live here.
+    """
+    from extracted_reasoning_core.graph import run_graph
 
-    # 5. Plan actions
-    state = await _node_plan_actions(state)
-
-    # 6. Execute actions
-    state = await _node_execute_actions(state)
-
-    # 7. Synthesize
-    state = await _node_synthesize(state)
-
-    # 8. Notify
-    state = await _node_notify(state)
-
-    return state
+    return await run_graph(state, _build_atlas_graph_nodes())
 
 
 # ------------------------------------------------------------------

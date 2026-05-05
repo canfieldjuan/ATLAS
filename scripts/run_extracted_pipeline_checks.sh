@@ -41,6 +41,7 @@ pytest \
   tests/test_extracted_reasoning_core_archetypes.py \
   tests/test_extracted_reasoning_core_evidence_engine.py \
   tests/test_extracted_reasoning_core_event_trace_ports.py \
+  tests/test_extracted_reasoning_core_graph.py \
   tests/test_extracted_reasoning_core_graph_helpers.py \
   tests/test_extracted_reasoning_core_graph_nodes.py \
   tests/test_extracted_reasoning_core_pack_registry.py \
@@ -56,6 +57,7 @@ pytest \
   tests/test_atlas_reasoning_agent_port_consumption.py \
   tests/test_atlas_reasoning_reflection_tracing.py \
   tests/test_atlas_reasoning_graph_aliases.py \
+  tests/test_atlas_reasoning_run_reasoning_graph_wiring.py \
   tests/test_extracted_product_utilities.py \
   tests/test_extracted_b2b_batch_utils.py \
   tests/test_extracted_blog_matching.py \
