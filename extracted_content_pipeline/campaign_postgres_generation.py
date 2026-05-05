@@ -22,6 +22,7 @@ from .campaign_postgres import (
     PostgresIntelligenceRepository,
 )
 from .skills.registry import get_skill_registry
+from .services.reasoning_provider_port import CampaignReasoningProviderPort
 
 
 def tenant_scope_from_mapping(value: Mapping[str, Any] | TenantScope | None) -> TenantScope:
@@ -50,7 +51,7 @@ async def generate_campaign_drafts_from_postgres(
     filters: Mapping[str, Any] | None = None,
     llm: LLMClient | None = None,
     skills: SkillStore | None = None,
-    reasoning_context: CampaignReasoningContextProvider | None = None,
+    reasoning_context: CampaignReasoningContextProvider | CampaignReasoningProviderPort | None = None,
     config: CampaignGenerationConfig | None = None,
     opportunity_table: str = "campaign_opportunities",
     vendor_targets_table: str = "vendor_targets",

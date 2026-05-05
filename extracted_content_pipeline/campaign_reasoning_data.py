@@ -10,6 +10,7 @@ from typing import Any
 
 from .campaign_ports import CampaignReasoningContext, TenantScope
 from .services.campaign_reasoning_context import normalize_campaign_reasoning_context
+from .services.reasoning_provider_port import CampaignReasoningProviderPort
 
 
 _ROW_KEYS = ("contexts", "rows", "data", "reasoning_contexts")
@@ -183,4 +184,11 @@ def _clean_keys(values: Sequence[Any]) -> tuple[str, ...]:
 __all__ = [
     "FileCampaignReasoningContextProvider",
     "load_campaign_reasoning_context_provider",
+    "load_reasoning_provider_port",
 ]
+
+
+def load_reasoning_provider_port(path: str | Path) -> CampaignReasoningProviderPort:
+    """Load a host-port compatible reasoning provider from JSON."""
+
+    return load_campaign_reasoning_context_provider(path)
