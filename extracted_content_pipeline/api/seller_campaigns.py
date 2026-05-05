@@ -266,7 +266,19 @@ def _combine_prepare_results(results: Sequence[Mapping[str, Any]]) -> dict[str, 
 
 
 def _result_categories(result: Mapping[str, Any]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(_parse_payload_list(result.get("categories"))))
+    raw_categories = result.get("categories")
+    if raw_categories is None:
+        return ()
+    if isinstance(raw_categories, str):
+        candidates: Sequence[Any] = (raw_categories,)
+    elif isinstance(raw_categories, Sequence) and not isinstance(
+        raw_categories,
+        (bytes, bytearray),
+    ):
+        candidates = raw_categories
+    else:
+        candidates = (raw_categories,)
+    return tuple(dict.fromkeys(_clean(item) for item in candidates if _clean(item)))
 
 
 def _api_offset(value: int | None) -> int:
