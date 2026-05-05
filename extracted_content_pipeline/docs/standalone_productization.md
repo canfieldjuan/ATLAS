@@ -190,11 +190,17 @@ cached `category_intelligence_snapshots` into normalized
 existing DB-backed generator can produce seller drafts without importing the
 Atlas seller scheduled task or product review aggregation code.
 
+`extracted_content_pipeline/campaign_postgres_seller_category_intelligence.py`
+owns the broad category-intelligence refresh seam for Amazon seller campaigns.
+It aggregates host `product_reviews` / `product_metadata` rows into
+`category_intelligence_snapshots` without importing Atlas settings, task
+models, notifications, LLM report generation, or comparison pipeline helpers.
+
 `extracted_content_pipeline/api/seller_campaigns.py` owns the host-mounted
 FastAPI surface for seller target management and seller draft review. It keeps
 seller draft list/export/review locked to `target_mode="amazon_seller"` and
-defers Atlas-only generation triggers and category-intelligence refreshes until
-their producers are extracted behind ports.
+defers Atlas-only generation triggers; category-intelligence refresh is
+available through the product-owned Postgres seam above.
 
 `extracted_content_pipeline/campaign_postgres_send.py` owns the DB-backed send
 worker seam. It composes `PostgresCampaignRepository`,

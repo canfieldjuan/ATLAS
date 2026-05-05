@@ -137,6 +137,7 @@ async def _read_seller_intelligence_rows(
               SELECT *
                 FROM {_identifier(category_snapshots_table)} cis
                WHERE cis.category = cat.category
+                 AND cis.subcategory IS NULL
                ORDER BY cis.snapshot_date DESC, cis.created_at DESC
                LIMIT 1
           ) snap ON TRUE

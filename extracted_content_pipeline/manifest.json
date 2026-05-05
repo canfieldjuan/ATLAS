@@ -199,6 +199,9 @@
       "target": "extracted_content_pipeline/campaign_postgres_seller_opportunities.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_postgres_seller_category_intelligence.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_postgres_send.py"
     },
     {
@@ -248,6 +251,9 @@
     },
     {
       "target": "extracted_content_pipeline/storage/migrations/152_campaign_draft_export_indexes.sql"
+    },
+    {
+      "target": "extracted_content_pipeline/storage/migrations/092_subcategory_intelligence.sql"
     },
     {
       "target": "extracted_content_pipeline/pipelines/notify.py"
