@@ -37,13 +37,19 @@ import pytest
 
 
 def test_build_atlas_graph_nodes_is_a_frozen_graph_nodes() -> None:
+    from dataclasses import FrozenInstanceError
+
     from atlas_brain.reasoning.graph import _build_atlas_graph_nodes
     from extracted_reasoning_core.graph import GraphNodes
 
     bundle = _build_atlas_graph_nodes()
     assert isinstance(bundle, GraphNodes)
-    # Frozen: bundle can't be mutated mid-run.
-    with pytest.raises(Exception):
+    # Frozen: bundle can't be mutated mid-run. ``frozen=True`` raises
+    # ``FrozenInstanceError``; ``slots=True`` alone would raise
+    # ``AttributeError``. Accept either so a future refactor that
+    # drops slots+frozen->frozen alone (or vice versa) doesn't fail
+    # this test for the wrong reason.
+    with pytest.raises((FrozenInstanceError, AttributeError)):
         bundle.triage = lambda state: state  # type: ignore[misc]
 
 

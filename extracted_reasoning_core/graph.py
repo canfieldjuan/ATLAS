@@ -25,7 +25,7 @@ needs to know about.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from .state import ReasoningAgentState
 

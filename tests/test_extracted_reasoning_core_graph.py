@@ -242,6 +242,11 @@ def test_graph_nodes_is_frozen() -> None:
     # The orchestrator runs read-only against the bundle; mutating
     # mid-run would risk inconsistent behavior. Pin the frozen=True
     # contract so a future refactor can't accidentally drop it.
+    # ``frozen=True`` raises ``FrozenInstanceError``; ``slots=True``
+    # alone would raise ``AttributeError``. Accept either so the test
+    # doesn't have to know which decorator combination ships.
+    from dataclasses import FrozenInstanceError
+
     nodes = _build_nodes([])
-    with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
+    with pytest.raises((FrozenInstanceError, AttributeError)):
         nodes.triage = lambda state: state  # type: ignore[misc]
