@@ -153,11 +153,15 @@ async def submit_customer_batch(
 
     # Call Anthropic. Imported lazily so unit tests can stub the
     # client without dragging the SDK into module load.
+    # ``async with`` ensures the underlying httpx connection pool is
+    # released after each call -- /llm/batch is high-traffic per
+    # customer, so leaking even one connection per call accumulates
+    # quickly. Codex P2 fix on PR-D4b.
     from anthropic import AsyncAnthropic
 
-    client = AsyncAnthropic(api_key=api_key)
     try:
-        provider_batch = await client.messages.batches.create(requests=requests)
+        async with AsyncAnthropic(api_key=api_key) as client:
+            provider_batch = await client.messages.batches.create(requests=requests)
     except Exception as exc:
         logger.warning(
             "llm_gateway_batch.submit failed account=%s model=%s items=%d: %s",
@@ -255,9 +259,12 @@ async def refresh_customer_batch_status(
 
     from anthropic import AsyncAnthropic
 
-    client = AsyncAnthropic(api_key=api_key)
+    # ``async with`` releases the httpx connection pool after each
+    # poll -- /llm/batch/{id} is hit repeatedly while a batch is
+    # processing, so leaks compound fast. Codex P2 fix on PR-D4b.
     try:
-        provider_batch = await client.messages.batches.retrieve(record.provider_batch_id)
+        async with AsyncAnthropic(api_key=api_key) as client:
+            provider_batch = await client.messages.batches.retrieve(record.provider_batch_id)
     except Exception as exc:
         logger.warning(
             "llm_gateway_batch.refresh failed account=%s batch=%s: %s",

@@ -278,3 +278,56 @@ def test_batch_view_omits_results_jsonl():
 
     fields = set(BatchView.model_fields.keys())
     assert "results_jsonl" not in fields
+
+
+# ---- Codex P2 review (resource cleanup via async-with) ----------------
+
+
+def test_submit_customer_batch_uses_async_with():
+    """Codex P2: ``AsyncAnthropic`` opens an httpx connection pool
+    that must be released after each batch submit. Source-text pin
+    that we use ``async with`` (not bare construction)."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    assert "async with AsyncAnthropic(api_key=api_key)" in src
+    # The bare ``client = AsyncAnthropic(...)`` pattern must NOT
+    # remain in the file.
+    bare_pattern = "client = AsyncAnthropic(api_key=api_key)"
+    full_src = inspect.getsource(llm_gateway_batch)
+    assert bare_pattern not in full_src
+
+
+def test_refresh_customer_batch_uses_async_with():
+    """Same posture for the polling path -- /batch/{id} is hit
+    repeatedly while a batch is in flight, so leaks compound."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.refresh_customer_batch_status)
+    assert "async with AsyncAnthropic(api_key=api_key)" in src
+
+
+def test_chat_handler_uses_async_with_anthropic():
+    """The /chat handler used to access ``llm._async_client``
+    directly -- AnthropicLLM is shaped for atlas's long-running
+    pipeline (one instance held across calls), so per-request
+    gateway use leaked the httpx pool. Now uses AsyncAnthropic
+    in async-with directly."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    assert "async with AsyncAnthropic(api_key=api_key)" in src
+    # Direct ``llm._async_client`` access must NOT remain.
+    assert "llm._async_client" not in src
+    # The unnecessary load() call is also gone (AsyncAnthropic is
+    # constructed directly inside async-with).
+    assert "llm.load()" not in src
+
+
+def test_chat_stream_handler_uses_async_with_anthropic():
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway._stream_chat_chunks)
+    assert "async with AsyncAnthropic(api_key=api_key)" in src
+    assert "llm._async_client" not in src
+    assert "llm.load()" not in src

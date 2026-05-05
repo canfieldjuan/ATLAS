@@ -162,22 +162,17 @@ async def chat(
     pool = get_db_pool()
     api_key = await _resolve_byok_or_503(pool, body.provider, user.account_id)
 
+    # Normalize the model id via AnthropicLLM (alias map) but do NOT
+    # call load() -- atlas's AnthropicLLM is shaped for long-running
+    # pipeline use (one instance kept alive across calls). Per-request
+    # gateway calls leak httpx connections through ``_async_client``,
+    # so we use ``AsyncAnthropic`` directly in an ``async with`` block
+    # below for proper resource cleanup. Codex P2 fix on PR-D4b.
+    from anthropic import AsyncAnthropic
+
     from ..services.llm.anthropic import AnthropicLLM
 
     llm = AnthropicLLM(model=body.model, api_key=api_key)
-    try:
-        # AnthropicLLM.load() is synchronous (returns None). Do NOT await.
-        llm.load()
-    except Exception as exc:
-        logger.warning(
-            "llm_gateway.chat load failed account=%s provider=%s model=%s: %s",
-            user.account_id,
-            body.provider,
-            body.model,
-            exc,
-        )
-        raise HTTPException(status_code=502, detail="Provider key invalid or load failed")
-
     messages = [Message(role=m.role, content=m.content) for m in body.messages]
     system_prompt, api_messages = convert_messages(messages)
 
@@ -190,14 +185,14 @@ async def chat(
     if system_prompt:
         create_kwargs["system"] = system_prompt
 
-    # Bypass llm.chat_async() so we can capture full response (text +
-    # usage). Codex P1 fix on PR-D4: chat_async returned only text,
-    # which left input_tokens=output_tokens=0 for trace_llm_call.
-    # _store_local then short-circuited (all token fields falsy) and
-    # /usage returned empty for every customer call.
+    # Capture full response (text + usage) via direct SDK call.
+    # PR-D4 review fix already addressed the "chat_async returned
+    # only text -> zero token usage" bug; PR-D4b also closes the
+    # httpx pool after each request via async-with.
     start = time.monotonic()
     try:
-        response = await llm._async_client.messages.create(**create_kwargs)
+        async with AsyncAnthropic(api_key=api_key) as client:
+            response = await client.messages.create(**create_kwargs)
     except Exception as exc:
         logger.warning(
             "llm_gateway.chat call failed account=%s provider=%s model=%s: %s",
@@ -368,14 +363,15 @@ async def _stream_chat_chunks(
     final token counts, then a ``done`` event. On error: ``error``
     event with the detail.
     """
+    # Use AnthropicLLM only for model-id normalization (alias map).
+    # We construct AsyncAnthropic in async-with below for proper
+    # connection-pool cleanup -- AnthropicLLM's _async_client would
+    # leak per request. Codex P2 fix on PR-D4b.
+    from anthropic import AsyncAnthropic
+
     from ..services.llm.anthropic import AnthropicLLM
 
     llm = AnthropicLLM(model=body.model, api_key=api_key)
-    try:
-        llm.load()
-    except Exception as exc:
-        yield _sse_event("error", {"detail": f"Provider load failed: {exc}"})
-        return
 
     messages = [Message(role=m.role, content=m.content) for m in body.messages]
     system_prompt, api_messages = convert_messages(messages)
@@ -398,41 +394,42 @@ async def _stream_chat_chunks(
     provider_request_id: Optional[str] = None
 
     try:
-        async with llm._async_client.messages.stream(**create_kwargs) as stream:
-            async for event in stream:
-                etype = getattr(event, "type", None)
-                if etype == "content_block_delta":
-                    delta = getattr(event, "delta", None)
-                    text = getattr(delta, "text", "") if delta else ""
-                    if text:
-                        yield _sse_event("content", {"id": response_id, "text": text})
-                elif etype == "message_start":
-                    message = getattr(event, "message", None)
-                    provider_request_id = getattr(message, "id", None)
-                    msg_usage = getattr(message, "usage", None)
-                    if msg_usage is not None:
-                        input_tokens = int(getattr(msg_usage, "input_tokens", 0) or 0)
-                        cached_tokens = int(getattr(msg_usage, "cache_read_input_tokens", 0) or 0)
-                        cache_write_tokens = int(
-                            getattr(msg_usage, "cache_creation_input_tokens", 0) or 0
-                        )
-                elif etype == "message_delta":
-                    msg_usage = getattr(event, "usage", None)
-                    if msg_usage is not None:
-                        output_tokens = int(getattr(msg_usage, "output_tokens", output_tokens) or output_tokens)
-            final = await stream.get_final_message()
-            final_usage = getattr(final, "usage", None)
-            if final_usage is not None:
-                # Final values overwrite any partials we captured during
-                # message_delta events.
-                input_tokens = int(getattr(final_usage, "input_tokens", input_tokens) or input_tokens)
-                output_tokens = int(getattr(final_usage, "output_tokens", output_tokens) or output_tokens)
-                cached_tokens = int(getattr(final_usage, "cache_read_input_tokens", cached_tokens) or cached_tokens)
-                cache_write_tokens = int(
-                    getattr(final_usage, "cache_creation_input_tokens", cache_write_tokens) or cache_write_tokens
-                )
-            if not provider_request_id:
-                provider_request_id = getattr(final, "id", None)
+        async with AsyncAnthropic(api_key=api_key) as client:
+            async with client.messages.stream(**create_kwargs) as stream:
+                async for event in stream:
+                    etype = getattr(event, "type", None)
+                    if etype == "content_block_delta":
+                        delta = getattr(event, "delta", None)
+                        text = getattr(delta, "text", "") if delta else ""
+                        if text:
+                            yield _sse_event("content", {"id": response_id, "text": text})
+                    elif etype == "message_start":
+                        message = getattr(event, "message", None)
+                        provider_request_id = getattr(message, "id", None)
+                        msg_usage = getattr(message, "usage", None)
+                        if msg_usage is not None:
+                            input_tokens = int(getattr(msg_usage, "input_tokens", 0) or 0)
+                            cached_tokens = int(getattr(msg_usage, "cache_read_input_tokens", 0) or 0)
+                            cache_write_tokens = int(
+                                getattr(msg_usage, "cache_creation_input_tokens", 0) or 0
+                            )
+                    elif etype == "message_delta":
+                        msg_usage = getattr(event, "usage", None)
+                        if msg_usage is not None:
+                            output_tokens = int(getattr(msg_usage, "output_tokens", output_tokens) or output_tokens)
+                final = await stream.get_final_message()
+                final_usage = getattr(final, "usage", None)
+                if final_usage is not None:
+                    # Final values overwrite any partials we captured during
+                    # message_delta events.
+                    input_tokens = int(getattr(final_usage, "input_tokens", input_tokens) or input_tokens)
+                    output_tokens = int(getattr(final_usage, "output_tokens", output_tokens) or output_tokens)
+                    cached_tokens = int(getattr(final_usage, "cache_read_input_tokens", cached_tokens) or cached_tokens)
+                    cache_write_tokens = int(
+                        getattr(final_usage, "cache_creation_input_tokens", cache_write_tokens) or cache_write_tokens
+                    )
+                if not provider_request_id:
+                    provider_request_id = getattr(final, "id", None)
     except Exception as exc:
         logger.warning(
             "llm_gateway.chat_stream failed account=%s model=%s: %s",
