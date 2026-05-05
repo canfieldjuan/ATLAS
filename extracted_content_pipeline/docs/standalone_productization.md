@@ -204,11 +204,12 @@ LLM draft generation to worker/CLI paths so hosts can control provider runtime
 policy separately.
 
 `extracted_content_pipeline/api/campaign_operations.py` owns the host-mounted
-FastAPI surface for operational campaign workers. It exposes send queued,
-sequence progression, and analytics refresh triggers while requiring the host
-to inject database, sender, auth, and optional LLM/skill providers. Request
-payloads are limited to batch sizing so provider credentials, sender identity,
-unsubscribe policy, and LLM routing remain host-owned.
+FastAPI surface for operational campaign workers. It exposes draft generation,
+send queued, sequence progression, and analytics refresh triggers while
+requiring the host to inject database, sender, auth, and optional
+LLM/skill/reasoning providers. Request payloads are limited to tenant scope,
+target/channel, filters, and batch sizing so provider credentials, sender
+identity, unsubscribe policy, and LLM routing remain host-owned.
 
 `extracted_content_pipeline/campaign_postgres_send.py` owns the DB-backed send
 worker seam. It composes `PostgresCampaignRepository`,
