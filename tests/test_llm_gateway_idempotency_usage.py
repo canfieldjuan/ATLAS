@@ -344,6 +344,28 @@ def test_refresh_stamps_retry_timestamp_before_persist():
     )
 
 
+def test_refresh_cooldown_uses_atomic_claim_not_select_then_update():
+    """Codex P2 on PR-D4e: SELECT-then-UPDATE is racy -- two
+    concurrent pollers can both observe cooldown_active=false
+    before either writes. The cooldown gate must be a single
+    conditional UPDATE...RETURNING so only one poller can claim
+    the retry slot per cooldown window. Same atomic-claim pattern
+    PR-D4d uses for the usage_tracked flag flip."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.refresh_customer_batch_status)
+    # Single atomic claim with RETURNING.
+    assert "claim = await pool.fetchrow(" in src
+    assert "RETURNING id" in src
+    assert "if claim is None:" in src
+    # Predicate covers both NULL and outside-the-window cases.
+    assert "last_usage_retry_at IS NULL" in src
+    assert "OR last_usage_retry_at <=" in src
+    # The racy SELECT-then-UPDATE pattern must not return.
+    assert "cooldown_active = await pool.fetchval" not in src
+    assert "if cooldown_active:" not in src
+
+
 def test_customer_batch_record_exposes_resume_safety_fields():
     """PR-D4e adds two fields to the dataclass for the refresh +
     submit paths to read. Defaults None so test mocks that don't

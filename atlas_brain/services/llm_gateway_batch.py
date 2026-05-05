@@ -584,38 +584,33 @@ async def refresh_customer_batch_status(
             and record.status in ("ended", "canceled", "expired")
             and record.provider_batch_id
         ):
-            # PR-D4e cooldown: if the prior retry attempt is more
-            # recent than the cooldown window, skip this attempt
-            # to avoid hammering Anthropic's results endpoint
-            # under a transient-failure poll storm. Returns the
-            # current record so the customer keeps polling --
-            # the next poll outside the cooldown will retry.
-            cooldown_active = await pool.fetchval(
+            # PR-D4e cooldown (Codex P2): atomic claim collapses
+            # the cooldown check + stamp into a single conditional
+            # UPDATE so two concurrent pollers can't both observe
+            # cooldown_active=false and race into _persist_batch_usage.
+            # Returns a row if the claim won (this poller proceeds);
+            # returns None if the cooldown is active OR another
+            # concurrent poller already claimed the slot (this poller
+            # returns the current record so the customer keeps
+            # polling -- the next attempt outside the window retries).
+            claim = await pool.fetchrow(
                 """
-                SELECT (last_usage_retry_at IS NOT NULL
-                        AND last_usage_retry_at >
-                            NOW() - make_interval(secs => $3))
-                FROM llm_gateway_batches
+                UPDATE llm_gateway_batches
+                SET last_usage_retry_at = NOW()
                 WHERE id = $1 AND account_id = $2
+                  AND (
+                    last_usage_retry_at IS NULL
+                    OR last_usage_retry_at <=
+                        NOW() - make_interval(secs => $3)
+                  )
+                RETURNING id
                 """,
                 batch_id,
                 account_id,
                 _USAGE_RETRY_COOLDOWN_SECONDS,
             )
-            if cooldown_active:
+            if claim is None:
                 return record
-            # Stamp the retry-attempt timestamp BEFORE calling
-            # _persist_batch_usage so a concurrent poller in the
-            # same window sees the cooldown and skips.
-            await pool.execute(
-                """
-                UPDATE llm_gateway_batches
-                SET last_usage_retry_at = NOW()
-                WHERE id = $1 AND account_id = $2
-                """,
-                batch_id,
-                account_id,
-            )
             try:
                 await _persist_batch_usage(
                     pool,
