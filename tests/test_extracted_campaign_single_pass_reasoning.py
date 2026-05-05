@@ -151,6 +151,16 @@ def test_parse_reasoning_context_response_accepts_embedded_json() -> None:
     assert context.as_dict()["confidence"] == "low"
 
 
+def test_parse_reasoning_context_response_ignores_braces_inside_strings() -> None:
+    context = parse_reasoning_context_response(
+        "Here is the answer: "
+        "{\"reasoning_context\":{\"summary\":\"Renewal window starts {Q3\"}}"
+    )
+
+    assert context is not None
+    assert context.as_dict()["summary"] == "Renewal window starts {Q3"
+
+
 def test_parse_reasoning_context_response_returns_none_for_empty_context() -> None:
     assert parse_reasoning_context_response("{}") is None
     assert parse_reasoning_context_response("not json") is None

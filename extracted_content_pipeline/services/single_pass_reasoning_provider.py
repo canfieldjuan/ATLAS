@@ -129,12 +129,27 @@ def _json_candidates(text: str) -> list[Any]:
 
     depth = 0
     start = -1
+    in_string = False
+    escaped = False
     for index, char in enumerate(cleaned):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
         if char == "{":
             if depth == 0:
                 start = index
             depth += 1
         elif char == "}":
+            if depth <= 0:
+                continue
             depth -= 1
             if depth == 0 and start >= 0:
                 try:
