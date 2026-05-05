@@ -38,6 +38,7 @@ MODULES = [
     "extracted_competitive_intelligence.services.b2b.anthropic_batch",
     "extracted_competitive_intelligence.services.b2b.challenger_dashboard_claims",
     "extracted_competitive_intelligence.services.b2b.competitive_set_ports",
+    "extracted_competitive_intelligence.services.b2b.vendor_briefing_ports",
     "extracted_competitive_intelligence.services.b2b.llm_exact_cache",
     "extracted_competitive_intelligence.services.b2b.pdf_renderer",
     "extracted_competitive_intelligence.services.b2b_competitive_sets",
@@ -112,6 +113,11 @@ def main() -> int:
             "extracted_llm_infrastructure.services.b2b.anthropic_batch",
         ),
         (
+            "extracted_competitive_intelligence.services.b2b.vendor_briefing_ports",
+            "get_vendor_briefing_intelligence_port",
+            "extracted_competitive_intelligence.services.b2b.vendor_briefing_ports",
+        ),
+        (
             "extracted_competitive_intelligence.autonomous.tasks._b2b_batch_utils",
             "anthropic_batch_requested",
             "extracted_competitive_intelligence.autonomous.tasks._b2b_batch_utils",
@@ -151,6 +157,7 @@ def main() -> int:
         ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "source_impact.py",
         ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "challenger_dashboard_claims.py",
         ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "competitive_set_ports.py",
+        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "vendor_briefing_ports.py",
         ROOT / "extracted_competitive_intelligence" / "services" / "b2b_competitive_sets.py",
         ROOT / "extracted_competitive_intelligence" / "autonomous" / "tasks" / "_b2b_batch_utils.py",
         ROOT / "extracted_competitive_intelligence" / "autonomous" / "tasks" / "_b2b_cross_vendor_synthesis.py",
