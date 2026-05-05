@@ -33,7 +33,7 @@ Full task/runtime decoupling remains Phase 3.
 | Anthropic batch bridge | ✅ `services.b2b.anthropic_batch` routes to extracted LLM infrastructure in standalone mode |
 | Anthropic batch helper boundary | ✅ `autonomous.tasks._b2b_batch_utils` is product-owned helper logic |
 | Campaign LLM router bridge | ✅ `services.llm_router` routes vendor-briefing campaign LLM selection through extracted LLM infrastructure in standalone mode |
-| Battle-card support port | ✅ `services.b2b.battle_card_ports` replaces direct `_b2b_shared.py` imports for battle-card helper/data-read support |
+| Battle-card support port | ✅ `services.b2b.battle_card_ports` replaces direct `_b2b_shared.py`, churn-scope, and execution-progress imports for battle-card support |
 | Vendor briefing intelligence port | ✅ `services.b2b.vendor_briefing_ports` replaces direct `_b2b_shared.py` imports for vendor briefing evidence readers |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
 | Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM pipeline/router bridges, and service package fallback |
@@ -113,7 +113,7 @@ Product-owned modules:
 | `services/scraping/sources.py` | n/a | ✅ | ✅ |
 | `reasoning/ecosystem.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/_b2b_batch_utils.py` | n/a | ✅ | ✅ |
-| `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 (shared-helper imports routed through `battle_card_ports.py`; runtime still needs churn/synthesis/progress host ports) | 🔲 |
+| `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 (shared-helper, churn-scope, and progress imports routed through `battle_card_ports.py`; runtime still needs synthesis-reader host ports) | 🔲 |
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | ✅ | ✅ |
 | `services/b2b_competitive_sets.py` | ✅ | ✅ | ✅ |
