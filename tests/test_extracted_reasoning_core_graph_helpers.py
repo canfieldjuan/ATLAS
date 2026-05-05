@@ -20,7 +20,10 @@ from extracted_reasoning_core.graph_helpers import (
     SAFE_ACTIONS,
     build_notification_fallback,
     clean_summary_text,
+    complete_with_json,
+    extract_completion_text,
     has_suspicious_trailing_fragment,
+    make_chat_messages,
     parse_llm_json,
     plan_actions,
     sanitize_notification_summary,
@@ -280,3 +283,140 @@ def test_safe_actions_set_contents() -> None:
         "create_reminder",
         "send_notification",
     })
+
+
+# ----------------------------------------------------------------------
+# make_chat_messages
+# ----------------------------------------------------------------------
+
+
+def test_make_chat_messages_returns_role_content_pairs() -> None:
+    msgs = make_chat_messages("system text", "user text")
+    assert msgs == [
+        {"role": "system", "content": "system text"},
+        {"role": "user", "content": "user text"},
+    ]
+
+
+def test_make_chat_messages_returns_fresh_list_each_call() -> None:
+    a = make_chat_messages("a", "b")
+    b = make_chat_messages("a", "b")
+    assert a is not b
+    a.append({"role": "user", "content": "extra"})
+    assert len(b) == 2  # unaffected
+
+
+# ----------------------------------------------------------------------
+# extract_completion_text
+# ----------------------------------------------------------------------
+
+
+def test_extract_completion_text_canonical_shape() -> None:
+    result = {"response": "hello", "usage": {"input_tokens": 5, "output_tokens": 2}}
+    text, usage = extract_completion_text(result)
+    assert text == "hello"
+    assert usage == {"input_tokens": 5, "output_tokens": 2}
+
+
+def test_extract_completion_text_openai_choices_shape() -> None:
+    result = {
+        "choices": [{"message": {"content": "from openai"}}],
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+    text, usage = extract_completion_text(result)
+    assert text == "from openai"
+    assert usage == {"input_tokens": 1, "output_tokens": 1}
+
+
+def test_extract_completion_text_content_only_shape() -> None:
+    text, usage = extract_completion_text({"content": "plain content"})
+    assert text == "plain content"
+    assert usage == {}
+
+
+def test_extract_completion_text_handles_non_dict_input() -> None:
+    text, usage = extract_completion_text("not a dict")  # type: ignore[arg-type]
+    assert text == ""
+    assert usage == {}
+
+
+def test_extract_completion_text_handles_missing_response() -> None:
+    text, usage = extract_completion_text({})
+    assert text == ""
+    assert usage == {}
+
+
+def test_extract_completion_text_coerces_non_string_response() -> None:
+    # Some Provider clients return an integer or model object as
+    # ``response``. Coerce to string so callers don't have to.
+    text, _ = extract_completion_text({"response": 42})
+    assert text == "42"
+
+
+# ----------------------------------------------------------------------
+# complete_with_json
+# ----------------------------------------------------------------------
+
+
+class _FakeJSONClient:
+    def __init__(self, response: str) -> None:
+        self._response = response
+        self.calls: list[dict] = []
+
+    async def complete(self, messages, *, max_tokens, temperature, metadata=None):
+        self.calls.append(
+            {
+                "messages": list(messages),
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "metadata": dict(metadata) if metadata else None,
+            }
+        )
+        return {"response": self._response, "usage": {"input_tokens": 3, "output_tokens": 1}}
+
+
+@pytest.mark.asyncio
+async def test_complete_with_json_round_trip() -> None:
+    fake = _FakeJSONClient('{"answer": 42}')
+    result = await complete_with_json(
+        fake, "system", "user", max_tokens=128, temperature=0.2,
+    )
+    assert result["response"] == '{"answer": 42}'
+    assert result["usage"] == {"input_tokens": 3, "output_tokens": 1}
+    assert result["parsed"] == {"answer": 42}
+
+    # Metadata carries json_mode + response_format so the atlas adapter
+    # can lift them into chat()'s typed kwargs.
+    assert fake.calls[0]["metadata"]["json_mode"] is True
+    assert fake.calls[0]["metadata"]["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_complete_with_json_returns_empty_parsed_on_malformed_json() -> None:
+    fake = _FakeJSONClient("not valid JSON at all")
+    result = await complete_with_json(
+        fake, "system", "user", max_tokens=64, temperature=0.0,
+    )
+    # Raw response is preserved -- caller can fall back to it.
+    assert result["response"] == "not valid JSON at all"
+    # parsed is empty rather than raising, so call sites can check
+    # truthiness rather than wrap in try/except.
+    assert result["parsed"] == {}
+
+
+@pytest.mark.asyncio
+async def test_complete_with_json_omits_json_mode_when_disabled() -> None:
+    fake = _FakeJSONClient("plain text")
+    await complete_with_json(
+        fake, "system", "user", max_tokens=64, temperature=0.5, json_mode=False,
+    )
+    assert fake.calls[0]["metadata"] is None  # no metadata when no flags set
+
+
+@pytest.mark.asyncio
+async def test_complete_with_json_threads_timeout_through_metadata() -> None:
+    fake = _FakeJSONClient('{"x": 1}')
+    await complete_with_json(
+        fake, "sys", "user", max_tokens=64, temperature=0.0, timeout=30.0,
+    )
+    assert fake.calls[0]["metadata"]["timeout"] == 30.0
