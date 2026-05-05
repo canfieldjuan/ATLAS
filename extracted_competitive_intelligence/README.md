@@ -25,6 +25,7 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | `mcp/b2b/cross_vendor.py` | MCP tools for cross-vendor conclusions |
 | `mcp/b2b/write_intelligence.py` | Write-back MCP tools for persisting conclusions |
 | `services/b2b/source_impact.py` | Source impact ledger (which sources feed which products) |
+| `services/b2b/vendor_briefing_ports.py` | Host port for vendor briefing evidence and scorecard readers |
 | `autonomous/tasks/b2b_battle_cards.py` | Deterministic battle card builder + LLM overlay (~5K LOC) |
 | `autonomous/tasks/b2b_vendor_briefing.py` | Vendor churn briefing assembly + Resend send |
 | `autonomous/tasks/_b2b_batch_utils.py` | Product-owned Anthropic batch helper logic |
@@ -40,10 +41,8 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 
 ## What's out of scope (remaining Phase 3)
 
-- Deep runtime decoupling for remaining battle-card LLM calls; standalone mode
-  routes the LLM bridge, exact-cache message builder, and Anthropic batch
-  support through `extracted_llm_infrastructure/`, but task-level LLM seams
-  still need Phase 3 hardening.
+- Deep runtime decoupling for remaining battle-card and vendor-briefing task
+  dependencies outside the LLM and vendor-intelligence reader surfaces.
 - API endpoint extraction beyond the briefing endpoints (`/b2b/win-loss`, dashboard endpoints stay in atlas_brain)
 - Full runtime exercise without `atlas_brain` on `sys.path`; this slice adds the standalone substrate and smoke coverage, but deep task modules still carry Atlas-owned domain dependencies.
 
@@ -55,7 +54,7 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 | **Evidence claims** | atlas-core | `services/b2b/evidence_claim_*.py` is shared with churn intel — keep central |
 | **Campaign suppression** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured `SuppressionPolicy` |
 | **Campaign sender (Resend)** | injectable in standalone mode | Atlas bridge remains default; standalone mode uses a configured campaign sender |
-| **`_b2b_shared.py`** | atlas-core | Circular-import risk; not extracted |
+| **`_b2b_shared.py`** | host adapter | Vendor briefing consumes it only through `services/b2b/vendor_briefing_ports.py`; remaining consumers stay atlas-side |
 | **`challenger_dashboard_claims.py`** | injectable in standalone mode | Battle-card displacement gates use configured host claim readers |
 
 ## Standalone toggle
@@ -71,6 +70,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `services/b2b/pdf_renderer.py` uses an injectable PDF renderer port for standalone gated report delivery
 - `services/b2b/llm_exact_cache.py` uses `extracted_llm_infrastructure` for standalone battle-card prompt envelopes
 - `services/b2b/anthropic_batch.py` uses `extracted_llm_infrastructure` for standalone battle-card batch overlays
+- `services/b2b/vendor_briefing_ports.py` exposes fail-closed host ports for vendor briefing evidence and scorecard readers
 - `services/protocols.py`, `services/llm_router.py`, and `pipelines/llm.py` use `extracted_llm_infrastructure`
 - `services/scraping/sources.py` owns the source enum and classification sets locally
 - MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed
