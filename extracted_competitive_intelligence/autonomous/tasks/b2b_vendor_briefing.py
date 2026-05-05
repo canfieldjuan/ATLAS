@@ -34,6 +34,10 @@ from ...config import settings
 from ...services.campaign_sender import get_campaign_sender
 from ...services.b2b.vendor_briefing_ports import (
     align_vendor_intelligence_record_to_scorecard as _align_vendor_intelligence_record_to_scorecard,
+    inject_synthesis_freshness,
+    load_best_reasoning_view,
+    load_prior_reasoning_snapshots,
+    load_synthesis_view,
     timing_summary_payload as _timing_summary_payload,
     reasoning_int as _reasoning_int,
     read_vendor_company_signal_review_queue,
@@ -68,8 +72,6 @@ def _apply_synthesis_view_to_briefing(
     """Overlay normalized synthesis-view fields onto a briefing payload."""
     if view is None:
         return False
-
-    from ._b2b_synthesis_reader import inject_synthesis_freshness
 
     context = view.filtered_consumer_context("vendor_briefing")
     contracts = context.get("reasoning_contracts") or {}
@@ -248,8 +250,6 @@ def _apply_reasoning_synthesis_to_briefing(
     """Overlay contract-backed reasoning fields from weekly feed entries."""
     if not isinstance(feed_entry, dict):
         return False
-
-    from ._b2b_synthesis_reader import load_synthesis_view
 
     vendor_name = str(feed_entry.get("vendor") or briefing.get("vendor") or "").strip()
     view = load_synthesis_view(
@@ -1959,8 +1959,6 @@ async def build_vendor_briefing(
         or not briefing.get("reasoning_anchor_examples")
         or not briefing.get("reasoning_reference_ids")
     ):
-        from ._b2b_synthesis_reader import load_best_reasoning_view
-
         reasoning_view = await load_best_reasoning_view(
             pool,
             vendor_name,
@@ -2119,7 +2117,6 @@ async def build_vendor_briefing(
     # ------------------------------------------------------------------
     try:
         if reasoning_view is None:
-            from ._b2b_synthesis_reader import load_best_reasoning_view
             reasoning_view = await load_best_reasoning_view(
                 pool,
                 vendor_name,
@@ -2139,8 +2136,6 @@ async def build_vendor_briefing(
             ]
 
             # "What changed" context via prior reasoning snapshot
-            from ._b2b_synthesis_reader import load_prior_reasoning_snapshots
-
             prior = await load_prior_reasoning_snapshots(pool, [vendor_name])
             prior_data = prior.get(vendor_name, {})
             if prior_data.get("archetype"):
@@ -2242,8 +2237,6 @@ async def _fetch_reasoning_synthesis(pool: Any, vendor_name: str) -> dict[str, A
 
     Returns the raw dict suitable for _apply_reasoning_synthesis_to_briefing.
     """
-    from ._b2b_synthesis_reader import load_best_reasoning_view
-
     view = await load_best_reasoning_view(
         pool,
         vendor_name,
