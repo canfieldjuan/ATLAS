@@ -11,6 +11,9 @@ from extracted_content_pipeline.campaign_postgres_generation import (
     generate_campaign_drafts_from_postgres,
     tenant_scope_from_mapping,
 )
+from extracted_content_pipeline.services.single_pass_reasoning_provider import (
+    SinglePassCampaignReasoningProvider,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -320,3 +323,73 @@ def test_postgres_runner_cli_uses_provider_port_loader(tmp_path) -> None:
 
     assert calls == [reasoning_path]
     assert overrides["reasoning_context"] == "provider-port"
+
+
+def test_postgres_runner_cli_wires_single_pass_reasoning(monkeypatch, tmp_path) -> None:
+    postgres_cli = _load_postgres_cli_module()
+    llm = _LLM()
+    skills = _Skills()
+    skill_path = tmp_path / "digest" / "b2b_campaign_generation.md"
+    skill_path.parent.mkdir()
+    skill_path.write_text("Custom DB prompt {opportunity_json}", encoding="utf-8")
+
+    monkeypatch.setattr(postgres_cli, "create_pipeline_llm_client", lambda: llm)
+    monkeypatch.setattr(postgres_cli, "get_skill_registry", lambda root=None: skills)
+
+    args = postgres_cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--skills-root",
+        str(tmp_path),
+        "--single-pass-reasoning",
+        "--reasoning-skill-name",
+        "digest/custom_reasoning",
+        "--reasoning-max-tokens",
+        "321",
+        "--reasoning-temperature",
+        "0.3",
+        "--no-reasoning-source-opportunity",
+    ])
+    overrides = postgres_cli._dependency_overrides(args)
+
+    provider = overrides["reasoning_context"]
+    assert isinstance(provider, SinglePassCampaignReasoningProvider)
+    assert provider.llm is llm
+    assert provider.skills is skills
+    assert provider.config.skill_name == "digest/custom_reasoning"
+    assert provider.config.max_tokens == 321
+    assert provider.config.temperature == 0.3
+    assert provider.config.include_source_opportunity is False
+    assert overrides["llm"] is llm
+    assert overrides["skills"] is skills
+
+
+def test_postgres_runner_cli_rejects_conflicting_reasoning_modes(tmp_path) -> None:
+    postgres_cli = _load_postgres_cli_module()
+    reasoning_path = tmp_path / "reasoning.json"
+    reasoning_path.write_text("[]", encoding="utf-8")
+
+    args = postgres_cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--reasoning-context",
+        str(reasoning_path),
+        "--single-pass-reasoning",
+    ])
+
+    with pytest.raises(SystemExit, match="cannot be combined"):
+        postgres_cli._dependency_overrides(args)
+
+
+def test_postgres_runner_cli_rejects_offline_single_pass_reasoning() -> None:
+    postgres_cli = _load_postgres_cli_module()
+    args = postgres_cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--llm",
+        "offline",
+        "--single-pass-reasoning",
+    ])
+
+    with pytest.raises(SystemExit, match="requires --llm pipeline"):
+        postgres_cli._dependency_overrides(args)

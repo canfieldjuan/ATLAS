@@ -143,9 +143,10 @@
   ports to build one normalized `CampaignReasoningContext` per opportunity with
   the `digest/b2b_campaign_reasoning_context` prompt, without importing Atlas
   reasoning producers or graph state.
-- Both the offline and Postgres campaign generation runners can consume that
-  JSON through `--reasoning-context`, so file-backed host reasoning is available
-  on demo and DB-backed generation paths.
+- Both the offline and Postgres campaign generation runners can consume
+  file-backed reasoning through `--reasoning-context`; they can also opt into
+  the packaged single-pass provider with `--single-pass-reasoning` when the
+  product LLM adapter is configured.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.

@@ -162,6 +162,15 @@ It calls the configured `LLMClient` once per opportunity with the packaged
 context shape. This is not a multi-hop graph reasoner; it is the small packaged
 Tier 1 path for "source row in, reasoned draft out."
 
+The example CLI can wire that provider directly when the product LLM adapter is
+configured:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py \
+  --llm pipeline \
+  --single-pass-reasoning
+```
+
 Use host-provided prompt contracts by pointing at a markdown skill directory:
 
 ```bash
@@ -227,6 +236,14 @@ It also accepts the same host-provided reasoning JSON as the offline example:
 python scripts/run_extracted_campaign_generation_postgres.py \
   --account-id acct_123 \
   --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
+```
+
+Or generate lightweight reasoning context during the DB-backed run:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --single-pass-reasoning
 ```
 
 Use `--skills-root customer_skills` on the Postgres runner for the same
