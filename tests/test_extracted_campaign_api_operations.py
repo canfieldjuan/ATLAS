@@ -1048,6 +1048,48 @@ def test_campaign_operations_router_sanitizes_analytics_errors(monkeypatch) -> N
     }
 
 
+def test_campaign_operations_router_emits_failed_visibility_for_analytics_error(
+    monkeypatch,
+) -> None:
+    visibility = _Visibility()
+
+    async def _refresh(_pool):
+        return _Result(refreshed=False, error="SELECT * FROM private_table failed")
+
+    monkeypatch.setattr(
+        operations_api,
+        "refresh_campaign_analytics_from_postgres",
+        _refresh,
+    )
+
+    response = _client(
+        _Pool(),
+        visibility=visibility,
+    ).post("/campaigns/operations/analytics/refresh")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "refreshed": False,
+        "error": operations_api._ANALYTICS_ERROR_SUMMARY,
+    }
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_STARTED_EVENT,
+            {"operation": "analytics_refresh"},
+        ),
+        (
+            operations_api._OPERATION_FAILED_EVENT,
+            {
+                "operation": "analytics_refresh",
+                "error_type": operations_api._ANALYTICS_REPORTED_ERROR_TYPE,
+                "result": {
+                    "refreshed": False,
+                },
+            },
+        ),
+    ]
+
+
 def test_campaign_operations_router_requires_database() -> None:
     response = _client(_Pool(initialized=False), sender=_Sender()).post(
         "/campaigns/operations/send/queued"

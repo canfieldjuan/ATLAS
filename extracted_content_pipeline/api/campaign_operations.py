@@ -50,6 +50,7 @@ VisibilityProvider = Callable[[], VisibilitySink | Awaitable[VisibilitySink]]
 
 logger = logging.getLogger(__name__)
 _ANALYTICS_ERROR_SUMMARY = "Campaign analytics refresh failed."
+_ANALYTICS_REPORTED_ERROR_TYPE = "reported_error"
 _OPERATION_STARTED_EVENT = "campaign_operation_started"
 _OPERATION_COMPLETED_EVENT = "campaign_operation_completed"
 _OPERATION_FAILED_EVENT = "campaign_operation_failed"
@@ -778,6 +779,17 @@ def create_campaign_operations_router(
             )
             raise
         data = _public_analytics_result(result)
+        if data.get("error"):
+            await _emit_operation_event(
+                visibility,
+                _OPERATION_FAILED_EVENT,
+                "analytics_refresh",
+                {
+                    "error_type": _ANALYTICS_REPORTED_ERROR_TYPE,
+                    "result": _visibility_result_summary(data),
+                },
+            )
+            return data
         await _emit_operation_event(
             visibility,
             _OPERATION_COMPLETED_EVENT,
