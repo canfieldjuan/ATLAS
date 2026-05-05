@@ -78,14 +78,35 @@ class SemanticCache:
     # constant in core's ``semantic_cache_keys`` is the canonical home.
     STALE_THRESHOLD = _CORE_STALE_THRESHOLD
 
-    def __init__(self, pool: SemanticCachePool):
+    # Sentinel account UUID for atlas's internal pipeline (PR-D3).
+    # Atlas's existing reasoning calls write to the cache without
+    # knowing about accounts; the sentinel marks those rows so
+    # customer cache hits cannot leak across tenants.
+    SENTINEL_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"
+
+    def __init__(
+        self,
+        pool: SemanticCachePool,
+        *,
+        account_id: str = SENTINEL_ACCOUNT_ID,
+    ):
         """*pool*: any object exposing the ``SemanticCachePool``
         contract (``fetchrow`` / ``fetch`` / ``execute`` coroutine
         methods that speak Postgres dialect). The atlas
         ``DatabasePool`` wrapper and a raw asyncpg ``Pool`` both
         satisfy this Protocol.
+
+        *account_id*: scopes every read/write to the given account
+        (PR-D3). Defaults to the SENTINEL so atlas's existing
+        instantiations keep working unmodified. Customer-facing
+        callers (PR-D4 LLM Gateway router) construct a new instance
+        per request with the requesting account's UUID, so cross-
+        tenant cache hits are impossible -- the (pattern_sig,
+        account_id) UNIQUE constraint guarantees isolation at the
+        storage layer.
         """
         self._pool = pool
+        self._account_id = account_id
 
     # ------------------------------------------------------------------
     # Core operations
@@ -99,9 +120,11 @@ class SemanticCache:
         row = await self._pool.fetchrow(
             """
             SELECT * FROM reasoning_semantic_cache
-            WHERE pattern_sig = $1 AND invalidated_at IS NULL
+            WHERE pattern_sig = $1 AND account_id = $2
+              AND invalidated_at IS NULL
             """,
             pattern_sig,
+            self._account_id,
         )
         if row is None:
             return None
@@ -122,16 +145,16 @@ class SemanticCache:
         await self._pool.execute(
             """
             INSERT INTO reasoning_semantic_cache (
-                pattern_sig, pattern_class, vendor_name, product_category,
-                conclusion, confidence, reasoning_steps, boundary_conditions,
-                falsification_conditions, uncertainty_sources,
-                decay_half_life_days, conclusion_type, evidence_hash,
-                last_validated_at, validation_count
+                pattern_sig, account_id, pattern_class, vendor_name,
+                product_category, conclusion, confidence, reasoning_steps,
+                boundary_conditions, falsification_conditions,
+                uncertainty_sources, decay_half_life_days, conclusion_type,
+                evidence_hash, last_validated_at, validation_count
             ) VALUES (
-                $1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb,
-                $9::jsonb, $10, $11, $12, $13, NOW(), 1
+                $1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb,
+                $10::jsonb, $11, $12, $13, $14, NOW(), 1
             )
-            ON CONFLICT (pattern_sig) DO UPDATE SET
+            ON CONFLICT (pattern_sig, account_id) DO UPDATE SET
                 pattern_class = EXCLUDED.pattern_class,
                 vendor_name = EXCLUDED.vendor_name,
                 product_category = EXCLUDED.product_category,
@@ -149,6 +172,7 @@ class SemanticCache:
                 invalidated_at = NULL
             """,
             entry.pattern_sig,
+            self._account_id,
             entry.pattern_class,
             entry.vendor_name,
             entry.product_category,
@@ -172,10 +196,12 @@ class SemanticCache:
                 UPDATE reasoning_semantic_cache
                 SET last_validated_at = NOW(),
                     validation_count = validation_count + 1,
-                    confidence = $2
-                WHERE pattern_sig = $1 AND invalidated_at IS NULL
+                    confidence = $3
+                WHERE pattern_sig = $1 AND account_id = $2
+                  AND invalidated_at IS NULL
                 """,
                 pattern_sig,
+                self._account_id,
                 new_confidence,
             )
         else:
@@ -184,9 +210,11 @@ class SemanticCache:
                 UPDATE reasoning_semantic_cache
                 SET last_validated_at = NOW(),
                     validation_count = validation_count + 1
-                WHERE pattern_sig = $1 AND invalidated_at IS NULL
+                WHERE pattern_sig = $1 AND account_id = $2
+                  AND invalidated_at IS NULL
                 """,
                 pattern_sig,
+                self._account_id,
             )
 
     async def invalidate(self, pattern_sig: str, reason: str = "") -> None:
@@ -195,9 +223,11 @@ class SemanticCache:
             """
             UPDATE reasoning_semantic_cache
             SET invalidated_at = NOW()
-            WHERE pattern_sig = $1 AND invalidated_at IS NULL
+            WHERE pattern_sig = $1 AND account_id = $2
+              AND invalidated_at IS NULL
             """,
             pattern_sig,
+            self._account_id,
         )
         logger.info("Invalidated cache entry: %s (reason: %s)", pattern_sig, reason)
 
@@ -214,34 +244,40 @@ class SemanticCache:
             rows = await self._pool.fetch(
                 """
                 SELECT * FROM reasoning_semantic_cache
-                WHERE vendor_name = $1 AND invalidated_at IS NULL
+                WHERE vendor_name = $1 AND account_id = $2
+                  AND invalidated_at IS NULL
                 ORDER BY last_validated_at DESC
-                LIMIT $2
+                LIMIT $3
                 """,
                 vendor_name,
+                self._account_id,
                 limit,
             )
         elif vendor_name:
             rows = await self._pool.fetch(
                 """
                 SELECT * FROM reasoning_semantic_cache
-                WHERE pattern_class = $1 AND vendor_name = $2 AND invalidated_at IS NULL
+                WHERE pattern_class = $1 AND vendor_name = $2
+                  AND account_id = $3 AND invalidated_at IS NULL
                 ORDER BY confidence DESC
-                LIMIT $3
+                LIMIT $4
                 """,
                 pattern_class,
                 vendor_name,
+                self._account_id,
                 limit,
             )
         else:
             rows = await self._pool.fetch(
                 """
                 SELECT * FROM reasoning_semantic_cache
-                WHERE pattern_class = $1 AND invalidated_at IS NULL
+                WHERE pattern_class = $1 AND account_id = $2
+                  AND invalidated_at IS NULL
                 ORDER BY confidence DESC
-                LIMIT $2
+                LIMIT $3
                 """,
                 pattern_class,
+                self._account_id,
                 limit,
             )
         entries = []

@@ -496,6 +496,10 @@ class FTLTracingClient:
         event_type = _metadata_text_value(meta, "event_type")
         entity_type = _metadata_text_value(meta, "entity_type")
         entity_id = _metadata_text_value(meta, "entity_id")
+        # PR-D3: account_id rides in metadata (or sentinel for atlas's
+        # internal pipeline). PR-D4's LLM Gateway router will set this
+        # via metadata={"account_id": user.account_id, ...}.
+        account_id_str = _metadata_text_value(meta, "account_id")
 
         try:
             from ..storage.database import get_db_pool
@@ -503,6 +507,10 @@ class FTLTracingClient:
             pool = get_db_pool()
             if not pool.is_initialized:
                 return
+            # PR-D3: account_id read from metadata (set by PR-D4's
+            # LLM Gateway router) or sentinel for atlas's internal
+            # pipeline.
+            account_id = account_id_str or "00000000-0000-0000-0000-000000000000"
             query = """INSERT INTO llm_usage
                        (span_name, operation_type, model_name, model_provider,
                         input_tokens, output_tokens, total_tokens, cost_usd,
@@ -510,8 +518,8 @@ class FTLTracingClient:
                         tokens_per_second, billable_input_tokens, cached_tokens,
                         cache_write_tokens, api_endpoint, provider_request_id,
                         status, metadata, vendor_name, run_id, source_name,
-                        event_type, entity_type, entity_id)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)"""
+                        event_type, entity_type, entity_id, account_id)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)"""
             args = (
                 payload.get("span_name", ""),
                 payload.get("operation_type", "llm_call"),
@@ -539,6 +547,7 @@ class FTLTracingClient:
                 event_type,
                 entity_type,
                 entity_id,
+                account_id,
             )
             if use_shared_pool:
                 await pool.execute(query, *args)
