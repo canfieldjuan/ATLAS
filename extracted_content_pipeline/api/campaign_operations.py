@@ -197,7 +197,7 @@ def _sequence_config(
 def _public_analytics_result(result: Any) -> dict[str, Any]:
     data = result.as_dict()
     if data.get("error"):
-        logger.warning("Campaign analytics refresh failed: %s", data.get("error"))
+        logger.warning("Campaign analytics refresh failed")
         data["error"] = _ANALYTICS_ERROR_SUMMARY
     return data
 
