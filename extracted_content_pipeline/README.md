@@ -448,6 +448,13 @@ status route reports database availability, injected provider presence, feature
 readiness, and configured limits without resolving sender/LLM/skill providers
 or exposing secrets.
 
+Hosts can inject a `visibility_provider` when mounting the router. The four
+POST operation routes emit best-effort `campaign_operation_started`,
+`campaign_operation_completed`, and `campaign_operation_failed` events through
+the `VisibilitySink` port so dashboards can show worker activity without the
+content product owning a dashboard store. Sink failures are logged and do not
+change operation responses.
+
 Mount this router beside `create_b2b_campaign_router` to run the hosted B2B
 flow without SQL in the admin UI:
 
@@ -565,7 +572,7 @@ Several small utility shims provide product-owned local behavior by default so t
   campaign webhook and unsubscribe routes
 - `api/campaign_operations.py`: optional FastAPI router factory for
   host-mounted draft generation, send, sequence progression, and analytics
-  operation triggers
+  operation triggers with optional `VisibilitySink` telemetry
 - `api/b2b_campaigns.py`: optional FastAPI router factory for host-mounted
   B2B draft list/export/review routes
 - `api/seller_campaigns.py`: optional FastAPI router factory for host-mounted

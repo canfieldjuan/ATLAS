@@ -79,7 +79,9 @@
   providers are injected. The router also exposes `GET
   /campaigns/operations/status` for admin dashboards to inspect database
   availability, provider presence, feature readiness, and configured limits
-  without exposing credentials.
+  without exposing credentials. Hosts can inject a `VisibilitySink` provider
+  so operation triggers emit best-effort start/completed/failed telemetry
+  without making dashboard storage a product dependency.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared

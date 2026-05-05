@@ -18,7 +18,13 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_generation import CampaignGenerationConfig
-from ..campaign_ports import CampaignSender, LLMClient, SkillStore, TenantScope
+from ..campaign_ports import (
+    CampaignSender,
+    LLMClient,
+    SkillStore,
+    TenantScope,
+    VisibilitySink,
+)
 from ..campaign_postgres_generation import generate_campaign_drafts_from_postgres
 from ..campaign_postgres_analytics import refresh_campaign_analytics_from_postgres
 from ..campaign_postgres_send import send_due_campaigns_from_postgres
@@ -40,9 +46,13 @@ LLMProvider = Callable[[], LLMClient | Awaitable[LLMClient]]
 SkillsProvider = Callable[[], SkillStore | Awaitable[SkillStore]]
 ReasoningProvider = Callable[[], Any | Awaitable[Any]]
 ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[Any]]
+VisibilityProvider = Callable[[], VisibilitySink | Awaitable[VisibilitySink]]
 
 logger = logging.getLogger(__name__)
 _ANALYTICS_ERROR_SUMMARY = "Campaign analytics refresh failed."
+_OPERATION_STARTED_EVENT = "campaign_operation_started"
+_OPERATION_COMPLETED_EVENT = "campaign_operation_completed"
+_OPERATION_FAILED_EVENT = "campaign_operation_failed"
 
 
 @dataclass(frozen=True)
@@ -388,6 +398,7 @@ def _operation_readiness(
     llm_provider: LLMProvider | None,
     skills_provider: SkillsProvider | None,
     reasoning_context_provider: ReasoningProvider | None,
+    visibility_provider: VisibilityProvider | None,
 ) -> dict[str, Any]:
     llm_configured = llm_provider is not None
     skills_configured = skills_provider is not None
@@ -410,6 +421,7 @@ def _operation_readiness(
             "llm": llm_configured,
             "skills": skills_configured,
             "reasoning": explicit_reasoning,
+            "visibility": visibility_provider is not None,
         },
         "reasoning": {
             "mode": (
@@ -459,6 +471,51 @@ def _public_analytics_result(result: Any) -> dict[str, Any]:
     return data
 
 
+async def _resolve_visibility(
+    visibility_provider: VisibilityProvider | None,
+) -> VisibilitySink | None:
+    if visibility_provider is None:
+        return None
+    try:
+        return await _maybe_await(visibility_provider())
+    except Exception:
+        logger.warning("Campaign operations visibility provider failed", exc_info=True)
+        return None
+
+
+async def _emit_operation_event(
+    visibility: VisibilitySink | None,
+    event_type: str,
+    operation: str,
+    payload: Mapping[str, Any],
+) -> None:
+    if visibility is None:
+        return
+    try:
+        await visibility.emit(
+            event_type,
+            {
+                "operation": operation,
+                **dict(payload),
+            },
+        )
+    except Exception:
+        logger.warning("Campaign operation visibility emit failed", exc_info=True)
+
+
+def _visibility_result_summary(data: Mapping[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, (bool, int, float)) or value is None:
+            summary[key] = value
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            if key == "errors":
+                summary["error_count"] = len(value)
+            elif key.endswith("_ids"):
+                summary[f"{key}_count"] = len(value)
+    return summary
+
+
 def create_campaign_operations_router(
     *,
     pool_provider: PoolProvider,
@@ -467,6 +524,7 @@ def create_campaign_operations_router(
     llm_provider: LLMProvider | None = None,
     skills_provider: SkillsProvider | None = None,
     reasoning_context_provider: ReasoningProvider | None = None,
+    visibility_provider: VisibilityProvider | None = None,
     config: CampaignOperationsApiConfig | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
@@ -493,6 +551,7 @@ def create_campaign_operations_router(
                 llm_provider=llm_provider,
                 skills_provider=skills_provider,
                 reasoning_context_provider=reasoning_context_provider,
+                visibility_provider=visibility_provider,
             ),
             "limits": _operation_limits(resolved_config),
         }
@@ -526,6 +585,20 @@ def create_campaign_operations_router(
         llm = await _resolve_optional(llm_provider)
         skills = await _resolve_optional(skills_provider)
         explicit_reasoning_context = await _resolve_optional(reasoning_context_provider)
+        visibility = await _resolve_visibility(visibility_provider)
+        operation_payload = {
+            "limit": limit,
+            "target_mode": target_mode,
+            "channel": channel,
+            "channels": list(channels),
+            "account_id": _scope_account_id(scope),
+        }
+        await _emit_operation_event(
+            visibility,
+            _OPERATION_STARTED_EVENT,
+            "draft_generation",
+            operation_payload,
+        )
         try:
             reasoning_context = _generation_reasoning_context(
                 resolved_config,
@@ -554,8 +627,29 @@ def create_campaign_operations_router(
                 vendor_targets_table=resolved_config.generation_vendor_targets_table,
             )
         except ValueError as exc:
+            await _emit_operation_event(
+                visibility,
+                _OPERATION_FAILED_EVENT,
+                "draft_generation",
+                {**operation_payload, "error_type": type(exc).__name__},
+            )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return result.as_dict()
+        except Exception as exc:
+            await _emit_operation_event(
+                visibility,
+                _OPERATION_FAILED_EVENT,
+                "draft_generation",
+                {**operation_payload, "error_type": type(exc).__name__},
+            )
+            raise
+        data = result.as_dict()
+        await _emit_operation_event(
+            visibility,
+            _OPERATION_COMPLETED_EVENT,
+            "draft_generation",
+            {**operation_payload, "result": _visibility_result_summary(data)},
+        )
+        return data
 
     @router.post("/send/queued")
     async def send_queued(
@@ -570,13 +664,37 @@ def create_campaign_operations_router(
         )
         pool = await _resolve_pool(pool_provider)
         sender = await _resolve_sender(sender_provider)
-        result = await send_due_campaigns_from_postgres(
-            pool,
-            sender=sender,
-            config=_send_config(resolved_config, limit=limit),
-            limit=limit,
+        visibility = await _resolve_visibility(visibility_provider)
+        operation_payload = {"limit": limit}
+        await _emit_operation_event(
+            visibility,
+            _OPERATION_STARTED_EVENT,
+            "send_queued",
+            operation_payload,
         )
-        return result.as_dict()
+        try:
+            result = await send_due_campaigns_from_postgres(
+                pool,
+                sender=sender,
+                config=_send_config(resolved_config, limit=limit),
+                limit=limit,
+            )
+        except Exception as exc:
+            await _emit_operation_event(
+                visibility,
+                _OPERATION_FAILED_EVENT,
+                "send_queued",
+                {**operation_payload, "error_type": type(exc).__name__},
+            )
+            raise
+        data = result.as_dict()
+        await _emit_operation_event(
+            visibility,
+            _OPERATION_COMPLETED_EVENT,
+            "send_queued",
+            {**operation_payload, "result": _visibility_result_summary(data)},
+        )
+        return data
 
     @router.post("/sequences/progress")
     async def progress_sequences(
@@ -603,13 +721,37 @@ def create_campaign_operations_router(
         pool = await _resolve_pool(pool_provider)
         llm = await _resolve_optional(llm_provider)
         skills = await _resolve_optional(skills_provider)
-        result = await progress_campaign_sequences_from_postgres(
-            pool,
-            llm=llm,
-            skills=skills,
-            config=sequence_config,
+        visibility = await _resolve_visibility(visibility_provider)
+        operation_payload = {"limit": limit, "max_steps": max_steps}
+        await _emit_operation_event(
+            visibility,
+            _OPERATION_STARTED_EVENT,
+            "sequence_progression",
+            operation_payload,
         )
-        return result.as_dict()
+        try:
+            result = await progress_campaign_sequences_from_postgres(
+                pool,
+                llm=llm,
+                skills=skills,
+                config=sequence_config,
+            )
+        except Exception as exc:
+            await _emit_operation_event(
+                visibility,
+                _OPERATION_FAILED_EVENT,
+                "sequence_progression",
+                {**operation_payload, "error_type": type(exc).__name__},
+            )
+            raise
+        data = result.as_dict()
+        await _emit_operation_event(
+            visibility,
+            _OPERATION_COMPLETED_EVENT,
+            "sequence_progression",
+            {**operation_payload, "result": _visibility_result_summary(data)},
+        )
+        return data
 
     @router.post("/analytics/refresh")
     async def refresh_analytics(
@@ -617,8 +759,32 @@ def create_campaign_operations_router(
     ) -> dict[str, Any]:
         _ = payload
         pool = await _resolve_pool(pool_provider)
-        result = await refresh_campaign_analytics_from_postgres(pool)
-        return _public_analytics_result(result)
+        visibility = await _resolve_visibility(visibility_provider)
+        operation_payload: dict[str, Any] = {}
+        await _emit_operation_event(
+            visibility,
+            _OPERATION_STARTED_EVENT,
+            "analytics_refresh",
+            operation_payload,
+        )
+        try:
+            result = await refresh_campaign_analytics_from_postgres(pool)
+        except Exception as exc:
+            await _emit_operation_event(
+                visibility,
+                _OPERATION_FAILED_EVENT,
+                "analytics_refresh",
+                {"error_type": type(exc).__name__},
+            )
+            raise
+        data = _public_analytics_result(result)
+        await _emit_operation_event(
+            visibility,
+            _OPERATION_COMPLETED_EVENT,
+            "analytics_refresh",
+            {"result": _visibility_result_summary(data)},
+        )
+        return data
 
     return router
 

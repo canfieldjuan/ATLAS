@@ -49,6 +49,17 @@ class _Reasoning:
     pass
 
 
+class _Visibility:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        if self.fail:
+            raise RuntimeError("visibility down")
+        self.events.append((event_type, dict(payload)))
+
+
 def _client(
     pool: Any,
     *,
@@ -57,6 +68,7 @@ def _client(
     llm: Any = None,
     skills: Any = None,
     reasoning: Any = None,
+    visibility: Any = None,
     config: CampaignOperationsApiConfig | None = None,
     dependencies: list[Any] | None = None,
     counters: dict[str, int] | None = None,
@@ -88,6 +100,10 @@ def _client(
         counts["reasoning"] = counts.get("reasoning", 0) + 1
         return reasoning
 
+    async def visibility_provider():
+        counts["visibility"] = counts.get("visibility", 0) + 1
+        return visibility
+
     app.include_router(
         create_campaign_operations_router(
             pool_provider=pool_provider,
@@ -98,6 +114,7 @@ def _client(
             reasoning_context_provider=(
                 reasoning_context_provider if reasoning is not None else None
             ),
+            visibility_provider=visibility_provider if visibility is not None else None,
             config=config,
             dependencies=dependencies,
         )
@@ -190,6 +207,73 @@ def test_campaign_operations_router_generates_campaign_drafts(monkeypatch) -> No
     assert config.temperature == 0.3
 
 
+def test_campaign_operations_router_emits_visibility_for_generation(monkeypatch) -> None:
+    visibility = _Visibility()
+
+    async def _generate(_pool, **_kwargs):
+        return _Result(
+            requested=2,
+            generated=2,
+            skipped=0,
+            saved_ids=["campaign-1", "campaign-2"],
+            errors=[],
+        )
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        scope=TenantScope(account_id="acct_1"),
+        visibility=visibility,
+    ).post(
+        "/campaigns/operations/drafts/generate",
+        json={
+            "account_id": "acct_1",
+            "target_mode": "vendor_retention",
+            "channel": "email",
+            "channels": ["email_cold", "email_followup"],
+            "limit": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_STARTED_EVENT,
+            {
+                "operation": "draft_generation",
+                "limit": 2,
+                "target_mode": "vendor_retention",
+                "channel": "email",
+                "channels": ["email_cold", "email_followup"],
+                "account_id": "acct_1",
+            },
+        ),
+        (
+            operations_api._OPERATION_COMPLETED_EVENT,
+            {
+                "operation": "draft_generation",
+                "limit": 2,
+                "target_mode": "vendor_retention",
+                "channel": "email",
+                "channels": ["email_cold", "email_followup"],
+                "account_id": "acct_1",
+                "result": {
+                    "requested": 2,
+                    "generated": 2,
+                    "skipped": 0,
+                    "saved_ids_count": 2,
+                    "error_count": 0,
+                },
+            },
+        ),
+    ]
+
+
 def test_campaign_operations_router_reports_status() -> None:
     counters: dict[str, int] = {}
     response = _client(
@@ -198,6 +282,7 @@ def test_campaign_operations_router_reports_status() -> None:
         llm=_LLM(),
         skills=_Skills(),
         reasoning=_Reasoning(),
+        visibility=_Visibility(),
         counters=counters,
         config=CampaignOperationsApiConfig(
             default_generation_limit=7,
@@ -225,6 +310,7 @@ def test_campaign_operations_router_reports_status() -> None:
             "llm": True,
             "skills": True,
             "reasoning": True,
+            "visibility": True,
         },
         "reasoning": {
             "mode": "explicit_provider",
@@ -612,6 +698,60 @@ def test_campaign_operations_router_sends_queued_campaigns(monkeypatch) -> None:
     assert send_config.limit == 7
 
 
+def test_campaign_operations_router_emits_visibility_for_send(monkeypatch) -> None:
+    visibility = _Visibility()
+
+    async def _send(_pool, **_kwargs):
+        return _Result(sent=2, failed=0, suppressed=1, skipped=0)
+
+    monkeypatch.setattr(operations_api, "send_due_campaigns_from_postgres", _send)
+
+    response = _client(
+        _Pool(),
+        sender=_Sender(),
+        visibility=visibility,
+    ).post("/campaigns/operations/send/queued", json={"limit": 7})
+
+    assert response.status_code == 200
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_STARTED_EVENT,
+            {"operation": "send_queued", "limit": 7},
+        ),
+        (
+            operations_api._OPERATION_COMPLETED_EVENT,
+            {
+                "operation": "send_queued",
+                "limit": 7,
+                "result": {
+                    "sent": 2,
+                    "failed": 0,
+                    "suppressed": 1,
+                    "skipped": 0,
+                },
+            },
+        ),
+    ]
+
+
+def test_campaign_operations_router_visibility_failures_do_not_break_send(
+    monkeypatch,
+) -> None:
+    async def _send(_pool, **_kwargs):
+        return _Result(sent=1, failed=0)
+
+    monkeypatch.setattr(operations_api, "send_due_campaigns_from_postgres", _send)
+
+    response = _client(
+        _Pool(),
+        sender=_Sender(),
+        visibility=_Visibility(fail=True),
+    ).post("/campaigns/operations/send/queued", json={"limit": 1})
+
+    assert response.status_code == 200
+    assert response.json() == {"sent": 1, "failed": 0}
+
+
 @pytest.mark.parametrize(
     ("payload", "detail"),
     (
@@ -714,6 +854,52 @@ def test_campaign_operations_router_progresses_sequences(monkeypatch) -> None:
     assert sequence_config.temperature == 0.4
 
 
+def test_campaign_operations_router_emits_visibility_for_sequence_progression(
+    monkeypatch,
+) -> None:
+    visibility = _Visibility()
+
+    async def _progress(_pool, **_kwargs):
+        return _Result(due_sequences=3, progressed=2, skipped=1, disabled=False)
+
+    monkeypatch.setattr(
+        operations_api,
+        "progress_campaign_sequences_from_postgres",
+        _progress,
+    )
+
+    response = _client(
+        _Pool(),
+        visibility=visibility,
+        config=CampaignOperationsApiConfig(sequence_from_email="audit@example.com"),
+    ).post(
+        "/campaigns/operations/sequences/progress",
+        json={"limit": 8, "max_steps": 4},
+    )
+
+    assert response.status_code == 200
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_STARTED_EVENT,
+            {"operation": "sequence_progression", "limit": 8, "max_steps": 4},
+        ),
+        (
+            operations_api._OPERATION_COMPLETED_EVENT,
+            {
+                "operation": "sequence_progression",
+                "limit": 8,
+                "max_steps": 4,
+                "result": {
+                    "due_sequences": 3,
+                    "progressed": 2,
+                    "skipped": 1,
+                    "disabled": False,
+                },
+            },
+        ),
+    ]
+
+
 def test_campaign_operations_router_rejects_invalid_sequence_limits(
     monkeypatch,
 ) -> None:
@@ -808,6 +994,39 @@ def test_campaign_operations_router_refreshes_analytics(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {"refreshed": True, "error": None}
     assert calls == [pool]
+
+
+def test_campaign_operations_router_emits_visibility_for_analytics(monkeypatch) -> None:
+    visibility = _Visibility()
+
+    async def _refresh(_pool):
+        return _Result(refreshed=True, error=None)
+
+    monkeypatch.setattr(
+        operations_api,
+        "refresh_campaign_analytics_from_postgres",
+        _refresh,
+    )
+
+    response = _client(
+        _Pool(),
+        visibility=visibility,
+    ).post("/campaigns/operations/analytics/refresh")
+
+    assert response.status_code == 200
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_STARTED_EVENT,
+            {"operation": "analytics_refresh"},
+        ),
+        (
+            operations_api._OPERATION_COMPLETED_EVENT,
+            {
+                "operation": "analytics_refresh",
+                "result": {"refreshed": True, "error": None},
+            },
+        ),
+    ]
 
 
 def test_campaign_operations_router_sanitizes_analytics_errors(monkeypatch) -> None:
