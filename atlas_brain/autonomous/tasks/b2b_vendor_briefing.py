@@ -34,10 +34,16 @@ from ...config import settings
 from ...services.campaign_sender import get_campaign_sender
 from ...services.b2b.vendor_briefing_ports import (
     align_vendor_intelligence_record_to_scorecard as _align_vendor_intelligence_record_to_scorecard,
+    build_llm_messages,
+    clean_llm_output,
+    get_campaign_llm,
     inject_synthesis_freshness,
+    lookup_b2b_exact_stage_text,
     load_best_reasoning_view,
     load_prior_reasoning_snapshots,
     load_synthesis_view,
+    normalize_openrouter_model,
+    prepare_b2b_exact_stage_request,
     timing_summary_payload as _timing_summary_payload,
     reasoning_int as _reasoning_int,
     read_vendor_company_signal_review_queue,
@@ -45,6 +51,8 @@ from ...services.b2b.vendor_briefing_ports import (
     read_vendor_intelligence,
     read_vendor_quote_evidence,
     read_vendor_scorecard_detail,
+    store_b2b_exact_stage_text,
+    trace_llm_call,
 )
 from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...services.vendor_registry import resolve_vendor_name
@@ -896,12 +904,6 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
     cache_namespace = "b2b_vendor_briefing.analyst_summary"
 
     try:
-        from ...pipelines.llm import clean_llm_output, normalize_openrouter_model
-        from ...services.b2b.cache_runner import (
-            lookup_b2b_exact_stage_text,
-            prepare_b2b_exact_stage_request,
-            store_b2b_exact_stage_text,
-        )
         analyst_model = normalize_openrouter_model(
             settings.b2b_churn.briefing_analyst_model,
             context="vendor briefing analyst summary",
@@ -1199,8 +1201,7 @@ def _mode_instruction(target_mode: str) -> str:
 
 def _get_llm() -> Any:
     """Get LLM instance for account card enrichment."""
-    from ...services.llm_router import get_llm
-    return get_llm("campaign")
+    return get_campaign_llm()
 
 
 async def _llm_call(
@@ -1213,17 +1214,7 @@ async def _llm_call(
     cache_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Single LLM call returning parsed JSON or None."""
-    from ...services.protocols import Message
-    from ...services.b2b.cache_runner import (
-        lookup_b2b_exact_stage_text,
-        prepare_b2b_exact_stage_request,
-        store_b2b_exact_stage_text,
-    )
-
-    messages = [
-        Message(role="system", content=system_prompt),
-        Message(role="user", content=user_prompt),
-    ]
+    messages = build_llm_messages(system_prompt, user_prompt)
     request = prepare_b2b_exact_stage_request(
         cache_namespace,
         llm=llm,
@@ -1630,9 +1621,7 @@ async def generate_account_cards(
             "Account cards: %d cards, tokens in=%d out=%d vendor=%s",
             len(cards), total_in, total_out, vendor_name,
         )
-        from ...pipelines.llm import trace_llm_call
-        from ...services.llm_router import get_llm as _get_llm_router
-        _llm = _get_llm_router("campaign")
+        _llm = _get_llm()
         trace_llm_call("task.vendor_briefing.account_cards", input_tokens=total_in,
                        output_tokens=total_out,
                        model=getattr(_llm, "model", "") if _llm else "",
