@@ -31,6 +31,8 @@ class B2BChurnSubConfig(BaseSettings):
     vendor_briefing_enabled: bool = True
     vendor_briefing_sender_name: str = "Atlas Intelligence"
     vendor_briefing_gate_base_url: str = ""
+    vendor_briefing_report_base_url: str = ""
+    vendor_briefing_reply_to_email: str = ""
     vendor_briefing_gate_expiry_days: int = Field(default=7, ge=1, le=90)
     vendor_briefing_cooldown_days: int = Field(default=30, ge=0, le=365)
     vendor_briefing_max_per_batch: int = Field(default=25, ge=1, le=1000)
@@ -79,6 +81,8 @@ class CampaignSequenceSubConfig(BaseSettings):
 
     resend_api_key: str = ""
     resend_from_email: str = ""
+    resend_api_url: str = "https://api.resend.com/emails"
+    resend_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
 
 
 class SaasAuthSubConfig(BaseSettings):

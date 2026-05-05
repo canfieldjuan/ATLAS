@@ -28,6 +28,7 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | `services/b2b/source_impact.py` | Source impact ledger (which sources feed which products) |
 | `services/b2b/battle_card_ports.py` | Host port for battle-card shared helper, data-read, synthesis-reader, and webhook support |
 | `services/b2b/vendor_briefing_ports.py` | Host port for vendor briefing evidence, scorecard, synthesis-reader, and LLM/cache support |
+| `services/b2b/vendor_briefing_api_ports.py` | Host/runtime port for checkout, session lookup, and gated report email delivery |
 | `services/b2b/product_claim.py` | Compatibility surface for `extracted_quality_gate.product_claim` |
 | `autonomous/tasks/b2b_battle_cards.py` | Deterministic battle card builder + LLM overlay (~5K LOC) |
 | `autonomous/tasks/b2b_vendor_briefing.py` | Vendor churn briefing assembly + Resend send |
@@ -38,6 +39,8 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | `reasoning/single_pass_prompts/cross_vendor_battle.py` | Single-pass cross-vendor battle prompt |
 | `reasoning/single_pass_prompts/battle_card_reasoning.py` | Contracts-first battle card reasoning prompt |
 | `templates/email/vendor_briefing.py` | HTML email template (Outlook-compatible) |
+| `templates/email/vendor_report_delivery.py` | Product-owned full-report delivery email template |
+| `templates/email/vendor_checkout_confirmation.py` | Product-owned vendor subscription confirmation email template |
 | `api/b2b_vendor_briefing.py` | REST endpoints for preview / send / approve / reject |
 
 Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_company_signals.sql`, `101_vendor_buyer_profiles.sql`, `147_displacement_velocity.sql`, `158_cross_vendor_conclusions.sql`, `245_cross_vendor_reasoning_synthesis.sql`, `261_b2b_competitive_sets.sql`, `262_b2b_competitive_set_runs.sql`, `263_b2b_competitive_set_run_constraints.sql`.
@@ -75,6 +78,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `services/b2b/anthropic_batch.py` uses `extracted_llm_infrastructure` for standalone battle-card batch overlays
 - `services/b2b/battle_card_ports.py` exposes fail-closed host ports for battle-card shared helper, data-read, churn-scope, execution-progress, synthesis-reader, and webhook support
 - `services/b2b/vendor_briefing_ports.py` exposes fail-closed host ports for vendor briefing evidence, scorecard, and synthesis-reader support, plus standalone-safe LLM/cache runtime bridges
+- `services/b2b/vendor_briefing_api_ports.py` centralizes checkout, Stripe session lookup, and gated report email delivery runtime edges
 - `services/protocols.py`, `services/llm_router.py`, and `pipelines/llm.py` use `extracted_llm_infrastructure`
 - `services/scraping/sources.py` owns the source enum and classification sets locally
 - MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed
@@ -153,6 +157,11 @@ bridges. The mapped vendor briefing task no longer imports `_b2b_shared.py`,
 `_b2b_synthesis_reader.py`, `cache_runner.py`, `pipelines/llm.py`,
 `llm_router.py`, or `protocols.py` directly for those helpers.
 
+`services/b2b/vendor_briefing_api_ports.py` is a product-owned runtime port for
+the customer-facing briefing API. It owns Stripe checkout/session lookup and
+gated full-report email delivery behind configurable settings, so the endpoint
+does not embed provider SDK calls or hard-coded delivery URLs.
+
 `services/b2b/product_claim.py` is a product-owned compatibility surface over
 `extracted_quality_gate.product_claim`. Competitive Intelligence consumes the
 shared quality-gate ProductClaim envelope without importing Atlas product-claim
@@ -161,6 +170,8 @@ internals or copying the claim engine.
 `templates/email/vendor_briefing.py` is a product-owned customer-facing
 renderer. It no longer imports runtime settings; hosts configure the fallback
 witness highlight limit through an explicit renderer function.
+The report delivery and checkout confirmation templates are also product-owned
+and no longer bridge to Atlas template modules.
 
 `reasoning/cross_vendor_selection.py` is product-owned pure selection logic for
 battles, categories, and asymmetry pairs. It is covered by extracted-package
