@@ -170,29 +170,29 @@ def test_validate_chat_provider_accepts_anthropic():
 # ---- BYOK 503 path ------------------------------------------------------
 
 
-def test_resolve_byok_or_403_raises_503_when_no_key(monkeypatch):
+def test_resolve_byok_raises_503_when_no_key(monkeypatch):
     monkeypatch.delenv(
         "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
         raising=False,
     )
-    from atlas_brain.api.llm_gateway import _resolve_byok_or_403
+    from atlas_brain.api.llm_gateway import _resolve_byok_or_503
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        _resolve_byok_or_403("anthropic", "00000000-0000-0000-0000-000000000000")
+        _resolve_byok_or_503("anthropic", "00000000-0000-0000-0000-000000000000")
     assert exc_info.value.status_code == 503
     assert "BYOK key" in exc_info.value.detail
 
 
-def test_resolve_byok_or_403_returns_key_when_set(monkeypatch):
+def test_resolve_byok_returns_key_when_set(monkeypatch):
     monkeypatch.setenv(
         "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
         "sk-ant-fake",
     )
-    from atlas_brain.api.llm_gateway import _resolve_byok_or_403
+    from atlas_brain.api.llm_gateway import _resolve_byok_or_503
 
     assert (
-        _resolve_byok_or_403("anthropic", "00000000-0000-0000-0000-000000000000")
+        _resolve_byok_or_503("anthropic", "00000000-0000-0000-0000-000000000000")
         == "sk-ant-fake"
     )
 
@@ -277,3 +277,36 @@ def test_usage_sql_scopes_by_account_id():
 
     src = inspect.getsource(llm_gateway.usage)
     assert "WHERE account_id = $1" in src
+
+
+# ---- Codex review fixes (post-review on PR-D4) -------------------------
+
+
+def test_chat_handler_does_not_await_synchronous_load():
+    """Codex P0 fix: ``AnthropicLLM.load()`` is synchronous (returns
+    None). Awaiting it raises TypeError at runtime and breaks every
+    /chat call. Pin via source-text inspection that the handler
+    calls ``llm.load()`` (not ``await llm.load()``)."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    assert "await llm.load()" not in src
+    assert "llm.load()" in src
+
+
+def test_resolve_byok_helper_renamed_to_503():
+    """Codex naming fix: helper was ``_resolve_byok_or_403`` but
+    raises 503. Rename keeps the name aligned with behavior."""
+    from atlas_brain.api import llm_gateway
+
+    assert hasattr(llm_gateway, "_resolve_byok_or_503")
+    assert not hasattr(llm_gateway, "_resolve_byok_or_403")
+
+
+def test_unused_helper_cache_enabled_for_plan_removed():
+    """Codex dead-code fix: ``_cache_enabled_for_plan`` was unused.
+    Cache gates land in PR-D4b when /chat reaches the cache path;
+    until then the helper is dead code."""
+    from atlas_brain.api import llm_gateway
+
+    assert not hasattr(llm_gateway, "_cache_enabled_for_plan")

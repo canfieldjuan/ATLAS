@@ -29,15 +29,14 @@ from __future__ import annotations
 import logging
 import time
 import uuid as _uuid
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..api.billing import LLM_PLAN_LIMITS
-from ..auth.dependencies import AuthUser, require_api_key, require_llm_plan
+from ..auth.dependencies import AuthUser, require_llm_plan
 from ..pipelines.llm import trace_llm_call
-from ..services.byok_keys import SUPPORTED_PROVIDERS, lookup_provider_key
+from ..services.byok_keys import lookup_provider_key
 from ..services.protocols import Message
 from ..storage.database import get_db_pool
 
@@ -116,7 +115,10 @@ def _validate_chat_provider(provider: str) -> None:
         )
 
 
-def _resolve_byok_or_403(provider: str, account_id: str) -> str:
+def _resolve_byok_or_503(provider: str, account_id: str) -> str:
+    """Look up the customer's stored BYOK key for ``provider``. Raises
+    HTTPException 503 when no key is configured -- the dashboard
+    (PR-D5) is the customer-facing path to set one."""
     raw = lookup_provider_key(provider, account_id)
     if not raw:
         raise HTTPException(
@@ -128,11 +130,6 @@ def _resolve_byok_or_403(provider: str, account_id: str) -> str:
             ),
         )
     return raw
-
-
-def _cache_enabled_for_plan(plan: str) -> bool:
-    limits = LLM_PLAN_LIMITS.get(plan, {})
-    return bool(limits.get("cache_enabled", False))
 
 
 # ---- /chat (sync) -------------------------------------------------------
@@ -147,13 +144,14 @@ async def chat(
     (PR-D1) and plan-gated to llm_trial+ (PR-D2)."""
     _validate_chat_provider(body.provider)
 
-    api_key = _resolve_byok_or_403(body.provider, user.account_id)
+    api_key = _resolve_byok_or_503(body.provider, user.account_id)
 
     from ..services.llm.anthropic import AnthropicLLM
 
     llm = AnthropicLLM(model=body.model, api_key=api_key)
     try:
-        await llm.load()
+        # AnthropicLLM.load() is synchronous (returns None). Do NOT await.
+        llm.load()
     except Exception as exc:
         logger.warning(
             "llm_gateway.chat load failed account=%s provider=%s model=%s: %s",
