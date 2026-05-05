@@ -66,6 +66,7 @@ pytest \
   tests/test_atlas_reasoning_wedge_registry_aliases.py \
   tests/test_atlas_reasoning_temporal_aliases.py \
   tests/test_atlas_reasoning_archetypes_aliases.py \
+  tests/test_atlas_reasoning_evidence_engine_aliases.py \
   tests/test_forbid_atlas_reasoning_imports.py \
   tests/test_extracted_product_utilities.py \
   tests/test_extracted_b2b_batch_utils.py \
