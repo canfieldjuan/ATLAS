@@ -484,6 +484,90 @@ async def read_vendor_quote_evidence(
     )
 
 
+# Pre-existing main drift: PR #225 ("Route vendor briefing synthesis
+# reader through intelligence port") added a synthesis-reader port
+# surface to atlas + the competitive_intelligence mirror but missed
+# the content_pipeline mirror. b2b_vendor_briefing.py imports the
+# four symbols below from this module; without these re-exports the
+# package fails import-smoke. The underlying implementations already
+# live in ``_b2b_synthesis_reader`` -- this is purely a missing
+# re-export layer. A future content_pipeline-side port refactor can
+# replace these with proper port methods.
+
+
+def inject_synthesis_freshness(
+    entry: dict[str, Any],
+    view: Any,
+    *,
+    requested_as_of: date | None = None,
+) -> None:
+    """Apply synthesis freshness metadata to an output entry."""
+    from ...autonomous.tasks._b2b_synthesis_reader import (
+        inject_synthesis_freshness as _impl,
+    )
+
+    _impl(entry, view, requested_as_of=requested_as_of)
+
+
+def load_synthesis_view(
+    raw: dict[str, Any],
+    vendor_name: str,
+    schema_version: str = "",
+    as_of_date: date | str | None = None,
+) -> Any:
+    """Build the synthesis view object for a vendor's evidence vault."""
+    from ...autonomous.tasks._b2b_synthesis_reader import (
+        load_synthesis_view as _impl,
+    )
+
+    return _impl(
+        raw,
+        vendor_name,
+        schema_version=schema_version,
+        as_of_date=as_of_date,
+    )
+
+
+async def load_best_reasoning_view(
+    pool: Any,
+    vendor_name: str,
+    *,
+    as_of: date | None = None,
+    analysis_window_days: int = 30,
+) -> Any | None:
+    """Return the best available reasoning view for a vendor."""
+    from ...autonomous.tasks._b2b_synthesis_reader import (
+        load_best_reasoning_view as _impl,
+    )
+
+    return await _impl(
+        pool,
+        vendor_name,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+    )
+
+
+async def load_prior_reasoning_snapshots(
+    pool: Any,
+    vendor_names: list[str],
+    *,
+    before_date: date | None = None,
+    analysis_window_days: int = 30,
+) -> dict[str, dict[str, Any]]:
+    """Return prior reasoning snapshots keyed by vendor name."""
+    from ...autonomous.tasks._b2b_synthesis_reader import (
+        load_prior_reasoning_snapshots as _impl,
+    )
+
+    return await _impl(
+        pool,
+        vendor_names,
+        before_date=before_date,
+        analysis_window_days=analysis_window_days,
+    )
+
+
 __all__ = [
     "STANDALONE_ENV_VAR",
     "VendorBriefingIntelligencePort",
