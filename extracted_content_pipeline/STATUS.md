@@ -54,8 +54,9 @@
   tables, so the seller target -> opportunity -> draft loop can run without the
   Atlas seller scheduled task.
 - `api.seller_campaigns` provides a FastAPI router factory around seller
-  targets and seller draft review/export routes. Seller draft review is guarded
-  to `target_mode="amazon_seller"`.
+  targets, hosted category refresh, opportunity preparation, and seller draft
+  review/export routes. Seller draft review is guarded to
+  `target_mode="amazon_seller"`.
 - `campaign_postgres_send` provides a DB-backed queued send worker seam. Hosts
   inject a Resend or SES sender and reuse the product campaign, suppression,
   and audit ports to send rows already moved to `queued`.

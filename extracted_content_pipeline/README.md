@@ -263,8 +263,8 @@ This adds JSON draft listing, CSV/JSON export, and approve/queue/cancel/expire
 review routes without importing Atlas API globals.
 
 Amazon seller installs can mount the seller-specific router. It adds seller
-target CRUD plus seller draft list/export/review routes locked to
-`target_mode="amazon_seller"`:
+target CRUD, hosted category refresh and opportunity preparation triggers, plus
+seller draft list/export/review routes locked to `target_mode="amazon_seller"`:
 
 ```python
 from fastapi import Depends
@@ -280,6 +280,12 @@ app.include_router(
     )
 )
 ```
+
+Hosts can call `POST /seller/intelligence/refresh`,
+`POST /seller/opportunities/prepare`, or
+`POST /seller/operations/refresh-and-prepare` from an admin UI or scheduler.
+Draft generation still runs through the worker/CLI path so hosts can control
+LLM provider policy and runtime separately.
 
 Before generating seller drafts, prepare seller opportunities from active
 seller targets and cached category intelligence:
@@ -469,7 +475,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `api/b2b_campaigns.py`: optional FastAPI router factory for host-mounted
   B2B draft list/export/review routes
 - `api/seller_campaigns.py`: optional FastAPI router factory for host-mounted
-  seller target and seller draft review routes
+  seller target management, category refresh, opportunity preparation, and
+  seller draft review routes
 - `campaign_postgres_sequence_progression.py`: DB-backed due-sequence worker
   that composes the sequence, audit, LLM, and skill ports for follow-up
   generation

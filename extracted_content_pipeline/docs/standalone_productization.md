@@ -197,10 +197,11 @@ It aggregates host `product_reviews` / `product_metadata` rows into
 models, notifications, LLM report generation, or comparison pipeline helpers.
 
 `extracted_content_pipeline/api/seller_campaigns.py` owns the host-mounted
-FastAPI surface for seller target management and seller draft review. It keeps
-seller draft list/export/review locked to `target_mode="amazon_seller"` and
-defers Atlas-only generation triggers; category-intelligence refresh is
-available through the product-owned Postgres seam above.
+FastAPI surface for seller target management, hosted category refresh,
+opportunity preparation, and seller draft review. It keeps seller draft
+list/export/review locked to `target_mode="amazon_seller"` and still defers
+LLM draft generation to worker/CLI paths so hosts can control provider runtime
+policy separately.
 
 `extracted_content_pipeline/campaign_postgres_send.py` owns the DB-backed send
 worker seam. It composes `PostgresCampaignRepository`,

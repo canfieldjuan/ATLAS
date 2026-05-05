@@ -33,6 +33,44 @@ class VendorBriefingIntelligencePort(Protocol):
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """Align one vendor evidence-vault record against one scorecard row."""
 
+    def inject_synthesis_freshness(
+        self,
+        entry: dict[str, Any],
+        view: Any,
+        *,
+        requested_as_of: date | None = None,
+    ) -> None:
+        """Apply synthesis freshness metadata to an output entry."""
+
+    def load_synthesis_view(
+        self,
+        raw: dict[str, Any],
+        vendor_name: str,
+        schema_version: str = "",
+        as_of_date: date | str | None = None,
+    ) -> Any:
+        """Construct a host-owned synthesis view."""
+
+    async def load_best_reasoning_view(
+        self,
+        pool: Any,
+        vendor_name: str,
+        *,
+        as_of: date | None = None,
+        analysis_window_days: int = 30,
+    ) -> Any | None:
+        """Load the best reasoning view for one vendor."""
+
+    async def load_prior_reasoning_snapshots(
+        self,
+        pool: Any,
+        vendor_names: list[str],
+        *,
+        before_date: date | None = None,
+        analysis_window_days: int = 30,
+    ) -> dict[str, dict[str, Any]]:
+        """Load prior reasoning snapshots for vendors."""
+
     async def read_vendor_company_signal_review_queue(
         self,
         pool: Any,
@@ -108,6 +146,73 @@ class _BridgeVendorBriefingIntelligencePort:
         from ...autonomous.tasks import _b2b_shared as shared
 
         return shared._align_vendor_intelligence_record_to_scorecard(scorecard, record)
+
+    def inject_synthesis_freshness(
+        self,
+        entry: dict[str, Any],
+        view: Any,
+        *,
+        requested_as_of: date | None = None,
+    ) -> None:
+        from ...autonomous.tasks._b2b_synthesis_reader import inject_synthesis_freshness
+
+        inject_synthesis_freshness(
+            entry,
+            view,
+            requested_as_of=requested_as_of,
+        )
+
+    def load_synthesis_view(
+        self,
+        raw: dict[str, Any],
+        vendor_name: str,
+        schema_version: str = "",
+        as_of_date: date | str | None = None,
+    ) -> Any:
+        from ...autonomous.tasks._b2b_synthesis_reader import load_synthesis_view
+
+        return load_synthesis_view(
+            raw,
+            vendor_name,
+            schema_version=schema_version,
+            as_of_date=as_of_date,
+        )
+
+    async def load_best_reasoning_view(
+        self,
+        pool: Any,
+        vendor_name: str,
+        *,
+        as_of: date | None = None,
+        analysis_window_days: int = 30,
+    ) -> Any | None:
+        from ...autonomous.tasks._b2b_synthesis_reader import load_best_reasoning_view
+
+        return await load_best_reasoning_view(
+            pool,
+            vendor_name,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+        )
+
+    async def load_prior_reasoning_snapshots(
+        self,
+        pool: Any,
+        vendor_names: list[str],
+        *,
+        before_date: date | None = None,
+        analysis_window_days: int = 30,
+    ) -> dict[str, dict[str, Any]]:
+        from ...autonomous.tasks._b2b_synthesis_reader import (
+            load_prior_reasoning_snapshots,
+        )
+
+        return await load_prior_reasoning_snapshots(
+            pool,
+            vendor_names,
+            before_date=before_date,
+            analysis_window_days=analysis_window_days,
+        )
 
     async def read_vendor_company_signal_review_queue(
         self,
@@ -242,6 +347,63 @@ def align_vendor_intelligence_record_to_scorecard(
     )
 
 
+def inject_synthesis_freshness(
+    entry: dict[str, Any],
+    view: Any,
+    *,
+    requested_as_of: date | None = None,
+) -> None:
+    return get_vendor_briefing_intelligence_port().inject_synthesis_freshness(
+        entry,
+        view,
+        requested_as_of=requested_as_of,
+    )
+
+
+def load_synthesis_view(
+    raw: dict[str, Any],
+    vendor_name: str,
+    schema_version: str = "",
+    as_of_date: date | str | None = None,
+) -> Any:
+    return get_vendor_briefing_intelligence_port().load_synthesis_view(
+        raw,
+        vendor_name,
+        schema_version=schema_version,
+        as_of_date=as_of_date,
+    )
+
+
+async def load_best_reasoning_view(
+    pool: Any,
+    vendor_name: str,
+    *,
+    as_of: date | None = None,
+    analysis_window_days: int = 30,
+) -> Any | None:
+    return await get_vendor_briefing_intelligence_port().load_best_reasoning_view(
+        pool,
+        vendor_name,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+    )
+
+
+async def load_prior_reasoning_snapshots(
+    pool: Any,
+    vendor_names: list[str],
+    *,
+    before_date: date | None = None,
+    analysis_window_days: int = 30,
+) -> dict[str, dict[str, Any]]:
+    return await get_vendor_briefing_intelligence_port().load_prior_reasoning_snapshots(
+        pool,
+        vendor_names,
+        before_date=before_date,
+        analysis_window_days=analysis_window_days,
+    )
+
+
 async def read_vendor_company_signal_review_queue(
     pool: Any,
     *,
@@ -319,90 +481,6 @@ async def read_vendor_quote_evidence(
         pain_filter=pain_filter,
         require_quotes=require_quotes,
         recency_column=recency_column,
-    )
-
-
-# Pre-existing main drift: PR #225 ("Route vendor briefing synthesis
-# reader through intelligence port") added a synthesis-reader port
-# surface to atlas + the competitive_intelligence mirror but missed
-# the content_pipeline mirror. b2b_vendor_briefing.py imports the
-# four symbols below from this module; without these re-exports the
-# package fails import-smoke. The underlying implementations already
-# live in ``_b2b_synthesis_reader`` -- this is purely a missing
-# re-export layer. A future content_pipeline-side port refactor can
-# replace these with proper port methods.
-
-
-def inject_synthesis_freshness(
-    entry: dict[str, Any],
-    view: Any,
-    *,
-    requested_as_of: date | None = None,
-) -> None:
-    """Apply synthesis freshness metadata to an output entry."""
-    from ...autonomous.tasks._b2b_synthesis_reader import (
-        inject_synthesis_freshness as _impl,
-    )
-
-    _impl(entry, view, requested_as_of=requested_as_of)
-
-
-def load_synthesis_view(
-    raw: dict[str, Any],
-    vendor_name: str,
-    schema_version: str = "",
-    as_of_date: date | str | None = None,
-) -> Any:
-    """Build the synthesis view object for a vendor's evidence vault."""
-    from ...autonomous.tasks._b2b_synthesis_reader import (
-        load_synthesis_view as _impl,
-    )
-
-    return _impl(
-        raw,
-        vendor_name,
-        schema_version=schema_version,
-        as_of_date=as_of_date,
-    )
-
-
-async def load_best_reasoning_view(
-    pool: Any,
-    vendor_name: str,
-    *,
-    as_of: date | None = None,
-    analysis_window_days: int = 30,
-) -> Any | None:
-    """Return the best available reasoning view for a vendor."""
-    from ...autonomous.tasks._b2b_synthesis_reader import (
-        load_best_reasoning_view as _impl,
-    )
-
-    return await _impl(
-        pool,
-        vendor_name,
-        as_of=as_of,
-        analysis_window_days=analysis_window_days,
-    )
-
-
-async def load_prior_reasoning_snapshots(
-    pool: Any,
-    vendor_names: list[str],
-    *,
-    before_date: date | None = None,
-    analysis_window_days: int = 30,
-) -> dict[str, dict[str, Any]]:
-    """Return prior reasoning snapshots keyed by vendor name."""
-    from ...autonomous.tasks._b2b_synthesis_reader import (
-        load_prior_reasoning_snapshots as _impl,
-    )
-
-    return await _impl(
-        pool,
-        vendor_names,
-        before_date=before_date,
-        analysis_window_days=analysis_window_days,
     )
 
 
