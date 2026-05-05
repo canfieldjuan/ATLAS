@@ -267,6 +267,7 @@ async def test_vendor_briefing_synthesis_helpers_use_configured_port(
         )
     finally:
         port_module.configure_vendor_briefing_intelligence_port(None)
+        port_module.configure_vendor_briefing_runtime_port(None)
 
     assert entry == {"requested_as_of": "2026-05-05"}
     assert loaded.vendor_name == "Acme"
@@ -313,6 +314,7 @@ async def test_vendor_briefing_runtime_helpers_use_configured_port(
         cleaned = port_module.clean_llm_output(" raw ")
     finally:
         port_module.configure_vendor_briefing_intelligence_port(None)
+        port_module.configure_vendor_briefing_runtime_port(None)
 
     assert normalized == "normalized:model"
     assert cleaned == "raw"

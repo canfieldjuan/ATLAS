@@ -268,6 +268,7 @@ def reset_configured_port():
     module = sys.modules.get(_PORT_MODULE)
     if module is not None:
         module.configure_vendor_briefing_intelligence_port(None)
+        module.configure_vendor_briefing_runtime_port(None)
 
 
 def test_vendor_briefing_port_fails_closed_in_standalone(monkeypatch) -> None:
@@ -291,6 +292,32 @@ def test_vendor_briefing_port_fails_closed_in_standalone(monkeypatch) -> None:
     assert _ATLAS_LLM_ROUTER_MODULE not in sys.modules
     assert _EXTRACTED_PROTOCOLS_MODULE not in sys.modules
     assert _ATLAS_PROTOCOLS_MODULE not in sys.modules
+
+
+def test_runtime_helpers_fallback_when_intelligence_port_is_reader_only(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(_COMP_INTEL_ENV_VAR, "1")
+    _reset_modules()
+
+    port_module = importlib.import_module(_PORT_MODULE)
+    port_module.configure_vendor_briefing_intelligence_port(
+        SimpleNamespace(reasoning_int=lambda value: 1)
+    )
+
+    assert port_module.clean_llm_output(" raw ") == "raw"
+    request = port_module.prepare_b2b_exact_stage_request(
+        "b2b_vendor_briefing.account_card",
+        llm=SimpleNamespace(name="provider", model="model"),
+        messages=[],
+        max_tokens=1,
+        temperature=0.0,
+    )
+
+    assert request.namespace == "b2b_vendor_briefing.account_card"
+    assert _EXTRACTED_CACHE_RUNNER_MODULE in sys.modules
+    assert _ATLAS_CACHE_RUNNER_MODULE not in sys.modules
+    assert _ATLAS_LLM_PIPELINE_MODULE not in sys.modules
 
 
 @pytest.mark.asyncio

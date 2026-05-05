@@ -123,6 +123,10 @@ class VendorBriefingIntelligencePort(Protocol):
     ) -> list[dict[str, Any]]:
         """Return row-level quote evidence for one vendor."""
 
+
+class VendorBriefingRuntimePort(Protocol):
+    """Host operations used by vendor briefing LLM/cache runtime."""
+
     def normalize_openrouter_model(self, model: Any | None, *, context: str = "") -> str:
         """Return the host-normalized OpenRouter model name."""
 
@@ -370,7 +374,18 @@ class _BridgeVendorBriefingIntelligencePort:
 
 
 _configured_intelligence_port: VendorBriefingIntelligencePort | None = None
+_configured_runtime_port: VendorBriefingRuntimePort | None = None
 _bridge_intelligence_port = _BridgeVendorBriefingIntelligencePort()
+_RUNTIME_METHODS = frozenset({
+    "normalize_openrouter_model",
+    "clean_llm_output",
+    "get_campaign_llm",
+    "build_llm_messages",
+    "prepare_b2b_exact_stage_request",
+    "lookup_b2b_exact_stage_text",
+    "store_b2b_exact_stage_text",
+    "trace_llm_call",
+})
 
 
 def configure_vendor_briefing_intelligence_port(
@@ -379,6 +394,14 @@ def configure_vendor_briefing_intelligence_port(
     """Register the host adapter for vendor briefing intelligence support."""
     global _configured_intelligence_port
     _configured_intelligence_port = port
+
+
+def configure_vendor_briefing_runtime_port(
+    port: VendorBriefingRuntimePort | None,
+) -> None:
+    """Register the host adapter for vendor briefing LLM/cache support."""
+    global _configured_runtime_port
+    _configured_runtime_port = port
 
 
 def get_vendor_briefing_intelligence_port() -> VendorBriefingIntelligencePort:
@@ -392,9 +415,22 @@ def get_vendor_briefing_intelligence_port() -> VendorBriefingIntelligencePort:
     return _bridge_intelligence_port
 
 
-def _get_vendor_briefing_runtime_port() -> VendorBriefingIntelligencePort:
-    if _configured_intelligence_port is not None:
-        return _configured_intelligence_port
+def _has_vendor_briefing_runtime_methods(port: Any) -> bool:
+    return all(
+        callable(getattr(port, method_name, None))
+        for method_name in _RUNTIME_METHODS
+    )
+
+
+def _get_vendor_briefing_runtime_port() -> VendorBriefingRuntimePort:
+    if _configured_runtime_port is not None:
+        return _configured_runtime_port
+    if (
+        _configured_intelligence_port is not None
+        and _has_vendor_briefing_runtime_methods(_configured_intelligence_port)
+    ):
+        runtime_port: Any = _configured_intelligence_port
+        return runtime_port
     return _bridge_intelligence_port
 
 
@@ -610,10 +646,12 @@ __all__ = [
     "STANDALONE_ENV_VAR",
     "VendorBriefingIntelligencePort",
     "VendorBriefingIntelligencePortNotConfigured",
+    "VendorBriefingRuntimePort",
     "align_vendor_intelligence_record_to_scorecard",
     "build_llm_messages",
     "clean_llm_output",
     "configure_vendor_briefing_intelligence_port",
+    "configure_vendor_briefing_runtime_port",
     "get_campaign_llm",
     "get_vendor_briefing_intelligence_port",
     "inject_synthesis_freshness",
