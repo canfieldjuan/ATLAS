@@ -274,6 +274,77 @@ def test_campaign_operations_router_emits_visibility_for_generation(monkeypatch)
     ]
 
 
+def test_campaign_operations_router_emits_failed_visibility_for_generation_errors(
+    monkeypatch,
+) -> None:
+    visibility = _Visibility()
+
+    async def _generate(_pool, **_kwargs):
+        return _Result(
+            requested=3,
+            generated=1,
+            skipped=1,
+            saved_ids=["campaign-1"],
+            errors=[{"opportunity_id": "opp-2", "error": "LLM failed"}],
+        )
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        scope=TenantScope(account_id="acct_1"),
+        visibility=visibility,
+    ).post(
+        "/campaigns/operations/drafts/generate",
+        json={"account_id": "acct_1", "limit": 3},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "requested": 3,
+        "generated": 1,
+        "skipped": 1,
+        "saved_ids": ["campaign-1"],
+        "errors": [{"opportunity_id": "opp-2", "error": "LLM failed"}],
+    }
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_STARTED_EVENT,
+            {
+                "operation": "draft_generation",
+                "limit": 3,
+                "target_mode": "vendor_retention",
+                "channel": "email",
+                "channels": [],
+                "account_id": "acct_1",
+            },
+        ),
+        (
+            operations_api._OPERATION_FAILED_EVENT,
+            {
+                "operation": "draft_generation",
+                "limit": 3,
+                "target_mode": "vendor_retention",
+                "channel": "email",
+                "channels": [],
+                "account_id": "acct_1",
+                "error_type": operations_api._GENERATION_REPORTED_FAILURE_TYPE,
+                "result": {
+                    "requested": 3,
+                    "generated": 1,
+                    "skipped": 1,
+                    "saved_ids_count": 1,
+                    "error_count": 1,
+                },
+            },
+        ),
+    ]
+
+
 def test_campaign_operations_router_reports_status() -> None:
     counters: dict[str, int] = {}
     response = _client(
