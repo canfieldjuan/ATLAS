@@ -34,6 +34,7 @@ class BattleCardSupportPort(Protocol):
     async def latest_complete_core_report_date(self, pool: Any) -> date | None: ...
     async def describe_core_run_gap(self, pool: Any, report_date: date) -> str: ...
     async def update_execution_progress(self, task: Any, *, stage: str, progress_current: int | None = None, progress_total: int | None = None, progress_message: str | None = None, **counters: Any) -> None: ...
+    async def dispatch_report_generated_webhook(self, pool: Any, **payload: Any) -> None: ...
     def normalize_test_vendors(self, raw: Any) -> list[str]: ...
     def apply_vendor_scope_to_churn_inputs(self, data: dict[str, Any], vendor_names: list[str] | str | None) -> tuple[dict[str, Any], list[str]]: ...
     async def load_best_reasoning_views(self, pool: Any, vendor_names: list[str], *, as_of: date | None = None, analysis_window_days: int = 30) -> dict[str, Any]: ...
@@ -155,6 +156,15 @@ class _BridgeBattleCardSupportPort:
             progress_message=progress_message,
             **counters,
         )
+
+    async def dispatch_report_generated_webhook(
+        self,
+        pool: Any,
+        **payload: Any,
+    ) -> None:
+        from ...services.b2b.webhook_dispatcher import dispatch_report_generated_webhook
+
+        await dispatch_report_generated_webhook(pool, **payload)
 
     def normalize_test_vendors(self, raw: Any) -> list[str]:
         from ...autonomous.tasks.b2b_churn_intelligence import _normalize_test_vendors
@@ -453,6 +463,13 @@ async def update_execution_progress(
     )
 
 
+async def dispatch_report_generated_webhook(pool: Any, **payload: Any) -> None:
+    return await get_battle_card_support_port().dispatch_report_generated_webhook(
+        pool,
+        **payload,
+    )
+
+
 def normalize_test_vendors(raw: Any) -> list[str]:
     return get_battle_card_support_port().normalize_test_vendors(raw)
 
@@ -694,6 +711,7 @@ __all__ = [
     "apply_vendor_scope_to_churn_inputs",
     "build_reasoning_lookup_from_views",
     "configure_battle_card_support_port",
+    "dispatch_report_generated_webhook",
     "get_battle_card_support_port",
     "load_best_reasoning_views",
     "normalize_test_vendors",

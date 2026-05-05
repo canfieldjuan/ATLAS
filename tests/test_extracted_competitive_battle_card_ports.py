@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 from datetime import date
@@ -26,6 +27,10 @@ _EXTRACTED_SYNTHESIS_MODULE = (
     "extracted_competitive_intelligence.autonomous.tasks._b2b_synthesis_reader"
 )
 _ATLAS_SYNTHESIS_MODULE = "atlas_brain.autonomous.tasks._b2b_synthesis_reader"
+_EXTRACTED_WEBHOOK_MODULE = (
+    "extracted_competitive_intelligence.services.b2b.webhook_dispatcher"
+)
+_ATLAS_WEBHOOK_MODULE = "atlas_brain.services.b2b.webhook_dispatcher"
 
 
 def _drop_package_attr(package_name: str, attr_name: str) -> None:
@@ -46,6 +51,8 @@ def _reset_modules() -> None:
         _ATLAS_PROGRESS_MODULE,
         _EXTRACTED_SYNTHESIS_MODULE,
         _ATLAS_SYNTHESIS_MODULE,
+        _EXTRACTED_WEBHOOK_MODULE,
+        _ATLAS_WEBHOOK_MODULE,
     ):
         sys.modules.pop(module_name, None)
     _drop_package_attr("extracted_competitive_intelligence.services.b2b", "battle_card_ports")
@@ -54,10 +61,12 @@ def _reset_modules() -> None:
     _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "b2b_churn_intelligence")
     _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "_execution_progress")
     _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "_b2b_synthesis_reader")
+    _drop_package_attr("extracted_competitive_intelligence.services.b2b", "webhook_dispatcher")
     _drop_package_attr("atlas_brain.autonomous.tasks", "_b2b_shared")
     _drop_package_attr("atlas_brain.autonomous.tasks", "b2b_churn_intelligence")
     _drop_package_attr("atlas_brain.autonomous.tasks", "_execution_progress")
     _drop_package_attr("atlas_brain.autonomous.tasks", "_b2b_synthesis_reader")
+    _drop_package_attr("atlas_brain.services.b2b", "webhook_dispatcher")
 
 
 class FakeSynthesisView:
@@ -100,6 +109,13 @@ class RecordingPort:
             "progress_message": progress_message,
             **counters,
         }
+
+    async def dispatch_report_generated_webhook(self, pool, **payload):
+        self.calls.append((
+            "dispatch_report_generated_webhook",
+            str(payload.get("report_type") or ""),
+        ))
+        pool.webhook_payload = payload
 
     def normalize_test_vendors(self, raw):
         self.calls.append(("normalize_test_vendors", str(raw)))
@@ -164,6 +180,8 @@ def test_battle_card_support_port_fails_closed_in_standalone(monkeypatch) -> Non
         module.get_battle_card_support_port()
     with pytest.raises(module.BattleCardSupportPortNotConfigured):
         module._build_metric_ledger({})
+    with pytest.raises(module.BattleCardSupportPortNotConfigured):
+        asyncio.run(module.dispatch_report_generated_webhook(object()))
 
     assert _EXTRACTED_SHARED_MODULE not in sys.modules
     assert _ATLAS_SHARED_MODULE not in sys.modules
@@ -173,6 +191,8 @@ def test_battle_card_support_port_fails_closed_in_standalone(monkeypatch) -> Non
     assert _ATLAS_PROGRESS_MODULE not in sys.modules
     assert _EXTRACTED_SYNTHESIS_MODULE not in sys.modules
     assert _ATLAS_SYNTHESIS_MODULE not in sys.modules
+    assert _EXTRACTED_WEBHOOK_MODULE not in sys.modules
+    assert _ATLAS_WEBHOOK_MODULE not in sys.modules
 
 
 @pytest.mark.asyncio
@@ -225,6 +245,15 @@ async def test_battle_card_task_uses_configured_support_port(monkeypatch) -> Non
         "progress_message": "Loading",
         "cards_built": 2,
     }
+    await battle_cards.dispatch_report_generated_webhook(
+        task,
+        report_id="report-1",
+        report_type="battle_card",
+    )
+    assert task.webhook_payload == {
+        "report_id": "report-1",
+        "report_type": "battle_card",
+    }
 
     payload = battle_cards._build_battle_card_render_payload(
         {"vendor": "Acme", "total_reviews": 12}
@@ -238,6 +267,7 @@ async def test_battle_card_task_uses_configured_support_port(monkeypatch) -> Non
     assert ("load_best_reasoning_views", "Acme:45") in port.calls
     assert ("build_reasoning_lookup_from_views", "1") in port.calls
     assert ("update_execution_progress", "loading_inputs") in port.calls
+    assert ("dispatch_report_generated_webhook", "battle_card") in port.calls
     assert ("locked_facts", "Acme") in port.calls
     assert ("metric_ledger", "Acme") in port.calls
     assert _EXTRACTED_SHARED_MODULE not in sys.modules
@@ -248,3 +278,5 @@ async def test_battle_card_task_uses_configured_support_port(monkeypatch) -> Non
     assert _ATLAS_PROGRESS_MODULE not in sys.modules
     assert _EXTRACTED_SYNTHESIS_MODULE not in sys.modules
     assert _ATLAS_SYNTHESIS_MODULE not in sys.modules
+    assert _EXTRACTED_WEBHOOK_MODULE not in sys.modules
+    assert _ATLAS_WEBHOOK_MODULE not in sys.modules
