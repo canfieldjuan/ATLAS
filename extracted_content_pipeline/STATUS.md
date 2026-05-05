@@ -75,6 +75,10 @@
   Hosts inject the database, sender, optional LLM/skill/reasoning providers,
   and auth dependencies; HTTP payloads only control tenant scope,
   target/channel, filters, and batch sizing.
+- `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
+  host-mounted B2B admin flow: generate drafts, list/review them through the
+  B2B router, send queued rows, and refresh analytics while preserving shared
+  tenant scope and host provider ports.
 - `campaign_postgres_sequence_progression` provides a DB-backed follow-up
   generation worker seam. Hosts reuse due `campaign_sequences` rows, packaged
   or custom sequence prompts, and the product LLM port to queue the next
