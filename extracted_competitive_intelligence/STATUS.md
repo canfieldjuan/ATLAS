@@ -35,6 +35,7 @@ Full task/runtime decoupling remains Phase 3.
 | Campaign LLM router bridge | ✅ `services.llm_router` routes vendor-briefing campaign LLM selection through extracted LLM infrastructure in standalone mode |
 | Battle-card support port | ✅ `services.b2b.battle_card_ports` replaces direct `_b2b_shared.py`, churn-scope, execution-progress, synthesis-reader, and webhook imports for battle-card support |
 | Vendor briefing intelligence port | ✅ `services.b2b.vendor_briefing_ports` replaces direct `_b2b_shared.py`, `_b2b_synthesis_reader.py`, LLM pipeline, LLM router, protocol, and cache-runner imports for vendor briefing support |
+| Vendor briefing delivery helper | ✅ `services.b2b.vendor_briefing_delivery` centralizes config-backed subject/from/tags and CampaignSender invocation for scheduled and approved briefing sends |
 | Vendor briefing API runtime port | ✅ `services.b2b.vendor_briefing_api_ports` owns checkout, session lookup, PDF attachment delivery, and gated-report email runtime edges |
 | ProductClaim compatibility | ✅ `services.b2b.product_claim` re-exports `extracted_quality_gate.product_claim` instead of bridging to Atlas |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
@@ -58,9 +59,9 @@ Full task/runtime decoupling remains Phase 3.
 
 | Metric | Count |
 |---|---:|
-| Extracted files | 93 |
-| Manifest mappings | 11 |
-| Manifest Python snapshots | 2 |
+| Extracted files | 94 |
+| Manifest mappings | 12 |
+| Manifest Python snapshots | 3 |
 | Manifest SQL snapshots | 9 |
 | Product-owned modules | 26 |
 

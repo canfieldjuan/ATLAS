@@ -2,6 +2,7 @@
   "mappings": [
     {"source": "atlas_brain/autonomous/tasks/b2b_battle_cards.py", "target": "extracted_competitive_intelligence/autonomous/tasks/b2b_battle_cards.py"},
     {"source": "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py", "target": "extracted_competitive_intelligence/autonomous/tasks/b2b_vendor_briefing.py"},
+    {"source": "atlas_brain/services/b2b/vendor_briefing_delivery.py", "target": "extracted_competitive_intelligence/services/b2b/vendor_briefing_delivery.py"},
     {"source": "atlas_brain/storage/migrations/095_b2b_vendor_registry.sql", "target": "extracted_competitive_intelligence/storage/migrations/095_b2b_vendor_registry.sql"},
     {"source": "atlas_brain/storage/migrations/099_displacement_edges_and_company_signals.sql", "target": "extracted_competitive_intelligence/storage/migrations/099_displacement_edges_and_company_signals.sql"},
     {"source": "atlas_brain/storage/migrations/101_vendor_buyer_profiles.sql", "target": "extracted_competitive_intelligence/storage/migrations/101_vendor_buyer_profiles.sql"},
