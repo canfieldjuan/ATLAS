@@ -34,6 +34,7 @@ MODULES = [
     "extracted_competitive_intelligence.pipelines.llm",
     "extracted_competitive_intelligence.templates.email.vendor_briefing",
     "extracted_competitive_intelligence.services.b2b.source_impact",
+    "extracted_competitive_intelligence.services.b2b.anthropic_batch",
     "extracted_competitive_intelligence.services.b2b.challenger_dashboard_claims",
     "extracted_competitive_intelligence.services.b2b.competitive_set_ports",
     "extracted_competitive_intelligence.services.b2b.llm_exact_cache",
@@ -97,6 +98,11 @@ def main() -> int:
             "extracted_competitive_intelligence.services.b2b.llm_exact_cache",
             "build_skill_messages",
             "extracted_llm_infrastructure.services.b2b.llm_exact_cache",
+        ),
+        (
+            "extracted_competitive_intelligence.services.b2b.anthropic_batch",
+            "AnthropicBatchItem",
+            "extracted_llm_infrastructure.services.b2b.anthropic_batch",
         ),
     ]
     for module_name, attr_name, expected_prefix in checks:
