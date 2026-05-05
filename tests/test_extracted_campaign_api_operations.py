@@ -15,6 +15,9 @@ from extracted_content_pipeline.api.campaign_operations import (
     create_campaign_operations_router,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.services.single_pass_reasoning_provider import (
+    SinglePassCampaignReasoningProvider,
+)
 
 
 class _Pool:
@@ -187,6 +190,144 @@ def test_campaign_operations_router_generates_campaign_drafts(monkeypatch) -> No
     assert config.temperature == 0.3
 
 
+def test_campaign_operations_router_reports_status() -> None:
+    counters: dict[str, int] = {}
+    response = _client(
+        _Pool(),
+        sender=_Sender(),
+        llm=_LLM(),
+        skills=_Skills(),
+        reasoning=_Reasoning(),
+        counters=counters,
+        config=CampaignOperationsApiConfig(
+            default_generation_limit=7,
+            max_generation_limit=70,
+            generation_target_mode="vendor_retention",
+            generation_channel="email",
+            generation_channels=("email_cold", "email_followup"),
+            default_send_limit=8,
+            max_send_limit=80,
+            default_sequence_limit=9,
+            max_sequence_limit=90,
+            default_sequence_max_steps=4,
+            max_sequence_steps=12,
+            sequence_from_email="audit@example.com",
+        ),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "database": {"configured": True, "available": True},
+        "providers": {
+            "database": True,
+            "sender": True,
+            "llm": True,
+            "skills": True,
+            "reasoning": True,
+        },
+        "reasoning": {
+            "mode": "explicit_provider",
+            "single_pass_configured": False,
+            "single_pass_ready": False,
+        },
+        "features": {
+            "draft_generation": True,
+            "send_queued": True,
+            "sequence_progression": True,
+            "analytics_refresh": True,
+        },
+        "limits": {
+            "generation": {
+                "default_limit": 7,
+                "max_limit": 70,
+                "target_mode": "vendor_retention",
+                "channel": "email",
+                "channels": ["email_cold", "email_followup"],
+            },
+            "send": {"default_limit": 8, "max_limit": 80},
+            "sequence": {
+                "default_limit": 9,
+                "max_limit": 90,
+                "default_max_steps": 4,
+                "max_steps": 12,
+            },
+        },
+    }
+    assert counters == {"pool": 1}
+
+
+def test_campaign_operations_router_status_reports_degraded_database() -> None:
+    response = _client(_Pool(initialized=False)).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["database"] == {
+        "configured": True,
+        "available": False,
+        "reason": "pool_uninitialized",
+    }
+    assert payload["features"] == {
+        "draft_generation": False,
+        "send_queued": False,
+        "sequence_progression": False,
+        "analytics_refresh": False,
+    }
+
+
+def test_campaign_operations_router_status_reports_single_pass_readiness() -> None:
+    response = _client(
+        _Pool(),
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["reasoning"] == {
+        "mode": "single_pass",
+        "single_pass_configured": True,
+        "single_pass_ready": False,
+    }
+    assert payload["features"]["draft_generation"] is False
+
+
+def test_campaign_operations_router_status_marks_single_pass_ready() -> None:
+    response = _client(
+        _Pool(),
+        llm=_LLM(),
+        skills=_Skills(),
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reasoning"] == {
+        "mode": "single_pass",
+        "single_pass_configured": True,
+        "single_pass_ready": True,
+    }
+    assert payload["features"]["draft_generation"] is True
+
+
+def test_campaign_operations_router_status_treats_explicit_reasoning_as_ready() -> None:
+    response = _client(
+        _Pool(),
+        reasoning=_Reasoning(),
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reasoning"] == {
+        "mode": "explicit_provider",
+        "single_pass_configured": True,
+        "single_pass_ready": False,
+    }
+    assert payload["features"]["draft_generation"] is True
+
+
 def test_campaign_operations_router_generates_with_payload_scope(monkeypatch) -> None:
     calls = []
 
@@ -207,6 +348,154 @@ def test_campaign_operations_router_generates_with_payload_scope(monkeypatch) ->
 
     assert response.status_code == 200
     assert calls[0][1]["scope"] == {"account_id": "acct_1", "user_id": "user_1"}
+
+
+def test_campaign_operations_router_builds_single_pass_reasoning(monkeypatch) -> None:
+    pool = _Pool()
+    llm = _LLM()
+    skills = _Skills()
+    calls: list[tuple[Any, dict[str, Any]]] = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(requested=1, generated=1, skipped=0, saved_ids=[], errors=[])
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        pool,
+        llm=llm,
+        skills=skills,
+        config=CampaignOperationsApiConfig(
+            generation_single_pass_reasoning=True,
+            generation_reasoning_skill_name="digest/custom_reasoning",
+            generation_reasoning_max_tokens=321,
+            generation_reasoning_temperature=0.3,
+            generation_reasoning_include_source_opportunity=False,
+        ),
+    ).post("/campaigns/operations/drafts/generate", json={"limit": 1})
+
+    assert response.status_code == 200
+    provider = calls[0][1]["reasoning_context"]
+    assert isinstance(provider, SinglePassCampaignReasoningProvider)
+    assert provider.llm is llm
+    assert provider.skills is skills
+    assert provider.config.skill_name == "digest/custom_reasoning"
+    assert provider.config.max_tokens == 321
+    assert provider.config.temperature == 0.3
+    assert provider.config.include_source_opportunity is False
+
+
+def test_campaign_operations_router_prefers_explicit_reasoning_provider(
+    monkeypatch,
+) -> None:
+    reasoning = _Reasoning()
+    calls = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(requested=1, generated=1, skipped=0, saved_ids=[], errors=[])
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        reasoning=reasoning,
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).post("/campaigns/operations/drafts/generate", json={"limit": 1})
+
+    assert response.status_code == 200
+    assert calls[0][1]["reasoning_context"] is reasoning
+
+
+def test_campaign_operations_router_rejects_single_pass_without_llm(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(generated=1)
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        skills=_Skills(),
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).post("/campaigns/operations/drafts/generate", json={"limit": 1})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Campaign reasoning LLM unavailable"
+    assert calls == []
+
+
+def test_campaign_operations_router_rejects_single_pass_without_skills(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(generated=1)
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        llm=_LLM(),
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).post("/campaigns/operations/drafts/generate", json={"limit": 1})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Campaign reasoning skills unavailable"
+    assert calls == []
+
+
+def test_campaign_operations_router_maps_single_pass_config_errors(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(generated=1)
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        llm=_LLM(),
+        skills=_Skills(),
+        config=CampaignOperationsApiConfig(
+            generation_single_pass_reasoning=True,
+            generation_reasoning_temperature="not-a-number",  # type: ignore[arg-type]
+        ),
+    ).post("/campaigns/operations/drafts/generate", json={"limit": 1})
+
+    assert response.status_code == 400
+    assert "not-a-number" in response.json()["detail"]
+    assert calls == []
 
 
 def test_campaign_operations_router_rejects_generation_scope_mismatch(

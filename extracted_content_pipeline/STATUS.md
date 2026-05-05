@@ -74,7 +74,12 @@
   draft generation, send, sequence progression, and analytics refresh triggers.
   Hosts inject the database, sender, optional LLM/skill/reasoning providers,
   and auth dependencies; HTTP payloads only control tenant scope,
-  target/channel, filters, and batch sizing.
+  target/channel, filters, and batch sizing. Hosted installs can opt into the
+  packaged single-pass reasoning provider through config when LLM and skill
+  providers are injected. The router also exposes `GET
+  /campaigns/operations/status` for admin dashboards to inspect database
+  availability, provider presence, feature readiness, and configured limits
+  without exposing credentials.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
@@ -143,9 +148,10 @@
   ports to build one normalized `CampaignReasoningContext` per opportunity with
   the `digest/b2b_campaign_reasoning_context` prompt, without importing Atlas
   reasoning producers or graph state.
-- Both the offline and Postgres campaign generation runners can consume that
-  JSON through `--reasoning-context`, so file-backed host reasoning is available
-  on demo and DB-backed generation paths.
+- Both the offline and Postgres campaign generation runners can consume
+  file-backed reasoning through `--reasoning-context`; they can also opt into
+  the packaged single-pass provider with `--single-pass-reasoning` when the
+  product LLM adapter is configured.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.

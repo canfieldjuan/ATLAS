@@ -162,6 +162,15 @@ It calls the configured `LLMClient` once per opportunity with the packaged
 context shape. This is not a multi-hop graph reasoner; it is the small packaged
 Tier 1 path for "source row in, reasoned draft out."
 
+The example CLI can wire that provider directly when the product LLM adapter is
+configured:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py \
+  --llm pipeline \
+  --single-pass-reasoning
+```
+
 Use host-provided prompt contracts by pointing at a markdown skill directory:
 
 ```bash
@@ -227,6 +236,14 @@ It also accepts the same host-provided reasoning JSON as the offline example:
 python scripts/run_extracted_campaign_generation_postgres.py \
   --account-id acct_123 \
   --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
+```
+
+Or generate lightweight reasoning context during the DB-backed run:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --single-pass-reasoning
 ```
 
 Use `--skills-root customer_skills` on the Postgres runner for the same
@@ -411,6 +428,14 @@ app.include_router(
 )
 ```
 
+If the host does not have a separate reasoning provider but does provide LLM and
+skill providers, it can omit `reasoning_context_provider` and enable the
+packaged single-pass provider:
+
+```python
+config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True)
+```
+
 This adds `POST /campaigns/operations/drafts/generate`,
 `POST /campaigns/operations/send/queued`,
 `POST /campaigns/operations/sequences/progress`, and
@@ -418,18 +443,25 @@ This adds `POST /campaigns/operations/drafts/generate`,
 credentials, sender identity, unsubscribe policy, or LLM configuration through
 HTTP payloads.
 
+It also adds `GET /campaigns/operations/status` for admin dashboards. The
+status route reports database availability, injected provider presence, feature
+readiness, and configured limits without resolving sender/LLM/skill providers
+or exposing secrets.
+
 Mount this router beside `create_b2b_campaign_router` to run the hosted B2B
 flow without SQL in the admin UI:
 
-1. `POST /campaigns/operations/drafts/generate` creates scoped draft rows from
+1. `GET /campaigns/operations/status` lets the admin UI enable only ready
+   operations.
+2. `POST /campaigns/operations/drafts/generate` creates scoped draft rows from
    active `campaign_opportunities`.
-2. `GET /b2b/campaigns/drafts` or `/drafts/export` lets operators inspect the
+3. `GET /b2b/campaigns/drafts` or `/drafts/export` lets operators inspect the
    generated drafts.
-3. `POST /b2b/campaigns/drafts/review` moves selected drafts to `queued` after
+4. `POST /b2b/campaigns/drafts/review` moves selected drafts to `queued` after
    approval.
-4. `POST /campaigns/operations/send/queued` sends approved queued drafts
+5. `POST /campaigns/operations/send/queued` sends approved queued drafts
    through the injected sender.
-5. `POST /campaigns/operations/analytics/refresh` refreshes packaged funnel
+6. `POST /campaigns/operations/analytics/refresh` refreshes packaged funnel
    reporting after send/webhook activity.
 
 ## Import smoke test
