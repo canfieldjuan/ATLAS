@@ -16,6 +16,9 @@ from extracted_content_pipeline.campaign_reasoning_data import (
     FileCampaignReasoningContextProvider,
     load_reasoning_provider_port,
 )
+from extracted_content_pipeline.services.single_pass_reasoning_provider import (
+    SinglePassCampaignReasoningProvider,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -285,6 +288,88 @@ def test_campaign_generation_example_cli_accepts_skills_root(tmp_path) -> None:
     assert overrides["skills"].get_prompt("digest/b2b_campaign_generation") == (
         "Custom host prompt {opportunity_json}"
     )
+
+
+def test_campaign_generation_example_cli_wires_single_pass_reasoning(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    example_cli = _load_example_cli_module()
+    llm = _InjectedLLM()
+    skills = _InjectedSkills()
+    skill_path = tmp_path / "digest" / "b2b_campaign_generation.md"
+    skill_path.parent.mkdir()
+    skill_path.write_text("Custom host prompt {opportunity_json}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "extracted_content_pipeline.campaign_llm_client.create_pipeline_llm_client",
+        lambda: llm,
+    )
+    monkeypatch.setattr(
+        "extracted_content_pipeline.skills.registry.get_skill_registry",
+        lambda root=None: skills,
+    )
+
+    args = example_cli._parse_args([
+        str(EXAMPLE_PAYLOAD),
+        "--llm",
+        "pipeline",
+        "--skills-root",
+        str(tmp_path),
+        "--single-pass-reasoning",
+        "--reasoning-skill-name",
+        "digest/custom_reasoning",
+        "--reasoning-max-tokens",
+        "321",
+        "--reasoning-temperature",
+        "0.3",
+        "--no-reasoning-source-opportunity",
+    ])
+    overrides = example_cli._dependency_overrides(args)
+
+    provider = overrides["reasoning_context"]
+    assert isinstance(provider, SinglePassCampaignReasoningProvider)
+    assert provider.llm is llm
+    assert provider.skills is skills
+    assert provider.config.skill_name == "digest/custom_reasoning"
+    assert provider.config.max_tokens == 321
+    assert provider.config.temperature == 0.3
+    assert provider.config.include_source_opportunity is False
+    assert overrides["llm"] is llm
+    assert overrides["skills"] is skills
+
+
+def test_campaign_generation_example_cli_rejects_conflicting_reasoning_modes(
+    tmp_path,
+) -> None:
+    example_cli = _load_example_cli_module()
+    reasoning_path = tmp_path / "reasoning.json"
+    reasoning_path.write_text("[]", encoding="utf-8")
+
+    args = example_cli._parse_args([
+        str(EXAMPLE_PAYLOAD),
+        "--llm",
+        "pipeline",
+        "--reasoning-context",
+        str(reasoning_path),
+        "--single-pass-reasoning",
+    ])
+
+    with pytest.raises(SystemExit, match="cannot be combined"):
+        example_cli._dependency_overrides(args)
+
+
+def test_campaign_generation_example_cli_rejects_offline_single_pass_reasoning() -> None:
+    example_cli = _load_example_cli_module()
+    args = example_cli._parse_args([
+        str(EXAMPLE_PAYLOAD),
+        "--llm",
+        "offline",
+        "--single-pass-reasoning",
+    ])
+
+    with pytest.raises(SystemExit, match="requires --llm pipeline"):
+        example_cli._dependency_overrides(args)
 
 
 @pytest.mark.asyncio

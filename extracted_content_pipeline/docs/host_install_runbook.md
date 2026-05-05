@@ -189,6 +189,19 @@ packaged `digest/b2b_campaign_reasoning_context` prompt once per opportunity,
 and returns the same normalized context shape. This improves specificity
 without importing Atlas reasoning producers or long-running graph state.
 
+The Postgres generation runner wires that provider directly when the product
+LLM adapter is configured:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --single-pass-reasoning
+```
+
+Use `--reasoning-skill-name`, `--reasoning-max-tokens`, and
+`--reasoning-temperature` to tune the provider, or `--skills-root` to override
+the packaged reasoning prompt.
+
 See `reasoning_handoff_contract.md` for the accepted shape and the no-direct-
 import rule. AI Content Ops consumes compressed reasoning; it does not import a
 reasoning engine.
