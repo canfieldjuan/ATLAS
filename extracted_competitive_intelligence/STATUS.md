@@ -35,6 +35,7 @@ Full task/runtime decoupling remains Phase 3.
 | Campaign LLM router bridge | ✅ `services.llm_router` routes vendor-briefing campaign LLM selection through extracted LLM infrastructure in standalone mode |
 | Battle-card support port | ✅ `services.b2b.battle_card_ports` replaces direct `_b2b_shared.py`, churn-scope, execution-progress, and synthesis-reader imports for battle-card support |
 | Vendor briefing intelligence port | ✅ `services.b2b.vendor_briefing_ports` replaces direct `_b2b_shared.py` and `_b2b_synthesis_reader.py` imports for vendor briefing evidence and reasoning readers |
+| ProductClaim compatibility | ✅ `services.b2b.product_claim` re-exports `extracted_quality_gate.product_claim` instead of bridging to Atlas |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
 | Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM pipeline/router bridges, and service package fallback |
 | Standalone smoke script + CI | ✅ `smoke_extracted_competitive_intelligence_standalone.py` runs in the local check driver |
@@ -59,7 +60,7 @@ Full task/runtime decoupling remains Phase 3.
 | Manifest mappings | 12 |
 | Manifest Python snapshots | 3 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 20 |
+| Product-owned modules | 21 |
 
 Product-owned modules:
 
@@ -73,6 +74,7 @@ Product-owned modules:
 - `services/b2b/source_impact.py`
 - `services/b2b/challenger_dashboard_claims.py`
 - `services/b2b/competitive_set_ports.py`
+- `services/b2b/product_claim.py`
 - `services/b2b/battle_card_ports.py`
 - `services/b2b/vendor_briefing_ports.py`
 - `services/b2b_competitive_sets.py`
@@ -110,6 +112,7 @@ Product-owned modules:
 | `services/b2b/challenger_dashboard_claims.py` | ✅ | ✅ | ✅ |
 | `services/b2b/battle_card_ports.py` | n/a | ✅ | ✅ |
 | `services/b2b/vendor_briefing_ports.py` | n/a | ✅ | ✅ |
+| `services/b2b/product_claim.py` | n/a | ✅ | ✅ |
 | `services/scraping/sources.py` | n/a | ✅ | ✅ |
 | `reasoning/ecosystem.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/_b2b_batch_utils.py` | n/a | ✅ | ✅ |
