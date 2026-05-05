@@ -55,13 +55,11 @@ class _Pool:
 
 
 def _seed_aggregate_results(pool: _Pool, *, total_reviews: int = 120) -> None:
-    pool.fetchrow_results = [
-        {
-            "total_reviews": total_reviews,
-            "total_products": 30,
-            "total_brands": 8,
-        }
-    ]
+    pool.fetchrow_results.append({
+        "total_reviews": total_reviews,
+        "total_products": 30,
+        "total_brands": 8,
+    })
     pool.fetch_results.extend([
         [
             {
@@ -242,6 +240,32 @@ async def test_refresh_uses_explicit_categories_without_discovery() -> None:
     assert pool.fetchrow_calls[0][1] == ("supplements",)
     assert "GROUP BY source_category" not in pool.fetch_calls[0][0]
     assert result.refreshed == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_limit_explicit_categories() -> None:
+    pool = _Pool()
+    _seed_aggregate_results(pool)
+    _seed_aggregate_results(pool)
+    _seed_aggregate_results(pool)
+
+    result = await refresh_seller_category_intelligence(
+        pool,
+        categories=("supplements", "skincare", "coffee"),
+        min_reviews=50,
+        limit=1,
+    )
+
+    assert [args for _query, args in pool.fetchrow_calls] == [
+        ("supplements",),
+        ("skincare",),
+        ("coffee",),
+    ]
+    assert result.as_dict() == {
+        "refreshed": 3,
+        "skipped": 0,
+        "categories": ["supplements", "skincare", "coffee"],
+    }
 
 
 @pytest.mark.asyncio

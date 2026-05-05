@@ -80,7 +80,7 @@ async def refresh_seller_category_intelligence(
         )
     refreshed: list[str] = []
     skipped = 0
-    for category in category_names[:normalized_limit]:
+    for category in category_names:
         snapshot = await aggregate_seller_category_intelligence(
             pool,
             category,
