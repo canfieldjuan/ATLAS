@@ -19,6 +19,16 @@ _EXTRACTED_SYNTHESIS_MODULE = (
     "extracted_competitive_intelligence.autonomous.tasks._b2b_synthesis_reader"
 )
 _ATLAS_SYNTHESIS_MODULE = "atlas_brain.autonomous.tasks._b2b_synthesis_reader"
+_EXTRACTED_CACHE_RUNNER_MODULE = (
+    "extracted_competitive_intelligence.services.b2b.cache_runner"
+)
+_ATLAS_CACHE_RUNNER_MODULE = "atlas_brain.services.b2b.cache_runner"
+_EXTRACTED_LLM_PIPELINE_MODULE = "extracted_competitive_intelligence.pipelines.llm"
+_ATLAS_LLM_PIPELINE_MODULE = "atlas_brain.pipelines.llm"
+_EXTRACTED_LLM_ROUTER_MODULE = "extracted_competitive_intelligence.services.llm_router"
+_ATLAS_LLM_ROUTER_MODULE = "atlas_brain.services.llm_router"
+_EXTRACTED_PROTOCOLS_MODULE = "extracted_competitive_intelligence.services.protocols"
+_ATLAS_PROTOCOLS_MODULE = "atlas_brain.services.protocols"
 
 
 def _drop_package_attr(package_name: str, attr_name: str) -> None:
@@ -35,14 +45,30 @@ def _reset_modules() -> None:
         _ATLAS_SHARED_MODULE,
         _EXTRACTED_SYNTHESIS_MODULE,
         _ATLAS_SYNTHESIS_MODULE,
+        _EXTRACTED_CACHE_RUNNER_MODULE,
+        _ATLAS_CACHE_RUNNER_MODULE,
+        _EXTRACTED_LLM_PIPELINE_MODULE,
+        _ATLAS_LLM_PIPELINE_MODULE,
+        _EXTRACTED_LLM_ROUTER_MODULE,
+        _ATLAS_LLM_ROUTER_MODULE,
+        _EXTRACTED_PROTOCOLS_MODULE,
+        _ATLAS_PROTOCOLS_MODULE,
     ):
         sys.modules.pop(module_name, None)
     _drop_package_attr("extracted_competitive_intelligence.services.b2b", "vendor_briefing_ports")
     _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "b2b_vendor_briefing")
     _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "_b2b_shared")
     _drop_package_attr("extracted_competitive_intelligence.autonomous.tasks", "_b2b_synthesis_reader")
+    _drop_package_attr("extracted_competitive_intelligence.services.b2b", "cache_runner")
+    _drop_package_attr("extracted_competitive_intelligence.pipelines", "llm")
+    _drop_package_attr("extracted_competitive_intelligence.services", "llm_router")
+    _drop_package_attr("extracted_competitive_intelligence.services", "protocols")
     _drop_package_attr("atlas_brain.autonomous.tasks", "_b2b_shared")
     _drop_package_attr("atlas_brain.autonomous.tasks", "_b2b_synthesis_reader")
+    _drop_package_attr("atlas_brain.services.b2b", "cache_runner")
+    _drop_package_attr("atlas_brain.pipelines", "llm")
+    _drop_package_attr("atlas_brain.services", "llm_router")
+    _drop_package_attr("atlas_brain.services", "protocols")
 
 
 class FakeSynthesisView:
@@ -197,6 +223,44 @@ class RecordingPort:
         self.calls.append(("quote_evidence", vendor_name))
         return [{"vendor_name": vendor_name, "urgency": min_urgency}]
 
+    def normalize_openrouter_model(self, model, *, context=""):
+        self.calls.append(("normalize_openrouter_model", context))
+        return f"normalized:{model}"
+
+    def clean_llm_output(self, text):
+        self.calls.append(("clean_llm_output", ""))
+        return str(text).replace("```json", "").replace("```", "").strip()
+
+    def get_campaign_llm(self):
+        self.calls.append(("get_campaign_llm", "campaign"))
+        return SimpleNamespace(model="campaign-model", name="campaign-provider")
+
+    def build_llm_messages(self, system_prompt, user_prompt):
+        self.calls.append(("build_llm_messages", system_prompt))
+        return [
+            SimpleNamespace(role="system", content=system_prompt),
+            SimpleNamespace(role="user", content=user_prompt),
+        ]
+
+    def prepare_b2b_exact_stage_request(self, stage_id, **kwargs):
+        self.calls.append(("prepare_b2b_exact_stage_request", stage_id))
+        llm = kwargs.get("llm")
+        model = kwargs.get("model") or getattr(llm, "model", "")
+        return SimpleNamespace(stage_id=stage_id, model=model, kwargs=kwargs)
+
+    async def lookup_b2b_exact_stage_text(self, request):
+        self.calls.append(("lookup_b2b_exact_stage_text", request.stage_id))
+        return {"response_text": "{\"summary\":\"cached\"}"}
+
+    async def store_b2b_exact_stage_text(self, request, **kwargs):
+        self.calls.append(("store_b2b_exact_stage_text", request.stage_id))
+        self.stored_cache_kwargs = kwargs
+        return True
+
+    def trace_llm_call(self, span_name, **kwargs):
+        self.calls.append(("trace_llm_call", span_name))
+        self.trace_kwargs = kwargs
+
 
 @pytest.fixture(autouse=True)
 def reset_configured_port():
@@ -219,6 +283,14 @@ def test_vendor_briefing_port_fails_closed_in_standalone(monkeypatch) -> None:
     assert _ATLAS_SHARED_MODULE not in sys.modules
     assert _EXTRACTED_SYNTHESIS_MODULE not in sys.modules
     assert _ATLAS_SYNTHESIS_MODULE not in sys.modules
+    assert _EXTRACTED_CACHE_RUNNER_MODULE not in sys.modules
+    assert _ATLAS_CACHE_RUNNER_MODULE not in sys.modules
+    assert _EXTRACTED_LLM_PIPELINE_MODULE not in sys.modules
+    assert _ATLAS_LLM_PIPELINE_MODULE not in sys.modules
+    assert _EXTRACTED_LLM_ROUTER_MODULE not in sys.modules
+    assert _ATLAS_LLM_ROUTER_MODULE not in sys.modules
+    assert _EXTRACTED_PROTOCOLS_MODULE not in sys.modules
+    assert _ATLAS_PROTOCOLS_MODULE not in sys.modules
 
 
 @pytest.mark.asyncio
@@ -262,6 +334,19 @@ async def test_vendor_briefing_uses_configured_intelligence_port(monkeypatch) ->
         vendor_name="Acme",
         min_urgency=7.0,
     ) == [{"vendor_name": "Acme", "urgency": 7.0}]
+    assert vendor_briefing._get_llm().model == "campaign-model"
+    llm_result = await vendor_briefing._llm_call(
+        vendor_briefing._get_llm(),
+        "system",
+        "user",
+        cache_metadata={"vendor": "Acme"},
+    )
+    assert llm_result == {
+        "data": {"summary": "cached"},
+        "model": "campaign-model",
+        "token_usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+    port_module.trace_llm_call("task.vendor_briefing.account_cards", input_tokens=2)
     briefing = {"vendor": "Acme", "data_sources": {}}
     assert vendor_briefing._apply_reasoning_synthesis_to_briefing(
         briefing,
@@ -282,3 +367,18 @@ async def test_vendor_briefing_uses_configured_intelligence_port(monkeypatch) ->
     assert _ATLAS_SHARED_MODULE not in sys.modules
     assert _EXTRACTED_SYNTHESIS_MODULE not in sys.modules
     assert _ATLAS_SYNTHESIS_MODULE not in sys.modules
+    assert _EXTRACTED_CACHE_RUNNER_MODULE not in sys.modules
+    assert _ATLAS_CACHE_RUNNER_MODULE not in sys.modules
+    assert _EXTRACTED_LLM_PIPELINE_MODULE not in sys.modules
+    assert _ATLAS_LLM_PIPELINE_MODULE not in sys.modules
+    assert _EXTRACTED_LLM_ROUTER_MODULE not in sys.modules
+    assert _ATLAS_LLM_ROUTER_MODULE not in sys.modules
+    assert _EXTRACTED_PROTOCOLS_MODULE not in sys.modules
+    assert _ATLAS_PROTOCOLS_MODULE not in sys.modules
+
+    assert ("get_campaign_llm", "campaign") in port.calls
+    assert ("build_llm_messages", "system") in port.calls
+    assert ("prepare_b2b_exact_stage_request", "b2b_vendor_briefing.account_card") in port.calls
+    assert ("lookup_b2b_exact_stage_text", "b2b_vendor_briefing.account_card") in port.calls
+    assert ("store_b2b_exact_stage_text", "b2b_vendor_briefing.account_card") in port.calls
+    assert ("trace_llm_call", "task.vendor_briefing.account_cards") in port.calls
