@@ -136,3 +136,113 @@ goes live.
 - `docs/extraction/reasoning_boundary_audit_2026-05-03.md` —
   earlier reasoning boundary audit
 - `extracted_reasoning_core/api.py` — evaluator + producer-stub surface
+
+---
+
+## Addendum — Two reasoning systems in atlas_brain
+
+Update added 2026-05-04 after a deeper read. The earlier statement
+that "the Neo4j knowledge graph, event bus, LangGraph agent, and
+falsification watcher are defined but not called from the synthesis
+path" was narrow but accurate. Each of those modules has live
+importers — the call sites just live on different surfaces than the
+per-vendor synthesis path that `extracted_content_pipeline` consumes.
+
+### System A — single-pass batch reasoning
+
+- `atlas_brain/autonomous/tasks/b2b_reasoning_synthesis.py` (~3,900 LOC)
+- One LLM call per vendor, retry-on-validation-fail, persists JSONB
+  to `b2b_reasoning_synthesis.synthesis`.
+- This is the producer that `extracted_content_pipeline` consumes via
+  `CampaignReasoningContextProvider`.
+- Active in production.
+
+### System B — event-driven multi-step LangGraph agent
+
+- `atlas_brain/reasoning/agent.py` (151 LOC) +
+  `atlas_brain/reasoning/graph.py` (652 LOC) +
+  `atlas_brain/reasoning/consumer.py` (124 LOC) +
+  `atlas_brain/autonomous/tasks/reasoning_tick.py` (95 LOC)
+- 8-node conditional DAG that runs three LLM calls per event:
+  `_node_triage` (`graph.py:295`) → `_node_reason` (`graph.py:456`) →
+  `_node_synthesize` (`graph.py:601`).
+- Genuinely multi-step, with non-LLM gating nodes
+  (context_aggregate, lock_check, plan_actions, execute_actions,
+  notify).
+- Driven by Postgres LISTEN/NOTIFY on `atlas_events`. Consumes events
+  like `email.received`, `voice.turn_completed`, `crm.contact_created`,
+  `calendar.event_created`, `b2b.high_intent_detected`, etc.
+- Output shape (stored in `atlas_events.processing_result`):
+  `{status, triage_priority, needs_reasoning, queued, connections,
+  actions_planned, actions_executed, notified, summary}`. This is
+  *event-reactive notification logic*, not vendor intelligence. It
+  cannot be translated into `CampaignReasoningContext` without a new
+  LLM synthesis pass — the gap is semantic, not syntactic.
+
+### System B is cold by default
+
+- `settings.reasoning.enabled` defaults to `False`
+  (`atlas_brain/config.py:21-24`).
+- `reasoning_tick` is not registered in
+  `_DEFAULT_TASKS` (`atlas_brain/autonomous/scheduler.py:283-929`).
+- API endpoints (`/reasoning/events`, `/reasoning/locks`) are gated
+  by the same disabled-by-default flag.
+- `emit_if_enabled()` in `producers.py:26-27` is a no-op when the
+  flag is off.
+- `main.py` startup tries to start `EventBus` + `EventConsumer` but
+  swallows all exceptions as "non-fatal".
+
+So unless `ATLAS_REASONING__ENABLED=true` is set in the live
+deployment, System B is paper-only — no events flowing, no agent
+processing, no `processing_result` rows.
+
+### The Knowledge Graph is write-only
+
+- `atlas_brain/autonomous/tasks/knowledge_graph_sync.py` (51 LOC)
+  runs nightly, upserting `b2b_*` Postgres rows into Neo4j.
+- The only Cypher / Neo4j query call sites in the live codebase are
+  the writer itself, the external `graphiti-wrapper/main.py`, and
+  tests. `services/intelligence_report.py:784` references
+  `"knowledge_graph"` once but that's a string label, not a query.
+- The KG database is being maintained but no live application code
+  reads from it. Either the read path was disconnected at some point,
+  or it was never finished landing. Today: it's a write-only side
+  effect with a Neo4j infrastructure cost.
+
+### Three paths considered
+
+| | Build fresh | Extract System B | Fill `extracted_reasoning_core` stubs from System A |
+|---|---|---|---|
+| Cost | ~1,400 LOC, 2-3 weeks | ~3,500-5,000 LOC, 6-9 weeks | ~2,000-3,000 LOC, 4-6 weeks |
+| Risk | Design risk on what multi-step looks like; integration risk for `CampaignReasoningContextProvider` | System B's domain coupling (CRM / email / voice / calendar / B2B service deps drag along); cold in production today | Two-system split needs resolution first; otherwise straightforward |
+| What you get | Clean reasoner with no Atlas baggage; no reference implementation of multi-step in a real product | Working multi-step machinery but specific to event-driven contact intelligence; output shape is wrong for campaign generation | Working reasoning service that already matches what campaign generation consumes |
+
+### Recommendation (tabled, not in flight)
+
+The two-system split is real but only one of them is worth
+extracting. System A is active and feeds campaign generation today.
+System B is dormant and answers a different question (event reaction
+vs vendor intelligence).
+
+Recommended path when this work resumes:
+
+1. Confirm whether `ATLAS_REASONING__ENABLED=true` is set in the live
+   atlas deployment. If yes, System B is producing event reactions
+   that no consumer reads. If no, System B is paper-only and the
+   decision is easier.
+2. Extract System A's machinery (prompt + witness compression +
+   validation rules + retry orchestration) into
+   `extracted_reasoning_core`, replacing the four
+   `NotImplementedError` stubs (~4-6 weeks, ~2,000-3,000 LOC).
+3. Quarantine System B in a sub-package (e.g.
+   `atlas_brain/reasoning_event_agent/`) and stop treating it as
+   part of the reasoning extraction surface. If the event-reactive
+   agent ever becomes its own product (personal assistant surface vs
+   B2B vendor intelligence), extract it separately with its own value
+   prop.
+4. Either reactivate the Knowledge Graph (wire KG queries into the
+   reasoning prompt as a context source) or retire the nightly sync
+   and drop Neo4j from the stack. Letting it run as a write-only side
+   effect is the worst of both options.
+
+Status: tabled. Not committing to any of these paths in this PR.
