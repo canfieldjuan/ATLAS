@@ -27,6 +27,7 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | `services/b2b/source_impact.py` | Source impact ledger (which sources feed which products) |
 | `services/b2b/battle_card_ports.py` | Host port for battle-card shared helper, data-read, and synthesis-reader support |
 | `services/b2b/vendor_briefing_ports.py` | Host port for vendor briefing evidence, scorecard, and synthesis-reader support |
+| `services/b2b/product_claim.py` | Compatibility surface for `extracted_quality_gate.product_claim` |
 | `autonomous/tasks/b2b_battle_cards.py` | Deterministic battle card builder + LLM overlay (~5K LOC) |
 | `autonomous/tasks/b2b_vendor_briefing.py` | Vendor churn briefing assembly + Resend send |
 | `autonomous/tasks/_b2b_batch_utils.py` | Product-owned Anthropic batch helper logic |
@@ -77,6 +78,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `services/scraping/sources.py` owns the source enum and classification sets locally
 - MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed
 - `services/b2b/challenger_dashboard_claims.py` uses fail-closed host reader ports for displacement ProductClaim aggregation
+- `services/b2b/product_claim.py` re-exports the `extracted_quality_gate.product_claim` contract instead of bridging to Atlas
 - Lazy package fallbacks fail closed in standalone mode instead of silently importing Atlas package namespaces
 
 Standalone adapters that require a host application fail closed until configured.
@@ -144,6 +146,11 @@ briefing evidence, scorecard, and synthesis-reader support. The mapped vendor
 briefing task no longer imports `_b2b_shared.py` or `_b2b_synthesis_reader.py`
 directly for those helpers; Atlas uses the default bridge, while standalone
 competitive hosts must register explicit support adapters.
+
+`services/b2b/product_claim.py` is a product-owned compatibility surface over
+`extracted_quality_gate.product_claim`. Competitive Intelligence consumes the
+shared quality-gate ProductClaim envelope without importing Atlas product-claim
+internals or copying the claim engine.
 
 `templates/email/vendor_briefing.py` is a product-owned customer-facing
 renderer. It no longer imports runtime settings; hosts configure the fallback
