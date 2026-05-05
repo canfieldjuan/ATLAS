@@ -3157,6 +3157,8 @@ class B2BChurnConfig(BaseSettings):
 
     # Briefing gate (email capture for full report)
     vendor_briefing_gate_base_url: str = Field(default="https://churnsignals.co/report", description="Base URL for briefing gate landing page")
+    vendor_briefing_report_base_url: str = Field(default="https://churnsignals.co/report", description="Base URL for vendor briefing report checkout and delivery pages")
+    vendor_briefing_reply_to_email: str = Field(default="outreach@churnsignals.co", description="Reply-to email for vendor briefing report delivery")
     vendor_briefing_gate_expiry_days: int = Field(default=7, description="Gate token expiry in days")
 
     reasoning_synthesis_attempts: int = Field(
@@ -4792,6 +4794,8 @@ class CampaignSequenceConfig(BaseSettings):
     )
     resend_api_key: str = Field(default="", description="Resend ESP API key")
     resend_from_email: str = Field(default="", description="Resend sender email address")
+    resend_api_url: str = Field(default="https://api.resend.com/emails", description="Resend email send API URL")
+    resend_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0, description="Timeout for Resend email send requests")
     resend_webhook_signing_secret: str = Field(
         default="", description="Resend webhook signature verification secret"
     )

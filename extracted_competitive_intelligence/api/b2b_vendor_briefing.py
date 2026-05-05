@@ -32,6 +32,14 @@ from ..autonomous.tasks.b2b_vendor_briefing import (
     send_vendor_briefing,
 )
 from ..autonomous.tasks.campaign_suppression import is_suppressed
+from ..services.b2b.vendor_briefing_api_ports import (
+    VendorBriefingAPIError,
+    VendorBriefingAPINotConfigured,
+    create_vendor_checkout_session,
+    retrieve_vendor_checkout_session,
+    send_checkout_confirmation_email,
+    send_gated_report_email,
+)
 from ..templates.email.vendor_briefing import render_vendor_briefing_html
 
 logger = logging.getLogger("atlas.api.b2b_vendor_briefing")
@@ -480,50 +488,14 @@ async def briefing_gate(body: GateRequest):
         rd = full_report_row["intelligence_data"]
         full_report_data = json.loads(rd) if isinstance(rd, str) else rd
 
-    # Generate full vendor report PDF
-    import base64
-    import httpx as _httpx
-    from ..services.b2b.pdf_renderer import render_vendor_full_report_pdf
-    from ..templates.email.vendor_report_delivery import (
-        render_report_delivery_html,
-        render_report_delivery_text,
-    )
-
-    pdf_bytes = render_vendor_full_report_pdf(
-        vendor_name=vendor_name,
-        report_data=full_report_data,
-        briefing_data=briefing_data,
-    )
-
-    # Send cover email with PDF attachment via Resend (churnsignals.co sender)
-    cover_html = render_report_delivery_html(vendor_name)
-    slug = vendor_name.lower().replace(" ", "-")
-    sender_name = settings.b2b_churn.vendor_briefing_sender_name
-    cfg = settings.campaign_sequence
-
     try:
-        async with _httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                "https://api.resend.com/emails",
-                headers={
-                    "Authorization": f"Bearer {cfg.resend_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "from": f"{sender_name} <{cfg.resend_from_email}>",
-                    "to": [email],
-                    "subject": f"Your {vendor_name} Churn Intelligence Report",
-                    "html": cover_html,
-                    "reply_to": "outreach@churnsignals.co",
-                    "attachments": [{
-                        "filename": f"{slug}-churn-report.pdf",
-                        "content": base64.b64encode(pdf_bytes).decode("utf-8"),
-                    }],
-                },
-            )
-            resp.raise_for_status()
-            logger.info("Gate report email sent via Resend: %s", resp.json().get("id"))
-    except Exception:
+        await send_gated_report_email(
+            vendor_name=vendor_name,
+            recipient_email=email,
+            report_data=full_report_data,
+            briefing_data=briefing_data,
+        )
+    except VendorBriefingAPIError:
         logger.exception("Failed to send gated report email")
         raise HTTPException(status_code=500, detail="Failed to send report")
 
@@ -555,49 +527,21 @@ async def briefing_gate(body: GateRequest):
 @router.post("/checkout")
 async def vendor_checkout(body: VendorCheckoutRequest):
     """Create a Stripe Checkout Session for vendor retention intel subscription."""
-    import stripe
-    from urllib.parse import quote
-
-    cfg = settings.saas_auth
-    if not cfg.stripe_secret_key:
-        raise HTTPException(status_code=503, detail="Stripe not configured")
-    stripe.api_key = cfg.stripe_secret_key
-
-    price_id = (
-        cfg.stripe_vendor_standard_price_id
-        if body.tier == "standard"
-        else cfg.stripe_vendor_pro_price_id
-    )
-    if not price_id:
-        raise HTTPException(
-            status_code=503,
-            detail=f"No Stripe price configured for vendor {body.tier} tier",
-        )
-
-    vendor_encoded = quote(body.vendor_name)
-    session_params: dict = {
-        "mode": "subscription",
-        "line_items": [{"price": price_id, "quantity": 1}],
-        "success_url": f"https://churnsignals.co/report?vendor={vendor_encoded}&checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-        "cancel_url": f"https://churnsignals.co/report?vendor={vendor_encoded}&checkout=cancelled",
-        "metadata": {
-            "vendor_name": body.vendor_name,
-            "tier": body.tier,
-            "source": "vendor_briefing_report",
-        },
-    }
-    if body.email:
-        session_params["customer_email"] = body.email.lower()
-
     try:
-        session = stripe.checkout.Session.create(**session_params)
-    except stripe.StripeError as exc:
+        session = await create_vendor_checkout_session(
+            vendor_name=body.vendor_name,
+            tier=body.tier,
+            customer_email=body.email,
+        )
+    except VendorBriefingAPINotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except VendorBriefingAPIError as exc:
         logger.error("Stripe checkout creation failed: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to create checkout session")
 
     logger.info(
         "Vendor checkout session: vendor=%s tier=%s session=%s",
-        body.vendor_name, body.tier, session.id,
+        body.vendor_name, body.tier, session.url,
     )
     return {"url": session.url}
 
@@ -608,31 +552,24 @@ async def checkout_session_info(session_id: str = Query(..., min_length=10)):
 
     Also fires the purchase confirmation email on first call (idempotent).
     """
-    import stripe
-
     session_id = _clean_required_query_text(session_id, field_name="session_id")
-    cfg = settings.saas_auth
-    if not cfg.stripe_secret_key:
-        raise HTTPException(status_code=503, detail="Stripe not configured")
-    stripe.api_key = cfg.stripe_secret_key
 
     try:
-        session = stripe.checkout.Session.retrieve(session_id)
-    except stripe.StripeError as exc:
+        session = await retrieve_vendor_checkout_session(session_id)
+    except VendorBriefingAPINotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except VendorBriefingAPIError as exc:
         logger.warning("Stripe session retrieval failed: %s", exc)
         raise HTTPException(status_code=400, detail="Invalid session")
 
-    customer_email = (
-        session.customer_details.email if session.customer_details else session.customer_email
-    ) or ""
-    meta = session.metadata or {}
-    vendor_name = meta.get("vendor_name", "")
-    tier = meta.get("tier", "standard")
+    customer_email = session.customer_email
+    vendor_name = session.vendor_name
+    tier = session.tier
 
     # Send confirmation email only after successful payment
     # (idempotent -- dedup by session_id in billing_events)
-    payment_ok = getattr(session, "payment_status", None) == "paid"
-    if customer_email and meta.get("source") == "vendor_briefing_report" and payment_ok:
+    payment_ok = session.payment_status == "paid"
+    if customer_email and session.source == "vendor_briefing_report" and payment_ok:
         pool = get_db_pool()
         dedup_key = f"vendor_checkout_email_{session_id}"
         already_sent = await pool.fetchval(
@@ -640,22 +577,10 @@ async def checkout_session_info(session_id: str = Query(..., min_length=10)):
         )
         if not already_sent:
             try:
-                from ..templates.email.vendor_checkout_confirmation import (
-                    render_checkout_confirmation_html,
-                    render_checkout_confirmation_text,
-                )
-                from ..services.email_provider import get_email_provider
-
-                html = render_checkout_confirmation_html(vendor_name, tier, customer_email)
-                text = render_checkout_confirmation_text(vendor_name, tier)
-
-                email_provider = get_email_provider()
-                await email_provider.send(
-                    to=[customer_email],
-                    subject=f"Subscription Confirmed: {vendor_name} Churn Intelligence",
-                    body=text,
-                    html=html,
-                    reply_to="outreach@churnsignals.co",
+                await send_checkout_confirmation_email(
+                    vendor_name=vendor_name,
+                    tier=tier,
+                    customer_email=customer_email,
                 )
                 # Mark as sent so webhook doesn't double-send
                 await pool.execute(

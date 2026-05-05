@@ -39,12 +39,15 @@ MODULES = [
     "extracted_competitive_intelligence.autonomous.tasks.b2b_battle_cards",
     "extracted_competitive_intelligence.autonomous.tasks.b2b_vendor_briefing",
     "extracted_competitive_intelligence.autonomous.tasks._b2b_cross_vendor_synthesis",
+    "extracted_competitive_intelligence.services.b2b.vendor_briefing_api_ports",
     "extracted_competitive_intelligence.services.b2b_competitive_sets",
     "extracted_competitive_intelligence.reasoning.ecosystem",
     "extracted_competitive_intelligence.reasoning.cross_vendor_selection",
     "extracted_competitive_intelligence.reasoning.single_pass_prompts.cross_vendor_battle",
     "extracted_competitive_intelligence.reasoning.single_pass_prompts.battle_card_reasoning",
     "extracted_competitive_intelligence.templates.email.vendor_briefing",
+    "extracted_competitive_intelligence.templates.email.vendor_report_delivery",
+    "extracted_competitive_intelligence.templates.email.vendor_checkout_confirmation",
     "extracted_competitive_intelligence.api.b2b_vendor_briefing",
 ]
 

@@ -21,6 +21,7 @@ python -m pytest -q \
   tests/test_extracted_competitive_crm_provider_port.py \
   tests/test_extracted_competitive_email_provider_port.py \
   tests/test_extracted_competitive_pdf_renderer_port.py \
+  tests/test_extracted_competitive_vendor_briefing_api_ports.py \
   tests/test_extracted_competitive_llm_exact_cache_bridge.py \
   tests/test_extracted_competitive_anthropic_batch_bridge.py \
   tests/test_extracted_competitive_batch_utils.py \
