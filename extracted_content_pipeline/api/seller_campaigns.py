@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 try:
@@ -39,6 +40,8 @@ from ..campaign_postgres_seller_targets import (
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[Any]]
+logger = logging.getLogger(__name__)
+_REFRESH_ERROR_SUMMARY = "One or more categories failed to refresh."
 
 
 @dataclass(frozen=True)
@@ -169,6 +172,8 @@ def _payload_limit(
     raw_value = payload.get(key)
     if isinstance(raw_value, bool):
         raise HTTPException(status_code=400, detail=f"{key} must be an integer")
+    if isinstance(raw_value, float):
+        raise HTTPException(status_code=400, detail=f"{key} must be an integer")
     try:
         value = default if raw_value is None else int(raw_value)
     except (TypeError, ValueError) as exc:
@@ -204,6 +209,18 @@ def _scope_account_id(scope: TenantScope | Mapping[str, Any] | None) -> str | No
     if isinstance(scope, Mapping):
         return _clean(scope.get("account_id")) or None
     return None
+
+
+def _public_refresh_result(result: Any) -> dict[str, Any]:
+    data = result.as_dict()
+    if data.get("errors"):
+        logger.warning(
+            "Seller category refresh completed with %s failure(s): %s",
+            data.get("failed", 0),
+            data.get("errors"),
+        )
+        data["errors"] = [_REFRESH_ERROR_SUMMARY]
+    return data
 
 
 def _api_offset(value: int | None) -> int:
@@ -262,7 +279,7 @@ def create_seller_campaign_router(
             metadata_table=resolved_config.category_metadata_table,
             snapshots_table=resolved_config.category_snapshots_table,
         )
-        return result.as_dict()
+        return _public_refresh_result(result)
 
     async def _prepare_operation(
         pool: Any,

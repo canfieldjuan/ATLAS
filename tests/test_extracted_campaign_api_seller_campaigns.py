@@ -385,6 +385,47 @@ def test_seller_campaign_router_rejects_boolean_numeric_payload(monkeypatch) -> 
     assert calls == []
 
 
+def test_seller_campaign_router_rejects_float_numeric_payload(monkeypatch) -> None:
+    calls = []
+
+    async def _refresh(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(refreshed=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+
+    response = _client(_Pool()).post(
+        "/seller/intelligence/refresh",
+        json={"category": "supplements", "limit": 7.9},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "limit must be an integer"
+    assert calls == []
+
+
+def test_seller_campaign_router_sanitizes_refresh_errors(monkeypatch) -> None:
+    async def _refresh(_pool, **_kwargs):
+        return _Result(
+            refreshed=0,
+            failed=1,
+            errors=["supplements: SELECT * FROM private_table failed"],
+        )
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+
+    response = _client(_Pool()).post(
+        "/seller/intelligence/refresh",
+        json={"category": "supplements"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["failed"] == 1
+    assert response.json()["errors"] == [
+        seller_api._REFRESH_ERROR_SUMMARY,
+    ]
+
+
 def test_seller_campaign_router_rejects_unknown_boolean_payload(monkeypatch) -> None:
     calls = []
 
