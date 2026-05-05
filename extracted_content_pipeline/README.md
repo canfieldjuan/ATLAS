@@ -373,10 +373,11 @@ python scripts/progress_extracted_campaign_sequences.py \
   --json
 ```
 
-Hosts with FastAPI apps can mount the same send, sequence progression, and
-analytics worker triggers through a hosted operations router. The host injects
-its database pool, sender, optional LLM/skill providers, and auth dependencies;
-request payloads only control batch limits.
+Hosts with FastAPI apps can mount draft generation, send, sequence progression,
+and analytics worker triggers through a hosted operations router. The host
+injects its database pool, sender, optional LLM/skill/reasoning providers, and
+auth dependencies; request payloads only control tenant scope, target/channel,
+filters, and batch sizing.
 
 ```python
 from fastapi import Depends
@@ -393,6 +394,7 @@ app.include_router(
         sender_provider=get_campaign_sender,
         llm_provider=get_campaign_llm,
         skills_provider=get_campaign_skills,
+        reasoning_context_provider=get_campaign_reasoning_context,
         config=CampaignOperationsApiConfig(
             send_default_from_email="audit@customer.com",
             sequence_from_email="audit@customer.com",
@@ -402,7 +404,8 @@ app.include_router(
 )
 ```
 
-This adds `POST /campaigns/operations/send/queued`,
+This adds `POST /campaigns/operations/drafts/generate`,
+`POST /campaigns/operations/send/queued`,
 `POST /campaigns/operations/sequences/progress`, and
 `POST /campaigns/operations/analytics/refresh` without exposing provider
 credentials, sender identity, unsubscribe policy, or LLM configuration through
@@ -508,7 +511,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `api/campaign_webhooks.py`: optional FastAPI router factory for host-mounted
   campaign webhook and unsubscribe routes
 - `api/campaign_operations.py`: optional FastAPI router factory for
-  host-mounted send, sequence progression, and analytics operation triggers
+  host-mounted draft generation, send, sequence progression, and analytics
+  operation triggers
 - `api/b2b_campaigns.py`: optional FastAPI router factory for host-mounted
   B2B draft list/export/review routes
 - `api/seller_campaigns.py`: optional FastAPI router factory for host-mounted
