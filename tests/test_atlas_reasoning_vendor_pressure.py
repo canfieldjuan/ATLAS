@@ -5,11 +5,16 @@ expresses the existing churn / vendor-pressure reasoning flow as a
 ``DomainReasoningResult[VendorPressurePayload]`` and that its consumer
 projection matches the legacy ``_b2b_reasoning_consumer_adapter``
 output bit-for-bit (including the sparse-entry contract from PR #184).
+
+These tests deliberately exercise the ``_from_entry`` path instead of
+the synthesis-view wrapper. The wrapper does a deferred import of
+``atlas_brain.autonomous.tasks._b2b_synthesis_reader`` (which pulls
+in the storage/scheduler chain), and that's not in the standalone-CI
+dep set. The dict-in path covers the same logic without crossing that
+boundary; the wrapper itself is just a thin import + delegate.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 import pytest
 
@@ -17,6 +22,7 @@ from atlas_brain.reasoning.vendor_pressure import (
     VendorOpportunitySubject,
     VendorPressureConsumer,
     VendorPressurePayload,
+    vendor_pressure_result_from_entry,
     vendor_pressure_result_from_synthesis_view,
 )
 from extracted_reasoning_core.domains import (
@@ -64,29 +70,23 @@ def test_vendor_pressure_domain_is_registered() -> None:
 
 
 # ---------------------------------------------------------------------
-# vendor_pressure_result_from_synthesis_view
+# vendor_pressure_result_from_entry
 # ---------------------------------------------------------------------
 
 
-def test_result_from_full_synthesis_view(monkeypatch) -> None:
-    def _fake_entry(_view: Any) -> dict[str, Any]:
-        return {
-            "archetype": "price_squeeze",
-            "confidence": 0.82,
-            "mode": "synthesis",
-            "risk_level": "high",
-            "executive_summary": "Acme is reviewing vendors before renewal.",
-            "key_signals": ["pricing_mentions", "exec_change"],
-            "uncertainty_sources": ["limited transcript coverage"],
-            "falsification_conditions": ["renewal signed within 7 days"],
-        }
+def test_result_from_full_entry() -> None:
+    entry = {
+        "archetype": "price_squeeze",
+        "confidence": 0.82,
+        "mode": "synthesis",
+        "risk_level": "high",
+        "executive_summary": "Acme is reviewing vendors before renewal.",
+        "key_signals": ["pricing_mentions", "exec_change"],
+        "uncertainty_sources": ["limited transcript coverage"],
+        "falsification_conditions": ["renewal signed within 7 days"],
+    }
 
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
-        _fake_entry,
-    )
-
-    result = vendor_pressure_result_from_synthesis_view(object(), subject_id="opp-1")
+    result = vendor_pressure_result_from_entry(entry, subject_id="opp-1")
 
     assert isinstance(result, DomainReasoningResult)
     assert result.subject_id == "opp-1"
@@ -99,18 +99,12 @@ def test_result_from_full_synthesis_view(monkeypatch) -> None:
     assert result.key_signals == ("pricing_mentions", "exec_change")
     assert result.uncertainty_sources == ("limited transcript coverage",)
     assert result.falsification_conditions == ("renewal signed within 7 days",)
-    # Domain payload carries the wedge identifier
     assert result.domain_payload.wedge == "price_squeeze"
 
 
-def test_result_from_sparse_synthesis_view(monkeypatch) -> None:
-    """Sparse views must produce stable result fields (PR #184 contract)."""
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
-        lambda _view: {},
-    )
-
-    result = vendor_pressure_result_from_synthesis_view(object())
+def test_result_from_empty_entry() -> None:
+    """Sparse entries must produce stable result fields (PR #184 contract)."""
+    result = vendor_pressure_result_from_entry({})
 
     assert result.subject_id == ""
     assert result.domain == "vendor_pressure"
@@ -125,27 +119,45 @@ def test_result_from_sparse_synthesis_view(monkeypatch) -> None:
     assert result.domain_payload.wedge is None
 
 
-def test_result_handles_explicit_null_lists(monkeypatch) -> None:
-    """Producer dict may set list keys to explicit None; envelope still gets empty tuples."""
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
-        lambda _view: {
-            "archetype": "support_erosion",
-            "confidence": 0.44,
-            "mode": "synthesis",
-            "risk_level": "medium",
-            "executive_summary": "summary",
-            "key_signals": None,
-            "uncertainty_sources": None,
-            "falsification_conditions": None,
-        },
-    )
+def test_result_from_none_entry_is_sparse() -> None:
+    """``None`` entry -> same result shape as empty dict."""
+    result = vendor_pressure_result_from_entry(None)
+    assert result.confidence is None
+    assert result.archetype is None
+    assert result.key_signals == ()
 
-    result = vendor_pressure_result_from_synthesis_view(object())
+
+def test_result_handles_explicit_null_lists() -> None:
+    """Producer dict may set list keys to explicit None; envelope still gets empty tuples."""
+    entry = {
+        "archetype": "support_erosion",
+        "confidence": 0.44,
+        "mode": "synthesis",
+        "risk_level": "medium",
+        "executive_summary": "summary",
+        "key_signals": None,
+        "uncertainty_sources": None,
+        "falsification_conditions": None,
+    }
+
+    result = vendor_pressure_result_from_entry(entry)
 
     assert result.key_signals == ()
     assert result.uncertainty_sources == ()
     assert result.falsification_conditions == ()
+
+
+# ---------------------------------------------------------------------
+# vendor_pressure_result_from_synthesis_view (thin wrapper)
+# ---------------------------------------------------------------------
+
+
+def test_synthesis_view_wrapper_short_circuits_on_none() -> None:
+    """``view=None`` must not trigger the deferred synthesis-reader import."""
+    result = vendor_pressure_result_from_synthesis_view(None, subject_id="opp-1")
+    assert result.subject_id == "opp-1"
+    assert result.confidence is None
+    assert result.archetype is None
 
 
 # ---------------------------------------------------------------------
@@ -161,8 +173,8 @@ def _full_result() -> DomainReasoningResult[VendorPressurePayload]:
     return DomainReasoningResult(
         subject_id="opp-1",
         domain="vendor_pressure",
-        domain_payload=VendorPressurePayload(wedge="price_squeeze"),
         confidence=0.82,
+        domain_payload=VendorPressurePayload(wedge="price_squeeze"),
         mode="synthesis",
         risk_level="high",
         archetype="price_squeeze",
@@ -207,6 +219,7 @@ def test_consumer_sparse_result_keeps_stable_keys() -> None:
     sparse = DomainReasoningResult(
         subject_id="",
         domain="vendor_pressure",
+        confidence=None,
         domain_payload=VendorPressurePayload(),
     )
     consumer = VendorPressureConsumer()
@@ -238,56 +251,3 @@ def test_consumer_sparse_result_keeps_stable_keys() -> None:
     assert detail["reasoning_key_signals"] == []
     assert detail["reasoning_uncertainty_sources"] == []
     assert detail["falsification_conditions"] == []
-
-
-# ---------------------------------------------------------------------
-# End-to-end: legacy adapter shim still produces identical wire shape
-# ---------------------------------------------------------------------
-
-
-def test_legacy_adapter_shim_summary_matches(monkeypatch) -> None:
-    """Wire shape preservation: legacy two-function adapter -> typed pathway -> back."""
-    from atlas_brain.autonomous.tasks import _b2b_reasoning_consumer_adapter as adapter
-
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
-        lambda _view: {
-            "archetype": "price_squeeze",
-            "confidence": 0.82,
-            "mode": "synthesis",
-            "risk_level": "high",
-        },
-    )
-
-    out = adapter.reasoning_summary_fields_from_view(object())
-    assert out == {
-        "archetype": "price_squeeze",
-        "archetype_confidence": 0.82,
-        "reasoning_mode": "synthesis",
-        "reasoning_risk_level": "high",
-    }
-
-
-def test_legacy_adapter_shim_detail_matches(monkeypatch) -> None:
-    from atlas_brain.autonomous.tasks import _b2b_reasoning_consumer_adapter as adapter
-
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
-        lambda _view: {
-            "archetype": "support_erosion",
-            "confidence": 0.44,
-            "mode": "synthesis",
-            "risk_level": "medium",
-            "executive_summary": "summary",
-        },
-    )
-
-    out = adapter.reasoning_detail_fields_from_view(object())
-    assert out["archetype"] == "support_erosion"
-    assert out["archetype_confidence"] == pytest.approx(0.44)
-    assert out["reasoning_mode"] == "synthesis"
-    assert out["reasoning_risk_level"] == "medium"
-    assert out["reasoning_executive_summary"] == "summary"
-    assert out["reasoning_key_signals"] == []
-    assert out["reasoning_uncertainty_sources"] == []
-    assert out["falsification_conditions"] == []

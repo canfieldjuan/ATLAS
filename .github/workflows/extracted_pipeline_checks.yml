@@ -23,8 +23,6 @@ on:
       - "tests/test_atlas_reasoning_state_*.py"
       - "tests/test_atlas_reasoning_port_adapters.py"
       - "tests/test_atlas_reasoning_vendor_pressure.py"
-      - "tests/test_b2b_reasoning_consumer_adapter.py"
-      - "tests/test_b2b_mcp_signals_overlay_contract.py"
   push:
     paths:
       - "extracted_content_pipeline/**"
@@ -47,8 +45,6 @@ on:
       - "tests/test_atlas_reasoning_state_*.py"
       - "tests/test_atlas_reasoning_port_adapters.py"
       - "tests/test_atlas_reasoning_vendor_pressure.py"
-      - "tests/test_b2b_reasoning_consumer_adapter.py"
-      - "tests/test_b2b_mcp_signals_overlay_contract.py"
 
 jobs:
   extracted-checks:

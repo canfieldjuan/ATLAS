@@ -83,25 +83,23 @@ class VendorPressurePayload:
     wedge: str | None = None
 
 
-def vendor_pressure_result_from_synthesis_view(
-    view: object,
+def vendor_pressure_result_from_entry(
+    entry: Mapping[str, Any] | None,
     *,
     subject_id: str = "",
 ) -> DomainReasoningResult[VendorPressurePayload]:
-    """Build a typed reasoning result from a vendor synthesis view.
+    """Build a typed reasoning result from a reasoning-entry dict.
 
-    Routes through ``_b2b_synthesis_reader.synthesis_view_to_reasoning_entry``
-    so the universal-field semantics match exactly what shared report
-    builders and the legacy consumer adapter expect. Sparse views (where
-    ``synthesis_view_to_reasoning_entry`` returns an empty dict) produce
-    a result with all-None scalar fields and empty-tuple list fields,
-    matching the contract from PR #184.
+    Pure dict-in / envelope-out conversion. Tests use this directly with
+    synthetic entries, avoiding the ``atlas_brain.autonomous.tasks``
+    import chain (which pulls in storage / asyncpg / scheduler that
+    aren't in the standalone-CI dep set).
+
+    A ``None`` or empty entry produces a result with all-None scalar
+    fields and empty-tuple list fields, matching the PR #184 sparse
+    contract that ``signals.py`` overlays rely on.
     """
-    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
-        synthesis_view_to_reasoning_entry,
-    )
-
-    entry = synthesis_view_to_reasoning_entry(view) if view is not None else {}
+    entry = entry or {}
 
     key_signals_raw = entry.get("key_signals") or []
     if not isinstance(key_signals_raw, list):
@@ -118,8 +116,8 @@ def vendor_pressure_result_from_synthesis_view(
     return DomainReasoningResult(
         subject_id=subject_id,
         domain="vendor_pressure",
-        domain_payload=VendorPressurePayload(wedge=archetype),
         confidence=entry.get("confidence"),
+        domain_payload=VendorPressurePayload(wedge=archetype),
         executive_summary=entry.get("executive_summary"),
         key_signals=tuple(key_signals_raw),
         uncertainty_sources=tuple(uncertainty_raw),
@@ -129,6 +127,30 @@ def vendor_pressure_result_from_synthesis_view(
         archetype=archetype,
         reference_ids=ReferenceIds(),
     )
+
+
+def vendor_pressure_result_from_synthesis_view(
+    view: object,
+    *,
+    subject_id: str = "",
+) -> DomainReasoningResult[VendorPressurePayload]:
+    """Build a typed reasoning result from a vendor synthesis view.
+
+    Production wrapper that routes through
+    ``_b2b_synthesis_reader.synthesis_view_to_reasoning_entry`` then
+    delegates to :func:`vendor_pressure_result_from_entry`. The deferred
+    import keeps this module loadable without the ``atlas_brain.autonomous``
+    dep chain when callers only need the dict-in path.
+    """
+    if view is None:
+        return vendor_pressure_result_from_entry({}, subject_id=subject_id)
+
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
+        synthesis_view_to_reasoning_entry,
+    )
+
+    entry = synthesis_view_to_reasoning_entry(view)
+    return vendor_pressure_result_from_entry(entry, subject_id=subject_id)
 
 
 class VendorPressureConsumer:
@@ -195,5 +217,6 @@ __all__ = [
     "VendorOpportunitySubject",
     "VendorPressureConsumer",
     "VendorPressurePayload",
+    "vendor_pressure_result_from_entry",
     "vendor_pressure_result_from_synthesis_view",
 ]
