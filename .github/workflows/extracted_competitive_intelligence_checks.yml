@@ -16,6 +16,16 @@ on:
       - "tests/test_extracted_competitive_cross_vendor_selection.py"
       - "tests/test_extracted_competitive_prompt_contracts.py"
       - "tests/test_extracted_competitive_ecosystem_port.py"
+      # Wire-shape regression tests for the b2b reasoning consumer
+      # adapter + MCP signal overlay. These import the full
+      # atlas_brain.autonomous / atlas_brain.mcp.b2b chain (apscheduler,
+      # asyncpg, mcp, torch) which is why they live in this heavier
+      # workflow tier rather than extracted_pipeline_checks.
+      - "tests/test_b2b_reasoning_consumer_adapter.py"
+      - "tests/test_b2b_mcp_signals_overlay_contract.py"
+      - "atlas_brain/autonomous/tasks/_b2b_reasoning_consumer_adapter.py"
+      - "atlas_brain/mcp/b2b/signals.py"
+      - "atlas_brain/reasoning/vendor_pressure.py"
       # Atlas source paths the manifest snapshots from. If any of these
       # change without a corresponding scaffold sync, the validate step
       # catches the drift.
@@ -53,6 +63,16 @@ on:
       - "tests/test_extracted_competitive_cross_vendor_selection.py"
       - "tests/test_extracted_competitive_prompt_contracts.py"
       - "tests/test_extracted_competitive_ecosystem_port.py"
+      # Wire-shape regression tests for the b2b reasoning consumer
+      # adapter + MCP signal overlay. These import the full
+      # atlas_brain.autonomous / atlas_brain.mcp.b2b chain (apscheduler,
+      # asyncpg, mcp, torch) which is why they live in this heavier
+      # workflow tier rather than extracted_pipeline_checks.
+      - "tests/test_b2b_reasoning_consumer_adapter.py"
+      - "tests/test_b2b_mcp_signals_overlay_contract.py"
+      - "atlas_brain/autonomous/tasks/_b2b_reasoning_consumer_adapter.py"
+      - "atlas_brain/mcp/b2b/signals.py"
+      - "atlas_brain/reasoning/vendor_pressure.py"
       - "atlas_brain/mcp/b2b/vendor_registry.py"
       - "atlas_brain/mcp/b2b/displacement.py"
       - "atlas_brain/mcp/b2b/cross_vendor.py"
