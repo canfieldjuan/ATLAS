@@ -509,94 +509,132 @@ async def _persist_batch_usage(
 ) -> None:
     """Write per-item ``llm_usage`` rows for a completed batch.
 
-    Idempotent: runs at most once per batch via the
-    ``usage_tracked=FALSE`` precondition in the UPDATE that flips
-    the flag. A concurrent poller losing the race is a no-op
-    (conditional update returns 0 rows).
+    Two-phase design (Codex P1 + Copilot on PR-D4c):
 
-    Per-item cost calculation applies the 50% Anthropic batch
-    discount. Customers see the discounted figure in their
-    ``/api/v1/llm/usage`` rollup -- which matches what Anthropic
-    actually charges them.
+    1. Pre-fetch all results from Anthropic into memory. No DB
+       writes happen yet -- if the SDK iteration fails mid-stream,
+       the usage_tracked flag stays FALSE and the next poll retries
+       cleanly.
+    2. Atomic claim flips usage_tracked FALSE->TRUE under
+       (id, account_id) so concurrent pollers and cross-account
+       batch_id misrouting both no-op.
+    3. Then persist. Trace_llm_call failures here are logged but
+       NOT rolled back, because the rollback + retry pattern would
+       re-emit the items that already landed and double-count
+       against the customer. Failure to write a single item is
+       recovered by ops (the partial-write is logged loudly).
+
+    Per-item cost applies the 50% Anthropic batch discount.
+    Customers see the discounted figure in
+    ``/api/v1/llm/usage`` -- matches what Anthropic actually
+    charges them.
     """
-    # Atomic claim: only proceed when usage_tracked transitions
-    # FALSE -> TRUE. A concurrent poller wins the race and the
-    # loser exits cleanly.
+    # Phase 1: Pre-fetch results from Anthropic. Materialize the
+    # async iterator into memory BEFORE we touch the DB. The SDK
+    # call is the most likely failure point (network, provider
+    # stall, rate limit), and surfacing the failure here means we
+    # never claim the batch -- next poll retries on a clean slate.
+    from anthropic import AsyncAnthropic
+
+    items_to_persist: list[dict[str, Any]] = []
+    async with AsyncAnthropic(
+        api_key=api_key,
+        timeout=ANTHROPIC_SDK_TIMEOUT_SECONDS,
+    ) as client:
+        results_iter = await client.messages.batches.results(provider_batch_id)
+        async for entry in results_iter:
+            custom_id = getattr(entry, "custom_id", "") or ""
+            result = getattr(entry, "result", None)
+            rtype = getattr(result, "type", None) if result else None
+            if rtype != "succeeded":
+                # Only successful items consumed tokens billed by
+                # Anthropic. Errored / canceled / expired items
+                # show in the failed_items counter but don't add
+                # to llm_usage.
+                continue
+            message = getattr(result, "message", None)
+            usage = getattr(message, "usage", None) if message else None
+            if usage is None:
+                continue
+            items_to_persist.append({
+                "custom_id": custom_id,
+                "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+                "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+                "cached_tokens": int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+                "cache_write_tokens": int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+                "provider_request_id": getattr(message, "id", None),
+            })
+
+    # Phase 2: Atomic claim. Only proceed when usage_tracked
+    # transitions FALSE -> TRUE. The ``account_id`` predicate
+    # (Copilot on PR-D4c) defends against batch_id reuse or
+    # misrouting flipping the flag on a row outside the caller's
+    # account.
     claim = await pool.fetchrow(
         """
         UPDATE llm_gateway_batches
         SET usage_tracked = TRUE
-        WHERE id = $1 AND usage_tracked = FALSE
+        WHERE id = $1 AND account_id = $2 AND usage_tracked = FALSE
         RETURNING id
         """,
         batch_id,
+        account_id,
     )
     if claim is None:
-        return  # Already tracked by an earlier poll.
+        return  # Already tracked by an earlier poll, or wrong account.
 
-    from anthropic import AsyncAnthropic
-
+    # Phase 3: Persist. Trace_llm_call failures are logged but we
+    # do NOT roll back the claim -- the rollback-and-retry pattern
+    # would re-emit the items already written and double-count
+    # against the customer. The pending-usage index in migration
+    # 318 lets ops scan for any straggler rows that need a
+    # follow-up.
     from ..pipelines.llm import trace_llm_call
 
-    try:
-        async with AsyncAnthropic(
-            api_key=api_key,
-            timeout=ANTHROPIC_SDK_TIMEOUT_SECONDS,
-        ) as client:
-            results_iter = await client.messages.batches.results(provider_batch_id)
-            async for entry in results_iter:
-                custom_id = getattr(entry, "custom_id", "") or ""
-                result = getattr(entry, "result", None)
-                rtype = getattr(result, "type", None) if result else None
-                if rtype != "succeeded":
-                    # Only successful items consumed tokens billed by
-                    # Anthropic. Errored / canceled / expired items
-                    # show in the failed_items counter but don't add
-                    # to llm_usage.
-                    continue
-                message = getattr(result, "message", None)
-                usage = getattr(message, "usage", None) if message else None
-                if usage is None:
-                    continue
-                input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-                output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-                cached_tokens = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-                cache_write_tokens = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-                provider_request_id = getattr(message, "id", None)
-                trace_llm_call(
-                    span_name="llm_gateway.batch_item",
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cached_tokens=cached_tokens,
-                    cache_write_tokens=cache_write_tokens,
-                    billable_input_tokens=input_tokens,
+    persisted = 0
+    for item in items_to_persist:
+        try:
+            trace_llm_call(
+                span_name="llm_gateway.batch_item",
+                input_tokens=item["input_tokens"],
+                output_tokens=item["output_tokens"],
+                cached_tokens=item["cached_tokens"],
+                cache_write_tokens=item["cache_write_tokens"],
+                billable_input_tokens=item["input_tokens"],
+                model=model,
+                provider="anthropic",
+                provider_request_id=(
+                    str(item["provider_request_id"])
+                    if item["provider_request_id"]
+                    else None
+                ),
+                cost_usd_override=_BATCH_DISCOUNT_FACTOR
+                * _estimate_cost_usd(
                     model=model,
-                    provider="anthropic",
-                    provider_request_id=str(provider_request_id) if provider_request_id else None,
-                    cost_usd_override=_BATCH_DISCOUNT_FACTOR
-                    * _estimate_cost_usd(
-                        model=model,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        cached_tokens=cached_tokens,
-                        cache_write_tokens=cache_write_tokens,
-                    ),
-                    metadata={
-                        "account_id": str(account_id),
-                        "batch_id": str(batch_id),
-                        "custom_id": custom_id,
-                        "endpoint": "llm_gateway.batch",
-                    },
-                )
-    except Exception:
-        # Roll the claim back so a future poll retries the usage
-        # write. Otherwise a transient SDK error during
-        # results-fetch would lose the usage permanently.
-        await pool.execute(
-            "UPDATE llm_gateway_batches SET usage_tracked = FALSE WHERE id = $1",
-            batch_id,
-        )
-        raise
+                    input_tokens=item["input_tokens"],
+                    output_tokens=item["output_tokens"],
+                    cached_tokens=item["cached_tokens"],
+                    cache_write_tokens=item["cache_write_tokens"],
+                ),
+                metadata={
+                    "account_id": str(account_id),
+                    "batch_id": str(batch_id),
+                    "custom_id": item["custom_id"],
+                    "endpoint": "llm_gateway.batch",
+                },
+            )
+            persisted += 1
+        except Exception:
+            logger.exception(
+                "llm_gateway_batch.persist_usage: trace_llm_call failed "
+                "account=%s batch=%s custom_id=%s persisted=%d/%d",
+                account_id,
+                batch_id,
+                item["custom_id"],
+                persisted,
+                len(items_to_persist),
+            )
+            # Keep going. Partial loss > double-count.
 
 
 def _estimate_cost_usd(

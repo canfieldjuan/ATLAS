@@ -153,25 +153,56 @@ def test_persist_batch_usage_helper_exists():
 def test_persist_batch_usage_idempotent_via_atomic_claim():
     """The function must atomically transition usage_tracked
     FALSE->TRUE before doing the work. A concurrent poller losing
-    the race is a no-op (claim returns no rows)."""
+    the race is a no-op (claim returns no rows). Codex P1 + Copilot
+    on PR-D4c: claim is also account-scoped so a misrouted batch_id
+    can never flip the flag on a row outside the caller's account."""
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
-    assert "WHERE id = $1 AND usage_tracked = FALSE" in src
+    assert "WHERE id = $1 AND account_id = $2 AND usage_tracked = FALSE" in src
     assert "RETURNING id" in src
     # Loser path returns cleanly.
     assert "if claim is None:" in src
 
 
-def test_persist_batch_usage_rolls_back_on_error():
-    """If results-fetch raises (transient SDK error mid-iteration),
-    the usage_tracked flag must roll back so a future poll retries.
-    Otherwise the customer's usage would be lost permanently."""
+def test_persist_batch_usage_pre_fetches_before_claiming():
+    """Codex P1 + Copilot fix on PR-D4c: the SDK results fetch must
+    happen BEFORE the atomic claim, not after. Otherwise a transient
+    SDK error mid-iteration would happen with usage_tracked already
+    flipped to TRUE -- the rollback-then-retry pattern would re-emit
+    the items that already landed and double-count against the
+    customer. Pre-fetching means failures here leave usage_tracked
+    FALSE (no claim was made) so the next poll retries cleanly."""
     from atlas_brain.services import llm_gateway_batch
 
     src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
-    # Rollback path on exception.
-    assert "SET usage_tracked = FALSE WHERE id = $1" in src
+    fetch_idx = src.find("client.messages.batches.results")
+    claim_idx = src.find("SET usage_tracked = TRUE")
+    assert fetch_idx > 0 and claim_idx > 0, "Both phases must be present"
+    assert fetch_idx < claim_idx, (
+        "Results fetch must precede the atomic claim so SDK failures "
+        "don't leave the row in an unrecoverable claimed state."
+    )
+
+
+def test_persist_batch_usage_does_not_roll_back_after_claim():
+    """Codex P1 + Copilot on PR-D4c: once the claim flips
+    usage_tracked to TRUE, we must NOT roll it back to FALSE on
+    subsequent failures. trace_llm_call failures during the persist
+    phase are logged loudly but the claim stays TRUE so retries
+    can't double-emit the items that already landed. A pending-
+    usage index in migration 318 lets ops scan for orphaned
+    partial-write batches."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch._persist_batch_usage)
+    # No rollback statement.
+    assert "SET usage_tracked = FALSE" not in src
+    # But trace_llm_call failures still log so ops can see them.
+    assert (
+        'logger.exception(\n                '
+        '"llm_gateway_batch.persist_usage: trace_llm_call failed' in src
+    )
 
 
 def test_persist_batch_usage_only_counts_succeeded_items():
