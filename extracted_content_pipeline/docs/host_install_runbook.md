@@ -475,6 +475,12 @@ tenant scope, target/channel, filters, `limit`, and, for sequence progression,
 `max_steps`; provider credentials, sender identity, unsubscribe policy, LLM
 client, skill roots, and reasoning providers stay host-configured.
 
+For lightweight hosted installs without a separate reasoning provider, set
+`generation_single_pass_reasoning=True` on `CampaignOperationsApiConfig`. The
+draft generation route then builds `SinglePassCampaignReasoningProvider` from
+the injected LLM and skill providers before calling the Postgres generation
+runner. Explicit `reasoning_context_provider` injection still takes precedence.
+
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/campaigns/operations/drafts/generate` | Generate and persist campaign drafts from `campaign_opportunities`. |

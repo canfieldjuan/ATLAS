@@ -428,6 +428,14 @@ app.include_router(
 )
 ```
 
+If the host does not have a separate reasoning provider but does provide LLM and
+skill providers, it can omit `reasoning_context_provider` and enable the
+packaged single-pass provider:
+
+```python
+config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True)
+```
+
 This adds `POST /campaigns/operations/drafts/generate`,
 `POST /campaigns/operations/send/queued`,
 `POST /campaigns/operations/sequences/progress`, and
