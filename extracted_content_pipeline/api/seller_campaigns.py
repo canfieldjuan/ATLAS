@@ -150,7 +150,7 @@ def _parse_payload_list(value: Any, *, default: Sequence[str] = ()) -> tuple[str
 
 
 def _payload_categories(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    categories = list(_parse_payload_list(payload.get("categories")))
+    categories = list(dict.fromkeys(_parse_payload_list(payload.get("categories"))))
     single = _clean(payload.get("category"))
     if single and single not in categories:
         categories.append(single)
@@ -455,10 +455,12 @@ def create_seller_campaign_router(
         pool = await _resolve_pool(pool_provider)
         scope = await _resolve_scope(scope_provider)
         try:
+            continue_on_refresh_failure = _payload_bool(
+                resolved_payload,
+                "continue_on_refresh_failure",
+            )
             refresh_result = await _refresh_operation(pool, resolved_payload)
-            if refresh_result.get("failed") and not _payload_bool(
-                resolved_payload, "continue_on_refresh_failure"
-            ):
+            if refresh_result.get("failed") and not continue_on_refresh_failure:
                 return {
                     "refresh": refresh_result,
                     "prepare": None,
