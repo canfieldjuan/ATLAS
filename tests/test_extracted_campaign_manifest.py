@@ -14,6 +14,7 @@ CORE_CAMPAIGN_MIGRATIONS = {
     "073_campaign_sequence_fixes.sql",
     "074_campaign_target_modes.sql",
     "075_amazon_seller_campaigns.sql",
+    "092_subcategory_intelligence.sql",
     "090_audit_log_metadata_index.sql",
     "104_campaign_outcomes.sql",
     "146_campaign_score_components.sql",

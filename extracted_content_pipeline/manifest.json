@@ -105,6 +105,10 @@
       "target": "extracted_content_pipeline/storage/migrations/075_amazon_seller_campaigns.sql"
     },
     {
+      "source": "atlas_brain/storage/migrations/092_subcategory_intelligence.sql",
+      "target": "extracted_content_pipeline/storage/migrations/092_subcategory_intelligence.sql"
+    },
+    {
       "source": "atlas_brain/storage/migrations/090_audit_log_metadata_index.sql",
       "target": "extracted_content_pipeline/storage/migrations/090_audit_log_metadata_index.sql"
     },

@@ -70,7 +70,7 @@ async def refresh_seller_category_intelligence(
 
     normalized_min_reviews = _normalize_limit(min_reviews, "min_reviews")
     normalized_limit = _normalize_limit(limit, "limit")
-    category_names = tuple(_clean_sequence(categories))
+    category_names = _clean_sequence(categories)
     if not category_names:
         category_names = await _discover_categories(
             pool,
@@ -196,7 +196,7 @@ async def save_seller_category_intelligence_snapshot(
             top_root_causes
         ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb,
                   $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb)
-        ON CONFLICT (category, snapshot_date) DO UPDATE SET
+        ON CONFLICT (category, COALESCE(subcategory, ''), snapshot_date) DO UPDATE SET
             total_reviews = EXCLUDED.total_reviews,
             total_brands = EXCLUDED.total_brands,
             total_products = EXCLUDED.total_products,
@@ -405,7 +405,7 @@ def _normalize_known_brand(value: Any, known_brands: Mapping[str, str]) -> str:
         matched = known_brands.get(_brand_key(candidate))
         if matched:
             return matched
-    return ""
+    return " ".join(words).title()
 
 
 def _brand_key(value: Any) -> str:
@@ -623,7 +623,14 @@ def _jsonb(value: Any) -> str:
 
 
 def _clean_sequence(values: Sequence[Any]) -> tuple[str, ...]:
-    return tuple(item for item in (_clean(value) for value in values) if item)
+    seen: set[str] = set()
+    items: list[str] = []
+    for item in (_clean(value) for value in values):
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        items.append(item)
+    return tuple(items)
 
 
 def _clean(value: Any) -> str:

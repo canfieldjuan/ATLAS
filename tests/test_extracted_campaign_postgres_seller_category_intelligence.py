@@ -104,6 +104,12 @@ def _seed_aggregate_results(
                 "direction": "used_with",
                 "count": 10,
             },
+            {
+                "reviewed_brand": "Brand A",
+                "compared_product": "unmodeled competitor",
+                "direction": "switched_to",
+                "count": 2,
+            },
         ],
         [{"brand": "Brand A", "category": "labeling", "description": "missing", "flagged_count": 2}],
         [{"suggestion": "better seal", "count": 3, "affected_asins": ["a1", "a2"]}],
@@ -133,12 +139,20 @@ async def test_aggregate_seller_category_intelligence_builds_snapshot() -> None:
     }
     assert snapshot["top_pain_points"][0]["severity"] == "medium"
     assert snapshot["feature_gaps"][0]["avg_rating"] == 2.8
-    assert snapshot["competitive_flows"] == [{
-        "from_brand": "Brand A",
-        "to_brand": "Brand B",
-        "direction": "switched_to",
-        "count": 3,
-    }]
+    assert snapshot["competitive_flows"] == [
+        {
+            "from_brand": "Brand A",
+            "to_brand": "Brand B",
+            "direction": "switched_to",
+            "count": 3,
+        },
+        {
+            "from_brand": "Brand A",
+            "to_brand": "Unmodeled Competitor",
+            "direction": "switched_to",
+            "count": 2,
+        },
+    ]
     assert snapshot["brand_health"][0]["trend"] == "rising"
 
     brand_query, brand_args = pool.fetch_calls[0]
@@ -212,8 +226,7 @@ async def test_save_seller_category_intelligence_snapshot_upserts_json() -> None
 
     query, args = pool.execute_calls[0]
     assert "INSERT INTO \"category_intelligence_snapshots\"" in query
-    assert "ON CONFLICT (category, snapshot_date)" in query
-    assert "COALESCE(subcategory" not in query
+    assert "ON CONFLICT (category, COALESCE(subcategory, ''), snapshot_date)" in query
     assert args[:4] == ("supplements", 120, 8, 30)
     assert json.loads(args[4]) == [{"complaint": "leaky bottle"}]
     assert json.loads(args[10]) == [{"cause": "packaging"}]
@@ -290,6 +303,30 @@ async def test_refresh_does_not_limit_explicit_categories() -> None:
         if "SELECT brand" in query and "GROUP BY brand" in query
     ]
     assert len(known_brand_queries) == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_deduplicates_explicit_categories() -> None:
+    pool = _Pool()
+    pool.fetch_results = [_known_brand_rows()]
+    _seed_aggregate_results(pool, include_known_brands=False)
+    _seed_aggregate_results(pool, include_known_brands=False)
+
+    result = await refresh_seller_category_intelligence(
+        pool,
+        categories=("supplements", "supplements", "skincare", "skincare"),
+        min_reviews=50,
+    )
+
+    assert [args for _query, args in pool.fetchrow_calls] == [
+        ("supplements",),
+        ("skincare",),
+    ]
+    assert result.as_dict() == {
+        "refreshed": 2,
+        "skipped": 0,
+        "categories": ["supplements", "skincare"],
+    }
 
 
 @pytest.mark.asyncio
