@@ -29,6 +29,18 @@ B2B_PLAN_LIMITS = {
     "b2b_pro":     {"vendors": -1, "campaigns": True,  "reports": True, "api": True},
 }
 
+# LLM Gateway plan tiers (PR-D2). monthly_token_limit is advertised
+# here but enforced in PR-D4 against per-account llm_usage rows;
+# byok_keys_max gates how many provider API keys a customer can store
+# (PR-D5). cache_enabled / batch_enabled are feature gates for the
+# /api/v1/llm/* router.
+LLM_PLAN_LIMITS = {
+    "llm_trial":   {"monthly_token_limit": 1_000_000,   "cache_enabled": True, "batch_enabled": False, "byok_keys_max": 2},
+    "llm_starter": {"monthly_token_limit": 10_000_000,  "cache_enabled": True, "batch_enabled": True,  "byok_keys_max": 4},
+    "llm_growth":  {"monthly_token_limit": 100_000_000, "cache_enabled": True, "batch_enabled": True,  "byok_keys_max": 10},
+    "llm_pro":     {"monthly_token_limit": -1,          "cache_enabled": True, "batch_enabled": True,  "byok_keys_max": -1},
+}
+
 PRICE_TO_PLAN = {}  # populated at module init from config
 
 
@@ -50,6 +62,13 @@ def _init_price_map():
         PRICE_TO_PLAN[cfg.stripe_vendor_standard_price_id] = "vendor_standard"
     if cfg.stripe_vendor_pro_price_id:
         PRICE_TO_PLAN[cfg.stripe_vendor_pro_price_id] = "vendor_pro"
+    # LLM Gateway plan tiers (PR-D2)
+    if cfg.stripe_llm_starter_price_id:
+        PRICE_TO_PLAN[cfg.stripe_llm_starter_price_id] = "llm_starter"
+    if cfg.stripe_llm_growth_price_id:
+        PRICE_TO_PLAN[cfg.stripe_llm_growth_price_id] = "llm_growth"
+    if cfg.stripe_llm_pro_price_id:
+        PRICE_TO_PLAN[cfg.stripe_llm_pro_price_id] = "llm_pro"
 
 
 def _get_stripe():

@@ -65,6 +65,13 @@ class SaaSAuthConfig(BaseSettings):
     stripe_vendor_standard_price_id: str = Field(default="", description="Stripe Price ID for Vendor Standard ($499/mo)")
     stripe_vendor_pro_price_id: str = Field(default="", description="Stripe Price ID for Vendor Pro ($1,499/mo)")
 
+    # LLM Gateway plan tiers (PR-D2). Stripe products are created
+    # operationally; the price IDs land here when ready, _init_price_map()
+    # in api/billing.py picks them up.
+    stripe_llm_starter_price_id: str = Field(default="", description="Stripe Price ID for LLM Gateway Starter plan")
+    stripe_llm_growth_price_id: str = Field(default="", description="Stripe Price ID for LLM Gateway Growth plan")
+    stripe_llm_pro_price_id: str = Field(default="", description="Stripe Price ID for LLM Gateway Pro plan")
+
     # API key (LLM Gateway, PR-D1) -- HMAC pepper for hashing customer API keys.
     # Pepper is server-wide; raw keys are 160-bit random so a per-key salt
     # would only add cost. The default sentinel "api-key-pepper-change-me"

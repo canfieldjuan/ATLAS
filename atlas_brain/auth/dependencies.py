@@ -12,6 +12,7 @@ from .jwt import decode_token
 
 PLAN_ORDER = ["trial", "starter", "growth", "pro"]
 B2B_PLAN_ORDER = ["b2b_trial", "b2b_starter", "b2b_growth", "b2b_pro"]
+LLM_GATEWAY_PLAN_ORDER = ["llm_trial", "llm_starter", "llm_growth", "llm_pro"]
 
 
 @dataclass
@@ -226,6 +227,46 @@ def require_b2b_plan(min_plan: str):
                 detail="B2B product required",
             )
         user_idx = B2B_PLAN_ORDER.index(user.plan) if user.plan in B2B_PLAN_ORDER else -1
+        if user_idx < min_idx:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Plan '{min_plan}' or higher required (current: '{user.plan}')",
+            )
+        return user
+
+    return _check
+
+
+def require_llm_plan(min_plan: str):
+    """Return a dependency that enforces a minimum LLM-Gateway plan tier.
+
+    Mirrors ``require_b2b_plan``: enforces both the product binding
+    (``user.product == "llm_gateway"``) and the plan ordering. Used
+    by PR-D4's ``/api/v1/llm/*`` router to gate per-tier feature
+    access.
+    """
+    if min_plan not in LLM_GATEWAY_PLAN_ORDER:
+        raise ValueError(
+            f"Invalid LLM Gateway plan tier '{min_plan}'. Expected one of {LLM_GATEWAY_PLAN_ORDER}"
+        )
+    min_idx = LLM_GATEWAY_PLAN_ORDER.index(min_plan)
+
+    async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
+        if user.plan_status == "past_due":
+            raise HTTPException(
+                status_code=402,
+                detail="Payment past due",
+            )
+        if user.product != "llm_gateway":
+            raise HTTPException(
+                status_code=403,
+                detail="LLM Gateway product required",
+            )
+        user_idx = (
+            LLM_GATEWAY_PLAN_ORDER.index(user.plan)
+            if user.plan in LLM_GATEWAY_PLAN_ORDER
+            else -1
+        )
         if user_idx < min_idx:
             raise HTTPException(
                 status_code=403,

@@ -26,7 +26,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 # -- Request/Response schemas --
 
-VALID_PRODUCTS = {"consumer", "b2b_retention", "b2b_challenger"}
+VALID_PRODUCTS = {"consumer", "b2b_retention", "b2b_challenger", "llm_gateway"}
 
 
 class RegisterRequest(BaseModel):
