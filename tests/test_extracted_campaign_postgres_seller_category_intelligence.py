@@ -54,13 +54,25 @@ class _Pool:
         self.closed = True
 
 
-def _seed_aggregate_results(pool: _Pool, *, total_reviews: int = 120) -> None:
+def _known_brand_rows() -> list[dict[str, str]]:
+    return [{"brand": "Brand A"}, {"brand": "Brand B"}, {"brand": "Brand C"}]
+
+
+def _seed_aggregate_results(
+    pool: _Pool,
+    *,
+    total_reviews: int = 120,
+    include_known_brands: bool = True,
+) -> None:
     pool.fetchrow_results.append({
         "total_reviews": total_reviews,
         "total_products": 30,
         "total_brands": 8,
     })
-    pool.fetch_results.extend([
+    results = []
+    if include_known_brands:
+        results.append(_known_brand_rows())
+    results.extend([
         [
             {
                 "brand": "Brand A",
@@ -73,7 +85,6 @@ def _seed_aggregate_results(pool: _Pool, *, total_reviews: int = 120) -> None:
         ],
         [{"complaint": "leaky bottle", "count": 7, "severity": None, "affected_brands": 3}],
         [{"request": "third-party testing", "count": 5, "brand_count": 2, "avg_rating": 2.8}],
-        [{"brand": "Brand A"}, {"brand": "Brand B"}, {"brand": "Brand C"}],
         [
             {
                 "reviewed_brand": "Brand A",
@@ -98,6 +109,7 @@ def _seed_aggregate_results(pool: _Pool, *, total_reviews: int = 120) -> None:
         [{"suggestion": "better seal", "count": 3, "affected_asins": ["a1", "a2"]}],
         [{"cause": "packaging", "count": 9}],
     ])
+    pool.fetch_results.extend(results)
 
 
 @pytest.mark.asyncio
@@ -129,7 +141,7 @@ async def test_aggregate_seller_category_intelligence_builds_snapshot() -> None:
     }]
     assert snapshot["brand_health"][0]["trend"] == "rising"
 
-    brand_query, brand_args = pool.fetch_calls[3]
+    brand_query, brand_args = pool.fetch_calls[0]
     assert "SELECT brand" in brand_query
     assert brand_args == ()
     flow_query, flow_args = pool.fetch_calls[4]
@@ -172,7 +184,7 @@ async def test_aggregate_seller_category_intelligence_accepts_custom_limits() ->
         ),
     )
 
-    brand_query, brand_args = pool.fetch_calls[0]
+    brand_query, brand_args = pool.fetch_calls[1]
     assert "HAVING COUNT(*) >= $2" in brand_query
     assert brand_args == ("supplements", 3, 7)
 
@@ -210,8 +222,11 @@ async def test_save_seller_category_intelligence_snapshot_upserts_json() -> None
 @pytest.mark.asyncio
 async def test_refresh_discovers_categories_and_saves_snapshots() -> None:
     pool = _Pool()
-    pool.fetch_results = [[{"source_category": "supplements", "review_count": 120}]]
-    _seed_aggregate_results(pool)
+    pool.fetch_results = [
+        [{"source_category": "supplements", "review_count": 120}],
+        _known_brand_rows(),
+    ]
+    _seed_aggregate_results(pool, include_known_brands=False)
 
     result = await refresh_seller_category_intelligence(pool, min_reviews=50, limit=5)
 
@@ -229,7 +244,8 @@ async def test_refresh_discovers_categories_and_saves_snapshots() -> None:
 @pytest.mark.asyncio
 async def test_refresh_uses_explicit_categories_without_discovery() -> None:
     pool = _Pool()
-    _seed_aggregate_results(pool)
+    pool.fetch_results = [_known_brand_rows()]
+    _seed_aggregate_results(pool, include_known_brands=False)
 
     result = await refresh_seller_category_intelligence(
         pool,
@@ -238,6 +254,7 @@ async def test_refresh_uses_explicit_categories_without_discovery() -> None:
     )
 
     assert pool.fetchrow_calls[0][1] == ("supplements",)
+    assert "SELECT brand" in pool.fetch_calls[0][0]
     assert "GROUP BY source_category" not in pool.fetch_calls[0][0]
     assert result.refreshed == 1
 
@@ -245,9 +262,10 @@ async def test_refresh_uses_explicit_categories_without_discovery() -> None:
 @pytest.mark.asyncio
 async def test_refresh_does_not_limit_explicit_categories() -> None:
     pool = _Pool()
-    _seed_aggregate_results(pool)
-    _seed_aggregate_results(pool)
-    _seed_aggregate_results(pool)
+    pool.fetch_results = [_known_brand_rows()]
+    _seed_aggregate_results(pool, include_known_brands=False)
+    _seed_aggregate_results(pool, include_known_brands=False)
+    _seed_aggregate_results(pool, include_known_brands=False)
 
     result = await refresh_seller_category_intelligence(
         pool,
@@ -266,6 +284,12 @@ async def test_refresh_does_not_limit_explicit_categories() -> None:
         "skipped": 0,
         "categories": ["supplements", "skincare", "coffee"],
     }
+    known_brand_queries = [
+        query
+        for query, _args in pool.fetch_calls
+        if "SELECT brand" in query and "GROUP BY brand" in query
+    ]
+    assert len(known_brand_queries) == 1
 
 
 @pytest.mark.asyncio
@@ -304,7 +328,8 @@ def test_refresh_cli_parses_categories_and_tables() -> None:
 async def test_refresh_cli_wires_pool_and_result(monkeypatch, capsys) -> None:
     cli = _load_cli_module()
     pool = _Pool()
-    _seed_aggregate_results(pool)
+    pool.fetch_results = [_known_brand_rows()]
+    _seed_aggregate_results(pool, include_known_brands=False)
     created_urls: list[str] = []
 
     async def create_pool(database_url):

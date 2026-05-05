@@ -78,6 +78,11 @@ async def refresh_seller_category_intelligence(
             limit=normalized_limit,
             reviews_table=reviews_table,
         )
+    known_brands = (
+        await _fetch_known_brands(pool, _identifier(metadata_table))
+        if category_names
+        else {}
+    )
     refreshed: list[str] = []
     skipped = 0
     for category in category_names:
@@ -88,6 +93,7 @@ async def refresh_seller_category_intelligence(
             reviews_table=reviews_table,
             metadata_table=metadata_table,
             intelligence_limits=intelligence_limits,
+            known_brands=known_brands,
         )
         if not snapshot:
             skipped += 1
@@ -113,6 +119,7 @@ async def aggregate_seller_category_intelligence(
     reviews_table: str = "product_reviews",
     metadata_table: str = "product_metadata",
     intelligence_limits: CategoryIntelligenceLimits | None = None,
+    known_brands: Mapping[str, str] | None = None,
 ) -> JsonDict | None:
     """Build one seller category snapshot from product review rows."""
 
@@ -135,6 +142,11 @@ async def aggregate_seller_category_intelligence(
         return None
 
     limits = intelligence_limits or CategoryIntelligenceLimits()
+    brand_lookup = (
+        dict(known_brands)
+        if known_brands is not None
+        else await _fetch_known_brands(pool, metadata)
+    )
     brand_rows = await _fetch_brand_rows(pool, clean_category, reviews, metadata, limits)
     return {
         "category": clean_category,
@@ -151,7 +163,7 @@ async def aggregate_seller_category_intelligence(
             pool, clean_category, reviews, metadata, limits
         ),
         "competitive_flows": await _fetch_competitive_flows(
-            pool, clean_category, reviews, metadata, limits
+            pool, clean_category, reviews, metadata, brand_lookup, limits
         ),
         "brand_health": _brand_health(brand_rows, limits),
         "safety_signals": await _fetch_safety_signals(
@@ -405,9 +417,9 @@ async def _fetch_competitive_flows(
     category: str,
     reviews: str,
     metadata: str,
+    known_brands: Mapping[str, str],
     limits: CategoryIntelligenceLimits,
 ) -> list[JsonDict]:
-    known_brands = await _fetch_known_brands(pool, metadata)
     rows = await pool.fetch(
         f"""
         SELECT pm.brand AS reviewed_brand,
