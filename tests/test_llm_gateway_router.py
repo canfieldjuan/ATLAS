@@ -422,3 +422,229 @@ def test_resolve_byok_helper_calls_db_aware_resolver():
     src = inspect.getsource(llm_gateway._resolve_byok_or_503)
     assert "lookup_provider_key_async" in src
     assert "lookup_provider_key(" not in src.replace("lookup_provider_key_async", "")
+
+
+# ---- Exact cache wiring (PR-D6b) ----------------------------------------
+
+
+def test_llm_gateway_config_has_exact_cache_flag():
+    """PR-D6b: the customer-facing /chat surface gets its own
+    feature flag, decoupled from b2b_churn.llm_exact_cache_enabled
+    so the two products toggle independently."""
+    from atlas_brain.config import settings
+
+    assert hasattr(settings, "llm_gateway")
+    assert hasattr(settings.llm_gateway, "exact_cache_enabled")
+    # Default OFF -- caching is opt-in.
+    assert settings.llm_gateway.exact_cache_enabled is False
+
+
+def test_chat_namespace_constant_routes_to_gateway_flag():
+    """The cache namespace must start with the prefix the cache
+    module's _is_cache_enabled_for_namespace() dispatcher checks.
+    Otherwise enablement falls through to the B2B flag and the
+    products couple."""
+    from atlas_brain.api import llm_gateway
+    from atlas_brain.services.b2b.llm_exact_cache import (
+        LLM_GATEWAY_NAMESPACE_PREFIX,
+    )
+
+    assert llm_gateway._LLM_CHAT_CACHE_NAMESPACE.startswith(
+        LLM_GATEWAY_NAMESPACE_PREFIX
+    )
+
+
+def test_chat_route_imports_cache_helpers():
+    """Source-text pin: the chat route must import the cache
+    primitives. Without the imports the wiring below silently
+    falls back to the un-cached path."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway)
+    assert "from ..services.b2b.llm_exact_cache import" in src
+    assert "build_request_envelope" in src
+    assert "is_llm_gateway_exact_cache_enabled" in src
+    assert "lookup_cached_text" in src
+    assert "store_cached_text" in src
+
+
+def test_chat_lookup_runs_before_anthropic_call():
+    """Cache lookup must happen BEFORE the Anthropic call --
+    otherwise we pay for a request whose answer is already cached.
+    Pin the source ordering."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    lookup_idx = src.find("await lookup_cached_text(")
+    create_idx = src.find("await client.messages.create(")
+    assert lookup_idx > 0 and create_idx > 0
+    assert lookup_idx < create_idx
+
+
+def test_chat_lookup_is_account_scoped():
+    """Cross-account leak guard: the lookup must thread the
+    customer's account_id (not the sentinel) so PR-D3's
+    composite (cache_key, account_id) PK isolates tenants."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    # Find the lookup block specifically (not the store block).
+    lookup_block = src.split("await lookup_cached_text(")[1].split(")", 1)[0]
+    assert "account_id=user.account_id" in lookup_block
+
+
+def test_chat_lookup_gated_by_feature_flag():
+    """Lookup only runs when settings.llm_gateway.exact_cache_enabled
+    is True. With the flag off (the default), the cache module
+    isn't even called -- no DB round-trip."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    flag_idx = src.find("if is_llm_gateway_exact_cache_enabled():")
+    lookup_idx = src.find("await lookup_cached_text(")
+    assert flag_idx > 0 and lookup_idx > 0
+    # Flag check is the immediate guard for the lookup.
+    assert flag_idx < lookup_idx
+
+
+def test_chat_cache_lookup_failures_do_not_fail_request():
+    """If the cache lookup raises (DB transient, schema drift),
+    the chat request must NOT 500 -- fall through to a normal
+    Anthropic call. Pin the try/except wrap and the empty
+    fall-through."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    # try/except around the lookup call.
+    assert "try:\n            cache_hit = await lookup_cached_text(" in src
+    assert "llm_gateway.chat cache lookup failed" in src
+
+
+def test_chat_cache_hit_returns_zero_token_usage():
+    """On cache hit: ChatResponse.usage = 0/0/0 (no tokens consumed
+    this call). Customer can infer cache via the zero usage; a
+    follow-up PR adds a `cached: bool` field for explicit signaling."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    # The cache-hit ChatResponse path uses ChatUsage zeros.
+    assert "if cache_hit is not None:" in src
+    hit_block = src.split("if cache_hit is not None:")[1].split("# Capture full response")[0]
+    assert "input_tokens=0" in hit_block
+    assert "output_tokens=0" in hit_block
+    assert "total_tokens=0" in hit_block
+    # And the response_text comes from the cache hit.
+    assert 'response=cache_hit["response_text"]' in hit_block
+
+
+def test_chat_cache_hit_writes_zero_token_usage_row_with_cache_hit_metadata():
+    """Cache savings analytics depend on a zero-token llm_usage
+    row tagged ``cache_hit: true`` -- without it, dashboard can't
+    distinguish "didn't call provider" from "didn't track"."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    hit_block = src.split("if cache_hit is not None:")[1].split("# Capture full response")[0]
+    # trace_llm_call still fires on hit.
+    assert "trace_llm_call(" in hit_block
+    # With zero tokens.
+    assert "input_tokens=0" in hit_block
+    # And the cache_hit metadata flag.
+    assert '"cache_hit": True' in hit_block
+
+
+def test_chat_cache_hit_skips_anthropic_call():
+    """The cache-hit branch must return BEFORE the Anthropic
+    create call -- otherwise the customer pays for a request
+    whose answer was just served from cache."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    hit_block = src.split("if cache_hit is not None:")[1].split("# Capture full response")[0]
+    # The hit branch must return.
+    assert "return ChatResponse(" in hit_block
+
+
+def test_chat_store_runs_after_successful_anthropic_call():
+    """Cache store must happen AFTER the Anthropic call so we
+    only persist responses that actually came back -- and after
+    the trace_llm_call usage row is written so the success
+    accounting precedes the cache write."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    create_idx = src.find("await client.messages.create(")
+    store_idx = src.find("await store_cached_text(")
+    assert create_idx > 0 and store_idx > 0
+    assert create_idx < store_idx
+
+
+def test_chat_store_is_account_scoped():
+    """Same isolation guard as lookup -- store must thread the
+    customer's account_id so the row lands in the right tenant
+    namespace."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    store_block = src.split("await store_cached_text(")[1].split(")", 1)[0]
+    assert "account_id=user.account_id" in store_block
+
+
+def test_chat_cache_store_failures_do_not_fail_request():
+    """Same posture as lookup: cache store errors get logged but
+    do not raise -- the chat response was already produced."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    assert "try:\n            await store_cached_text(" in src
+    assert "llm_gateway.chat cache store failed" in src
+
+
+def test_chat_envelope_includes_system_prompt_in_extra():
+    """The system prompt is part of the request's identity and
+    must be in the cache key envelope -- otherwise two calls with
+    the same messages but different system prompts collide."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    assert 'extra={"system": system_prompt}' in src
+
+
+# ---- Cache module: namespace dispatch (PR-D6b) -------------------------
+
+
+def test_cache_module_dispatches_enablement_by_namespace():
+    """The B2B and LLM Gateway products own separate feature flags;
+    the cache module dispatches based on namespace prefix so
+    callers don't accidentally couple."""
+    from atlas_brain.services.b2b import llm_exact_cache
+
+    assert hasattr(llm_exact_cache, "is_llm_gateway_exact_cache_enabled")
+    assert hasattr(llm_exact_cache, "_is_cache_enabled_for_namespace")
+    assert llm_exact_cache.LLM_GATEWAY_NAMESPACE_PREFIX == "llm_gateway."
+
+    # Dispatcher branches.
+    src = inspect.getsource(llm_exact_cache._is_cache_enabled_for_namespace)
+    assert "LLM_GATEWAY_NAMESPACE_PREFIX" in src
+    assert "is_llm_gateway_exact_cache_enabled" in src
+    assert "is_b2b_llm_exact_cache_enabled" in src
+
+
+def test_lookup_cached_text_uses_namespace_dispatch_not_b2b_flag():
+    """The lookup must check the namespace-aware dispatcher, not
+    the bare B2B flag -- otherwise gateway-namespaced calls fail
+    when the B2B flag is off."""
+    from atlas_brain.services.b2b import llm_exact_cache
+
+    src = inspect.getsource(llm_exact_cache.lookup_cached_text)
+    assert "_is_cache_enabled_for_namespace(namespace)" in src
+    # The bare B2B flag check shouldn't appear in this function.
+    assert "is_b2b_llm_exact_cache_enabled()" not in src
+
+
+def test_store_cached_text_uses_namespace_dispatch_not_b2b_flag():
+    from atlas_brain.services.b2b import llm_exact_cache
+
+    src = inspect.getsource(llm_exact_cache.store_cached_text)
+    assert "_is_cache_enabled_for_namespace(namespace)" in src
+    assert "is_b2b_llm_exact_cache_enabled()" not in src

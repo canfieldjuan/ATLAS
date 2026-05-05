@@ -39,6 +39,12 @@ from pydantic import BaseModel, Field
 from ..api.billing import LLM_PLAN_LIMITS
 from ..auth.dependencies import AuthUser, require_llm_plan
 from ..pipelines.llm import trace_llm_call
+from ..services.b2b.llm_exact_cache import (
+    build_request_envelope,
+    is_llm_gateway_exact_cache_enabled,
+    lookup_cached_text,
+    store_cached_text,
+)
 from ..services.byok_keys import lookup_provider_key_async
 from ..services.llm.anthropic import convert_messages
 from ..services.llm_gateway_batch import (
@@ -59,6 +65,13 @@ router = APIRouter(prefix="/llm", tags=["llm-gateway"])
 # Groq) layer in subsequent PRs once their LLMService implementations
 # are exercised through the gateway path.
 _PROVIDERS_THIS_PR = ("anthropic",)
+
+
+# Exact-cache namespace for /chat (PR-D6b). The
+# ``llm_gateway.`` prefix routes the cache module's enablement
+# check to the gateway's own feature flag rather than the B2B
+# pipeline flag, so the two products stay decoupled.
+_LLM_CHAT_CACHE_NAMESPACE = "llm_gateway.chat"
 
 
 # ---- Request / response schemas -----------------------------------------
@@ -210,6 +223,73 @@ async def chat(
     if system_prompt:
         create_kwargs["system"] = system_prompt
 
+    # PR-D6b: exact-match cache lookup. The envelope hashes
+    # provider/model/messages/max_tokens/temperature plus the system
+    # prompt under ``extra`` so any difference produces a different
+    # cache key. Account-scoped via the (cache_key, account_id)
+    # composite PK from PR-D3 -- cross-tenant hits are impossible.
+    # Cache failures must NOT fail the chat request: any exception
+    # falls through to a normal Anthropic call.
+    request_envelope = build_request_envelope(
+        provider=body.provider,
+        model=llm.model,
+        messages=api_messages,
+        max_tokens=body.max_tokens,
+        temperature=body.temperature,
+        extra={"system": system_prompt} if system_prompt else None,
+    )
+    cache_hit = None
+    if is_llm_gateway_exact_cache_enabled():
+        try:
+            cache_hit = await lookup_cached_text(
+                _LLM_CHAT_CACHE_NAMESPACE,
+                request_envelope,
+                pool=pool,
+                account_id=user.account_id,
+            )
+        except Exception:
+            logger.exception(
+                "llm_gateway.chat cache lookup failed account=%s",
+                user.account_id,
+            )
+
+    if cache_hit is not None:
+        # Cache hit: skip Anthropic, return cached text with zero
+        # token counts (the customer didn't consume tokens this
+        # call). Write a zero-token llm_usage row tagged
+        # ``cache_hit: true`` so dashboard analytics can compute
+        # cache savings ("you would have paid X, you paid 0").
+        response_id = f"llm_{_uuid.uuid4().hex[:24]}"
+        try:
+            trace_llm_call(
+                span_name="llm_gateway.chat",
+                input_tokens=0,
+                output_tokens=0,
+                billable_input_tokens=0,
+                model=body.model,
+                provider=body.provider,
+                duration_ms=0,
+                metadata={
+                    "account_id": user.account_id,
+                    "request_id": response_id,
+                    "endpoint": "llm_gateway.chat",
+                    "cache_hit": True,
+                },
+            )
+        except Exception:
+            logger.exception("llm_gateway.chat cache-hit usage tracking failed")
+        return ChatResponse(
+            id=response_id,
+            provider=body.provider,
+            model=body.model,
+            response=cache_hit["response_text"],
+            usage=ChatUsage(
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+            ),
+        )
+
     # Capture full response (text + usage) via direct SDK call.
     # PR-D4 review fix already addressed the "chat_async returned
     # only text -> zero token usage" bug; PR-D4b also closes the
@@ -267,6 +347,35 @@ async def chat(
         )
     except Exception:
         logger.exception("llm_gateway.chat usage tracking failed")
+
+    # PR-D6b: store the response in the exact cache so an identical
+    # subsequent call from this account hits. Skipped on empty
+    # response (lookup_cached_text would treat it as a non-hit anyway)
+    # and on flag off. Cache write failures must not fail the chat
+    # response -- log and proceed.
+    if text and is_llm_gateway_exact_cache_enabled():
+        try:
+            await store_cached_text(
+                _LLM_CHAT_CACHE_NAMESPACE,
+                request_envelope,
+                provider=body.provider,
+                model=body.model,
+                response_text=text,
+                usage={
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cached_tokens": cached_tokens,
+                    "cache_write_tokens": cache_write_tokens,
+                },
+                metadata={"endpoint": "llm_gateway.chat"},
+                pool=pool,
+                account_id=user.account_id,
+            )
+        except Exception:
+            logger.exception(
+                "llm_gateway.chat cache store failed account=%s",
+                user.account_id,
+            )
 
     return ChatResponse(
         id=response_id,

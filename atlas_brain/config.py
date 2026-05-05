@@ -14,6 +14,31 @@ ENV_FILES = (".env", ".env.local")
 DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
 
 
+class LLMGatewayConfig(BaseSettings):
+    """LLM Gateway product-level configuration (PR-D6b+).
+
+    Settings that scope to the customer-facing /api/v1/llm/* surface.
+    Distinct from ``b2b_churn`` (atlas's internal pipeline) so flags
+    like the exact cache can be toggled per product without coupling.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_LLM_GATEWAY_",
+        env_file=ENV_FILES,
+        extra="ignore",
+    )
+
+    exact_cache_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable exact-match Postgres caching for customer-facing "
+            "/api/v1/llm/chat calls. Reuses the b2b_llm_exact_cache "
+            "table with namespace='llm_gateway.chat' and per-account "
+            "scoping (PR-D3 migration 314)."
+        ),
+    )
+
+
 class SaaSAuthConfig(BaseSettings):
     """SaaS authentication and billing configuration."""
 
@@ -5476,6 +5501,7 @@ class Settings(BaseSettings):
     news_intel: NewsIntelligenceConfig = Field(default_factory=NewsIntelligenceConfig)
     provider_cost: ProviderCostConfig = Field(default_factory=ProviderCostConfig)
     saas_auth: SaaSAuthConfig = Field(default_factory=SaaSAuthConfig)
+    llm_gateway: LLMGatewayConfig = Field(default_factory=LLMGatewayConfig)
 
     # Reasoning agent (cross-domain event-driven intelligence)
     @staticmethod
