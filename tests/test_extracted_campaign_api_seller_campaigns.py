@@ -783,7 +783,7 @@ def test_seller_campaign_router_rejects_unknown_boolean_payload(monkeypatch) -> 
     assert calls == []
 
 
-def test_seller_campaign_router_requires_account_to_replace_opportunities(
+def test_seller_campaign_router_requires_scope_to_replace_opportunities(
     monkeypatch,
 ) -> None:
     calls = []
@@ -800,9 +800,16 @@ def test_seller_campaign_router_requires_account_to_replace_opportunities(
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == (
-        "account_id is required when replace_existing is true"
+    assert response.json()["detail"] == "replace_existing requires a scoped account"
+    assert calls == []
+
+    response = _client(_Pool()).post(
+        "/seller/opportunities/prepare",
+        json={"account_id": "acct_1", "replace_existing": True},
     )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "replace_existing requires a scoped account"
     assert calls == []
 
 
@@ -861,7 +868,13 @@ def test_seller_campaign_router_rejects_target_mode_override(monkeypatch) -> Non
             {"replace_existing": True},
             None,
             400,
-            "account_id is required when replace_existing is true",
+            "replace_existing requires a scoped account",
+        ),
+        (
+            {"account_id": "acct_1", "replace_existing": True},
+            None,
+            400,
+            "replace_existing requires a scoped account",
         ),
         (
             {"target_mode": "vendor_retention"},

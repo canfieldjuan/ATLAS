@@ -362,10 +362,10 @@ def create_seller_campaign_router(
             )
         account_id = scoped_account_id or payload_account_id
         replace_existing = _payload_bool(payload, "replace_existing")
-        if replace_existing and not account_id:
+        if replace_existing and not scoped_account_id:
             raise HTTPException(
                 status_code=400,
-                detail="account_id is required when replace_existing is true",
+                detail="replace_existing requires a scoped account",
             )
         return {
             "account_id": account_id,
