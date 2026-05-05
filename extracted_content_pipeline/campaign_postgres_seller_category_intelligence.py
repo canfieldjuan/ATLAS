@@ -143,7 +143,7 @@ async def aggregate_seller_category_intelligence(
             pool, clean_category, reviews, metadata, limits
         ),
         "competitive_flows": await _fetch_competitive_flows(
-            pool, clean_category, reviews, limits
+            pool, clean_category, reviews, metadata, limits
         ),
         "brand_health": _brand_health(brand_rows, limits),
         "safety_signals": await _fetch_safety_signals(
@@ -176,7 +176,7 @@ async def save_seller_category_intelligence_snapshot(
             top_root_causes
         ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb,
                   $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb)
-        ON CONFLICT (category, COALESCE(subcategory, ''), snapshot_date) DO UPDATE SET
+        ON CONFLICT (category, snapshot_date) DO UPDATE SET
             total_reviews = EXCLUDED.total_reviews,
             total_brands = EXCLUDED.total_brands,
             total_products = EXCLUDED.total_products,
@@ -360,31 +360,48 @@ async def _fetch_competitive_flows(
     pool: Any,
     category: str,
     reviews: str,
+    metadata: str,
     limits: CategoryIntelligenceLimits,
 ) -> list[JsonDict]:
     rows = await pool.fetch(
         f"""
-        SELECT from_product,
-               to_product,
-               COUNT(*) AS mentions
+        SELECT from_brand,
+               to_brand,
+               direction,
+               COUNT(*) AS count
           FROM (
             SELECT
-                COALESCE(comp ->> 'from_product', comp ->> 'from') AS from_product,
-                COALESCE(comp ->> 'to_product', comp ->> 'to') AS to_product
-              FROM {reviews} pr,
+                CASE
+                    WHEN direction = 'switched_from' THEN compared_brand
+                    ELSE reviewed_brand
+                END AS from_brand,
+                CASE
+                    WHEN direction = 'switched_from' THEN reviewed_brand
+                    ELSE compared_brand
+                END AS to_brand,
+                direction
+              FROM (
+                SELECT
+                    NULLIF(BTRIM(pm.brand), '') AS reviewed_brand,
+                    NULLIF(BTRIM(comp ->> 'product_name'), '') AS compared_brand,
+                    COALESCE(NULLIF(BTRIM(comp ->> 'direction'), ''), 'compared') AS direction
+                  FROM {reviews} pr
+                  JOIN {metadata} pm ON pm.asin = pr.asin,
                    jsonb_array_elements(
                        CASE jsonb_typeof(pr.deep_extraction->'product_comparisons')
                             WHEN 'array' THEN pr.deep_extraction->'product_comparisons'
                             ELSE '[]'::jsonb
                        END
                    ) AS comp
-             WHERE pr.source_category = $1
-               AND pr.deep_enrichment_status = 'enriched'
-               AND pr.deep_extraction->'product_comparisons' IS NOT NULL
+                 WHERE pr.source_category = $1
+                   AND pr.deep_enrichment_status = 'enriched'
+                   AND pr.deep_extraction->'product_comparisons' IS NOT NULL
+              ) raw_flows
+             WHERE reviewed_brand IS NOT NULL
+               AND compared_brand IS NOT NULL
           ) flows
-         WHERE from_product IS NOT NULL AND from_product != ''
-           AND to_product IS NOT NULL AND to_product != ''
-         GROUP BY from_product, to_product
+         WHERE LOWER(from_brand) != LOWER(to_brand)
+         GROUP BY from_brand, to_brand, direction
         HAVING COUNT(*) >= $2
          ORDER BY COUNT(*) DESC
          LIMIT $3
@@ -395,9 +412,10 @@ async def _fetch_competitive_flows(
     )
     return [
         {
-            "from_product": row.get("from_product"),
-            "to_product": row.get("to_product"),
-            "mentions": row.get("mentions"),
+            "from_brand": row.get("from_brand"),
+            "to_brand": row.get("to_brand"),
+            "direction": row.get("direction"),
+            "count": row.get("count"),
         }
         for row in (_row_dict(item) for item in rows)
     ]

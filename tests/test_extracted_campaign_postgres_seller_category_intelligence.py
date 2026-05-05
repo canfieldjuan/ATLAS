@@ -75,7 +75,7 @@ def _seed_aggregate_results(pool: _Pool, *, total_reviews: int = 120) -> None:
         ],
         [{"complaint": "leaky bottle", "count": 7, "severity": None, "affected_brands": 3}],
         [{"request": "third-party testing", "count": 5, "brand_count": 2, "avg_rating": 2.8}],
-        [{"from_product": "Brand A", "to_product": "Brand B", "mentions": 4}],
+        [{"from_brand": "Brand A", "to_brand": "Brand B", "direction": "switched_to", "count": 4}],
         [{"brand": "Brand A", "category": "labeling", "description": "missing", "flagged_count": 2}],
         [{"suggestion": "better seal", "count": 3, "affected_asins": ["a1", "a2"]}],
         [{"cause": "packaging", "count": 9}],
@@ -103,8 +103,16 @@ async def test_aggregate_seller_category_intelligence_builds_snapshot() -> None:
     }
     assert snapshot["top_pain_points"][0]["severity"] == "medium"
     assert snapshot["feature_gaps"][0]["avg_rating"] == 2.8
-    assert snapshot["competitive_flows"][0]["mentions"] == 4
+    assert snapshot["competitive_flows"][0]["count"] == 4
     assert snapshot["brand_health"][0]["trend"] == "rising"
+
+    flow_query, flow_args = pool.fetch_calls[3]
+    assert "comp ->> 'product_name'" in flow_query
+    assert "comp ->> 'direction'" in flow_query
+    assert "JOIN \"product_metadata\" pm ON pm.asin = pr.asin" in flow_query
+    assert "from_product" not in flow_query
+    assert "to_product" not in flow_query
+    assert flow_args == ("supplements", 2, 15)
 
 
 @pytest.mark.asyncio
@@ -155,7 +163,7 @@ async def test_save_seller_category_intelligence_snapshot_upserts_json() -> None
         },
         "top_pain_points": [{"complaint": "leaky bottle"}],
         "feature_gaps": [{"request": "third-party testing"}],
-        "competitive_flows": [{"from_product": "A", "to_product": "B"}],
+        "competitive_flows": [{"from_brand": "A", "to_brand": "B"}],
         "brand_health": [{"brand": "A", "health_score": 80}],
         "safety_signals": [{"brand": "A", "flagged_count": 2}],
         "manufacturing_insights": [{"suggestion": "better seal"}],
@@ -166,7 +174,8 @@ async def test_save_seller_category_intelligence_snapshot_upserts_json() -> None
 
     query, args = pool.execute_calls[0]
     assert "INSERT INTO \"category_intelligence_snapshots\"" in query
-    assert "ON CONFLICT" in query
+    assert "ON CONFLICT (category, snapshot_date)" in query
+    assert "COALESCE(subcategory" not in query
     assert args[:4] == ("supplements", 120, 8, 30)
     assert json.loads(args[4]) == [{"complaint": "leaky bottle"}]
     assert json.loads(args[10]) == [{"cause": "packaging"}]
