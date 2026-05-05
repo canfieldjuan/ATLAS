@@ -33,6 +33,8 @@ on:
       - "tests/test_atlas_reasoning_reflection_tracing.py"
       - "tests/test_atlas_reasoning_graph_aliases.py"
       - "tests/test_atlas_reasoning_run_reasoning_graph_wiring.py"
+      - "tests/test_forbid_atlas_reasoning_imports.py"
+      - "extracted/_shared/scripts/forbid_atlas_reasoning_imports.py"
   push:
     paths:
       - "extracted_content_pipeline/**"
@@ -65,6 +67,8 @@ on:
       - "tests/test_atlas_reasoning_reflection_tracing.py"
       - "tests/test_atlas_reasoning_graph_aliases.py"
       - "tests/test_atlas_reasoning_run_reasoning_graph_wiring.py"
+      - "tests/test_forbid_atlas_reasoning_imports.py"
+      - "extracted/_shared/scripts/forbid_atlas_reasoning_imports.py"
 
 jobs:
   extracted-checks:
