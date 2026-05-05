@@ -317,6 +317,12 @@
       "target": "extracted_content_pipeline/services/b2b/vendor_briefing_ports.py"
     },
     {
+      "target": "extracted_content_pipeline/services/b2b/vendor_briefing_delivery.py"
+    },
+    {
+      "target": "extracted_content_pipeline/services/b2b/vendor_briefing_repository.py"
+    },
+    {
       "target": "extracted_content_pipeline/services/vendor_target_selection.py"
     },
     {

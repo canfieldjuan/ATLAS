@@ -475,6 +475,12 @@ tenant scope, target/channel, filters, `limit`, and, for sequence progression,
 `max_steps`; provider credentials, sender identity, unsubscribe policy, LLM
 client, skill roots, and reasoning providers stay host-configured.
 
+Inject `visibility_provider` when the host wants admin UI telemetry. The four
+POST operation routes emit best-effort `campaign_operation_started`,
+`campaign_operation_completed`, and `campaign_operation_failed` events through
+the `VisibilitySink` port. Sink failures are logged and do not change operation
+responses.
+
 For lightweight hosted installs without a separate reasoning provider, set
 `generation_single_pass_reasoning=True` on `CampaignOperationsApiConfig`. The
 draft generation route then builds `SinglePassCampaignReasoningProvider` from
