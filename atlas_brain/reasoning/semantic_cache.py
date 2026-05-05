@@ -303,34 +303,39 @@ class SemanticCache:
                 """
                 SELECT * FROM reasoning_semantic_cache
                 WHERE conclusion_type = $1 AND product_category = $2
-                  AND invalidated_at IS NULL
+                  AND account_id = $3 AND invalidated_at IS NULL
                 ORDER BY last_validated_at DESC
-                LIMIT $3
+                LIMIT $4
                 """,
                 conclusion_type,
                 product_category,
+                self._account_id,
                 limit,
             )
         elif vendor_name:
             rows = await self._pool.fetch(
                 """
                 SELECT * FROM reasoning_semantic_cache
-                WHERE vendor_name = $1 AND invalidated_at IS NULL
+                WHERE vendor_name = $1 AND account_id = $2
+                  AND invalidated_at IS NULL
                 ORDER BY last_validated_at DESC
-                LIMIT $2
+                LIMIT $3
                 """,
                 vendor_name,
+                self._account_id,
                 limit,
             )
         else:
             rows = await self._pool.fetch(
                 """
                 SELECT * FROM reasoning_semantic_cache
-                WHERE conclusion_type = $1 AND invalidated_at IS NULL
+                WHERE conclusion_type = $1 AND account_id = $2
+                  AND invalidated_at IS NULL
                 ORDER BY last_validated_at DESC
-                LIMIT $2
+                LIMIT $3
                 """,
                 conclusion_type,
+                self._account_id,
                 limit,
             )
         entries = []
@@ -342,7 +347,11 @@ class SemanticCache:
         return entries
 
     async def get_cache_stats(self) -> dict[str, Any]:
-        """Aggregate stats for metacognition tracking."""
+        """Aggregate stats for metacognition tracking.
+
+        Scoped to ``self._account_id`` so tenant A's stats never
+        include tenant B's rows.
+        """
         row = await self._pool.fetchrow(
             """
             SELECT
@@ -351,7 +360,9 @@ class SemanticCache:
                 AVG(confidence) FILTER (WHERE invalidated_at IS NULL) AS avg_confidence,
                 AVG(validation_count) FILTER (WHERE invalidated_at IS NULL) AS avg_validations
             FROM reasoning_semantic_cache
-            """
+            WHERE account_id = $1
+            """,
+            self._account_id,
         )
         if row is None:
             return {"active": 0, "invalidated": 0, "avg_confidence": 0, "avg_validations": 0}

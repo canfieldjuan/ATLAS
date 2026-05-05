@@ -129,6 +129,57 @@ def test_semantic_cache_lookup_by_class_filters_by_account():
     assert src.count("AND account_id =") >= 3
 
 
+def test_semantic_cache_lookup_for_tier_filters_by_account():
+    """Codex P1 fix: lookup_for_tier feeds tier-inheritance and was
+    unscoped pre-fix. All 3 branches (category-only, vendor-only,
+    conclusion_type-only) must filter on account_id."""
+    from atlas_brain.reasoning import semantic_cache as sc_mod
+
+    src = inspect.getsource(sc_mod.SemanticCache.lookup_for_tier)
+    assert "self._account_id" in src
+    assert src.count("AND account_id =") >= 3
+
+
+def test_semantic_cache_get_cache_stats_filters_by_account():
+    """Codex P1 fix: get_cache_stats was unscoped. Tenant A's stats
+    cannot include tenant B's rows -- otherwise the metacognition
+    layer ingests cross-tenant counts."""
+    from atlas_brain.reasoning import semantic_cache as sc_mod
+
+    src = inspect.getsource(sc_mod.SemanticCache.get_cache_stats)
+    assert "self._account_id" in src
+    assert "WHERE account_id =" in src
+
+
+def test_every_semantic_cache_query_method_scopes_by_account():
+    """Sweep guard: any new method on SemanticCache that issues SQL
+    against reasoning_semantic_cache MUST reference self._account_id.
+    Catches a future regression where someone adds a query method
+    without remembering account scoping."""
+    from atlas_brain.reasoning.semantic_cache import SemanticCache
+
+    # Methods that issue SQL against reasoning_semantic_cache -- the
+    # constructor and pure helpers (e.g. row_to_cache_entry) are
+    # excluded; this list grows as new query methods land.
+    sql_emitting_methods = (
+        "lookup",
+        "store",
+        "validate",
+        "invalidate",
+        "lookup_by_class",
+        "lookup_for_tier",
+        "get_cache_stats",
+    )
+    for name in sql_emitting_methods:
+        method = getattr(SemanticCache, name, None)
+        assert method is not None, f"SemanticCache.{name} must exist"
+        src = inspect.getsource(method)
+        assert "self._account_id" in src, (
+            f"SemanticCache.{name} issues SQL but does not scope on "
+            "self._account_id -- cross-tenant leak risk"
+        )
+
+
 # ---- llm_exact_cache: account_id kwarg + composite ON CONFLICT ----------
 
 
