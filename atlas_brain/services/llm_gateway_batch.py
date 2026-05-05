@@ -154,6 +154,7 @@ async def submit_customer_batch(
     normalized_key = idempotency_key.strip() if idempotency_key else None
     if not normalized_key:
         normalized_key = None
+    row: Any = None
     if normalized_key:
         existing = await pool.fetchrow(
             """
@@ -168,13 +169,69 @@ async def submit_customer_batch(
             normalized_key,
         )
         if existing:
+            settled = (
+                existing["provider_batch_id"]
+                or existing["status"] != "queued"
+            )
+            if settled:
+                logger.info(
+                    "llm_gateway_batch.submit replay account=%s key=%s id=%s",
+                    account_id,
+                    normalized_key,
+                    existing["id"],
+                )
+                return _row_to_record(existing)
+
+            # Codex P1 round 3 on PR-D4c: pre-submit row (queued
+            # with no provider_batch_id). Two cases:
+            #   a) An earlier attempt crashed between INSERT and
+            #      the Anthropic call -- naive replay would loop
+            #      forever returning the stale 'queued' row. Need
+            #      to genuinely re-submit.
+            #   b) A concurrent retry is in-flight to Anthropic
+            #      right now. Re-submitting would duplicate-pay.
+            # Distinguish via updated_at age, and do the
+            # decision atomically in SQL so two concurrent
+            # resumes can't both win. Threshold = 2x
+            # ANTHROPIC_SDK_TIMEOUT_SECONDS (30s) so an in-flight
+            # call has had time to either succeed or hit timeout.
+            resumed = await pool.fetchrow(
+                """
+                UPDATE llm_gateway_batches
+                SET updated_at = NOW()
+                WHERE id = $1
+                  AND account_id = $2
+                  AND status = 'queued'
+                  AND provider_batch_id IS NULL
+                  AND updated_at < NOW() - INTERVAL '60 seconds'
+                RETURNING id, account_id, provider, provider_batch_id, model,
+                          status, total_items, completed_items, failed_items,
+                          error_text, created_at, updated_at, submitted_at,
+                          completed_at, usage_tracked
+                """,
+                existing["id"],
+                account_id,
+            )
+            if resumed is None:
+                # Still in-flight (< 60s old) or another retry
+                # already claimed it. Replay -- the customer
+                # polls /batch/{id} either way.
+                logger.info(
+                    "llm_gateway_batch.submit replay (in-flight) "
+                    "account=%s key=%s id=%s",
+                    account_id,
+                    normalized_key,
+                    existing["id"],
+                )
+                return _row_to_record(existing)
             logger.info(
-                "llm_gateway_batch.submit replay account=%s key=%s id=%s",
+                "llm_gateway_batch.submit resume pre-submit "
+                "account=%s key=%s id=%s",
                 account_id,
                 normalized_key,
                 existing["id"],
             )
-            return _row_to_record(existing)
+            row = resumed
 
     # Insert pre-submit so a crash mid-call still leaves a queued row
     # the customer can see. The idempotency_key column is NULL when
@@ -186,55 +243,56 @@ async def submit_customer_batch(
     # violation and re-read so the loser of the race still gets the
     # winner's record back (the contract callers expect from
     # idempotency).
-    try:
-        async with pool.transaction() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO llm_gateway_batches (
-                    account_id, provider, model, status, total_items, idempotency_key
-                ) VALUES (
-                    $1, 'anthropic', $2, 'queued', $3, $4
+    if row is None:
+        try:
+            async with pool.transaction() as conn:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO llm_gateway_batches (
+                        account_id, provider, model, status, total_items, idempotency_key
+                    ) VALUES (
+                        $1, 'anthropic', $2, 'queued', $3, $4
+                    )
+                    RETURNING id, account_id, provider, provider_batch_id, model,
+                              status, total_items, completed_items, failed_items,
+                              error_text, created_at, updated_at, submitted_at,
+                              completed_at, usage_tracked
+                    """,
+                    account_id,
+                    model,
+                    len(items),
+                    normalized_key,
                 )
-                RETURNING id, account_id, provider, provider_batch_id, model,
-                          status, total_items, completed_items, failed_items,
-                          error_text, created_at, updated_at, submitted_at,
-                          completed_at, usage_tracked
+        except asyncpg.exceptions.UniqueViolationError:
+            if not normalized_key:
+                # Should not happen -- the only unique constraint is the
+                # idempotency partial index, which excludes NULL keys.
+                raise
+            existing = await pool.fetchrow(
+                """
+                SELECT id, account_id, provider, provider_batch_id, model,
+                       status, total_items, completed_items, failed_items,
+                       error_text, created_at, updated_at, submitted_at,
+                       completed_at, usage_tracked
+                FROM llm_gateway_batches
+                WHERE account_id = $1 AND idempotency_key = $2
                 """,
                 account_id,
-                model,
-                len(items),
                 normalized_key,
             )
-    except asyncpg.exceptions.UniqueViolationError:
-        if not normalized_key:
-            # Should not happen -- the only unique constraint is the
-            # idempotency partial index, which excludes NULL keys.
-            raise
-        existing = await pool.fetchrow(
-            """
-            SELECT id, account_id, provider, provider_batch_id, model,
-                   status, total_items, completed_items, failed_items,
-                   error_text, created_at, updated_at, submitted_at,
-                   completed_at, usage_tracked
-            FROM llm_gateway_batches
-            WHERE account_id = $1 AND idempotency_key = $2
-            """,
-            account_id,
-            normalized_key,
-        )
-        if existing is None:
-            # Unique-violation but no matching row -- means the
-            # winner committed and rolled back, or some other
-            # column collided. Re-raise so the caller sees the real
-            # 500 instead of a confusing "missing record".
-            raise
-        logger.info(
-            "llm_gateway_batch.submit replay (race) account=%s key=%s id=%s",
-            account_id,
-            normalized_key,
-            existing["id"],
-        )
-        return _row_to_record(existing)
+            if existing is None:
+                # Unique-violation but no matching row -- means the
+                # winner committed and rolled back, or some other
+                # column collided. Re-raise so the caller sees the real
+                # 500 instead of a confusing "missing record".
+                raise
+            logger.info(
+                "llm_gateway_batch.submit replay (race) account=%s key=%s id=%s",
+                account_id,
+                normalized_key,
+                existing["id"],
+            )
+            return _row_to_record(existing)
 
     requests = []
     for item in items:

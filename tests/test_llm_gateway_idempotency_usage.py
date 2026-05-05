@@ -112,7 +112,32 @@ def test_submit_customer_batch_handles_unique_violation_race():
         "WHERE account_id = $1 AND idempotency_key = $2" in src
     )
     # Race-replay log line distinguishes from the normal-replay path.
-    assert 'logger.info(\n            "llm_gateway_batch.submit replay (race)' in src
+    assert 'logger.info(\n                "llm_gateway_batch.submit replay (race)' in src
+
+
+def test_submit_customer_batch_resumes_stale_pre_submit_atomically():
+    """Codex P1 round 3 on PR-D4c: a row stuck in pre-submit state
+    ('queued', no provider_batch_id) means a previous attempt
+    crashed between INSERT and the Anthropic call. Naive replay
+    would loop forever returning the stale row -- the customer's
+    batch never actually submits. Resume via an atomic SQL claim
+    that flips updated_at; concurrent in-flight calls are
+    distinguished from stuck rows via updated_at age (60s = 2x
+    SDK timeout). Two concurrent resumes can't both win because
+    the UPDATE is atomic."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    # Atomic SQL claim with the staleness predicate.
+    assert "AND status = 'queued'" in src
+    assert "AND provider_batch_id IS NULL" in src
+    assert "AND updated_at < NOW() - INTERVAL '60 seconds'" in src
+    # account_id is in the WHERE (defense-in-depth, same pattern
+    # as _persist_batch_usage's atomic claim).
+    assert "WHERE id = $1\n                  AND account_id = $2" in src
+    # Distinct log lines for each branch so ops can spot leaks.
+    assert "submit replay (in-flight)" in src
+    assert "submit resume pre-submit" in src
 
 
 # ---- Router Idempotency-Key header --------------------------------------
