@@ -24,6 +24,7 @@
     {"target": "extracted_competitive_intelligence/services/b2b/source_impact.py"},
     {"target": "extracted_competitive_intelligence/services/b2b/challenger_dashboard_claims.py"},
     {"target": "extracted_competitive_intelligence/services/b2b/competitive_set_ports.py"},
+    {"target": "extracted_competitive_intelligence/services/b2b/battle_card_ports.py"},
     {"target": "extracted_competitive_intelligence/services/b2b/vendor_briefing_ports.py"},
     {"target": "extracted_competitive_intelligence/services/b2b_competitive_sets.py"},
     {"target": "extracted_competitive_intelligence/autonomous/tasks/_b2b_batch_utils.py"},

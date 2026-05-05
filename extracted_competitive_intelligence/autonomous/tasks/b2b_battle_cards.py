@@ -1216,7 +1216,7 @@ def _battle_card_anchor_phrase(card: dict[str, Any]) -> str:
 
 def _populate_battle_card_fallback_sales_copy(card: dict[str, Any]) -> None:
     """Fill empty battle-card seller-copy fields from deterministic evidence."""
-    from ._b2b_shared import (
+    from ...services.b2b.battle_card_ports import (
         _battle_card_best_supported_quote,
         _battle_card_fallback_recommended_plays,
         _battle_card_quote_terms,
@@ -1403,7 +1403,7 @@ def _evaluate_battle_card_quality(
     phase: str,
 ) -> dict[str, Any]:
     """Score battle-card readiness and return a strict quality contract."""
-    from ._b2b_shared import (
+    from ...services.b2b.battle_card_ports import (
         _battle_card_allowed_quotes,
         _battle_card_fallback_recommended_plays,
         _battle_card_has_duplicate_recommended_play_segments,
@@ -1782,7 +1782,7 @@ def _build_battle_card_render_payload(
     validation_feedback: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a compact contract-first LLM render packet for battle cards."""
-    from ._b2b_shared import _build_battle_card_locked_facts, _build_metric_ledger
+    from ...services.b2b.battle_card_ports import _build_battle_card_locked_facts, _build_metric_ledger
 
     payload = {
         key: card[key]
@@ -2553,7 +2553,7 @@ async def _retire_gated_out_battle_cards(
 
 async def _check_freshness(pool) -> date | None:
     """Return today's date if the core run completed canonically, else None."""
-    from ._b2b_shared import has_complete_core_run_marker
+    from ...services.b2b.battle_card_ports import has_complete_core_run_marker
 
     today = date.today()
     if not await has_complete_core_run_marker(pool, today):
@@ -2564,7 +2564,7 @@ async def _check_freshness(pool) -> date | None:
 
 async def _latest_core_report_date(pool) -> date | None:
     """Return the latest complete persisted core-run date, if any."""
-    from ._b2b_shared import latest_complete_core_report_date
+    from ...services.b2b.battle_card_ports import latest_complete_core_report_date
 
     return await latest_complete_core_report_date(pool)
 
@@ -2595,7 +2595,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     today = await _resolve_core_report_date(pool, maintenance_run=maintenance_run)
     if today is None:
-        from ._b2b_shared import describe_core_run_gap
+        from ...services.b2b.battle_card_ports import describe_core_run_gap
 
         return {
             "_skip_synthesis": (
@@ -2604,7 +2604,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
         }
 
-    from ._b2b_shared import (
+    from ...services.b2b.battle_card_ports import (
         _aggregate_competitive_disp,
         _build_deterministic_battle_cards,
         _build_pain_lookup,
