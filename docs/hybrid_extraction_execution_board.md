@@ -214,5 +214,5 @@ Use these commands as the scoped compatibility checklist for the current wave:
   - `./scripts/run_hybrid_reasoning_checks.sh`
 
 - Unified runner with machine-readable report:
-  - `./scripts/run_hybrid_reasoning_checks_with_report.py`
-  - writes `artifacts/hybrid_reasoning_checks_report.json` including skip/pass state
+  - `./scripts/run_hybrid_reasoning_checks_with_report.py [--output <path>]`
+  - writes `artifacts/hybrid_reasoning_checks_report.json` by default, including skip/pass state
