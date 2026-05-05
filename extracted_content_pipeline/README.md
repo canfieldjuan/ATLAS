@@ -443,18 +443,25 @@ This adds `POST /campaigns/operations/drafts/generate`,
 credentials, sender identity, unsubscribe policy, or LLM configuration through
 HTTP payloads.
 
+It also adds `GET /campaigns/operations/status` for admin dashboards. The
+status route reports database availability, injected provider presence, feature
+readiness, and configured limits without resolving sender/LLM/skill providers
+or exposing secrets.
+
 Mount this router beside `create_b2b_campaign_router` to run the hosted B2B
 flow without SQL in the admin UI:
 
-1. `POST /campaigns/operations/drafts/generate` creates scoped draft rows from
+1. `GET /campaigns/operations/status` lets the admin UI enable only ready
+   operations.
+2. `POST /campaigns/operations/drafts/generate` creates scoped draft rows from
    active `campaign_opportunities`.
-2. `GET /b2b/campaigns/drafts` or `/drafts/export` lets operators inspect the
+3. `GET /b2b/campaigns/drafts` or `/drafts/export` lets operators inspect the
    generated drafts.
-3. `POST /b2b/campaigns/drafts/review` moves selected drafts to `queued` after
+4. `POST /b2b/campaigns/drafts/review` moves selected drafts to `queued` after
    approval.
-4. `POST /campaigns/operations/send/queued` sends approved queued drafts
+5. `POST /campaigns/operations/send/queued` sends approved queued drafts
    through the injected sender.
-5. `POST /campaigns/operations/analytics/refresh` refreshes packaged funnel
+6. `POST /campaigns/operations/analytics/refresh` refreshes packaged funnel
    reporting after send/webhook activity.
 
 ## Import smoke test

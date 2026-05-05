@@ -191,6 +191,7 @@ def test_hosted_campaign_api_workflow_uses_shared_scope_and_provider_ports(
         counters=counters,
     )
 
+    status_response = client.get("/campaigns/operations/status")
     generate_response = client.post(
         "/campaigns/operations/drafts/generate",
         json={
@@ -216,11 +217,18 @@ def test_hosted_campaign_api_workflow_uses_shared_scope_and_provider_ports(
     send_response = client.post("/campaigns/operations/send/queued", json={"limit": 1})
     analytics_response = client.post("/campaigns/operations/analytics/refresh")
 
+    assert status_response.status_code == 200
     assert generate_response.status_code == 200
     assert list_response.status_code == 200
     assert review_response.status_code == 200
     assert send_response.status_code == 200
     assert analytics_response.status_code == 200
+    assert status_response.json()["features"] == {
+        "draft_generation": True,
+        "send_queued": True,
+        "sequence_progression": True,
+        "analytics_refresh": True,
+    }
     assert [name for name, _ in calls] == [
         "generate",
         "list",
@@ -244,9 +252,9 @@ def test_hosted_campaign_api_workflow_uses_shared_scope_and_provider_ports(
     assert calls[2][1]["scope"] == scope
     assert calls[3][1]["sender"] is sender
     assert counters == {
-        "auth": 5,
+        "auth": 6,
         "scope": 3,
-        "pool": 5,
+        "pool": 6,
         "llm": 1,
         "skills": 1,
         "reasoning": 1,
