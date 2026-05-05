@@ -33,7 +33,7 @@ Full task/runtime decoupling remains Phase 3.
 | Anthropic batch bridge | ✅ `services.b2b.anthropic_batch` routes to extracted LLM infrastructure in standalone mode |
 | Anthropic batch helper boundary | ✅ `autonomous.tasks._b2b_batch_utils` is product-owned helper logic |
 | Campaign LLM router bridge | ✅ `services.llm_router` routes vendor-briefing campaign LLM selection through extracted LLM infrastructure in standalone mode |
-| Battle-card support port | ✅ `services.b2b.battle_card_ports` replaces direct `_b2b_shared.py`, churn-scope, execution-progress, and synthesis-reader imports for battle-card support |
+| Battle-card support port | ✅ `services.b2b.battle_card_ports` replaces direct `_b2b_shared.py`, churn-scope, execution-progress, synthesis-reader, and webhook imports for battle-card support |
 | Vendor briefing intelligence port | ✅ `services.b2b.vendor_briefing_ports` replaces direct `_b2b_shared.py` and `_b2b_synthesis_reader.py` imports for vendor briefing evidence and reasoning readers |
 | ProductClaim compatibility | ✅ `services.b2b.product_claim` re-exports `extracted_quality_gate.product_claim` instead of bridging to Atlas |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
@@ -51,6 +51,7 @@ Full task/runtime decoupling remains Phase 3.
 | Challenger claim aggregation boundary | ✅ `services/b2b/challenger_dashboard_claims.py` is a fail-closed host adapter port |
 | Competitive-set planner boundary | ✅ `services/b2b_competitive_sets.py` is product-owned and uses `competitive_set_ports.py` for reasoning/task support |
 | Cross-vendor synthesis boundary | ✅ `_b2b_cross_vendor_synthesis.py` is product-owned packet/contract/reader logic with extracted semantic-cache hashing |
+| Vendor target selection boundary | ✅ `services/vendor_target_selection.py` is product-owned deterministic dedupe/prioritization logic |
 
 ### Current audit snapshot
 
@@ -60,7 +61,7 @@ Full task/runtime decoupling remains Phase 3.
 | Manifest mappings | 12 |
 | Manifest Python snapshots | 3 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 21 |
+| Product-owned modules | 22 |
 
 Product-owned modules:
 
@@ -70,6 +71,7 @@ Product-owned modules:
 - `mcp/b2b/write_intelligence.py`
 - `mcp/b2b/write_ports.py`
 - `services/vendor_registry.py`
+- `services/vendor_target_selection.py`
 - `services/scraping/capabilities.py`
 - `services/b2b/source_impact.py`
 - `services/b2b/challenger_dashboard_claims.py`
@@ -102,6 +104,7 @@ Product-owned modules:
 | Scaffold file | Phase 1 (snapshot) | Phase 2 (standalone-ready) | Phase 3 (decoupled) |
 |---|---|---|---|
 | `services/vendor_registry.py` | ✅ | ✅ | 🔲 |
+| `services/vendor_target_selection.py` | n/a | ✅ | ✅ |
 | `mcp/b2b/vendor_registry.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/displacement.py` | ✅ | ✅ | ✅ |
 | `mcp/b2b/cross_vendor.py` | ✅ | ✅ | ✅ |
@@ -116,7 +119,7 @@ Product-owned modules:
 | `services/scraping/sources.py` | n/a | ✅ | ✅ |
 | `reasoning/ecosystem.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/_b2b_batch_utils.py` | n/a | ✅ | ✅ |
-| `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 (shared-helper, churn-scope, progress, and synthesis-reader imports routed through `battle_card_ports.py`; remaining runtime seams need follow-up ports) | 🔲 |
+| `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 (shared-helper, churn-scope, progress, synthesis-reader, and webhook imports routed through `battle_card_ports.py`; remaining runtime seams need follow-up ports) | 🔲 |
 | `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 (evidence, scorecard, and synthesis-reader imports routed through `vendor_briefing_ports.py`; remaining runtime seams need follow-up ports) | 🔲 |
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | ✅ | ✅ |
 | `services/b2b_competitive_sets.py` | ✅ | ✅ | ✅ |

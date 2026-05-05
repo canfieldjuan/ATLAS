@@ -20,6 +20,7 @@ from ...services.b2b.challenger_dashboard_claims import (
 )
 from ...services.b2b.product_claim import ProductClaim, SuppressionReason
 from ...services.b2b.battle_card_ports import (
+    dispatch_report_generated_webhook,
     update_execution_progress as _update_execution_progress,
 )
 from ...storage.database import get_db_pool
@@ -2510,8 +2511,6 @@ async def _persist_battle_card(
         await pool.execute(sql.replace(" RETURNING id", ""), *sql_args)
     elif report_row.get("id"):
         try:
-            from ...services.b2b.webhook_dispatcher import dispatch_report_generated_webhook
-
             await dispatch_report_generated_webhook(
                 pool,
                 report_id=report_row["id"],

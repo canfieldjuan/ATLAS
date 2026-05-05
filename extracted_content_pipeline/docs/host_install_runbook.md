@@ -335,10 +335,23 @@ app.include_router(
 )
 ```
 
-It exposes seller target CRUD under `/seller/targets` and seller draft
-list/export/review routes under `/seller/campaigns/drafts`. Seller draft
-review is guarded to `target_mode="amazon_seller"` so the route cannot update
-other campaign products by id.
+It exposes seller target CRUD under `/seller/targets`, hosted refresh and
+opportunity preparation triggers under `/seller/intelligence/refresh`,
+`/seller/opportunities/prepare`, and
+`/seller/operations/refresh-and-prepare`, plus seller draft list/export/review
+routes under `/seller/campaigns/drafts`. Seller draft review is guarded to
+`target_mode="amazon_seller"` so the route cannot update other campaign
+products by id.
+
+Example hosted operation payload:
+
+```json
+{
+  "category": "supplements",
+  "min_reviews": 50,
+  "replace_existing": true
+}
+```
 
 Send queued drafts through the configured provider:
 
