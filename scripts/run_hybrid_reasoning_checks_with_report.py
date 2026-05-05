@@ -14,7 +14,15 @@ DEFAULT_REPORT_PATH = ROOT / "artifacts" / "hybrid_reasoning_checks_report.json"
 
 
 def _run(cmd: list[str]) -> dict[str, object]:
-    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return {
+            "command": " ".join(cmd),
+            "returncode": -1,
+            "stdout": "",
+            "stderr": f"{type(exc).__name__}: {exc}",
+        }
     return {
         "command": " ".join(cmd),
         "returncode": proc.returncode,
