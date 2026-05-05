@@ -46,15 +46,27 @@ class EmailGraphSync:
         return self._rag_client
 
     def _get_llm(self):
-        """Get or create a dedicated OllamaLLM instance for qwen3:32b."""
-        if self._llm is None:
-            from ..services.llm.ollama import OllamaLLM
+        """Get the Stage 1 extraction LLM via the LLM router.
 
-            model = self._settings.memory.email_graph_model
-            base_url = self._settings.llm.ollama_url
-            self._llm = OllamaLLM(model=model, base_url=base_url)
-            self._llm.load()
-            logger.info("Loaded extraction LLM: %s at %s", model, base_url)
+        Routes through the email_triage workflow so this stage uses whatever
+        provider main.py initialized (typically OpenRouter -> Anthropic Haiku
+        in production; falls back to the local registry if not initialized).
+        Lifecycle is router-managed -- callers must not call .unload().
+        """
+        if self._llm is None:
+            from ..services.llm_router import get_llm
+
+            self._llm = get_llm("email_triage")
+            if self._llm is None:
+                raise RuntimeError(
+                    "No LLM available for email_graph_sync stage 1. "
+                    "Initialize the triage LLM in main.py (init_triage_llm) "
+                    "or activate a local LLM in llm_registry."
+                )
+            logger.info(
+                "email_graph_sync stage 1 using LLM: %s",
+                getattr(self._llm, "model_name", type(self._llm).__name__),
+            )
         return self._llm
 
     async def _get_gmail_client(self):
@@ -300,15 +312,12 @@ class EmailGraphSync:
             })
             graphiti_ids.append(msg_id)
 
-        # Unload Stage 1 model before Graphiti calls Ollama -- frees the runner
-        # so Graphiti (via Docker) doesn't hit a stale/busy model instance.
-        if self._llm is not None:
-            try:
-                self._llm.unload()
-                self._llm = None
-                logger.info("Unloaded extraction LLM before Graphiti send")
-            except Exception:
-                pass
+        # Stage 1 LLM lifecycle is router-managed (singleton in llm_router);
+        # nothing to unload here. The original code freed local Ollama VRAM
+        # before Graphiti ran qwen3:32b on the same GPU -- with router-backed
+        # LLMs (OpenRouter, Anthropic, etc.) the call is remote and there is
+        # no shared resource to free. Just clear the local cache reference.
+        self._llm = None
 
         # Stage 2: Send batch to Graphiti for entity/relationship extraction.
         # Brief pause lets Ollama's model runner fully settle after Stage 1.
