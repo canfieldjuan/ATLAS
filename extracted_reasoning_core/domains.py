@@ -100,9 +100,17 @@ class DomainReasoningResult(Generic[PayloadT_co]):
     contract for anything built after M5-alpha.
     """
 
+    # ``confidence`` is required positionally to preserve the original
+    # M5-alpha constructor contract -- moving it out of position would
+    # silently corrupt downstream callers that use positional construction
+    # (a payload would slide into ``confidence`` and vice versa). The
+    # type widens to ``float | None`` because real producers have cases
+    # where confidence is genuinely unknown (sparse evidence, insufficient
+    # pool depth, etc.); a producer that is confident asserts a float in
+    # [0, 1], one with no signal explicitly passes ``None``.
     subject_id: str
     domain: str
-    confidence: float
+    confidence: float | None
     domain_payload: PayloadT_co
 
     # Optional universal fields -- present when the producer can compute

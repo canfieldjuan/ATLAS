@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from extracted_reasoning_core import domains as _domains
 from extracted_reasoning_core.domains import (
     DomainDescriptor,
     DomainReasoningResult,
@@ -19,7 +20,6 @@ from extracted_reasoning_core.domains import (
     ReasoningProducerPort,
     ReasoningSubject,
     ReferenceIds,
-    _clear_registry_for_tests,
     _project_universal_fields,
     get_domain,
     list_domains,
@@ -51,10 +51,26 @@ class _SampleSubject:
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():
-    """Clear the domain registry before and after each test."""
-    _clear_registry_for_tests()
-    yield
-    _clear_registry_for_tests()
+    """Snapshot the domain registry, give the test a clean slate, then restore.
+
+    Earlier versions cleared before AND after, but that wiped registrations
+    other modules made via import-time side effects (e.g.
+    ``atlas_brain.reasoning.vendor_pressure`` calling ``register_domain``
+    when imported). When the full extracted-pipeline check runs both this
+    file and the vendor-pressure tests in the same process, those tests
+    would then look up ``get_domain('vendor_pressure')`` and find nothing.
+
+    Snapshot-and-restore preserves any other module's registrations across
+    this file's test runs while still giving each individual test a clean
+    registry to validate its own register/get/list semantics.
+    """
+    snapshot = dict(_domains._REGISTRY)
+    _domains._REGISTRY.clear()
+    try:
+        yield
+    finally:
+        _domains._REGISTRY.clear()
+        _domains._REGISTRY.update(snapshot)
 
 
 # ---------------------------------------------------------------------
