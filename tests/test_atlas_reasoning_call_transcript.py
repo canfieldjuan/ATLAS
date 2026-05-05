@@ -187,16 +187,74 @@ def test_result_handles_explicit_null_lists() -> None:
     assert result.reference_ids.witness_ids == ()
 
 
-def test_result_drops_non_string_list_items() -> None:
-    """Defensive: producer might pass non-string items; coerce or skip."""
+def test_result_coerces_non_string_list_items_and_drops_none() -> None:
+    """Defensive coercion: ``None`` items are filtered, non-strings are
+    coerced via ``str()`` (e.g. ``42`` -> ``"42"``).
+
+    Domain-payload lists keep the same shape as their producer (so
+    integers in ``topics`` survive as their stringified form). Lineage
+    IDs go through a tighter ``_normalize_ids`` path that additionally
+    strips whitespace and drops empties — see
+    :func:`test_lineage_ids_normalize_and_filter_empty`.
+    """
     entry = {
         "topics": ["renewal", None, 42, "pricing"],
         "metric_ids": [None, "real_metric_id"],
     }
     result = call_transcript_result_from_entry(entry)
-    # None gets filtered; non-string is coerced via str()
     assert result.domain_payload.topics == ("renewal", "42", "pricing")
     assert result.reference_ids.metric_ids == ("real_metric_id",)
+
+
+def test_lineage_ids_strip_whitespace_and_drop_empty() -> None:
+    """Lineage IDs are normalized: whitespace stripped, empties dropped.
+
+    Unlike domain-payload lists (which preserve coerced strings even if
+    short or padded), lineage IDs feed downstream lookups; whitespace
+    or empty IDs would silently miss-match, so the envelope filters
+    them at the boundary.
+    """
+    entry = {
+        "metric_ids": ["  m1  ", "", "   ", None, "m2"],
+        "witness_ids": ["w1", "  w2", ""],
+    }
+    result = call_transcript_result_from_entry(entry)
+    assert result.reference_ids.metric_ids == ("m1", "m2")
+    assert result.reference_ids.witness_ids == ("w1", "w2")
+
+
+def test_lineage_prefers_nested_reference_ids_object() -> None:
+    """When the entry carries a nested ``reference_ids`` object (the
+    canonical synthesis-payload shape), the builder reads from there
+    and the top-level ``metric_ids``/``witness_ids`` fallback is
+    ignored.
+    """
+    entry = {
+        "reference_ids": {
+            "metric_ids": ["nested_m1", "nested_m2"],
+            "witness_ids": ["nested_w1"],
+        },
+        # Top-level keys are present but should be ignored when the
+        # nested object exists.
+        "metric_ids": ["top_level_m_should_be_ignored"],
+        "witness_ids": ["top_level_w_should_be_ignored"],
+    }
+    result = call_transcript_result_from_entry(entry)
+    assert result.reference_ids.metric_ids == ("nested_m1", "nested_m2")
+    assert result.reference_ids.witness_ids == ("nested_w1",)
+
+
+def test_lineage_falls_back_to_top_level_when_nested_absent() -> None:
+    """Without a nested ``reference_ids`` object, the flat shape used
+    by the vendor-pressure-style entry path still round-trips.
+    """
+    entry = {
+        "metric_ids": ["flat_m1"],
+        "witness_ids": ["flat_w1"],
+    }
+    result = call_transcript_result_from_entry(entry)
+    assert result.reference_ids.metric_ids == ("flat_m1",)
+    assert result.reference_ids.witness_ids == ("flat_w1",)
 
 
 # ---------------------------------------------------------------------

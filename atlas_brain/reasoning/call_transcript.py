@@ -113,12 +113,36 @@ def call_transcript_result_from_entry(
             return ()
         return tuple(str(item) for item in raw if item is not None)
 
-    metric_ids = entry.get("metric_ids") or []
-    witness_ids = entry.get("witness_ids") or []
-    if not isinstance(metric_ids, list):
-        metric_ids = []
-    if not isinstance(witness_ids, list):
-        witness_ids = []
+    # Lineage: prefer the canonical nested ``reference_ids`` object
+    # (matches the synthesis-payload shape across the codebase); fall
+    # back to top-level ``metric_ids`` / ``witness_ids`` keys so a
+    # producer using the flatter pattern still round-trips.
+    ref_ids_raw = entry.get("reference_ids")
+    if isinstance(ref_ids_raw, Mapping):
+        metric_raw = ref_ids_raw.get("metric_ids") or []
+        witness_raw = ref_ids_raw.get("witness_ids") or []
+    else:
+        metric_raw = entry.get("metric_ids") or []
+        witness_raw = entry.get("witness_ids") or []
+
+    def _normalize_ids(raw: Any) -> tuple[str, ...]:
+        """Coerce to str, strip whitespace, drop None/empty.
+
+        Lineage IDs are referenced for resolution downstream; whitespace
+        IDs and empty strings are pure noise that downstream lookups
+        would silently miss-match against, so we filter them out at the
+        envelope boundary.
+        """
+        if not isinstance(raw, list):
+            return ()
+        out: list[str] = []
+        for item in raw:
+            if item is None:
+                continue
+            normalized = str(item).strip()
+            if normalized:
+                out.append(normalized)
+        return tuple(out)
 
     return DomainReasoningResult(
         subject_id=subject_id,
@@ -138,8 +162,8 @@ def call_transcript_result_from_entry(
         risk_level=entry.get("risk_level"),
         archetype=entry.get("archetype"),
         reference_ids=ReferenceIds(
-            metric_ids=tuple(str(m) for m in metric_ids if m is not None),
-            witness_ids=tuple(str(w) for w in witness_ids if w is not None),
+            metric_ids=_normalize_ids(metric_raw),
+            witness_ids=_normalize_ids(witness_raw),
         ),
     )
 
