@@ -138,6 +138,11 @@
   reference file-backed adapter for that boundary. It lets examples and hosts
   provide precomputed reasoning JSON keyed by target id, company, email, or
   vendor without importing a reasoning producer.
+- `services.single_pass_reasoning_provider.SinglePassCampaignReasoningProvider`
+  is the packaged Tier 1 reasoning producer. It uses the existing LLM and skill
+  ports to build one normalized `CampaignReasoningContext` per opportunity with
+  the `digest/b2b_campaign_reasoning_context` prompt, without importing Atlas
+  reasoning producers or graph state.
 - Both the offline and Postgres campaign generation runners can consume that
   JSON through `--reasoning-context`, so file-backed host reasoning is available
   on demo and DB-backed generation paths.
@@ -150,11 +155,11 @@
 - `reasoning.evidence_engine` is product-owned and evaluates deterministic
   conclusion gates, section suppression gates, and confidence labels from
   built-in rules or an optional host-provided evidence map.
-- Reasoning generation is explicitly host-owned. AI Content Ops consumes
-  compressed reasoning through `CampaignReasoningContextProvider` and the
-  contract documented in `docs/reasoning_handoff_contract.md`; it does not
-  import Atlas synthesis, pool compression, or extracted reasoning-core
-  internals.
+- Long-running reasoning generation is explicitly host-owned. AI Content Ops
+  consumes compressed reasoning through `CampaignReasoningContextProvider` and
+  includes a lightweight single-pass provider for opportunity-level context; it
+  does not import Atlas synthesis, pool compression, graph state, or extracted
+  reasoning-core internals.
 - `docs/host_install_runbook.md` documents the end-to-end host path for
   database-backed installs: migrations, opportunity import, optional reasoning
   JSON, optional skill roots, generation, and output verification.

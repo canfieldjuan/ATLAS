@@ -13,17 +13,17 @@ with its own data flow.
 
 ## TL;DR
 
-- The product is **shippable today** for buyers who either bring their
-  own reasoning input as JSON or accept a known quality penalty
-  (~60-70% specificity reduction, qualitative estimate).
+- The product is **shippable today** for buyers who bring their own reasoning
+  input as JSON, configure the packaged single-pass reasoning provider, or
+  accept a known quality penalty from running without reasoning.
 - The standalone debt audit reports **0 atlas_brain runtime imports**.
 - The reasoning *consumer* surface is complete and clean.
-- The reasoning *producer* surface does not exist in the extracted
-  package. `extracted_reasoning_core` exposes evaluator helpers
-  (`score_archetypes`, `evaluate_evidence`, `build_temporal_evidence`)
-  but its four producer-shaped functions (`run_reasoning`,
-  `continue_reasoning`, `check_falsification`, `build_narrative_plan`)
-  all raise `NotImplementedError`.
+- The extracted package now includes a Tier 1 opportunity-level reasoning
+  producer: `SinglePassCampaignReasoningProvider`. It does not replace the
+  heavier reasoning-core producer stubs; `extracted_reasoning_core` still has
+  four producer-shaped functions (`run_reasoning`, `continue_reasoning`,
+  `check_falsification`, `build_narrative_plan`) that raise
+  `NotImplementedError`.
 - No branch in flight wires `extracted_reasoning_core` into the
   content-pipeline generator.
 
@@ -122,6 +122,7 @@ normalize into this shape. Reference example payload:
 |---|---|---|
 | `reasoning_context = None` (default) | Generator falls back to `normalize_campaign_reasoning_context` over the opportunity row itself; only fields embedded in the source data flow into the prompt | Lowest. Drafts are generic. |
 | `FileCampaignReasoningContextProvider` (file-backed) | Loads pre-baked reasoning JSON keyed by target_id / company / email / vendor; normalized and threaded into the prompt | High when the source file is well-built. Quality scales with effort the host put into producing the JSON. |
+| `SinglePassCampaignReasoningProvider` | Calls the configured LLM once per opportunity with the packaged reasoning prompt; normalized and threaded into the campaign prompt | Medium. Better than no reasoning, but no multi-hop planning, cache, or falsification. |
 | Custom `CampaignReasoningContextProvider` (e.g. real producer) | Provider is called once per opportunity; output normalized and threaded in | High. This is the architecturally intended path. |
 
 ## What "add a source and reason over it" costs, by tier
@@ -131,8 +132,7 @@ Each lands the buyer at "source in, drafts out":
 
 ### Tier 1: Single-pass prompt reasoning
 
-- ~1 day of work, ~300 LOC
-- New `extracted_content_pipeline/services/single_pass_reasoning_provider.py`
+- Implemented in `extracted_content_pipeline/services/single_pass_reasoning_provider.py`
 - One LLM call per opportunity that takes the source row + context and
   produces the `CampaignReasoningContext` shape directly via a
   structured-output prompt
@@ -176,24 +176,20 @@ Not recommended. Captured here for completeness; the cost-benefit on
 Tier 3 only makes sense if the goal is to fold the reasoning engine
 into the content product as a single SKU.
 
-## Decision points open before sizing the next sprint
+## Decision points after Tier 1
 
-These need answering before the work can be scoped concretely:
+Tier 1 is now implemented for B2B campaign opportunities. Remaining choices are
+about deeper reasoning, not basic "source row in, reasoned draft out":
 
-1. **Which tier?** Tier 1 (1 day) or Tier 2 (2-3 weeks). Tier 3 is
-   already documented as not the chosen path.
-2. **What is "the extracted reasoning system"?** Confirmed to be
-   `extracted_reasoning_core` (the only candidate package). Whether it
-   means "fill the four NotImplementedError stubs" (Tier 2) or "use
-   the existing evaluators with a thin orchestrator" (a smaller Tier
-   1.5) is the choice that decides effort.
-3. **What source format?** CRM dump, review/complaint data, episode
-   transcripts, sales call transcripts — each needs a different
-   schema-aware extraction step in the reasoning provider's input.
-4. **Multi-step required?** If single-pass meets the product promise
-   on the landing page, Tier 1 is sufficient. If the page promises
-   "reasons over your data with multi-pass refinement," Tier 2 is
-   the floor.
+1. **Tier 2 scope.** Decide whether to fill the four
+   `extracted_reasoning_core` producer stubs for multi-pass planning,
+   falsification, and cache-aware reasoning.
+2. **Additional source formats.** CRM rows are covered through
+   `campaign_opportunities`; review/complaint data, episode transcripts, and
+   sales call transcripts need their own schema-aware adapters.
+3. **Product promise.** If single-pass meets the sold promise, AI Content Ops is
+   operational. If the promise is "multi-pass refinement over your data," Tier
+   2 is the floor.
 
 ## Status verdict
 
@@ -206,12 +202,12 @@ These need answering before the work can be scoped concretely:
 | Buyer can review and export drafts | Yes |
 | Buyer can supply pre-baked reasoning as JSON | Yes |
 | Buyer can supply a custom Python reasoning provider | Yes (port is defined) |
-| The product itself produces reasoning from a source | No |
+| The product itself produces reasoning from a source | Yes, single-pass opportunity-level reasoning only |
 | `extracted_reasoning_core` produces reasoning from a source | No (4 stubs raise NotImplementedError) |
 
-The structural gap is **one decision and one build away** from
-"buyer plugs in a source and gets reasoned drafts": pick Tier 1 or
-Tier 2, build it, ship.
+The remaining structural gap is multi-step reasoning. Tier 1 now lands the
+buyer at "source in, reasoned drafts out"; Tier 2 is still required for
+multi-pass planning, falsification, cache, and deeper reasoning state.
 
 ## References
 
