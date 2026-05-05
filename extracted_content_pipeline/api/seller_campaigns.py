@@ -250,6 +250,10 @@ def _combine_prepare_results(results: Sequence[Mapping[str, Any]]) -> dict[str, 
     }
 
 
+def _result_categories(result: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(_parse_payload_list(result.get("categories"))))
+
+
 def _api_offset(value: int | None) -> int:
     offset = 0 if value is None else int(value)
     if offset < 0:
@@ -490,19 +494,23 @@ def create_seller_campaign_router(
                     "prepare": None,
                     "prepare_skipped": True,
                 }
-            if categories:
-                prepare_result = _combine_prepare_results(
-                    [
-                        await _prepare_operation(
-                            pool,
-                            scope,
-                            {**resolved_payload, "category": category},
-                        )
-                        for category in categories
-                    ]
-                )
-            else:
-                prepare_result = await _prepare_operation(pool, scope, resolved_payload)
+            prepare_categories = categories or _result_categories(refresh_result)
+            if not prepare_categories:
+                return {
+                    "refresh": refresh_result,
+                    "prepare": None,
+                    "prepare_skipped": True,
+                }
+            prepare_result = _combine_prepare_results(
+                [
+                    await _prepare_operation(
+                        pool,
+                        scope,
+                        {**resolved_payload, "category": category},
+                    )
+                    for category in prepare_categories
+                ]
+            )
             return {
                 "refresh": refresh_result,
                 "prepare": prepare_result,

@@ -432,6 +432,62 @@ def test_seller_campaign_router_combined_operation_deduplicates_categories(
     assert response.json()["prepare"]["categories"] == ["beauty", "supplements"]
 
 
+def test_seller_campaign_router_combined_operation_prepares_refreshed_categories(
+    monkeypatch,
+) -> None:
+    prepare_categories = []
+
+    async def _refresh(_pool, **_kwargs):
+        return _Result(refreshed=2, failed=0, categories=["beauty", "supplements"])
+
+    async def _prepare(_pool, **kwargs):
+        prepare_categories.append(kwargs["category"])
+        return _Result(
+            prepared=1,
+            skipped=0,
+            replaced=0,
+            target_mode="amazon_seller",
+            target_ids=[f"target-{kwargs['category']}"],
+            categories=[kwargs["category"]],
+        )
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool()).post(
+        "/seller/operations/refresh-and-prepare",
+        json={"limit": 2},
+    )
+
+    assert response.status_code == 200
+    assert prepare_categories == ["beauty", "supplements"]
+    assert response.json()["prepare"]["prepared"] == 2
+    assert response.json()["prepare"]["categories"] == ["beauty", "supplements"]
+
+
+def test_seller_campaign_router_combined_operation_skips_without_refreshed_categories(
+    monkeypatch,
+) -> None:
+    prepare_calls = []
+
+    async def _refresh(_pool, **_kwargs):
+        return _Result(refreshed=0, failed=0, categories=[])
+
+    async def _prepare(received_pool, **kwargs):
+        prepare_calls.append((received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool()).post("/seller/operations/refresh-and-prepare")
+
+    assert response.status_code == 200
+    assert response.json()["prepare"] is None
+    assert response.json()["prepare_skipped"] is True
+    assert prepare_calls == []
+
+
 def test_seller_campaign_router_rejects_invalid_continue_flag_before_refresh(
     monkeypatch,
 ) -> None:
