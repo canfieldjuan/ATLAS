@@ -8,19 +8,56 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from extracted_reasoning_core.types import ReasoningPorts
 
 logger = logging.getLogger("atlas.reasoning.reflection")
 
 
-async def run_reflection() -> dict[str, Any]:
+async def run_reflection(
+    ports: Optional["ReasoningPorts"] = None,
+) -> dict[str, Any]:
     """Execute a full reflection cycle.
 
     1. Run rule-based pattern detectors
     2. Feed patterns + recent events to Claude for analysis
     3. Auto-execute high-confidence recommendations
     4. Notify owner for lower-confidence findings
+
+    A ``reasoning.reflection`` span is opened for the cycle via the
+    injected ``ReasoningPorts.trace_sink`` so the cron-driven
+    reflection cycle is no longer invisible to FTL. ``ports`` defaults
+    to ``None`` for production callers; the default-builder is shared
+    with ``ReasoningAgentGraph`` (atlas's reactive entry point) so
+    tracing stays consistent across both reasoning paths. Tests inject
+    an explicit fake bundle to bypass atlas's heavy services chain.
     """
+    if ports is None:
+        from .agent import _build_default_ports
+        ports = _build_default_ports()
+
+    span = ports.trace_sink.start_span("reasoning.reflection")
+    try:
+        result = await _run_reflection_cycle(ports)
+    except Exception as exc:
+        ports.trace_sink.end_span(
+            span,
+            status="error",
+            metadata={
+                "error_message": str(exc) or type(exc).__name__,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise
+    ports.trace_sink.end_span(span, status="ok", metadata=result)
+    return result
+
+
+async def _run_reflection_cycle(ports: "ReasoningPorts") -> dict[str, Any]:
+    """Body of the reflection cycle, factored out so ``run_reflection``
+    can wrap it in a single span without indenting the whole function."""
     from .patterns import run_all_pattern_detectors
 
     # 1. Rule-based pattern detection
