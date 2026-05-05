@@ -36,6 +36,17 @@ from ...services.b2b.vendor_briefing_delivery import (
     require_vendor_briefing_delivery_configured,
     send_vendor_briefing_delivery,
 )
+from ...services.b2b.vendor_briefing_repository import (
+    fetch_pending_approval_briefing,
+    has_prior_deliverable_briefing,
+    has_recent_deliverable_briefing,
+    insert_delivery_briefing_record,
+    insert_pending_approval_briefing_record,
+    insert_suppressed_briefing_record,
+    mark_pending_briefing_failed,
+    mark_pending_briefing_sent,
+    reject_pending_briefing,
+)
 from ...services.b2b.vendor_briefing_ports import (
     align_vendor_intelligence_record_to_scorecard as _align_vendor_intelligence_record_to_scorecard,
     build_llm_messages,
@@ -428,15 +439,7 @@ def build_gate_url(vendor_name: str) -> str:
 
 async def _is_first_briefing(pool: Any, vendor_name: str) -> bool:
     """Return True if no successful briefing has ever been sent for this vendor."""
-    count = await pool.fetchval(
-        """
-        SELECT COUNT(*) FROM b2b_vendor_briefings
-        WHERE LOWER(vendor_name) = LOWER($1)
-          AND status NOT IN ('failed', 'suppressed', 'rejected')
-        """,
-        vendor_name,
-    )
-    return (count or 0) == 0
+    return not await has_prior_deliverable_briefing(pool, vendor_name)
 
 
 # ---------------------------------------------------------------------------
@@ -2713,16 +2716,12 @@ async def send_vendor_briefing(
                 {"challenger_mode": challenger_mode},
             )
             try:
-                await pool.execute(
-                    """
-                    INSERT INTO b2b_vendor_briefings
-                        (vendor_name, recipient_email, subject, briefing_data, status)
-                    VALUES ($1, $2, $3, $4::jsonb, 'suppressed')
-                    """,
-                    vendor_name,
-                    to_email,
-                    suppressed_subject,
-                    json.dumps(briefing_data, default=str),
+                await insert_suppressed_briefing_record(
+                    pool,
+                    vendor_name=vendor_name,
+                    recipient_email=to_email,
+                    subject=suppressed_subject,
+                    briefing_data=briefing_data,
                 )
             except Exception as exc:
                 logger.warning("Failed to persist suppressed record: %s", exc)
@@ -2748,18 +2747,14 @@ async def send_vendor_briefing(
     # Persist delivery record
     if pool.is_initialized:
         try:
-            await pool.execute(
-                """
-                INSERT INTO b2b_vendor_briefings
-                    (vendor_name, recipient_email, subject, briefing_data, resend_id, status)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-                """,
-                vendor_name,
-                to_email,
-                subject,
-                json.dumps(briefing_data, default=str),
-                resend_id,
-                status,
+            await insert_delivery_briefing_record(
+                pool,
+                vendor_name=vendor_name,
+                recipient_email=to_email,
+                subject=subject,
+                briefing_data=briefing_data,
+                resend_id=resend_id,
+                status=status,
             )
         except Exception as exc:
             logger.warning("Failed to persist briefing record: %s", exc)
@@ -2780,24 +2775,14 @@ async def send_approved_briefing(briefing_id: str) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"error": "Database not ready"}
 
-    row = await pool.fetchrow(
-        """
-        SELECT id, vendor_name, recipient_email, subject,
-               briefing_data, briefing_html
-        FROM b2b_vendor_briefings
-        WHERE id = $1 AND status = 'pending_approval'
-        """,
-        briefing_id,
-    )
-    if not row:
+    pending = await fetch_pending_approval_briefing(pool, briefing_id)
+    if pending is None:
         return {"error": "Briefing not found or not pending approval"}
 
-    vendor_name = row["vendor_name"]
-    to_email = row["recipient_email"]
-    subject = row["subject"]
-    html = row["briefing_html"]
-    bd = row["briefing_data"]
-    briefing_data = json.loads(bd) if isinstance(bd, str) else (bd or {})
+    vendor_name = pending.vendor_name
+    to_email = pending.recipient_email
+    subject = pending.subject
+    html = pending.briefing_html
 
     if not html:
         return {"error": "No rendered HTML stored for this briefing"}
@@ -2824,26 +2809,13 @@ async def send_approved_briefing(briefing_id: str) -> dict[str, Any]:
         status = "failed"
 
     if status == "sent":
-        await pool.execute(
-            """
-            UPDATE b2b_vendor_briefings
-            SET status = $1, resend_id = $2, approved_at = NOW()
-            WHERE id = $3
-            """,
-            status,
-            resend_id,
-            briefing_id,
+        await mark_pending_briefing_sent(
+            pool,
+            briefing_id=briefing_id,
+            resend_id=resend_id,
         )
     else:
-        await pool.execute(
-            """
-            UPDATE b2b_vendor_briefings
-            SET status = $1
-            WHERE id = $2
-            """,
-            status,
-            briefing_id,
-        )
+        await mark_pending_briefing_failed(pool, briefing_id)
 
     return {
         "id": str(briefing_id),
@@ -2860,16 +2832,12 @@ async def reject_briefing(briefing_id: str, reason: str | None = None) -> dict[s
     if not pool.is_initialized:
         return {"error": "Database not ready"}
 
-    result = await pool.execute(
-        """
-        UPDATE b2b_vendor_briefings
-        SET status = 'rejected', rejected_at = NOW(), reject_reason = $1
-        WHERE id = $2 AND status = 'pending_approval'
-        """,
-        reason,
-        briefing_id,
+    rejected = await reject_pending_briefing(
+        pool,
+        briefing_id=briefing_id,
+        reason=reason,
     )
-    if result == "UPDATE 0":
+    if not rejected:
         return {"error": "Briefing not found or not pending approval"}
 
     return {"id": str(briefing_id), "status": "rejected"}
@@ -2958,19 +2926,7 @@ async def _check_cooldown(
     pool: Any, vendor_name: str, cooldown_days: int
 ) -> bool:
     """Return True if a recent briefing exists (should skip)."""
-    row = await pool.fetchval(
-        """
-        SELECT EXISTS(
-            SELECT 1 FROM b2b_vendor_briefings
-            WHERE LOWER(vendor_name) = LOWER($1)
-              AND status NOT IN ('failed', 'suppressed', 'rejected')
-              AND created_at > NOW() - make_interval(days => $2)
-        )
-        """,
-        vendor_name,
-        cooldown_days,
-    )
-    return bool(row)
+    return await has_recent_deliverable_briefing(pool, vendor_name, cooldown_days)
 
 
 # ---------------------------------------------------------------------------
@@ -3110,34 +3066,17 @@ async def send_batch_briefings() -> dict[str, Any]:
         # Render HTML and store as pending_approval (HITL gate)
         briefing_html = render_vendor_briefing_html(briefing_data)
 
-        challenger_mode = briefing_data.get("challenger_mode", False)
-        if briefing_data.get("prospect_mode"):
-            subject = (
-                f"{vendor_name} -- Accounts In Motion"
-                if challenger_mode
-                else f"{vendor_name} -- Churn Signals Detected"
-            )
-        else:
-            subject = (
-                f"Sales Intelligence Briefing: {vendor_name}"
-                if challenger_mode
-                else f"Churn Intelligence Briefing: {vendor_name}"
-            )
+        subject = build_vendor_briefing_subject(vendor_name, briefing_data)
 
         try:
-            await pool.execute(
-                """
-                INSERT INTO b2b_vendor_briefings
-                    (vendor_name, recipient_email, subject, briefing_data,
-                     briefing_html, status, target_mode)
-                VALUES ($1, $2, $3, $4::jsonb, $5, 'pending_approval', $6)
-                """,
-                vendor_name,
-                to_email,
-                subject,
-                json.dumps(briefing_data, default=str),
-                briefing_html,
-                target_mode,
+            await insert_pending_approval_briefing_record(
+                pool,
+                vendor_name=vendor_name,
+                recipient_email=to_email,
+                subject=subject,
+                briefing_data=briefing_data,
+                briefing_html=briefing_html,
+                target_mode=target_mode,
             )
             queued += 1
             details.append({

@@ -159,6 +159,10 @@
     {
       "source": "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py",
       "target": "extracted_content_pipeline/autonomous/tasks/b2b_vendor_briefing.py"
+    },
+    {
+      "source": "atlas_brain/services/b2b/vendor_briefing_delivery.py",
+      "target": "extracted_content_pipeline/services/b2b/vendor_briefing_delivery.py"
     }
   ],
   "owned": [

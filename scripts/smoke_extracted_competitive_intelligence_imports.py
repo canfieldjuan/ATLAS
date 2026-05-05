@@ -40,6 +40,7 @@ MODULES = [
     "extracted_competitive_intelligence.autonomous.tasks.b2b_vendor_briefing",
     "extracted_competitive_intelligence.autonomous.tasks._b2b_cross_vendor_synthesis",
     "extracted_competitive_intelligence.services.b2b.vendor_briefing_delivery",
+    "extracted_competitive_intelligence.services.b2b.vendor_briefing_repository",
     "extracted_competitive_intelligence.services.b2b.vendor_briefing_api_ports",
     "extracted_competitive_intelligence.services.b2b_competitive_sets",
     "extracted_competitive_intelligence.reasoning.ecosystem",
