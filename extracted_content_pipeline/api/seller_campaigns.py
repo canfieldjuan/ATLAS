@@ -223,6 +223,24 @@ def _public_refresh_result(result: Any) -> dict[str, Any]:
     return data
 
 
+def _combine_prepare_results(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    if len(results) == 1:
+        return dict(results[0])
+    target_ids: list[str] = []
+    categories: list[str] = []
+    for result in results:
+        target_ids.extend(str(item) for item in result.get("target_ids") or ())
+        categories.extend(str(item) for item in result.get("categories") or ())
+    return {
+        "prepared": sum(int(result.get("prepared") or 0) for result in results),
+        "skipped": sum(int(result.get("skipped") or 0) for result in results),
+        "replaced": sum(int(result.get("replaced") or 0) for result in results),
+        "target_mode": results[0].get("target_mode") if results else None,
+        "target_ids": list(dict.fromkeys(target_ids)),
+        "categories": list(dict.fromkeys(categories)),
+    }
+
+
 def _api_offset(value: int | None) -> int:
     offset = 0 if value is None else int(value)
     if offset < 0:
@@ -446,7 +464,20 @@ def create_seller_campaign_router(
                     "prepare": None,
                     "prepare_skipped": True,
                 }
-            prepare_result = await _prepare_operation(pool, scope, resolved_payload)
+            categories = _payload_categories(resolved_payload)
+            if categories:
+                prepare_result = _combine_prepare_results(
+                    [
+                        await _prepare_operation(
+                            pool,
+                            scope,
+                            {**resolved_payload, "category": category},
+                        )
+                        for category in categories
+                    ]
+                )
+            else:
+                prepare_result = await _prepare_operation(pool, scope, resolved_payload)
             return {
                 "refresh": refresh_result,
                 "prepare": prepare_result,
