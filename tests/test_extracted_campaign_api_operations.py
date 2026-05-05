@@ -752,6 +752,51 @@ def test_campaign_operations_router_visibility_failures_do_not_break_send(
     assert response.json() == {"sent": 1, "failed": 0}
 
 
+def test_campaign_operations_router_emits_failed_visibility_for_send_failures(
+    monkeypatch,
+) -> None:
+    visibility = _Visibility()
+
+    async def _send(_pool, **_kwargs):
+        return _Result(sent=1, failed=2, suppressed=0, skipped=0)
+
+    monkeypatch.setattr(operations_api, "send_due_campaigns_from_postgres", _send)
+
+    response = _client(
+        _Pool(),
+        sender=_Sender(),
+        visibility=visibility,
+    ).post("/campaigns/operations/send/queued", json={"limit": 7})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "sent": 1,
+        "failed": 2,
+        "suppressed": 0,
+        "skipped": 0,
+    }
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_STARTED_EVENT,
+            {"operation": "send_queued", "limit": 7},
+        ),
+        (
+            operations_api._OPERATION_FAILED_EVENT,
+            {
+                "operation": "send_queued",
+                "limit": 7,
+                "error_type": operations_api._SEND_REPORTED_FAILURE_TYPE,
+                "result": {
+                    "sent": 1,
+                    "failed": 2,
+                    "suppressed": 0,
+                    "skipped": 0,
+                },
+            },
+        ),
+    ]
+
+
 @pytest.mark.parametrize(
     ("payload", "detail"),
     (
