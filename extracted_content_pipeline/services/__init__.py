@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .reasoning_provider_port import CampaignReasoningProviderPort
+
 
 class _StandaloneLLMRegistry:
     @staticmethod
@@ -9,4 +11,4 @@ class _StandaloneLLMRegistry:
 
 llm_registry = _StandaloneLLMRegistry()
 
-__all__ = ["llm_registry"]
+__all__ = ["llm_registry", "CampaignReasoningProviderPort"]

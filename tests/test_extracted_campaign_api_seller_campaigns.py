@@ -1,0 +1,288 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+pytest.importorskip("fastapi")
+
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
+import extracted_content_pipeline.api.seller_campaigns as seller_api
+from extracted_content_pipeline.api.seller_campaigns import (
+    SellerCampaignApiConfig,
+    create_seller_campaign_router,
+)
+from extracted_content_pipeline.campaign_ports import TenantScope
+
+
+TARGET_ID = "00000000-0000-0000-0000-000000000001"
+CAMPAIGN_ID = "00000000-0000-0000-0000-000000000011"
+
+
+class _Pool:
+    def __init__(
+        self,
+        *,
+        rows=None,
+        row=None,
+        total: int = 0,
+        execute_result="UPDATE 1",
+        initialized: bool = True,
+    ) -> None:
+        self.rows = list(rows or [])
+        self.row = row
+        self.total = total
+        self.execute_result = execute_result
+        self.is_initialized = initialized
+        self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fetch(self, query, *args):
+        self.fetch_calls.append((str(query), args))
+        return self.rows
+
+    async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append((str(query), args))
+        return self.row
+
+    async def fetchval(self, query, *args):
+        self.fetchval_calls.append((str(query), args))
+        return self.total
+
+    async def execute(self, query, *args):
+        self.execute_calls.append((str(query), args))
+        return self.execute_result
+
+
+def _target_row(**overrides):
+    row = {
+        "id": TARGET_ID,
+        "seller_name": "Acme Seller",
+        "company_name": "Acme",
+        "email": "owner@example.com",
+        "seller_type": "private_label",
+        "categories": ["supplements"],
+        "storefront_url": None,
+        "notes": None,
+        "status": "active",
+        "source": "manual",
+        "created_at": datetime(2026, 5, 4, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 5, 4, tzinfo=timezone.utc),
+    }
+    row.update(overrides)
+    return row
+
+
+def _campaign_row(**overrides):
+    row = {
+        "id": CAMPAIGN_ID,
+        "company_name": "Acme Seller",
+        "vendor_name": None,
+        "target_mode": "amazon_seller",
+        "channel": "email_cold",
+        "status": "draft",
+        "recipient_email": "owner@example.com",
+        "subject": "Category wins",
+        "body": "Body",
+        "cta": "Review category report",
+        "llm_model": "offline",
+        "created_at": datetime(2026, 5, 4, tzinfo=timezone.utc),
+        "metadata": {"scope": {"account_id": "acct_1"}},
+    }
+    row.update(overrides)
+    return row
+
+
+def _review_row(**overrides):
+    row = {
+        "id": CAMPAIGN_ID,
+        "previous_status": "draft",
+        "status": "queued",
+        "company_name": "Acme Seller",
+        "vendor_name": None,
+        "channel": "email_cold",
+        "recipient_email": "owner@example.com",
+        "from_email": "seller@example.com",
+        "metadata": {"scope": {"account_id": "acct_1"}},
+    }
+    row.update(overrides)
+    return row
+
+
+def _client(
+    pool,
+    *,
+    scope=None,
+    config: SellerCampaignApiConfig | None = None,
+    dependencies=None,
+) -> TestClient:
+    app = FastAPI()
+
+    async def pool_provider():
+        return pool
+
+    async def scope_provider():
+        return scope
+
+    app.include_router(
+        create_seller_campaign_router(
+            pool_provider=pool_provider,
+            scope_provider=scope_provider if scope is not None else None,
+            config=config,
+            dependencies=dependencies,
+        )
+    )
+    return TestClient(app)
+
+
+def test_seller_campaign_router_lists_targets() -> None:
+    pool = _Pool(rows=[_target_row()], total=1)
+
+    response = _client(pool).get(
+        "/seller/targets?status=active&seller_type=private_label"
+        "&category=supplements&limit=5&offset=2"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["targets"][0]["seller_name"] == "Acme Seller"
+    query, args = pool.fetch_calls[0]
+    assert "FROM \"seller_targets\"" in query
+    assert args == ("active", "private_label", "supplements", 5, 2)
+
+
+def test_seller_campaign_router_creates_target() -> None:
+    pool = _Pool(row=_target_row())
+
+    response = _client(pool).post(
+        "/seller/targets",
+        json={
+            "seller_name": "Acme Seller",
+            "seller_type": "private_label",
+            "categories": ["supplements"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == TARGET_ID
+    query, args = pool.fetchrow_calls[0]
+    assert "INSERT INTO \"seller_targets\"" in query
+    assert args[0] == "Acme Seller"
+
+
+def test_seller_campaign_router_rejects_target_without_name() -> None:
+    response = _client(_Pool()).post(
+        "/seller/targets",
+        json={"seller_name": " ", "company_name": ""},
+    )
+
+    assert response.status_code == 400
+    assert "seller_name or company_name" in response.json()["detail"]
+
+
+def test_seller_campaign_router_updates_and_deletes_targets() -> None:
+    pool = _Pool(row=_target_row(status="paused"), execute_result="UPDATE 1")
+    client = _client(pool)
+
+    patch = client.patch(f"/seller/targets/{TARGET_ID}", json={"status": "paused"})
+
+    assert patch.status_code == 200
+    assert patch.json()["status"] == "paused"
+    assert pool.execute_calls[0][1] == ("paused", TARGET_ID)
+
+    pool.execute_result = "DELETE 1"
+    delete = client.delete(f"/seller/targets/{TARGET_ID}")
+
+    assert delete.status_code == 200
+    assert delete.json() == {"ok": True}
+
+
+def test_seller_campaign_router_returns_404_for_missing_target() -> None:
+    response = _client(_Pool(row=None)).get(f"/seller/targets/{TARGET_ID}")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Seller target not found"
+
+
+def test_seller_campaign_router_lists_seller_drafts() -> None:
+    pool = _Pool(rows=[_campaign_row()])
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+    ).get("/seller/campaigns/drafts?statuses=draft,approved&limit=5")
+
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["target_mode"] == "amazon_seller"
+    query, args = pool.fetch_calls[0]
+    assert "target_mode = $3" in query
+    assert args == (["draft", "approved"], "acct_1", "amazon_seller", 5)
+
+
+def test_seller_campaign_router_exports_seller_drafts_csv() -> None:
+    pool = _Pool(rows=[_campaign_row()])
+
+    response = _client(pool).get("/seller/campaigns/drafts/export")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "seller_campaign_drafts.csv" in response.headers["content-disposition"]
+    assert "Acme Seller" in response.text
+
+
+def test_seller_campaign_router_reviews_only_seller_drafts() -> None:
+    pool = _Pool(rows=[_review_row()])
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).post(
+        "/seller/campaigns/drafts/review",
+        json={
+            "campaign_ids": [CAMPAIGN_ID],
+            "status": "queued",
+            "from_statuses": "draft,approved",
+            "from_email": "seller@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    query, args = pool.fetch_calls[0]
+    assert "target_mode = $4" in query
+    assert "campaign.target_mode = $4" in query
+    assert args[0] == [CAMPAIGN_ID]
+    assert args[1] == ["draft", "approved"]
+    assert args[2] == "acct_1"
+    assert args[3] == "amazon_seller"
+    assert args[4] == "queued"
+
+
+def test_seller_campaign_router_requires_database() -> None:
+    response = _client(_Pool(initialized=False)).get("/seller/targets")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Database unavailable"
+
+
+def test_seller_campaign_router_honors_host_dependencies() -> None:
+    pool = _Pool(rows=[_target_row()])
+
+    def require_auth():
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    response = _client(pool, dependencies=[Depends(require_auth)]).get(
+        "/seller/targets"
+    )
+
+    assert response.status_code == 403
+    assert pool.fetch_calls == []
+
+
+def test_seller_campaign_router_requires_fastapi(monkeypatch) -> None:
+    monkeypatch.setattr(seller_api, "_FASTAPI_IMPORT_ERROR", ImportError("missing"))
+
+    with pytest.raises(RuntimeError, match="FastAPI is required"):
+        create_seller_campaign_router(pool_provider=lambda: None)

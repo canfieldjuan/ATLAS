@@ -119,6 +119,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/campaign_postgres_analytics.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_webhooks.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_review.py" in owned
+    assert "extracted_content_pipeline/campaign_postgres_seller_targets.py" in owned
     assert "extracted_content_pipeline/campaign_postgres_send.py" in owned
     assert "extracted_content_pipeline/campaign_example.py" in owned
     assert "extracted_content_pipeline/campaign_customer_data.py" in owned
@@ -126,6 +127,8 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/settings.py" in owned
     assert "extracted_content_pipeline/api/__init__.py" in owned
     assert "extracted_content_pipeline/api/campaign_webhooks.py" in owned
+    assert "extracted_content_pipeline/api/b2b_campaigns.py" in owned
+    assert "extracted_content_pipeline/api/seller_campaigns.py" in owned
     assert "extracted_content_pipeline/storage/migrations/151_campaign_opportunities.sql" in owned
     assert "extracted_content_pipeline/storage/migrations/152_campaign_draft_export_indexes.sql" in owned
     assert "extracted_content_pipeline/reasoning/archetypes.py" in owned
@@ -162,12 +165,15 @@ def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
     assert "extracted_content_pipeline/campaign_postgres_generation.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_analytics.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_webhooks.py" not in mapped
+    assert "extracted_content_pipeline/campaign_postgres_seller_targets.py" not in mapped
     assert "extracted_content_pipeline/campaign_postgres_send.py" not in mapped
     assert "extracted_content_pipeline/campaign_example.py" not in mapped
     assert "extracted_content_pipeline/campaign_customer_data.py" not in mapped
     assert "extracted_content_pipeline/campaign_opportunities.py" not in mapped
     assert "extracted_content_pipeline/api/__init__.py" not in mapped
     assert "extracted_content_pipeline/api/campaign_webhooks.py" not in mapped
+    assert "extracted_content_pipeline/api/b2b_campaigns.py" not in mapped
+    assert "extracted_content_pipeline/api/seller_campaigns.py" not in mapped
     assert "extracted_content_pipeline/reasoning/semantic_cache.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_execution_progress.py" not in mapped
     assert "extracted_content_pipeline/autonomous/tasks/_google_news.py" not in mapped

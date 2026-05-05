@@ -38,6 +38,15 @@
 - `campaign_postgres_review` provides a product-owned draft review/status
   update path so hosts can approve, queue, cancel, or expire generated
   `b2b_campaigns` rows after export without handwritten SQL.
+- `api.b2b_campaigns` provides a FastAPI router factory around the draft
+  list/export/review seams. Hosts inject pool providers, tenant scope, and any
+  auth dependencies instead of importing Atlas API globals.
+- `campaign_postgres_seller_targets` provides product-owned CRUD/list helpers
+  for `seller_targets`, the Amazon seller outreach recipient table copied in
+  the product migrations.
+- `api.seller_campaigns` provides a FastAPI router factory around seller
+  targets and seller draft review/export routes. Seller draft review is guarded
+  to `target_mode="amazon_seller"`.
 - `campaign_postgres_send` provides a DB-backed queued send worker seam. Hosts
   inject a Resend or SES sender and reuse the product campaign, suppression,
   and audit ports to send rows already moved to `queued`.

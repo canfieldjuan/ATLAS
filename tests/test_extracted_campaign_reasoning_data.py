@@ -8,6 +8,10 @@ from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.campaign_reasoning_data import (
     FileCampaignReasoningContextProvider,
     load_campaign_reasoning_context_provider,
+    load_reasoning_provider_port,
+)
+from extracted_content_pipeline.services.reasoning_provider_port import (
+    CampaignReasoningProviderPort,
 )
 
 
@@ -157,3 +161,18 @@ async def test_load_file_reasoning_provider(tmp_path) -> None:
     assert provider.source == str(path)
     assert context is not None
     assert context.as_dict()["confidence"] == "medium"
+
+
+def test_load_reasoning_provider_port_is_protocol_compatible(tmp_path) -> None:
+    path = tmp_path / "reasoning.json"
+    path.write_text('[]', encoding="utf-8")
+
+    provider = load_reasoning_provider_port(path)
+
+    # Verify the loader returns the concrete File implementation AND that the
+    # implementation satisfies the runtime-checkable Protocol -- this is what
+    # the test name promises. Without the Protocol assertion, the test would
+    # still pass if FileCampaignReasoningContextProvider stopped satisfying
+    # CampaignReasoningProviderPort.
+    assert isinstance(provider, FileCampaignReasoningContextProvider)
+    assert isinstance(provider, CampaignReasoningProviderPort)

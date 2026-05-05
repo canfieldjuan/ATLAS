@@ -29,6 +29,7 @@ Full task/runtime decoupling remains Phase 3.
 | CRM provider Protocol | ✅ `services.crm_provider` routes to an injectable standalone CRM adapter |
 | Checkout email provider Protocol | ✅ `services.email_provider` routes to an injectable standalone email adapter |
 | Gated report PDF renderer Protocol | ✅ `services.b2b.pdf_renderer` routes to an injectable standalone PDF renderer |
+| LLM exact-cache bridge | ✅ `services.b2b.llm_exact_cache` routes to extracted LLM infrastructure in standalone mode |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
 | Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM bridge, and service package fallback |
 | Standalone smoke script + CI | ✅ `smoke_extracted_competitive_intelligence_standalone.py` runs in the local check driver |
@@ -79,7 +80,7 @@ Product-owned modules:
 
 | Task | Source file referenced |
 |---|---|
-| Rewire `b2b_battle_cards.py` LLM calls to consume `extracted_llm_infrastructure` directly | `autonomous/tasks/b2b_battle_cards.py:3140` (`call_llm_with_skill`, `get_pipeline_llm`), `b2b_vendor_briefing.py:1199-1202` (`get_llm`) |
+| Rewire remaining battle-card/vendor-briefing LLM calls to consume `extracted_llm_infrastructure` directly | `autonomous/tasks/b2b_battle_cards.py:3140` (`call_llm_with_skill`, `get_pipeline_llm` already routes through `pipelines.llm`; exact-cache message builder now routes through extracted LLM infra), `b2b_vendor_briefing.py:1199-1202` (`get_llm`) |
 | Replace `_b2b_shared.py` cross-imports with explicit `Protocol`-based interfaces | `vendor_briefing.py:40-47` reads from `_b2b_shared` for vendor intelligence records |
 | Provide host adapters for write-tool builders | `mcp/b2b/write_ports.py` defines ports for challenger brief and accounts-in-motion builders |
 | Generic `EvidenceClaimReader` Protocol | `services/b2b/evidence_claim_*.py` stays in atlas-core; scaffold consumes via Protocol |

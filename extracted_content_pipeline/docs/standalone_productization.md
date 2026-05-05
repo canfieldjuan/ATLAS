@@ -174,6 +174,21 @@ campaign id, optional account scope, and source-status guard so hosts can move
 reviewed drafts to `approved`, `queued`, `cancelled`, or `expired` without
 writing ad hoc SQL.
 
+`extracted_content_pipeline/api/b2b_campaigns.py` owns the host-mounted FastAPI
+surface for that review loop. It exposes a router factory for draft listing,
+CSV/JSON export, and review status updates while requiring the host to inject
+pool providers, tenant scope, and auth dependencies.
+
+`extracted_content_pipeline/campaign_postgres_seller_targets.py` owns the
+seller-recipient table seam for Amazon seller outreach. It provides CRUD/list
+helpers over `seller_targets` without importing Atlas seller API code.
+
+`extracted_content_pipeline/api/seller_campaigns.py` owns the host-mounted
+FastAPI surface for seller target management and seller draft review. It keeps
+seller draft list/export/review locked to `target_mode="amazon_seller"` and
+defers Atlas-only generation triggers and category-intelligence refreshes until
+their producers are extracted behind ports.
+
 `extracted_content_pipeline/campaign_postgres_send.py` owns the DB-backed send
 worker seam. It composes `PostgresCampaignRepository`,
 `PostgresSuppressionRepository`, `PostgresCampaignAuditSink`, and

@@ -259,6 +259,54 @@ python scripts/review_extracted_campaign_drafts.py \
   --from-email audit@customer.com
 ```
 
+Or mount the B2B draft API router in a host FastAPI app and inject tenant
+scope/auth from the host application:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.b2b_campaigns import create_b2b_campaign_router
+
+
+app.include_router(
+    create_b2b_campaign_router(
+        pool_provider=get_pool,
+        scope_provider=current_tenant_scope,
+        dependencies=[Depends(require_content_ops_user)],
+    )
+)
+```
+
+The router exposes:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/b2b/campaigns/drafts` | List scoped drafts as JSON. |
+| `GET` | `/b2b/campaigns/drafts/export` | Export scoped drafts as CSV or JSON. |
+| `POST` | `/b2b/campaigns/drafts/review` | Approve, queue, cancel, or expire selected drafts. |
+
+Amazon seller installs can mount the seller-specific router:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.seller_campaigns import create_seller_campaign_router
+
+
+app.include_router(
+    create_seller_campaign_router(
+        pool_provider=get_pool,
+        scope_provider=current_tenant_scope,
+        dependencies=[Depends(require_content_ops_user)],
+    )
+)
+```
+
+It exposes seller target CRUD under `/seller/targets` and seller draft
+list/export/review routes under `/seller/campaigns/drafts`. Seller draft
+review is guarded to `target_mode="amazon_seller"` so the route cannot update
+other campaign products by id.
+
 Send queued drafts through the configured provider:
 
 ```bash
@@ -359,8 +407,8 @@ DELETE FROM campaign_opportunities WHERE account_id = 'acct_123';
 
 ## Current Limits
 
-- API routes, review queues, and dashboard auth are not part of this install
-  path yet.
+- Dashboard auth and long-running hosted workers are not part of this install
+  path yet. Host apps inject auth dependencies into the packaged routers.
 - The runbook covers campaign opportunity generation, not blog generation or
   vendor briefing delivery.
 - Reasoning production remains host-owned. This product accepts reasoning
