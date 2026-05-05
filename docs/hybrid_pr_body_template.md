@@ -37,3 +37,6 @@ Use this template for every PR in the current hybrid extraction wave.
   - `./scripts/run_reasoning_provider_port_tests.sh`
 - Additional checks:
   - 
+
+- Optional markdown summary from JSON report:
+  - `./scripts/render_hybrid_reasoning_report_summary.py --report <path>`

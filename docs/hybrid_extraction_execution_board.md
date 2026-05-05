@@ -216,3 +216,6 @@ Use these commands as the scoped compatibility checklist for the current wave:
 - Unified runner with machine-readable report:
   - `./scripts/run_hybrid_reasoning_checks_with_report.py [--output <path>]`
   - writes `artifacts/hybrid_reasoning_checks_report.json` by default, including skip/pass state
+
+- Report-to-markdown helper for PR descriptions:
+  - `./scripts/render_hybrid_reasoning_report_summary.py --report <path>`
