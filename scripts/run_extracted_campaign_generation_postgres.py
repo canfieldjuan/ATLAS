@@ -24,7 +24,7 @@ from extracted_content_pipeline.campaign_postgres_generation import (  # noqa: E
     generate_campaign_drafts_from_postgres,
 )
 from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
-    load_campaign_reasoning_context_provider,
+    load_reasoning_provider_port,
 )
 from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: E402
 
@@ -109,7 +109,7 @@ async def _create_pool(database_url: str):
 def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     if args.reasoning_context:
-        overrides["reasoning_context"] = load_campaign_reasoning_context_provider(
+        overrides["reasoning_context"] = load_reasoning_provider_port(
             args.reasoning_context
         )
     if args.skills_root:

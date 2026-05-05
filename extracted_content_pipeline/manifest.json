@@ -193,6 +193,9 @@
       "target": "extracted_content_pipeline/campaign_postgres_review.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_postgres_seller_targets.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_postgres_send.py"
     },
     {
@@ -230,6 +233,12 @@
     },
     {
       "target": "extracted_content_pipeline/api/campaign_webhooks.py"
+    },
+    {
+      "target": "extracted_content_pipeline/api/b2b_campaigns.py"
+    },
+    {
+      "target": "extracted_content_pipeline/api/seller_campaigns.py"
     },
     {
       "target": "extracted_content_pipeline/storage/migrations/151_campaign_opportunities.sql"

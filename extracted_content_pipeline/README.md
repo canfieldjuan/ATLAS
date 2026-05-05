@@ -240,6 +240,47 @@ python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id ac
 python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id acct_123 --status cancelled --reason "customer rejected"
 ```
 
+Hosts with FastAPI apps can mount the same draft review/export loop through a
+router factory. The host injects its database pool, tenant scope, and auth
+dependencies:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.b2b_campaigns import create_b2b_campaign_router
+
+
+app.include_router(
+    create_b2b_campaign_router(
+        pool_provider=get_pool,
+        scope_provider=current_tenant_scope,
+        dependencies=[Depends(require_content_ops_user)],
+    )
+)
+```
+
+This adds JSON draft listing, CSV/JSON export, and approve/queue/cancel/expire
+review routes without importing Atlas API globals.
+
+Amazon seller installs can mount the seller-specific router. It adds seller
+target CRUD plus seller draft list/export/review routes locked to
+`target_mode="amazon_seller"`:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.seller_campaigns import create_seller_campaign_router
+
+
+app.include_router(
+    create_seller_campaign_router(
+        pool_provider=get_pool,
+        scope_provider=current_tenant_scope,
+        dependencies=[Depends(require_content_ops_user)],
+    )
+)
+```
+
 Send queued drafts through the configured provider:
 
 ```bash
@@ -394,6 +435,8 @@ Several small utility shims provide product-owned local behavior by default so t
   `PipelineLLMClient`, and the local skill registry for DB-backed draft
   generation
 - `campaign_postgres_export.py`: read-only draft export for host review flows
+- `campaign_postgres_seller_targets.py`: seller target CRUD/list helpers for
+  Amazon seller campaign installs
 - `campaign_postgres_send.py`: DB-backed queued send runner that composes the
   campaign, suppression, audit, and sender ports for host worker CLIs
 - `campaign_postgres_analytics.py`: DB-backed analytics refresh runner that
@@ -403,6 +446,10 @@ Several small utility shims provide product-owned local behavior by default so t
   host worker CLIs
 - `api/campaign_webhooks.py`: optional FastAPI router factory for host-mounted
   campaign webhook and unsubscribe routes
+- `api/b2b_campaigns.py`: optional FastAPI router factory for host-mounted
+  B2B draft list/export/review routes
+- `api/seller_campaigns.py`: optional FastAPI router factory for host-mounted
+  seller target and seller draft review routes
 - `campaign_postgres_sequence_progression.py`: DB-backed due-sequence worker
   that composes the sequence, audit, LLM, and skill ports for follow-up
   generation

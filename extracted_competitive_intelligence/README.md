@@ -39,9 +39,10 @@ Plus 9 migrations: `095_b2b_vendor_registry.sql`, `099_displacement_edges_and_co
 
 ## What's out of scope (remaining Phase 3)
 
-- Deep runtime decoupling for battle-card LLM calls; standalone mode routes the
-  LLM bridge through `extracted_llm_infrastructure/`, but task-level LLM seams
-  still need Phase 3 hardening.
+- Deep runtime decoupling for remaining battle-card LLM calls; standalone mode
+  routes the LLM bridge and exact-cache message builder through
+  `extracted_llm_infrastructure/`, but task-level LLM seams still need Phase 3
+  hardening.
 - API endpoint extraction beyond the briefing endpoints (`/b2b/win-loss`, dashboard endpoints stay in atlas_brain)
 - Full runtime exercise without `atlas_brain` on `sys.path`; this slice adds the standalone substrate and smoke coverage, but deep task modules still carry Atlas-owned domain dependencies.
 
@@ -67,6 +68,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `services/crm_provider.py` uses an injectable CRM provider port for standalone lead/contact writes
 - `services/email_provider.py` uses an injectable email provider port for standalone checkout confirmations
 - `services/b2b/pdf_renderer.py` uses an injectable PDF renderer port for standalone gated report delivery
+- `services/b2b/llm_exact_cache.py` uses `extracted_llm_infrastructure` for standalone battle-card prompt envelopes
 - `services/protocols.py` and `pipelines/llm.py` use `extracted_llm_infrastructure`
 - `services/scraping/sources.py` owns the source enum and classification sets locally
 - MCP shared/server modules are extracted-owned and importable without the optional `mcp` package installed
