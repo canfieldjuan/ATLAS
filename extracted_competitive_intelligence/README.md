@@ -28,6 +28,7 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | `services/b2b/source_impact.py` | Source impact ledger (which sources feed which products) |
 | `services/b2b/battle_card_ports.py` | Host port for battle-card shared helper, data-read, synthesis-reader, and webhook support |
 | `services/b2b/vendor_briefing_delivery.py` | Shared delivery helper for config-backed vendor briefing subject/sender/tags |
+| `services/b2b/vendor_briefing_repository.py` | Shared repository helper for vendor briefing delivery and HITL state |
 | `services/b2b/vendor_briefing_ports.py` | Host port for vendor briefing evidence, scorecard, synthesis-reader, and LLM/cache support |
 | `services/b2b/vendor_briefing_api_ports.py` | Host/runtime port for checkout, session lookup, and gated report email delivery |
 | `services/b2b/product_claim.py` | Compatibility surface for `extracted_quality_gate.product_claim` |
@@ -79,6 +80,7 @@ Set `EXTRACTED_COMP_INTEL_STANDALONE=1` to route core substrate imports away fro
 - `services/b2b/anthropic_batch.py` uses `extracted_llm_infrastructure` for standalone battle-card batch overlays
 - `services/b2b/battle_card_ports.py` exposes fail-closed host ports for battle-card shared helper, data-read, churn-scope, execution-progress, synthesis-reader, and webhook support
 - `services/b2b/vendor_briefing_delivery.py` centralizes config-backed CampaignSender delivery metadata for scheduled and approved vendor briefings
+- `services/b2b/vendor_briefing_repository.py` centralizes `b2b_vendor_briefings` delivery and HITL state writes
 - `services/b2b/vendor_briefing_ports.py` exposes fail-closed host ports for vendor briefing evidence, scorecard, and synthesis-reader support, plus standalone-safe LLM/cache runtime bridges
 - `services/b2b/vendor_briefing_api_ports.py` centralizes checkout, Stripe session lookup, and gated report email delivery runtime edges
 - `services/protocols.py`, `services/llm_router.py`, and `pipelines/llm.py` use `extracted_llm_infrastructure`
@@ -162,6 +164,11 @@ bridges. The mapped vendor briefing task no longer imports `_b2b_shared.py`,
 `services/b2b/vendor_briefing_delivery.py` is a shared delivery helper for
 vendor briefing emails. Scheduled sends and approval sends share the same
 config-backed subject, from-address, tag, and CampaignSender invocation logic.
+
+`services/b2b/vendor_briefing_repository.py` is a shared repository helper for
+vendor briefing state. Direct sends, approval sends, rejections, cooldown
+checks, and scheduled pending-approval writes share the same
+`b2b_vendor_briefings` persistence contract.
 
 `services/b2b/vendor_briefing_api_ports.py` is a product-owned runtime port for
 the customer-facing briefing API. It owns Stripe checkout/session lookup and
