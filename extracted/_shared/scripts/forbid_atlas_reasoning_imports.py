@@ -73,17 +73,37 @@ def _is_import_module_call(node: ast.Call) -> bool:
     return False
 
 
-def _import_module_call_targets_atlas_reasoning(node: ast.Call) -> bool:
+def _import_module_call_targets_atlas_reasoning(
+    node: ast.Call,
+) -> str | None:
+    """Return the forbidden module name if this call targets atlas_brain.reasoning.
+
+    Inspects both positional and keyword forms -- ``importlib.import_module``
+    accepts ``name`` as a keyword (and ``package`` for relative imports), so
+    a call like ``importlib.import_module(name="atlas_brain.reasoning")``
+    must trip the guard the same as the positional form. Returns the
+    string the call would resolve, or ``None`` if it doesn't statically
+    target the forbidden prefix.
+    """
     if not _is_import_module_call(node):
-        return False
-    if not node.args:
-        return False
-    first = node.args[0]
-    if not isinstance(first, ast.Constant):
-        return False
-    if not isinstance(first.value, str):
-        return False
-    return _module_targets_atlas_reasoning(first.value)
+        return None
+    candidate: ast.expr | None = None
+    if node.args:
+        candidate = node.args[0]
+    if candidate is None:
+        for kw in node.keywords:
+            if kw.arg == "name":
+                candidate = kw.value
+                break
+    if candidate is None:
+        return None
+    if not isinstance(candidate, ast.Constant):
+        return None
+    if not isinstance(candidate.value, str):
+        return None
+    if not _module_targets_atlas_reasoning(candidate.value):
+        return None
+    return candidate.value
 
 
 def scan_file(path: Path) -> list[tuple[int, str]]:
@@ -107,12 +127,12 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
             )
             violations.append((node.lineno, target))
             continue
-        if isinstance(node, ast.Call) and _import_module_call_targets_atlas_reasoning(node):
-            first = node.args[0]
-            assert isinstance(first, ast.Constant)
-            violations.append(
-                (node.lineno, f"importlib.import_module({first.value!r})")
-            )
+        if isinstance(node, ast.Call):
+            forbidden_name = _import_module_call_targets_atlas_reasoning(node)
+            if forbidden_name is not None:
+                violations.append(
+                    (node.lineno, f"importlib.import_module({forbidden_name!r})")
+                )
     return violations
 
 

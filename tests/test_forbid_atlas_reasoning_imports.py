@@ -127,6 +127,49 @@ def test_bare_import_module_call_is_violation(tmp_path: Path) -> None:
     assert len(violations) == 1
 
 
+def test_importlib_import_module_with_keyword_arg_is_violation(tmp_path: Path) -> None:
+    # ``importlib.import_module`` accepts ``name`` as a keyword
+    # argument. A guard that only inspects ``node.args[0]`` would
+    # silently accept this form and let the forbidden import slip
+    # through CI -- Codex caught this bypass on the original guard.
+    violations = _scan(
+        """
+        import importlib
+        x = importlib.import_module(name="atlas_brain.reasoning")
+        """,
+        tmp_path,
+    )
+    assert len(violations) == 1
+    assert "atlas_brain.reasoning" in violations[0][1]
+
+
+def test_bare_import_module_with_keyword_arg_is_violation(tmp_path: Path) -> None:
+    # Same kwarg bypass when ``import_module`` is bare-imported.
+    violations = _scan(
+        """
+        from importlib import import_module
+        x = import_module(name="atlas_brain.reasoning.archetypes")
+        """,
+        tmp_path,
+    )
+    assert len(violations) == 1
+    assert "atlas_brain.reasoning.archetypes" in violations[0][1]
+
+
+def test_import_module_keyword_arg_other_module_does_not_fire(tmp_path: Path) -> None:
+    # Sanity check the inverse: kwarg variant for a non-reasoning
+    # module flows through cleanly. Catches a regression where the
+    # kwarg-extraction code over-fires.
+    violations = _scan(
+        """
+        import importlib
+        x = importlib.import_module(name="atlas_brain.services")
+        """,
+        tmp_path,
+    )
+    assert violations == []
+
+
 def test_atlas_reasoning_inside_try_except_still_violates(tmp_path: Path) -> None:
     # Stricter than forbid_hard_atlas_imports.py -- gated atlas_brain
     # reads are allowed for OTHER atlas modules, but the reasoning
