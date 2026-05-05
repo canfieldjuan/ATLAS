@@ -184,7 +184,7 @@ This board operationalizes `docs/hybrid_extraction_implementation_plan.md` into 
 
 - [x] Add one consolidated compatibility test matrix run target for provider-port paths (`scripts/run_reasoning_provider_port_compat_checks.sh`).
 - [x] Add execution-board CI checklist links to each acceptance test command.
-- [ ] Keep contract-impact annotations in every new PR body (scope guard compliance).
+- [x] Keep contract-impact annotations in every new PR body (scope guard compliance).
 
 ### Deferred (explicitly out of current slice)
 
@@ -206,3 +206,6 @@ Use these commands as the scoped compatibility checklist for the current wave:
 - Targeted compile checks (fast local fallback):
   - `python -m py_compile extracted_content_pipeline/campaign_reasoning_data.py`
   - `python -m py_compile atlas_brain/autonomous/tasks/_b2b_reasoning_consumer_adapter.py`
+
+- PR body template for scope + contract metadata:
+  - `docs/hybrid_pr_body_template.md`
