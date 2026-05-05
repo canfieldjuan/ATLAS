@@ -463,6 +463,8 @@ def _normalize_known_brand(
     noise_terms = {_brand_key(value) for value in limits.comparison_noise_terms}
     if _brand_key(text) in noise_terms:
         return ""
+    if any(_brand_key(word) in noise_terms for word in words):
+        return ""
     return " ".join(words).title()
 
 

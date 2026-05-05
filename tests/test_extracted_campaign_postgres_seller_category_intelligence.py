@@ -123,7 +123,7 @@ def _seed_aggregate_results(
             },
             {
                 "reviewed_brand": "Brand A",
-                "compared_product": "charger",
+                "compared_product": "amazon charger",
                 "direction": "switched_to",
                 "count": 5,
             },
