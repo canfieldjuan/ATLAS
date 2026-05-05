@@ -44,3 +44,5 @@ if status:
 
 print(f"Validation passed: mapped files for {product} match atlas_brain sources")
 PY
+
+python "$ROOT_DIR/extracted/_shared/scripts/forbid_hard_atlas_imports.py" "$PRODUCT_DIR"
