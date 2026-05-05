@@ -18,11 +18,11 @@ Three pieces:
 2.  ``vendor_pressure_result_from_synthesis_view(view)`` -- the
     producer-side bridge that builds a typed
     ``DomainReasoningResult[VendorPressurePayload]`` from a
-    ``_b2b_synthesis_reader.SynthesisView``. Internally still goes
-    through ``synthesis_view_to_reasoning_entry`` so the universal
-    fields (confidence, summary, signals, uncertainty, falsification,
-    mode, risk_level, archetype) come from the same place they always
-    did.
+    ``_b2b_synthesis_reader.SynthesisView``. Goes through
+    ``synthesis_view_to_reasoning_entry`` for the universal-narrative
+    fields, then enriches with view-only metadata (lineage,
+    freshness, categorical confidence label) before delegating to
+    :func:`vendor_pressure_result_from_entry`.
 
 3.  ``VendorPressureConsumer`` -- the consumer-side projection that
     implements ``ReasoningConsumerPort[VendorPressurePayload]``. Its
@@ -83,6 +83,25 @@ class VendorPressurePayload:
     wedge: str | None = None
 
 
+def _normalize_lineage_ids(raw: Any) -> tuple[str, ...]:
+    """Coerce to str, strip whitespace, drop None / empty.
+
+    Matches the call_transcript domain's lineage normalization. Lineage
+    IDs feed downstream lookups; whitespace IDs and empties would silently
+    miss-match, so filtering at the envelope boundary is the right place.
+    """
+    if not isinstance(raw, list):
+        return ()
+    out: list[str] = []
+    for item in raw:
+        if item is None:
+            continue
+        normalized = str(item).strip()
+        if normalized:
+            out.append(normalized)
+    return tuple(out)
+
+
 def vendor_pressure_result_from_entry(
     entry: Mapping[str, Any] | None,
     *,
@@ -94,6 +113,22 @@ def vendor_pressure_result_from_entry(
     synthetic entries, avoiding the ``atlas_brain.autonomous.tasks``
     import chain (which pulls in storage / asyncpg / scheduler that
     aren't in the standalone-CI dep set).
+
+    Recognized keys (all optional; absent or null falls back to envelope
+    defaults):
+
+    Universal-narrative fields (from ``synthesis_view_to_reasoning_entry``):
+        ``archetype``, ``confidence`` (numeric), ``mode``, ``risk_level``,
+        ``executive_summary``, ``key_signals``, ``uncertainty_sources``,
+        ``falsification_conditions``.
+
+    Lineage / freshness fields (from ``SynthesisView`` direct accessors;
+    see :func:`vendor_pressure_result_from_synthesis_view`):
+        ``confidence_label`` (categorical: ``"high"`` / ``"medium"`` /
+        ``"low"`` / ...),
+        ``as_of`` (ISO date string),
+        ``reference_ids`` (nested object: ``{"metric_ids": [...],
+        "witness_ids": [...]}``).
 
     A ``None`` or empty entry produces a result with all-None scalar
     fields and empty-tuple list fields, matching the PR #184 sparse
@@ -113,11 +148,41 @@ def vendor_pressure_result_from_entry(
 
     archetype = entry.get("archetype")
 
+    # Lineage: nested ``reference_ids`` object is the canonical shape
+    # surfaced by ``SynthesisView.reference_ids``. The synthesis-view
+    # wrapper enriches the entry with this; tests can also drive it
+    # directly with a synthetic dict.
+    ref_ids_raw = entry.get("reference_ids")
+    if isinstance(ref_ids_raw, Mapping):
+        metric_ids = _normalize_lineage_ids(ref_ids_raw.get("metric_ids"))
+        witness_ids = _normalize_lineage_ids(ref_ids_raw.get("witness_ids"))
+    else:
+        metric_ids = ()
+        witness_ids = ()
+
+    # Freshness: empty string from view.as_of_date_iso() collapses to None
+    # so consumers see "no date" rather than "the empty-string date".
+    as_of_raw = entry.get("as_of")
+    if isinstance(as_of_raw, str) and as_of_raw.strip():
+        as_of = as_of_raw.strip()
+    else:
+        as_of = None
+
+    # Categorical confidence label (e.g. "high"/"medium"/"low"). Empty
+    # strings normalize to None for the same reason.
+    confidence_label_raw = entry.get("confidence_label")
+    if isinstance(confidence_label_raw, str) and confidence_label_raw.strip():
+        confidence_label = confidence_label_raw.strip()
+    else:
+        confidence_label = None
+
     return DomainReasoningResult(
         subject_id=subject_id,
         domain="vendor_pressure",
         confidence=entry.get("confidence"),
         domain_payload=VendorPressurePayload(wedge=archetype),
+        confidence_label=confidence_label,
+        as_of=as_of,
         executive_summary=entry.get("executive_summary"),
         key_signals=tuple(key_signals_raw),
         uncertainty_sources=tuple(uncertainty_raw),
@@ -125,7 +190,10 @@ def vendor_pressure_result_from_entry(
         mode=entry.get("mode"),
         risk_level=entry.get("risk_level"),
         archetype=archetype,
-        reference_ids=ReferenceIds(),
+        reference_ids=ReferenceIds(
+            metric_ids=metric_ids,
+            witness_ids=witness_ids,
+        ),
     )
 
 
@@ -136,11 +204,29 @@ def vendor_pressure_result_from_synthesis_view(
 ) -> DomainReasoningResult[VendorPressurePayload]:
     """Build a typed reasoning result from a vendor synthesis view.
 
-    Production wrapper that routes through
-    ``_b2b_synthesis_reader.synthesis_view_to_reasoning_entry`` then
-    delegates to :func:`vendor_pressure_result_from_entry`. The deferred
-    import keeps this module loadable without the ``atlas_brain.autonomous``
-    dep chain when callers only need the dict-in path.
+    Production wrapper. Two-step:
+
+    1. Calls ``synthesis_view_to_reasoning_entry(view)`` for the
+       universal narrative fields (archetype / confidence / summary /
+       signals / mode / risk_level / falsification / uncertainty).
+    2. Enriches the entry dict with view-only metadata that the
+       reasoning-entry helper doesn't surface:
+
+       - ``reference_ids`` from ``view.reference_ids`` -- the nested
+         ``{"metric_ids": [...], "witness_ids": [...]}`` lineage block,
+         already deduplicated by the view's resolver.
+       - ``as_of`` from ``view.as_of_date_iso()`` -- ISO date string
+         describing when the synthesis was generated.
+       - ``confidence_label`` from ``view.confidence("causal_narrative")``
+         -- the categorical band ("high" / "medium" / "low" / ...) that
+         complements the numeric confidence already in the entry.
+
+    Then delegates to :func:`vendor_pressure_result_from_entry` so the
+    sparse-contract guards and field normalization happen in one place.
+
+    The deferred import keeps this module loadable without the
+    ``atlas_brain.autonomous`` dep chain when callers only need the
+    dict-in path.
     """
     if view is None:
         return vendor_pressure_result_from_entry({}, subject_id=subject_id)
@@ -149,7 +235,34 @@ def vendor_pressure_result_from_synthesis_view(
         synthesis_view_to_reasoning_entry,
     )
 
-    entry = synthesis_view_to_reasoning_entry(view)
+    entry: dict[str, Any] = dict(synthesis_view_to_reasoning_entry(view))
+
+    # Lineage: view exposes a property; if absent or empty-dict, leave
+    # the entry's reference_ids unset so the builder falls back to its
+    # empty-tuple default.
+    reference_ids = getattr(view, "reference_ids", None)
+    if isinstance(reference_ids, Mapping) and reference_ids:
+        entry.setdefault("reference_ids", reference_ids)
+
+    # Freshness: view returns "" when no date; treat that as absent.
+    as_of_iso = getattr(view, "as_of_date_iso", None)
+    if callable(as_of_iso):
+        as_of_value = as_of_iso()
+        if isinstance(as_of_value, str) and as_of_value.strip():
+            entry.setdefault("as_of", as_of_value)
+
+    # Categorical confidence label for the causal-narrative section
+    # (the same section synthesis_view_to_reasoning_entry already
+    # numericizes for the ``confidence`` field).
+    confidence_method = getattr(view, "confidence", None)
+    if callable(confidence_method):
+        try:
+            label = confidence_method("causal_narrative")
+        except Exception:  # pragma: no cover -- defensive against view-API drift
+            label = None
+        if isinstance(label, str) and label.strip():
+            entry.setdefault("confidence_label", label)
+
     return vendor_pressure_result_from_entry(entry, subject_id=subject_id)
 
 
@@ -174,7 +287,12 @@ class VendorPressureConsumer:
         envelope.falsification_conditions -> ``falsification_conditions``
 
     The summary projection includes the first four fields; the detail
-    projection includes all eight.
+    projection includes all eight. Lineage / freshness fields are
+    available on the envelope (``reference_ids``, ``as_of``,
+    ``confidence_label``) but intentionally not in this consumer's
+    overlay output to preserve the legacy ``signals.py`` wire shape.
+    Future consumers (or this one in a versioned variant) can surface
+    them when there's a UI/API surface ready to render them.
     """
 
     def to_summary_fields(

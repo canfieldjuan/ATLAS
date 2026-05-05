@@ -161,6 +161,189 @@ def test_synthesis_view_wrapper_short_circuits_on_none() -> None:
 
 
 # ---------------------------------------------------------------------
+# Lineage / freshness ingestion via the entry-dict path
+# ---------------------------------------------------------------------
+
+
+def test_result_carries_reference_ids_from_entry() -> None:
+    """Nested ``reference_ids`` round-trips through the envelope.
+
+    The synthesis-view wrapper enriches the entry with
+    ``view.reference_ids``; this test exercises the underlying
+    builder with a synthetic entry to keep the test off the
+    atlas_brain.autonomous import chain.
+    """
+    entry = {
+        "archetype": "renewal_pressure",
+        "confidence": 0.74,
+        "reference_ids": {
+            "metric_ids": ["m_pricing_mentions", "m_exec_change"],
+            "witness_ids": ["w_segment_7"],
+        },
+    }
+    result = vendor_pressure_result_from_entry(entry, subject_id="opp-1")
+    assert result.reference_ids.metric_ids == (
+        "m_pricing_mentions",
+        "m_exec_change",
+    )
+    assert result.reference_ids.witness_ids == ("w_segment_7",)
+
+
+def test_result_carries_as_of_from_entry() -> None:
+    entry = {"as_of": "2026-05-04"}
+    assert vendor_pressure_result_from_entry(entry).as_of == "2026-05-04"
+
+
+def test_result_carries_confidence_label_from_entry() -> None:
+    entry = {"confidence": 0.74, "confidence_label": "high"}
+    result = vendor_pressure_result_from_entry(entry)
+    assert result.confidence == 0.74
+    assert result.confidence_label == "high"
+
+
+def test_result_normalizes_lineage_ids_strip_and_drop_empty() -> None:
+    """Lineage IDs are str-coerced, .strip()-ed, and empty-after-strip
+    is dropped. Mirrors the call_transcript domain's normalization.
+    """
+    entry = {
+        "reference_ids": {
+            "metric_ids": ["  m1  ", "", "   ", None, "m2"],
+            "witness_ids": [None, "w1"],
+        },
+    }
+    result = vendor_pressure_result_from_entry(entry)
+    assert result.reference_ids.metric_ids == ("m1", "m2")
+    assert result.reference_ids.witness_ids == ("w1",)
+
+
+def test_result_collapses_empty_strings_for_freshness_and_label() -> None:
+    """Empty-string ``as_of`` / ``confidence_label`` collapse to None.
+
+    Mirrors ``view.as_of_date_iso()`` returning "" when the synthesis
+    has no date — consumers should see "no date", not "the empty string
+    date".
+    """
+    entry = {"as_of": "", "confidence_label": "   "}
+    result = vendor_pressure_result_from_entry(entry)
+    assert result.as_of is None
+    assert result.confidence_label is None
+
+
+def test_result_ignores_non_mapping_reference_ids() -> None:
+    """Defensive: malformed ``reference_ids`` (e.g. a list) leaves
+    lineage empty rather than raising.
+    """
+    entry = {"reference_ids": ["m1", "m2"]}
+    result = vendor_pressure_result_from_entry(entry)
+    assert result.reference_ids.metric_ids == ()
+    assert result.reference_ids.witness_ids == ()
+
+
+# ---------------------------------------------------------------------
+# Synthesis-view wrapper enrichment (uses a stub view object)
+# ---------------------------------------------------------------------
+
+
+class _StubSynthesisView:
+    """Minimal stub that satisfies the synthesis-view wrapper's calls.
+
+    Only implements the attributes the wrapper actually reads:
+    ``reference_ids`` (property), ``as_of_date_iso()``,
+    ``confidence(section)``. The deferred
+    ``synthesis_view_to_reasoning_entry`` call is monkeypatched to
+    return a synthetic entry so this stub doesn't have to satisfy
+    that helper too.
+    """
+
+    def __init__(
+        self,
+        *,
+        reference_ids=None,
+        as_of_iso="",
+        confidence_label_for_causal="",
+    ):
+        self._reference_ids = reference_ids or {}
+        self._as_of_iso = as_of_iso
+        self._confidence_label = confidence_label_for_causal
+
+    @property
+    def reference_ids(self):
+        return self._reference_ids
+
+    def as_of_date_iso(self):
+        return self._as_of_iso
+
+    def confidence(self, section):
+        if section == "causal_narrative":
+            return self._confidence_label
+        return ""
+
+
+def test_synthesis_view_wrapper_enriches_with_view_metadata(monkeypatch) -> None:
+    """End-to-end: the wrapper pulls lineage / freshness / categorical
+    confidence from the view and threads them into the typed envelope.
+    """
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
+        lambda v: {
+            "archetype": "renewal_pressure",
+            "confidence": 0.74,
+            "mode": "synthesis",
+            "risk_level": "high",
+            "executive_summary": "summary",
+        },
+    )
+
+    view = _StubSynthesisView(
+        reference_ids={
+            "metric_ids": ["m_pricing_mentions"],
+            "witness_ids": ["w_segment_7"],
+        },
+        as_of_iso="2026-05-04",
+        confidence_label_for_causal="high",
+    )
+
+    result = vendor_pressure_result_from_synthesis_view(
+        view, subject_id="opp-1"
+    )
+
+    # Universal-narrative fields still flow from the entry.
+    assert result.archetype == "renewal_pressure"
+    assert result.confidence == 0.74
+    assert result.executive_summary == "summary"
+
+    # New: lineage / freshness / categorical label come from the view.
+    assert result.reference_ids.metric_ids == ("m_pricing_mentions",)
+    assert result.reference_ids.witness_ids == ("w_segment_7",)
+    assert result.as_of == "2026-05-04"
+    assert result.confidence_label == "high"
+
+
+def test_synthesis_view_wrapper_handles_view_without_lineage(monkeypatch) -> None:
+    """View with empty reference_ids / as_of / confidence-label still
+    produces a clean envelope with sparse lineage/freshness defaults.
+    """
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
+        lambda v: {
+            "archetype": "renewal_pressure",
+            "confidence": 0.42,
+        },
+    )
+    view = _StubSynthesisView()  # everything defaults to empty
+
+    result = vendor_pressure_result_from_synthesis_view(view)
+
+    assert result.archetype == "renewal_pressure"
+    assert result.confidence == 0.42
+    # Sparse lineage / freshness / label
+    assert result.reference_ids.metric_ids == ()
+    assert result.reference_ids.witness_ids == ()
+    assert result.as_of is None
+    assert result.confidence_label is None
+
+
+# ---------------------------------------------------------------------
 # VendorPressureConsumer projections
 # ---------------------------------------------------------------------
 
