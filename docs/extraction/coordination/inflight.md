@@ -1,12 +1,11 @@
 # In-Flight PRs
 
-Last updated: 2026-05-05T04:03Z by claude-2026-05-03
+Last updated: 2026-05-05T04:29Z by claude-2026-05-03
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| (PR-C4e2, in flight) | PR-C4e2: AtlasLLMClient + LLM-driven nodes to core (PR 6 fifth slice, 2/3 of graph extraction) | NEW: `atlas_brain/reasoning/port_adapters.py::AtlasLLMClient` (wraps `LLMService`, satisfies the existing `LLMClient.complete()` Protocol; runs sync `chat()` via `asyncio.to_thread`; lifts `json_mode`/`timeout`/`response_format` from metadata). EDIT: `extracted_reasoning_core/graph_helpers.py` (add `make_chat_messages`, `extract_completion_text`, `complete_with_json` async helpers). NEW: `extracted_reasoning_core/graph_nodes.py` (`node_triage`, `node_synthesize` -- self-contained; both accept `llm: LLMClient \| None` and apply existing fallbacks when LLM unavailable). EDIT: `atlas_brain/reasoning/graph.py` (`_node_triage`/`_node_synthesize` become thin wrappers; `_node_reason` keeps atlas's extended-state prompt builder and calls core `complete_with_json` for the LLM round-trip). NEW/EDIT: `tests/test_extracted_reasoning_core_graph_nodes.py`, extend `tests/test_extracted_reasoning_core_graph_helpers.py`, extend `tests/test_atlas_reasoning_port_adapters.py` (AtlasLLMClient), extend `tests/test_atlas_reasoning_graph_aliases.py` (new node aliases). EDIT: `scripts/run_extracted_pipeline_checks.sh` + `.github/workflows/extracted_pipeline_checks.yml` (wire new test). Existing `LLMClient.complete()` Protocol unchanged -- `extracted_content_pipeline.PipelineLLMClient` keeps working. PR-C4e3 next: orchestrator + atlas-coupled nodes (aggregate_context / lock check / execute / notify) via new ports. | claude-2026-05-03 | `extracted_reasoning_core/graph_helpers.py`; `extracted_reasoning_core/graph_nodes.py`; `atlas_brain/reasoning/port_adapters.py`; `atlas_brain/reasoning/graph.py`; `tests/test_extracted_reasoning_core_graph_helpers.py`; `tests/test_extracted_reasoning_core_graph_nodes.py`; `tests/test_atlas_reasoning_port_adapters.py`; `tests/test_atlas_reasoning_graph_aliases.py`; `scripts/run_extracted_pipeline_checks.sh`; `.github/workflows/extracted_pipeline_checks.yml` |
 | #164 | docs: log cross-product standalone % audit | `docs/extraction/cross_product_audit_2026-05-04.md` | canfieldjuan | Avoid editing the cross-product audit doc until PR #164 lands |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
