@@ -10,6 +10,13 @@ from typing import Any
 
 JsonDict = dict[str, Any]
 
+_DEFAULT_ADJACENCY_DIRECTIONS = (
+    "used_with",
+    "relied_on",
+    "tested_with",
+    "compatible_with",
+)
+
 
 @dataclass(frozen=True)
 class CategoryIntelligenceRefreshResult:
@@ -45,6 +52,7 @@ class CategoryIntelligenceLimits:
     safety_penalty_multiplier: float = 10
     health_score_scale: float = 100
     health_score_precision: int = 1
+    competitive_adjacency_directions: tuple[str, ...] = _DEFAULT_ADJACENCY_DIRECTIONS
 
 
 async def refresh_seller_category_intelligence(
@@ -356,6 +364,42 @@ async def _fetch_feature_gaps(
     ]
 
 
+async def _fetch_known_brands(pool: Any, metadata: str) -> dict[str, str]:
+    rows = await pool.fetch(
+        f"""
+        SELECT brand
+          FROM {metadata}
+         WHERE brand IS NOT NULL AND BTRIM(brand) != ''
+         GROUP BY brand
+        """
+    )
+    return {
+        _brand_key(row.get("brand")): str(row.get("brand")).strip()
+        for row in (_row_dict(item) for item in rows)
+        if _brand_key(row.get("brand"))
+    }
+
+
+def _normalize_known_brand(value: Any, known_brands: Mapping[str, str]) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    exact = known_brands.get(_brand_key(text))
+    if exact:
+        return exact
+    words = text.split()
+    for size in range(len(words), 0, -1):
+        candidate = " ".join(words[:size])
+        matched = known_brands.get(_brand_key(candidate))
+        if matched:
+            return matched
+    return ""
+
+
+def _brand_key(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
 async def _fetch_competitive_flows(
     pool: Any,
     category: str,
@@ -363,61 +407,63 @@ async def _fetch_competitive_flows(
     metadata: str,
     limits: CategoryIntelligenceLimits,
 ) -> list[JsonDict]:
+    known_brands = await _fetch_known_brands(pool, metadata)
     rows = await pool.fetch(
         f"""
-        SELECT from_brand,
-               to_brand,
-               direction,
+        SELECT pm.brand AS reviewed_brand,
+               comp ->> 'product_name' AS compared_product,
+               COALESCE(NULLIF(BTRIM(comp ->> 'direction'), ''), 'compared') AS direction,
                COUNT(*) AS count
-          FROM (
-            SELECT
-                CASE
-                    WHEN direction = 'switched_from' THEN compared_brand
-                    ELSE reviewed_brand
-                END AS from_brand,
-                CASE
-                    WHEN direction = 'switched_from' THEN reviewed_brand
-                    ELSE compared_brand
-                END AS to_brand,
-                direction
-              FROM (
-                SELECT
-                    NULLIF(BTRIM(pm.brand), '') AS reviewed_brand,
-                    NULLIF(BTRIM(comp ->> 'product_name'), '') AS compared_brand,
-                    COALESCE(NULLIF(BTRIM(comp ->> 'direction'), ''), 'compared') AS direction
-                  FROM {reviews} pr
-                  JOIN {metadata} pm ON pm.asin = pr.asin,
-                   jsonb_array_elements(
-                       CASE jsonb_typeof(pr.deep_extraction->'product_comparisons')
-                            WHEN 'array' THEN pr.deep_extraction->'product_comparisons'
-                            ELSE '[]'::jsonb
-                       END
-                   ) AS comp
-                 WHERE pr.source_category = $1
-                   AND pr.deep_enrichment_status = 'enriched'
-                   AND pr.deep_extraction->'product_comparisons' IS NOT NULL
-              ) raw_flows
-             WHERE reviewed_brand IS NOT NULL
-               AND compared_brand IS NOT NULL
-          ) flows
-         WHERE LOWER(from_brand) != LOWER(to_brand)
-         GROUP BY from_brand, to_brand, direction
-        HAVING COUNT(*) >= $2
+          FROM {reviews} pr
+          JOIN {metadata} pm ON pm.asin = pr.asin,
+               jsonb_array_elements(
+                   CASE jsonb_typeof(pr.deep_extraction->'product_comparisons')
+                        WHEN 'array' THEN pr.deep_extraction->'product_comparisons'
+                        ELSE '[]'::jsonb
+                   END
+               ) AS comp
+         WHERE pr.source_category = $1
+           AND pr.deep_enrichment_status = 'enriched'
+           AND pr.deep_extraction->'product_comparisons' IS NOT NULL
+         GROUP BY pm.brand, comp ->> 'product_name', comp ->> 'direction'
          ORDER BY COUNT(*) DESC
-         LIMIT $3
         """,
         category,
-        limits.competitive_flow_min_mentions,
-        limits.competitive_flow_limit,
     )
-    return [
-        {
-            "from_brand": row.get("from_brand"),
-            "to_brand": row.get("to_brand"),
-            "direction": row.get("direction"),
-            "count": row.get("count"),
-        }
-        for row in (_row_dict(item) for item in rows)
+    adjacency = {item.strip().lower() for item in limits.competitive_adjacency_directions}
+    merged: dict[tuple[str, str, str], JsonDict] = {}
+    for row in (_row_dict(item) for item in rows):
+        direction = str(row.get("direction") or "compared").strip().lower()
+        if direction in adjacency:
+            continue
+        reviewed_brand = _normalize_known_brand(row.get("reviewed_brand"), known_brands)
+        compared_brand = _normalize_known_brand(row.get("compared_product"), known_brands)
+        if not reviewed_brand or not compared_brand:
+            continue
+        if reviewed_brand.lower() == compared_brand.lower():
+            continue
+        if direction == "switched_from":
+            from_brand, to_brand = compared_brand, reviewed_brand
+        else:
+            from_brand, to_brand = reviewed_brand, compared_brand
+        key = (from_brand, to_brand, direction)
+        entry = merged.setdefault(
+            key,
+            {
+                "from_brand": from_brand,
+                "to_brand": to_brand,
+                "direction": direction,
+                "count": 0,
+            },
+        )
+        entry["count"] += int(row.get("count") or 0)
+    filtered = [
+        item
+        for item in merged.values()
+        if int(item.get("count") or 0) >= limits.competitive_flow_min_mentions
+    ]
+    return sorted(filtered, key=lambda item: int(item.get("count") or 0), reverse=True)[
+        : limits.competitive_flow_limit
     ]
 
 

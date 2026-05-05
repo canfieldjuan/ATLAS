@@ -75,7 +75,27 @@ def _seed_aggregate_results(pool: _Pool, *, total_reviews: int = 120) -> None:
         ],
         [{"complaint": "leaky bottle", "count": 7, "severity": None, "affected_brands": 3}],
         [{"request": "third-party testing", "count": 5, "brand_count": 2, "avg_rating": 2.8}],
-        [{"from_brand": "Brand A", "to_brand": "Brand B", "direction": "switched_to", "count": 4}],
+        [{"brand": "Brand A"}, {"brand": "Brand B"}, {"brand": "Brand C"}],
+        [
+            {
+                "reviewed_brand": "Brand A",
+                "compared_product": "Brand B Pro Bottle",
+                "direction": "switched_to",
+                "count": 1,
+            },
+            {
+                "reviewed_brand": "Brand A",
+                "compared_product": "Brand B Travel Kit",
+                "direction": "switched_to",
+                "count": 2,
+            },
+            {
+                "reviewed_brand": "Brand A",
+                "compared_product": "Brand C Charger",
+                "direction": "used_with",
+                "count": 10,
+            },
+        ],
         [{"brand": "Brand A", "category": "labeling", "description": "missing", "flagged_count": 2}],
         [{"suggestion": "better seal", "count": 3, "affected_asins": ["a1", "a2"]}],
         [{"cause": "packaging", "count": 9}],
@@ -103,16 +123,24 @@ async def test_aggregate_seller_category_intelligence_builds_snapshot() -> None:
     }
     assert snapshot["top_pain_points"][0]["severity"] == "medium"
     assert snapshot["feature_gaps"][0]["avg_rating"] == 2.8
-    assert snapshot["competitive_flows"][0]["count"] == 4
+    assert snapshot["competitive_flows"] == [{
+        "from_brand": "Brand A",
+        "to_brand": "Brand B",
+        "direction": "switched_to",
+        "count": 3,
+    }]
     assert snapshot["brand_health"][0]["trend"] == "rising"
 
-    flow_query, flow_args = pool.fetch_calls[3]
+    brand_query, brand_args = pool.fetch_calls[3]
+    assert "SELECT brand" in brand_query
+    assert brand_args == ()
+    flow_query, flow_args = pool.fetch_calls[4]
     assert "comp ->> 'product_name'" in flow_query
     assert "comp ->> 'direction'" in flow_query
     assert "JOIN \"product_metadata\" pm ON pm.asin = pr.asin" in flow_query
     assert "from_product" not in flow_query
     assert "to_product" not in flow_query
-    assert flow_args == ("supplements", 2, 15)
+    assert flow_args == ("supplements",)
 
 
 @pytest.mark.asyncio
