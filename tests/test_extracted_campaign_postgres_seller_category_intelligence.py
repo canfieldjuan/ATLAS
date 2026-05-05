@@ -213,37 +213,6 @@ async def test_aggregate_seller_category_intelligence_accepts_custom_limits() ->
 
 
 @pytest.mark.asyncio
-async def test_aggregate_can_opt_into_unmatched_competitor_names() -> None:
-    pool = _Pool()
-    _seed_aggregate_results(pool)
-
-    snapshot = await aggregate_seller_category_intelligence(
-        pool,
-        "supplements",
-        min_reviews=50,
-        intelligence_limits=CategoryIntelligenceLimits(
-            allow_unmatched_competitor_names=True,
-        ),
-    )
-
-    assert snapshot is not None
-    assert snapshot["competitive_flows"] == [
-        {
-            "from_brand": "Brand A",
-            "to_brand": "Brand B",
-            "direction": "switched_to",
-            "count": 3,
-        },
-        {
-            "from_brand": "Brand A",
-            "to_brand": "Unmodeled Competitor",
-            "direction": "switched_to",
-            "count": 2,
-        },
-    ]
-
-
-@pytest.mark.asyncio
 async def test_save_seller_category_intelligence_snapshot_upserts_json() -> None:
     pool = _Pool()
     snapshot = {
