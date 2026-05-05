@@ -21,6 +21,13 @@ else:
 from ..campaign_ports import TenantScope
 from ..campaign_postgres_export import list_campaign_drafts
 from ..campaign_postgres_review import review_campaign_drafts
+from ..campaign_postgres_seller_category_intelligence import (
+    refresh_seller_category_intelligence,
+)
+from ..campaign_postgres_seller_opportunities import (
+    DEFAULT_SELLER_TARGET_MODE,
+    prepare_seller_campaign_opportunities,
+)
 from ..campaign_postgres_seller_targets import (
     create_seller_target,
     delete_seller_target,
@@ -42,10 +49,18 @@ class SellerCampaignApiConfig:
     tags: tuple[str, ...] = ("seller-campaigns",)
     campaign_table: str = "b2b_campaigns"
     seller_targets_table: str = "seller_targets"
-    target_mode: str = "amazon_seller"
+    category_reviews_table: str = "product_reviews"
+    category_metadata_table: str = "product_metadata"
+    category_snapshots_table: str = "category_intelligence_snapshots"
+    opportunities_table: str = "campaign_opportunities"
+    target_mode: str = DEFAULT_SELLER_TARGET_MODE
     default_statuses: tuple[str, ...] = ("draft",)
     default_limit: int = 50
     max_limit: int = 200
+    default_category_min_reviews: int = 50
+    default_category_refresh_limit: int = 20
+    default_seller_status: str = "active"
+    default_opportunity_limit: int = 100
     export_filename: str = "seller_campaign_drafts.csv"
 
     def __post_init__(self) -> None:
@@ -59,6 +74,14 @@ class SellerCampaignApiConfig:
             raise ValueError("target_mode is required")
         if not _clean(self.export_filename):
             raise ValueError("export_filename is required")
+        if self.default_category_min_reviews < 0:
+            raise ValueError("default_category_min_reviews must be non-negative")
+        if self.default_category_refresh_limit < 0:
+            raise ValueError("default_category_refresh_limit must be non-negative")
+        if self.default_opportunity_limit < 0:
+            raise ValueError("default_opportunity_limit must be non-negative")
+        if not _clean(self.default_seller_status):
+            raise ValueError("default_seller_status is required")
 
 
 def _require_fastapi() -> None:
@@ -123,11 +146,57 @@ def _parse_payload_list(value: Any, *, default: Sequence[str] = ()) -> tuple[str
     return tuple(default)
 
 
+def _payload_categories(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    categories = list(_parse_payload_list(payload.get("categories")))
+    single = _clean(payload.get("category"))
+    if single and single not in categories:
+        categories.append(single)
+    return tuple(categories)
+
+
 def _api_limit(value: int | None, config: SellerCampaignApiConfig) -> int:
     limit = config.default_limit if value is None else int(value)
     if limit < 0:
         raise HTTPException(status_code=400, detail="limit must be non-negative")
     return min(limit, config.max_limit)
+
+
+def _payload_limit(
+    payload: Mapping[str, Any],
+    key: str,
+    default: int,
+) -> int:
+    raw_value = payload.get(key)
+    try:
+        value = default if raw_value is None else int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{key} must be an integer") from exc
+    if value < 0:
+        raise HTTPException(status_code=400, detail=f"{key} must be non-negative")
+    return value
+
+
+def _payload_bool(payload: Mapping[str, Any], key: str) -> bool:
+    raw_value = payload.get(key)
+    if isinstance(raw_value, bool):
+        return raw_value
+    if raw_value is None:
+        return False
+    if isinstance(raw_value, str):
+        value = raw_value.strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(raw_value)
+
+
+def _scope_account_id(scope: TenantScope | Mapping[str, Any] | None) -> str | None:
+    if isinstance(scope, TenantScope):
+        return scope.account_id
+    if isinstance(scope, Mapping):
+        return _clean(scope.get("account_id")) or None
+    return None
 
 
 def _api_offset(value: int | None) -> int:
@@ -255,6 +324,86 @@ def create_seller_campaign_router(
         if not deleted:
             raise _not_found("Seller target not found")
         return {"ok": True}
+
+    @router.post("/intelligence/refresh")
+    async def refresh_intelligence(
+        payload: dict[str, Any] | None = Body(None),
+    ) -> dict[str, Any]:
+        resolved_payload = payload or {}
+        pool = await _resolve_pool(pool_provider)
+        try:
+            result = await refresh_seller_category_intelligence(
+                pool,
+                categories=_payload_categories(resolved_payload),
+                min_reviews=_payload_limit(
+                    resolved_payload,
+                    "min_reviews",
+                    resolved_config.default_category_min_reviews,
+                ),
+                limit=_payload_limit(
+                    resolved_payload,
+                    "limit",
+                    resolved_config.default_category_refresh_limit,
+                ),
+                reviews_table=resolved_config.category_reviews_table,
+                metadata_table=resolved_config.category_metadata_table,
+                snapshots_table=resolved_config.category_snapshots_table,
+            )
+        except ValueError as exc:
+            raise _bad_request(exc) from exc
+        return result.as_dict()
+
+    @router.post("/opportunities/prepare")
+    async def prepare_opportunities(
+        payload: dict[str, Any] | None = Body(None),
+    ) -> dict[str, Any]:
+        resolved_payload = payload or {}
+        pool = await _resolve_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        try:
+            result = await prepare_seller_campaign_opportunities(
+                pool,
+                account_id=_clean(resolved_payload.get("account_id"))
+                or _scope_account_id(scope),
+                category=_clean(resolved_payload.get("category")) or None,
+                seller_status=_clean(resolved_payload.get("seller_status"))
+                or resolved_config.default_seller_status,
+                limit=_payload_limit(
+                    resolved_payload,
+                    "limit",
+                    resolved_config.default_opportunity_limit,
+                ),
+                replace_existing=_payload_bool(resolved_payload, "replace_existing"),
+                target_mode=_clean(resolved_payload.get("target_mode"))
+                or resolved_config.target_mode,
+                seller_targets_table=resolved_config.seller_targets_table,
+                category_snapshots_table=resolved_config.category_snapshots_table,
+                opportunities_table=resolved_config.opportunities_table,
+            )
+        except ValueError as exc:
+            raise _bad_request(exc) from exc
+        return result.as_dict()
+
+    @router.post("/operations/refresh-and-prepare")
+    async def refresh_and_prepare(
+        payload: dict[str, Any] | None = Body(None),
+    ) -> dict[str, Any]:
+        resolved_payload = payload or {}
+        refresh_result = await refresh_intelligence(resolved_payload)
+        if refresh_result.get("failed") and not _payload_bool(
+            resolved_payload, "continue_on_refresh_failure"
+        ):
+            return {
+                "refresh": refresh_result,
+                "prepare": None,
+                "prepare_skipped": True,
+            }
+        prepare_result = await prepare_opportunities(resolved_payload)
+        return {
+            "refresh": refresh_result,
+            "prepare": prepare_result,
+            "prepare_skipped": False,
+        }
 
     @router.get("/campaigns/drafts")
     async def list_drafts(

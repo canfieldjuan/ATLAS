@@ -113,6 +113,14 @@ def _review_row(**overrides):
     return row
 
 
+class _Result:
+    def __init__(self, **values) -> None:
+        self.values = values
+
+    def as_dict(self):
+        return dict(self.values)
+
+
 def _client(
     pool,
     *,
@@ -205,6 +213,157 @@ def test_seller_campaign_router_returns_404_for_missing_target() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Seller target not found"
+
+
+def test_seller_campaign_router_refreshes_category_intelligence(monkeypatch) -> None:
+    pool = _Pool()
+    calls = []
+
+    async def _refresh(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(refreshed=1, failed=0, categories=["supplements"])
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+
+    response = _client(
+        pool,
+        config=SellerCampaignApiConfig(
+            category_reviews_table="reviews",
+            category_metadata_table="metadata",
+            category_snapshots_table="snapshots",
+        ),
+    ).post(
+        "/seller/intelligence/refresh",
+        json={
+            "category": "supplements",
+            "categories": ["beauty", "supplements"],
+            "min_reviews": 75,
+            "limit": 7,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["categories"] == ["supplements"]
+    assert calls == [
+        (
+            pool,
+            {
+                "categories": ("beauty", "supplements"),
+                "min_reviews": 75,
+                "limit": 7,
+                "reviews_table": "reviews",
+                "metadata_table": "metadata",
+                "snapshots_table": "snapshots",
+            },
+        )
+    ]
+
+
+def test_seller_campaign_router_prepares_opportunities_from_scope(monkeypatch) -> None:
+    pool = _Pool()
+    calls = []
+
+    async def _prepare(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(prepared=2, target_mode="amazon_seller")
+
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        config=SellerCampaignApiConfig(
+            seller_targets_table="targets",
+            category_snapshots_table="snapshots",
+            opportunities_table="opps",
+        ),
+    ).post(
+        "/seller/opportunities/prepare",
+        json={
+            "category": "supplements",
+            "seller_status": "paused",
+            "limit": 9,
+            "replace_existing": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["prepared"] == 2
+    assert calls == [
+        (
+            pool,
+            {
+                "account_id": "acct_1",
+                "category": "supplements",
+                "seller_status": "paused",
+                "limit": 9,
+                "replace_existing": True,
+                "target_mode": "amazon_seller",
+                "seller_targets_table": "targets",
+                "category_snapshots_table": "snapshots",
+                "opportunities_table": "opps",
+            },
+        )
+    ]
+
+
+def test_seller_campaign_router_combined_operation_skips_prepare_on_refresh_failure(
+    monkeypatch,
+) -> None:
+    prepare_calls = []
+
+    async def _refresh(_pool, **_kwargs):
+        return _Result(refreshed=0, failed=1, errors=["supplements: boom"])
+
+    async def _prepare(received_pool, **kwargs):
+        prepare_calls.append((received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool()).post(
+        "/seller/operations/refresh-and-prepare",
+        json={"category": "supplements"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["prepare"] is None
+    assert response.json()["prepare_skipped"] is True
+    assert prepare_calls == []
+
+
+def test_seller_campaign_router_combined_operation_can_continue_after_refresh_failure(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _refresh(received_pool, **kwargs):
+        calls.append(("refresh", received_pool, kwargs))
+        return _Result(refreshed=0, failed=1, errors=["supplements: boom"])
+
+    async def _prepare(received_pool, **kwargs):
+        calls.append(("prepare", received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool(), scope={"account_id": "acct_1"}).post(
+        "/seller/operations/refresh-and-prepare",
+        json={
+            "category": "supplements",
+            "continue_on_refresh_failure": True,
+            "replace_existing": "yes",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["prepare"] == {"prepared": 1}
+    assert response.json()["prepare_skipped"] is False
+    assert [item[0] for item in calls] == ["refresh", "prepare"]
+    assert calls[1][2]["account_id"] == "acct_1"
+    assert calls[1][2]["replace_existing"] is True
 
 
 def test_seller_campaign_router_lists_seller_drafts() -> None:
