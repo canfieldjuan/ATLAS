@@ -181,6 +181,14 @@ The file-backed reasoning adapter matches rows by target id, company, email, or
 vendor. The generator still works without this file, but output quality is lower
 because prompts only see the opportunity row.
 
+If a host does not already have reasoning JSON, it can configure
+`SinglePassCampaignReasoningProvider` from
+`extracted_content_pipeline.services.single_pass_reasoning_provider`. The
+provider uses the same LLM and skill ports as campaign generation, calls the
+packaged `digest/b2b_campaign_reasoning_context` prompt once per opportunity,
+and returns the same normalized context shape. This improves specificity
+without importing Atlas reasoning producers or long-running graph state.
+
 See `reasoning_handoff_contract.md` for the accepted shape and the no-direct-
 import rule. AI Content Ops consumes compressed reasoning; it does not import a
 reasoning engine.
@@ -508,5 +516,6 @@ DELETE FROM campaign_opportunities WHERE account_id = 'acct_123';
   path yet. Host apps inject auth dependencies into the packaged routers.
 - The runbook covers campaign opportunity generation, not blog generation or
   vendor briefing delivery.
-- Reasoning production remains host-owned. This product accepts reasoning
-  context; it does not compute long-running graph state.
+- Long-running reasoning production remains host-owned. The product includes a
+  single-pass opportunity-level provider for lightweight installs, but it does
+  not compute graph state or multi-hop synthesis.
