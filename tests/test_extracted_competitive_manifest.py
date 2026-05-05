@@ -35,6 +35,7 @@ def test_manifest_tracks_product_owned_competitive_modules() -> None:
     assert "extracted_competitive_intelligence/services/b2b/challenger_dashboard_claims.py" in owned
     assert "extracted_competitive_intelligence/services/b2b/competitive_set_ports.py" in owned
     assert "extracted_competitive_intelligence/services/b2b_competitive_sets.py" in owned
+    assert "extracted_competitive_intelligence/autonomous/tasks/_b2b_batch_utils.py" in owned
     assert "extracted_competitive_intelligence/autonomous/tasks/_b2b_cross_vendor_synthesis.py" in owned
     assert "extracted_competitive_intelligence/templates/email/vendor_briefing.py" in owned
     assert "extracted_competitive_intelligence/reasoning/ecosystem.py" in owned
@@ -54,6 +55,7 @@ def test_product_owned_competitive_modules_are_not_manifest_synced() -> None:
     assert "extracted_competitive_intelligence/services/b2b/challenger_dashboard_claims.py" not in mapped
     assert "extracted_competitive_intelligence/services/b2b/competitive_set_ports.py" not in mapped
     assert "extracted_competitive_intelligence/services/b2b_competitive_sets.py" not in mapped
+    assert "extracted_competitive_intelligence/autonomous/tasks/_b2b_batch_utils.py" not in mapped
     assert "extracted_competitive_intelligence/autonomous/tasks/_b2b_cross_vendor_synthesis.py" not in mapped
     assert "extracted_competitive_intelligence/templates/email/vendor_briefing.py" not in mapped
     assert "extracted_competitive_intelligence/reasoning/ecosystem.py" not in mapped

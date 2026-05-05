@@ -27,6 +27,7 @@ Differentiator: every output is grounded in real switching signals and uses the 
 | `services/b2b/source_impact.py` | Source impact ledger (which sources feed which products) |
 | `autonomous/tasks/b2b_battle_cards.py` | Deterministic battle card builder + LLM overlay (~5K LOC) |
 | `autonomous/tasks/b2b_vendor_briefing.py` | Vendor churn briefing assembly + Resend send |
+| `autonomous/tasks/_b2b_batch_utils.py` | Product-owned Anthropic batch helper logic |
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | Cross-vendor packet builders |
 | `services/b2b_competitive_sets.py` | Planner that scopes synthesis to a competitive set |
 | `reasoning/cross_vendor_selection.py` | Selection logic for which vendor pairs deserve LLM budget |
@@ -123,6 +124,10 @@ internals.
 citation, contract-normalization, and lookup-reader logic. It depends on the
 extracted semantic-cache facade for evidence hashes and no longer byte-syncs
 from Atlas.
+
+`autonomous/tasks/_b2b_batch_utils.py` is product-owned Anthropic batch
+enablement and reconciliation helper logic. In standalone mode it resolves
+auxiliary Anthropic LLM slots through `extracted_llm_infrastructure`.
 
 `templates/email/vendor_briefing.py` is a product-owned customer-facing
 renderer. It no longer imports runtime settings; hosts configure the fallback
