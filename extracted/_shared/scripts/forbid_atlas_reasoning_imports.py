@@ -58,23 +58,74 @@ def _import_node_targets_atlas_reasoning(node: ast.AST) -> bool:
     return False
 
 
-def _is_import_module_call(node: ast.Call) -> bool:
-    """Return True for ``importlib.import_module(...)`` callable shape.
+def _collect_import_module_aliases(
+    tree: ast.AST,
+) -> tuple[set[str], set[str]]:
+    """Return ``(direct_aliases, importlib_module_aliases)`` from the tree.
 
-    Matches both ``importlib.import_module("...")`` (Attribute) and
-    ``import_module("...")`` (Name -- when the function was imported
-    as ``from importlib import import_module``).
+    - ``direct_aliases`` -- names bound directly to
+      ``importlib.import_module``. ``from importlib import import_module``
+      yields ``{"import_module"}``;
+      ``from importlib import import_module as im`` yields ``{"im"}``;
+      both can coexist in one file.
+    - ``importlib_module_aliases`` -- names bound to the ``importlib``
+      module. ``import importlib`` yields ``{"importlib"}``;
+      ``import importlib as i`` yields ``{"i"}``.
+
+    Pre-pass collected once per file so call-site analysis is cheap
+    and the guard catches alias bypasses Copilot flagged
+    (e.g. ``from importlib import import_module as im;
+    im("atlas_brain.reasoning")``).
+    """
+    direct: set[str] = set()
+    module: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            for alias in node.names:
+                if alias.name == "import_module":
+                    direct.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "importlib":
+                    module.add(alias.asname or alias.name)
+    return direct, module
+
+
+def _is_import_module_call(
+    node: ast.Call,
+    direct_aliases: set[str],
+    importlib_aliases: set[str],
+) -> bool:
+    """Return True if ``node`` calls ``importlib.import_module`` (any form).
+
+    Resolves through alias tables produced by
+    :func:`_collect_import_module_aliases` so the guard catches:
+
+    - ``importlib.import_module("...")`` (no aliasing)
+    - ``import importlib as i; i.import_module("...")`` (module alias)
+    - ``from importlib import import_module; import_module("...")``
+      (direct import)
+    - ``from importlib import import_module as im; im("...")``
+      (direct alias)
     """
     func = node.func
     if isinstance(func, ast.Attribute):
-        return func.attr == "import_module"
+        if func.attr != "import_module":
+            return False
+        if not isinstance(func.value, ast.Name):
+            # e.g. ``some.deep.attr.chain.import_module(...)`` -- can't
+            # statically resolve to importlib without dataflow analysis.
+            return False
+        return func.value.id in importlib_aliases
     if isinstance(func, ast.Name):
-        return func.id == "import_module"
+        return func.id in direct_aliases
     return False
 
 
 def _import_module_call_targets_atlas_reasoning(
     node: ast.Call,
+    direct_aliases: set[str],
+    importlib_aliases: set[str],
 ) -> str | None:
     """Return the forbidden module name if this call targets atlas_brain.reasoning.
 
@@ -85,7 +136,7 @@ def _import_module_call_targets_atlas_reasoning(
     string the call would resolve, or ``None`` if it doesn't statically
     target the forbidden prefix.
     """
-    if not _is_import_module_call(node):
+    if not _is_import_module_call(node, direct_aliases, importlib_aliases):
         return None
     candidate: ast.expr | None = None
     if node.args:
@@ -112,6 +163,8 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
     except SyntaxError as exc:
         return [(exc.lineno or 0, f"syntax error: {exc.msg}")]
 
+    direct_aliases, importlib_aliases = _collect_import_module_aliases(tree)
+
     violations: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and _import_node_targets_atlas_reasoning(node):
@@ -128,7 +181,9 @@ def scan_file(path: Path) -> list[tuple[int, str]]:
             violations.append((node.lineno, target))
             continue
         if isinstance(node, ast.Call):
-            forbidden_name = _import_module_call_targets_atlas_reasoning(node)
+            forbidden_name = _import_module_call_targets_atlas_reasoning(
+                node, direct_aliases, importlib_aliases,
+            )
             if forbidden_name is not None:
                 violations.append(
                     (node.lineno, f"importlib.import_module({forbidden_name!r})")

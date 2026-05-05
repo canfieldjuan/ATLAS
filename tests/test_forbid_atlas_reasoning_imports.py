@@ -170,6 +170,82 @@ def test_import_module_keyword_arg_other_module_does_not_fire(tmp_path: Path) ->
     assert violations == []
 
 
+def test_aliased_import_module_call_is_violation(tmp_path: Path) -> None:
+    # Copilot caught: ``from importlib import import_module as im;
+    # im("atlas_brain.reasoning")`` bypasses a guard that only matches
+    # the bare name ``import_module``. The fix tracks aliases via a
+    # pre-pass so any name bound to importlib.import_module triggers.
+    violations = _scan(
+        """
+        from importlib import import_module as im
+        x = im("atlas_brain.reasoning")
+        """,
+        tmp_path,
+    )
+    assert len(violations) == 1
+    assert "atlas_brain.reasoning" in violations[0][1]
+
+
+def test_aliased_importlib_attribute_call_is_violation(tmp_path: Path) -> None:
+    # ``import importlib as i; i.import_module("...")`` -- the module
+    # itself can be aliased. Same alias-tracking logic must catch it.
+    violations = _scan(
+        """
+        import importlib as i
+        x = i.import_module("atlas_brain.reasoning.archetypes")
+        """,
+        tmp_path,
+    )
+    assert len(violations) == 1
+
+
+def test_aliased_import_module_with_keyword_arg_is_violation(tmp_path: Path) -> None:
+    # Both bypasses combined: alias + kwarg form.
+    violations = _scan(
+        """
+        from importlib import import_module as im
+        x = im(name="atlas_brain.reasoning.evidence_engine")
+        """,
+        tmp_path,
+    )
+    assert len(violations) == 1
+
+
+def test_unaliased_other_module_attribute_does_not_fire(tmp_path: Path) -> None:
+    # Sanity: a method named ``import_module`` on an unrelated object
+    # (e.g. a custom class) should NOT fire. The previous guard would
+    # over-fire here because it matched any ``.import_module(...)``
+    # attribute call. Alias-tracking now requires the receiver to
+    # resolve to the importlib module.
+    violations = _scan(
+        """
+        class _Loader:
+            def import_module(self, name):
+                return name
+
+        loader = _Loader()
+        x = loader.import_module("atlas_brain.reasoning")
+        """,
+        tmp_path,
+    )
+    assert violations == []
+
+
+def test_local_function_named_import_module_does_not_fire(tmp_path: Path) -> None:
+    # Same defensive check for the bare-name form: a local function
+    # named ``import_module`` (not from importlib) should be ignored.
+    violations = _scan(
+        """
+        def import_module(name):
+            return None
+
+        x = import_module("atlas_brain.reasoning")
+        """,
+        tmp_path,
+    )
+    assert violations == []
+
+
 def test_atlas_reasoning_inside_try_except_still_violates(tmp_path: Path) -> None:
     # Stricter than forbid_hard_atlas_imports.py -- gated atlas_brain
     # reads are allowed for OTHER atlas modules, but the reasoning
