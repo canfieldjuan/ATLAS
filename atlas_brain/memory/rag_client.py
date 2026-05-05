@@ -470,7 +470,22 @@ class RAGClient:
                 timeout=1200.0,  # batch extraction: ~10 LLM calls per message, can take 10+ min
             )
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+
+            # The wrapper returns HTTP 200 even when extraction fails (e.g. when
+            # the configured LLM is unreachable), with success=False in the body.
+            # Treat that as failure so callers (nightly_memory_sync) don't lie
+            # about turns_sent. We only act on an explicit success=False; missing
+            # field falls through to preserve backward compat with older wrappers.
+            if data.get("success") is False:
+                logger.error(
+                    "RAG send_messages: wrapper reported failure (%d/%d episodes created): %s",
+                    data.get("episodes_created", 0),
+                    len(messages),
+                    data.get("message", ""),
+                )
+                return {}
+            return data
 
         except Exception as e:
             logger.error("RAG send_messages error: %s", e)

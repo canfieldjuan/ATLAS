@@ -571,3 +571,80 @@ class TestRAGClientContract:
         assert result.prompt == "q"
         assert result.context_used is True
         assert len(result.sources) == 1
+
+
+class TestSendMessagesSilentSuccessGuard:
+    """The graphiti-wrapper returns HTTP 200 even when extraction fails (e.g.
+    when the LLM is unreachable), with success=False in the body. RAGClient
+    must surface that as failure so callers don't silently report success.
+    """
+
+    @pytest.mark.asyncio
+    async def test_send_messages_returns_empty_when_wrapper_reports_failure(self):
+        client = RAGClient(base_url="http://test.invalid", timeout=5.0)
+
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json = MagicMock(return_value={
+            "success": False,
+            "episodes_created": 0,
+            "episode_ids": [],
+            "message": "0 episodes created, 1 errors",
+        })
+
+        fake_http = AsyncMock()
+        fake_http.post = AsyncMock(return_value=fake_resp)
+
+        with patch.object(RAGClient, "_get_client", AsyncMock(return_value=fake_http)):
+            result = await client.send_messages(
+                messages=[{"content": "hi", "role_type": "user", "timestamp": "2026-01-01T00:00:00Z"}],
+            )
+
+        assert result == {}, "send_messages must return {} when wrapper reports success=False"
+
+    @pytest.mark.asyncio
+    async def test_send_messages_returns_data_on_real_success(self):
+        client = RAGClient(base_url="http://test.invalid", timeout=5.0)
+
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json = MagicMock(return_value={
+            "success": True,
+            "episodes_created": 2,
+            "episode_ids": ["a", "b"],
+        })
+
+        fake_http = AsyncMock()
+        fake_http.post = AsyncMock(return_value=fake_resp)
+
+        with patch.object(RAGClient, "_get_client", AsyncMock(return_value=fake_http)):
+            result = await client.send_messages(
+                messages=[{"content": "hi", "role_type": "user", "timestamp": "2026-01-01T00:00:00Z"}],
+            )
+
+        assert result.get("success") is True
+        assert result.get("episodes_created") == 2
+
+    @pytest.mark.asyncio
+    async def test_send_messages_passes_through_when_success_field_missing(self):
+        """Backward compat: older wrapper versions may not include `success`.
+        Fall through to returning the body so callers behave as before.
+        """
+        client = RAGClient(base_url="http://test.invalid", timeout=5.0)
+
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json = MagicMock(return_value={
+            "episodes_created": 1,
+            "episode_ids": ["a"],
+        })
+
+        fake_http = AsyncMock()
+        fake_http.post = AsyncMock(return_value=fake_resp)
+
+        with patch.object(RAGClient, "_get_client", AsyncMock(return_value=fake_http)):
+            result = await client.send_messages(
+                messages=[{"content": "hi", "role_type": "user", "timestamp": "2026-01-01T00:00:00Z"}],
+            )
+
+        assert result.get("episodes_created") == 1
