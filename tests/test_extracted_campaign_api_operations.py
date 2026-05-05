@@ -14,6 +14,7 @@ from extracted_content_pipeline.api.campaign_operations import (
     CampaignOperationsApiConfig,
     create_campaign_operations_router,
 )
+from extracted_content_pipeline.campaign_ports import TenantScope
 
 
 class _Pool:
@@ -41,12 +42,18 @@ class _Skills:
     pass
 
 
+class _Reasoning:
+    pass
+
+
 def _client(
     pool: Any,
     *,
     sender: Any = None,
+    scope: Any = None,
     llm: Any = None,
     skills: Any = None,
+    reasoning: Any = None,
     config: CampaignOperationsApiConfig | None = None,
     dependencies: list[Any] | None = None,
     counters: dict[str, int] | None = None,
@@ -62,6 +69,10 @@ def _client(
         counts["sender"] = counts.get("sender", 0) + 1
         return sender
 
+    async def scope_provider():
+        counts["scope"] = counts.get("scope", 0) + 1
+        return scope
+
     async def llm_provider():
         counts["llm"] = counts.get("llm", 0) + 1
         return llm
@@ -70,17 +81,200 @@ def _client(
         counts["skills"] = counts.get("skills", 0) + 1
         return skills
 
+    async def reasoning_context_provider():
+        counts["reasoning"] = counts.get("reasoning", 0) + 1
+        return reasoning
+
     app.include_router(
         create_campaign_operations_router(
             pool_provider=pool_provider,
             sender_provider=sender_provider if sender is not None else None,
+            scope_provider=scope_provider if scope is not None else None,
             llm_provider=llm_provider if llm is not None else None,
             skills_provider=skills_provider if skills is not None else None,
+            reasoning_context_provider=(
+                reasoning_context_provider if reasoning is not None else None
+            ),
             config=config,
             dependencies=dependencies,
         )
     )
     return TestClient(app)
+
+
+def test_campaign_operations_router_generates_campaign_drafts(monkeypatch) -> None:
+    pool = _Pool()
+    llm = _LLM()
+    skills = _Skills()
+    reasoning = _Reasoning()
+    calls: list[tuple[Any, dict[str, Any]]] = []
+    counters: dict[str, int] = {}
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(
+            requested=2,
+            generated=2,
+            skipped=0,
+            saved_ids=["campaign-1", "campaign-2"],
+            errors=[],
+        )
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1", user_id="user_1"),
+        llm=llm,
+        skills=skills,
+        reasoning=reasoning,
+        counters=counters,
+        config=CampaignOperationsApiConfig(
+            max_generation_limit=50,
+            generation_opportunity_table="opps",
+            generation_vendor_targets_table="targets",
+            generation_skill_name="digest/custom_campaign_generation",
+            generation_max_tokens=900,
+            generation_temperature=0.3,
+        ),
+    ).post(
+        "/campaigns/operations/drafts/generate",
+        json={
+            "account_id": "acct_1",
+            "target_mode": "vendor_retention",
+            "channel": "email",
+            "channels": ["email_cold", "email_followup"],
+            "filters": {"vendor_name": "HubSpot"},
+            "limit": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "requested": 2,
+        "generated": 2,
+        "skipped": 0,
+        "saved_ids": ["campaign-1", "campaign-2"],
+        "errors": [],
+    }
+    assert counters == {
+        "scope": 1,
+        "pool": 1,
+        "llm": 1,
+        "skills": 1,
+        "reasoning": 1,
+    }
+    assert calls[0][0] is pool
+    kwargs = calls[0][1]
+    assert kwargs["scope"] == TenantScope(account_id="acct_1", user_id="user_1")
+    assert kwargs["target_mode"] == "vendor_retention"
+    assert kwargs["channel"] == "email"
+    assert kwargs["channels"] == ("email_cold", "email_followup")
+    assert kwargs["limit"] == 2
+    assert kwargs["filters"] == {"vendor_name": "HubSpot"}
+    assert kwargs["llm"] is llm
+    assert kwargs["skills"] is skills
+    assert kwargs["reasoning_context"] is reasoning
+    assert kwargs["opportunity_table"] == "opps"
+    assert kwargs["vendor_targets_table"] == "targets"
+    config = kwargs["config"]
+    assert config.skill_name == "digest/custom_campaign_generation"
+    assert config.max_tokens == 900
+    assert config.temperature == 0.3
+
+
+def test_campaign_operations_router_generates_with_payload_scope(monkeypatch) -> None:
+    calls = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(requested=1, generated=1, skipped=0, saved_ids=[], errors=[])
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(_Pool()).post(
+        "/campaigns/operations/drafts/generate",
+        json={"account_id": "acct_1", "user_id": "user_1"},
+    )
+
+    assert response.status_code == 200
+    assert calls[0][1]["scope"] == {"account_id": "acct_1", "user_id": "user_1"}
+
+
+def test_campaign_operations_router_rejects_generation_scope_mismatch(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(generated=1)
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        scope={"account_id": "acct_1"},
+    ).post(
+        "/campaigns/operations/drafts/generate",
+        json={"account_id": "acct_2"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "account_id does not match scope"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    (
+        ({"limit": True}, "limit must be an integer"),
+        ({"limit": 0}, "limit must be greater than 0"),
+        ({"limit": 51}, "limit must be less than or equal to 50"),
+        ({"filters": ["vendor_name", "HubSpot"]}, "filters must be an object"),
+        ({"channels": {"name": "email"}}, "channels must be a list or string"),
+    ),
+)
+def test_campaign_operations_router_rejects_invalid_generation_payload(
+    monkeypatch,
+    payload,
+    detail,
+) -> None:
+    calls = []
+
+    async def _generate(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(generated=1)
+
+    monkeypatch.setattr(
+        operations_api,
+        "generate_campaign_drafts_from_postgres",
+        _generate,
+    )
+
+    response = _client(
+        _Pool(),
+        config=CampaignOperationsApiConfig(
+            default_generation_limit=50,
+            max_generation_limit=50,
+        ),
+    ).post("/campaigns/operations/drafts/generate", json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == detail
+    assert calls == []
 
 
 def test_campaign_operations_router_sends_queued_campaigns(monkeypatch) -> None:
