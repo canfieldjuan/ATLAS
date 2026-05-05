@@ -404,6 +404,48 @@ def test_seller_campaign_router_rejects_unknown_boolean_payload(monkeypatch) -> 
     assert calls == []
 
 
+def test_seller_campaign_router_rejects_account_id_scope_mismatch(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _prepare(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool(), scope={"account_id": "acct_1"}).post(
+        "/seller/opportunities/prepare",
+        json={"account_id": "acct_2"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "account_id does not match scope"
+    assert calls == []
+
+
+def test_seller_campaign_router_rejects_target_mode_override(monkeypatch) -> None:
+    calls = []
+
+    async def _prepare(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool()).post(
+        "/seller/opportunities/prepare",
+        json={"target_mode": "vendor_retention"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "target_mode must match configured seller target mode"
+    )
+    assert calls == []
+
+
 def test_seller_campaign_router_combined_operation_resolves_dependencies_once(
     monkeypatch,
 ) -> None:

@@ -269,9 +269,19 @@ def create_seller_campaign_router(
         scope: TenantScope | Mapping[str, Any] | None,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
+        scoped_account_id = _scope_account_id(scope)
+        payload_account_id = _clean(payload.get("account_id")) or None
+        if scoped_account_id and payload_account_id and payload_account_id != scoped_account_id:
+            raise HTTPException(status_code=403, detail="account_id does not match scope")
+        payload_target_mode = _clean(payload.get("target_mode"))
+        if payload_target_mode and payload_target_mode != resolved_config.target_mode:
+            raise HTTPException(
+                status_code=400,
+                detail="target_mode must match configured seller target mode",
+            )
         result = await prepare_seller_campaign_opportunities(
             pool,
-            account_id=_clean(payload.get("account_id")) or _scope_account_id(scope),
+            account_id=scoped_account_id or payload_account_id,
             category=_clean(payload.get("category")) or None,
             seller_status=_clean(payload.get("seller_status"))
             or resolved_config.default_seller_status,
@@ -281,7 +291,7 @@ def create_seller_campaign_router(
                 resolved_config.default_opportunity_limit,
             ),
             replace_existing=_payload_bool(payload, "replace_existing"),
-            target_mode=_clean(payload.get("target_mode")) or resolved_config.target_mode,
+            target_mode=resolved_config.target_mode,
             seller_targets_table=resolved_config.seller_targets_table,
             category_snapshots_table=resolved_config.category_snapshots_table,
             opportunities_table=resolved_config.opportunities_table,
