@@ -171,6 +171,11 @@ def test_validate_chat_provider_accepts_anthropic():
 
 
 def test_resolve_byok_raises_503_when_no_key(monkeypatch):
+    """When neither DB nor env-var fallback resolves a key, the
+    helper raises 503. PR-D5 review fix: helper is now async + takes
+    pool so DB-stored keys (added via /byok-keys) are honored."""
+    import asyncio
+
     monkeypatch.delenv(
         "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
         raising=False,
@@ -179,22 +184,29 @@ def test_resolve_byok_raises_503_when_no_key(monkeypatch):
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        _resolve_byok_or_503("anthropic", "00000000-0000-0000-0000-000000000000")
+        # pool=None -> resolver skips DB lookup, env is unset -> 503.
+        asyncio.run(
+            _resolve_byok_or_503(None, "anthropic", "00000000-0000-0000-0000-000000000000")
+        )
     assert exc_info.value.status_code == 503
     assert "BYOK key" in exc_info.value.detail
 
 
 def test_resolve_byok_returns_key_when_set(monkeypatch):
+    """The async helper falls back to env var when no DB row exists,
+    keeping local-dev workflows functional."""
+    import asyncio
+
     monkeypatch.setenv(
         "ATLAS_BYOK_ANTHROPIC_00000000_0000_0000_0000_000000000000",
         "sk-ant-fake",
     )
     from atlas_brain.api.llm_gateway import _resolve_byok_or_503
 
-    assert (
-        _resolve_byok_or_503("anthropic", "00000000-0000-0000-0000-000000000000")
-        == "sk-ant-fake"
+    result = asyncio.run(
+        _resolve_byok_or_503(None, "anthropic", "00000000-0000-0000-0000-000000000000")
     )
+    assert result == "sk-ant-fake"
 
 
 # ---- Schema shape -------------------------------------------------------
@@ -373,3 +385,36 @@ def test_chat_handler_threads_provider_request_id_to_trace():
 
     src = inspect.getsource(llm_gateway.chat)
     assert "provider_request_id=" in src
+
+
+# ---- Codex PR-D5 review (P1: gateway must use DB resolver) ----------
+
+
+def test_chat_handler_uses_async_db_resolver():
+    """Codex P1 fix on PR-D5: the gateway used the SYNC env-only
+    resolver, so keys added via /api/v1/byok-keys were silently
+    ignored. Switch to the async resolver that hits the DB first."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    # Pool must be acquired and passed to the resolver.
+    assert "_resolve_byok_or_503(pool" in src
+    # The await is critical -- coroutine must be awaited.
+    assert "await _resolve_byok_or_503" in src
+
+
+def test_resolve_byok_helper_is_async():
+    from atlas_brain.api import llm_gateway
+    import inspect as _inspect
+
+    assert _inspect.iscoroutinefunction(llm_gateway._resolve_byok_or_503)
+
+
+def test_resolve_byok_helper_calls_db_aware_resolver():
+    """The helper must call the DB-aware async resolver, not the
+    legacy sync env-only one."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway._resolve_byok_or_503)
+    assert "lookup_provider_key_async" in src
+    assert "lookup_provider_key(" not in src.replace("lookup_provider_key_async", "")

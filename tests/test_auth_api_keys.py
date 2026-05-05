@@ -171,11 +171,19 @@ def test_default_scopes_is_llm_wildcard():
 # ---- Pepper validator (config-level) -------------------------------------
 
 
+# Valid Fernet KEK (base64 of 32 bytes) used by tests that enable SaaS
+# auth and want to isolate validation to the pepper -- without this, the
+# new BYOK_ENCRYPTION_KEK validator (PR-D5) would also fire and the
+# pepper-specific assertion would be ambiguous.
+_VALID_TEST_KEK = "v1:" + ("A" * 43) + "="
+
+
 def test_saas_auth_rejects_default_pepper_when_enabled(monkeypatch):
     """When ``ATLAS_SAAS_ENABLED=true``, the default sentinel pepper
     raises a ValueError -- prevents shipping prod with a known pepper."""
     monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
     monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", _VALID_TEST_KEK)
     # Leave pepper unset -> defaults to sentinel.
     monkeypatch.delenv("ATLAS_SAAS_API_KEY_PEPPER", raising=False)
 
@@ -195,6 +203,7 @@ def test_saas_auth_accepts_non_default_pepper_when_enabled(monkeypatch):
     monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
     monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
     monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "non-default-pepper")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", _VALID_TEST_KEK)
 
     import importlib
     import atlas_brain.config as config_mod
@@ -210,6 +219,7 @@ def test_saas_auth_rejects_empty_pepper_when_enabled(monkeypatch):
     monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
     monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
     monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", _VALID_TEST_KEK)
 
     import importlib
     import atlas_brain.config as config_mod
@@ -227,6 +237,7 @@ def test_saas_auth_rejects_whitespace_only_pepper_when_enabled(monkeypatch):
     monkeypatch.setenv("ATLAS_SAAS_ENABLED", "true")
     monkeypatch.setenv("ATLAS_SAAS_JWT_SECRET", "non-default-jwt")
     monkeypatch.setenv("ATLAS_SAAS_API_KEY_PEPPER", "   ")
+    monkeypatch.setenv("ATLAS_SAAS_BYOK_ENCRYPTION_KEK", _VALID_TEST_KEK)
 
     import importlib
     import atlas_brain.config as config_mod
