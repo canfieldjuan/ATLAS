@@ -234,3 +234,88 @@ def require_b2b_plan(min_plan: str):
         return user
 
     return _check
+
+
+def _extract_api_key(request: Request) -> Optional[str]:
+    """Extract a customer API key from the Authorization header.
+
+    Customer API keys (``atls_live_*``) and JWTs both ride on the same
+    ``Authorization: Bearer ...`` header. This helper only returns
+    values that look like API keys; JWT bearer tokens fall through to
+    ``require_auth``'s extractor.
+    """
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[7:].strip()
+    if not token.startswith("atls_live_"):
+        return None
+    return token
+
+
+async def require_api_key(request: Request) -> AuthUser:
+    """Authenticate via a customer-issued API key (PR-D1).
+
+    Returns an ``AuthUser`` with the same shape as ``require_auth`` so
+    downstream endpoints stay auth-method agnostic. The ``user_id``
+    field is populated from ``api_keys.user_id`` (creator audit) when
+    present, else falls back to ``account_id`` so the endpoint always
+    has a non-empty caller identity.
+
+    Raises 401 when the key is missing, malformed, revoked, or
+    unrecognized; 403 when the account is canceled or the trial
+    expired.
+    """
+    if not settings.saas_auth.enabled:
+        return _synthetic_admin()
+
+    raw_key = _extract_api_key(request)
+    if not raw_key:
+        raise HTTPException(status_code=401, detail="API key required")
+
+    from ..auth.api_keys import lookup_api_key, touch_api_key
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    row = await lookup_api_key(pool, raw_key)
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    account_row = await pool.fetchrow(
+        """
+        SELECT plan, plan_status, product, trial_ends_at
+        FROM saas_accounts
+        WHERE id = $1
+        """,
+        row["account_id"],
+    )
+    if not account_row:
+        raise HTTPException(status_code=401, detail="Account not found")
+
+    if account_row["plan_status"] == "canceled":
+        raise HTTPException(status_code=403, detail="Subscription canceled")
+
+    trial_ends = account_row["trial_ends_at"]
+    if account_row["plan"] in ("trial", "b2b_trial") and trial_ends:
+        te = trial_ends if trial_ends.tzinfo else trial_ends.replace(tzinfo=timezone.utc)
+        if te < datetime.now(timezone.utc):
+            raise HTTPException(status_code=403, detail="Trial expired")
+
+    creator_id = row["user_id"]
+    if creator_id is None:
+        creator_id = row["account_id"]
+
+    user = AuthUser(
+        user_id=str(creator_id),
+        account_id=str(row["account_id"]),
+        plan=account_row["plan"],
+        plan_status=account_row["plan_status"],
+        role="member",
+        product=account_row["product"] or "consumer",
+        trial_ends_at=trial_ends,
+        is_admin=False,
+    )
+
+    client_ip = request.client.host if request.client else None
+    await touch_api_key(pool, key_id=row["id"], client_ip=client_ip)
+    return user
