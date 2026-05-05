@@ -35,6 +35,7 @@ Full task/runtime decoupling remains Phase 3.
 | Campaign LLM router bridge | ✅ `services.llm_router` routes vendor-briefing campaign LLM selection through extracted LLM infrastructure in standalone mode |
 | Battle-card support port | ✅ `services.b2b.battle_card_ports` replaces direct `_b2b_shared.py`, churn-scope, execution-progress, synthesis-reader, and webhook imports for battle-card support |
 | Vendor briefing intelligence port | ✅ `services.b2b.vendor_briefing_ports` replaces direct `_b2b_shared.py`, `_b2b_synthesis_reader.py`, LLM pipeline, LLM router, protocol, and cache-runner imports for vendor briefing support |
+| Vendor briefing API runtime port | ✅ `services.b2b.vendor_briefing_api_ports` owns checkout, session lookup, PDF attachment delivery, and gated-report email runtime edges |
 | ProductClaim compatibility | ✅ `services.b2b.product_claim` re-exports `extracted_quality_gate.product_claim` instead of bridging to Atlas |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
 | Bridge stubs gate on `EXTRACTED_COMP_INTEL_STANDALONE=1` | ✅ config, DB, auth, campaign sender, suppression, protocols, LLM pipeline/router bridges, and service package fallback |
@@ -57,11 +58,11 @@ Full task/runtime decoupling remains Phase 3.
 
 | Metric | Count |
 |---|---:|
-| Extracted files | 92 |
-| Manifest mappings | 12 |
-| Manifest Python snapshots | 3 |
+| Extracted files | 93 |
+| Manifest mappings | 11 |
+| Manifest Python snapshots | 2 |
 | Manifest SQL snapshots | 9 |
-| Product-owned modules | 22 |
+| Product-owned modules | 26 |
 
 Product-owned modules:
 
@@ -79,10 +80,14 @@ Product-owned modules:
 - `services/b2b/product_claim.py`
 - `services/b2b/battle_card_ports.py`
 - `services/b2b/vendor_briefing_ports.py`
+- `services/b2b/vendor_briefing_api_ports.py`
 - `services/b2b_competitive_sets.py`
 - `autonomous/tasks/_b2b_batch_utils.py`
 - `autonomous/tasks/_b2b_cross_vendor_synthesis.py`
 - `templates/email/vendor_briefing.py`
+- `templates/email/vendor_report_delivery.py`
+- `templates/email/vendor_checkout_confirmation.py`
+- `api/b2b_vendor_briefing.py`
 - `reasoning/ecosystem.py`
 - `reasoning/cross_vendor_selection.py`
 - `reasoning/single_pass_prompts/cross_vendor_battle.py`
@@ -127,7 +132,7 @@ Product-owned modules:
 | `reasoning/single_pass_prompts/cross_vendor_battle.py` | ✅ | ✅ | n/a (product-owned LLM contract) |
 | `reasoning/single_pass_prompts/battle_card_reasoning.py` | ✅ | ✅ | n/a (product-owned LLM contract) |
 | `templates/email/vendor_briefing.py` | ✅ | ✅ | ✅ |
-| `api/b2b_vendor_briefing.py` | ✅ | 🔲 | 🔲 |
+| `api/b2b_vendor_briefing.py` | ✅ | ✅ | 🔲 (routes through product-owned checkout and gated-report delivery ports; deeper task runtime still Phase 3) |
 | `storage/migrations/095_b2b_vendor_registry.sql` | ✅ | n/a | n/a |
 | `storage/migrations/099_displacement_edges_and_company_signals.sql` | ✅ | n/a | n/a |
 | `storage/migrations/101_vendor_buyer_profiles.sql` | ✅ | n/a | n/a |
