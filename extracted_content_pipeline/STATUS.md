@@ -74,7 +74,9 @@
   draft generation, send, sequence progression, and analytics refresh triggers.
   Hosts inject the database, sender, optional LLM/skill/reasoning providers,
   and auth dependencies; HTTP payloads only control tenant scope,
-  target/channel, filters, and batch sizing.
+  target/channel, filters, and batch sizing. Hosted installs can opt into the
+  packaged single-pass reasoning provider through config when LLM and skill
+  providers are injected.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared

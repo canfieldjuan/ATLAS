@@ -27,6 +27,11 @@ from ..campaign_postgres_sequence_progression import (
 )
 from ..campaign_send import CampaignSendConfig
 from ..campaign_sequence_progression import CampaignSequenceProgressionConfig
+from ..services.single_pass_reasoning_provider import (
+    DEFAULT_REASONING_SKILL_NAME,
+    SinglePassCampaignReasoningProvider,
+    SinglePassReasoningConfig,
+)
 
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
@@ -71,6 +76,11 @@ class CampaignOperationsApiConfig:
     generation_include_source_opportunity: bool = True
     generation_opportunity_table: str = "campaign_opportunities"
     generation_vendor_targets_table: str = "vendor_targets"
+    generation_single_pass_reasoning: bool = False
+    generation_reasoning_skill_name: str = DEFAULT_REASONING_SKILL_NAME
+    generation_reasoning_max_tokens: int = 900
+    generation_reasoning_temperature: float = 0.2
+    generation_reasoning_include_source_opportunity: bool = True
 
     def __post_init__(self) -> None:
         _validate_default_limit(
@@ -105,6 +115,11 @@ class CampaignOperationsApiConfig:
             raise ValueError("generation_skill_name is required")
         if self.generation_max_tokens <= 0:
             raise ValueError("generation_max_tokens must be positive")
+        if self.generation_single_pass_reasoning:
+            if not _clean(self.generation_reasoning_skill_name):
+                raise ValueError("generation_reasoning_skill_name is required")
+            if self.generation_reasoning_max_tokens <= 0:
+                raise ValueError("generation_reasoning_max_tokens must be positive")
 
 
 def _require_fastapi() -> None:
@@ -307,6 +322,39 @@ def _generation_config(
     )
 
 
+def _generation_reasoning_config(
+    config: CampaignOperationsApiConfig,
+) -> SinglePassReasoningConfig:
+    return SinglePassReasoningConfig(
+        skill_name=config.generation_reasoning_skill_name,
+        max_tokens=config.generation_reasoning_max_tokens,
+        temperature=float(config.generation_reasoning_temperature),
+        include_source_opportunity=config.generation_reasoning_include_source_opportunity,
+    )
+
+
+def _generation_reasoning_context(
+    config: CampaignOperationsApiConfig,
+    *,
+    explicit_reasoning_context: Any,
+    llm: LLMClient | None,
+    skills: SkillStore | None,
+) -> Any:
+    if explicit_reasoning_context is not None:
+        return explicit_reasoning_context
+    if not config.generation_single_pass_reasoning:
+        return None
+    if llm is None:
+        raise HTTPException(status_code=503, detail="Campaign reasoning LLM unavailable")
+    if skills is None:
+        raise HTTPException(status_code=503, detail="Campaign reasoning skills unavailable")
+    return SinglePassCampaignReasoningProvider(
+        llm=llm,
+        skills=skills,
+        config=_generation_reasoning_config(config),
+    )
+
+
 def _public_analytics_result(result: Any) -> dict[str, Any]:
     data = result.as_dict()
     if data.get("error"):
@@ -363,8 +411,14 @@ def create_campaign_operations_router(
         pool = await _resolve_pool(pool_provider)
         llm = await _resolve_optional(llm_provider)
         skills = await _resolve_optional(skills_provider)
-        reasoning_context = await _resolve_optional(reasoning_context_provider)
+        explicit_reasoning_context = await _resolve_optional(reasoning_context_provider)
         try:
+            reasoning_context = _generation_reasoning_context(
+                resolved_config,
+                explicit_reasoning_context=explicit_reasoning_context,
+                llm=llm,
+                skills=skills,
+            )
             result = await generate_campaign_drafts_from_postgres(
                 pool,
                 scope=scope,
