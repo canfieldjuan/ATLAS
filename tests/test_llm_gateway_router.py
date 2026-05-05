@@ -540,17 +540,54 @@ def test_chat_cache_hit_returns_zero_token_usage():
 def test_chat_cache_hit_writes_zero_token_usage_row_with_cache_hit_metadata():
     """Cache savings analytics depend on a zero-token llm_usage
     row tagged ``cache_hit: true`` -- without it, dashboard can't
-    distinguish "didn't call provider" from "didn't track"."""
+    distinguish "didn't call provider" from "didn't track".
+
+    Codex P1 on PR-D6b: trace_llm_call -> _store_local
+    short-circuits when every token field is falsy, so routing
+    through it would drop the row silently. Direct INSERT to
+    pool.execute(_CACHE_HIT_USAGE_INSERT_SQL, ...) instead --
+    same pattern _persist_batch_usage uses for batch items."""
     from atlas_brain.api import llm_gateway
 
     src = inspect.getsource(llm_gateway.chat)
     hit_block = src.split("if cache_hit is not None:")[1].split("# Capture full response")[0]
-    # trace_llm_call still fires on hit.
-    assert "trace_llm_call(" in hit_block
-    # With zero tokens.
-    assert "input_tokens=0" in hit_block
-    # And the cache_hit metadata flag.
+    # Direct INSERT, NOT trace_llm_call (which would silently drop).
+    assert "await pool.execute(\n                _CACHE_HIT_USAGE_INSERT_SQL," in hit_block
+    assert "trace_llm_call(" not in hit_block
+    # cache_hit metadata flag is in the JSON payload.
     assert '"cache_hit": True' in hit_block
+
+    # The constant SQL is shaped correctly: zero token counts
+    # baked in (legitimate -- they didn't consume tokens) and
+    # the cache_hit row is identifiable by api_endpoint
+    # 'llm_gateway.chat' + metadata.cache_hit=True.
+    sql = llm_gateway._CACHE_HIT_USAGE_INSERT_SQL
+    assert "INSERT INTO llm_usage" in sql
+    assert "input_tokens, output_tokens, total_tokens" in sql
+    assert "0, 0, 0" in sql  # token zeros baked in
+
+
+def test_cache_hit_insert_sql_does_not_route_through_tracer_drop_filter():
+    """Pin the design rationale: the tracer's _store_local returns
+    early when every token field is falsy. A cache-hit row has
+    legitimately-zero tokens and would be dropped if we routed
+    through trace_llm_call. Direct INSERT bypasses the filter."""
+    from atlas_brain.api import llm_gateway
+    from atlas_brain.services import tracing
+
+    # Confirm the tracer DOES drop zero-token payloads (the bug
+    # this test guards against).
+    store_local_src = inspect.getsource(tracing.FTLTracingClient._store_local)
+    assert "if not any(" in store_local_src
+    assert '"input_tokens"' in store_local_src
+    assert '"output_tokens"' in store_local_src
+
+    # The cache-hit constant is the bypass.
+    assert hasattr(llm_gateway, "_CACHE_HIT_USAGE_INSERT_SQL")
+    # And the chat handler uses it in the hit branch.
+    src = inspect.getsource(llm_gateway.chat)
+    hit_block = src.split("if cache_hit is not None:")[1].split("# Capture full response")[0]
+    assert "_CACHE_HIT_USAGE_INSERT_SQL" in hit_block
 
 
 def test_chat_cache_hit_skips_anthropic_call():

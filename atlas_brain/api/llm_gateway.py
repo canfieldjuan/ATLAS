@@ -74,6 +74,30 @@ _PROVIDERS_THIS_PR = ("anthropic",)
 _LLM_CHAT_CACHE_NAMESPACE = "llm_gateway.chat"
 
 
+# Cache-hit rows have legitimately-zero token counts (the customer
+# didn't consume any provider tokens), but the tracer's _store_local
+# short-circuits when every token field is falsy -- so routing
+# through trace_llm_call would silently drop the row and the future
+# cache-savings dashboard would never see it. Direct INSERT instead
+# (same pattern _persist_batch_usage uses for batch items in
+# llm_gateway_batch.py). Codex P1 fix on PR-D6b.
+_CACHE_HIT_USAGE_INSERT_SQL = """
+INSERT INTO llm_usage (
+    span_name, operation_type, model_name, model_provider,
+    input_tokens, output_tokens, total_tokens,
+    billable_input_tokens, cached_tokens, cache_write_tokens,
+    cost_usd, duration_ms, status, metadata,
+    api_endpoint, account_id
+) VALUES (
+    'llm_gateway.chat', 'llm_call', $1, $2,
+    0, 0, 0,
+    0, 0, 0,
+    0, 0, 'completed', $3::jsonb,
+    'llm_gateway.chat', $4
+)
+"""
+
+
 # ---- Request / response schemas -----------------------------------------
 
 
@@ -259,22 +283,25 @@ async def chat(
         # call). Write a zero-token llm_usage row tagged
         # ``cache_hit: true`` so dashboard analytics can compute
         # cache savings ("you would have paid X, you paid 0").
+        # Codex P1 on PR-D6b: route the INSERT directly to the
+        # pool. trace_llm_call -> _store_local short-circuits when
+        # every token field is falsy, which would drop this row
+        # silently. Direct write keeps the legitimate-zero row
+        # visible to /api/v1/llm/usage rollups.
         response_id = f"llm_{_uuid.uuid4().hex[:24]}"
         try:
-            trace_llm_call(
-                span_name="llm_gateway.chat",
-                input_tokens=0,
-                output_tokens=0,
-                billable_input_tokens=0,
-                model=body.model,
-                provider=body.provider,
-                duration_ms=0,
-                metadata={
-                    "account_id": user.account_id,
-                    "request_id": response_id,
-                    "endpoint": "llm_gateway.chat",
-                    "cache_hit": True,
-                },
+            cache_hit_metadata = json.dumps({
+                "account_id": user.account_id,
+                "request_id": response_id,
+                "endpoint": "llm_gateway.chat",
+                "cache_hit": True,
+            })
+            await pool.execute(
+                _CACHE_HIT_USAGE_INSERT_SQL,
+                body.model,
+                body.provider,
+                cache_hit_metadata,
+                user.account_id,
             )
         except Exception:
             logger.exception("llm_gateway.chat cache-hit usage tracking failed")
