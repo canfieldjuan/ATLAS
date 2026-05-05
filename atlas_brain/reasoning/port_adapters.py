@@ -30,9 +30,17 @@ or other heavy atlas internals -- so it can be exercised by the
 standalone-CI test suite. The production wiring site does the heavy
 imports once and hands instances to ``ReasoningPorts``.
 
-PR-C4c does not wire these into the runner -- that's PR-C4d/e. This
-slice just provides the atlas-side surface that future port-instantiation
-code can hand to ``ReasoningPorts``.
+PR-C4d extends ``AtlasTraceSink`` to lift specific keys out of the Port
+contract's free-form ``metadata`` and route them to atlas's tracer as
+typed kwargs. This preserves the host's existing FTL trace payload
+shape (top-level ``model_name`` / ``model_provider`` / ``session_tag``
+columns, token counts, ``input_data``/``output_data``) without
+widening the Port contract -- which has to stay host-agnostic. Two keys
+are deliberately *not* extracted: ``reasoning`` (atlas's
+``_derive_reasoning_text`` promotes ``metadata["reasoning"]`` to a
+top-level field) and ``business`` (the business-context envelope is
+captured as nested metadata by design). Callers stuff those into the
+metadata dict as-is.
 """
 
 from __future__ import annotations
@@ -41,6 +49,28 @@ from typing import Any, Awaitable, Callable, Mapping
 
 
 _DEFAULT_OPERATION_TYPE = "reasoning"
+
+# Keys that ``AtlasTraceSink.start_span`` lifts out of metadata into
+# atlas tracer kwargs. These map to fields atlas's ``SpanContext``
+# carries through to the trace payload + ``llm_usage`` columns.
+_START_SPAN_METADATA_KWARGS: tuple[str, ...] = (
+    "model_name",
+    "model_provider",
+    "session_id",
+)
+
+# Keys that ``AtlasTraceSink.end_span`` lifts out of metadata. These map
+# to atlas tracer's ``end_span`` typed kwargs that affect cost calc
+# (tokens), payload top-level columns (input_data/output_data), and
+# the failure envelope (error_message/error_type).
+_END_SPAN_METADATA_KWARGS: tuple[str, ...] = (
+    "input_tokens",
+    "output_tokens",
+    "input_data",
+    "output_data",
+    "error_message",
+    "error_type",
+)
 
 
 class AtlasEventSink:
@@ -83,10 +113,12 @@ class AtlasTraceSink:
         *,
         metadata: Mapping[str, Any] | None = None,
     ) -> Any:
+        kwargs, remaining = _split_metadata(metadata, _START_SPAN_METADATA_KWARGS)
         return self._tracer.start_span(
             span_name=name,
             operation_type=_DEFAULT_OPERATION_TYPE,
-            metadata=dict(metadata) if metadata else None,
+            metadata=remaining,
+            **kwargs,
         )
 
     def end_span(
@@ -96,10 +128,12 @@ class AtlasTraceSink:
         status: str = "ok",
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
+        kwargs, remaining = _split_metadata(metadata, _END_SPAN_METADATA_KWARGS)
         self._tracer.end_span(
             span,
             status=_translate_status(status),
-            metadata=dict(metadata) if metadata else None,
+            metadata=remaining,
+            **kwargs,
         )
 
 
@@ -109,6 +143,27 @@ def _translate_status(port_status: str) -> str:
     if port_status == "error":
         return "failed"
     return port_status
+
+
+def _split_metadata(
+    metadata: Mapping[str, Any] | None,
+    typed_keys: tuple[str, ...],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Split a metadata mapping into (typed_kwargs, remaining_metadata).
+
+    Used by ``AtlasTraceSink`` to lift host-tracer-specific keys out of
+    the Port contract's free-form metadata. Returns ``(kwargs, None)``
+    when no metadata remains after extraction so callers can pass the
+    underlying tracer ``metadata=None`` cleanly.
+    """
+    if not metadata:
+        return {}, None
+    remaining = dict(metadata)
+    kwargs: dict[str, Any] = {}
+    for key in typed_keys:
+        if key in remaining:
+            kwargs[key] = remaining.pop(key)
+    return kwargs, remaining or None
 
 
 __all__ = ["AtlasEventSink", "AtlasTraceSink"]
