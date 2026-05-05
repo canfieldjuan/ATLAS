@@ -295,3 +295,28 @@ async def test_postgres_runner_cli_requires_database_url(monkeypatch):
 
     with pytest.raises(SystemExit, match="Missing --database-url"):
         await postgres_cli._main()
+
+
+def test_postgres_runner_cli_uses_provider_port_loader(tmp_path) -> None:
+    postgres_cli = _load_postgres_cli_module()
+    reasoning_path = tmp_path / "reasoning.json"
+    reasoning_path.write_text("[]", encoding="utf-8")
+
+    calls = []
+
+    def _fake_loader(path):
+        calls.append(path)
+        return "provider-port"
+
+    postgres_cli.load_reasoning_provider_port = _fake_loader
+
+    args = postgres_cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--reasoning-context",
+        str(reasoning_path),
+    ])
+    overrides = postgres_cli._dependency_overrides(args)
+
+    assert calls == [reasoning_path]
+    assert overrides["reasoning_context"] == "provider-port"

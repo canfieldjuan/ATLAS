@@ -14,6 +14,7 @@ from extracted_content_pipeline.campaign_example import (
 from extracted_content_pipeline.campaign_ports import LLMResponse
 from extracted_content_pipeline.campaign_reasoning_data import (
     FileCampaignReasoningContextProvider,
+    load_reasoning_provider_port,
 )
 
 
@@ -284,3 +285,36 @@ def test_campaign_generation_example_cli_accepts_skills_root(tmp_path) -> None:
     assert overrides["skills"].get_prompt("digest/b2b_campaign_generation") == (
         "Custom host prompt {opportunity_json}"
     )
+
+
+@pytest.mark.asyncio
+async def test_example_accepts_provider_port_loader(tmp_path) -> None:
+    reasoning_path = tmp_path / "reasoning_port.json"
+    reasoning_path.write_text(
+        json.dumps({
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "reasoning_context": {"wedge": "renewal pressure", "confidence": "high"},
+                    "campaign_reasoning_context": {
+                        "proof_points": [{"label": "pricing_mentions", "value": 12}]
+                    },
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    provider = load_reasoning_provider_port(reasoning_path)
+    payload = {
+        "target_mode": "vendor_retention",
+        "limit": 1,
+        "opportunities": [
+            {"id": "opp-1", "company": "Acme Logistics", "vendor": "HubSpot"}
+        ],
+    }
+
+    result = await generate_campaign_drafts_from_payload(payload, reasoning_context=provider)
+
+    source = result["drafts"][0]["metadata"]["source_opportunity"]
+    assert source["reasoning_context"]["wedge"] == "renewal pressure"
+    assert source["campaign_reasoning_context"]["proof_points"][0]["label"] == "pricing_mentions"

@@ -61,24 +61,15 @@ async def _load_reasoning_views_for_vendors(pool, vendor_names: list[str]) -> di
 
 
 def _overlay_reasoning_summary_from_view(target: dict, view: object) -> None:
-    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import synthesis_view_to_reasoning_entry
+    from atlas_brain.autonomous.tasks._b2b_reasoning_consumer_adapter import reasoning_summary_fields_from_view
 
-    entry = synthesis_view_to_reasoning_entry(view)
-    target["archetype"] = entry.get("archetype")
-    target["archetype_confidence"] = entry.get("confidence")
-    target["reasoning_mode"] = entry.get("mode")
-    target["reasoning_risk_level"] = entry.get("risk_level")
+    target.update(reasoning_summary_fields_from_view(view))
 
 
 def _overlay_reasoning_detail_from_view(target: dict, view: object) -> None:
-    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import synthesis_view_to_reasoning_entry
+    from atlas_brain.autonomous.tasks._b2b_reasoning_consumer_adapter import reasoning_detail_fields_from_view
 
-    _overlay_reasoning_summary_from_view(target, view)
-    entry = synthesis_view_to_reasoning_entry(view)
-    target["reasoning_executive_summary"] = entry.get("executive_summary")
-    target["reasoning_key_signals"] = entry.get("key_signals", [])
-    target["reasoning_uncertainty_sources"] = entry.get("uncertainty_sources", [])
-    target["falsification_conditions"] = entry.get("falsification_conditions", [])
+    target.update(reasoning_detail_fields_from_view(view))
 
 
 @mcp.tool()

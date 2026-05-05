@@ -155,6 +155,9 @@ rows by target id, company, email, or vendor and feeds the normalized
 `CampaignReasoningContextProvider` port documented in
 `docs/reasoning_handoff_contract.md`.
 
+For host entrypoints, use `campaign_reasoning_data.load_reasoning_provider_port(...)`
+as the port-compatible loader wrapper.
+
 Use host-provided prompt contracts by pointing at a markdown skill directory:
 
 ```bash

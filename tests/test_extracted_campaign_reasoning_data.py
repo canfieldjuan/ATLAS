@@ -157,3 +157,12 @@ async def test_load_file_reasoning_provider(tmp_path) -> None:
     assert provider.source == str(path)
     assert context is not None
     assert context.as_dict()["confidence"] == "medium"
+
+
+def test_load_reasoning_provider_port_is_protocol_compatible(tmp_path) -> None:
+    path = tmp_path / "reasoning.json"
+    path.write_text('[]', encoding="utf-8")
+
+    provider = load_reasoning_provider_port(path)
+
+    assert isinstance(provider, FileCampaignReasoningContextProvider)
