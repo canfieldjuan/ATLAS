@@ -99,3 +99,8 @@ requirements.freeze.bak
 .env*.local
 .playwright-mcp/
 *.png
+
+# hybrid reasoning check reports
+artifacts/hybrid_reasoning_checks_report.json
+
+artifacts/hybrid_reasoning_checks_summary.md
