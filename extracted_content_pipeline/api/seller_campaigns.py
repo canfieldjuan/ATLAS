@@ -308,8 +308,7 @@ def create_seller_campaign_router(
         )
         return _public_refresh_result(result)
 
-    async def _prepare_operation(
-        pool: Any,
+    def _prepare_inputs(
         scope: TenantScope | Mapping[str, Any] | None,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
@@ -323,18 +322,32 @@ def create_seller_campaign_router(
                 status_code=400,
                 detail="target_mode must match configured seller target mode",
             )
-        result = await prepare_seller_campaign_opportunities(
-            pool,
-            account_id=scoped_account_id or payload_account_id,
-            category=_clean(payload.get("category")) or None,
-            seller_status=_clean(payload.get("seller_status"))
+        return {
+            "account_id": scoped_account_id or payload_account_id,
+            "category": _clean(payload.get("category")) or None,
+            "seller_status": _clean(payload.get("seller_status"))
             or resolved_config.default_seller_status,
-            limit=_payload_limit(
+            "limit": _payload_limit(
                 payload,
                 "limit",
                 resolved_config.default_opportunity_limit,
             ),
-            replace_existing=_payload_bool(payload, "replace_existing"),
+            "replace_existing": _payload_bool(payload, "replace_existing"),
+        }
+
+    async def _prepare_operation(
+        pool: Any,
+        scope: TenantScope | Mapping[str, Any] | None,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        inputs = _prepare_inputs(scope, payload)
+        result = await prepare_seller_campaign_opportunities(
+            pool,
+            account_id=inputs["account_id"],
+            category=inputs["category"],
+            seller_status=inputs["seller_status"],
+            limit=inputs["limit"],
+            replace_existing=inputs["replace_existing"],
             target_mode=resolved_config.target_mode,
             seller_targets_table=resolved_config.seller_targets_table,
             category_snapshots_table=resolved_config.category_snapshots_table,
@@ -468,6 +481,8 @@ def create_seller_campaign_router(
                 resolved_payload,
                 "continue_on_refresh_failure",
             )
+            categories = _payload_categories(resolved_payload)
+            _prepare_inputs(scope, resolved_payload)
             refresh_result = await _refresh_operation(pool, resolved_payload)
             if refresh_result.get("failed") and not continue_on_refresh_failure:
                 return {
@@ -475,7 +490,6 @@ def create_seller_campaign_router(
                     "prepare": None,
                     "prepare_skipped": True,
                 }
-            categories = _payload_categories(resolved_payload)
             if categories:
                 prepare_result = _combine_prepare_results(
                     [

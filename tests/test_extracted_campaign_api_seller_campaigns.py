@@ -616,6 +616,61 @@ def test_seller_campaign_router_rejects_target_mode_override(monkeypatch) -> Non
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    ("payload", "scope", "status_code", "detail"),
+    [
+        (
+            {"replace_existing": "maybe"},
+            None,
+            400,
+            "replace_existing must be a boolean",
+        ),
+        (
+            {"target_mode": "vendor_retention"},
+            None,
+            400,
+            "target_mode must match configured seller target mode",
+        ),
+        (
+            {"account_id": "acct_2"},
+            {"account_id": "acct_1"},
+            403,
+            "account_id does not match scope",
+        ),
+    ],
+)
+def test_seller_campaign_router_combined_operation_preflights_prepare_inputs(
+    monkeypatch,
+    payload,
+    scope,
+    status_code,
+    detail,
+) -> None:
+    refresh_calls = []
+    prepare_calls = []
+
+    async def _refresh(received_pool, **kwargs):
+        refresh_calls.append((received_pool, kwargs))
+        return _Result(refreshed=1)
+
+    async def _prepare(received_pool, **kwargs):
+        prepare_calls.append((received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool(), scope=scope).post(
+        "/seller/operations/refresh-and-prepare",
+        json=payload,
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"] == detail
+    assert refresh_calls == []
+    assert prepare_calls == []
+
+
 def test_seller_campaign_router_combined_operation_resolves_dependencies_once(
     monkeypatch,
 ) -> None:
