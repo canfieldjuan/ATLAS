@@ -22,6 +22,7 @@ from atlas_brain.reasoning.vendor_pressure import (
     VendorOpportunitySubject,
     VendorPressureConsumer,
     VendorPressurePayload,
+    _enrich_entry_with_view_metadata,
     vendor_pressure_result_from_entry,
     vendor_pressure_result_from_synthesis_view,
 )
@@ -240,19 +241,19 @@ def test_result_ignores_non_mapping_reference_ids() -> None:
 
 
 # ---------------------------------------------------------------------
-# Synthesis-view wrapper enrichment (uses a stub view object)
+# _enrich_entry_with_view_metadata: pure helper, exercised with stub
+# views that match the real SynthesisView API shape (reference_ids and
+# as_of_date_iso are @property, confidence is a method). These tests
+# stay off the atlas_brain.autonomous import chain.
 # ---------------------------------------------------------------------
 
 
-class _StubSynthesisView:
-    """Minimal stub that satisfies the synthesis-view wrapper's calls.
+class _StubSynthesisViewPropertyShape:
+    """Stub matching the real SynthesisView shape exactly.
 
-    Only implements the attributes the wrapper actually reads:
-    ``reference_ids`` (property), ``as_of_date_iso()``,
-    ``confidence(section)``. The deferred
-    ``synthesis_view_to_reasoning_entry`` call is monkeypatched to
-    return a synthetic entry so this stub doesn't have to satisfy
-    that helper too.
+    - ``reference_ids`` is a ``@property`` (returns dict).
+    - ``as_of_date_iso`` is a ``@property`` (returns string).
+    - ``confidence`` is a method taking ``section`` arg.
     """
 
     def __init__(
@@ -270,6 +271,7 @@ class _StubSynthesisView:
     def reference_ids(self):
         return self._reference_ids
 
+    @property
     def as_of_date_iso(self):
         return self._as_of_iso
 
@@ -279,22 +281,31 @@ class _StubSynthesisView:
         return ""
 
 
-def test_synthesis_view_wrapper_enriches_with_view_metadata(monkeypatch) -> None:
-    """End-to-end: the wrapper pulls lineage / freshness / categorical
-    confidence from the view and threads them into the typed envelope.
+class _StubSynthesisViewCallableShape:
+    """Stub modelling ``as_of_date_iso`` as a callable instead of a
+    property — covers the wrapper's defensive accept-both branch so a
+    future view-API refactor doesn't regress us.
     """
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
-        lambda v: {
-            "archetype": "renewal_pressure",
-            "confidence": 0.74,
-            "mode": "synthesis",
-            "risk_level": "high",
-            "executive_summary": "summary",
-        },
-    )
 
-    view = _StubSynthesisView(
+    def __init__(self, *, as_of_iso=""):
+        self._as_of_iso = as_of_iso
+
+    @property
+    def reference_ids(self):
+        return {}
+
+    def as_of_date_iso(self):
+        return self._as_of_iso
+
+    def confidence(self, section):
+        return ""
+
+
+def test_enrich_with_property_shaped_view() -> None:
+    """Real SynthesisView has ``as_of_date_iso`` as a @property — must
+    populate ``as_of`` from the property value, not via a method call.
+    """
+    view = _StubSynthesisViewPropertyShape(
         reference_ids={
             "metric_ids": ["m_pricing_mentions"],
             "witness_ids": ["w_segment_7"],
@@ -303,44 +314,77 @@ def test_synthesis_view_wrapper_enriches_with_view_metadata(monkeypatch) -> None
         confidence_label_for_causal="high",
     )
 
-    result = vendor_pressure_result_from_synthesis_view(
-        view, subject_id="opp-1"
-    )
+    enriched = _enrich_entry_with_view_metadata({}, view)
 
-    # Universal-narrative fields still flow from the entry.
-    assert result.archetype == "renewal_pressure"
-    assert result.confidence == 0.74
-    assert result.executive_summary == "summary"
-
-    # New: lineage / freshness / categorical label come from the view.
-    assert result.reference_ids.metric_ids == ("m_pricing_mentions",)
-    assert result.reference_ids.witness_ids == ("w_segment_7",)
-    assert result.as_of == "2026-05-04"
-    assert result.confidence_label == "high"
+    assert enriched["reference_ids"] == {
+        "metric_ids": ["m_pricing_mentions"],
+        "witness_ids": ["w_segment_7"],
+    }
+    assert enriched["as_of"] == "2026-05-04"
+    assert enriched["confidence_label"] == "high"
 
 
-def test_synthesis_view_wrapper_handles_view_without_lineage(monkeypatch) -> None:
-    """View with empty reference_ids / as_of / confidence-label still
-    produces a clean envelope with sparse lineage/freshness defaults.
+def test_enrich_with_callable_shaped_view() -> None:
+    """Defensive: if the view exposes ``as_of_date_iso`` as a method
+    (zero-arg callable), the wrapper still picks up the value.
     """
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
-        lambda v: {
-            "archetype": "renewal_pressure",
-            "confidence": 0.42,
-        },
+    view = _StubSynthesisViewCallableShape(as_of_iso="2026-05-04")
+    enriched = _enrich_entry_with_view_metadata({}, view)
+    assert enriched["as_of"] == "2026-05-04"
+
+
+def test_enrich_skips_empty_string_as_of() -> None:
+    """``view.as_of_date_iso`` returns "" when the synthesis has no
+    date — that should NOT show up as ``as_of=""`` on the envelope.
+    """
+    view = _StubSynthesisViewPropertyShape(as_of_iso="")
+    enriched = _enrich_entry_with_view_metadata({}, view)
+    assert "as_of" not in enriched
+
+
+def test_enrich_skips_empty_reference_ids() -> None:
+    """Empty / missing reference_ids dict should leave the entry's
+    ``reference_ids`` key unset (so the builder falls back to the
+    sparse default).
+    """
+    view = _StubSynthesisViewPropertyShape(reference_ids={})
+    enriched = _enrich_entry_with_view_metadata({}, view)
+    assert "reference_ids" not in enriched
+
+
+def test_enrich_skips_empty_confidence_label() -> None:
+    view = _StubSynthesisViewPropertyShape(confidence_label_for_causal="")
+    enriched = _enrich_entry_with_view_metadata({}, view)
+    assert "confidence_label" not in enriched
+
+
+def test_enrich_uses_setdefault_so_explicit_entry_keys_win() -> None:
+    """If the entry already carries one of the view-derived fields
+    (e.g. a producer that pre-computed reference_ids), the wrapper
+    must NOT overwrite it.
+    """
+    view = _StubSynthesisViewPropertyShape(
+        reference_ids={"metric_ids": ["from_view"], "witness_ids": []},
+        as_of_iso="2026-05-04",
+        confidence_label_for_causal="high",
     )
-    view = _StubSynthesisView()  # everything defaults to empty
+    entry = {
+        "reference_ids": {"metric_ids": ["from_entry"], "witness_ids": []},
+        "as_of": "2025-01-01",
+        "confidence_label": "low",
+    }
+    enriched = _enrich_entry_with_view_metadata(entry, view)
+    assert enriched["reference_ids"]["metric_ids"] == ["from_entry"]
+    assert enriched["as_of"] == "2025-01-01"
+    assert enriched["confidence_label"] == "low"
 
-    result = vendor_pressure_result_from_synthesis_view(view)
 
-    assert result.archetype == "renewal_pressure"
-    assert result.confidence == 0.42
-    # Sparse lineage / freshness / label
-    assert result.reference_ids.metric_ids == ()
-    assert result.reference_ids.witness_ids == ()
-    assert result.as_of is None
-    assert result.confidence_label is None
+def test_enrich_handles_view_missing_attributes_gracefully() -> None:
+    """A bare object with none of the expected attributes should not
+    raise — the entry just stays unenriched.
+    """
+    enriched = _enrich_entry_with_view_metadata({}, object())
+    assert enriched == {}
 
 
 # ---------------------------------------------------------------------

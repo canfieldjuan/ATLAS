@@ -197,6 +197,65 @@ def vendor_pressure_result_from_entry(
     )
 
 
+def _enrich_entry_with_view_metadata(
+    entry: dict[str, Any],
+    view: object,
+) -> dict[str, Any]:
+    """Top up ``entry`` with view-only metadata via ``setdefault``.
+
+    Pulled out as a pure helper so tests can exercise it directly with
+    a stub view, without crossing into the ``atlas_brain.autonomous``
+    import chain that the lean CI tier doesn't carry. Also makes the
+    property-vs-method handling for each accessor explicit.
+
+    Three accessors, each with its own quirk in the real
+    ``_b2b_synthesis_reader.SynthesisView``:
+
+    - ``view.reference_ids`` is a ``@property`` returning a dict
+      (already deduplicated). Read directly via ``getattr``.
+    - ``view.as_of_date_iso`` is a ``@property`` returning a string
+      ("" when the synthesis has no date). The earlier draft of this
+      wrapper treated it as a method, which silently dropped the
+      value in production -- ``getattr`` on a property returns the
+      *value*, ``callable(str)`` is ``False``, branch skipped. Both
+      shapes are now accepted (property value or zero-arg callable)
+      so a future refactor of the view doesn't regress us either way.
+    - ``view.confidence(section)`` is a regular method taking a
+      section-name argument. Always callable in the real view.
+    """
+    # Lineage: property returning the dict directly.
+    reference_ids = getattr(view, "reference_ids", None)
+    if isinstance(reference_ids, Mapping) and reference_ids:
+        entry.setdefault("reference_ids", reference_ids)
+
+    # Freshness: property in the real view (returns ""). Accept either
+    # the property value (str | None) or a zero-arg callable that
+    # returns a string. Empty / whitespace-only collapses to absent.
+    as_of_attr = getattr(view, "as_of_date_iso", None)
+    if callable(as_of_attr):
+        try:
+            as_of_value = as_of_attr()
+        except Exception:  # pragma: no cover -- defensive against view-API drift
+            as_of_value = None
+    else:
+        as_of_value = as_of_attr
+    if isinstance(as_of_value, str) and as_of_value.strip():
+        entry.setdefault("as_of", as_of_value)
+
+    # Categorical confidence label for the causal-narrative section
+    # (complements the numeric confidence already in the entry).
+    confidence_method = getattr(view, "confidence", None)
+    if callable(confidence_method):
+        try:
+            label = confidence_method("causal_narrative")
+        except Exception:  # pragma: no cover -- defensive against view-API drift
+            label = None
+        if isinstance(label, str) and label.strip():
+            entry.setdefault("confidence_label", label)
+
+    return entry
+
+
 def vendor_pressure_result_from_synthesis_view(
     view: object,
     *,
@@ -209,17 +268,16 @@ def vendor_pressure_result_from_synthesis_view(
     1. Calls ``synthesis_view_to_reasoning_entry(view)`` for the
        universal narrative fields (archetype / confidence / summary /
        signals / mode / risk_level / falsification / uncertainty).
-    2. Enriches the entry dict with view-only metadata that the
-       reasoning-entry helper doesn't surface:
+    2. Enriches the entry dict via :func:`_enrich_entry_with_view_metadata`
+       with view-only metadata the reasoning-entry helper doesn't
+       surface:
 
        - ``reference_ids`` from ``view.reference_ids`` -- the nested
-         ``{"metric_ids": [...], "witness_ids": [...]}`` lineage block,
-         already deduplicated by the view's resolver.
-       - ``as_of`` from ``view.as_of_date_iso()`` -- ISO date string
-         describing when the synthesis was generated.
+         ``{"metric_ids": [...], "witness_ids": [...]}`` lineage block.
+       - ``as_of`` from ``view.as_of_date_iso`` (property) -- ISO date
+         string describing when the synthesis was generated.
        - ``confidence_label`` from ``view.confidence("causal_narrative")``
-         -- the categorical band ("high" / "medium" / "low" / ...) that
-         complements the numeric confidence already in the entry.
+         -- the categorical band ("high" / "medium" / "low" / ...).
 
     Then delegates to :func:`vendor_pressure_result_from_entry` so the
     sparse-contract guards and field normalization happen in one place.
@@ -236,32 +294,7 @@ def vendor_pressure_result_from_synthesis_view(
     )
 
     entry: dict[str, Any] = dict(synthesis_view_to_reasoning_entry(view))
-
-    # Lineage: view exposes a property; if absent or empty-dict, leave
-    # the entry's reference_ids unset so the builder falls back to its
-    # empty-tuple default.
-    reference_ids = getattr(view, "reference_ids", None)
-    if isinstance(reference_ids, Mapping) and reference_ids:
-        entry.setdefault("reference_ids", reference_ids)
-
-    # Freshness: view returns "" when no date; treat that as absent.
-    as_of_iso = getattr(view, "as_of_date_iso", None)
-    if callable(as_of_iso):
-        as_of_value = as_of_iso()
-        if isinstance(as_of_value, str) and as_of_value.strip():
-            entry.setdefault("as_of", as_of_value)
-
-    # Categorical confidence label for the causal-narrative section
-    # (the same section synthesis_view_to_reasoning_entry already
-    # numericizes for the ``confidence`` field).
-    confidence_method = getattr(view, "confidence", None)
-    if callable(confidence_method):
-        try:
-            label = confidence_method("causal_narrative")
-        except Exception:  # pragma: no cover -- defensive against view-API drift
-            label = None
-        if isinstance(label, str) and label.strip():
-            entry.setdefault("confidence_label", label)
+    entry = _enrich_entry_with_view_metadata(entry, view)
 
     return vendor_pressure_result_from_entry(entry, subject_id=subject_id)
 
