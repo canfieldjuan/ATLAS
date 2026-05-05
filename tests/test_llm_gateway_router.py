@@ -685,3 +685,114 @@ def test_store_cached_text_uses_namespace_dispatch_not_b2b_flag():
     src = inspect.getsource(llm_exact_cache.store_cached_text)
     assert "_is_cache_enabled_for_namespace(namespace)" in src
     assert "is_b2b_llm_exact_cache_enabled()" not in src
+
+
+# ---- Cache savings rollup (PR-D6c) -------------------------------------
+
+
+def test_cache_savings_metadata_key_is_module_constant():
+    """Write site (cache-hit handler) and read site (/usage SQL)
+    must agree on the metadata key. Defining once as a module
+    constant prevents drift."""
+    from atlas_brain.api import llm_gateway
+
+    assert hasattr(llm_gateway, "_CACHE_SAVINGS_METADATA_KEY")
+    assert llm_gateway._CACHE_SAVINGS_METADATA_KEY == "cache_savings_usd"
+    # Read site: the SQL clause that pulls it out for the rollup.
+    src = inspect.getsource(llm_gateway.usage)
+    assert "metadata->>'cache_savings_usd'" in src
+
+
+def test_cache_hit_stamps_savings_metadata():
+    """The cache-hit branch must stamp the would-have-paid USD on
+    the llm_usage row's metadata so /usage can sum it later. The
+    value comes from _estimate_cost_usd applied to the cached
+    entry's stored token counts."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    hit_block = src.split("if cache_hit is not None:")[1].split("# Capture full response")[0]
+    # _estimate_cost_usd is called on the cached usage.
+    assert "_estimate_cost_usd(" in hit_block
+    assert 'cache_hit.get("usage")' in hit_block
+    # Result is stamped into the metadata payload using the constant.
+    assert "_CACHE_SAVINGS_METADATA_KEY: cache_savings_usd" in hit_block
+
+
+def test_cache_hit_savings_estimate_failure_falls_back_to_zero():
+    """A model missing from the pricing config (or any other
+    estimate failure) must NOT break the chat response. Catch
+    the exception, log, default the field to 0.0 -- the row
+    still gets written, the savings just don't show up for that
+    call."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    hit_block = src.split("if cache_hit is not None:")[1].split("# Capture full response")[0]
+    # try/except wraps the estimate call.
+    assert "try:\n                cache_savings_usd = _estimate_cost_usd(" in hit_block
+    assert "cache_savings_usd = 0.0" in hit_block
+    # Distinct log line so ops can spot pricing-config holes.
+    assert "cache-hit savings estimate failed" in hit_block
+
+
+def test_estimate_cost_usd_imported_from_batch_module():
+    """Reuse the existing helper rather than duplicating the
+    pricing math. The function lives in llm_gateway_batch.py
+    (PR-D4d) -- import it from there. Underscore-private name is
+    deliberate (no public alias yet); revisit if a third caller
+    appears."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway)
+    assert "_estimate_cost_usd," in src
+
+
+def test_usage_response_exposes_total_cache_savings_usd():
+    """New top-level field on UsageResponse so customers see
+    aggregate cache savings for the period in a single number."""
+    from atlas_brain.api.llm_gateway import UsageResponse
+
+    fields = UsageResponse.model_fields
+    assert "total_cache_savings_usd" in fields
+    # Default 0.0 -- back-compat with clients that don't know
+    # about the field, and correct value for periods with no hits.
+    assert fields["total_cache_savings_usd"].default == 0.0
+
+
+def test_usage_breakdown_row_exposes_per_group_savings():
+    """Customers want savings broken out by (provider, model) too
+    so they can see "cache hit-rate on Opus" vs "Haiku"."""
+    from atlas_brain.api.llm_gateway import UsageBreakdownRow
+
+    fields = UsageBreakdownRow.model_fields
+    assert "cache_savings_usd" in fields
+    assert fields["cache_savings_usd"].default == 0.0
+
+
+def test_usage_sql_aggregates_cache_savings_per_group():
+    """Source-text pin on the rollup SQL: SUM the metadata field
+    per (provider, model) group. NULLIF guards rows that don't
+    have the metadata key (everything other than cache hits) so
+    the SUM doesn't error on cast."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.usage)
+    assert "NULLIF(metadata->>'cache_savings_usd', '')::float" in src
+    assert "AS cache_savings_usd" in src
+
+
+def test_usage_handler_threads_savings_into_response():
+    """The query result feeds both the per-row breakdown and
+    the top-level total. Accumulator pattern matches the existing
+    cost_usd handling."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.usage)
+    # Per-row breakdown carries it.
+    assert "cache_savings_usd=row_cache_savings" in src
+    # Total accumulator.
+    assert "total_cache_savings = 0.0" in src
+    assert "total_cache_savings += row_cache_savings" in src
+    # And the response object surfaces the total.
+    assert "total_cache_savings_usd=total_cache_savings" in src

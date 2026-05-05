@@ -49,6 +49,7 @@ from ..services.byok_keys import lookup_provider_key_async
 from ..services.llm.anthropic import convert_messages
 from ..services.llm_gateway_batch import (
     CustomerBatchItem,
+    _estimate_cost_usd,
     get_customer_batch,
     refresh_customer_batch_status,
     submit_customer_batch,
@@ -72,6 +73,14 @@ _PROVIDERS_THIS_PR = ("anthropic",)
 # check to the gateway's own feature flag rather than the B2B
 # pipeline flag, so the two products stay decoupled.
 _LLM_CHAT_CACHE_NAMESPACE = "llm_gateway.chat"
+
+
+# Metadata key for the would-have-paid USD on a cache-hit row
+# (PR-D6c). Stamped at hit time with the synchronous-tier cost
+# computed from the cached entry's stored token counts; summed
+# at /usage query time as ``total_cache_savings_usd``. Defined as
+# a module constant so the write site and read site can't drift.
+_CACHE_SAVINGS_METADATA_KEY = "cache_savings_usd"
 
 
 # Cache-hit rows have legitimately-zero token counts (the customer
@@ -161,6 +170,10 @@ class UsageBreakdownRow(BaseModel):
     total_tokens: int = 0
     cost_usd: float = 0.0
     call_count: int = 0
+    # PR-D6c: would-have-paid for cache-hit calls in this group.
+    # Summed from each cache_hit row's metadata; defaults to 0
+    # when there are no hits in the period (back-compat).
+    cache_savings_usd: float = 0.0
 
 
 class UsageResponse(BaseModel):
@@ -170,6 +183,11 @@ class UsageResponse(BaseModel):
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cost_usd: float = 0.0
+    # PR-D6c: total $-value of provider calls avoided by exact-cache
+    # hits in this period. The sales pitch's "you would have paid X,
+    # you paid Y" number lives here. Defaults to 0 -- back-compat
+    # with clients that don't know about caching.
+    total_cache_savings_usd: float = 0.0
     by_provider: list[UsageBreakdownRow]
 
 
@@ -290,11 +308,36 @@ async def chat(
         # visible to /api/v1/llm/usage rollups.
         response_id = f"llm_{_uuid.uuid4().hex[:24]}"
         try:
+            # PR-D6c: compute would-have-paid USD from the cached
+            # entry's stored token counts so /api/v1/llm/usage can
+            # surface the savings. Reuses the batch module's
+            # _estimate_cost_usd (already imported) -- it's
+            # underscore-private but the function is the right
+            # primitive here and there's no public alias yet.
+            # Failures (model not in pricing config, missing
+            # tokens) fall back to 0.0 so a malformed cache entry
+            # doesn't break the chat response.
+            cached_usage = cache_hit.get("usage") or {}
+            try:
+                cache_savings_usd = _estimate_cost_usd(
+                    model=cache_hit.get("model") or body.model,
+                    input_tokens=int(cached_usage.get("input_tokens", 0) or 0),
+                    output_tokens=int(cached_usage.get("output_tokens", 0) or 0),
+                    cached_tokens=int(cached_usage.get("cached_tokens", 0) or 0),
+                    cache_write_tokens=int(cached_usage.get("cache_write_tokens", 0) or 0),
+                )
+            except Exception:
+                logger.exception(
+                    "llm_gateway.chat cache-hit savings estimate failed; "
+                    "row will record 0.0",
+                )
+                cache_savings_usd = 0.0
             cache_hit_metadata = json.dumps({
                 "account_id": user.account_id,
                 "request_id": response_id,
                 "endpoint": "llm_gateway.chat",
                 "cache_hit": True,
+                _CACHE_SAVINGS_METADATA_KEY: cache_savings_usd,
             })
             await pool.execute(
                 _CACHE_HIT_USAGE_INSERT_SQL,
@@ -435,6 +478,10 @@ async def usage(
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
+    # PR-D6c: cache_savings_usd is summed from the metadata field
+    # stamped on each cache-hit row at hit time. Cast via NULLIF
+    # so non-cache rows (no metadata key) and malformed values
+    # contribute 0 instead of erroring.
     rows = await pool.fetch(
         """
         SELECT model_provider, model_name,
@@ -442,6 +489,9 @@ async def usage(
                COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
                COALESCE(SUM(total_tokens), 0)::bigint  AS total_tokens,
                COALESCE(SUM(cost_usd), 0)::float       AS cost_usd,
+               COALESCE(SUM(
+                   NULLIF(metadata->>'cache_savings_usd', '')::float
+               ), 0)::float                            AS cache_savings_usd,
                COUNT(*)::bigint                         AS call_count,
                MIN(created_at)                          AS period_start,
                MAX(created_at)                          AS period_end
@@ -459,9 +509,11 @@ async def usage(
     total_input = 0
     total_output = 0
     total_cost = 0.0
+    total_cache_savings = 0.0
     period_start = None
     period_end = None
     for row in rows:
+        row_cache_savings = float(row["cache_savings_usd"] or 0.0)
         breakdown.append(
             UsageBreakdownRow(
                 provider=row["model_provider"],
@@ -471,11 +523,13 @@ async def usage(
                 total_tokens=int(row["total_tokens"] or 0),
                 cost_usd=float(row["cost_usd"] or 0.0),
                 call_count=int(row["call_count"] or 0),
+                cache_savings_usd=row_cache_savings,
             )
         )
         total_input += int(row["input_tokens"] or 0)
         total_output += int(row["output_tokens"] or 0)
         total_cost += float(row["cost_usd"] or 0.0)
+        total_cache_savings += row_cache_savings
         if period_start is None or (row["period_start"] and row["period_start"] < period_start):
             period_start = row["period_start"]
         if period_end is None or (row["period_end"] and row["period_end"] > period_end):
@@ -496,6 +550,7 @@ async def usage(
         total_input_tokens=total_input,
         total_output_tokens=total_output,
         total_cost_usd=total_cost,
+        total_cache_savings_usd=total_cache_savings,
         by_provider=breakdown,
     )
 
