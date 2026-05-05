@@ -116,6 +116,9 @@
 - `pipelines.notify` is product-owned and dispatches through the
   `VisibilitySink` port when configured, while staying a no-op when no host
   visibility adapter is installed.
+- `campaign_visibility` provides reference `VisibilitySink` adapters for
+  hosts: an in-memory sink for local dashboards/tests and a JSONL sink for
+  append-only operation audit trails.
 - Small task utility helpers are product-owned rather than Atlas-synced:
   `_execution_progress`, `_google_news`, `_blog_ts`, `_blog_deploy`, and
   `_b2b_batch_utils`, and `_blog_matching`.

@@ -481,6 +481,22 @@ POST operation routes emit best-effort `campaign_operation_started`,
 the `VisibilitySink` port. Sink failures are logged and do not change operation
 responses.
 
+For a file-backed audit trail without writing a custom sink first:
+
+```python
+from extracted_content_pipeline.campaign_visibility import JsonlVisibilitySink
+
+visibility = JsonlVisibilitySink("/var/log/content-ops/campaign-events.jsonl")
+
+app.include_router(
+    create_campaign_operations_router(
+        pool_provider=get_pool,
+        sender_provider=get_campaign_sender,
+        visibility_provider=lambda: visibility,
+    )
+)
+```
+
 For lightweight hosted installs without a separate reasoning provider, set
 `generation_single_pass_reasoning=True` on `CampaignOperationsApiConfig`. The
 draft generation route then builds `SinglePassCampaignReasoningProvider` from
