@@ -252,7 +252,10 @@ def require_llm_plan(min_plan: str):
         )
     min_idx = LLM_GATEWAY_PLAN_ORDER.index(min_plan)
 
-    async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
+    # PR-D4 fix: depend on the API-key-or-JWT helper so customer scripts
+    # using ``atls_live_*`` keys reach the plan check. ``require_auth``
+    # (JWT-only) silently rejected them before the plan logic ran.
+    async def _check(user: AuthUser = Depends(require_auth_or_api_key)) -> AuthUser:
         if user.plan_status == "past_due":
             raise HTTPException(
                 status_code=402,
@@ -363,3 +366,27 @@ async def require_api_key(request: Request) -> AuthUser:
     client_ip = request.client.host if request.client else None
     await touch_api_key(pool, key_id=row["id"], client_ip=client_ip)
     return user
+
+
+async def require_auth_or_api_key(request: Request) -> AuthUser:
+    """Accept EITHER a JWT bearer (dashboard) OR a customer API key
+    (production scripts). PR-D4 review fix: ``require_llm_plan``
+    used ``Depends(require_auth)`` which only validates JWTs, so
+    ``Authorization: Bearer atls_live_*`` got rejected before plan
+    checks. This helper dispatches by token shape so both auth
+    methods work.
+
+    Used only by LLM Gateway endpoints (PR-D4); atlas's existing
+    products are dashboard-only and keep their JWT-only chains.
+    """
+    if not settings.saas_auth.enabled:
+        return _synthetic_admin()
+
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    token = auth_header[7:].strip()
+
+    if token.startswith("atls_live_"):
+        return await require_api_key(request)
+    return await require_auth(request)

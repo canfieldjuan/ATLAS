@@ -310,3 +310,66 @@ def test_unused_helper_cache_enabled_for_plan_removed():
     from atlas_brain.api import llm_gateway
 
     assert not hasattr(llm_gateway, "_cache_enabled_for_plan")
+
+
+# ---- Codex second-pass review (P1 fixes) -------------------------------
+
+
+def test_require_auth_or_api_key_dispatches_by_token_shape():
+    """Codex P1: ``require_llm_plan`` previously chained through
+    ``require_auth`` (JWT-only), so ``Authorization: Bearer atls_live_*``
+    rejected. The new helper inspects token shape and dispatches to
+    either auth method, returning the same AuthUser."""
+    from atlas_brain.auth.dependencies import require_auth_or_api_key
+
+    assert callable(require_auth_or_api_key)
+    src = inspect.getsource(require_auth_or_api_key)
+    # Token shape check: atls_live_ prefix routes to API-key path.
+    assert 'startswith("atls_live_")' in src
+    assert "require_api_key(request)" in src
+    assert "require_auth(request)" in src
+
+
+def test_require_llm_plan_accepts_api_keys():
+    """The plan-tier dependency must use the dual-auth helper so
+    customer scripts (API keys) can hit /api/v1/llm/* routes."""
+    from atlas_brain.auth import dependencies as deps_mod
+
+    src = inspect.getsource(deps_mod.require_llm_plan)
+    assert "Depends(require_auth_or_api_key)" in src
+    # The old JWT-only dep must NOT be the user resolver anymore.
+    assert "user: AuthUser = Depends(require_auth)" not in src
+
+
+def test_chat_handler_captures_real_token_usage():
+    """Codex P1: chat used to hard-code input_tokens=output_tokens=0,
+    so _store_local short-circuited (all token fields falsy) and no
+    llm_usage row was written. Pin via source-text inspection that
+    the handler reads response.usage."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    assert "response.usage" in src or "getattr(response, \"usage\"" in src
+    # Token counts must reach trace_llm_call (not hardcoded zero).
+    assert "input_tokens=input_tokens" in src
+    assert "output_tokens=output_tokens" in src
+
+
+def test_chat_handler_returns_usage_in_response():
+    """Customers see token counts in the response so they can
+    pre-validate against their own quotas without hitting /usage."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    assert "input_tokens=input_tokens" in src
+    assert "total_tokens=input_tokens + output_tokens" in src
+
+
+def test_chat_handler_threads_provider_request_id_to_trace():
+    """Anthropic returns ``response.id`` -- propagating it to
+    trace_llm_call lets ops correlate llm_usage rows with provider
+    billing dashboards (PR-A4c openai_billing logic)."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.chat)
+    assert "provider_request_id=" in src

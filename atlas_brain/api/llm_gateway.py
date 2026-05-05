@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid as _uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from ..auth.dependencies import AuthUser, require_llm_plan
 from ..pipelines.llm import trace_llm_call
 from ..services.byok_keys import lookup_provider_key
+from ..services.llm.anthropic import convert_messages
 from ..services.protocols import Message
 from ..storage.database import get_db_pool
 
@@ -163,14 +164,25 @@ async def chat(
         raise HTTPException(status_code=502, detail="Provider key invalid or load failed")
 
     messages = [Message(role=m.role, content=m.content) for m in body.messages]
+    system_prompt, api_messages = convert_messages(messages)
 
+    create_kwargs: dict[str, Any] = {
+        "model": llm.model,
+        "messages": api_messages,
+        "max_tokens": body.max_tokens,
+        "temperature": body.temperature,
+    }
+    if system_prompt:
+        create_kwargs["system"] = system_prompt
+
+    # Bypass llm.chat_async() so we can capture full response (text +
+    # usage). Codex P1 fix on PR-D4: chat_async returned only text,
+    # which left input_tokens=output_tokens=0 for trace_llm_call.
+    # _store_local then short-circuited (all token fields falsy) and
+    # /usage returned empty for every customer call.
     start = time.monotonic()
     try:
-        text = await llm.chat_async(
-            messages,
-            max_tokens=body.max_tokens,
-            temperature=body.temperature,
-        )
+        response = await llm._async_client.messages.create(**create_kwargs)
     except Exception as exc:
         logger.warning(
             "llm_gateway.chat call failed account=%s provider=%s model=%s: %s",
@@ -182,18 +194,36 @@ async def chat(
         raise HTTPException(status_code=502, detail="Provider call failed")
     duration_ms = (time.monotonic() - start) * 1000.0
 
+    text_parts: list[str] = []
+    for block in response.content or []:
+        if getattr(block, "type", None) == "text":
+            text_parts.append(getattr(block, "text", "") or "")
+    text = "\n".join(text_parts).strip()
+
+    usage_obj = getattr(response, "usage", None)
+    input_tokens = int(getattr(usage_obj, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage_obj, "output_tokens", 0) or 0)
+    cached_tokens = int(getattr(usage_obj, "cache_read_input_tokens", 0) or 0)
+    cache_write_tokens = int(getattr(usage_obj, "cache_creation_input_tokens", 0) or 0)
+    provider_request_id = getattr(response, "id", None)
+
     response_id = f"llm_{_uuid.uuid4().hex[:24]}"
 
-    # Best-effort usage tracking. trace_llm_call writes to llm_usage
-    # via the FTL tracer; PR-D3 added account_id to that INSERT.
+    # Usage tracking now carries real token counts so /usage rollups
+    # populate. trace_llm_call writes to llm_usage via the FTL tracer;
+    # PR-D3 added account_id to that INSERT (read from metadata).
     try:
         trace_llm_call(
             span_name="llm_gateway.chat",
-            input_tokens=0,  # tokenizer not exposed; ChatRequest doesn't carry counts
-            output_tokens=0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+            billable_input_tokens=input_tokens,
             model=body.model,
             provider=body.provider,
             duration_ms=duration_ms,
+            provider_request_id=str(provider_request_id) if provider_request_id else None,
             metadata={
                 "account_id": user.account_id,
                 "request_id": response_id,
@@ -208,7 +238,11 @@ async def chat(
         provider=body.provider,
         model=body.model,
         response=text,
-        usage=ChatUsage(),
+        usage=ChatUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        ),
     )
 
 
