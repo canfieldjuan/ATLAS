@@ -30,6 +30,27 @@ class B2BChurnSubConfig(BaseSettings):
 
     vendor_briefing_enabled: bool = True
     vendor_briefing_sender_name: str = "Atlas Intelligence"
+    vendor_briefing_standard_churn_subject_template: str = (
+        "Churn Intelligence Briefing: {vendor_name}"
+    )
+    vendor_briefing_standard_sales_subject_template: str = (
+        "Sales Intelligence Briefing: {vendor_name}"
+    )
+    vendor_briefing_prospect_churn_subject_template: str = (
+        "{vendor_name} -- Churn Signals Detected"
+    )
+    vendor_briefing_prospect_sales_subject_template: str = (
+        "{vendor_name} -- Accounts In Motion"
+    )
+    vendor_briefing_gated_churn_subject_template: str = (
+        "Your {vendor_name} Churn Intelligence Report"
+    )
+    vendor_briefing_gated_sales_subject_template: str = (
+        "Your {vendor_name} Sales Intelligence Report"
+    )
+    vendor_briefing_tag_type_name: str = "type"
+    vendor_briefing_tag_type_value: str = "vendor_briefing"
+    vendor_briefing_tag_vendor_name: str = "vendor"
     vendor_briefing_gate_base_url: str = ""
     vendor_briefing_report_base_url: str = ""
     vendor_briefing_reply_to_email: str = ""
