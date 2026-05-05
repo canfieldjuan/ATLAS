@@ -295,15 +295,19 @@ def test_usage_sql_scopes_by_account_id():
 
 
 def test_chat_handler_does_not_await_synchronous_load():
-    """Codex P0 fix: ``AnthropicLLM.load()`` is synchronous (returns
-    None). Awaiting it raises TypeError at runtime and breaks every
-    /chat call. Pin via source-text inspection that the handler
-    calls ``llm.load()`` (not ``await llm.load()``)."""
+    """Codex P0 on PR-D4 pinned that ``llm.load()`` (sync) must not
+    be awaited. PR-D4b refactored the chat handler to use
+    ``AsyncAnthropic`` directly (in ``async with``) and dropped the
+    ``llm.load()`` call entirely -- closes the P0 more thoroughly
+    since there's no client to load. Both variants satisfy the
+    original concern."""
     from atlas_brain.api import llm_gateway
 
     src = inspect.getsource(llm_gateway.chat)
+    # The original P0 was "awaiting a sync method"; that pattern
+    # must never reappear regardless of how the handler constructs
+    # its provider client.
     assert "await llm.load()" not in src
-    assert "llm.load()" in src
 
 
 def test_resolve_byok_helper_renamed_to_503():
