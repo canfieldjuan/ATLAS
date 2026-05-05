@@ -21,6 +21,7 @@ needed and no path that reaches real I/O.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -461,3 +462,215 @@ def test_extraction_only_lifts_keys_present_in_metadata() -> None:
     assert end_record["input_tokens"] == 10
     assert end_record["output_tokens"] is None
     assert end_record["error_message"] is None
+
+
+# ----------------------------------------------------------------------
+# AtlasLLMClient (PR-C4e2)
+#
+# Adapter wraps atlas's sync ``LLMService.chat`` so it satisfies the
+# core ``LLMClient.complete()`` Protocol. Tests verify:
+#
+# - sync->async dispatch (chat is called via asyncio.to_thread)
+# - Mapping[str,Any] -> atlas Message conversion
+# - metadata-key extraction (json_mode/response_format/timeout) into
+#   chat()'s typed kwargs
+# - Protocol satisfaction
+#
+# The adapter lazy-imports atlas's ``Message`` at call time to keep
+# port_adapters import-light. Tests stub a fake ``Message`` in
+# sys.modules['atlas_brain.services.protocols'] so the import resolves
+# without pulling the heavy services/__init__ chain. Stubs are
+# restored on teardown (PR-C4d Codex lesson).
+# ----------------------------------------------------------------------
+
+
+import sys as _sys
+import types as _types
+
+from atlas_brain.reasoning.port_adapters import AtlasLLMClient
+from extracted_reasoning_core.ports import LLMClient
+
+
+class _FakeMessage:
+    def __init__(self, role: str, content: str) -> None:
+        self.role = role
+        self.content = content
+
+
+class _RecordingLLMService:
+    """Fake atlas LLMService -- records ``chat()`` calls."""
+
+    def __init__(self, response: dict[str, Any] | None = None) -> None:
+        self._response = response or {"response": "ok", "usage": {"input_tokens": 1}}
+        self.calls: list[dict[str, Any]] = []
+
+    def chat(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return self._response
+
+
+@pytest.fixture
+def stub_protocols_module():
+    """Install a fake ``atlas_brain.services.protocols`` so the adapter's
+    lazy ``from ..services.protocols import Message`` resolves without
+    triggering ``atlas_brain.services.__init__``'s heavy imports."""
+    saved_services = _sys.modules.get("atlas_brain.services")
+    saved_protocols = _sys.modules.get("atlas_brain.services.protocols")
+
+    services_pkg = _types.ModuleType("atlas_brain.services")
+    services_pkg.__path__ = []
+    protocols_mod = _types.ModuleType("atlas_brain.services.protocols")
+    protocols_mod.Message = _FakeMessage
+
+    _sys.modules["atlas_brain.services"] = services_pkg
+    _sys.modules["atlas_brain.services.protocols"] = protocols_mod
+
+    yield
+
+    if saved_protocols is None:
+        _sys.modules.pop("atlas_brain.services.protocols", None)
+    else:
+        _sys.modules["atlas_brain.services.protocols"] = saved_protocols
+    if saved_services is None:
+        _sys.modules.pop("atlas_brain.services", None)
+    else:
+        _sys.modules["atlas_brain.services"] = saved_services
+
+
+def test_atlas_llm_client_satisfies_llm_client_protocol() -> None:
+    # LLMClient is not @runtime_checkable, so we can only do a
+    # structural hasattr check here. A future PR that flips the
+    # Protocol to runtime-checkable can tighten this.
+    client = AtlasLLMClient(_RecordingLLMService())
+    assert hasattr(client, "complete")
+    assert callable(getattr(client, "complete", None))
+    # Static analyzers should also accept it where LLMClient is required.
+    _: LLMClient = client
+
+
+@pytest.mark.asyncio
+async def test_atlas_llm_client_dispatches_to_chat_via_to_thread(
+    stub_protocols_module,
+) -> None:
+    fake_service = _RecordingLLMService(
+        response={"response": "hi", "usage": {"input_tokens": 4, "output_tokens": 2}},
+    )
+    client = AtlasLLMClient(fake_service)
+
+    result = await client.complete(
+        [
+            {"role": "system", "content": "system text"},
+            {"role": "user", "content": "user text"},
+        ],
+        max_tokens=128,
+        temperature=0.3,
+    )
+
+    assert result == {"response": "hi", "usage": {"input_tokens": 4, "output_tokens": 2}}
+    assert len(fake_service.calls) == 1
+    call = fake_service.calls[0]
+    # Messages converted to atlas Message objects (the Mapping->dataclass
+    # translation the adapter performs at the boundary).
+    assert isinstance(call["messages"], list)
+    assert len(call["messages"]) == 2
+    assert isinstance(call["messages"][0], _FakeMessage)
+    assert call["messages"][0].role == "system"
+    assert call["messages"][0].content == "system text"
+    assert call["max_tokens"] == 128
+    assert call["temperature"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_atlas_llm_client_lifts_json_mode_from_metadata(
+    stub_protocols_module,
+) -> None:
+    fake_service = _RecordingLLMService()
+    client = AtlasLLMClient(fake_service)
+
+    await client.complete(
+        [{"role": "user", "content": "x"}],
+        max_tokens=10,
+        temperature=0.0,
+        metadata={
+            "json_mode": True,
+            "response_format": {"type": "json_object"},
+            "timeout": 60.0,
+            "irrelevant": "stays-in-metadata-but-not-passed-to-chat",
+        },
+    )
+
+    call = fake_service.calls[0]
+    # The three known keys are lifted into typed kwargs.
+    assert call["json_mode"] is True
+    assert call["response_format"] == {"type": "json_object"}
+    assert call["timeout"] == 60.0
+    # Unrelated metadata keys are NOT forwarded as kwargs (would
+    # otherwise risk shadowing future LLMService kwargs).
+    assert "irrelevant" not in call
+
+
+@pytest.mark.asyncio
+async def test_atlas_llm_client_complete_returns_dict_for_non_dict_chat_result(
+    stub_protocols_module,
+) -> None:
+    # Some atlas LLMService impls return a plain string. The adapter
+    # must wrap it so the LLMClient contract (returns Mapping) holds.
+    class _StringChatService:
+        def chat(self, **kwargs: Any) -> str:
+            return "raw string response"
+
+    client = AtlasLLMClient(_StringChatService())
+    result = await client.complete(
+        [{"role": "user", "content": "x"}],
+        max_tokens=10,
+        temperature=0.0,
+    )
+    assert result == {"response": "raw string response"}
+
+
+@pytest.mark.asyncio
+async def test_atlas_llm_client_enforces_metadata_timeout_via_wait_for(
+    stub_protocols_module,
+) -> None:
+    # Atlas's pre-extraction _llm_generate wrapped chat() in
+    # asyncio.wait_for(timeout=120). PR-C4e2 broke that until the
+    # adapter was taught to honor the metadata timeout itself --
+    # forwarding ``timeout`` to chat() alone isn't enough because
+    # some Provider impls ignore the kwarg or block in non-cooperative
+    # C extensions. Pin the wait_for behavior so a regression here
+    # would surface as a TimeoutError, not an indefinite hang.
+    import time
+
+    class _SlowChatService:
+        def chat(self, **kwargs: Any) -> dict[str, Any]:
+            time.sleep(2.0)  # Longer than our 0.05s timeout below.
+            return {"response": "should never be reached"}
+
+    client = AtlasLLMClient(_SlowChatService())
+    with pytest.raises(asyncio.TimeoutError):
+        await client.complete(
+            [{"role": "user", "content": "x"}],
+            max_tokens=10,
+            temperature=0.0,
+            metadata={"timeout": 0.05},
+        )
+
+
+@pytest.mark.asyncio
+async def test_atlas_llm_client_no_timeout_when_metadata_omits_it(
+    stub_protocols_module,
+) -> None:
+    # Without an explicit timeout in metadata, the adapter awaits the
+    # to_thread coroutine directly -- no outer wait_for. This
+    # preserves backward compat with callers that don't care about
+    # deadlines (and doesn't impose an arbitrary default).
+    fake = _RecordingLLMService(response={"response": "ok"})
+    client = AtlasLLMClient(fake)
+    result = await client.complete(
+        [{"role": "user", "content": "x"}],
+        max_tokens=10,
+        temperature=0.0,
+    )
+    assert result == {"response": "ok"}
+    # Sanity: no timeout kwarg got passed to chat() when none in metadata.
+    assert "timeout" not in fake.calls[0]

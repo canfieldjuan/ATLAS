@@ -45,10 +45,28 @@ metadata dict as-is.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Mapping
+import asyncio
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 
 _DEFAULT_OPERATION_TYPE = "reasoning"
+
+# Keys that ``AtlasLLMClient.complete`` lifts out of the Port's
+# free-form ``metadata`` and forwards to atlas's ``LLMService.chat``
+# as typed kwargs. ``json_mode`` and ``response_format`` control
+# structured-output behavior; ``timeout`` is both forwarded to
+# ``chat()`` (in case the underlying client honors it) and used to
+# wrap the ``asyncio.to_thread`` await in ``asyncio.wait_for``.
+#
+# Metadata keys NOT in this tuple are deliberately discarded -- atlas's
+# ``chat`` signature is fixed and unrecognized kwargs would raise
+# ``TypeError``. To extend the contract, add the key here AND update
+# the matching atlas-side signature.
+_LLM_COMPLETE_METADATA_KWARGS: tuple[str, ...] = (
+    "json_mode",
+    "response_format",
+    "timeout",
+)
 
 # Keys that ``AtlasTraceSink.start_span`` lifts out of metadata into
 # atlas tracer kwargs. These map to fields atlas's ``SpanContext``
@@ -137,6 +155,82 @@ class AtlasTraceSink:
         )
 
 
+class AtlasLLMClient:
+    """``LLMClient`` adapter over atlas's ``LLMService.chat``.
+
+    Wraps an :class:`atlas_brain.services.protocols.LLMService` so it
+    satisfies :class:`extracted_reasoning_core.ports.LLMClient`. Three
+    translation responsibilities:
+
+    - **sync -> async**: atlas's ``chat`` is sync (the native model
+      call); the Port is ``async``. We dispatch via
+      :func:`asyncio.to_thread` so the event loop stays responsive
+      while the model runs.
+    - **timeout enforcement**: when the metadata bag carries a
+      ``timeout`` (in seconds), the adapter wraps the
+      ``asyncio.to_thread`` await in :func:`asyncio.wait_for`. This
+      preserves the deadline semantics atlas's pre-extraction
+      ``_llm_generate`` enforced -- forwarding ``timeout`` as a kwarg
+      to ``chat`` alone isn't enough because some Provider impls
+      ignore it or block in non-cooperative C extensions.
+    - **metadata -> typed kwargs**: the Port carries ``json_mode`` /
+      ``response_format`` / ``timeout`` in the free-form metadata bag
+      so reasoning-core nodes don't have to know about atlas's chat
+      signature. The adapter lifts those three keys back out and
+      forwards them as typed kwargs to ``chat`` (in addition to
+      using ``timeout`` for the outer ``wait_for``). Other metadata
+      keys are deliberately *not* forwarded -- atlas's chat signature
+      is fixed and unrecognized kwargs would raise ``TypeError``;
+      callers that need to extend the contract should add new
+      typed-extraction entries to ``_LLM_COMPLETE_METADATA_KWARGS``.
+
+    The adapter accepts ``llm_service`` as ``Any`` rather than a typed
+    parameter -- atlas's ``LLMService`` Protocol lives behind
+    ``atlas_brain.services.__init__`` which would pull in the heavy
+    LLM-impl chain at import time, defeating the import-light goal of
+    this module.
+    """
+
+    def __init__(self, llm_service: Any) -> None:
+        self._llm_service = llm_service
+
+    async def complete(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        kwargs, _remaining = _split_metadata(metadata, _LLM_COMPLETE_METADATA_KWARGS)
+        # Atlas's chat() expects a list of Message objects; the Port
+        # passes raw mappings. Convert here -- atlas's Message is a
+        # dataclass with ``role`` + ``content``, so a dict with those
+        # keys is structurally compatible. Importing atlas's Message
+        # at call-time avoids the heavy services package init at
+        # adapter-module-import time.
+        from ..services.protocols import Message
+
+        message_list = [
+            Message(role=m["role"], content=m["content"]) for m in messages
+        ]
+
+        chat_kwargs: dict[str, Any] = {
+            "messages": message_list,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        chat_kwargs.update(kwargs)
+
+        timeout = kwargs.get("timeout")
+        coro = asyncio.to_thread(self._llm_service.chat, **chat_kwargs)
+        if timeout is not None and timeout > 0:
+            result = await asyncio.wait_for(coro, timeout=timeout)
+        else:
+            result = await coro
+        return result if isinstance(result, dict) else {"response": str(result)}
+
+
 def _translate_status(port_status: str) -> str:
     if port_status == "ok":
         return "completed"
@@ -166,4 +260,4 @@ def _split_metadata(
     return kwargs, remaining or None
 
 
-__all__ = ["AtlasEventSink", "AtlasTraceSink"]
+__all__ = ["AtlasEventSink", "AtlasLLMClient", "AtlasTraceSink"]
