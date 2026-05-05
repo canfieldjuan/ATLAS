@@ -160,8 +160,8 @@ def vendor_pressure_result_from_entry(
         metric_ids = ()
         witness_ids = ()
 
-    # Freshness: empty string from view.as_of_date_iso() collapses to None
-    # so consumers see "no date" rather than "the empty-string date".
+    # Freshness: empty string from view.as_of_date_iso (property) collapses
+    # to None so consumers see "no date" rather than "the empty-string date".
     as_of_raw = entry.get("as_of")
     if isinstance(as_of_raw, str) and as_of_raw.strip():
         as_of = as_of_raw.strip()

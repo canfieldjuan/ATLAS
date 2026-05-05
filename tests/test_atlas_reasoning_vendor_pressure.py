@@ -220,9 +220,9 @@ def test_result_normalizes_lineage_ids_strip_and_drop_empty() -> None:
 def test_result_collapses_empty_strings_for_freshness_and_label() -> None:
     """Empty-string ``as_of`` / ``confidence_label`` collapse to None.
 
-    Mirrors ``view.as_of_date_iso()`` returning "" when the synthesis
-    has no date — consumers should see "no date", not "the empty string
-    date".
+    Mirrors ``view.as_of_date_iso`` (a ``@property``) returning "" when
+    the synthesis has no date — consumers should see "no date", not "the
+    empty string date".
     """
     entry = {"as_of": "", "confidence_label": "   "}
     result = vendor_pressure_result_from_entry(entry)
