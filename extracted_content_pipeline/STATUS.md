@@ -70,6 +70,10 @@
   DB-backed webhook seam. Hosts inject pool/signing-secret providers, an
   unsubscribe-token verifier, and any auth dependencies instead of importing
   Atlas API globals.
+- `api.campaign_operations` provides a FastAPI router factory around hosted
+  send, sequence progression, and analytics refresh triggers. Hosts inject the
+  database, sender, optional LLM/skill providers, and auth dependencies; HTTP
+  payloads only control batch sizing.
 - `campaign_postgres_sequence_progression` provides a DB-backed follow-up
   generation worker seam. Hosts reuse due `campaign_sequences` rows, packaged
   or custom sequence prompts, and the product LLM port to queue the next

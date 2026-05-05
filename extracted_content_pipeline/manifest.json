@@ -241,6 +241,9 @@
       "target": "extracted_content_pipeline/api/campaign_webhooks.py"
     },
     {
+      "target": "extracted_content_pipeline/api/campaign_operations.py"
+    },
+    {
       "target": "extracted_content_pipeline/api/b2b_campaigns.py"
     },
     {
