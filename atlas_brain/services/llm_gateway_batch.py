@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
+import asyncpg
+
 from .llm.anthropic import convert_messages
 from .protocols import Message
 
@@ -84,6 +86,10 @@ class CustomerBatchRecord:
     updated_at: datetime
     submitted_at: Optional[datetime]
     completed_at: Optional[datetime]
+    # PR-D4c Codex P1: surfaced so the refresh path can detect a
+    # terminal row whose usage write never landed (atomic claim
+    # failed mid-iteration -> rolled back to FALSE) and retry.
+    usage_tracked: bool = False
 
 
 def _row_to_record(row: Any) -> CustomerBatchRecord:
@@ -102,6 +108,11 @@ def _row_to_record(row: Any) -> CustomerBatchRecord:
         updated_at=row["updated_at"],
         submitted_at=row["submitted_at"],
         completed_at=row["completed_at"],
+        # ``usage_tracked`` was added in migration 318. Use ``.get``
+        # via dict-like access so older callers / tests with shorter
+        # row mocks still work (the column defaults FALSE in the
+        # migration, so missing == not-yet-tracked).
+        usage_tracked=bool(row["usage_tracked"]) if "usage_tracked" in row.keys() else False,
     )
 
 
@@ -149,7 +160,7 @@ async def submit_customer_batch(
             SELECT id, account_id, provider, provider_batch_id, model,
                    status, total_items, completed_items, failed_items,
                    error_text, created_at, updated_at, submitted_at,
-                   completed_at
+                   completed_at, usage_tracked
             FROM llm_gateway_batches
             WHERE account_id = $1 AND idempotency_key = $2
             """,
@@ -168,24 +179,62 @@ async def submit_customer_batch(
     # Insert pre-submit so a crash mid-call still leaves a queued row
     # the customer can see. The idempotency_key column is NULL when
     # no header was sent -- the partial UNIQUE index ignores NULL.
-    async with pool.transaction() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO llm_gateway_batches (
-                account_id, provider, model, status, total_items, idempotency_key
-            ) VALUES (
-                $1, 'anthropic', $2, 'queued', $3, $4
+    #
+    # Codex P1 on PR-D4c: the SELECT above is not atomic with this
+    # INSERT, so two concurrent retries with the same key can both
+    # miss the SELECT and race here. Catch the resulting unique
+    # violation and re-read so the loser of the race still gets the
+    # winner's record back (the contract callers expect from
+    # idempotency).
+    try:
+        async with pool.transaction() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO llm_gateway_batches (
+                    account_id, provider, model, status, total_items, idempotency_key
+                ) VALUES (
+                    $1, 'anthropic', $2, 'queued', $3, $4
+                )
+                RETURNING id, account_id, provider, provider_batch_id, model,
+                          status, total_items, completed_items, failed_items,
+                          error_text, created_at, updated_at, submitted_at,
+                          completed_at, usage_tracked
+                """,
+                account_id,
+                model,
+                len(items),
+                normalized_key,
             )
-            RETURNING id, account_id, provider, provider_batch_id, model,
-                      status, total_items, completed_items, failed_items,
-                      error_text, created_at, updated_at, submitted_at,
-                      completed_at
+    except asyncpg.exceptions.UniqueViolationError:
+        if not normalized_key:
+            # Should not happen -- the only unique constraint is the
+            # idempotency partial index, which excludes NULL keys.
+            raise
+        existing = await pool.fetchrow(
+            """
+            SELECT id, account_id, provider, provider_batch_id, model,
+                   status, total_items, completed_items, failed_items,
+                   error_text, created_at, updated_at, submitted_at,
+                   completed_at, usage_tracked
+            FROM llm_gateway_batches
+            WHERE account_id = $1 AND idempotency_key = $2
             """,
             account_id,
-            model,
-            len(items),
             normalized_key,
         )
+        if existing is None:
+            # Unique-violation but no matching row -- means the
+            # winner committed and rolled back, or some other
+            # column collided. Re-raise so the caller sees the real
+            # 500 instead of a confusing "missing record".
+            raise
+        logger.info(
+            "llm_gateway_batch.submit replay (race) account=%s key=%s id=%s",
+            account_id,
+            normalized_key,
+            existing["id"],
+        )
+        return _row_to_record(existing)
 
     requests = []
     for item in items:
@@ -239,7 +288,7 @@ async def submit_customer_batch(
             RETURNING id, account_id, provider, provider_batch_id, model,
                       status, total_items, completed_items, failed_items,
                       error_text, created_at, updated_at, submitted_at,
-                      completed_at
+                      completed_at, usage_tracked
             """,
             row["id"],
             f"Anthropic batch submit failed: {exc}",
@@ -260,7 +309,7 @@ async def submit_customer_batch(
         RETURNING id, account_id, provider, provider_batch_id, model,
                   status, total_items, completed_items, failed_items,
                   error_text, created_at, updated_at, submitted_at,
-                  completed_at
+                  completed_at, usage_tracked
         """,
         row["id"],
         str(provider_batch_id) if provider_batch_id else None,
@@ -287,7 +336,7 @@ async def get_customer_batch(
         SELECT id, account_id, provider, provider_batch_id, model,
                status, total_items, completed_items, failed_items,
                error_text, created_at, updated_at, submitted_at,
-               completed_at
+               completed_at, usage_tracked
         FROM llm_gateway_batches
         WHERE id = $1 AND account_id = $2
         """,
@@ -315,6 +364,39 @@ async def refresh_customer_batch_status(
     if record is None:
         return None
     if record.status in TERMINAL_STATUSES:
+        # Codex P1 on PR-D4c: a terminal row whose usage write has
+        # not landed yet means the previous attempt failed mid-
+        # iteration and rolled ``usage_tracked`` back to FALSE. We
+        # must retry here -- the only other place that triggers a
+        # write is the non-terminal->terminal transition above, and
+        # that won't fire again. Without this branch, a single
+        # transient SDK error would silently lose the customer's
+        # usage data forever.
+        if (
+            not record.usage_tracked
+            and record.status in ("ended", "canceled", "expired")
+            and record.provider_batch_id
+        ):
+            try:
+                await _persist_batch_usage(
+                    pool,
+                    account_id=account_id,
+                    batch_id=batch_id,
+                    provider_batch_id=record.provider_batch_id,
+                    model=record.model,
+                    api_key=api_key,
+                )
+            except Exception:
+                logger.exception(
+                    "llm_gateway_batch.refresh: usage retry failed "
+                    "account=%s batch=%s",
+                    account_id,
+                    batch_id,
+                )
+            # Re-read so usage_tracked / counts reflect the retry.
+            return await get_customer_batch(
+                pool, account_id=account_id, batch_id=batch_id
+            )
         return record
     if not record.provider_batch_id:
         # Submit failed before persisting provider_batch_id; nothing
@@ -372,7 +454,7 @@ async def refresh_customer_batch_status(
         RETURNING id, account_id, provider, provider_batch_id, model,
                   status, total_items, completed_items, failed_items,
                   error_text, created_at, updated_at, submitted_at,
-                  completed_at
+                  completed_at, usage_tracked
         """,
         batch_id,
         new_status,

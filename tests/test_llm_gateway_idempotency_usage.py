@@ -95,6 +95,26 @@ def test_submit_customer_batch_inserts_idempotency_column():
     assert "idempotency_key" in src.split("INSERT INTO llm_gateway_batches")[1].split("RETURNING")[0]
 
 
+def test_submit_customer_batch_handles_unique_violation_race():
+    """Codex P1 fix: SELECT-then-INSERT is not atomic. Two concurrent
+    retries with the same key can both miss the SELECT and race on
+    the partial UNIQUE index. The loser must re-read and return the
+    winner's record -- otherwise the loser gets a 500 and the
+    idempotency contract is broken precisely in the case it exists
+    to handle."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.submit_customer_batch)
+    # Handler exists.
+    assert "asyncpg.exceptions.UniqueViolationError" in src
+    # Replay path re-reads by (account_id, idempotency_key).
+    assert (
+        "WHERE account_id = $1 AND idempotency_key = $2" in src
+    )
+    # Race-replay log line distinguishes from the normal-replay path.
+    assert 'logger.info(\n            "llm_gateway_batch.submit replay (race)' in src
+
+
 # ---- Router Idempotency-Key header --------------------------------------
 
 
@@ -226,6 +246,34 @@ def test_refresh_does_not_propagate_usage_write_failure():
     # try/except around _persist_batch_usage call.
     assert "try:\n            await _persist_batch_usage(" in src
     assert 'logger.exception(\n                "llm_gateway_batch.refresh: usage write failed' in src
+
+
+def test_refresh_retries_persist_usage_on_terminal_untracked():
+    """Codex P1 fix: a batch can be terminal but still have
+    ``usage_tracked = FALSE`` if a previous _persist_batch_usage
+    rolled back mid-iteration. The early-terminal short-circuit
+    must NOT skip retrying in that case -- otherwise a single
+    transient SDK error permanently loses the customer's usage."""
+    from atlas_brain.services import llm_gateway_batch
+
+    src = inspect.getsource(llm_gateway_batch.refresh_customer_batch_status)
+    # Retry condition explicit.
+    assert "not record.usage_tracked" in src
+    assert 'record.status in ("ended", "canceled", "expired")' in src
+    # Re-read after retry so the caller sees usage_tracked = TRUE.
+    assert "return await get_customer_batch(" in src
+
+
+def test_customer_batch_record_exposes_usage_tracked():
+    """The dataclass must surface ``usage_tracked`` so the refresh
+    path can decide whether to retry. Defaults FALSE so test mocks
+    that don't include the column still construct cleanly."""
+    from atlas_brain.services.llm_gateway_batch import CustomerBatchRecord
+
+    fields = {f.name for f in CustomerBatchRecord.__dataclass_fields__.values()}
+    assert "usage_tracked" in fields
+    field = CustomerBatchRecord.__dataclass_fields__["usage_tracked"]
+    assert field.default is False
 
 
 # ---- Cost helper -------------------------------------------------------
