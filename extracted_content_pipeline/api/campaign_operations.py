@@ -617,6 +617,20 @@ def create_campaign_operations_router(
             llm = await _resolve_optional(llm_provider)
             skills = await _resolve_optional(skills_provider)
             explicit_reasoning_context = await _resolve_optional(reasoning_context_provider)
+            reasoning_context = _generation_reasoning_context(
+                resolved_config,
+                explicit_reasoning_context=explicit_reasoning_context,
+                llm=llm,
+                skills=skills,
+            )
+        except ValueError as exc:
+            await _emit_operation_failure(
+                visibility,
+                "draft_generation",
+                operation_payload,
+                exc,
+            )
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             await _emit_operation_failure(
                 visibility,
@@ -632,12 +646,6 @@ def create_campaign_operations_router(
             operation_payload,
         )
         try:
-            reasoning_context = _generation_reasoning_context(
-                resolved_config,
-                explicit_reasoning_context=explicit_reasoning_context,
-                llm=llm,
-                skills=skills,
-            )
             result = await generate_campaign_drafts_from_postgres(
                 pool,
                 scope=scope,

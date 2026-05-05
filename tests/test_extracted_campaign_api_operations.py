@@ -1120,6 +1120,37 @@ def test_campaign_operations_router_emits_failed_visibility_for_generation_prefl
     ]
 
 
+def test_campaign_operations_router_emits_failed_visibility_for_reasoning_preflight() -> None:
+    visibility = _Visibility()
+
+    response = _client(
+        _Pool(),
+        visibility=visibility,
+        config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True),
+    ).post(
+        "/campaigns/operations/drafts/generate",
+        json={"account_id": "acct_1", "limit": 3},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Campaign reasoning LLM unavailable"
+    assert visibility.events == [
+        (
+            operations_api._OPERATION_FAILED_EVENT,
+            {
+                "operation": "draft_generation",
+                "limit": 3,
+                "target_mode": "vendor_retention",
+                "channel": "email",
+                "channels": [],
+                "account_id": "acct_1",
+                "error_type": "HTTPException",
+                "status_code": 503,
+            },
+        ),
+    ]
+
+
 def test_campaign_operations_router_emits_failed_visibility_for_send_preflight() -> None:
     visibility = _Visibility()
 
