@@ -31,7 +31,11 @@ import httpx
 import jwt as pyjwt
 
 from ...config import settings
-from ...services.campaign_sender import get_campaign_sender
+from ...services.b2b.vendor_briefing_delivery import (
+    build_vendor_briefing_subject,
+    require_vendor_briefing_delivery_configured,
+    send_vendor_briefing_delivery,
+)
 from ...services.b2b.vendor_briefing_ports import (
     align_vendor_intelligence_record_to_scorecard as _align_vendor_intelligence_record_to_scorecard,
     build_llm_messages,
@@ -2686,8 +2690,9 @@ async def send_vendor_briefing(
     briefing_data: dict,
 ) -> dict | None:
     """Send a vendor briefing email via CampaignSender and persist to DB."""
-    cfg = settings.campaign_sequence
-    if not cfg.resend_api_key or not cfg.resend_from_email:
+    try:
+        require_vendor_briefing_delivery_configured()
+    except Exception:
         logger.warning("Resend not configured -- cannot send briefing")
         return None
 
@@ -2703,10 +2708,9 @@ async def send_vendor_briefing(
         suppressed = await is_suppressed(pool, email=to_email)
         if suppressed:
             logger.info("Suppressed briefing to %s (vendor=%s)", to_email, vendor_name)
-            suppressed_subject = (
-                f"Sales Intelligence Briefing: {vendor_name}"
-                if challenger_mode
-                else f"Churn Intelligence Briefing: {vendor_name}"
+            suppressed_subject = build_vendor_briefing_subject(
+                vendor_name,
+                {"challenger_mode": challenger_mode},
             )
             try:
                 await pool.execute(
@@ -2724,41 +2728,19 @@ async def send_vendor_briefing(
                 logger.warning("Failed to persist suppressed record: %s", exc)
             return None
 
-    sender_name = settings.b2b_churn.vendor_briefing_sender_name
-    from_addr = f"{sender_name} <{cfg.resend_from_email}>"
-
-    if briefing_data.get("prospect_mode"):
-        if challenger_mode:
-            subject = f"{vendor_name} -- Accounts In Motion"
-        else:
-            subject = f"{vendor_name} -- Churn Signals Detected"
-    elif briefing_data.get("is_gated_delivery"):
-        if challenger_mode:
-            subject = f"Your {vendor_name} Sales Intelligence Report"
-        else:
-            subject = f"Your {vendor_name} Churn Intelligence Report"
-    else:
-        if challenger_mode:
-            subject = f"Sales Intelligence Briefing: {vendor_name}"
-        else:
-            subject = f"Churn Intelligence Briefing: {vendor_name}"
+    subject = build_vendor_briefing_subject(vendor_name, briefing_data)
 
     resend_id: str | None = None
     status = "sent"
 
     try:
-        sender = get_campaign_sender()
-        result = await sender.send(
-            to=to_email,
-            from_email=from_addr,
+        result = await send_vendor_briefing_delivery(
+            to_email=to_email,
+            vendor_name=vendor_name,
             subject=subject,
-            body=briefing_html,
-            tags=[
-                {"name": "type", "value": "vendor_briefing"},
-                {"name": "vendor", "value": vendor_name},
-            ],
+            briefing_html=briefing_html,
         )
-        resend_id = result.get("id")
+        resend_id = result.provider_message_id
     except Exception as exc:
         logger.warning("Failed to send briefing to %s: %s", to_email, exc)
         status = "failed"
@@ -2821,29 +2803,22 @@ async def send_approved_briefing(briefing_id: str) -> dict[str, Any]:
         return {"error": "No rendered HTML stored for this briefing"}
 
     # Send via CampaignSender
-    cfg = settings.campaign_sequence
-    if not cfg.resend_api_key or not cfg.resend_from_email:
+    try:
+        require_vendor_briefing_delivery_configured()
+    except Exception:
         return {"error": "Resend not configured"}
-
-    sender_name = settings.b2b_churn.vendor_briefing_sender_name
-    from_addr = f"{sender_name} <{cfg.resend_from_email}>"
 
     resend_id: str | None = None
     status = "sent"
 
     try:
-        sender = get_campaign_sender()
-        result = await sender.send(
-            to=to_email,
-            from_email=from_addr,
+        result = await send_vendor_briefing_delivery(
+            to_email=to_email,
+            vendor_name=vendor_name,
             subject=subject,
-            body=html,
-            tags=[
-                {"name": "type", "value": "vendor_briefing"},
-                {"name": "vendor", "value": vendor_name},
-            ],
+            briefing_html=html,
         )
-        resend_id = result.get("id")
+        resend_id = result.provider_message_id
     except Exception as exc:
         logger.warning("Failed to send approved briefing %s: %s", briefing_id, exc)
         status = "failed"
