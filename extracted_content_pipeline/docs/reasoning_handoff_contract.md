@@ -10,9 +10,10 @@ decides multi-hop strategy.
 
 ## Decision
 
-Reasoning generation is host-owned and reaches the product through the
-`CampaignReasoningContextProvider` port in
-`extracted_content_pipeline/campaign_ports.py`.
+Long-running reasoning generation is host-owned and reaches the product through
+the `CampaignReasoningContextProvider` port in
+`extracted_content_pipeline/campaign_ports.py`. Lightweight installs can use
+the packaged single-pass provider described below.
 
 That keeps the package composable:
 
@@ -121,11 +122,27 @@ python scripts/run_extracted_campaign_generation_example.py \
   --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
 ```
 
+## Packaged Single-Pass Provider
+
+`services.single_pass_reasoning_provider.SinglePassCampaignReasoningProvider`
+is the lightweight packaged producer for hosts that do not already have
+reasoning JSON. It implements the same `CampaignReasoningContextProvider`
+Protocol, calls the configured `LLMClient` once per opportunity, uses the
+packaged `digest/b2b_campaign_reasoning_context` prompt, and normalizes the
+JSON response into `CampaignReasoningContext`.
+
+This provider is intentionally narrow. It improves opportunity-level
+specificity, but it does not perform multi-hop graph traversal, falsification,
+semantic caching, entity locking, or long-running synthesis. Hosts that need
+those behaviors should provide their own reasoning adapter or use a separate
+reasoning product.
+
 ## Integration Modes
 
 | Mode | Who produces reasoning? | Content package behavior |
 |---|---|---|
 | Atlas-hosted | Atlas synthesis/compression adapters. | Adapter returns the contract shape above. No direct Atlas imports in product code. |
+| Packaged single-pass | AI Content Ops `SinglePassCampaignReasoningProvider`. | One LLM call per opportunity returns the normalized context shape. No graph state or multi-hop synthesis. |
 | Extracted reasoning product | `extracted_reasoning_core` or a future reasoning-producer package. | Adapter converts reasoning output to `CampaignReasoningContext`. |
 | Buyer-owned reasoning | Customer engine, warehouse job, agent workflow, or CRM scoring layer. | Customer adapter implements the provider port. |
 | No reasoning | No provider configured. | Generator uses embedded opportunity fields only; quality is lower but standalone operation remains valid. |

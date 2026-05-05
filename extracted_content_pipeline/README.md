@@ -155,6 +155,13 @@ rows by target id, company, email, or vendor and feeds the normalized
 `CampaignReasoningContextProvider` port documented in
 `docs/reasoning_handoff_contract.md`.
 
+For lightweight installs that do not already have reasoning JSON, use
+`services.single_pass_reasoning_provider.SinglePassCampaignReasoningProvider`.
+It calls the configured `LLMClient` once per opportunity with the packaged
+`digest/b2b_campaign_reasoning_context` prompt and returns the same normalized
+context shape. This is not a multi-hop graph reasoner; it is the small packaged
+Tier 1 path for "source row in, reasoned draft out."
+
 Use host-provided prompt contracts by pointing at a markdown skill directory:
 
 ```bash

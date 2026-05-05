@@ -217,6 +217,9 @@
       "target": "extracted_content_pipeline/campaign_reasoning_data.py"
     },
     {
+      "target": "extracted_content_pipeline/services/single_pass_reasoning_provider.py"
+    },
+    {
       "target": "extracted_content_pipeline/storage/migration_runner.py"
     },
     {
@@ -230,6 +233,9 @@
     },
     {
       "target": "extracted_content_pipeline/skills/registry.py"
+    },
+    {
+      "target": "extracted_content_pipeline/skills/digest/b2b_campaign_reasoning_context.md"
     },
     {
       "target": "extracted_content_pipeline/settings.py"
