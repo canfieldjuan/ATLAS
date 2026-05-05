@@ -177,6 +177,8 @@ def _payload_limit(
     payload: Mapping[str, Any],
     key: str,
     default: int,
+    *,
+    max_value: int | None = None,
 ) -> int:
     raw_value = payload.get(key)
     if isinstance(raw_value, bool):
@@ -189,6 +191,11 @@ def _payload_limit(
         raise HTTPException(status_code=400, detail=f"{key} must be an integer") from exc
     if value < 0:
         raise HTTPException(status_code=400, detail=f"{key} must be non-negative")
+    if max_value is not None and value > max_value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{key} must be less than or equal to {max_value}",
+        )
     return value
 
 
@@ -305,6 +312,7 @@ def create_seller_campaign_router(
                 payload,
                 "limit",
                 resolved_config.default_category_refresh_limit,
+                max_value=resolved_config.max_limit,
             ),
             reviews_table=resolved_config.category_reviews_table,
             metadata_table=resolved_config.category_metadata_table,
@@ -335,6 +343,7 @@ def create_seller_campaign_router(
                 payload,
                 "limit",
                 resolved_config.default_opportunity_limit,
+                max_value=resolved_config.max_limit,
             ),
             "replace_existing": _payload_bool(payload, "replace_existing"),
         }

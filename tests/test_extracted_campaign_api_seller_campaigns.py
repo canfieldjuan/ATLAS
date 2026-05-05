@@ -589,6 +589,48 @@ def test_seller_campaign_router_rejects_float_numeric_payload(monkeypatch) -> No
     assert calls == []
 
 
+def test_seller_campaign_router_rejects_refresh_limit_above_configured_cap(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _refresh(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(refreshed=1)
+
+    monkeypatch.setattr(seller_api, "refresh_seller_category_intelligence", _refresh)
+
+    response = _client(_Pool(), config=SellerCampaignApiConfig(max_limit=60)).post(
+        "/seller/intelligence/refresh",
+        json={"category": "supplements", "limit": 61},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "limit must be less than or equal to 60"
+    assert calls == []
+
+
+def test_seller_campaign_router_rejects_prepare_limit_above_configured_cap(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    async def _prepare(received_pool, **kwargs):
+        calls.append((received_pool, kwargs))
+        return _Result(prepared=1)
+
+    monkeypatch.setattr(seller_api, "prepare_seller_campaign_opportunities", _prepare)
+
+    response = _client(_Pool(), config=SellerCampaignApiConfig(max_limit=60)).post(
+        "/seller/opportunities/prepare",
+        json={"category": "supplements", "limit": 61},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "limit must be less than or equal to 60"
+    assert calls == []
+
+
 def test_seller_campaign_router_sanitizes_refresh_errors(monkeypatch) -> None:
     async def _refresh(_pool, **_kwargs):
         return _Result(
