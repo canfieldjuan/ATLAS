@@ -34,7 +34,7 @@ def _load_payload(path: Path, *, file_format: str) -> dict[str, Any]:
         return loaded.as_payload()
 
     data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
+    if isinstance(data, dict) and isinstance(data.get("opportunities"), list):
         return data
     loaded = load_campaign_opportunities_from_file(path, file_format="json")
     return loaded.as_payload()

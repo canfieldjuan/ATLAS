@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -73,6 +74,38 @@ def test_host_smoke_cli_accepts_customer_csv_export() -> None:
             str(EXAMPLE_CSV),
             "--format",
             "csv",
+            "--limit",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "AI Content Ops host smoke passed" in completed.stdout
+    assert "generated=2" in completed.stdout
+
+
+def test_host_smoke_cli_accepts_single_object_json_export(tmp_path) -> None:
+    payload_path = tmp_path / "single_opportunity.json"
+    payload_path.write_text(
+        json.dumps({
+            "company": "Acme Logistics",
+            "vendor": "HubSpot",
+            "email": "ops@example.com",
+            "title": "VP Revenue Operations",
+            "pain_category": "pricing pressure",
+        }),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(payload_path),
+            "--format",
+            "json",
             "--limit",
             "1",
         ],
