@@ -56,3 +56,16 @@ def test_load_reasoning_pack_handles_pack_with_no_metadata() -> None:
 
     assert pack is not None
     assert pack.policies == {}
+
+
+def test_load_reasoning_pack_uses_proper_semver_not_lexicographic_ordering() -> None:
+    """Regression: 1.10.0 must outrank 1.9.0. Lexicographic ordering would invert this."""
+
+    register_pack(Pack(name="semver_test", version="1.9.0", prompts={"k": "nine"}))
+    register_pack(Pack(name="semver_test", version="1.10.0", prompts={"k": "ten"}))
+
+    pack = load_reasoning_pack("semver_test")
+
+    assert pack is not None
+    assert pack.version == "1.10.0"
+    assert pack.prompts == {"k": "ten"}
