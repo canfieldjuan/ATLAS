@@ -18,14 +18,13 @@ with its own data flow.
   accept a known quality penalty from running without reasoning.
 - The standalone debt audit reports **0 atlas_brain runtime imports**.
 - The reasoning *consumer* surface is complete and clean.
-- The extracted package now includes a Tier 1 opportunity-level reasoning
-  producer: `SinglePassCampaignReasoningProvider`. It does not replace the
-  heavier reasoning-core producer stubs; `extracted_reasoning_core` still has
-  four producer-shaped functions (`run_reasoning`, `continue_reasoning`,
-  `check_falsification`, `build_narrative_plan`) that raise
-  `NotImplementedError`.
-- No branch in flight wires `extracted_reasoning_core` into the
-  content-pipeline generator.
+- The extracted package includes two packaged reasoning providers:
+  `SinglePassCampaignReasoningProvider` for Tier 1 opportunity reasoning and
+  `MultiPassCampaignReasoningProvider` for extracted reasoning-core
+  orchestration through the same campaign context port.
+- The campaign generator still does not import reasoning internals directly.
+  CLIs and hosted APIs opt into providers and pass the normalized
+  `CampaignReasoningContextProvider` dependency into generation.
 
 ## What works today end-to-end without atlas_brain
 
@@ -82,7 +81,7 @@ CLI inventory:
 |---|---|---|
 | `CampaignReasoningContextProvider` port (`campaign_ports.py:171-180`) | Optional Protocol the host implements to inject reasoning into generation | Defined and working; reference adapter `FileCampaignReasoningContextProvider` covers the file-backed case |
 | `extracted_reasoning_core` evaluators (`api.py`) | Score / gate / compute over pre-existing reasoning state. `score_archetypes`, `evaluate_evidence`, `build_temporal_evidence` | Implemented and exported |
-| `extracted_reasoning_core` producers (`api.py`) | Generate reasoning from raw inputs. `run_reasoning`, `continue_reasoning`, `check_falsification`, `build_narrative_plan` | All four raise `NotImplementedError` |
+| `extracted_reasoning_core` producers (`api.py`) | Generate reasoning from raw inputs. `run_reasoning`, `continue_reasoning`, `check_falsification`, `build_narrative_plan` | Implemented and callable through the multi-pass provider |
 
 And the wiring between the layers:
 
@@ -91,8 +90,8 @@ And the wiring between the layers:
 | `extracted_content_pipeline.reasoning.archetypes` re-exports `extracted_reasoning_core.archetypes` | Done |
 | `extracted_content_pipeline.reasoning.wedge_registry` re-exports `extracted_reasoning_core.api` | Done |
 | `campaign_generation.py` actually calls those evaluators | Zero call sites |
-| Adapter that packages `extracted_reasoning_core` output into a `CampaignReasoningContextProvider` instance | Does not exist |
-| Branch in flight building any of the above | None — `git branch -a \| grep -i reason` returns nothing |
+| Adapter that packages `extracted_reasoning_core` output into a `CampaignReasoningContextProvider` instance | Done: `MultiPassCampaignReasoningProvider` |
+| CLI access to the multi-pass adapter | Done: `--multi-pass-reasoning` on offline and Postgres generation runners |
 
 ## What the generator expects (the input shape)
 
@@ -123,6 +122,7 @@ normalize into this shape. Reference example payload:
 | `reasoning_context = None` (default) | Generator falls back to `normalize_campaign_reasoning_context` over the opportunity row itself; only fields embedded in the source data flow into the prompt | Lowest. Drafts are generic. |
 | `FileCampaignReasoningContextProvider` (file-backed) | Loads pre-baked reasoning JSON keyed by target_id / company / email / vendor; normalized and threaded into the prompt | High when the source file is well-built. Quality scales with effort the host put into producing the JSON. |
 | `SinglePassCampaignReasoningProvider` | Calls the configured LLM once per opportunity with the packaged reasoning prompt; normalized and threaded into the campaign prompt | Medium. Better than no reasoning, but no multi-hop planning, cache, or falsification. |
+| `MultiPassCampaignReasoningProvider` | Calls extracted reasoning-core `run_reasoning`, optionally chains opportunity events through `continue_reasoning`, and normalizes the final result into campaign context | Higher. Best for hosts that want multi-step per-opportunity reasoning without owning a separate provider. |
 | Custom `CampaignReasoningContextProvider` (e.g. real producer) | Provider is called once per opportunity; output normalized and threaded in | High. This is the architecturally intended path. |
 
 ## What "add a source and reason over it" costs, by tier
@@ -144,20 +144,19 @@ Trade-off: no multi-step planning, no falsification, no cache. If the
 LLM gets it wrong on the first call, the campaign draft inherits the
 mistake.
 
-### Tier 2: Implement `extracted_reasoning_core` producer stubs
+### Tier 2: Use extracted reasoning-core multi-pass provider
 
-- ~2-3 weeks of work, ~2,000 LOC
-- Fill in `run_reasoning`, `continue_reasoning`, `check_falsification`,
-  `build_narrative_plan` in `extracted_reasoning_core/api.py`
-- Plus an adapter that packages those outputs into a
-  `CampaignReasoningContextProvider`
+- Implemented in
+  `extracted_content_pipeline/services/multi_pass_reasoning_provider.py`
+- Calls `run_reasoning`, can chain `continue_reasoning` over
+  opportunity events, and can surface falsification / validation / narrative
+  planning when configured
+- Exposed through hosted operations config and the generation CLIs:
+  `--multi-pass-reasoning`
 - Multi-step LLM with state, falsification gating, semantic cache
-- This is what the architecture intended when the producer stubs were
-  defined
 
-Trade-off: real reasoning, but you're committing to ~3 weeks of work
-before the primary product ships meaningfully better drafts than the
-single-pass version.
+Trade-off: better reasoning, but higher LLM spend and more host policy to tune
+than the single-pass path.
 
 ### Tier 3: Extract the atlas_brain producer
 
@@ -176,20 +175,17 @@ Not recommended. Captured here for completeness; the cost-benefit on
 Tier 3 only makes sense if the goal is to fold the reasoning engine
 into the content product as a single SKU.
 
-## Decision points after Tier 1
+## Remaining decision points
 
-Tier 1 is now implemented for B2B campaign opportunities. Remaining choices are
-about deeper reasoning, not basic "source row in, reasoned draft out":
+Tier 1 and Tier 2 are implemented for B2B campaign opportunities. Remaining
+choices are about source coverage and product promise, not basic wiring:
 
-1. **Tier 2 scope.** Decide whether to fill the four
-   `extracted_reasoning_core` producer stubs for multi-pass planning,
-   falsification, and cache-aware reasoning.
-2. **Additional source formats.** CRM rows are covered through
+1. **Additional source formats.** CRM rows are covered through
    `campaign_opportunities`; review/complaint data, episode transcripts, and
    sales call transcripts need their own schema-aware adapters.
-3. **Product promise.** If single-pass meets the sold promise, AI Content Ops is
-   operational. If the promise is "multi-pass refinement over your data," Tier
-   2 is the floor.
+2. **Product promise.** If single-pass meets the sold promise, AI Content Ops is
+   operational. If the promise is "multi-pass refinement over your data," the
+   multi-pass provider is the floor.
 
 ## Status verdict
 
@@ -202,12 +198,12 @@ about deeper reasoning, not basic "source row in, reasoned draft out":
 | Buyer can review and export drafts | Yes |
 | Buyer can supply pre-baked reasoning as JSON | Yes |
 | Buyer can supply a custom Python reasoning provider | Yes (port is defined) |
-| The product itself produces reasoning from a source | Yes, single-pass opportunity-level reasoning only |
-| `extracted_reasoning_core` produces reasoning from a source | No (4 stubs raise NotImplementedError) |
+| The product itself produces reasoning from a source | Yes, single-pass or multi-pass opportunity-level reasoning |
+| `extracted_reasoning_core` produces reasoning from a source | Yes, through the multi-pass provider |
 
-The remaining structural gap is multi-step reasoning. Tier 1 now lands the
-buyer at "source in, reasoned drafts out"; Tier 2 is still required for
-multi-pass planning, falsification, cache, and deeper reasoning state.
+The remaining structural gap is source breadth, not reasoning-provider wiring.
+CRM/opportunity rows are operational; richer source types need their own
+schema-aware adapters.
 
 ## References
 

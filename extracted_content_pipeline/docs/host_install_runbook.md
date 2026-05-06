@@ -225,9 +225,24 @@ Use `--reasoning-skill-name`, `--reasoning-max-tokens`, and
 `--reasoning-temperature` to tune the provider, or `--skills-root` to override
 the packaged reasoning prompt.
 
+For multi-step reasoning backed by `extracted_reasoning_core`, use the
+multi-pass provider. It uses the product LLM port and can chain opportunity
+events through `continue_reasoning` when the opportunity row includes an
+`events` array:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --multi-pass-reasoning \
+  --multi-pass-depth L3
+```
+
+Use `--multi-pass-pack-name`, `--multi-pass-max-continuations`, and
+`--multi-pass-disable-chain` to tune the provider for host budget and policy.
+
 See `reasoning_handoff_contract.md` for the accepted shape and the no-direct-
-import rule. AI Content Ops consumes compressed reasoning; it does not import a
-reasoning engine.
+import rule. AI Content Ops consumes compressed reasoning through a provider;
+the provider may be file-backed, single-pass, multi-pass, or host-owned.
 
 ## Step 6: Add Optional Prompt Overrides
 
@@ -538,6 +553,11 @@ draft generation route then builds `SinglePassCampaignReasoningProvider` from
 the injected LLM and skill providers before calling the Postgres generation
 runner. Explicit `reasoning_context_provider` injection still takes precedence.
 
+For hosted installs that want extracted reasoning-core orchestration, set
+`generation_multi_pass_reasoning=True`. The route builds
+`MultiPassCampaignReasoningProvider` from the injected LLM provider. Explicit
+`reasoning_context_provider` injection still takes precedence.
+
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/campaigns/operations/status` | Report database availability, provider presence, feature readiness, and configured limits for admin dashboards. |
@@ -595,6 +615,7 @@ DELETE FROM campaign_opportunities WHERE account_id = 'acct_123';
   path yet. Host apps inject auth dependencies into the packaged routers.
 - The runbook covers campaign opportunity generation, not blog generation or
   vendor briefing delivery.
-- Long-running reasoning production remains host-owned. The product includes a
-  single-pass opportunity-level provider for lightweight installs, but it does
-  not compute graph state or multi-hop synthesis.
+- Long-running, persistent reasoning production remains host-owned. The product
+  includes single-pass and extracted reasoning-core multi-pass providers for
+  per-opportunity generation, but it does not own a background evidence
+  collection or graph-state service.

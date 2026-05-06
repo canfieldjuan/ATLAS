@@ -137,13 +137,24 @@ semantic caching, entity locking, or long-running synthesis. Hosts that need
 those behaviors should provide their own reasoning adapter or use a separate
 reasoning product.
 
+## Packaged Multi-Pass Provider
+
+`services.multi_pass_reasoning_provider.MultiPassCampaignReasoningProvider`
+is the bridge to `extracted_reasoning_core`. It implements the same
+`CampaignReasoningContextProvider` Protocol, calls `run_reasoning`, optionally
+chains opportunity events through `continue_reasoning`, and normalizes the
+result into campaign context. The provider is opt-in for hosts that inject an
+LLM port and want extracted reasoning-core orchestration without changing the
+campaign generator.
+
 ## Integration Modes
 
 | Mode | Who produces reasoning? | Content package behavior |
 |---|---|---|
 | Atlas-hosted | Atlas synthesis/compression adapters. | Adapter returns the contract shape above. No direct Atlas imports in product code. |
 | Packaged single-pass | AI Content Ops `SinglePassCampaignReasoningProvider`. | One LLM call per opportunity returns the normalized context shape. No graph state or multi-hop synthesis. |
-| Extracted reasoning product | `extracted_reasoning_core` or a future reasoning-producer package. | Adapter converts reasoning output to `CampaignReasoningContext`. |
+| Packaged multi-pass | AI Content Ops `MultiPassCampaignReasoningProvider` over `extracted_reasoning_core`. | Multi-step reasoning output is converted to `CampaignReasoningContext`. |
+| External reasoning product | Future reasoning-producer package. | Adapter converts reasoning output to `CampaignReasoningContext`. |
 | Buyer-owned reasoning | Customer engine, warehouse job, agent workflow, or CRM scoring layer. | Customer adapter implements the provider port. |
 | No reasoning | No provider configured. | Generator uses embedded opportunity fields only; quality is lower but standalone operation remains valid. |
 
@@ -156,16 +167,17 @@ AI Content Ops may own:
 - Sequence progression, suppression, audit, analytics, webhooks, and send
   orchestration.
 - Prompt-visible reasoning context normalization.
+- Thin provider bridges over explicit reasoning ports.
 - Metadata persistence of the context it consumed.
 
 AI Content Ops must not own:
 
-- Multi-hop reasoning graph traversal.
+- Owning multi-hop reasoning graph traversal internals.
 - Evidence-pool compression.
 - Cross-vendor synthesis.
 - Entity locks, event bus orchestration, or reasoning-agent state.
-- Domain-specific reasoning producer internals from Atlas or the reasoning
-  core product.
+- Domain-specific reasoning producer internals from Atlas or any reasoning
+  product.
 
 ## Fit By Content Type
 

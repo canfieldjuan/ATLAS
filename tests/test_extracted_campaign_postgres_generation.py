@@ -15,6 +15,9 @@ from extracted_content_pipeline.campaign_visibility import read_jsonl_visibility
 from extracted_content_pipeline.services.single_pass_reasoning_provider import (
     SinglePassCampaignReasoningProvider,
 )
+from extracted_content_pipeline.services.multi_pass_reasoning_provider import (
+    MultiPassCampaignReasoningProvider,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -382,6 +385,36 @@ def test_postgres_runner_cli_wires_single_pass_reasoning(monkeypatch, tmp_path) 
     assert overrides["skills"] is skills
 
 
+def test_postgres_runner_cli_wires_multi_pass_reasoning(monkeypatch) -> None:
+    postgres_cli = _load_postgres_cli_module()
+    llm = _LLM()
+
+    monkeypatch.setattr(postgres_cli, "create_pipeline_llm_client", lambda: llm)
+
+    args = postgres_cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--multi-pass-reasoning",
+        "--multi-pass-pack-name",
+        "campaign/content",
+        "--multi-pass-depth",
+        "L3",
+        "--multi-pass-max-continuations",
+        "2",
+        "--multi-pass-disable-chain",
+    ])
+    overrides = postgres_cli._dependency_overrides(args)
+
+    provider = overrides["reasoning_context"]
+    assert isinstance(provider, MultiPassCampaignReasoningProvider)
+    assert provider._ports.llm is llm
+    assert provider._config.pack_name == "campaign/content"
+    assert provider._config.default_depth == "L3"
+    assert provider._config.max_continuations == 2
+    assert provider._config.enable_multi_pass is False
+    assert overrides["llm"] is llm
+
+
 def test_postgres_runner_cli_rejects_conflicting_reasoning_modes(tmp_path) -> None:
     postgres_cli = _load_postgres_cli_module()
     reasoning_path = tmp_path / "reasoning.json"
@@ -407,6 +440,20 @@ def test_postgres_runner_cli_rejects_offline_single_pass_reasoning() -> None:
         "--llm",
         "offline",
         "--single-pass-reasoning",
+    ])
+
+    with pytest.raises(SystemExit, match="requires --llm pipeline"):
+        postgres_cli._dependency_overrides(args)
+
+
+def test_postgres_runner_cli_rejects_offline_multi_pass_reasoning() -> None:
+    postgres_cli = _load_postgres_cli_module()
+    args = postgres_cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--llm",
+        "offline",
+        "--multi-pass-reasoning",
     ])
 
     with pytest.raises(SystemExit, match="requires --llm pipeline"):

@@ -19,6 +19,9 @@ from extracted_content_pipeline.campaign_reasoning_data import (
 from extracted_content_pipeline.services.single_pass_reasoning_provider import (
     SinglePassCampaignReasoningProvider,
 )
+from extracted_content_pipeline.services.multi_pass_reasoning_provider import (
+    MultiPassCampaignReasoningProvider,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -339,6 +342,42 @@ def test_campaign_generation_example_cli_wires_single_pass_reasoning(
     assert overrides["skills"] is skills
 
 
+def test_campaign_generation_example_cli_wires_multi_pass_reasoning(
+    monkeypatch,
+) -> None:
+    example_cli = _load_example_cli_module()
+    llm = _InjectedLLM()
+
+    monkeypatch.setattr(
+        "extracted_content_pipeline.campaign_llm_client.create_pipeline_llm_client",
+        lambda: llm,
+    )
+
+    args = example_cli._parse_args([
+        str(EXAMPLE_PAYLOAD),
+        "--llm",
+        "pipeline",
+        "--multi-pass-reasoning",
+        "--multi-pass-pack-name",
+        "campaign/content",
+        "--multi-pass-depth",
+        "L3",
+        "--multi-pass-max-continuations",
+        "2",
+        "--multi-pass-disable-chain",
+    ])
+    overrides = example_cli._dependency_overrides(args)
+
+    provider = overrides["reasoning_context"]
+    assert isinstance(provider, MultiPassCampaignReasoningProvider)
+    assert provider._ports.llm is llm
+    assert provider._config.pack_name == "campaign/content"
+    assert provider._config.default_depth == "L3"
+    assert provider._config.max_continuations == 2
+    assert provider._config.enable_multi_pass is False
+    assert overrides["llm"] is llm
+
+
 def test_campaign_generation_example_cli_rejects_conflicting_reasoning_modes(
     tmp_path,
 ) -> None:
@@ -366,6 +405,19 @@ def test_campaign_generation_example_cli_rejects_offline_single_pass_reasoning()
         "--llm",
         "offline",
         "--single-pass-reasoning",
+    ])
+
+    with pytest.raises(SystemExit, match="requires --llm pipeline"):
+        example_cli._dependency_overrides(args)
+
+
+def test_campaign_generation_example_cli_rejects_offline_multi_pass_reasoning() -> None:
+    example_cli = _load_example_cli_module()
+    args = example_cli._parse_args([
+        str(EXAMPLE_PAYLOAD),
+        "--llm",
+        "offline",
+        "--multi-pass-reasoning",
     ])
 
     with pytest.raises(SystemExit, match="requires --llm pipeline"):
