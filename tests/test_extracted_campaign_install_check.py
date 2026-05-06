@@ -98,6 +98,48 @@ def test_send_profile_without_sender_defaults_to_resend_checks(monkeypatch) -> N
     assert errors == ["resend_api_key", "from_email"]
 
 
+def test_send_profile_without_sender_honors_campaign_sender_env(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(install_check, "find_spec", _module_present)
+
+    report = check_campaign_install(
+        environ={
+            "EXTRACTED_DATABASE_URL": "postgres://example",
+            "EXTRACTED_CAMPAIGN_SENDER_TYPE": "ses",
+            "EXTRACTED_CAMPAIGN_RESEND_FROM_EMAIL": "sales@example.com",
+        },
+        profiles=("send",),
+    )
+
+    check_names = [check.name for check in report.checks]
+    assert report.sender == "ses"
+    assert "resend_api_key" not in check_names
+    assert "boto3" in check_names
+    assert report.passed is True
+
+
+def test_send_profile_without_sender_honors_sequence_sender_env(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(install_check, "find_spec", _module_present)
+
+    report = check_campaign_install(
+        environ={
+            "EXTRACTED_DATABASE_URL": "postgres://example",
+            "EXTRACTED_CAMPAIGN_SEQUENCE_SENDER_TYPE": "ses",
+            "EXTRACTED_CAMPAIGN_FROM_EMAIL": "sales@example.com",
+        },
+        profiles=("send",),
+    )
+
+    check_names = [check.name for check in report.checks]
+    assert report.sender == "ses"
+    assert "resend_api_key" not in check_names
+    assert "boto3" in check_names
+    assert report.passed is True
+
+
 def test_send_profile_explicit_none_preserves_provider_skipped_warning(
     monkeypatch,
 ) -> None:

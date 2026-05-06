@@ -36,6 +36,10 @@ FROM_EMAIL_ENV = (
     "EXTRACTED_SES_FROM_EMAIL",
 )
 SES_FROM_EMAIL_ENV = FROM_EMAIL_ENV
+SENDER_PROVIDER_ENV = (
+    "EXTRACTED_CAMPAIGN_SENDER_TYPE",
+    "EXTRACTED_CAMPAIGN_SEQUENCE_SENDER_TYPE",
+)
 SEQUENCE_FROM_EMAIL_ENV = (
     "EXTRACTED_CAMPAIGN_SEQUENCE_FROM_EMAIL",
     "EXTRACTED_CAMPAIGN_FROM_EMAIL",
@@ -124,7 +128,7 @@ def check_campaign_install(
     sender_was_omitted = sender is None or not str(sender).strip()
     normalized_sender = _normalize_sender(sender)
     if "send" in normalized_profiles and sender_was_omitted:
-        normalized_sender = "resend"
+        normalized_sender = _default_sender_from_env(env)
     checks: list[InstallCheck] = [
         _module_check("product_package", "extracted_content_pipeline", required=True),
     ]
@@ -167,6 +171,21 @@ def _normalize_sender(sender: str) -> SenderName:
     if normalized in {"resend", "ses"}:
         return normalized  # type: ignore[return-value]
     raise ValueError(f"Unsupported sender: {sender!r}")
+
+
+def _default_sender_from_env(env: Mapping[str, str]) -> SenderName:
+    for name in SENDER_PROVIDER_ENV:
+        value = str(env.get(name) or "").strip()
+        if value:
+            return _normalize_provider_sender(value, source=name)
+    return "resend"
+
+
+def _normalize_provider_sender(value: str, *, source: str) -> SenderName:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"resend", "ses"}:
+        return normalized  # type: ignore[return-value]
+    raise ValueError(f"Unsupported sender provider in {source}: {value!r}")
 
 
 def _requires_database(profiles: Sequence[str]) -> bool:
