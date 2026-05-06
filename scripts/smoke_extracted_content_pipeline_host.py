@@ -74,8 +74,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--min-drafts",
         type=int,
-        default=1,
-        help="Minimum generated drafts required for a passing smoke test.",
+        help=(
+            "Minimum generated drafts required for a passing smoke test. "
+            "Defaults to limit multiplied by selected channel count."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -107,9 +109,14 @@ async def _main() -> int:
         for item in str(args.channels or "").split(",")
         if item.strip()
     ]
+    min_drafts = (
+        int(args.min_drafts)
+        if args.min_drafts is not None
+        else int(args.limit) * len(payload["channels"])
+    )
 
     result = await generate_campaign_drafts_from_payload(payload)
-    errors = _draft_errors(result, min_drafts=int(args.min_drafts))
+    errors = _draft_errors(result, min_drafts=min_drafts)
     if errors:
         print("AI Content Ops host smoke failed:")
         for error in errors:

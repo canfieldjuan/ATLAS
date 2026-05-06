@@ -11,6 +11,7 @@ CLI = ROOT / "scripts/smoke_extracted_content_pipeline_host.py"
 EXAMPLE_PAYLOAD = (
     ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.json"
 )
+EXAMPLE_CSV = ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.csv"
 
 
 def _load_smoke_module():
@@ -44,6 +45,44 @@ def test_host_smoke_cli_generates_offline_draft() -> None:
     assert "AI Content Ops host smoke passed" in completed.stdout
     assert "generated=2" in completed.stdout
     assert "model=offline-deterministic" in completed.stdout
+
+
+def test_host_smoke_cli_default_requires_both_default_channels() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(EXAMPLE_PAYLOAD),
+            "--limit",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "AI Content Ops host smoke passed" in completed.stdout
+    assert "generated=2" in completed.stdout
+
+
+def test_host_smoke_cli_accepts_customer_csv_export() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(EXAMPLE_CSV),
+            "--format",
+            "csv",
+            "--limit",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "AI Content Ops host smoke passed" in completed.stdout
+    assert "generated=2" in completed.stdout
 
 
 def test_host_smoke_cli_fails_when_min_drafts_not_met() -> None:
