@@ -458,3 +458,30 @@ def test_postgres_runner_cli_rejects_offline_multi_pass_reasoning() -> None:
 
     with pytest.raises(SystemExit, match="requires --llm pipeline"):
         postgres_cli._dependency_overrides(args)
+
+
+def test_postgres_runner_cli_rejects_invalid_multi_pass_depth() -> None:
+    postgres_cli = _load_postgres_cli_module()
+
+    with pytest.raises(SystemExit):
+        postgres_cli._parse_args([
+            "--database-url",
+            "postgres://example",
+            "--multi-pass-reasoning",
+            "--multi-pass-depth",
+            "L6",
+        ])
+
+
+def test_postgres_runner_cli_rejects_negative_multi_pass_continuations() -> None:
+    postgres_cli = _load_postgres_cli_module()
+    args = postgres_cli._parse_args([
+        "--database-url",
+        "postgres://example",
+        "--multi-pass-reasoning",
+        "--multi-pass-max-continuations",
+        "-1",
+    ])
+
+    with pytest.raises(SystemExit, match="must be >= 0"):
+        postgres_cli._dependency_overrides(args)

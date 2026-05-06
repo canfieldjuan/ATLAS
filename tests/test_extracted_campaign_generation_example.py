@@ -424,6 +424,33 @@ def test_campaign_generation_example_cli_rejects_offline_multi_pass_reasoning() 
         example_cli._dependency_overrides(args)
 
 
+def test_campaign_generation_example_cli_rejects_invalid_multi_pass_depth() -> None:
+    example_cli = _load_example_cli_module()
+
+    with pytest.raises(SystemExit):
+        example_cli._parse_args([
+            str(EXAMPLE_PAYLOAD),
+            "--multi-pass-reasoning",
+            "--multi-pass-depth",
+            "L6",
+        ])
+
+
+def test_campaign_generation_example_cli_rejects_negative_multi_pass_continuations() -> None:
+    example_cli = _load_example_cli_module()
+    args = example_cli._parse_args([
+        str(EXAMPLE_PAYLOAD),
+        "--llm",
+        "pipeline",
+        "--multi-pass-reasoning",
+        "--multi-pass-max-continuations",
+        "-1",
+    ])
+
+    with pytest.raises(SystemExit, match="must be >= 0"):
+        example_cli._dependency_overrides(args)
+
+
 @pytest.mark.asyncio
 async def test_example_accepts_provider_port_loader(tmp_path) -> None:
     reasoning_path = tmp_path / "reasoning_port.json"

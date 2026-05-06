@@ -121,6 +121,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--multi-pass-depth",
+        choices=("L1", "L2", "L3", "L4", "L5"),
         default=DEFAULT_MULTI_PASS_CONFIG.default_depth,
         help="Reasoning depth for --multi-pass-reasoning.",
     )
@@ -203,6 +204,8 @@ def _validate_reasoning_args(args: argparse.Namespace) -> None:
         raise SystemExit(
             "reasoning requires --llm pipeline"
         )
+    if args.multi_pass_max_continuations < 0:
+        raise SystemExit("--multi-pass-max-continuations must be >= 0")
 
 
 def _single_pass_config_from_args(args: argparse.Namespace) -> SinglePassReasoningConfig:

@@ -122,7 +122,7 @@ normalize into this shape. Reference example payload:
 | `reasoning_context = None` (default) | Generator falls back to `normalize_campaign_reasoning_context` over the opportunity row itself; only fields embedded in the source data flow into the prompt | Lowest. Drafts are generic. |
 | `FileCampaignReasoningContextProvider` (file-backed) | Loads pre-baked reasoning JSON keyed by target_id / company / email / vendor; normalized and threaded into the prompt | High when the source file is well-built. Quality scales with effort the host put into producing the JSON. |
 | `SinglePassCampaignReasoningProvider` | Calls the configured LLM once per opportunity with the packaged reasoning prompt; normalized and threaded into the campaign prompt | Medium. Better than no reasoning, but no multi-hop planning, cache, or falsification. |
-| `MultiPassCampaignReasoningProvider` | Calls extracted reasoning-core `run_reasoning`, optionally chains opportunity events through `continue_reasoning`, and normalizes the final result into campaign context | Higher. Best for hosts that want multi-step per-opportunity reasoning without owning a separate provider. |
+| `MultiPassCampaignReasoningProvider` | Calls extracted reasoning-core `run_reasoning`, optionally chains opportunity events through `continue_reasoning`, and normalizes the final result into campaign context | Higher. Best for hosts that want multi-step per-opportunity reasoning without owning a separate provider. The CLI seam does not configure cache or falsification policy. |
 | Custom `CampaignReasoningContextProvider` (e.g. real producer) | Provider is called once per opportunity; output normalized and threaded in | High. This is the architecturally intended path. |
 
 ## What "add a source and reason over it" costs, by tier
@@ -149,11 +149,14 @@ mistake.
 - Implemented in
   `extracted_content_pipeline/services/multi_pass_reasoning_provider.py`
 - Calls `run_reasoning`, can chain `continue_reasoning` over
-  opportunity events, and can surface falsification / validation / narrative
-  planning when configured
+  opportunity events, and normalizes the final result into campaign context
 - Exposed through hosted operations config and the generation CLIs:
   `--multi-pass-reasoning`
-- Multi-step LLM with state, falsification gating, semantic cache
+- Falsification, output validation, and narrative planning require a
+  host-constructed provider config; the CLI seam does not expose those policy
+  objects.
+- Semantic cache is not part of this CLI seam because the runner constructs
+  `ReasoningPorts(llm=llm)` only.
 
 Trade-off: better reasoning, but higher LLM spend and more host policy to tune
 than the single-pass path.
