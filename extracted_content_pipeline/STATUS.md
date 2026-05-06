@@ -123,6 +123,9 @@
 - `scripts/read_extracted_campaign_visibility.py` gives lightweight worker
   installs a read-only way to filter and inspect JSONL operation audit trails
   without mounting the hosted operations router.
+- `scripts/check_extracted_content_install.py` gives host installs a read-only
+  readiness check for local env/import prerequisites before opening database,
+  sender, webhook, or LLM provider handles.
 - Small task utility helpers are product-owned rather than Atlas-synced:
   `_execution_progress`, `_google_news`, `_blog_ts`, `_blog_deploy`, and
   `_b2b_batch_utils`, and `_blog_matching`.

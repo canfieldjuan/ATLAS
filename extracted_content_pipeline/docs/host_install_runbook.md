@@ -52,6 +52,19 @@ If `EXTRACTED_DATABASE_URL` is not set, the migration, import, and generation
 commands fall back to `DATABASE_URL`. Use `--database-url` when the host app
 keeps AI Content Ops data in a separate database.
 
+Check install readiness before running migrations or workers. The checker only
+inspects environment variables and Python imports; it does not connect to
+Postgres, Resend, SES, or an LLM provider.
+
+```bash
+python scripts/check_extracted_content_install.py --profile generation --llm offline
+python scripts/check_extracted_content_install.py --profile all --sender resend
+python scripts/check_extracted_content_install.py --profile all --sender resend --json
+```
+
+Use `--skip-webhook-secret` only for trusted webhook replay installs that will
+invoke `ingest_extracted_campaign_webhook.py --skip-signature-verification`.
+
 ## Step 2: Apply Migrations
 
 Preview pending migrations:
