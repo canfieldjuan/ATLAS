@@ -1,5 +1,6 @@
 {
   "mappings": [
+    {"source": "atlas_brain/autonomous/visibility.py", "target": "extracted_competitive_intelligence/autonomous/visibility.py"},
     {"source": "atlas_brain/autonomous/tasks/b2b_battle_cards.py", "target": "extracted_competitive_intelligence/autonomous/tasks/b2b_battle_cards.py"},
     {"source": "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py", "target": "extracted_competitive_intelligence/autonomous/tasks/b2b_vendor_briefing.py"},
     {"source": "atlas_brain/services/b2b/vendor_briefing_delivery.py", "target": "extracted_competitive_intelligence/services/b2b/vendor_briefing_delivery.py"},
