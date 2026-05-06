@@ -105,6 +105,16 @@ python scripts/run_extracted_campaign_generation_example.py \
 This proves the opportunity rows can normalize into prompt-ready fields without
 requiring a database or provider credentials.
 
+Run the packaged host smoke command when you want a single pass/fail check over
+the same offline path:
+
+```bash
+python scripts/smoke_extracted_content_pipeline_host.py customer_opportunities.csv --format csv
+```
+
+The command exits nonzero if the product cannot generate the minimum expected
+draft shape (`subject`, `body`, `target_id`, and `channel`).
+
 Minimum useful columns:
 
 | Column | Purpose |

@@ -185,6 +185,16 @@ The example uses in-memory product ports and an offline deterministic LLM stand
 in, so it does not need Atlas, a database, or provider credentials. It proves
 the customer-data path: JSON opportunities in, normalized campaign drafts out.
 
+For a one-command host smoke test that fails when no usable draft is produced:
+
+```bash
+python scripts/smoke_extracted_content_pipeline_host.py
+```
+
+The smoke command uses the packaged example payload, offline deterministic LLM,
+and cold-email plus follow-up channels by default. Pass a customer JSON or CSV
+file to validate a host export before wiring Postgres or send providers.
+
 To run the same example through the product LLM adapter, configure the
 `EXTRACTED_CAMPAIGN_LLM_*` environment variables and pass `--llm pipeline`:
 
