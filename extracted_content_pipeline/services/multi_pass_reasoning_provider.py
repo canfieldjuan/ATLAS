@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from ..campaign_ports import CampaignReasoningContext, TenantScope
 
 if TYPE_CHECKING:
-    from extracted_reasoning_core.types import FalsificationPolicy
+    from extracted_reasoning_core.types import FalsificationPolicy, ReasoningPack
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,19 @@ class MultiPassReasoningProviderConfig:
     # but are flagged in scope_summary["falsification"]["falsified_claim_ids"]
     # so downstream renderers can decide what to do.
     drop_falsified: bool = False
+    # Optional ReasoningPack for narrative-plan structuring. When set,
+    # build_narrative_plan runs after the chain (and after falsification
+    # gating, if any) on the final result. The resulting NarrativePlan
+    # is surfaced as canonical_reasoning["narrative_plan"]. Hosts that
+    # want to load a pack from the registry can do so themselves via
+    # extracted_reasoning_core.api.load_reasoning_pack and pass the
+    # result here. When None (default), no narrative plan is produced.
+    #
+    # Note: pack policies are forwarded to build_narrative_plan as-is.
+    # In particular, ``policies["max_sections"]`` silently drops claims
+    # belonging to over-cap sections from the rendered NarrativePlan
+    # (see D20d). Tune defensively if claim-coverage matters.
+    narrative_plan_pack: "ReasoningPack | None" = None
 
 
 class MultiPassCampaignReasoningProvider:
@@ -234,12 +247,40 @@ class MultiPassCampaignReasoningProvider:
                 "traces": tuple(falsification_traces),
             }
 
+        # Optional narrative plan. When a pack is configured, run
+        # build_narrative_plan over the final state and surface the
+        # resulting NarrativePlan in canonical_reasoning. If
+        # drop_falsified=True, the narrative-plan input is pre-filtered
+        # to remove falsified claims so the rendered plan stays
+        # consistent with the rendered top_theses.
+        narrative_plan_summary: Mapping[str, Any] | None = None
+        if self._config.narrative_plan_pack is not None:
+            from extracted_reasoning_core.api import build_narrative_plan
+
+            if self._config.drop_falsified and falsified_claim_ids:
+                drop_set = set(falsified_claim_ids)
+                raw = dict(result.state.get("raw_synthesis") or {})
+                raw_claims = list(raw.get("claims") or ())
+                raw["claims"] = [c for c in raw_claims if _claim_identity(c) not in drop_set]
+                narrative_context: Mapping[str, Any] = {**dict(result.state), "raw_synthesis": raw}
+            else:
+                narrative_context = result.state
+
+            plan = build_narrative_plan(narrative_context, pack=self._config.narrative_plan_pack)
+            narrative_plan_summary = {
+                "claims": tuple(dict(c) for c in plan.claims),
+                "sections": tuple(dict(s) for s in plan.sections),
+                "evidence_requirements": tuple(dict(e) for e in plan.evidence_requirements),
+                "state_hints": dict(plan.state_hints),
+            }
+
         return _result_to_campaign_context(
             result,
             limit=self._config.top_thesis_limit,
             chain_telemetry=chain_telemetry,
             falsification_summary=falsification_summary,
             drop_claim_ids=falsified_claim_ids if self._config.drop_falsified else (),
+            narrative_plan=narrative_plan_summary,
         )
 
 
@@ -268,6 +309,7 @@ def _result_to_campaign_context(
     chain_telemetry: Mapping[str, Any] | None = None,
     falsification_summary: Mapping[str, Any] | None = None,
     drop_claim_ids: tuple[str, ...] = (),
+    narrative_plan: Mapping[str, Any] | None = None,
 ) -> CampaignReasoningContext:
     raw_claims = list(result.claims or ())
     drop_set = set(drop_claim_ids)
@@ -306,13 +348,15 @@ def _result_to_campaign_context(
             if sid_str and sid_str not in all_source_ids:
                 all_source_ids.append(sid_str)
 
-    canonical_reasoning = {
+    canonical_reasoning: dict[str, Any] = {
         "summary": result.summary,
         "confidence": result.confidence,
         "tier": result.tier,
         "generation": int(result.state.get("generation") or 1),
         "raw_synthesis": dict(result.state.get("raw_synthesis") or {}),
     }
+    if narrative_plan is not None:
+        canonical_reasoning["narrative_plan"] = dict(narrative_plan)
 
     return CampaignReasoningContext(
         anchor_examples={},
