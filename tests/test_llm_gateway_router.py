@@ -1020,6 +1020,23 @@ def test_reconciliation_validates_provider_against_allowlist():
     assert "reconciliation in this release" in src
 
 
+def test_reconciliation_rejects_non_usd_currency():
+    """Codex P2 round 3 on PR-D6d: the arithmetic in the handler
+    subtracts atlas's USD totals from invoice_total_usd, but the
+    request schema accepted any currency string. A non-USD body
+    produced numerically-meaningless deltas with only a warning
+    string -- customers parsing ``delta_usd`` programmatically
+    would happily consume the wrong number. Reject at the
+    handler so the API can never return a mismatched-unit
+    delta."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    # Explicit non-USD reject.
+    assert 'if body.currency.upper() != "USD":' in src
+    assert "Convert your invoice to USD" in src
+
+
 def test_reconciliation_dedupes_by_model_via_sum_not_overwrite():
     """Audit fix on PR-D6d: customers can legitimately have
     multi-row line items per model on their invoice (different

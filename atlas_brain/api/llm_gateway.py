@@ -700,6 +700,23 @@ async def reconciliation(
                 f"{sorted(_PROVIDERS_THIS_PR)}."
             ),
         )
+    # Reject non-USD outright. The arithmetic below mixes the
+    # customer's invoice_total (their currency) with atlas's
+    # cost_usd (always USD), so a non-USD body produces
+    # numerically meaningless deltas. The response field
+    # ``delta_explanation`` previously emitted a warning string
+    # but customers parse the numeric ``delta_usd`` programmatically
+    # and would happily consume the wrong number. Codex P2 fix on
+    # PR-D6d. Currency conversion is on the followup list when a
+    # customer asks for it.
+    if body.currency.upper() != "USD":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Currency '{body.currency}' not supported. "
+                f"Convert your invoice to USD before submitting."
+            ),
+        )
     start_dt = _parse_reconciliation_date("period_start", body.period_start)
     end_dt = _parse_reconciliation_date("period_end", body.period_end)
     if start_dt > end_dt:
