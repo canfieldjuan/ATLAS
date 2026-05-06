@@ -1090,6 +1090,61 @@ def test_reconciliation_sql_anchors_period_to_utc():
     assert "AND created_at <  ($4::date + INTERVAL '1 day') AT TIME ZONE 'UTC'" in src
 
 
+def test_reconciliation_rejects_non_finite_invoice_amounts():
+    """Codex P2 on PR-D6d: a JSON number that overflows to inf
+    (e.g. 1e309) was accepted by Pydantic's default float handling,
+    propagated through the reconciliation arithmetic, and crashed
+    at JSON-serialization time -- turning a bad input into a 500.
+    ``allow_inf_nan=False`` rejects inf/NaN at validation, returning
+    a 422 the client can act on."""
+    import math
+    from pydantic import ValidationError
+    from atlas_brain.api.llm_gateway import (
+        ReconciliationByModelRequest,
+        ReconciliationRequest,
+    )
+
+    # Top-level invoice_total_usd guards against inf.
+    try:
+        ReconciliationRequest(
+            period_start="2026-04-01",
+            period_end="2026-04-30",
+            invoice_total_usd=float("inf"),
+        )
+        raise AssertionError("expected ValidationError on inf invoice_total_usd")
+    except ValidationError:
+        pass
+
+    # NaN also rejected.
+    try:
+        ReconciliationRequest(
+            period_start="2026-04-01",
+            period_end="2026-04-30",
+            invoice_total_usd=math.nan,
+        )
+        raise AssertionError("expected ValidationError on NaN invoice_total_usd")
+    except ValidationError:
+        pass
+
+    # Per-model invoice_cost_usd has the same guard.
+    try:
+        ReconciliationByModelRequest(
+            model="claude-haiku-4-5",
+            invoice_cost_usd=float("inf"),
+        )
+        raise AssertionError("expected ValidationError on inf invoice_cost_usd")
+    except ValidationError:
+        pass
+
+    # Sanity: finite values still pass.
+    valid = ReconciliationRequest(
+        period_start="2026-04-01",
+        period_end="2026-04-30",
+        invoice_total_usd=100.0,
+    )
+    assert valid.invoice_total_usd == 100.0
+
+
 def test_reconciliation_normalizes_model_aliases_on_both_sides():
     """Codex P2 on PR-D6d: /chat persists body.model (customer
     input) to llm_usage.model_name while Anthropic invoices use

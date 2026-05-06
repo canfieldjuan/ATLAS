@@ -212,14 +212,19 @@ class UsageResponse(BaseModel):
 
 class ReconciliationByModelRequest(BaseModel):
     model: str = Field(..., min_length=1, max_length=256)
-    invoice_cost_usd: float = Field(..., ge=0)
+    # ``allow_inf_nan=False`` rejects ``1e309`` -> inf and NaN at
+    # validation time. Without it the value flows through to the
+    # response, JSON serialization can't encode non-finite floats,
+    # and a 400-bug becomes a 500. Codex P2 fix on PR-D6d.
+    invoice_cost_usd: float = Field(..., ge=0, allow_inf_nan=False)
 
 
 class ReconciliationRequest(BaseModel):
     provider: str = Field(default="anthropic", min_length=1, max_length=64)
     period_start: str = Field(..., description="ISO date YYYY-MM-DD")
     period_end: str = Field(..., description="ISO date YYYY-MM-DD")
-    invoice_total_usd: float = Field(..., ge=0)
+    # Same finite-float guard as invoice_cost_usd above.
+    invoice_total_usd: float = Field(..., ge=0, allow_inf_nan=False)
     currency: str = Field(default="USD", min_length=3, max_length=8)
     # Cap the per-model list well above the count of models any
     # provider actually offers, so a malformed payload (or a
