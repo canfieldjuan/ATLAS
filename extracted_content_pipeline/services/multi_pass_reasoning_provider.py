@@ -18,7 +18,7 @@ match the existing provider ergonomics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from ..campaign_ports import CampaignReasoningContext, TenantScope
 
@@ -64,40 +64,37 @@ class MultiPassCampaignReasoningProvider:
         del scope  # tenant scoping is the host's responsibility upstream
 
         from extracted_reasoning_core.api import (
-            ConfigurationError,
             load_reasoning_pack,
             run_reasoning,
         )
-        from extracted_reasoning_core.types import (
-            EvidenceItem,
-            ReasoningInput,
-        )
+        from extracted_reasoning_core.types import ReasoningInput
 
         evidence_items = tuple(
             _coerce_evidence(item) for item in (opportunity.get("evidence") or ())
         )
         goal = str(opportunity.get("goal") or self._config.default_goal)
         depth = str(opportunity.get("depth") or self._config.default_depth)
+        # Per-opportunity pack_name overrides the provider-bound default so a
+        # single provider can serve heterogeneous targets (e.g. different packs
+        # per vendor segment) without instantiating one provider per pack.
+        pack_name = opportunity.get("pack_name") or self._config.pack_name
         reasoning_input = ReasoningInput(
             entity_id=str(target_id),
             entity_type=str(target_mode or opportunity.get("entity_type") or ""),
             goal=goal,
             evidence=evidence_items,
             context=dict(opportunity.get("context") or {}),
-            pack_name=self._config.pack_name,
+            pack_name=pack_name,
         )
 
-        pack = load_reasoning_pack(self._config.pack_name) if self._config.pack_name else None
+        pack = load_reasoning_pack(pack_name) if pack_name else None
 
-        try:
-            result = await run_reasoning(
-                reasoning_input,
-                depth=depth,  # type: ignore[arg-type]
-                pack=pack,
-                ports=self._ports,
-            )
-        except ConfigurationError:
-            raise
+        result = await run_reasoning(
+            reasoning_input,
+            depth=depth,  # type: ignore[arg-type]
+            pack=pack,
+            ports=self._ports,
+        )
 
         if str(result.state.get("status") or "") != "completed":
             # Validation-failure path. Surface a defensive empty context

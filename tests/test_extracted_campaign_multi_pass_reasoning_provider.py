@@ -149,3 +149,36 @@ async def test_multi_pass_provider_honors_top_thesis_limit() -> None:
     assert len(context.top_theses) == 2
     # Reference ids still aggregate from all claims (limit applies to top_theses only).
     assert len(context.reference_ids["top_theses"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_honors_per_opportunity_pack_name_override() -> None:
+    """An opportunity-level pack_name overrides the provider-bound default."""
+
+    llm = FakeLLMPort([
+        {
+            "response": json.dumps({
+                "summary": "ok",
+                "claims": [{"claim": "ok", "confidence": 0.7, "source_ids": ["r1"]}],
+                "confidence": 0.7,
+            }),
+            "usage": {},
+        }
+    ])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(pack_name="provider_default"),
+    )
+    opportunity = _opportunity()
+    opportunity["pack_name"] = "per_opportunity_override"
+
+    await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=opportunity,
+    )
+
+    # The per-opportunity pack_name flows through to the LLM call metadata
+    # rather than the provider-bound default.
+    assert llm.calls[0]["metadata"]["pack"] == "per_opportunity_override"
