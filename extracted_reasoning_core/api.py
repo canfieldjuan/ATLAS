@@ -1269,10 +1269,53 @@ def build_semantic_cache_key(
     return f"reasoning/{tier}/{effective_pack}/{digest}"
 
 
-def load_reasoning_pack(name: str) -> ReasoningPack:
-    """Load a named reasoning pack."""
-    del name
-    raise NotImplementedError("load_reasoning_pack lands with pack registry")
+def load_reasoning_pack(name: str) -> ReasoningPack | None:
+    """Load a named reasoning pack from the shared pack registry.
+
+    Adapts a ``pack_registry.Pack`` (registered by an owning product at
+    import time) into the public ``ReasoningPack`` shape that
+    ``run_reasoning`` and ``continue_reasoning`` consume. When multiple
+    versions of a pack are registered, returns the highest by **proper
+    semver comparison** (``packaging.version.Version``) rather than the
+    lexicographic comparison the underlying ``pack_registry.get_pack``
+    uses -- so ``1.10.0`` correctly outranks ``1.9.0`` here.
+
+    Returns ``None`` when no pack is registered under ``name`` -- core
+    never raises on unknown names, matching the existing
+    ``pack_registry.get_pack`` ergonomic so callers can run without any
+    pack registered. Callers needing strict-load semantics should check
+    for ``None`` explicitly or call ``pack_registry.get_pack`` with an
+    explicit version.
+
+    The registry's free-form ``metadata`` is mapped to
+    ``ReasoningPack.policies`` so consumers like
+    ``synthesis_config_from_pack`` pick up policy flags
+    (``max_attempts``, ``temperature``, etc.) directly.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    from .pack_registry import list_packs
+
+    candidates = [p for p in list_packs() if p.name == name]
+    if not candidates:
+        return None
+
+    def _semver_key(p: Any) -> Any:
+        try:
+            return (0, Version(p.version))
+        except InvalidVersion:
+            # Non-semver versions sort below any valid semver; among
+            # themselves, fall back to lexicographic so behavior is at
+            # least deterministic.
+            return (-1, p.version)
+
+    pack = max(candidates, key=_semver_key)
+    return ReasoningPack(
+        name=pack.name,
+        version=pack.version,
+        prompts=dict(pack.prompts or {}),
+        policies=dict(pack.metadata or {}),
+    )
 
 
 def validate_reasoning_output(
