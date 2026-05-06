@@ -11,6 +11,7 @@
     {"source": "atlas_brain/storage/migrations/147_displacement_velocity.sql", "target": "extracted_competitive_intelligence/storage/migrations/147_displacement_velocity.sql"},
     {"source": "atlas_brain/storage/migrations/158_cross_vendor_conclusions.sql", "target": "extracted_competitive_intelligence/storage/migrations/158_cross_vendor_conclusions.sql"},
     {"source": "atlas_brain/storage/migrations/245_cross_vendor_reasoning_synthesis.sql", "target": "extracted_competitive_intelligence/storage/migrations/245_cross_vendor_reasoning_synthesis.sql"},
+    {"source": "atlas_brain/storage/migrations/246_pipeline_visibility.sql", "target": "extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql"},
     {"source": "atlas_brain/storage/migrations/261_b2b_competitive_sets.sql", "target": "extracted_competitive_intelligence/storage/migrations/261_b2b_competitive_sets.sql"},
     {"source": "atlas_brain/storage/migrations/262_b2b_competitive_set_runs.sql", "target": "extracted_competitive_intelligence/storage/migrations/262_b2b_competitive_set_runs.sql"},
     {"source": "atlas_brain/storage/migrations/263_b2b_competitive_set_run_constraints.sql", "target": "extracted_competitive_intelligence/storage/migrations/263_b2b_competitive_set_run_constraints.sql"}
