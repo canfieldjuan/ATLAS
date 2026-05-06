@@ -693,6 +693,7 @@ def _synthesis_success_result(
             "pack_version": pack.version,
             "attempts_used": len(loop.attempts),
             "tokens_used": loop.total_tokens,
+            "depth": depth,
             "raw_synthesis": dict(candidate),
         },
         trace={
@@ -777,6 +778,7 @@ def _continuation_success_result(
             "events_consumed": (event_type,),
             "attempts_used": len(loop.attempts),
             "tokens_used": loop.total_tokens,
+            "depth": depth,
             "raw_synthesis": dict(candidate),
         },
         trace={

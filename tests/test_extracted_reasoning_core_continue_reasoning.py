@@ -246,6 +246,41 @@ async def test_continue_reasoning_retries_validation_failure_and_returns_final_f
 
 
 @pytest.mark.asyncio
+async def test_continue_reasoning_preserves_depth_across_continuations() -> None:
+    """Regression: L3 chains must not silently downgrade to L2.
+
+    Prior to the depth-in-state fix, _synthesis_success_result and
+    _continuation_success_result both omitted the depth key, so
+    continue_reasoning's fallback always resolved to "L2" regardless of
+    the original tier.
+    """
+
+    state = _completed_state()
+    state["depth"] = "L3"
+
+    llm = FakeLLMPort([
+        {
+            "response": json.dumps({
+                "summary": "Continued at the original tier.",
+                "claims": [{"claim": "Continuation preserves L3.", "confidence": 0.7, "source_ids": []}],
+                "confidence": 0.7,
+            }),
+            "usage": {"input_tokens": 2, "output_tokens": 1},
+        }
+    ])
+
+    result = await continue_reasoning(
+        state,
+        {"event_type": "tier_check", "evidence": []},
+        ports=ReasoningPorts(llm=llm, witness_context=FakeWitnessContextPort({})),
+    )
+
+    assert result.tier == "L3"
+    assert result.state["depth"] == "L3"
+    assert llm.calls[0]["metadata"]["depth"] == "L3"
+
+
+@pytest.mark.asyncio
 async def test_continue_reasoning_missing_llm_port_raises_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="ReasoningPorts.llm"):
         await continue_reasoning(
