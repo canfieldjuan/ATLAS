@@ -1,61 +1,70 @@
-"""Declarative evidence evaluation engine.
+"""Declarative evidence evaluation engine (atlas-side wrapper).
 
-Loads rules from ``evidence_map.yaml`` and provides deterministic
-per-review enrichment compute and per-vendor conclusion gating.
+PR-D7b3 promoted core's slim conclusions+suppression engine into
+:mod:`extracted_reasoning_core.evidence_engine`. Atlas keeps the
+import surface ``atlas_brain.reasoning.evidence_engine`` as a
+subclass wrapper that adds the per-review enrichment methods that
+stay atlas-side per PR-C1's slim-core split:
 
-All business logic lives in the YAML -- this module is pure evaluation
-machinery with zero hardcoded thresholds or domain knowledge.
+  - ``compute_urgency``
+  - ``override_pain``
+  - ``derive_recommend``
+  - ``derive_price_complaint`` (depends on atlas-only
+    ``_b2b_phrase_metadata``)
+  - ``derive_budget_authority``
+
+The subclass pattern keeps existing atlas callers
+(``b2b_churn_intelligence``, ``_b2b_shared``,
+``services/b2b/enrichment_derivation``, the test stubs in
+``test_b2b_enrichment.py``) writing ``engine.compute_urgency(...)``
+against a single object -- core's slim conclusions/suppression
+methods (``evaluate_conclusions`` / ``evaluate_suppression`` /
+``get_confidence_tier`` / ``get_confidence_label`` /
+``evaluate_conclusion``) come from the core base class; the six
+enrichment methods come from this subclass.
+
+Re-exports ``ConclusionResult`` / ``SuppressionResult`` from
+:mod:`extracted_reasoning_core.types` -- both shapes are byte-
+identical to atlas's pre-PR-D7b3 local dataclasses (verified during
+PR-D7b3 drift analysis), so atlas callers reading
+``r.conclusion_id`` / ``r.met`` / ``r.confidence`` /
+``r.fallback_label`` / ``r.fallback_action`` and ``s.suppress`` /
+``s.degrade`` / ``s.disclaimer`` / ``s.fallback_label`` keep
+working through the wrapper.
+
+Atlas's factory ``get_evidence_engine`` continues to consult
+``settings.b2b_churn.evidence_map_path`` before falling back to the
+default YAML beside this module. Core's factory stays config-free
+because external products don't ship atlas's settings module.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
-from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from extracted_reasoning_core.evidence_engine import (
+    EvidenceEngine as _CoreEvidenceEngine,
+)
+from extracted_reasoning_core.types import ConclusionResult, SuppressionResult
 
 logger = logging.getLogger("atlas.reasoning.evidence_engine")
 
 _DEFAULT_MAP_PATH = Path(__file__).parent / "evidence_map.yaml"
 
 
-@dataclass(frozen=True, slots=True)
-class ConclusionResult:
-    conclusion_id: str
-    met: bool
-    confidence: str
-    fallback_label: str | None = None
-    fallback_action: str | None = None
+class EvidenceEngine(_CoreEvidenceEngine):
+    """Core slim engine extended with atlas-side per-review enrichment."""
 
-
-@dataclass(frozen=True, slots=True)
-class SuppressionResult:
-    suppress: bool = False
-    degrade: bool = False
-    disclaimer: str | None = None
-    fallback_label: str | None = None
-
-
-class EvidenceEngine:
-    """Generic YAML-driven evidence evaluator."""
-
-    def __init__(self, map_path: str | Path | None = None) -> None:
-        path = Path(map_path) if map_path else _DEFAULT_MAP_PATH
-        with open(path) as f:
-            raw_bytes = f.read()
-        self._rules: dict[str, Any] = yaml.safe_load(raw_bytes)
-        self.map_hash: str = hashlib.sha256(raw_bytes.encode()).hexdigest()[:16]
-        self.map_path: str = str(path)
-        self._enrichment = self._rules.get("enrichment", {})
-        self._conclusions = self._rules.get("conclusions", {})
-        self._suppression = self._rules.get("suppression", {})
-        self._confidence_tiers = self._rules.get("confidence_tiers", {})
-
-        # Pre-compile regex patterns for recommend derivation
+    def _init_from_rules(
+        self,
+        rules: dict[str, Any],
+        map_path_str: str,
+        raw_bytes: bytes,
+    ) -> None:
+        super()._init_from_rules(rules, map_path_str, raw_bytes)
         rec = self._enrichment.get("recommend_derivation", {})
         self._rec_positive = [
             re.compile(p, re.IGNORECASE)
@@ -71,10 +80,6 @@ class EvidenceEngine:
             for p in price.get("positive_patterns", [])
         ]
 
-    # ------------------------------------------------------------------
-    # Per-review: enrichment-time compute
-    # ------------------------------------------------------------------
-
     def compute_urgency(
         self,
         indicators: dict[str, bool],
@@ -87,13 +92,11 @@ class EvidenceEngine:
         cfg = self._enrichment.get("urgency_scoring", {})
         weights: dict[str, float] = cfg.get("weights", {})
 
-        # Sum weighted indicators
         score = 0.0
         for key, weight in weights.items():
             if indicators.get(key):
                 score += weight
 
-        # Rating floors
         if rating is not None and rating_max > 0:
             normalized = rating / rating_max
             for floor in cfg.get("rating_floors", []):
@@ -101,19 +104,16 @@ class EvidenceEngine:
                     score = max(score, floor["min_score"])
                     break
 
-        # Adjustments
         for adj in cfg.get("adjustments", []):
             cond = adj.get("condition", {})
             if self._check_condition_simple(cond, {"content_type": content_type, "source_weight": source_weight}):
                 score += adj.get("delta", 0.0)
 
-        # Gates
         for gate in cfg.get("gates", []):
             cond = gate.get("condition", {})
             if self._check_condition_simple(cond, {"content_type": content_type, "source_weight": source_weight}):
                 score = gate.get("force", score)
 
-        # Clamp
         lo, hi = cfg.get("clamp", [0, 10])
         return round(min(max(score, lo), hi), 1)
 
@@ -182,7 +182,6 @@ class EvidenceEngine:
         positive_hits = 0
         negative_hits = 0
         for phrase in (recommendation_language or []):
-            # Check negative first -- longer patterns take priority
             neg_match = any(pat.search(phrase) for pat in self._rec_negative)
             if neg_match:
                 negative_hits += 1
@@ -193,8 +192,8 @@ class EvidenceEngine:
 
         if negative_hits > 0 and negative_hits >= positive_hits:
             return False
-        # If rating is very low, a single positive phrase is likely sarcasm
-        # -- require 2+ positive hits to override a clearly negative rating
+        # Single positive phrase against a clearly negative rating is likely
+        # sarcasm -- require 2+ positive hits to override.
         fallback = cfg.get("rating_fallback", {})
         if (
             positive_hits == 1
@@ -207,7 +206,6 @@ class EvidenceEngine:
         if positive_hits > 0 and positive_hits > negative_hits:
             return True
 
-        # Rating fallback
         fallback = cfg.get("rating_fallback", {})
         if rating is not None and rating_max > 0:
             normalized = rating / rating_max
@@ -227,11 +225,9 @@ class EvidenceEngine:
         Phase 2 (Layer 1 -- subject attribution gate): on v2-tagged
         enrichments, restrict the rule check to pricing_phrases the LLM
         marked as subject='subject_vendor'. A self-cost mention like
-        "I pay $X for my own setup" must not flip the price_complaint flag
-        on the vendor being reviewed.
-
-        v1 enrichments fall through to the legacy code path: every
-        non-empty pricing_phrase counts.
+        "I pay $X for my own setup" must not flip the price_complaint
+        flag on the vendor being reviewed. v1 enrichments fall through
+        to the legacy code path.
         """
         from ..autonomous.tasks._b2b_phrase_metadata import (
             is_v2_tagged, phrase_metadata_map,
@@ -251,14 +247,10 @@ class EvidenceEngine:
                 if row.get("subject") != "subject_vendor":
                     continue
                 # Phase 3 (Layer 2): only negative / mixed pricing phrases
-                # should trip the price_complaint flag. "Great value at $X"
-                # tagged polarity=positive must not count.
+                # should trip the price_complaint flag.
                 if row.get("polarity") not in ("negative", "mixed"):
                     continue
                 filtered.append(phrase)
-            # Build a shallow view that the rule check sees as the pricing
-            # phrases the LLM said are about the subject vendor AND carry
-            # negative / mixed sentiment. Other fields are pass-through.
             rule_input = {**enrichment, "pricing_phrases": filtered}
 
         pricing_phrases = [
@@ -292,161 +284,10 @@ class EvidenceEngine:
                 return True
         return False
 
-    # ------------------------------------------------------------------
-    # Per-vendor: report-time conclusion gating
-    # ------------------------------------------------------------------
-
-    def evaluate_conclusions(
-        self,
-        vendor_evidence: dict[str, Any],
-    ) -> list[ConclusionResult]:
-        """Evaluate all conclusion gates against vendor-level evidence."""
-        results: list[ConclusionResult] = []
-
-        # Check insufficient_data first -- it can suppress everything
-        insuf = self._conclusions.get("insufficient_data")
-        if insuf:
-            triggers = insuf.get("trigger", [])
-            if all(self._check_requirement(t, vendor_evidence) for t in triggers):
-                results.append(ConclusionResult(
-                    conclusion_id="insufficient_data",
-                    met=True,
-                    confidence="insufficient",
-                    fallback_label=insuf.get("label"),
-                    fallback_action=insuf.get("action"),
-                ))
-                return results
-
-        for cid, spec in self._conclusions.items():
-            if cid == "insufficient_data":
-                continue
-
-            requires = spec.get("requires", [])
-            all_met = all(
-                self._check_requirement(r, vendor_evidence)
-                for r in requires
-            )
-
-            confidence = spec.get("confidence_when_met", "medium") if all_met else "insufficient"
-
-            # Amplifiers can boost confidence
-            if all_met:
-                for amp in spec.get("amplifiers", []):
-                    if self._check_requirement(amp, vendor_evidence) and amp.get("boost_confidence"):
-                        if confidence == "medium":
-                            confidence = "high"
-
-            fallback = spec.get("fallback", {})
-            results.append(ConclusionResult(
-                conclusion_id=cid,
-                met=all_met,
-                confidence=confidence,
-                fallback_label=fallback.get("label") if not all_met else None,
-                fallback_action=fallback.get("action") if not all_met else None,
-            ))
-
-        return results
-
-    def evaluate_suppression(
-        self,
-        section: str,
-        evidence: dict[str, Any],
-    ) -> SuppressionResult:
-        """Evaluate suppression rules for a report section."""
-        spec = self._suppression.get(section)
-        if not spec:
-            return SuppressionResult()
-
-        # Check suppress
-        for rule in spec.get("suppress_when", []):
-            if self._check_suppression_rule(rule, evidence):
-                return SuppressionResult(
-                    suppress=True,
-                    fallback_label=spec.get("fallback_label"),
-                )
-
-        # Check degrade
-        for rule in spec.get("degrade_when", []):
-            if self._check_suppression_rule(rule, evidence):
-                return SuppressionResult(
-                    degrade=True,
-                    disclaimer=spec.get("disclaimer"),
-                )
-
-        return SuppressionResult()
-
-    def get_confidence_tier(self, total_reviews: int) -> str:
-        """Return confidence tier label for a review count."""
-        for tier_name in ("high", "medium", "low"):
-            tier = self._confidence_tiers.get(tier_name, {})
-            if total_reviews >= tier.get("min_reviews", 0):
-                return tier_name
-        return "insufficient"
-
-    def get_confidence_label(self, total_reviews: int) -> str:
-        """Return human-readable confidence label."""
-        tier_name = self.get_confidence_tier(total_reviews)
-        tier = self._confidence_tiers.get(tier_name, {})
-        return tier.get("label", tier_name)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _resolve_field(data: dict[str, Any], field_path: str) -> Any:
-        """Resolve a dotted field path against a nested dict."""
-        parts = field_path.split(".")
-        current: Any = data
-        for part in parts:
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-        return current
-
-    def _check_condition_simple(
-        self, cond: dict[str, Any], context: dict[str, Any],
-    ) -> bool:
-        """Check a simple {field, eq/lte/gte/in} condition."""
-        field = cond.get("field", "")
-        value = self._resolve_field(context, field)
-        if "eq" in cond:
-            return value == cond["eq"]
-        if "lte" in cond:
-            return value is not None and float(value) <= float(cond["lte"])
-        if "gte" in cond:
-            return value is not None and float(value) >= float(cond["gte"])
-        if "in" in cond:
-            return value in cond["in"]
-        return False
-
-    def _check_requirement(
-        self, req: dict[str, Any], evidence: dict[str, Any],
-    ) -> bool:
-        """Check a conclusion requirement against vendor evidence."""
-        field = req.get("field", "")
-        value = self._resolve_field(evidence, field)
-        op = req.get("operator", "eq")
-
-        if op == "gte":
-            return value is not None and float(value) >= float(req["value"])
-        if op == "gt":
-            return value is not None and float(value) > float(req["value"])
-        if op == "lte":
-            return value is not None and float(value) <= float(req["value"])
-        if op == "lt":
-            return value is not None and float(value) < float(req["value"])
-        if op == "eq":
-            return value == req.get("value")
-        if op == "in":
-            return value in req.get("values", [])
-        return False
-
     def _check_derivation_rule(
         self, rule: dict[str, Any], enrichment: dict[str, Any],
     ) -> bool:
-        """Check a derivation true_if_any rule."""
+        """Check a derivation true_if_any rule (atlas-only helper)."""
         field = rule.get("field", "")
         value = self._resolve_field(enrichment, field)
 
@@ -465,28 +306,7 @@ class EvidenceEngine:
             return any(kw in combined for kw in rule["contains_any"])
         return False
 
-    def _check_suppression_rule(
-        self, rule: dict[str, Any], evidence: dict[str, Any],
-    ) -> bool:
-        """Check a suppression condition ({field, lt/eq/gt/lte/gte} format)."""
-        field = rule.get("field", "")
-        value = self._resolve_field(evidence, field)
 
-        if "lt" in rule:
-            return value is not None and float(value) < float(rule["lt"])
-        if "lte" in rule:
-            return value is not None and float(value) <= float(rule["lte"])
-        if "gt" in rule:
-            return value is not None and float(value) > float(rule["gt"])
-        if "gte" in rule:
-            return value is not None and float(value) >= float(rule["gte"])
-        if "eq" in rule:
-            return value == rule["eq"]
-
-        return False
-
-
-# Module-level singleton
 _engine: EvidenceEngine | None = None
 _engine_path: str | None = None
 
@@ -546,3 +366,12 @@ def reload_evidence_engine() -> EvidenceEngine:
     _engine = None
     _engine_path = None
     return get_evidence_engine()
+
+
+__all__ = [
+    "ConclusionResult",
+    "EvidenceEngine",
+    "SuppressionResult",
+    "get_evidence_engine",
+    "reload_evidence_engine",
+]
