@@ -436,3 +436,55 @@ async def test_send_cli_requires_ses_from_email_before_sender_creation(monkeypat
 
     with pytest.raises(SystemExit, match="Missing --ses-from-email"):
         await cli._main()
+
+
+@pytest.mark.asyncio
+async def test_send_cli_reports_sender_initialization_failure_to_visibility(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    cli = _load_cli_module()
+    visibility_path = tmp_path / "visibility.jsonl"
+    pool_called = False
+
+    async def create_pool(database_url):
+        nonlocal pool_called
+        pool_called = True
+        return _Pool()
+
+    def create_sender(provider, config):
+        raise RuntimeError("boto3 unavailable")
+
+    monkeypatch.setattr(cli, "_create_pool", create_pool)
+    monkeypatch.setattr(cli, "create_campaign_sender", create_sender)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "send",
+            "--database-url",
+            "postgres://example",
+            "--provider",
+            "ses",
+            "--default-from-email",
+            "sales@example.com",
+            "--visibility-jsonl",
+            str(visibility_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="boto3 unavailable"):
+        await cli._main()
+
+    assert pool_called is False
+    events = read_jsonl_visibility_events(visibility_path)
+    assert [row["event_type"] for row in events] == [
+        "campaign_operation_started",
+        "campaign_operation_failed",
+    ]
+    assert events[1]["payload"] == {
+        "error_type": "RuntimeError",
+        "limit": 20,
+        "operation": "send_queued",
+        "provider": "ses",
+    }

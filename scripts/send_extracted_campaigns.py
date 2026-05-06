@@ -302,10 +302,10 @@ async def _main() -> int:
     args = _parse_args()
     if not args.database_url:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
+    visibility = JsonlVisibilitySink(args.visibility_jsonl) if args.visibility_jsonl else None
     provider, provider_config = _sender_config(args)
     _validate_sender_config(provider, provider_config)
     _validate_send_args(args)
-    sender = create_campaign_sender(provider, provider_config)
     config = CampaignSendConfig(
         default_from_email=args.default_from_email or args.ses_from_email or "",
         default_reply_to=args.reply_to,
@@ -314,7 +314,6 @@ async def _main() -> int:
         company_address=args.company_address,
         limit=args.limit,
     )
-    visibility = JsonlVisibilitySink(args.visibility_jsonl) if args.visibility_jsonl else None
     operation_payload = {"limit": args.limit, "provider": provider}
     await emit_operation_event(
         visibility,
@@ -324,6 +323,7 @@ async def _main() -> int:
     )
     pool = None
     try:
+        sender = create_campaign_sender(provider, provider_config)
         pool = await _create_pool(args.database_url)
         summary = await send_due_campaigns_from_postgres(
             pool,
