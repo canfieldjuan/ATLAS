@@ -195,6 +195,60 @@ async def test_check_falsification_synthesizes_ids_for_anonymous_rules() -> None
 
 
 @pytest.mark.asyncio
+async def test_check_falsification_id_synthesis_skips_explicit_rule_n_collisions() -> None:
+    """If a host explicitly names a rule rule_<i>, synthesized ids skip past it."""
+
+    mixed_rules = (
+        {"id": "rule_0", "predicate": "host already used rule_0 explicitly"},
+        {"predicate": "anonymous A"},
+        {"id": "rule_2", "predicate": "host already used rule_2 explicitly"},
+        {"predicate": "anonymous B"},
+    )
+    llm = FakeLLMPort([
+        {
+            "response": json.dumps({
+                "triggered_conditions": [],
+                "non_triggered_conditions": [],
+            }),
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    ])
+
+    result = await check_falsification(
+        _CLAIM,
+        _EVIDENCE,
+        policy=FalsificationPolicy(rules=mixed_rules, conservative=False),
+        ports=ReasoningPorts(llm=llm),
+    )
+
+    sent_ids = [r["id"] for r in json.loads(llm.calls[0]["messages"][1]["content"])["rules"]]
+    # Anonymous rules get rule_1 and rule_3 — synthesizer skips past explicit rule_0 / rule_2.
+    assert sent_ids == ["rule_0", "rule_1", "rule_2", "rule_3"]
+    assert len(set(sent_ids)) == 4  # no duplicates
+    assert result.trace["rule_ids"] == ("rule_0", "rule_1", "rule_2", "rule_3")
+
+
+@pytest.mark.asyncio
+async def test_check_falsification_honors_policy_max_tokens_and_temperature() -> None:
+    llm = FakeLLMPort([
+        {
+            "response": json.dumps({"triggered_conditions": [], "non_triggered_conditions": []}),
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    ])
+
+    await check_falsification(
+        _CLAIM,
+        _EVIDENCE,
+        policy=FalsificationPolicy(rules=_POLICY.rules, max_tokens=128, temperature=0.42),
+        ports=ReasoningPorts(llm=llm),
+    )
+
+    assert llm.calls[0]["max_tokens"] == 128
+    assert llm.calls[0]["temperature"] == pytest.approx(0.42)
+
+
+@pytest.mark.asyncio
 async def test_check_falsification_emits_completed_event_and_trace_span() -> None:
     """Observability parity with run_reasoning / continue_reasoning."""
 

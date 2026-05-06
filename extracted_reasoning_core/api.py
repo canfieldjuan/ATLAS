@@ -927,11 +927,19 @@ async def check_falsification(
     effective_policy = policy or FalsificationPolicy()
     # Synthesize stable ids for any rule missing id/name/condition_id so the
     # LLM, the policy surface, and the result all reference the same handle.
+    # Collision-safe: skip past any rule_<i> a host already assigned explicitly.
+    explicit_ids = {_rule_id(r) for r in effective_policy.rules if _rule_id(r)}
     normalized_rules: list[dict[str, Any]] = []
     rule_ids_list: list[str] = []
-    for index, rule in enumerate(effective_policy.rules):
+    synth_counter = 0
+    for rule in effective_policy.rules:
         rule_dict = dict(rule)
-        rid = _rule_id(rule_dict) or f"rule_{index}"
+        rid = _rule_id(rule_dict)
+        if not rid:
+            while f"rule_{synth_counter}" in explicit_ids:
+                synth_counter += 1
+            rid = f"rule_{synth_counter}"
+            synth_counter += 1
         rule_dict["id"] = rid
         normalized_rules.append(rule_dict)
         rule_ids_list.append(rid)
@@ -965,8 +973,8 @@ async def check_falsification(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": payload_text},
             ],
-            max_tokens=4096,
-            temperature=0.1,
+            max_tokens=effective_policy.max_tokens,
+            temperature=effective_policy.temperature,
             metadata={
                 "reasoning_mode": "falsification_check",
                 "claim_id": claim_id,

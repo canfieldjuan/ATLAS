@@ -207,6 +207,8 @@ class ReasoningPack:
 class FalsificationPolicy:
     rules: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     conservative: bool = True
+    max_tokens: int = 4096
+    temperature: float = 0.1
 
 
 @dataclass(frozen=True)
