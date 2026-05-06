@@ -803,3 +803,286 @@ def test_usage_handler_threads_savings_into_response():
     assert "total_cache_savings += row_cache_savings" in src
     # And the response object surfaces the total.
     assert "total_cache_savings_usd=total_cache_savings" in src
+
+
+# ---- Reconciliation endpoint (PR-D6d, layer 3) -------------------------
+
+
+def test_reconciliation_endpoint_registered():
+    """The new layer-3 endpoint must be a POST registered under
+    /llm/reconciliation (prefix from the router)."""
+    from atlas_brain.api.llm_gateway import router
+
+    matches = [
+        r for r in router.routes
+        if hasattr(r, "path") and r.path == "/llm/reconciliation"
+    ]
+    assert matches, "/llm/reconciliation route not registered"
+    assert "POST" in matches[0].methods
+
+
+def test_reconciliation_endpoint_plan_gated_to_starter():
+    """Reconciliation is a paying-customer feature -- llm_starter
+    or above. Trial users see /usage but not this."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    assert 'require_llm_plan("llm_starter")' in src
+
+
+def test_reconciliation_request_schema_shape():
+    """Schema captures everything the customer needs to reconcile
+    against atlas-routed traffic: period bounds, invoice totals,
+    per-model breakdown, currency. Provider defaults to anthropic
+    (the only one currently supported) and currency defaults to
+    USD; the customer rarely needs to set either explicitly."""
+    from atlas_brain.api.llm_gateway import (
+        ReconciliationByModelRequest,
+        ReconciliationRequest,
+    )
+
+    req_fields = ReconciliationRequest.model_fields
+    assert "provider" in req_fields
+    assert req_fields["provider"].default == "anthropic"
+    assert "period_start" in req_fields
+    assert "period_end" in req_fields
+    assert "invoice_total_usd" in req_fields
+    assert "currency" in req_fields
+    assert req_fields["currency"].default == "USD"
+    assert "by_model" in req_fields
+
+    item_fields = ReconciliationByModelRequest.model_fields
+    assert "model" in item_fields
+    assert "invoice_cost_usd" in item_fields
+
+
+def test_reconciliation_response_schema_shape():
+    """Response surfaces both sides plus the delta and a
+    human-readable explanation. The customer compares numbers;
+    the explanation tells them whether the diff is actionable."""
+    from atlas_brain.api.llm_gateway import (
+        ReconciliationByModelRow,
+        ReconciliationResponse,
+    )
+
+    resp_fields = ReconciliationResponse.model_fields
+    for field in (
+        "period_start",
+        "period_end",
+        "provider",
+        "currency",
+        "atlas_total_usd",
+        "invoice_total_usd",
+        "delta_usd",
+        "delta_explanation",
+        "by_model",
+    ):
+        assert field in resp_fields
+
+    row_fields = ReconciliationByModelRow.model_fields
+    for field in ("model", "atlas_usd", "invoice_usd", "delta_usd"):
+        assert field in row_fields
+
+
+def test_reconciliation_sql_filters_by_account_period_provider():
+    """SQL must scope by account_id (PR-D3 isolation), provider
+    (only anthropic for now), and the date range. The full-day
+    semantics on period_end use ``< period_end::date + INTERVAL
+    '1 day'`` so calls made on the period_end day are included."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    assert "WHERE account_id = $1" in src
+    assert "AND model_provider = $2" in src
+    assert "AND created_at >= $3::date" in src
+    assert "AND created_at <  ($4::date + INTERVAL '1 day')" in src
+
+
+def test_reconciliation_excludes_cache_hits_via_jsonb_containment():
+    """Cache-hit rows have cost_usd=0 so they don't affect the
+    sum, but excluding them is honest -- they don't appear on
+    the Anthropic invoice either. Use JSONB containment (``@>``)
+    rather than ``->>`` cast so malformed metadata can't trigger
+    the same DoS PR-D6c P2 fixed for cache_savings_usd."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    assert (
+        "AND NOT (metadata @> '{\"cache_hit\": true}'::jsonb)"
+        in src
+    )
+
+
+def test_reconciliation_unions_atlas_and_invoice_models():
+    """The breakdown must include EVERY model from either side
+    so the customer can see (a) atlas-routed traffic for a
+    model not on the invoice (= our drift), and (b) invoice
+    line items for a model with no atlas-routed traffic
+    (= calls made outside atlas)."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    assert "set(atlas_by_model.keys()) | set(invoice_by_model.keys())" in src
+
+
+def test_reconciliation_delta_explanation_has_three_signed_branches():
+    """Helper composes user-facing text for: (1) match within
+    tolerance, (2) Anthropic > atlas (positive delta, expected
+    case), (3) atlas > Anthropic (negative delta, possible
+    drift to investigate)."""
+    from atlas_brain.api.llm_gateway import (
+        _RECONCILIATION_MATCH_TOLERANCE_USD,
+        _reconciliation_delta_explanation,
+    )
+
+    # Positive branch.
+    pos = _reconciliation_delta_explanation(5.00, "USD")
+    assert "exceeds atlas-routed" in pos.lower()
+    # Negative branch.
+    neg = _reconciliation_delta_explanation(-5.00, "USD")
+    assert "more than the invoice" in neg.lower() or "drift" in neg.lower()
+    # Match-within-tolerance branch.
+    match = _reconciliation_delta_explanation(
+        _RECONCILIATION_MATCH_TOLERANCE_USD / 2, "USD"
+    )
+    assert "matches" in match.lower()
+    # Non-USD branch returns a currency caveat instead of a delta sign.
+    eur = _reconciliation_delta_explanation(5.00, "EUR")
+    assert "EUR" in eur and "convert" in eur.lower()
+
+
+def test_reconciliation_validates_date_format():
+    """Malformed dates 400, not 500. Pin the helper that
+    centralizes the parse + raise so error messages stay
+    consistent and one helper is the single source of truth."""
+    from fastapi import HTTPException
+    from atlas_brain.api.llm_gateway import _parse_reconciliation_date
+
+    # Valid passes through.
+    parsed = _parse_reconciliation_date("period_start", "2026-04-01")
+    assert parsed.year == 2026
+
+    # Malformed raises HTTPException 400.
+    try:
+        _parse_reconciliation_date("period_start", "not-a-date")
+        raise AssertionError("expected HTTPException")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert "period_start" in str(exc.detail)
+
+
+def test_reconciliation_validates_period_ordering():
+    """period_start > period_end must 400 -- otherwise the SQL
+    range produces empty results silently and the customer can't
+    tell why their reconciliation looks blank."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    assert "period_start must be on or before period_end" in src
+
+
+def test_reconciliation_validates_period_span():
+    """Periods longer than the configured max (365d) must 400.
+    Anthropic invoices customers monthly; reconciling a year of
+    traffic in one POST is a wrong-tool signal, and the SQL
+    grouping loses meaning at that scale."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    assert "_RECONCILIATION_MAX_PERIOD_DAYS" in src
+    # Default value reasonable for a SaaS billing-cycle product.
+    assert llm_gateway._RECONCILIATION_MAX_PERIOD_DAYS == 365
+
+
+def test_reconciliation_match_tolerance_is_a_module_constant():
+    """The match-within threshold lives as a module constant so
+    it can be tuned without a code-path change. Defaults to
+    $0.01 (penny rounding)."""
+    from atlas_brain.api import llm_gateway
+
+    assert hasattr(llm_gateway, "_RECONCILIATION_MATCH_TOLERANCE_USD")
+    assert llm_gateway._RECONCILIATION_MATCH_TOLERANCE_USD == 0.01
+
+
+# ---- Reconciliation audit fixes (PR-D6d) -------------------------------
+
+
+def test_reconciliation_validates_provider_against_allowlist():
+    """Audit fix on PR-D6d: same provider allowlist as /chat
+    (_PROVIDERS_THIS_PR). Prevents a customer from POSTing
+    provider='openai', getting empty atlas data, and concluding
+    atlas didn't track any of their calls."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    assert "if body.provider not in _PROVIDERS_THIS_PR:" in src
+    assert "is not supported for" in src
+    assert "reconciliation in this release" in src
+
+
+def test_reconciliation_dedupes_by_model_via_sum_not_overwrite():
+    """Audit fix on PR-D6d: customers can legitimately have
+    multi-row line items per model on their invoice (different
+    price tiers, mid-cycle pricing changes). The dict-comp
+    overwrite pattern would silently drop all but the last and
+    understate the invoice total. Sum instead so duplicates
+    aggregate correctly."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    # The summing pattern.
+    assert "invoice_by_model[item.model] = (" in src
+    assert "invoice_by_model.get(item.model, 0.0)" in src
+    assert "+ float(item.invoice_cost_usd)" in src
+    # The naive dict-comp must not return.
+    assert "invoice_by_model: dict[str, float] = {\n        item.model:" not in src
+
+
+def test_reconciliation_request_caps_by_model_length():
+    """Audit fix on PR-D6d: unbounded by_model list lets a
+    malformed payload chew memory in the dict comprehension.
+    128 is well above any provider's model count so legitimate
+    customers never hit the cap."""
+    from atlas_brain.api.llm_gateway import ReconciliationRequest
+
+    fields = ReconciliationRequest.model_fields
+    by_model_field = fields["by_model"]
+    # max_length sits in the field metadata.
+    constraints = getattr(by_model_field, "metadata", []) or []
+    max_lens = [
+        getattr(c, "max_length", None) for c in constraints
+    ]
+    assert 128 in max_lens, f"max_length=128 missing from by_model constraints: {max_lens}"
+
+
+def test_reconciliation_rounds_dollar_values_to_4_decimals():
+    """Audit fix on PR-D6d: floating-point arithmetic produces
+    representation artifacts (5.0 - 4.99 ~ 1e-10) that are ugly
+    in the response. Round to 4 decimals -- enough to keep
+    sub-cent drift visible (Anthropic invoices show 2 decimals)
+    while hiding the artifacts."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    # Per-row rounding.
+    assert "atlas_usd=round(atlas_usd, 4)" in src
+    assert "invoice_usd=round(invoice_usd, 4)" in src
+    assert "delta_usd=round(invoice_usd - atlas_usd, 4)" in src
+    # Top-level rounding.
+    assert "delta = round(body.invoice_total_usd - atlas_total, 4)" in src
+    assert "atlas_total_usd=round(atlas_total, 4)" in src
+    assert "invoice_total_usd=round(body.invoice_total_usd, 4)" in src
+
+
+def test_reconciliation_sql_anchors_period_to_utc():
+    """Audit fix on PR-D6d: ``$::date`` casts resolve in the
+    session timezone. A non-UTC Postgres deployment would
+    silently misframe periods (calls late in a day might land
+    in the next day's bucket). Explicit ``AT TIME ZONE 'UTC'``
+    matches Anthropic's Cost Report API (UTC-day buckets) and
+    makes the intent legible."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    assert "AND created_at >= $3::date AT TIME ZONE 'UTC'" in src
+    assert "AND created_at <  ($4::date + INTERVAL '1 day') AT TIME ZONE 'UTC'" in src

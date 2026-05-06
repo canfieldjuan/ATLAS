@@ -30,6 +30,7 @@ import json
 import logging
 import time
 import uuid as _uuid
+from datetime import datetime
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -73,6 +74,19 @@ _PROVIDERS_THIS_PR = ("anthropic",)
 # check to the gateway's own feature flag rather than the B2B
 # pipeline flag, so the two products stay decoupled.
 _LLM_CHAT_CACHE_NAMESPACE = "llm_gateway.chat"
+
+
+# PR-D6d: maximum span of a reconciliation period. Mirrors the
+# /usage endpoint's 365-day cap -- any longer and the SQL groups
+# get unwieldy and the comparison loses meaning (Anthropic
+# invoices customers monthly, not yearly).
+_RECONCILIATION_MAX_PERIOD_DAYS = 365
+
+# PR-D6d: dollar-difference threshold below which the
+# reconciliation reports "matches the invoice" rather than
+# explaining a delta. A few cents of drift from rounding/timing
+# isn't actionable; saying "matches" is more useful.
+_RECONCILIATION_MATCH_TOLERANCE_USD = 0.01
 
 
 # Metadata key for the would-have-paid USD on a cache-hit row
@@ -189,6 +203,51 @@ class UsageResponse(BaseModel):
     # with clients that don't know about caching.
     total_cache_savings_usd: float = 0.0
     by_provider: list[UsageBreakdownRow]
+
+
+# PR-D6d reconciliation: customer uploads their provider invoice
+# data; we diff against atlas-routed traffic for the same period.
+# Stateless -- one POST returns the diff, no persistence.
+
+
+class ReconciliationByModelRequest(BaseModel):
+    model: str = Field(..., min_length=1, max_length=256)
+    invoice_cost_usd: float = Field(..., ge=0)
+
+
+class ReconciliationRequest(BaseModel):
+    provider: str = Field(default="anthropic", min_length=1, max_length=64)
+    period_start: str = Field(..., description="ISO date YYYY-MM-DD")
+    period_end: str = Field(..., description="ISO date YYYY-MM-DD")
+    invoice_total_usd: float = Field(..., ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    # Cap the per-model list well above the count of models any
+    # provider actually offers, so a malformed payload (or a
+    # compromised key) can't chew memory in the dict
+    # comprehension. Audit fix on PR-D6d.
+    by_model: list[ReconciliationByModelRequest] = Field(
+        default_factory=list,
+        max_length=128,
+    )
+
+
+class ReconciliationByModelRow(BaseModel):
+    model: str
+    atlas_usd: float = 0.0
+    invoice_usd: float = 0.0
+    delta_usd: float = 0.0
+
+
+class ReconciliationResponse(BaseModel):
+    period_start: str
+    period_end: str
+    provider: str
+    currency: str
+    atlas_total_usd: float = 0.0
+    invoice_total_usd: float = 0.0
+    delta_usd: float = 0.0
+    delta_explanation: str = ""
+    by_model: list[ReconciliationByModelRow]
 
 
 # ---- Helpers ------------------------------------------------------------
@@ -562,6 +621,179 @@ async def usage(
         total_cost_usd=total_cost,
         total_cache_savings_usd=total_cache_savings,
         by_provider=breakdown,
+    )
+
+
+# ---- /reconciliation (PR-D6d, layer 3 of cost-control bundle) ----------
+
+
+def _parse_reconciliation_date(name: str, value: str) -> datetime:
+    """Parse an ISO YYYY-MM-DD date; 400 on anything else.
+    Centralized so error messages are consistent across the
+    period_start / period_end checks."""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name} must be YYYY-MM-DD ({value!r}: {exc})",
+        )
+
+
+def _reconciliation_delta_explanation(delta: float, currency: str) -> str:
+    """Compose a human-readable explanation of the diff sign.
+
+    Positive delta = invoice > atlas-tracked. Almost always means
+    non-atlas-routed calls under the same Anthropic org/key.
+    Negative delta = atlas-tracked > invoice. Possible pricing-
+    config drift on our end, or the customer reconciled the wrong
+    period -- worth flagging for review either way."""
+    if currency.upper() != "USD":
+        return (
+            f"Currency {currency} not converted to USD; delta reported in "
+            f"{currency}. Convert manually before drawing conclusions."
+        )
+    if abs(delta) < _RECONCILIATION_MATCH_TOLERANCE_USD:
+        return "Atlas-routed traffic matches the invoice within $0.01."
+    if delta > 0:
+        return (
+            f"Anthropic billing exceeds atlas-routed traffic by ${delta:.2f}. "
+            f"Likely from non-atlas calls under the same Anthropic org/key."
+        )
+    return (
+        f"Atlas tracked ${-delta:.2f} more than the invoice. Possible "
+        f"pricing-config drift or wrong reconciliation period; please review."
+    )
+
+
+@router.post("/reconciliation", response_model=ReconciliationResponse)
+async def reconciliation(
+    body: ReconciliationRequest,
+    user: AuthUser = Depends(require_llm_plan("llm_starter")),
+) -> ReconciliationResponse:
+    """Diff customer-supplied provider invoice against atlas-routed traffic.
+
+    The customer extracts their billing data from Anthropic's
+    console / Cost Report API / their own invoice and POSTs the
+    canonical totals + per-model breakdown. We sum llm_usage rows
+    for (account_id, period, provider) excluding cache hits (which
+    cost the customer 0 -- they don't appear on Anthropic's
+    invoice) and return both sides plus a delta.
+
+    Stateless: nothing persisted server-side. Customer keeps the
+    upload data; we just compute the comparison.
+
+    Plan-gated to llm_starter+ -- reconciliation is a paying-
+    customer feature. Trial users see /usage but not this.
+    """
+    if body.provider not in _PROVIDERS_THIS_PR:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Provider '{body.provider}' is not supported for "
+                f"reconciliation in this release. Supported: "
+                f"{sorted(_PROVIDERS_THIS_PR)}."
+            ),
+        )
+    start_dt = _parse_reconciliation_date("period_start", body.period_start)
+    end_dt = _parse_reconciliation_date("period_end", body.period_end)
+    if start_dt > end_dt:
+        raise HTTPException(
+            status_code=400,
+            detail="period_start must be on or before period_end",
+        )
+    span_days = (end_dt - start_dt).days + 1
+    if span_days > _RECONCILIATION_MAX_PERIOD_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"period span {span_days}d exceeds maximum "
+                f"{_RECONCILIATION_MAX_PERIOD_DAYS}d"
+            ),
+        )
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    # Cache-hit exclusion uses JSONB containment (``@>``) rather
+    # than ``->>``-then-cast so a malformed metadata value can't
+    # raise -- same DoS-safety rationale as PR-D6c's
+    # jsonb_typeof guard for cache_savings_usd.
+    #
+    # Period bounds anchor explicitly to UTC: ``created_at`` is
+    # TIMESTAMPTZ but a bare ``$3::date`` cast resolves in the
+    # session timezone, so a non-UTC Postgres deployment would
+    # silently misframe periods. ``AT TIME ZONE 'UTC'`` makes the
+    # UTC-day semantics intentional and matches Anthropic's Cost
+    # Report API (which buckets by UTC days). Audit fix on PR-D6d.
+    rows = await pool.fetch(
+        """
+        SELECT model_name,
+               COALESCE(SUM(cost_usd), 0)::float AS atlas_usd
+        FROM llm_usage
+        WHERE account_id = $1
+          AND model_provider = $2
+          AND created_at >= $3::date AT TIME ZONE 'UTC'
+          AND created_at <  ($4::date + INTERVAL '1 day') AT TIME ZONE 'UTC'
+          AND NOT (metadata @> '{"cache_hit": true}'::jsonb)
+        GROUP BY model_name
+        """,
+        _uuid.UUID(user.account_id),
+        body.provider,
+        body.period_start,
+        body.period_end,
+    )
+
+    atlas_by_model: dict[str, float] = {}
+    for row in rows:
+        model = row["model_name"] or ""
+        atlas_by_model[model] = float(row["atlas_usd"] or 0.0)
+
+    # Sum duplicate model entries instead of dict-comp overwrite.
+    # Customers legitimately have multi-row line items per model
+    # (different price tiers, mid-cycle pricing changes); silently
+    # dropping all but the last would understate their invoice
+    # and they'd have no signal. Audit catch on PR-D6d.
+    invoice_by_model: dict[str, float] = {}
+    for item in body.by_model:
+        invoice_by_model[item.model] = (
+            invoice_by_model.get(item.model, 0.0)
+            + float(item.invoice_cost_usd)
+        )
+
+    # Round to 4 decimals on display: hides floating-point
+    # representation artifacts (5.0 - 4.99 = 1.0000000000509e-10)
+    # while keeping sub-cent drift visible. Anthropic invoices
+    # display 2 decimals, but rounding to 2 here would mask
+    # legitimate small deltas the customer might want to see.
+    breakdown: list[ReconciliationByModelRow] = []
+    atlas_total = 0.0
+    for model in sorted(set(atlas_by_model.keys()) | set(invoice_by_model.keys())):
+        atlas_usd = atlas_by_model.get(model, 0.0)
+        invoice_usd = invoice_by_model.get(model, 0.0)
+        breakdown.append(
+            ReconciliationByModelRow(
+                model=model,
+                atlas_usd=round(atlas_usd, 4),
+                invoice_usd=round(invoice_usd, 4),
+                delta_usd=round(invoice_usd - atlas_usd, 4),
+            )
+        )
+        atlas_total += atlas_usd
+
+    delta = round(body.invoice_total_usd - atlas_total, 4)
+
+    return ReconciliationResponse(
+        period_start=body.period_start,
+        period_end=body.period_end,
+        provider=body.provider,
+        currency=body.currency,
+        atlas_total_usd=round(atlas_total, 4),
+        invoice_total_usd=round(body.invoice_total_usd, 4),
+        delta_usd=delta,
+        delta_explanation=_reconciliation_delta_explanation(delta, body.currency),
+        by_model=breakdown,
     )
 
 
