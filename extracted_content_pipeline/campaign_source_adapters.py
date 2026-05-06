@@ -22,6 +22,7 @@ _SOURCE_ID_KEYS = ("source_id", "id", "review_id", "transcript_id", "document_id
 _TEXT_KEYS = ("text", "review_text", "transcript", "content", "body", "quote", "complaint")
 _SOURCE_TYPE_KEYS = ("source_type", "type", "kind")
 _SOURCE_TITLE_KEYS = ("source_title", "title", "name")
+_SOURCE_TITLE_COLLISION_KEYS = ("title", "name")
 _PAIN_KEYS = ("pain_points", "pain_categories", "pain_category", "topic", "category")
 
 
@@ -104,13 +105,17 @@ def source_row_to_campaign_opportunity(
                 "content, body, quote, or complaint."
             ),
         ))
+        return {}, tuple(warnings)
     source_id = _first_text(row, _SOURCE_ID_KEYS)
     source_type = _first_text(row, _SOURCE_TYPE_KEYS) or _infer_source_type(row)
+    source_title = _first_text(row, _SOURCE_TITLE_KEYS)
     opportunity = {
         str(key): value
         for key, value in row.items()
-        if value not in (None, "", [], {})
+        if value not in (None, "", [], {}) and key not in _SOURCE_TITLE_COLLISION_KEYS
     }
+    if source_title:
+        opportunity["source_title"] = source_title
     if source_id and "source_id" not in opportunity:
         opportunity["source_id"] = source_id
     if source_type:
@@ -176,9 +181,9 @@ def _source_evidence(
         evidence["source_id"] = source_id
     if source_type:
         evidence["source_type"] = source_type
-    title = _first_text(row, _SOURCE_TITLE_KEYS)
-    if title:
-        evidence["source_title"] = title
+    source_title = _first_text(row, _SOURCE_TITLE_KEYS)
+    if source_title:
+        evidence["source_title"] = source_title
     return evidence
 
 

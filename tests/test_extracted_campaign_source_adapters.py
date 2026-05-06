@@ -53,12 +53,32 @@ def test_source_rows_normalize_and_warn_for_missing_text() -> None:
         target_mode="vendor_retention",
     )
 
-    assert len(loaded.opportunities) == 2
+    assert len(loaded.opportunities) == 1
     first = loaded.opportunities[0]
     assert first["target_id"] == "call-1"
     assert first["target_mode"] == "vendor_retention"
     assert first["evidence"][0]["source_type"] == "transcript"
     assert "missing_source_text" in [warning.code for warning in loaded.warnings]
+
+
+def test_source_document_title_does_not_become_buyer_fields() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "id": "doc-1",
+        "name": "Q1 churn transcript",
+        "title": "Discovery call notes",
+        "vendor": "HubSpot",
+        "text": "The account is comparing HubSpot with Salesforce.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "doc-1"
+    assert opportunity["source_title"] == "Discovery call notes"
+    assert opportunity["evidence"][0]["source_title"] == "Discovery call notes"
+    assert "company_name" not in opportunity
+    assert "contact_name" not in opportunity
+    assert "contact_title" not in opportunity
+    assert "name" not in opportunity
+    assert "title" not in opportunity
 
 
 def test_load_source_campaign_opportunities_from_jsonl(tmp_path: Path) -> None:
