@@ -29,9 +29,12 @@ its surface narrow.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from ..campaign_ports import CampaignReasoningContext, TenantScope
+
+if TYPE_CHECKING:
+    from extracted_reasoning_core.types import FalsificationPolicy
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,18 @@ class MultiPassReasoningProviderConfig:
     # consumed in one call. Protects against runaway token spend if a
     # buggy upstream feeds an unbounded list.
     max_continuations: int = 8
+    # Optional falsification policy. When set, after the chain completes
+    # each surviving claim is run through check_falsification against the
+    # aggregated evidence (opportunity + event evidence). Falsified
+    # claim ids are surfaced in scope_summary["falsification"]; the
+    # claims are dropped from top_theses iff drop_falsified is True.
+    falsification_policy: "FalsificationPolicy | None" = None
+    # When True (and falsification_policy is set), claims marked
+    # should_invalidate=True are removed from the resulting
+    # top_theses/witness_highlights. When False (default), they remain
+    # but are flagged in scope_summary["falsification"]["falsified_claim_ids"]
+    # so downstream renderers can decide what to do.
+    drop_falsified: bool = False
 
 
 class MultiPassCampaignReasoningProvider:
@@ -84,6 +99,7 @@ class MultiPassCampaignReasoningProvider:
         del scope  # tenant scoping is the host's responsibility upstream
 
         from extracted_reasoning_core.api import (
+            check_falsification,
             continue_reasoning,
             load_reasoning_pack,
             run_reasoning,
@@ -160,10 +176,55 @@ class MultiPassCampaignReasoningProvider:
             "events_truncated": events_truncated,
             "chain_halted_on_failure": chain_halted_on_failure,
         }
+
+        # Optional falsification gate. Aggregates evidence from the
+        # opportunity and every consumed event, then runs
+        # check_falsification on each surviving claim. Falsified claim
+        # ids are surfaced in scope_summary regardless of drop_falsified;
+        # the drop_falsified flag controls whether those claims are also
+        # removed from the rendered top_theses.
+        falsification_summary: Mapping[str, Any] | None = None
+        falsified_claim_ids: tuple[str, ...] = ()
+        if self._config.falsification_policy is not None and result.claims:
+            consumed_event_evidence: list[Any] = []
+            if self._config.enable_multi_pass:
+                for event in events[:events_consumed]:
+                    for item in event.get("evidence") or ():
+                        consumed_event_evidence.append(_coerce_evidence(item))
+            fresh_evidence = tuple(evidence_items) + tuple(consumed_event_evidence)
+
+            falsified_ids: list[str] = []
+            falsification_traces: list[Mapping[str, Any]] = []
+            for claim in result.claims:
+                fr = await check_falsification(
+                    claim,
+                    fresh_evidence,
+                    policy=self._config.falsification_policy,
+                    ports=self._ports,
+                )
+                claim_id = _claim_identity(claim)
+                falsification_traces.append({
+                    "claim_id": claim_id,
+                    "should_invalidate": fr.should_invalidate,
+                    "triggered_conditions": tuple(fr.triggered_conditions),
+                })
+                if fr.should_invalidate:
+                    falsified_ids.append(claim_id)
+            falsified_claim_ids = tuple(falsified_ids)
+            falsification_summary = {
+                "evaluated_claim_count": len(result.claims),
+                "falsified_count": len(falsified_ids),
+                "falsified_claim_ids": falsified_claim_ids,
+                "drop_falsified": self._config.drop_falsified,
+                "traces": tuple(falsification_traces),
+            }
+
         return _result_to_campaign_context(
             result,
             limit=self._config.top_thesis_limit,
             chain_telemetry=chain_telemetry,
+            falsification_summary=falsification_summary,
+            drop_claim_ids=falsified_claim_ids if self._config.drop_falsified else (),
         )
 
 
@@ -190,8 +251,16 @@ def _result_to_campaign_context(
     *,
     limit: int,
     chain_telemetry: Mapping[str, Any] | None = None,
+    falsification_summary: Mapping[str, Any] | None = None,
+    drop_claim_ids: tuple[str, ...] = (),
 ) -> CampaignReasoningContext:
-    claims = list(result.claims or ())
+    raw_claims = list(result.claims or ())
+    drop_set = set(drop_claim_ids)
+    claims = (
+        [c for c in raw_claims if _claim_identity(c) not in drop_set]
+        if drop_set
+        else raw_claims
+    )
     # Top theses ordered by confidence descending (ties keep input order).
     sorted_claims = sorted(
         enumerate(claims),
@@ -248,9 +317,14 @@ def _result_to_campaign_context(
             "tokens_used": int(result.state.get("tokens_used") or 0),
             "attempts_used": int(result.state.get("attempts_used") or 0),
             **dict(chain_telemetry or {}),
+            **({"falsification": dict(falsification_summary)} if falsification_summary is not None else {}),
         },
         delta_summary={},
     )
+
+
+def _claim_identity(claim: Mapping[str, Any]) -> str:
+    return str(claim.get("claim_id") or claim.get("id") or claim.get("claim") or "")[:200]
 
 
 def _claim_confidence(claim: Mapping[str, Any]) -> float:

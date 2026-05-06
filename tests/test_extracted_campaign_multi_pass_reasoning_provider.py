@@ -372,3 +372,130 @@ async def test_multi_pass_provider_rejects_non_mapping_events_with_clear_error()
             target_mode="vendor",
             opportunity=opp,
         )
+
+
+def _falsifiable_synthesis_response() -> dict[str, Any]:
+    return {
+        "response": json.dumps({
+            "summary": "Two drivers identified.",
+            "claims": [
+                {"claim_id": "c1", "claim": "Renewal pricing drives churn.", "confidence": 0.8, "source_ids": ["r1"]},
+                {"claim_id": "c2", "claim": "Onboarding friction is secondary.", "confidence": 0.6, "source_ids": ["r2"]},
+            ],
+            "confidence": 0.8,
+        }),
+        "usage": {"input_tokens": 4, "output_tokens": 2},
+    }
+
+
+def _falsification_response(*, triggered: list[str], should_invalidate: bool) -> dict[str, Any]:
+    return {
+        "response": json.dumps({
+            "triggered_conditions": triggered,
+            "non_triggered_conditions": [],
+            "should_invalidate": should_invalidate,
+        }),
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_runs_falsification_gate_when_policy_set() -> None:
+    """With falsification_policy set, each claim is evaluated; falsified ids surfaced."""
+
+    from extracted_reasoning_core.types import FalsificationPolicy
+
+    llm = FakeLLMPort([
+        _falsifiable_synthesis_response(),
+        # Falsification call for c1 → falsified.
+        _falsification_response(triggered=["renewal_signal_lost"], should_invalidate=True),
+        # Falsification call for c2 → not falsified.
+        _falsification_response(triggered=[], should_invalidate=False),
+    ])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            falsification_policy=FalsificationPolicy(
+                rules=({"id": "renewal_signal_lost"},),
+                conservative=False,
+            ),
+        ),
+    )
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    f = context.scope_summary["falsification"]
+    assert f["evaluated_claim_count"] == 2
+    assert f["falsified_count"] == 1
+    assert f["falsified_claim_ids"] == ("c1",)
+    assert f["drop_falsified"] is False
+    # drop_falsified=False → falsified claim still in top_theses.
+    top_ids = [t["claim"] for t in context.top_theses]
+    assert "Renewal pricing drives churn." in top_ids
+    # 1 run_reasoning + 2 check_falsification = 3 calls.
+    assert len(llm.calls) == 3
+    assert llm.calls[1]["metadata"]["reasoning_mode"] == "falsification_check"
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_drops_falsified_claims_when_drop_falsified_true() -> None:
+    from extracted_reasoning_core.types import FalsificationPolicy
+
+    llm = FakeLLMPort([
+        _falsifiable_synthesis_response(),
+        _falsification_response(triggered=["renewal_signal_lost"], should_invalidate=True),
+        _falsification_response(triggered=[], should_invalidate=False),
+    ])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            falsification_policy=FalsificationPolicy(
+                rules=({"id": "renewal_signal_lost"},),
+                conservative=False,
+            ),
+            drop_falsified=True,
+        ),
+    )
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    # c1 was falsified and drop_falsified=True → not in top_theses.
+    top_claims = [t["claim"] for t in context.top_theses]
+    assert "Renewal pricing drives churn." not in top_claims
+    assert "Onboarding friction is secondary." in top_claims
+    f = context.scope_summary["falsification"]
+    assert f["falsified_claim_ids"] == ("c1",)
+    assert f["drop_falsified"] is True
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_skips_falsification_when_policy_unset() -> None:
+    """No falsification_policy → no falsification calls (existing D21b behavior preserved)."""
+
+    llm = FakeLLMPort([_falsifiable_synthesis_response()])
+    provider = MultiPassCampaignReasoningProvider(ports=ReasoningPorts(llm=llm))
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    # Only the run_reasoning call.
+    assert len(llm.calls) == 1
+    # No falsification key in scope_summary when policy is unset.
+    assert "falsification" not in context.scope_summary
