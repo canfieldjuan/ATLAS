@@ -103,14 +103,14 @@ async def invoke_synthesis_loop(
             temperature=config.temperature,
             metadata={**dict(llm_metadata), "attempt_no": attempt_no},
         )
-        text = _response_text(response)
-        cleaned = _clean_reasoning_text(text)
+        text = response_text(response)
+        cleaned = clean_reasoning_text(text)
         last_text = cleaned
         usage = dict(response.get("usage") or {}) if isinstance(response, Mapping) else {}
         attempt_tokens = _usage_tokens(usage)
         total_tokens += attempt_tokens
 
-        parsed = _parse_llm_json(cleaned)
+        parsed = parse_llm_json(cleaned)
         validation = _validate_reasoning_candidate(parsed)
         attempts.append({
             "attempt_no": attempt_no,
@@ -155,7 +155,7 @@ def evidence_to_mapping(item: Any) -> Mapping[str, Any]:
     return {"text": str(item)}
 
 
-def _response_text(response: Mapping[str, Any]) -> str:
+def response_text(response: Mapping[str, Any]) -> str:
     for key in ("response", "content", "text"):
         value = response.get(key)
         if value is not None:
@@ -166,14 +166,14 @@ def _response_text(response: Mapping[str, Any]) -> str:
     return json.dumps(response, default=str)
 
 
-def _clean_reasoning_text(text: str) -> str:
+def clean_reasoning_text(text: str) -> str:
     cleaned = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
     if "<scratchpad>" in cleaned:
         cleaned = cleaned.split("</scratchpad>")[-1].strip()
     return cleaned
 
 
-def _parse_llm_json(text: str) -> Any:
+def parse_llm_json(text: str) -> Any:
     try:
         from extracted_llm_infrastructure.pipelines.llm import parse_json_response
     except ImportError:
@@ -286,4 +286,7 @@ __all__ = [
     "extract_summary",
     "extract_claims",
     "extract_confidence",
+    "response_text",
+    "clean_reasoning_text",
+    "parse_llm_json",
 ]
