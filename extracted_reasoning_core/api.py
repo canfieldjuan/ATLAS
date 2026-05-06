@@ -1214,9 +1214,17 @@ def _normalize_condition(value: Any) -> str:
 
 
 def compute_evidence_hash(evidence: Mapping[str, Any]) -> str:
-    """Compute the stable reasoning evidence hash."""
-    del evidence
-    raise NotImplementedError("compute_evidence_hash lands with semantic-cache split")
+    """Compute a stable hex digest for an evidence mapping.
+
+    Delegates to :func:`extracted_reasoning_core.semantic_cache_keys.compute_evidence_hash`
+    so this public surface and the existing semantic-cache primitives
+    produce identical fingerprints. Returns a 16-char hex prefix of the
+    sha256 digest (matches the established ``reasoning_semantic_cache``
+    storage convention).
+    """
+    from .semantic_cache_keys import compute_evidence_hash as _compute
+
+    return _compute(dict(evidence or {}))
 
 
 def build_semantic_cache_key(
@@ -1225,11 +1233,27 @@ def build_semantic_cache_key(
     tier: str,
     pack_name: str | None = None,
 ) -> str:
-    """Build a stable semantic-cache key for a reasoning input."""
-    del reasoning_input
-    del tier
-    del pack_name
-    raise NotImplementedError("build_semantic_cache_key lands with semantic-cache split")
+    """Build a stable semantic-cache key for a reasoning input.
+
+    The key encodes everything that should make two reasoning calls
+    cache-equivalent: entity identity, goal, evidence content, context,
+    pack name, and tier. Format: ``reasoning/{tier}/{pack}/{digest}`` so
+    the leading segments are human-readable while the digest (16-char
+    hex from :func:`compute_evidence_hash`) captures full content
+    sensitivity.
+    """
+    effective_pack = pack_name or reasoning_input.pack_name or "default"
+    payload = {
+        "entity_id": reasoning_input.entity_id,
+        "entity_type": reasoning_input.entity_type,
+        "goal": reasoning_input.goal,
+        "evidence": [evidence_to_mapping(item) for item in reasoning_input.evidence],
+        "context": dict(reasoning_input.context or {}),
+        "pack_name": effective_pack,
+        "tier": tier,
+    }
+    digest = compute_evidence_hash(payload)
+    return f"reasoning/{tier}/{effective_pack}/{digest}"
 
 
 def load_reasoning_pack(name: str) -> ReasoningPack:

@@ -113,8 +113,6 @@ def test_stubbed_public_entry_points_fail_closed_until_consolidated() -> None:
     # PR-C1d wired `evaluate_evidence` to the slim `EvidenceEngine`.
     # All three originally NotImplementedError stubs are now functional.
     sync_calls = [
-        lambda: api.compute_evidence_hash({}),
-        lambda: api.build_semantic_cache_key(reasoning_input, tier="L1"),
         lambda: api.load_reasoning_pack("content_pipeline"),
         lambda: api.validate_reasoning_output(result),
     ]
@@ -126,6 +124,9 @@ def test_stubbed_public_entry_points_fail_closed_until_consolidated() -> None:
     # build_narrative_plan now returns a NarrativePlan (no longer stubbed).
     plan = api.build_narrative_plan({}, pack=ReasoningPack(name="default"))
     assert plan.claims == ()
+    # compute_evidence_hash and build_semantic_cache_key now return strings.
+    assert isinstance(api.compute_evidence_hash({}), str)
+    assert api.build_semantic_cache_key(reasoning_input, tier="L1").startswith("reasoning/L1/")
 
 
 # ------------------------------------------------------------------
