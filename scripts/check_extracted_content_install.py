@@ -22,6 +22,7 @@ PROFILE_CHOICES = (
     "offline",
     "generation",
     "send",
+    "sequence",
     "webhooks",
     "analytics",
     "export",

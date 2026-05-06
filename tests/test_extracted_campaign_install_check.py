@@ -167,6 +167,36 @@ def test_send_resend_profile_passes_with_campaign_env(monkeypatch) -> None:
     }
 
 
+def test_sequence_profile_requires_sequence_from_email(monkeypatch) -> None:
+    monkeypatch.setattr(install_check, "find_spec", _module_present)
+
+    report = check_campaign_install(
+        environ={"EXTRACTED_DATABASE_URL": "postgres://example"},
+        profiles=("sequence",),
+        llm="offline",
+    )
+
+    errors = [check.name for check in report.checks if check.status == "error"]
+    assert report.passed is False
+    assert errors == ["sequence_from_email"]
+
+
+def test_sequence_profile_accepts_campaign_sequence_from_email(monkeypatch) -> None:
+    monkeypatch.setattr(install_check, "find_spec", _module_present)
+
+    report = check_campaign_install(
+        environ={
+            "EXTRACTED_DATABASE_URL": "postgres://example",
+            "EXTRACTED_CAMPAIGN_SEQUENCE_FROM_EMAIL": "sales@example.com",
+        },
+        profiles=("sequence",),
+        llm="offline",
+    )
+
+    assert report.passed is True
+    assert "sequence_from_email" in [check.name for check in report.checks]
+
+
 def test_webhook_profile_can_skip_secret_requirement(monkeypatch) -> None:
     monkeypatch.setattr(install_check, "find_spec", _module_present)
 
@@ -208,6 +238,7 @@ def test_cli_accepts_all_profile_with_resend_env(monkeypatch, capsys) -> None:
     monkeypatch.setenv("EXTRACTED_DATABASE_URL", "postgres://example")
     monkeypatch.setenv("EXTRACTED_CAMPAIGN_RESEND_API_KEY", "re_test")
     monkeypatch.setenv("EXTRACTED_CAMPAIGN_FROM_EMAIL", "sales@example.com")
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_SEQUENCE_FROM_EMAIL", "sales@example.com")
     monkeypatch.setenv("EXTRACTED_RESEND_WEBHOOK_SECRET", "whsec_test")
 
     exit_code = cli.main([
@@ -220,4 +251,4 @@ def test_cli_accepts_all_profile_with_resend_env(monkeypatch, capsys) -> None:
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "passed=true" in output
-    assert "profiles=generation,send,webhooks,analytics,export" in output
+    assert "profiles=generation,send,sequence,webhooks,analytics,export" in output

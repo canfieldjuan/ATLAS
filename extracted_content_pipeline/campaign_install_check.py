@@ -14,6 +14,7 @@ ProfileName = Literal[
     "offline",
     "generation",
     "send",
+    "sequence",
     "webhooks",
     "analytics",
     "export",
@@ -35,6 +36,10 @@ FROM_EMAIL_ENV = (
     "EXTRACTED_SES_FROM_EMAIL",
 )
 SES_FROM_EMAIL_ENV = FROM_EMAIL_ENV
+SEQUENCE_FROM_EMAIL_ENV = (
+    "EXTRACTED_CAMPAIGN_SEQUENCE_FROM_EMAIL",
+    "EXTRACTED_CAMPAIGN_FROM_EMAIL",
+)
 RESEND_WEBHOOK_SECRET_ENV = (
     "EXTRACTED_RESEND_WEBHOOK_SECRET",
     "EXTRACTED_CAMPAIGN_RESEND_WEBHOOK_SECRET",
@@ -50,6 +55,7 @@ CAMPAIGN_LLM_ENV = (
 _ALL_PROFILES: tuple[ProfileName, ...] = (
     "generation",
     "send",
+    "sequence",
     "webhooks",
     "analytics",
     "export",
@@ -125,6 +131,10 @@ def check_campaign_install(
         checks.extend(_generation_checks(env, llm=llm))
     if "send" in normalized_profiles:
         checks.extend(_send_checks(env, sender=normalized_sender))
+    if "sequence" in normalized_profiles:
+        checks.extend(_sequence_checks(env))
+        if "generation" not in normalized_profiles:
+            checks.extend(_generation_checks(env, llm=llm))
     if "webhooks" in normalized_profiles:
         checks.extend(_webhook_checks(env, require_secret=require_webhook_secret))
     return InstallCheckReport(
@@ -157,7 +167,14 @@ def _normalize_sender(sender: str) -> SenderName:
 
 
 def _requires_database(profiles: Sequence[str]) -> bool:
-    database_profiles = {"generation", "send", "webhooks", "analytics", "export"}
+    database_profiles = {
+        "generation",
+        "send",
+        "sequence",
+        "webhooks",
+        "analytics",
+        "export",
+    }
     return any(profile in database_profiles for profile in profiles)
 
 
@@ -246,6 +263,22 @@ def _send_checks(env: Mapping[str, str], *, sender: SenderName) -> list[InstallC
     return checks
 
 
+def _sequence_checks(env: Mapping[str, str]) -> list[InstallCheck]:
+    return [
+        _env_check(
+            "sequence_from_email",
+            env,
+            SEQUENCE_FROM_EMAIL_ENV,
+            required=True,
+            present_message="Campaign sequence From email is configured.",
+            missing_message=(
+                "Set EXTRACTED_CAMPAIGN_SEQUENCE_FROM_EMAIL or "
+                "EXTRACTED_CAMPAIGN_FROM_EMAIL."
+            ),
+        )
+    ]
+
+
 def _webhook_checks(
     env: Mapping[str, str],
     *,
@@ -303,6 +336,7 @@ __all__ = [
     "InstallCheckReport",
     "RESEND_API_KEY_ENV",
     "RESEND_WEBHOOK_SECRET_ENV",
+    "SEQUENCE_FROM_EMAIL_ENV",
     "SES_FROM_EMAIL_ENV",
     "check_campaign_install",
 ]
