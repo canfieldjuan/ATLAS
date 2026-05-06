@@ -84,6 +84,49 @@ def test_send_resend_profile_requires_api_key_and_from_email(monkeypatch) -> Non
     assert errors == ["resend_api_key", "from_email"]
 
 
+def test_send_resend_profile_requires_httpx_runtime_dependency(monkeypatch) -> None:
+    monkeypatch.setattr(
+        install_check,
+        "find_spec",
+        lambda name: None if name == "httpx" else object(),
+    )
+
+    report = check_campaign_install(
+        environ={
+            "EXTRACTED_DATABASE_URL": "postgres://example",
+            "EXTRACTED_CAMPAIGN_RESEND_API_KEY": "re_test",
+            "EXTRACTED_CAMPAIGN_FROM_EMAIL": "sales@example.com",
+        },
+        profiles=("send",),
+        sender="resend",
+    )
+
+    errors = [check.name for check in report.checks if check.status == "error"]
+    assert report.passed is False
+    assert errors == ["httpx"]
+
+
+def test_send_ses_profile_requires_boto3_runtime_dependency(monkeypatch) -> None:
+    monkeypatch.setattr(
+        install_check,
+        "find_spec",
+        lambda name: None if name == "boto3" else object(),
+    )
+
+    report = check_campaign_install(
+        environ={
+            "EXTRACTED_DATABASE_URL": "postgres://example",
+            "EXTRACTED_SES_FROM_EMAIL": "sales@example.com",
+        },
+        profiles=("send",),
+        sender="ses",
+    )
+
+    errors = [check.name for check in report.checks if check.status == "error"]
+    assert report.passed is False
+    assert errors == ["boto3"]
+
+
 def test_send_resend_profile_passes_with_campaign_env(monkeypatch) -> None:
     monkeypatch.setattr(install_check, "find_spec", _module_present)
 
@@ -102,6 +145,7 @@ def test_send_resend_profile_passes_with_campaign_env(monkeypatch) -> None:
         "product_package",
         "database_url",
         "asyncpg",
+        "httpx",
         "resend_api_key",
         "from_email",
     }

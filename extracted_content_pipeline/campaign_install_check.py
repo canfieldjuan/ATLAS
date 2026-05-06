@@ -204,8 +204,10 @@ def _send_checks(env: Mapping[str, str], *, sender: SenderName) -> list[InstallC
                 "Send profile selected without --sender; provider credentials were not checked.",
             )
         ]
+    checks = [_module_check("httpx", "httpx", required=True)]
     if sender == "ses":
-        return [
+        checks.extend([
+            _module_check("boto3", "boto3", required=True),
             _env_check(
                 "ses_from_email",
                 env,
@@ -215,9 +217,10 @@ def _send_checks(env: Mapping[str, str], *, sender: SenderName) -> list[InstallC
                 missing_message=(
                     "Set EXTRACTED_SES_FROM_EMAIL or EXTRACTED_CAMPAIGN_FROM_EMAIL."
                 ),
-            )
-        ]
-    return [
+            ),
+        ])
+        return checks
+    checks.extend([
         _env_check(
             "resend_api_key",
             env,
@@ -239,7 +242,8 @@ def _send_checks(env: Mapping[str, str], *, sender: SenderName) -> list[InstallC
                 "Set EXTRACTED_CAMPAIGN_FROM_EMAIL or a provider-specific From email."
             ),
         ),
-    ]
+    ])
+    return checks
 
 
 def _webhook_checks(
