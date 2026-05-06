@@ -16,6 +16,44 @@ claim sourced and every dramatization labeled.
 > product-owned (`remaining_productization_audit.md` "Next Concrete
 > Slice") before any new product direction starts.
 
+## v0 cut (locked)
+
+The minimum trusted loop that proves the engine works. Locked
+2026-05-06. Anything outside this list is explicitly out of scope
+for v0.
+
+| Decision | v0 setting |
+| --- | --- |
+| Niche | true-crime / mystery / "strange, dark, and mysterious" YouTube long-form narration |
+| Truth mode | **Narrative Nonfiction only.** Strict Documentary and Dramatized True Story land later. |
+| Script length | **5–7 minutes (~1,000–1,500 words).** Shorter than the sibling doc's 10-minute target — less surface area for claim drift in the first loop. |
+| Loaders | **Two: YouTube transcripts + news article URL/text.** All other loaders (court records, police reports, OCR, voice notes, handwritten notes, scraped DBs, user timelines) are deferred. |
+| Drafting | Single-pass. Multi-pass orchestration loop lands when a length or accuracy regression demands it. |
+| Audio render | **Out of scope for v0.** Stage 14 (ElevenLabs render) is a separate manual step. The v0 deliverable is an audio-*ready* script with embedded TTS markers and a voice-direction sidecar. |
+| Surface | CLI only. Web UI / Slack-bot approval gates land later. |
+| Inferred claims | **Soft-rewrite policy (see "Inferred-claim handling" below).** Internally tag, externally rewrite to hedged language. |
+
+**v0 input → output contract:**
+
+```
+INPUT:
+  - 1 YouTube transcript (URL or .vtt/.srt)
+  - 1 news article (URL or pasted text) about the same case
+
+OUTPUT:
+  - source records         (one per ingested artifact)
+  - claim ledger           (typed + sourced, see schema below)
+  - timeline               (ordered events with confidence bands)
+  - 3 story angles         (with evidence-strength scores)
+  - selected outline       (5-beat, claim-budget per beat)
+  - narration script       (5-7 min, embedded TTS markers, soft-rewritten inferences)
+  - citation validation    (every script claim resolves to a ledger row)
+  - voice-direction sidecar (per-section tone / pacing / emphasis)
+```
+
+This is the contract the v0 build must satisfy. Anything else is a
+follow-on PR.
+
 ## Why a sibling doc
 
 The parked creative backlog is silent on four design surfaces that become
@@ -88,34 +126,95 @@ The mode is stored on `StoryDraft` and consumed by:
 
 ### 2. Citation ledger (the missing primitive)
 
-Every claim that lands in a script traces back to a source row:
+Every claim that lands in a script traces back to a source row.
+Without typing, the ledger becomes a soup of "everything is a claim"
+and the fact-check gate cannot be specific. Hence: every claim is
+both confidence-banded *and* type-classified.
+
+#### Claim-type taxonomy (seven types)
+
+| Type | What it asserts | Example | Default confidence allowed in Narrative Nonfiction |
+| --- | --- | --- | --- |
+| `factual` | Verifiable real-world assertion | "The car was found near the river." | verified |
+| `timeline` | Time / sequence assertion | "The 911 call came in at 8:43 PM." | verified |
+| `entity` | A person, place, or organization assertion | "John Doe lived in Chicago." | verified |
+| `emotional_inference` | Internal state attributed to a real subject | "She felt isolated." | inferred (must be soft-rewritten — see below) |
+| `disputed` | A claim where sources disagree | "The defense says the meeting never happened." | disputed |
+| `narrative_transition` | Author voice / scene-setting / pacing — not a factual assertion | "Hours passed before anyone noticed." | unknown (does not require a source row, but is logged) |
+| `reconstructed` | Dialogue or scene-level color invented to render a real event | "He whispered, 'I'm coming home.'" | only allowed in Dramatized True Story mode |
+
+The fact-check stage runs different invariants per type. `factual`,
+`timeline`, and `entity` claims must have a verbatim quote in the
+ledger or be rejected. `emotional_inference` claims must have a soft-
+rewrite applied (see next section). `disputed` claims must cite at
+least two sources and surface the disagreement on-screen.
+`narrative_transition` claims are logged for placement gates (10%
+rule) but do not require a source quote. `reconstructed` claims fail
+the gate in Strict and Narrative modes and are labeled at render time
+in Dramatized.
+
+#### Schema
 
 ```
 claim_id          uuid
 story_id          uuid
 text              the assertion as it appears in the script (post-rewrite)
-source_id         fk -> sources
+claim_type        factual | timeline | entity | emotional_inference
+                  | disputed | narrative_transition | reconstructed
+source_id         fk -> sources (nullable for narrative_transition only)
 quote             verbatim excerpt from the source
 locator           page / paragraph / timestamp / url-fragment
 confidence        verified | inferred | disputed | unknown
 mode_constraint   strict | narrative | dramatized
+rewrite_applied   bool — true when the inferred-claim soft-rewrite ran
+original_text     null | the pre-rewrite assertion (audit trail)
 inserted_by       extraction_pass | drafter | revision | reviewer
 verified_by       null | reviewer_id
 verified_at       null | timestamp
 ```
 
-A script cannot pass the fact-check gate unless every claim in it has
-a row. In Strict Documentary mode, every claim must have
+A script cannot pass the fact-check gate unless every claim of type
+`factual | timeline | entity | disputed | reconstructed` has a row,
+and every `emotional_inference` claim has `rewrite_applied=true`.
+
+In Strict Documentary mode, every claim must have
 `confidence='verified'`. In Narrative Nonfiction, `inferred` is
-allowed but is rendered with a "based on reporting from..." inline
-tag. In Dramatized, reconstructed segments are linked to the
-underlying source event but are flagged separately.
+allowed only on `emotional_inference` claims, and only after the
+soft-rewrite. In Dramatized, `reconstructed` segments are linked to
+the underlying source event but flagged separately for the render
+layer.
 
 The ledger also gates the **10% rule** (outcome cannot appear in the
 first 90% of the script) at the claim level: the reveal-claim is
 tagged at extraction time, and the deterministic gate from the
 sibling doc's `story_evidence_engine.py` checks claim placement, not
 keyword placement.
+
+#### Inferred-claim handling (soft-rewrite policy)
+
+For Narrative Nonfiction (the v0 mode), inferred emotional content
+is allowed internally but must be rewritten before it lands in the
+script. The policy is **Option B: internal tag, external rewrite to
+hedged language.** This avoids both extremes:
+
+- Hard-rejecting inferred claims would gut the narrative — half the
+  appeal of true-crime narration is the felt-emotion layer.
+- Letting inferred claims through verbatim ("She was terrified") would
+  let the system make nonfiction *sound* good while quietly inventing
+  interior states.
+
+Soft-rewrite examples:
+
+| Original (rejected) | Soft-rewritten (allowed) |
+| --- | --- |
+| "She was terrified." | "Based on the reporting, the situation appears to have left her afraid and isolated." |
+| "He knew what he had done." | "Investigators later concluded he understood the consequences of his actions." |
+| "The neighbors didn't care." | "No neighbor came forward to police in the days that followed." |
+
+The drafter prompt embeds the soft-rewrite rule. The revision pass
+verifies that no `emotional_inference` claim landed in the script
+without `rewrite_applied=true`. The `original_text` column preserves
+the pre-rewrite assertion for audit.
 
 ### 3. Source-data variety
 
@@ -240,23 +339,28 @@ the number of agents.
 
 ## v0 cut
 
-For the **first** evidence-to-story slice, narrow to:
+See the **v0 cut (locked)** section pinned near the top of this doc
+for the binding scope and the input → output contract. That section
+supersedes the earlier draft of this section. Resume condition is
+unchanged: the campaign-core spine must be product-owned per
+`remaining_productization_audit.md` before any of this starts.
 
-- **One niche:** strange-dark-mysterious / true-crime YouTube,
-  matching the sibling doc.
-- **One mode:** Narrative Nonfiction. Strict and Dramatized land
-  later.
-- **Two source loaders:** YouTube transcripts + news article URLs.
-  The other 7 listed loaders defer.
-- **CLI-driven workflow:** stages 1–13 as scripts; stage 14 (audio
-  render) is a separate manual step. UI lands later.
-- **Single-pass drafting** (matches the sibling doc's pragmatic v0
-  for short-form scripts). Multi-pass orchestration arrives only when
-  novel-length or 20-minute documentary lengths are in scope.
+## Name shortlist (parked)
 
-Resume condition is unchanged: the campaign-core spine must be
-product-owned per `remaining_productization_audit.md` before any of
-this starts.
+PR #308 didn't claim a product name and the doc shouldn't either
+until v0 ships. Captured here so the conversation isn't lost.
+
+| Candidate | What it leans into | Risk |
+| --- | --- | --- |
+| **StoryLedger** | The citation ledger IS the product. Most descriptive of the actual moat. | Sounds like an accounting tool. |
+| **TraceScript** | Catchier; "trace" implies source-traceability. | Doesn't say "story" out loud. |
+| **ProofNarrative** | Says the quiet part out loud (sourced narrative). | Clunky as a brand. |
+| **SourceFrame** | "Frame" implies the narrative scaffolding around sources. | Generic; collides with photography / framing terms. |
+
+Decision rule when the time comes: pick the name that survives the
+"explain it to a true-crime YouTube creator in one sentence" test.
+StoryLedger and TraceScript both pass; the other two need a second
+sentence.
 
 ## Open questions (for the resume conversation)
 
