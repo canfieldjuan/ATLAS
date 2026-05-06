@@ -442,6 +442,11 @@ python scripts/progress_extracted_campaign_sequences.py \
   --limit 10
 ```
 
+Add `--visibility-jsonl /var/log/content-ops/campaign-events.jsonl` to the
+generation, send, sequence progression, or analytics CLIs when the host wants a
+file-backed operation audit trail without mounting the FastAPI operations
+router.
+
 Or mount the hosted operations router in a FastAPI app for admin-triggered
 draft generation, send, sequence progression, and analytics refresh actions:
 

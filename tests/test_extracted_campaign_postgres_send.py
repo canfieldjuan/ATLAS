@@ -11,6 +11,7 @@ from extracted_content_pipeline.campaign_postgres_send import (
     send_due_campaigns_from_postgres,
 )
 from extracted_content_pipeline.campaign_send import CampaignSendConfig, CampaignSendSummary
+from extracted_content_pipeline.campaign_visibility import read_jsonl_visibility_events
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -234,10 +235,15 @@ def test_send_cli_reports_invalid_float_env(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_cli_outputs_json_summary_and_closes_pool(monkeypatch, capsys) -> None:
+async def test_send_cli_outputs_json_summary_and_closes_pool(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
     cli = _load_cli_module()
     pool = _Pool()
     calls: dict[str, object] = {}
+    visibility_path = tmp_path / "visibility.jsonl"
 
     async def create_pool(database_url):
         calls["database_url"] = database_url
@@ -276,6 +282,8 @@ async def test_send_cli_outputs_json_summary_and_closes_pool(monkeypatch, capsys
             "--limit",
             "4",
             "--json",
+            "--visibility-jsonl",
+            str(visibility_path),
         ],
     )
 
@@ -302,6 +310,23 @@ async def test_send_cli_outputs_json_summary_and_closes_pool(monkeypatch, capsys
         company_address="",
         limit=4,
     )
+    events = read_jsonl_visibility_events(visibility_path)
+    assert [row["event_type"] for row in events] == [
+        "campaign_operation_started",
+        "campaign_operation_failed",
+    ]
+    assert events[0]["payload"] == {
+        "limit": 4,
+        "operation": "send_queued",
+        "provider": "resend",
+    }
+    assert events[1]["payload"]["error_type"] == "reported_failures"
+    assert events[1]["payload"]["result"] == {
+        "failed": 1,
+        "sent": 2,
+        "skipped": 1,
+        "suppressed": 0,
+    }
 
 
 @pytest.mark.asyncio

@@ -397,6 +397,20 @@ python scripts/progress_extracted_campaign_sequences.py \
   --json
 ```
 
+For non-FastAPI worker installs, the four operational CLIs can append the same
+start/completed/failed telemetry to a JSONL audit trail:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --visibility-jsonl /var/log/content-ops/campaign-events.jsonl
+
+python scripts/send_extracted_campaigns.py \
+  --provider resend \
+  --default-from-email audit@customer.com \
+  --visibility-jsonl /var/log/content-ops/campaign-events.jsonl
+```
+
 Hosts with FastAPI apps can mount draft generation, send, sequence progression,
 and analytics worker triggers through a hosted operations router. The host
 injects its database pool, sender, optional LLM/skill/reasoning providers, and
