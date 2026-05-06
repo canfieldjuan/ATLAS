@@ -708,3 +708,151 @@ async def test_multi_pass_provider_narrative_plan_excludes_falsified_when_drop_f
     # c1 was falsified and drop_falsified=True → not in the narrative plan.
     assert "c1" not in plan_claim_ids
     assert "c2" in plan_claim_ids
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_skips_validation_when_output_policy_unset() -> None:
+    """No output_policy → no validation key in canonical_reasoning (no-op preserved)."""
+
+    llm = FakeLLMPort([_falsifiable_synthesis_response()])
+    provider = MultiPassCampaignReasoningProvider(ports=ReasoningPorts(llm=llm))
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    assert "validation" not in context.canonical_reasoning
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_surfaces_validation_report_when_policy_passes() -> None:
+    """output_policy set + result passes → validation report surfaced with passed=True."""
+
+    from extracted_reasoning_core.types import OutputPolicy
+
+    llm = FakeLLMPort([_falsifiable_synthesis_response()])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            output_policy=OutputPolicy(min_confidence=0.5, require_citations=True),
+        ),
+    )
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    validation = context.canonical_reasoning["validation"]
+    assert validation["passed"] is True
+    assert validation["blockers"] == ()
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_surfaces_validation_report_when_policy_fails() -> None:
+    """output_policy fails + block_on_validation_failure=False (default) → context returned with passed=False."""
+
+    from extracted_reasoning_core.types import OutputPolicy
+
+    llm = FakeLLMPort([_falsifiable_synthesis_response()])
+    # min_confidence=0.99 forces a confidence_below_min blocker (result confidence is 0.8).
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            output_policy=OutputPolicy(min_confidence=0.99),
+        ),
+    )
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    validation = context.canonical_reasoning["validation"]
+    assert validation["passed"] is False
+    assert "confidence_below_min" in validation["blockers"]
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_blocks_context_when_validation_fails_and_flag_set() -> None:
+    """block_on_validation_failure=True + failing report → bridge returns None."""
+
+    from extracted_reasoning_core.types import OutputPolicy
+
+    llm = FakeLLMPort([_falsifiable_synthesis_response()])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            output_policy=OutputPolicy(min_confidence=0.99),
+            block_on_validation_failure=True,
+        ),
+    )
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is None
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_validation_excludes_falsified_when_drop_falsified_true() -> None:
+    """drop_falsified=True pre-filters validation target so per-claim blockers reference rendered claims."""
+
+    from extracted_reasoning_core.types import FalsificationPolicy, OutputPolicy
+
+    # c1 has source_ids=["r1"] (cited), c2 will be the test target.
+    # We'll make c2 lack source_ids by emitting a custom synthesis response,
+    # then falsify c2 and drop it. With pre-filter, validation should pass
+    # (no claim_missing_citations on the surviving c1).
+    synthesis_response = {
+        "response": json.dumps({
+            "summary": "Two drivers identified.",
+            "claims": [
+                {"claim_id": "c1", "claim": "Renewal pricing drives churn.", "confidence": 0.8, "source_ids": ["r1"]},
+                {"claim_id": "c2", "claim": "Onboarding friction is secondary.", "confidence": 0.6, "source_ids": []},
+            ],
+            "confidence": 0.8,
+        }),
+        "usage": {"input_tokens": 4, "output_tokens": 2},
+    }
+    llm = FakeLLMPort([
+        synthesis_response,
+        _falsification_response(triggered=[], should_invalidate=False),  # c1 survives
+        _falsification_response(triggered=["x"], should_invalidate=True),  # c2 falsified
+    ])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            falsification_policy=FalsificationPolicy(rules=({"id": "x"},), conservative=False),
+            drop_falsified=True,
+            output_policy=OutputPolicy(require_citations=True, min_confidence=0.0),
+        ),
+    )
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    validation = context.canonical_reasoning["validation"]
+    # c2 (the unciteable claim) was dropped before validation, so no
+    # claim_missing_citations blocker fires.
+    assert validation["passed"] is True
+    assert validation["blockers"] == ()
