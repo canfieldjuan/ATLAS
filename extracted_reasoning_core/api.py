@@ -1323,10 +1323,79 @@ def validate_reasoning_output(
     *,
     policy: OutputPolicy | None = None,
 ) -> ValidationReport:
-    """Validate a reasoned output against output policy."""
-    del result
-    del policy
-    raise NotImplementedError("validate_reasoning_output lands with validation policy")
+    """Validate a reasoned output against an output policy.
+
+    Pure deterministic check (no LLM call). Each policy field maps to a
+    specific blocker class:
+
+      * ``min_confidence`` → ``confidence_below_min`` blocker if the
+        result's overall confidence is under the threshold.
+      * ``require_citations`` → ``claim_missing_citations:<idx>``
+        blocker for each claim with no ``source_ids``.
+      * ``required_claim_types`` → ``missing_required_claim_type:<type>``
+        blocker for each declared type absent from any claim's
+        ``type``/``category`` field.
+      * ``blocked_phrasing`` → ``blocked_phrasing:<phrase>`` blocker if
+        any blocked substring (case-insensitive) appears in the summary
+        or any claim text.
+
+    Empty claims raises a single ``no_claims`` blocker (always invalid).
+
+    ``passed`` is ``True`` iff there are no blockers. Warnings are not
+    used in v1 (reserved for future soft checks). ``repaired_fields`` is
+    always empty -- this validator inspects, it does not mutate.
+    """
+    effective_policy = policy or OutputPolicy()
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not result.claims:
+        blockers.append("no_claims")
+
+    if result.confidence < effective_policy.min_confidence:
+        blockers.append("confidence_below_min")
+
+    if effective_policy.require_citations:
+        for index, claim in enumerate(result.claims):
+            source_ids = claim.get("source_ids") or ()
+            if not source_ids:
+                blockers.append(f"claim_missing_citations:{index}")
+
+    if effective_policy.required_claim_types:
+        present_types = {
+            str(claim.get("type") or claim.get("category") or "").strip()
+            for claim in result.claims
+        }
+        present_types.discard("")
+        for required in effective_policy.required_claim_types:
+            if required not in present_types:
+                blockers.append(f"missing_required_claim_type:{required}")
+
+    if effective_policy.blocked_phrasing:
+        haystack_parts = [result.summary or ""]
+        for claim in result.claims:
+            for key in ("claim", "summary", "narrative"):
+                value = claim.get(key)
+                if isinstance(value, str):
+                    haystack_parts.append(value)
+        haystack = "\n".join(haystack_parts).lower()
+        for phrase in effective_policy.blocked_phrasing:
+            if str(phrase).lower() in haystack:
+                blockers.append(f"blocked_phrasing:{phrase}")
+
+    return ValidationReport(
+        passed=not blockers,
+        blockers=tuple(blockers),
+        warnings=tuple(warnings),
+        repaired_fields={},
+        trace={
+            "claim_count": len(result.claims),
+            "confidence": result.confidence,
+            "tier": result.tier,
+            "policy_required_types": tuple(effective_policy.required_claim_types),
+            "policy_min_confidence": effective_policy.min_confidence,
+        },
+    )
 
 
 __all__ = [
