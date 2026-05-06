@@ -239,10 +239,15 @@ def build_narrative_plan(
       * ``min_confidence`` (default 0.0): drop claims below this score.
       * ``max_sections`` (default 10): cap the number of sections.
       * ``claim_ordering`` (default "by_confidence"): "by_confidence"
-        sorts claims descending by confidence; "preserve_input" keeps
-        the order from the source.
+        sorts claims descending by confidence; any other value
+        (including "preserve_input") keeps the order from the source.
       * ``default_section`` (default "main"): section name used when a
         claim doesn't carry a ``section`` field.
+
+    ``state_hints`` includes ``dropped_below_confidence`` (claims removed
+    by ``min_confidence``) and ``dropped_due_to_section_cap`` (claims
+    removed because their section exceeded ``max_sections``) so callers
+    can distinguish missing data from rendering choices.
     """
 
     raw_synthesis = context.get("raw_synthesis") if isinstance(context.get("raw_synthesis"), Mapping) else None
@@ -281,7 +286,13 @@ def build_narrative_plan(
         section_claims[section_name].append(claim)
 
     if len(section_order) > max_sections:
+        capped_section_names = section_order[max_sections:]
+        dropped_due_to_section_cap = sum(
+            len(section_claims[s]) for s in capped_section_names
+        )
         section_order = section_order[:max_sections]
+    else:
+        dropped_due_to_section_cap = 0
 
     sections: list[Mapping[str, Any]] = []
     evidence_requirements: list[Mapping[str, Any]] = []
@@ -299,7 +310,7 @@ def build_narrative_plan(
         })
         evidence_requirements.append({
             "section_id": section_name,
-            "required_source_ids": section_source_ids,
+            "cited_source_ids": section_source_ids,
             "claim_count": len(claims_in_section),
         })
 
@@ -313,6 +324,7 @@ def build_narrative_plan(
             "claim_count": len(plan_claims),
             "section_count": len(sections),
             "dropped_below_confidence": dropped,
+            "dropped_due_to_section_cap": dropped_due_to_section_cap,
             "pack": pack.name,
             "pack_version": pack.version,
             "depth": context.get("depth") or context.get("tier") or "",

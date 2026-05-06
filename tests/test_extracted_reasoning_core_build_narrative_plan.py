@@ -57,7 +57,7 @@ def test_build_narrative_plan_happy_path_orders_by_confidence_and_groups_section
     assert drivers["claim_count"] == 2
     assert drivers["title"] == "Drivers"
     drivers_evidence = next(e for e in plan.evidence_requirements if e["section_id"] == "drivers")
-    assert set(drivers_evidence["required_source_ids"]) == {"r1", "r2", "r3"}
+    assert set(drivers_evidence["cited_source_ids"]) == {"r1", "r2", "r3"}
     assert plan.state_hints["overall_confidence"] == 0.78
     assert plan.state_hints["claim_count"] == 3
     assert plan.state_hints["dropped_below_confidence"] == 0
@@ -92,6 +92,11 @@ def test_build_narrative_plan_max_sections_caps_section_count() -> None:
     # section names from the confidence-sorted list survive.
     section_ids = [s["id"] for s in plan.sections]
     assert section_ids == ["drivers", "competitive"]
+    # c4 was dropped because its "operations" section exceeded the cap.
+    plan_claim_ids = [c["claim_id"] for c in plan.claims]
+    assert "c4" not in plan_claim_ids
+    assert plan.state_hints["dropped_due_to_section_cap"] == 1
+    assert plan.state_hints["claim_count"] == 3  # c1, c2, c3 survive
 
 
 def test_build_narrative_plan_accepts_raw_synthesis_directly_without_state_wrapper() -> None:
@@ -102,6 +107,21 @@ def test_build_narrative_plan_accepts_raw_synthesis_directly_without_state_wrapp
 
     assert plan.state_hints["claim_count"] == 3
     assert plan.state_hints["overall_confidence"] == 0.78
+
+
+def test_build_narrative_plan_preserve_input_keeps_source_order() -> None:
+    """claim_ordering="preserve_input" keeps source order even when confidence differs."""
+
+    state = _state_with_claims()
+    # Source order is [c1=0.85, c2=0.55, c3=0.7]; by_confidence would reorder to c1, c3, c2.
+    pack = ReasoningPack(name="preserve", policies={"claim_ordering": "preserve_input"})
+
+    plan = build_narrative_plan(state, pack=pack)
+
+    # All three claims present; section grouping still applies, but within each
+    # section claims keep their source order.
+    drivers = [c["claim_id"] for c in plan.claims if c.get("section") == "drivers"]
+    assert drivers == ["c1", "c2"]
 
 
 def test_build_narrative_plan_empty_context_returns_empty_plan() -> None:
