@@ -116,6 +116,9 @@ context rows keyed by target id, company, email, or vendor, normalizes them into
 `CampaignReasoningContext`, and keeps AI Content Ops independent from any
 reasoning producer.
 
+Use `campaign_reasoning_data.load_reasoning_provider_port(...)` when wiring this
+adapter into host CLI/runtime entrypoints.
+
 ```bash
 python scripts/run_extracted_campaign_generation_example.py \
   --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json

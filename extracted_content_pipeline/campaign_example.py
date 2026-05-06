@@ -17,6 +17,9 @@ from .campaign_ports import (
     TenantScope,
 )
 
+from .services.reasoning_provider_port import CampaignReasoningProviderPort
+
+
 
 _EXAMPLE_PROMPT = (
     "You are generating one outbound campaign draft from normalized customer "
@@ -251,7 +254,7 @@ async def generate_campaign_drafts_from_payload(
     payload: Mapping[str, Any],
     *,
     llm: LLMClient | None = None,
-    reasoning_context: CampaignReasoningContextProvider | None = None,
+    reasoning_context: CampaignReasoningContextProvider | CampaignReasoningProviderPort | None = None,
     skills: SkillStore | None = None,
 ) -> dict[str, Any]:
     """Run campaign generation from a portable JSON-compatible payload."""

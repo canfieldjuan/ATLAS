@@ -22,7 +22,7 @@ from extracted_content_pipeline.campaign_customer_data import (  # noqa: E402
     load_campaign_opportunities_from_file,
 )
 from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
-    load_campaign_reasoning_context_provider,
+    load_reasoning_provider_port,
 )
 
 
@@ -115,7 +115,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     if args.reasoning_context:
-        overrides["reasoning_context"] = load_campaign_reasoning_context_provider(
+        overrides["reasoning_context"] = load_reasoning_provider_port(
             args.reasoning_context
         )
     if args.skills_root:
