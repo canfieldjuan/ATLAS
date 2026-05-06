@@ -233,7 +233,7 @@ async def test_stubbed_async_entry_points_fail_closed_until_consolidated() -> No
         evidence=(evidence,),
     )
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(api.ConfigurationError):
         await api.run_reasoning(reasoning_input)
 
     with pytest.raises(NotImplementedError):

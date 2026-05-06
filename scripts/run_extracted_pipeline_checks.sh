@@ -44,6 +44,7 @@ pytest \
   tests/test_extracted_content_pipeline_reasoning_temporal.py \
   tests/test_extracted_content_pipeline_reasoning_evidence_engine.py \
   tests/test_extracted_reasoning_core_api.py \
+  tests/test_extracted_reasoning_core_run_reasoning.py \
   tests/test_extracted_reasoning_core_archetypes.py \
   tests/test_extracted_reasoning_core_evidence_engine.py \
   tests/test_extracted_reasoning_core_event_trace_ports.py \
