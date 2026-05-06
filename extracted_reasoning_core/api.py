@@ -1241,8 +1241,21 @@ def build_semantic_cache_key(
     the leading segments are human-readable while the digest (16-char
     hex from :func:`compute_evidence_hash`) captures full content
     sensitivity.
+
+    The default pack name (``"reasoning_synthesis"``) matches the fallback
+    that ``run_reasoning`` and ``continue_reasoning`` apply, so cache
+    lookups for inputs without an explicit pack still align with what
+    synthesis actually computed against.
+
+    ``tier`` and ``pack_name`` must not contain ``/`` (raises
+    ``ValueError``) since the slash separates key segments.
     """
-    effective_pack = pack_name or reasoning_input.pack_name or "default"
+    effective_pack = pack_name or reasoning_input.pack_name or "reasoning_synthesis"
+    for label, value in (("tier", tier), ("pack_name", effective_pack)):
+        if "/" in value:
+            raise ValueError(
+                f"semantic cache key {label} cannot contain '/': {value!r}"
+            )
     payload = {
         "entity_id": reasoning_input.entity_id,
         "entity_type": reasoning_input.entity_type,
