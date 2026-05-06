@@ -120,6 +120,9 @@
   hosts: an in-memory sink for local dashboards/tests, a JSONL sink for
   append-only operation audit trails, and shared event helpers used by hosted
   operation routes and worker CLIs.
+- `scripts/read_extracted_campaign_visibility.py` gives lightweight worker
+  installs a read-only way to filter and inspect JSONL operation audit trails
+  without mounting the hosted operations router.
 - Small task utility helpers are product-owned rather than Atlas-synced:
   `_execution_progress`, `_google_news`, `_blog_ts`, `_blog_deploy`, and
   `_b2b_batch_utils`, and `_blog_matching`.

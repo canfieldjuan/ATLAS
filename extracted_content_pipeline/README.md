@@ -409,6 +409,11 @@ python scripts/send_extracted_campaigns.py \
   --provider resend \
   --default-from-email audit@customer.com \
   --visibility-jsonl /var/log/content-ops/campaign-events.jsonl
+
+python scripts/read_extracted_campaign_visibility.py \
+  /var/log/content-ops/campaign-events.jsonl \
+  --operation send_queued \
+  --limit 10
 ```
 
 Hosts with FastAPI apps can mount draft generation, send, sequence progression,
