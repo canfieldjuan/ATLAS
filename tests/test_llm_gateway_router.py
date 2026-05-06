@@ -1026,13 +1026,15 @@ def test_reconciliation_dedupes_by_model_via_sum_not_overwrite():
     price tiers, mid-cycle pricing changes). The dict-comp
     overwrite pattern would silently drop all but the last and
     understate the invoice total. Sum instead so duplicates
-    aggregate correctly."""
+    aggregate correctly. After the Codex P2 fix the dict key is
+    the normalized model id (so two aliases collapsing to the
+    same canonical model also aggregate cleanly)."""
     from atlas_brain.api import llm_gateway
 
     src = inspect.getsource(llm_gateway.reconciliation)
-    # The summing pattern.
-    assert "invoice_by_model[item.model] = (" in src
-    assert "invoice_by_model.get(item.model, 0.0)" in src
+    # The summing pattern keyed on the normalized model id.
+    assert "invoice_by_model[normalized] = (" in src
+    assert "invoice_by_model.get(normalized, 0.0)" in src
     assert "+ float(item.invoice_cost_usd)" in src
     # The naive dict-comp must not return.
     assert "invoice_by_model: dict[str, float] = {\n        item.model:" not in src
@@ -1086,3 +1088,37 @@ def test_reconciliation_sql_anchors_period_to_utc():
     src = inspect.getsource(llm_gateway.reconciliation)
     assert "AND created_at >= $3::date AT TIME ZONE 'UTC'" in src
     assert "AND created_at <  ($4::date + INTERVAL '1 day') AT TIME ZONE 'UTC'" in src
+
+
+def test_reconciliation_normalizes_model_aliases_on_both_sides():
+    """Codex P2 on PR-D6d: /chat persists body.model (customer
+    input) to llm_usage.model_name while Anthropic invoices use
+    the canonical model id AnthropicLLM normalized to. Without
+    normalizing on read, an alias would split into atlas-only +
+    invoice-only rows in the breakdown -- falsely suggesting
+    non-atlas traffic or pricing drift.
+
+    Both sides go through ``_normalize_anthropic_model`` so the
+    breakdown groups by canonical name. Sum-aggregation handles
+    the case where multiple aliases collapse to the same
+    canonical model."""
+    from atlas_brain.api import llm_gateway
+
+    src = inspect.getsource(llm_gateway.reconciliation)
+    # Normalization helper imported.
+    assert "from ..services.llm.anthropic import _normalize_anthropic_model" in inspect.getsource(llm_gateway)
+    # Atlas-side normalization (with sum-aggregation in case
+    # multiple aliases collapse to the same canonical key).
+    assert "model = _normalize_anthropic_model(row[\"model_name\"] or \"\")" in src
+    assert 'atlas_by_model[model] = (' in src
+    assert "atlas_by_model.get(model, 0.0)" in src
+    # Invoice-side normalization.
+    assert "normalized = _normalize_anthropic_model(item.model)" in src
+    assert "invoice_by_model[normalized] = (" in src
+    # Helper itself collapses aliases (smoke test the round-trip).
+    from atlas_brain.services.llm.anthropic import _normalize_anthropic_model
+    # Empty input gets the default model -- harmless for our path
+    # (empty model strings shouldn't make it past Pydantic min_length
+    # validation on invoice items, and llm_usage rows with NULL
+    # model_name are an edge case worth bucketing somewhere).
+    assert _normalize_anthropic_model("") != ""

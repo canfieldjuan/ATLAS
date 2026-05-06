@@ -47,7 +47,7 @@ from ..services.b2b.llm_exact_cache import (
     store_cached_text,
 )
 from ..services.byok_keys import lookup_provider_key_async
-from ..services.llm.anthropic import convert_messages
+from ..services.llm.anthropic import _normalize_anthropic_model, convert_messages
 from ..services.llm_gateway_batch import (
     CustomerBatchItem,
     _estimate_cost_usd,
@@ -745,10 +745,21 @@ async def reconciliation(
         body.period_end,
     )
 
+    # Normalize model names on both sides before keying.
+    # /chat persists ``body.model`` (the customer's input) to
+    # ``llm_usage.model_name`` while Anthropic invoices use the
+    # canonical name AnthropicLLM normalized to. Without this
+    # step, an Anthropic alias on the customer's request would
+    # split into an atlas-only alias row plus an invoice-only
+    # canonical row in the breakdown, falsely suggesting non-
+    # atlas traffic or pricing drift. Codex P2 fix on PR-D6d.
     atlas_by_model: dict[str, float] = {}
     for row in rows:
-        model = row["model_name"] or ""
-        atlas_by_model[model] = float(row["atlas_usd"] or 0.0)
+        model = _normalize_anthropic_model(row["model_name"] or "")
+        atlas_by_model[model] = (
+            atlas_by_model.get(model, 0.0)
+            + float(row["atlas_usd"] or 0.0)
+        )
 
     # Sum duplicate model entries instead of dict-comp overwrite.
     # Customers legitimately have multi-row line items per model
@@ -757,8 +768,9 @@ async def reconciliation(
     # and they'd have no signal. Audit catch on PR-D6d.
     invoice_by_model: dict[str, float] = {}
     for item in body.by_model:
-        invoice_by_model[item.model] = (
-            invoice_by_model.get(item.model, 0.0)
+        normalized = _normalize_anthropic_model(item.model)
+        invoice_by_model[normalized] = (
+            invoice_by_model.get(normalized, 0.0)
             + float(item.invoice_cost_usd)
         )
 
