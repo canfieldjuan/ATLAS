@@ -59,6 +59,38 @@ def build_settings() -> SimpleNamespace:
         ),
         vendor_briefing_sender_name=os.getenv("EXTRACTED_VENDOR_BRIEFING_SENDER_NAME")
         or "Atlas",
+        vendor_briefing_standard_churn_subject_template=os.getenv(
+            "EXTRACTED_VENDOR_BRIEFING_STANDARD_CHURN_SUBJECT_TEMPLATE"
+        )
+        or "Churn Intelligence Briefing: {vendor_name}",
+        vendor_briefing_standard_sales_subject_template=os.getenv(
+            "EXTRACTED_VENDOR_BRIEFING_STANDARD_SALES_SUBJECT_TEMPLATE"
+        )
+        or "Sales Intelligence Briefing: {vendor_name}",
+        vendor_briefing_prospect_churn_subject_template=os.getenv(
+            "EXTRACTED_VENDOR_BRIEFING_PROSPECT_CHURN_SUBJECT_TEMPLATE"
+        )
+        or "{vendor_name} -- Churn Signals Detected",
+        vendor_briefing_prospect_sales_subject_template=os.getenv(
+            "EXTRACTED_VENDOR_BRIEFING_PROSPECT_SALES_SUBJECT_TEMPLATE"
+        )
+        or "{vendor_name} -- Accounts In Motion",
+        vendor_briefing_gated_churn_subject_template=os.getenv(
+            "EXTRACTED_VENDOR_BRIEFING_GATED_CHURN_SUBJECT_TEMPLATE"
+        )
+        or "Your {vendor_name} Churn Intelligence Report",
+        vendor_briefing_gated_sales_subject_template=os.getenv(
+            "EXTRACTED_VENDOR_BRIEFING_GATED_SALES_SUBJECT_TEMPLATE"
+        )
+        or "Your {vendor_name} Sales Intelligence Report",
+        vendor_briefing_tag_type_name=os.getenv("EXTRACTED_VENDOR_BRIEFING_TAG_TYPE_NAME")
+        or "type",
+        vendor_briefing_tag_type_value=os.getenv("EXTRACTED_VENDOR_BRIEFING_TAG_TYPE_VALUE")
+        or "vendor_briefing",
+        vendor_briefing_tag_vendor_name=os.getenv(
+            "EXTRACTED_VENDOR_BRIEFING_TAG_VENDOR_NAME"
+        )
+        or "vendor",
         vendor_briefing_gate_base_url=os.getenv("EXTRACTED_VENDOR_BRIEFING_GATE_BASE_URL")
         or "https://example.com/vendor-briefing",
         vendor_briefing_gate_expiry_days=_to_int(

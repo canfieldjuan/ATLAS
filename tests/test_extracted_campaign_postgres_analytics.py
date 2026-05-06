@@ -9,6 +9,7 @@ from extracted_content_pipeline.campaign_analytics import CampaignAnalyticsRefre
 from extracted_content_pipeline.campaign_postgres_analytics import (
     refresh_campaign_analytics_from_postgres,
 )
+from extracted_content_pipeline.campaign_visibility import read_jsonl_visibility_events
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,9 +124,14 @@ async def test_analytics_cli_closes_pool_and_prints_json(monkeypatch, capsys) ->
 
 
 @pytest.mark.asyncio
-async def test_analytics_cli_returns_nonzero_on_refresh_error(monkeypatch, capsys) -> None:
+async def test_analytics_cli_returns_nonzero_on_refresh_error(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
     cli = _load_cli_module()
     pool = _Pool()
+    visibility_path = tmp_path / "visibility.jsonl"
 
     async def fake_create_pool(database_url):
         return pool
@@ -137,6 +143,8 @@ async def test_analytics_cli_returns_nonzero_on_refresh_error(monkeypatch, capsy
     monkeypatch.setattr(cli, "_parse_args", lambda: parse_args([
         "--database-url",
         "postgres://example",
+        "--visibility-jsonl",
+        str(visibility_path),
     ]))
     monkeypatch.setattr(cli, "_create_pool", fake_create_pool)
     monkeypatch.setattr(cli, "refresh_campaign_analytics_from_postgres", fake_refresh)
@@ -146,3 +154,14 @@ async def test_analytics_cli_returns_nonzero_on_refresh_error(monkeypatch, capsy
     assert exit_code == 1
     assert pool.closed is True
     assert "refreshed=False error=view locked" in capsys.readouterr().out
+    events = read_jsonl_visibility_events(visibility_path)
+    assert [row["event_type"] for row in events] == [
+        "campaign_operation_started",
+        "campaign_operation_failed",
+    ]
+    assert events[0]["payload"] == {"operation": "analytics_refresh"}
+    assert events[1]["payload"] == {
+        "error_type": "reported_error",
+        "operation": "analytics_refresh",
+        "result": {"refreshed": False},
+    }

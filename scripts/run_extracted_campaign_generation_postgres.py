@@ -23,6 +23,15 @@ from extracted_content_pipeline.campaign_example import (  # noqa: E402
 from extracted_content_pipeline.campaign_postgres_generation import (  # noqa: E402
     generate_campaign_drafts_from_postgres,
 )
+from extracted_content_pipeline.campaign_visibility import (  # noqa: E402
+    JsonlVisibilitySink,
+    OPERATION_COMPLETED_EVENT,
+    OPERATION_FAILED_EVENT,
+    OPERATION_STARTED_EVENT,
+    REPORTED_FAILURES_ERROR_TYPE,
+    emit_operation_event,
+    visibility_result_summary,
+)
 from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
     load_reasoning_provider_port,
 )
@@ -135,6 +144,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Write result JSON to this path instead of stdout.",
     )
+    parser.add_argument(
+        "--visibility-jsonl",
+        type=Path,
+        help="Append campaign operation visibility events to this JSONL file.",
+    )
     return parser.parse_args(argv)
 
 
@@ -201,29 +215,70 @@ async def _main() -> int:
     _validate_reasoning_args(args)
     if not args.database_url:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
-    pool = await _create_pool(args.database_url)
+    visibility = JsonlVisibilitySink(args.visibility_jsonl) if args.visibility_jsonl else None
+    operation_payload = {
+        "limit": args.limit,
+        "target_mode": args.target_mode,
+        "channel": args.channel,
+        "channels": [
+            item.strip()
+            for item in str(args.channels or "").split(",")
+            if item.strip()
+        ],
+        "account_id": args.account_id,
+    }
+    await emit_operation_event(
+        visibility,
+        OPERATION_STARTED_EVENT,
+        "draft_generation",
+        operation_payload,
+    )
+    pool = None
     try:
+        pool = await _create_pool(args.database_url)
         result = await generate_campaign_drafts_from_postgres(
             pool,
             scope={"account_id": args.account_id, "user_id": args.user_id},
             target_mode=args.target_mode,
             channel=args.channel,
-            channels=tuple(
-                item.strip()
-                for item in str(args.channels or "").split(",")
-                if item.strip()
-            ),
+            channels=tuple(operation_payload["channels"]),
             limit=args.limit,
             filters=_json_object(args.filters_json),
             **_dependency_overrides(args),
         )
+    except Exception as exc:
+        await emit_operation_event(
+            visibility,
+            OPERATION_FAILED_EVENT,
+            "draft_generation",
+            {**operation_payload, "error_type": type(exc).__name__},
+        )
+        raise
     finally:
-        close = getattr(pool, "close", None)
-        if close is not None:
+        if pool is not None and (close := getattr(pool, "close", None)) is not None:
             maybe_awaitable = close()
             if hasattr(maybe_awaitable, "__await__"):
                 await maybe_awaitable
-    output = json.dumps(result.as_dict(), indent=2, sort_keys=True)
+    data = result.as_dict()
+    if data.get("errors") or data.get("skipped"):
+        await emit_operation_event(
+            visibility,
+            OPERATION_FAILED_EVENT,
+            "draft_generation",
+            {
+                **operation_payload,
+                "error_type": REPORTED_FAILURES_ERROR_TYPE,
+                "result": visibility_result_summary(data),
+            },
+        )
+    else:
+        await emit_operation_event(
+            visibility,
+            OPERATION_COMPLETED_EVENT,
+            "draft_generation",
+            {**operation_payload, "result": visibility_result_summary(data)},
+        )
+    output = json.dumps(data, indent=2, sort_keys=True)
     if args.output:
         args.output.write_text(f"{output}\n", encoding="utf-8")
     else:

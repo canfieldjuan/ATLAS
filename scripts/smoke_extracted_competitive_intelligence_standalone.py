@@ -41,6 +41,7 @@ MODULES = [
     "extracted_competitive_intelligence.services.b2b.competitive_set_ports",
     "extracted_competitive_intelligence.services.b2b.battle_card_ports",
     "extracted_competitive_intelligence.services.b2b.vendor_briefing_delivery",
+    "extracted_competitive_intelligence.services.b2b.vendor_briefing_repository",
     "extracted_competitive_intelligence.services.b2b.vendor_briefing_ports",
     "extracted_competitive_intelligence.services.b2b.vendor_briefing_api_ports",
     "extracted_competitive_intelligence.services.b2b.llm_exact_cache",

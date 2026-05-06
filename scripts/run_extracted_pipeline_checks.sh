@@ -12,6 +12,8 @@ python scripts/smoke_extracted_pipeline_imports.py
 python scripts/audit_extracted_standalone.py --fail-on-debt
 pytest \
   tests/test_extracted_campaign_analytics.py \
+  tests/test_extracted_campaign_visibility.py \
+  tests/test_extracted_campaign_visibility_reader_cli.py \
   tests/test_extracted_campaign_manifest.py \
   tests/test_extracted_campaign_generation_seams.py \
   tests/test_extracted_campaign_generation.py \
@@ -36,12 +38,20 @@ pytest \
   tests/test_extracted_campaign_postgres_sequence_progression.py \
   tests/test_extracted_campaign_postgres_import.py \
   tests/test_extracted_campaign_single_pass_reasoning.py \
+  tests/test_extracted_campaign_multi_pass_reasoning_provider.py \
   tests/test_extracted_content_pipeline_migration_runner.py \
   tests/test_extracted_pipeline_notify.py \
   tests/test_extracted_content_pipeline_reasoning_archetypes.py \
   tests/test_extracted_content_pipeline_reasoning_temporal.py \
   tests/test_extracted_content_pipeline_reasoning_evidence_engine.py \
   tests/test_extracted_reasoning_core_api.py \
+  tests/test_extracted_reasoning_core_run_reasoning.py \
+  tests/test_extracted_reasoning_core_continue_reasoning.py \
+  tests/test_extracted_reasoning_core_check_falsification.py \
+  tests/test_extracted_reasoning_core_build_narrative_plan.py \
+  tests/test_extracted_reasoning_core_semantic_cache.py \
+  tests/test_extracted_reasoning_core_load_reasoning_pack.py \
+  tests/test_extracted_reasoning_core_validate_reasoning_output.py \
   tests/test_extracted_reasoning_core_archetypes.py \
   tests/test_extracted_reasoning_core_evidence_engine.py \
   tests/test_extracted_reasoning_core_event_trace_ports.py \

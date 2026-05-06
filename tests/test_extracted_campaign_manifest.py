@@ -118,6 +118,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/pipelines/notify.py" in owned
     assert "extracted_content_pipeline/campaign_llm_client.py" in owned
     assert "extracted_content_pipeline/campaign_ports.py" in owned
+    assert "extracted_content_pipeline/campaign_visibility.py" in owned
     assert "extracted_content_pipeline/campaign_generation.py" in owned
     assert "extracted_content_pipeline/campaign_analytics.py" in owned
     assert "extracted_content_pipeline/campaign_webhooks.py" in owned
@@ -169,6 +170,7 @@ def test_product_owned_utility_helpers_are_not_manifest_synced() -> None:
     mapped = _mapped_targets()
 
     assert "extracted_content_pipeline/campaign_ports.py" not in mapped
+    assert "extracted_content_pipeline/campaign_visibility.py" not in mapped
     assert "extracted_content_pipeline/campaign_generation.py" not in mapped
     assert "extracted_content_pipeline/campaign_analytics.py" not in mapped
     assert "extracted_content_pipeline/campaign_webhooks.py" not in mapped

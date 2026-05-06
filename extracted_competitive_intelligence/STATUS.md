@@ -36,6 +36,7 @@ Full task/runtime decoupling remains Phase 3.
 | Battle-card support port | ✅ `services.b2b.battle_card_ports` replaces direct `_b2b_shared.py`, churn-scope, execution-progress, synthesis-reader, and webhook imports for battle-card support |
 | Vendor briefing intelligence port | ✅ `services.b2b.vendor_briefing_ports` replaces direct `_b2b_shared.py`, `_b2b_synthesis_reader.py`, LLM pipeline, LLM router, protocol, and cache-runner imports for vendor briefing support |
 | Vendor briefing delivery helper | ✅ `services.b2b.vendor_briefing_delivery` centralizes config-backed subject/from/tags and CampaignSender invocation for scheduled and approved briefing sends |
+| Vendor briefing repository helper | ✅ `services.b2b.vendor_briefing_repository` centralizes delivery records, HITL approval/rejection updates, cooldown checks, and pending-approval writes |
 | Vendor briefing API runtime port | ✅ `services.b2b.vendor_briefing_api_ports` owns checkout, session lookup, PDF attachment delivery, and gated-report email runtime edges |
 | ProductClaim compatibility | ✅ `services.b2b.product_claim` re-exports `extracted_quality_gate.product_claim` instead of bridging to Atlas |
 | Suppression-callback Protocol | ✅ `autonomous.tasks.campaign_suppression` routes to injectable standalone suppression policy |
@@ -59,9 +60,9 @@ Full task/runtime decoupling remains Phase 3.
 
 | Metric | Count |
 |---|---:|
-| Extracted files | 94 |
-| Manifest mappings | 12 |
-| Manifest Python snapshots | 3 |
+| Extracted files | 95 |
+| Manifest mappings | 13 |
+| Manifest Python snapshots | 4 |
 | Manifest SQL snapshots | 9 |
 | Product-owned modules | 26 |
 
@@ -126,7 +127,7 @@ Product-owned modules:
 | `reasoning/ecosystem.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/_b2b_batch_utils.py` | n/a | ✅ | ✅ |
 | `autonomous/tasks/b2b_battle_cards.py` | ✅ | 🔲 (shared-helper, churn-scope, progress, synthesis-reader, and webhook imports routed through `battle_card_ports.py`; remaining runtime seams need follow-up ports) | 🔲 |
-| `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 (evidence, scorecard, synthesis-reader, LLM/cache, protocol, and tracing imports routed through `vendor_briefing_ports.py`; remaining runtime seams need follow-up ports) | 🔲 |
+| `autonomous/tasks/b2b_vendor_briefing.py` | ✅ | 🔲 (evidence, scorecard, synthesis-reader, LLM/cache, protocol, tracing, delivery, and briefing-state persistence routed through support modules; remaining runtime seams need follow-up ports) | 🔲 |
 | `autonomous/tasks/_b2b_cross_vendor_synthesis.py` | ✅ | ✅ | ✅ |
 | `services/b2b_competitive_sets.py` | ✅ | ✅ | ✅ |
 | `reasoning/cross_vendor_selection.py` | ✅ | ✅ | ✅ |

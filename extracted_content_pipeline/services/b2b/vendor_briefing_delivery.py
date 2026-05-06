@@ -1,4 +1,4 @@
-"""Shared delivery helpers for Competitive Intelligence vendor briefings."""
+"""Shared delivery helpers for content-pipeline vendor briefings."""
 
 from __future__ import annotations
 

@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
-from .ports import Clock, EventSink, LLMClient, ReasoningStateStore, SemanticCacheStore, TraceSink
+from .ports import (
+    Clock,
+    EventSink,
+    LLMClient,
+    ReasoningStateStore,
+    SemanticCacheStore,
+    TraceSink,
+    WitnessContextPort,
+)
 from .wedge_registry import Wedge, WedgeMeta
 
 
@@ -49,6 +57,7 @@ class ReasoningPorts:
     clock: Clock | None = None
     event_sink: EventSink | None = None
     trace_sink: TraceSink | None = None
+    witness_context: WitnessContextPort | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +207,8 @@ class ReasoningPack:
 class FalsificationPolicy:
     rules: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     conservative: bool = True
+    max_tokens: int = 4096
+    temperature: float = 0.1
 
 
 @dataclass(frozen=True)

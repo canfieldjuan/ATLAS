@@ -13,7 +13,9 @@ from extracted_content_pipeline.campaign_postgres_sequence_progression import (
 )
 from extracted_content_pipeline.campaign_sequence_progression import (
     CampaignSequenceProgressionConfig,
+    CampaignSequenceProgressionResult,
 )
+from extracted_content_pipeline.campaign_visibility import read_jsonl_visibility_events
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -313,3 +315,79 @@ def test_sequence_cli_builds_config_and_offline_llm() -> None:
     assert config.onboarding_product_name == "Atlas Ops"
     assert config.temperature == 0.1
     assert cli._llm_from_args(args).__class__.__name__ == "DeterministicCampaignLLM"
+
+
+@pytest.mark.asyncio
+async def test_sequence_cli_writes_visibility_events(monkeypatch, capsys, tmp_path) -> None:
+    cli = _load_cli_module()
+    pool = _Pool()
+    visibility_path = tmp_path / "visibility.jsonl"
+    calls: dict[str, object] = {}
+
+    async def create_pool(database_url):
+        calls["database_url"] = database_url
+        return pool
+
+    async def progress_from_postgres(pool_arg, *, llm, skills, config):
+        calls["pool"] = pool_arg
+        calls["llm"] = llm
+        calls["skills"] = skills
+        calls["config"] = config
+        return CampaignSequenceProgressionResult(
+            due_sequences=2,
+            progressed=1,
+            skipped=1,
+            disabled=False,
+        )
+
+    monkeypatch.setattr(cli, "_create_pool", create_pool)
+    monkeypatch.setattr(
+        cli,
+        "progress_campaign_sequences_from_postgres",
+        progress_from_postgres,
+    )
+    monkeypatch.setattr(cli, "get_skill_registry", lambda root=None: _Skills())
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "progress",
+            "--database-url",
+            "postgres://example",
+            "--limit",
+            "4",
+            "--max-steps",
+            "3",
+            "--from-email",
+            "sales@example.com",
+            "--llm",
+            "offline",
+            "--json",
+            "--visibility-jsonl",
+            str(visibility_path),
+        ],
+    )
+
+    exit_code = await cli._main()
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["progressed"] == 1
+    assert calls["database_url"] == "postgres://example"
+    assert calls["pool"] is pool
+    assert pool.closed is True
+    events = read_jsonl_visibility_events(visibility_path)
+    assert [row["event_type"] for row in events] == [
+        "campaign_operation_started",
+        "campaign_operation_completed",
+    ]
+    assert events[0]["payload"] == {
+        "limit": 4,
+        "max_steps": 3,
+        "operation": "sequence_progression",
+    }
+    assert events[1]["payload"]["result"] == {
+        "disabled": False,
+        "due_sequences": 2,
+        "progressed": 1,
+        "skipped": 1,
+    }

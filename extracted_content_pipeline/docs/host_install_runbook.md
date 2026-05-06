@@ -442,6 +442,18 @@ python scripts/progress_extracted_campaign_sequences.py \
   --limit 10
 ```
 
+Add `--visibility-jsonl /var/log/content-ops/campaign-events.jsonl` to the
+generation, send, sequence progression, or analytics CLIs when the host wants a
+file-backed operation audit trail without mounting the FastAPI operations
+router. Inspect the same file with:
+
+```bash
+python scripts/read_extracted_campaign_visibility.py \
+  /var/log/content-ops/campaign-events.jsonl \
+  --json \
+  --limit 20
+```
+
 Or mount the hosted operations router in a FastAPI app for admin-triggered
 draft generation, send, sequence progression, and analytics refresh actions:
 
@@ -474,6 +486,28 @@ The hosted operations payloads are intentionally narrow. Callers may set
 tenant scope, target/channel, filters, `limit`, and, for sequence progression,
 `max_steps`; provider credentials, sender identity, unsubscribe policy, LLM
 client, skill roots, and reasoning providers stay host-configured.
+
+Inject `visibility_provider` when the host wants admin UI telemetry. The four
+POST operation routes emit best-effort `campaign_operation_started`,
+`campaign_operation_completed`, and `campaign_operation_failed` events through
+the `VisibilitySink` port. Sink failures are logged and do not change operation
+responses.
+
+For a file-backed audit trail without writing a custom sink first:
+
+```python
+from extracted_content_pipeline.campaign_visibility import JsonlVisibilitySink
+
+visibility = JsonlVisibilitySink("/var/log/content-ops/campaign-events.jsonl")
+
+app.include_router(
+    create_campaign_operations_router(
+        pool_provider=get_pool,
+        sender_provider=get_campaign_sender,
+        visibility_provider=lambda: visibility,
+    )
+)
+```
 
 For lightweight hosted installs without a separate reasoning provider, set
 `generation_single_pass_reasoning=True` on `CampaignOperationsApiConfig`. The

@@ -79,7 +79,9 @@
   providers are injected. The router also exposes `GET
   /campaigns/operations/status` for admin dashboards to inspect database
   availability, provider presence, feature readiness, and configured limits
-  without exposing credentials.
+  without exposing credentials. Hosts can inject a `VisibilitySink` provider
+  so operation triggers emit best-effort start/completed/failed telemetry
+  without making dashboard storage a product dependency.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
@@ -114,6 +116,13 @@
 - `pipelines.notify` is product-owned and dispatches through the
   `VisibilitySink` port when configured, while staying a no-op when no host
   visibility adapter is installed.
+- `campaign_visibility` provides reference `VisibilitySink` adapters for
+  hosts: an in-memory sink for local dashboards/tests, a JSONL sink for
+  append-only operation audit trails, and shared event helpers used by hosted
+  operation routes and worker CLIs.
+- `scripts/read_extracted_campaign_visibility.py` gives lightweight worker
+  installs a read-only way to filter and inspect JSONL operation audit trails
+  without mounting the hosted operations router.
 - Small task utility helpers are product-owned rather than Atlas-synced:
   `_execution_progress`, `_google_news`, `_blog_ts`, `_blog_deploy`, and
   `_b2b_batch_utils`, and `_blog_matching`.

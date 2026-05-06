@@ -397,6 +397,25 @@ python scripts/progress_extracted_campaign_sequences.py \
   --json
 ```
 
+For non-FastAPI worker installs, the four operational CLIs can append the same
+start/completed/failed telemetry to a JSONL audit trail:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --visibility-jsonl /var/log/content-ops/campaign-events.jsonl
+
+python scripts/send_extracted_campaigns.py \
+  --provider resend \
+  --default-from-email audit@customer.com \
+  --visibility-jsonl /var/log/content-ops/campaign-events.jsonl
+
+python scripts/read_extracted_campaign_visibility.py \
+  /var/log/content-ops/campaign-events.jsonl \
+  --operation send_queued \
+  --limit 10
+```
+
 Hosts with FastAPI apps can mount draft generation, send, sequence progression,
 and analytics worker triggers through a hosted operations router. The host
 injects its database pool, sender, optional LLM/skill/reasoning providers, and
@@ -447,6 +466,29 @@ It also adds `GET /campaigns/operations/status` for admin dashboards. The
 status route reports database availability, injected provider presence, feature
 readiness, and configured limits without resolving sender/LLM/skill providers
 or exposing secrets.
+
+Hosts can inject a `visibility_provider` when mounting the router. The four
+POST operation routes emit best-effort `campaign_operation_started`,
+`campaign_operation_completed`, and `campaign_operation_failed` events through
+the `VisibilitySink` port so dashboards can show worker activity without the
+content product owning a dashboard store. Sink failures are logged and do not
+change operation responses.
+
+For local dashboards or host audit logs, wire a product-owned visibility sink:
+
+```python
+from extracted_content_pipeline.campaign_visibility import JsonlVisibilitySink
+
+visibility = JsonlVisibilitySink("/var/log/content-ops/campaign-events.jsonl")
+
+app.include_router(
+    create_campaign_operations_router(
+        pool_provider=get_pool,
+        sender_provider=get_campaign_sender,
+        visibility_provider=lambda: visibility,
+    )
+)
+```
 
 Mount this router beside `create_b2b_campaign_router` to run the hosted B2B
 flow without SQL in the admin UI:
@@ -538,6 +580,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `campaign_llm_client.py`: `PipelineLLMClient` adapter from the campaign
   `LLMClient` port to extracted LLM infrastructure services, with product-owned
   provider routing config
+- `campaign_visibility.py`: reference in-memory and JSONL `VisibilitySink`
+  adapters for hosted operations telemetry
 - `storage/database.py` and `storage/models.py`: minimal `get_db_pool` and `ScheduledTask` fallbacks
 - `campaign_postgres.py`: async Postgres adapters for intelligence,
   campaign, sequence, suppression, and audit ports, including the product-owned
@@ -565,7 +609,7 @@ Several small utility shims provide product-owned local behavior by default so t
   campaign webhook and unsubscribe routes
 - `api/campaign_operations.py`: optional FastAPI router factory for
   host-mounted draft generation, send, sequence progression, and analytics
-  operation triggers
+  operation triggers with optional `VisibilitySink` telemetry
 - `api/b2b_campaigns.py`: optional FastAPI router factory for host-mounted
   B2B draft list/export/review routes
 - `api/seller_campaigns.py`: optional FastAPI router factory for host-mounted

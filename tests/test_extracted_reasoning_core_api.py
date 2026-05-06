@@ -109,20 +109,18 @@ def test_stubbed_public_entry_points_fail_closed_until_consolidated() -> None:
         state={},
     )
 
-    # PR-C1g wired `score_archetypes` and `build_temporal_evidence`;
-    # PR-C1d wired `evaluate_evidence` to the slim `EvidenceEngine`.
-    # All three originally NotImplementedError stubs are now functional.
-    sync_calls = [
-        lambda: api.build_narrative_plan({}, pack=ReasoningPack(name="default")),
-        lambda: api.compute_evidence_hash({}),
-        lambda: api.build_semantic_cache_key(reasoning_input, tier="L1"),
-        lambda: api.load_reasoning_pack("content_pipeline"),
-        lambda: api.validate_reasoning_output(result),
-    ]
-
-    for call in sync_calls:
-        with pytest.raises(NotImplementedError):
-            call()
+    # PR-D20a..g wired all 8 originally-NotImplementedError stubs in api.py.
+    # Async producers now raise ConfigurationError without an LLM port (asserted
+    # below); sync helpers all return real values.
+    plan = api.build_narrative_plan({}, pack=ReasoningPack(name="default"))
+    assert plan.claims == ()
+    assert isinstance(api.compute_evidence_hash({}), str)
+    assert api.build_semantic_cache_key(reasoning_input, tier="L1").startswith("reasoning/L1/")
+    assert api.load_reasoning_pack("nonexistent_pack_for_stub_test") is None
+    report = api.validate_reasoning_output(result)
+    assert isinstance(report, api.ValidationReport)
+    assert report.passed is False  # empty claims sequence triggers no_claims blocker
+    assert "no_claims" in report.blockers
 
 
 # ------------------------------------------------------------------
@@ -233,11 +231,11 @@ async def test_stubbed_async_entry_points_fail_closed_until_consolidated() -> No
         evidence=(evidence,),
     )
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(api.ConfigurationError):
         await api.run_reasoning(reasoning_input)
 
-    with pytest.raises(NotImplementedError):
-        await api.continue_reasoning({}, {})
+    with pytest.raises(api.ConfigurationError):
+        await api.continue_reasoning({"status": "completed"}, {"event_type": "noop"})
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(api.ConfigurationError):
         await api.check_falsification({}, (evidence,))

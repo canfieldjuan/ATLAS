@@ -27,6 +27,14 @@ from extracted_content_pipeline.campaign_postgres_sequence_progression import ( 
 from extracted_content_pipeline.campaign_sequence_progression import (  # noqa: E402
     CampaignSequenceProgressionConfig,
 )
+from extracted_content_pipeline.campaign_visibility import (  # noqa: E402
+    JsonlVisibilitySink,
+    OPERATION_COMPLETED_EVENT,
+    OPERATION_FAILED_EVENT,
+    OPERATION_STARTED_EVENT,
+    emit_operation_event,
+    visibility_result_summary,
+)
 from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: E402
 
 
@@ -154,6 +162,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Emit JSON summary instead of a concise text summary.",
     )
+    parser.add_argument(
+        "--visibility-jsonl",
+        type=Path,
+        help="Append campaign operation visibility events to this JSONL file.",
+    )
     return parser.parse_args(argv)
 
 
@@ -200,22 +213,44 @@ async def _main() -> int:
     if not args.database_url:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
     _validate_args(args)
-    pool = await _create_pool(args.database_url)
+    visibility = JsonlVisibilitySink(args.visibility_jsonl) if args.visibility_jsonl else None
+    operation_payload = {"limit": args.limit, "max_steps": args.max_steps}
+    await emit_operation_event(
+        visibility,
+        OPERATION_STARTED_EVENT,
+        "sequence_progression",
+        operation_payload,
+    )
+    pool = None
     try:
+        pool = await _create_pool(args.database_url)
         result = await progress_campaign_sequences_from_postgres(
             pool,
             llm=_llm_from_args(args),
             skills=get_skill_registry(root=args.skills_root),
             config=_config_from_args(args),
         )
+    except Exception as exc:
+        await emit_operation_event(
+            visibility,
+            OPERATION_FAILED_EVENT,
+            "sequence_progression",
+            {**operation_payload, "error_type": type(exc).__name__},
+        )
+        raise
     finally:
-        close = getattr(pool, "close", None)
-        if close is not None:
+        if pool is not None and (close := getattr(pool, "close", None)) is not None:
             maybe_awaitable = close()
             if hasattr(maybe_awaitable, "__await__"):
                 await maybe_awaitable
 
     summary = result.as_dict()
+    await emit_operation_event(
+        visibility,
+        OPERATION_COMPLETED_EVENT,
+        "sequence_progression",
+        {**operation_payload, "result": visibility_result_summary(summary)},
+    )
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:

@@ -11,6 +11,7 @@ from extracted_content_pipeline.campaign_postgres_generation import (
     generate_campaign_drafts_from_postgres,
     tenant_scope_from_mapping,
 )
+from extracted_content_pipeline.campaign_visibility import read_jsonl_visibility_events
 from extracted_content_pipeline.services.single_pass_reasoning_provider import (
     SinglePassCampaignReasoningProvider,
 )
@@ -246,6 +247,7 @@ async def test_postgres_runner_cli_wires_pool_offline_and_reasoning_context(
         }),
         encoding="utf-8",
     )
+    visibility_path = tmp_path / "visibility.jsonl"
     created_urls = []
 
     async def create_pool(database_url):
@@ -270,6 +272,8 @@ async def test_postgres_runner_cli_wires_pool_offline_and_reasoning_context(
             "offline",
             "--reasoning-context",
             str(reasoning_path),
+            "--visibility-jsonl",
+            str(visibility_path),
         ],
     )
 
@@ -287,6 +291,20 @@ async def test_postgres_runner_cli_wires_pool_offline_and_reasoning_context(
         "wedge": "renewal pressure",
     }
     assert pool.closed is True
+    events = read_jsonl_visibility_events(visibility_path)
+    assert [row["event_type"] for row in events] == [
+        "campaign_operation_started",
+        "campaign_operation_completed",
+    ]
+    assert events[0]["payload"]["operation"] == "draft_generation"
+    assert events[0]["payload"]["account_id"] == "acct-1"
+    assert events[1]["payload"]["result"] == {
+        "error_count": 0,
+        "generated": 1,
+        "requested": 1,
+        "saved_ids_count": 1,
+        "skipped": 0,
+    }
 
 
 @pytest.mark.asyncio
