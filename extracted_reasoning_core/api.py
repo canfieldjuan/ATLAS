@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping, Sequence
 
 from ._synthesis import (
@@ -1323,10 +1324,90 @@ def validate_reasoning_output(
     *,
     policy: OutputPolicy | None = None,
 ) -> ValidationReport:
-    """Validate a reasoned output against output policy."""
-    del result
-    del policy
-    raise NotImplementedError("validate_reasoning_output lands with validation policy")
+    """Validate a reasoned output against an output policy.
+
+    Pure deterministic check (no LLM call). Each policy field maps to a
+    specific blocker class:
+
+      * ``min_confidence`` → ``confidence_below_min`` blocker if the
+        result's overall confidence is under the threshold.
+      * ``require_citations`` → ``claim_missing_citations:<idx>``
+        blocker for each claim with no ``source_ids``.
+      * ``required_claim_types`` → ``missing_required_claim_type:<type>``
+        blocker for each declared type absent from any claim's
+        ``type``/``category`` field.
+      * ``blocked_phrasing`` → ``blocked_phrasing:<phrase>`` blocker if
+        any blocked phrase (case-insensitive, **word-boundary** match)
+        appears in the result summary or any claim's prose fields. The
+        scanned claim keys are: ``claim``, ``summary``, ``narrative``,
+        ``explanation``, ``rationale``, ``description``. Other claim
+        fields (id, type, source_ids, etc.) are intentionally not
+        scanned to avoid false positives on identifier-shaped strings.
+        Word-boundary matching means ``"promise"`` does NOT block
+        ``"compromise"`` and ``"free"`` does NOT block ``"freedom"``.
+
+    Empty claims raises a single ``no_claims`` blocker (always invalid).
+
+    ``passed`` is ``True`` iff there are no blockers. Warnings are not
+    used in v1 (reserved for future soft checks). ``repaired_fields`` is
+    always empty -- this validator inspects, it does not mutate.
+    """
+    effective_policy = policy or OutputPolicy()
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not result.claims:
+        blockers.append("no_claims")
+
+    if result.confidence < effective_policy.min_confidence:
+        blockers.append("confidence_below_min")
+
+    if effective_policy.require_citations:
+        for index, claim in enumerate(result.claims):
+            source_ids = claim.get("source_ids") or ()
+            if not source_ids:
+                blockers.append(f"claim_missing_citations:{index}")
+
+    if effective_policy.required_claim_types:
+        present_types = {
+            str(claim.get("type") or claim.get("category") or "").strip()
+            for claim in result.claims
+        }
+        present_types.discard("")
+        for required in effective_policy.required_claim_types:
+            if required not in present_types:
+                blockers.append(f"missing_required_claim_type:{required}")
+
+    if effective_policy.blocked_phrasing:
+        prose_keys = ("claim", "summary", "narrative", "explanation", "rationale", "description")
+        haystack_parts = [result.summary or ""]
+        for claim in result.claims:
+            for key in prose_keys:
+                value = claim.get(key)
+                if isinstance(value, str):
+                    haystack_parts.append(value)
+        haystack = "\n".join(haystack_parts)
+        for phrase in effective_policy.blocked_phrasing:
+            phrase_str = str(phrase)
+            if not phrase_str:
+                continue
+            pattern = re.compile(rf"\b{re.escape(phrase_str)}\b", re.IGNORECASE)
+            if pattern.search(haystack):
+                blockers.append(f"blocked_phrasing:{phrase}")
+
+    return ValidationReport(
+        passed=not blockers,
+        blockers=tuple(blockers),
+        warnings=tuple(warnings),
+        repaired_fields={},
+        trace={
+            "claim_count": len(result.claims),
+            "confidence": result.confidence,
+            "tier": result.tier,
+            "policy_required_types": tuple(effective_policy.required_claim_types),
+            "policy_min_confidence": effective_policy.min_confidence,
+        },
+    )
 
 
 __all__ = [

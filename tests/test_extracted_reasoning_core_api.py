@@ -109,25 +109,18 @@ def test_stubbed_public_entry_points_fail_closed_until_consolidated() -> None:
         state={},
     )
 
-    # PR-C1g wired `score_archetypes` and `build_temporal_evidence`;
-    # PR-C1d wired `evaluate_evidence` to the slim `EvidenceEngine`.
-    # All three originally NotImplementedError stubs are now functional.
-    sync_calls = [
-        lambda: api.validate_reasoning_output(result),
-    ]
-
-    for call in sync_calls:
-        with pytest.raises(NotImplementedError):
-            call()
-
-    # build_narrative_plan now returns a NarrativePlan (no longer stubbed).
+    # PR-D20a..g wired all 8 originally-NotImplementedError stubs in api.py.
+    # Async producers now raise ConfigurationError without an LLM port (asserted
+    # below); sync helpers all return real values.
     plan = api.build_narrative_plan({}, pack=ReasoningPack(name="default"))
     assert plan.claims == ()
-    # compute_evidence_hash and build_semantic_cache_key now return strings.
     assert isinstance(api.compute_evidence_hash({}), str)
     assert api.build_semantic_cache_key(reasoning_input, tier="L1").startswith("reasoning/L1/")
-    # load_reasoning_pack now returns None for unknown packs (no longer stubbed).
     assert api.load_reasoning_pack("nonexistent_pack_for_stub_test") is None
+    report = api.validate_reasoning_output(result)
+    assert isinstance(report, api.ValidationReport)
+    assert report.passed is False  # empty claims sequence triggers no_claims blocker
+    assert "no_claims" in report.blockers
 
 
 # ------------------------------------------------------------------
