@@ -249,6 +249,11 @@ async def test_multi_pass_provider_chains_continue_reasoning_for_each_event() ->
     assert context.canonical_reasoning["summary"] == "After event 2"
     # Generation increments: 1 (initial) → 2 (event 1) → 3 (event 2).
     assert context.canonical_reasoning["generation"] == 3
+    # Chain telemetry surfaces in scope_summary.
+    assert context.scope_summary["events_total"] == 2
+    assert context.scope_summary["events_consumed"] == 2
+    assert context.scope_summary["events_truncated"] == 0
+    assert context.scope_summary["chain_halted_on_failure"] is False
 
 
 @pytest.mark.asyncio
@@ -273,6 +278,12 @@ async def test_multi_pass_provider_skips_continuation_when_enable_multi_pass_is_
     # Only the run_reasoning call; the event is silently ignored.
     assert len(llm.calls) == 1
     assert context.canonical_reasoning["generation"] == 1
+    # Telemetry reflects that 1 event was provided but 0 consumed and the
+    # whole list was effectively truncated by the disabled flag.
+    assert context.scope_summary["events_total"] == 1
+    assert context.scope_summary["events_consumed"] == 0
+    assert context.scope_summary["events_truncated"] == 1
+    assert context.scope_summary["chain_halted_on_failure"] is False
 
 
 @pytest.mark.asyncio
@@ -302,6 +313,11 @@ async def test_multi_pass_provider_caps_continuation_chain_at_max_continuations(
     # 1 run_reasoning + 2 continuations (capped) = 3 calls; events 3 and 4 ignored.
     assert len(llm.calls) == 3
     assert context.canonical_reasoning["generation"] == 3
+    # Telemetry surfaces the truncation rather than letting it silently disappear.
+    assert context.scope_summary["events_total"] == 4
+    assert context.scope_summary["events_consumed"] == 2
+    assert context.scope_summary["events_truncated"] == 2
+    assert context.scope_summary["chain_halted_on_failure"] is False
 
 
 @pytest.mark.asyncio
@@ -334,3 +350,25 @@ async def test_multi_pass_provider_keeps_prior_state_when_continuation_fails_val
     # Result reflects event 1 (the last successful state), not event 2.
     assert context.canonical_reasoning["summary"] == "After event 1"
     assert context.canonical_reasoning["generation"] == 2
+    # Telemetry signals the mid-chain validation halt.
+    assert context.scope_summary["events_total"] == 2
+    assert context.scope_summary["events_consumed"] == 1
+    assert context.scope_summary["chain_halted_on_failure"] is True
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_rejects_non_mapping_events_with_clear_error() -> None:
+    """A host accidentally passing strings (or any non-Mapping) gets a TypeError, not silent wrap."""
+
+    llm = FakeLLMPort([_initial_synthesis_response()])
+    provider = MultiPassCampaignReasoningProvider(ports=ReasoningPorts(llm=llm))
+    opp = _opportunity()
+    opp["events"] = ["accidentally_a_string"]
+
+    with pytest.raises(TypeError, match="event_type"):
+        await provider.read_campaign_reasoning_context(
+            scope=TenantScope(),
+            target_id="acme",
+            target_mode="vendor",
+            opportunity=opp,
+        )

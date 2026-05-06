@@ -128,21 +128,43 @@ class MultiPassCampaignReasoningProvider:
         # continuation that fails validation -- the last successful state
         # is what feeds the campaign context.
         events = list(opportunity.get("events") or ())
+        events_total = len(events)
+        events_consumed = 0
+        chain_halted_on_failure = False
         if self._config.enable_multi_pass and events:
             limit = max(0, int(self._config.max_continuations))
             for event in events[:limit]:
+                if not isinstance(event, Mapping):
+                    raise TypeError(
+                        "opportunity['events'] entries must be mappings with at "
+                        f"least an 'event_type' key; got {type(event).__name__}: "
+                        f"{event!r}"
+                    )
                 next_result = await continue_reasoning(
                     result.state,
-                    event if isinstance(event, Mapping) else {"event_type": str(event), "evidence": ()},
+                    event,
                     ports=self._ports,
                 )
                 if str(next_result.state.get("status") or "") != "completed":
                     # Continuation failed validation -- keep the prior
                     # successful state and stop the chain.
+                    chain_halted_on_failure = True
                     break
                 result = next_result
+                events_consumed += 1
 
-        return _result_to_campaign_context(result, limit=self._config.top_thesis_limit)
+        events_truncated = max(0, events_total - max(0, int(self._config.max_continuations))) if self._config.enable_multi_pass else events_total
+        chain_telemetry = {
+            "events_total": events_total,
+            "events_consumed": events_consumed,
+            "events_truncated": events_truncated,
+            "chain_halted_on_failure": chain_halted_on_failure,
+        }
+        return _result_to_campaign_context(
+            result,
+            limit=self._config.top_thesis_limit,
+            chain_telemetry=chain_telemetry,
+        )
 
 
 def _coerce_evidence(item: Any) -> Any:
@@ -163,7 +185,12 @@ def _coerce_evidence(item: Any) -> Any:
     return EvidenceItem(source_type="unknown", source_id="", text=str(item))
 
 
-def _result_to_campaign_context(result: Any, *, limit: int) -> CampaignReasoningContext:
+def _result_to_campaign_context(
+    result: Any,
+    *,
+    limit: int,
+    chain_telemetry: Mapping[str, Any] | None = None,
+) -> CampaignReasoningContext:
     claims = list(result.claims or ())
     # Top theses ordered by confidence descending (ties keep input order).
     sorted_claims = sorted(
@@ -220,6 +247,7 @@ def _result_to_campaign_context(result: Any, *, limit: int) -> CampaignReasoning
             "pack": result.state.get("pack") or "",
             "tokens_used": int(result.state.get("tokens_used") or 0),
             "attempts_used": int(result.state.get("attempts_used") or 0),
+            **dict(chain_telemetry or {}),
         },
         delta_summary={},
     )
