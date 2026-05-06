@@ -1,11 +1,11 @@
 {
-  "_comment": "Stage-1 input contract. Replace TBD placeholders before running. See ../README.md.",
-  "story_id": "TBD_case_slug",
+  "_comment": "Stage-1 input contract. See ../README.md.",
+  "story_id": "real_noid_dominos_hostage_standoff",
   "sources": [
     {
       "type": "youtube_transcript",
-      "title": "TBD — channel + episode title",
-      "url": "TBD — full YouTube URL",
+      "title": "Stealing a Slice",
+      "url": "https://www.youtube.com/watch?v=z6bh7mhT1Lk",
       "text_path": "youtube_transcript.txt"
     },
     {
