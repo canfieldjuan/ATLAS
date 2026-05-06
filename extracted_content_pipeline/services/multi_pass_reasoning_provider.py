@@ -21,21 +21,26 @@ Per-call flow:
 
 Falsification (``check_falsification``), narrative planning
 (``build_narrative_plan``), and output validation
-(``validate_reasoning_output``) remain reachable via the shared
-``ReasoningPorts`` for host code that wants them; this provider keeps
-its surface narrow.
+(``validate_reasoning_output``) are reachable through opt-in config
+knobs (``falsification_policy``, ``narrative_plan_pack``,
+``output_policy``); the provider stays no-op for hosts that don't
+configure them.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping
 
 from ..campaign_ports import CampaignReasoningContext, TenantScope
 
 if TYPE_CHECKING:
-    from extracted_reasoning_core.types import FalsificationPolicy
+    from extracted_reasoning_core.types import (
+        FalsificationPolicy,
+        OutputPolicy,
+        ReasoningPack,
+    )
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,33 @@ class MultiPassReasoningProviderConfig:
     # but are flagged in scope_summary["falsification"]["falsified_claim_ids"]
     # so downstream renderers can decide what to do.
     drop_falsified: bool = False
+    # Optional ReasoningPack for narrative-plan structuring. When set,
+    # build_narrative_plan runs after the chain (and after falsification
+    # gating, if any) on the final result. The resulting NarrativePlan
+    # is surfaced as canonical_reasoning["narrative_plan"]. Hosts that
+    # want to load a pack from the registry can do so themselves via
+    # extracted_reasoning_core.api.load_reasoning_pack and pass the
+    # result here. When None (default), no narrative plan is produced.
+    #
+    # Note: pack policies are forwarded to build_narrative_plan as-is.
+    # In particular, ``policies["max_sections"]`` silently drops claims
+    # belonging to over-cap sections from the rendered NarrativePlan
+    # (see D20d). Tune defensively if claim-coverage matters.
+    narrative_plan_pack: "ReasoningPack | None" = None
+    # Optional output policy. When set, the final result is run through
+    # validate_reasoning_output after the chain (and after falsification
+    # gating). The resulting ValidationReport is surfaced as
+    # canonical_reasoning["validation"]. When drop_falsified=True, the
+    # validation target has falsified claims pre-filtered so per-claim
+    # blockers (e.g. claim_missing_citations:N) reference the rendered
+    # claim list, not the unfiltered one (mirrors narrative_plan).
+    output_policy: "OutputPolicy | None" = None
+    # When True (and output_policy is set), a failing ValidationReport
+    # causes the bridge to return None (suppress the context) so
+    # downstream renderers don't ship a known-invalid output. When
+    # False (default), the report is surfaced informationally and the
+    # context is returned regardless -- the host decides what to do.
+    block_on_validation_failure: bool = False
 
 
 class MultiPassCampaignReasoningProvider:
@@ -234,12 +266,72 @@ class MultiPassCampaignReasoningProvider:
                 "traces": tuple(falsification_traces),
             }
 
+        # Optional narrative plan. When a pack is configured, run
+        # build_narrative_plan over the final state and surface the
+        # resulting NarrativePlan in canonical_reasoning. If
+        # drop_falsified=True, the narrative-plan input is pre-filtered
+        # to remove falsified claims so the rendered plan stays
+        # consistent with the rendered top_theses.
+        narrative_plan_summary: Mapping[str, Any] | None = None
+        if self._config.narrative_plan_pack is not None:
+            from extracted_reasoning_core.api import build_narrative_plan
+
+            if self._config.drop_falsified and falsified_claim_ids:
+                drop_set = set(falsified_claim_ids)
+                raw = dict(result.state.get("raw_synthesis") or {})
+                raw_claims = list(raw.get("claims") or ())
+                raw["claims"] = [c for c in raw_claims if _claim_identity(c) not in drop_set]
+                narrative_context: Mapping[str, Any] = {**dict(result.state), "raw_synthesis": raw}
+            else:
+                narrative_context = result.state
+
+            plan = build_narrative_plan(narrative_context, pack=self._config.narrative_plan_pack)
+            narrative_plan_summary = {
+                "claims": tuple(dict(c) for c in plan.claims),
+                "sections": tuple(dict(s) for s in plan.sections),
+                "evidence_requirements": tuple(dict(e) for e in plan.evidence_requirements),
+                "state_hints": dict(plan.state_hints),
+            }
+
+        # Optional output validation. When an output_policy is configured,
+        # validate the final result against the policy after the chain
+        # (and after falsification gating). The report is surfaced in
+        # canonical_reasoning["validation"]. If block_on_validation_failure
+        # is True and the report fails, return None so downstream
+        # renderers don't ship a known-invalid output.
+        validation_summary: Mapping[str, Any] | None = None
+        if self._config.output_policy is not None:
+            from extracted_reasoning_core.api import validate_reasoning_output
+
+            if self._config.drop_falsified and falsified_claim_ids:
+                drop_set = set(falsified_claim_ids)
+                filtered_claims = tuple(
+                    c for c in result.claims if _claim_identity(c) not in drop_set
+                )
+                validation_target = replace(result, claims=filtered_claims)
+            else:
+                validation_target = result
+
+            report = validate_reasoning_output(
+                validation_target, policy=self._config.output_policy
+            )
+            validation_summary = {
+                "passed": report.passed,
+                "blockers": tuple(report.blockers),
+                "warnings": tuple(report.warnings),
+            }
+
+            if self._config.block_on_validation_failure and not report.passed:
+                return None
+
         return _result_to_campaign_context(
             result,
             limit=self._config.top_thesis_limit,
             chain_telemetry=chain_telemetry,
             falsification_summary=falsification_summary,
             drop_claim_ids=falsified_claim_ids if self._config.drop_falsified else (),
+            narrative_plan=narrative_plan_summary,
+            validation=validation_summary,
         )
 
 
@@ -268,6 +360,8 @@ def _result_to_campaign_context(
     chain_telemetry: Mapping[str, Any] | None = None,
     falsification_summary: Mapping[str, Any] | None = None,
     drop_claim_ids: tuple[str, ...] = (),
+    narrative_plan: Mapping[str, Any] | None = None,
+    validation: Mapping[str, Any] | None = None,
 ) -> CampaignReasoningContext:
     raw_claims = list(result.claims or ())
     drop_set = set(drop_claim_ids)
@@ -306,13 +400,17 @@ def _result_to_campaign_context(
             if sid_str and sid_str not in all_source_ids:
                 all_source_ids.append(sid_str)
 
-    canonical_reasoning = {
+    canonical_reasoning: dict[str, Any] = {
         "summary": result.summary,
         "confidence": result.confidence,
         "tier": result.tier,
         "generation": int(result.state.get("generation") or 1),
         "raw_synthesis": dict(result.state.get("raw_synthesis") or {}),
     }
+    if narrative_plan is not None:
+        canonical_reasoning["narrative_plan"] = dict(narrative_plan)
+    if validation is not None:
+        canonical_reasoning["validation"] = dict(validation)
 
     return CampaignReasoningContext(
         anchor_examples={},
