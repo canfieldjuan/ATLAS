@@ -281,6 +281,44 @@ async def test_continue_reasoning_preserves_depth_across_continuations() -> None
 
 
 @pytest.mark.asyncio
+async def test_continue_reasoning_propagates_pack_policies_and_prompts_from_state() -> None:
+    """State persists pack policies and prompts so continuation honors them.
+
+    Without this, a host-configured max_attempts=4, custom temperature, or
+    overridden continuation prompt would be silently dropped on the first
+    continuation (Issue 2).
+    """
+
+    custom_continuation_prompt = "CUSTOM CONTINUATION PROMPT — return JSON."
+    state = _completed_state()
+    state["pack_policies"] = {"max_attempts": 1, "temperature": 0.05, "max_tokens": 256}
+    state["pack_prompts"] = {"reasoning_continuation": custom_continuation_prompt}
+
+    llm = FakeLLMPort([
+        {
+            "response": json.dumps({
+                "summary": "Continued under custom pack.",
+                "claims": [{"claim": "Pack policies propagated.", "confidence": 0.7, "source_ids": []}],
+                "confidence": 0.7,
+            }),
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    ])
+
+    result = await continue_reasoning(
+        state,
+        {"event_type": "policy_check", "evidence": []},
+        ports=ReasoningPorts(llm=llm, witness_context=FakeWitnessContextPort({})),
+    )
+
+    assert llm.calls[0]["max_tokens"] == 256
+    assert llm.calls[0]["temperature"] == pytest.approx(0.05)
+    assert llm.calls[0]["messages"][0]["content"] == custom_continuation_prompt
+    assert result.state["pack_policies"] == {"max_attempts": 1, "temperature": 0.05, "max_tokens": 256}
+    assert result.state["pack_prompts"] == {"reasoning_continuation": custom_continuation_prompt}
+
+
+@pytest.mark.asyncio
 async def test_continue_reasoning_missing_llm_port_raises_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="ReasoningPorts.llm"):
         await continue_reasoning(

@@ -412,8 +412,8 @@ async def continue_reasoning(
     pack = ReasoningPack(
         name=pack_name,
         version=pack_version,
-        prompts={},
-        policies={},
+        prompts=dict(state.get("pack_prompts") or {}),
+        policies=dict(state.get("pack_policies") or {}),
     )
 
     event_evidence_raw = event.get("evidence") or ()
@@ -490,6 +490,8 @@ async def continue_reasoning(
                 goal=goal,
                 pack_name=pack_name,
                 pack_version=pack_version,
+                pack_policies=pack.policies,
+                pack_prompts=pack.prompts,
                 depth=depth_value,
                 generation=prior_generation + 1,
                 prior_synthesis_hash=prior_synthesis_hash,
@@ -691,6 +693,8 @@ def _synthesis_success_result(
             "goal": reasoning_input.goal,
             "pack": pack.name,
             "pack_version": pack.version,
+            "pack_policies": dict(pack.policies or {}),
+            "pack_prompts": dict(pack.prompts or {}),
             "attempts_used": len(loop.attempts),
             "tokens_used": loop.total_tokens,
             "depth": depth,
@@ -746,6 +750,8 @@ def _continuation_success_result(
     goal: str,
     pack_name: str,
     pack_version: str,
+    pack_policies: Mapping[str, Any],
+    pack_prompts: Mapping[str, Any],
     depth: ReasoningDepth,
     generation: int,
     prior_synthesis_hash: str,
@@ -772,6 +778,8 @@ def _continuation_success_result(
             "goal": goal,
             "pack": pack_name,
             "pack_version": pack_version,
+            "pack_policies": dict(pack_policies or {}),
+            "pack_prompts": dict(pack_prompts or {}),
             "generation": generation,
             "prior_synthesis_hash": prior_synthesis_hash,
             "prior_attempts_used": prior_attempts_used,
