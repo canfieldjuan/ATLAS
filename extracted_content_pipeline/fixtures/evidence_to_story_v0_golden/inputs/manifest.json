@@ -16,19 +16,28 @@
     },
     {
       "type": "news_article",
-      "title": "THE DOMINO'S EFFECT A REAL NOID",
-      "url": "https://www.washingtonpost.com/archive/lifestyle/1989/02/01/the-dominos-effect-a-real-noid/4ae20338-a9ed-4fc7-ac85-b80a64ba3906/",
+      "title": "Noid irked by 'Avoid the Noid' pizza commercials",
+      "url": "https://www.upi.com/Archives/1989/01/31/Noid-irked-by-Avoid-the-Noid-pizza-commercials/7309602226000/",
       "text_path": "news_article.txt",
       "metadata": {
-        "publication": "The Washington Post",
-        "published_at": "1989-02-01",
-        "fallback_source": {
-          "title": "Is Domino's Bringing Back Noid, a Mascot That Reportedly Drove a Man to Take Hostages?",
-          "url": "https://www.snopes.com/fact-check/dominos-noid-mascot-hostages/",
-          "publication": "Snopes",
-          "rating": "True",
-          "use_when": "WaPo archive paywall blocks access; Snopes cites the WaPo/AP reporting verbatim"
-        }
+        "publication": "UPI",
+        "published_at": "1989-01-31",
+        "fallback_sources": [
+          {
+            "title": "THE DOMINO'S EFFECT A REAL NOID",
+            "url": "https://www.washingtonpost.com/archive/lifestyle/1989/02/01/the-dominos-effect-a-real-noid/4ae20338-a9ed-4fc7-ac85-b80a64ba3906/",
+            "publication": "The Washington Post",
+            "published_at": "1989-02-01",
+            "use_when": "UPI access blocked; WaPo paywall is the next-best primary source"
+          },
+          {
+            "title": "Is Domino's Bringing Back Noid, a Mascot That Reportedly Drove a Man to Take Hostages?",
+            "url": "https://www.snopes.com/fact-check/dominos-noid-mascot-hostages/",
+            "publication": "Snopes",
+            "rating": "True",
+            "use_when": "Both UPI and WaPo blocked; Snopes cites WaPo/AP reporting"
+          }
+        ]
       }
     }
   ]

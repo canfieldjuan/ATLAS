@@ -1,30 +1,31 @@
-TBD — paste the news article body here.
+TBD — paste the news article body here from a desktop session.
 
 Canonical source (per manifest):
-  Title:       THE DOMINO'S EFFECT A REAL NOID
-  Publication: The Washington Post
-  Date:        1989-02-01
-  URL:         https://www.washingtonpost.com/archive/lifestyle/1989/02/01/the-dominos-effect-a-real-noid/4ae20338-a9ed-4fc7-ac85-b80a64ba3906/
+  Title:       Noid irked by 'Avoid the Noid' pizza commercials
+  Publication: UPI
+  Date:        1989-01-31  (day after the standoff — wire-service contemporaneous)
+  URL:         https://www.upi.com/Archives/1989/01/31/Noid-irked-by-Avoid-the-Noid-pizza-commercials/7309602226000/
 
-Fallback source (acceptable substitute when WaPo paywall blocks):
-  Title:       Is Domino's Bringing Back Noid, a Mascot That Reportedly Drove a Man to Take Hostages?
-  Publication: Snopes
-  Rating:      True (Snopes cites WaPo/AP reporting)
-  URL:         https://www.snopes.com/fact-check/dominos-noid-mascot-hostages/
+Fallback sources (in priority order, used only if UPI access fails):
+  1. The Washington Post — "THE DOMINO'S EFFECT A REAL NOID"  (1989-02-01)
+       https://www.washingtonpost.com/archive/lifestyle/1989/02/01/the-dominos-effect-a-real-noid/4ae20338-a9ed-4fc7-ac85-b80a64ba3906/
+  2. Snopes fact-check (rated True; cites WaPo/AP reporting verbatim)
+       https://www.snopes.com/fact-check/dominos-noid-mascot-hostages/
 
-Automated fetch attempted from a phone session: WaPo returned 403
-(paywall + bot detection), Snopes returned 403 (Cloudflare),
-web.archive.org is blocked at the tool level. The article text needs
-to be pasted manually from a desktop session.
+Automated fetch status as of last attempt: UPI returned 403 (bot
+detection), WaPo 403 (paywall + bot detection), Snopes 403
+(Cloudflare), web.archive.org tool-blocked. The article body must
+be pasted manually from a desktop browser.
 
 When pasting:
-  - Strip ads / navigation / "related stories"
+  - Strip ads / navigation / "related stories" / cookie banners
   - Preserve paragraph breaks
-  - Keep the byline + publication + date on the first line
-  - If using the Snopes fallback, prefix the body with a header line
-    documenting that the canonical citation is still WaPo
-    (the manifest's `metadata.fallback_source` block already records
-    this provenance, but inline is clearer for downstream stages)
+  - Keep byline + publication + date on the first line
+  - If a fallback source is used instead of UPI, prefix the body
+    with one header line documenting which source was used. The
+    manifest's `metadata.fallback_sources` block records the
+    candidate set; inline documentation makes provenance obvious
+    to downstream stages.
 
 The Stage-1 loader reads this file as `text` on the corresponding
 SourceRecord. See ../README.md for selection criteria.
