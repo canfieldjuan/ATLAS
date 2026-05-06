@@ -239,4 +239,4 @@ for m in matches:
 
 ## Contact
 
-_(TODO: name / email / linkedin / personal-site link)_
+**Juan Canfield** — [info@juancanfield.com](mailto:info@juancanfield.com) — [juancanfield.com](https://juancanfield.com)
