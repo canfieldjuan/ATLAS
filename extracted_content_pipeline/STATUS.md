@@ -32,6 +32,9 @@
 - `campaign_postgres_import` loads normalized JSON/CSV opportunity rows into
   `campaign_opportunities`, with dry-run validation and optional
   replace-existing semantics for repeatable customer imports.
+- `campaign_source_adapters` converts review, transcript, complaint, or
+  document source rows into normalized campaign opportunities so hosts can feed
+  richer text sources into the same generation/import path.
 - `campaign_postgres_export` provides a read-only draft export path over
   generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
   handwritten SQL.

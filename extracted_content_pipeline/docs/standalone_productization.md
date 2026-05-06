@@ -154,6 +154,12 @@ adapter slice. It loads JSON or CSV opportunity rows, normalizes them through
 the product opportunity contract, returns non-fatal data-quality warnings, and
 exposes `FileIntelligenceRepository` for running generation from customer files.
 
+`extracted_content_pipeline/campaign_source_adapters.py` is the source breadth
+slice for hosts that start from reviews, transcripts, complaints, or documents
+instead of ready-made opportunity rows. It converts source text into
+opportunity evidence and returns the same payload shape consumed by the file,
+import, and generation paths.
+
 `extracted_content_pipeline/campaign_postgres.py` owns the Postgres adapter path
 for customer opportunity reads through `PostgresIntelligenceRepository`. It
 reads the product-owned `campaign_opportunities` table and normalizes rows
