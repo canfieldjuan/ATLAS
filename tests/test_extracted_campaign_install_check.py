@@ -127,6 +127,22 @@ def test_send_ses_profile_requires_boto3_runtime_dependency(monkeypatch) -> None
     assert errors == ["boto3"]
 
 
+def test_send_ses_profile_accepts_runner_default_from_email_env(monkeypatch) -> None:
+    monkeypatch.setattr(install_check, "find_spec", _module_present)
+
+    report = check_campaign_install(
+        environ={
+            "EXTRACTED_DATABASE_URL": "postgres://example",
+            "EXTRACTED_CAMPAIGN_RESEND_FROM_EMAIL": "sales@example.com",
+        },
+        profiles=("send",),
+        sender="ses",
+    )
+
+    assert report.passed is True
+    assert "ses_from_email" in [check.name for check in report.checks]
+
+
 def test_send_resend_profile_passes_with_campaign_env(monkeypatch) -> None:
     monkeypatch.setattr(install_check, "find_spec", _module_present)
 
