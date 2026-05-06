@@ -925,78 +925,139 @@ async def check_falsification(
         )
 
     effective_policy = policy or FalsificationPolicy()
-    rule_ids = tuple(_rule_id(r) for r in effective_policy.rules if _rule_id(r))
+    # Synthesize stable ids for any rule missing id/name/condition_id so the
+    # LLM, the policy surface, and the result all reference the same handle.
+    normalized_rules: list[dict[str, Any]] = []
+    rule_ids_list: list[str] = []
+    for index, rule in enumerate(effective_policy.rules):
+        rule_dict = dict(rule)
+        rid = _rule_id(rule_dict) or f"rule_{index}"
+        rule_dict["id"] = rid
+        normalized_rules.append(rule_dict)
+        rule_ids_list.append(rid)
+    rule_ids = tuple(rule_ids_list)
+
+    claim_id = str((claim or {}).get("claim_id") or (claim or {}).get("id") or "")
     payload = {
         "claim": dict(claim or {}),
         "fresh_evidence": tuple(evidence_to_mapping(item) for item in fresh_evidence),
-        "rules": tuple(dict(r) for r in effective_policy.rules),
+        "rules": tuple(normalized_rules),
         "conservative": bool(effective_policy.conservative),
     }
     payload_text = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     system_prompt = _resolve_falsification_prompt()
 
-    response = await port_bundle.llm.complete(
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": payload_text},
-        ],
-        max_tokens=4096,
-        temperature=0.1,
-        metadata={
-            "reasoning_mode": "falsification_check",
-            "claim_id": str((claim or {}).get("claim_id") or (claim or {}).get("id") or ""),
-            "rule_count": len(rule_ids),
-        },
-    )
+    trace_sink = port_bundle.trace_sink
+    span = None
+    if trace_sink is not None:
+        span = trace_sink.start_span(
+            "extracted_reasoning_core.check_falsification",
+            metadata={
+                "claim_id": claim_id,
+                "rule_count": len(rule_ids),
+                "conservative": effective_policy.conservative,
+            },
+        )
 
-    raw_text = clean_reasoning_text(response_text(response))
-    parsed = parse_llm_json(raw_text)
+    try:
+        response = await port_bundle.llm.complete(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload_text},
+            ],
+            max_tokens=4096,
+            temperature=0.1,
+            metadata={
+                "reasoning_mode": "falsification_check",
+                "claim_id": claim_id,
+                "rule_count": len(rule_ids),
+            },
+        )
 
-    triggered: tuple[str, ...] = ()
-    non_triggered: tuple[str, ...] = ()
-    should_invalidate = False
-    parse_failed = False
-    raw_triggered: list[Any] = []
-    raw_non_triggered: list[Any] = []
+        raw_text = clean_reasoning_text(response_text(response))
+        parsed = parse_llm_json(raw_text)
 
-    if isinstance(parsed, Mapping) and not parsed.get("_parse_fallback"):
-        raw_triggered = list(parsed.get("triggered_conditions") or [])
-        raw_non_triggered = list(parsed.get("non_triggered_conditions") or [])
-        triggered = tuple(_normalize_condition(c) for c in raw_triggered if _normalize_condition(c))
-        non_triggered = tuple(_normalize_condition(c) for c in raw_non_triggered if _normalize_condition(c))
-        verdict = parsed.get("should_invalidate")
-        if verdict is None:
-            # Conservative: never auto-invalidate. Aggressive: any trigger invalidates.
-            should_invalidate = bool(triggered) and not effective_policy.conservative
+        triggered: tuple[str, ...] = ()
+        non_triggered: tuple[str, ...] = ()
+        should_invalidate = False
+        parse_failed = False
+        raw_triggered: list[Any] = []
+        raw_non_triggered: list[Any] = []
+
+        if isinstance(parsed, Mapping) and not parsed.get("_parse_fallback"):
+            raw_triggered = list(parsed.get("triggered_conditions") or [])
+            raw_non_triggered = list(parsed.get("non_triggered_conditions") or [])
+            triggered = tuple(_normalize_condition(c) for c in raw_triggered if _normalize_condition(c))
+            non_triggered = tuple(_normalize_condition(c) for c in raw_non_triggered if _normalize_condition(c))
+            verdict = parsed.get("should_invalidate")
+            if verdict is None:
+                # Conservative: never auto-invalidate. Aggressive: any trigger invalidates.
+                should_invalidate = bool(triggered) and not effective_policy.conservative
+            else:
+                should_invalidate = bool(verdict)
+            if effective_policy.conservative and not triggered:
+                # Override LLM verdict: no triggered conditions means no invalidation.
+                should_invalidate = False
         else:
-            should_invalidate = bool(verdict)
-        if effective_policy.conservative and not triggered:
-            # Override LLM verdict: no triggered conditions means no invalidation.
-            should_invalidate = False
-    else:
-        parse_failed = True
-        # Conservative fallback: surface no triggers, do not invalidate.
+            parse_failed = True
+            # Conservative fallback: surface no triggers, do not invalidate.
 
-    if rule_ids:
-        seen = set(triggered) | set(non_triggered)
-        unseen = tuple(rid for rid in rule_ids if rid not in seen)
-        non_triggered = non_triggered + unseen
+        if rule_ids:
+            seen = set(triggered) | set(non_triggered)
+            unseen = tuple(rid for rid in rule_ids if rid not in seen)
+            non_triggered = non_triggered + unseen
 
-    usage = dict(response.get("usage") or {}) if isinstance(response, Mapping) else {}
-    return FalsificationResult(
-        triggered_conditions=triggered,
-        non_triggered_conditions=non_triggered,
-        should_invalidate=should_invalidate,
-        trace={
-            "conservative": effective_policy.conservative,
-            "rule_ids": rule_ids,
-            "parse_failed": parse_failed,
-            "raw_triggered": tuple(str(c) for c in raw_triggered),
-            "raw_non_triggered": tuple(str(c) for c in raw_non_triggered),
-            "tokens_used": int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0),
-            "claim_id": str((claim or {}).get("claim_id") or (claim or {}).get("id") or ""),
-        },
-    )
+        usage = dict(response.get("usage") or {}) if isinstance(response, Mapping) else {}
+        tokens_used = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+
+        if port_bundle.event_sink is not None:
+            event_name = (
+                "reasoning.falsification.parse_failed"
+                if parse_failed
+                else "reasoning.falsification.completed"
+            )
+            await port_bundle.event_sink.emit(
+                event_name,
+                "extracted_reasoning_core.check_falsification",
+                {
+                    "triggered_count": len(triggered),
+                    "should_invalidate": should_invalidate,
+                    "tokens_used": tokens_used,
+                    "claim_id": claim_id,
+                },
+                entity_type="claim",
+                entity_id=claim_id,
+            )
+        if trace_sink is not None and span is not None:
+            trace_sink.end_span(
+                span,
+                status="error" if parse_failed else "ok",
+                metadata={
+                    "triggered_count": len(triggered),
+                    "should_invalidate": should_invalidate,
+                    "tokens_used": tokens_used,
+                    "parse_failed": parse_failed,
+                },
+            )
+
+        return FalsificationResult(
+            triggered_conditions=triggered,
+            non_triggered_conditions=non_triggered,
+            should_invalidate=should_invalidate,
+            trace={
+                "conservative": effective_policy.conservative,
+                "rule_ids": rule_ids,
+                "parse_failed": parse_failed,
+                "raw_triggered": tuple(str(c) for c in raw_triggered),
+                "raw_non_triggered": tuple(str(c) for c in raw_non_triggered),
+                "tokens_used": tokens_used,
+                "claim_id": claim_id,
+            },
+        )
+    except Exception:
+        if trace_sink is not None and span is not None:
+            trace_sink.end_span(span, status="error", metadata={"stage": "exception"})
+        raise
 
 
 def _resolve_falsification_prompt() -> str:
