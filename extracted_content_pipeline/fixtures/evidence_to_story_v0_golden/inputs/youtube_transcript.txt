@@ -1,5 +1,5 @@
-Source: MrBallen Podcast — "Stranger than Fiction Vol. [TBD]" (multi-story compilation episode)
-Story segment: "Stealing a Slice" (segment 2 of 3)
+Source: MrBallen Podcast — "Stranger Than Fiction Vol. XIII" (multi-story compilation episode)
+Story segment: "Stealing a Slice" (story 2 of 3)
 Extracted: 00:07:05 - end of 00:14:18 chunk (~7 minutes)
 Other segments in the source episode ("What's Wrong with Mommy", "Peek Experience") and host intro/outro stripped — they are unrelated cases and would pollute claim extraction.
 
