@@ -98,6 +98,23 @@ def test_send_profile_without_sender_defaults_to_resend_checks(monkeypatch) -> N
     assert errors == ["resend_api_key", "from_email"]
 
 
+def test_send_profile_explicit_none_preserves_provider_skipped_warning(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(install_check, "find_spec", _module_present)
+
+    report = check_campaign_install(
+        environ={"EXTRACTED_DATABASE_URL": "postgres://example"},
+        profiles=("send",),
+        sender="none",
+    )
+
+    warnings = [check.name for check in report.checks if check.status == "warning"]
+    assert report.sender == "none"
+    assert report.passed is True
+    assert warnings == ["sender_provider"]
+
+
 def test_send_resend_profile_requires_httpx_runtime_dependency(monkeypatch) -> None:
     monkeypatch.setattr(
         install_check,

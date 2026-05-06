@@ -113,7 +113,7 @@ def check_campaign_install(
     *,
     environ: Mapping[str, str] | None = None,
     profiles: Sequence[str] = ("offline",),
-    sender: str = "none",
+    sender: str | None = None,
     llm: str = "pipeline",
     require_webhook_secret: bool = True,
 ) -> InstallCheckReport:
@@ -121,8 +121,9 @@ def check_campaign_install(
 
     env = os.environ if environ is None else environ
     normalized_profiles = _normalize_profiles(profiles)
+    sender_was_omitted = sender is None or not str(sender).strip()
     normalized_sender = _normalize_sender(sender)
-    if "send" in normalized_profiles and normalized_sender == "none":
+    if "send" in normalized_profiles and sender_was_omitted:
         normalized_sender = "resend"
     checks: list[InstallCheck] = [
         _module_check("product_package", "extracted_content_pipeline", required=True),

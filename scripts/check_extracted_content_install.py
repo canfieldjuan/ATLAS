@@ -52,7 +52,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--sender",
         choices=SENDER_CHOICES,
-        default="none",
+        default=None,
         help="Sender credentials to validate when --profile send is selected.",
     )
     parser.add_argument(
