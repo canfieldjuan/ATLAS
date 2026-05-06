@@ -182,3 +182,155 @@ async def test_multi_pass_provider_honors_per_opportunity_pack_name_override() -
     # The per-opportunity pack_name flows through to the LLM call metadata
     # rather than the provider-bound default.
     assert llm.calls[0]["metadata"]["pack"] == "per_opportunity_override"
+
+
+def _initial_synthesis_response() -> dict[str, Any]:
+    return {
+        "response": json.dumps({
+            "summary": "Initial synthesis: pricing pressure dominates.",
+            "claims": [
+                {"claim": "Renewal pricing drives churn.", "confidence": 0.8, "source_ids": ["r1"]},
+            ],
+            "confidence": 0.8,
+        }),
+        "usage": {"input_tokens": 5, "output_tokens": 3},
+    }
+
+
+def _continuation_response(*, summary: str) -> dict[str, Any]:
+    return {
+        "response": json.dumps({
+            "summary": summary,
+            "claims": [
+                {
+                    "claim": f"Refined claim for {summary}",
+                    "confidence": 0.85,
+                    "source_ids": ["r1", "evt"],
+                    "revised_from": "Renewal pricing drives churn.",
+                },
+            ],
+            "confidence": 0.85,
+        }),
+        "usage": {"input_tokens": 3, "output_tokens": 2},
+    }
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_chains_continue_reasoning_for_each_event() -> None:
+    """opportunity["events"] are chained through continue_reasoning. Generation increments per event."""
+
+    llm = FakeLLMPort([
+        _initial_synthesis_response(),
+        _continuation_response(summary="After event 1"),
+        _continuation_response(summary="After event 2"),
+    ])
+    provider = MultiPassCampaignReasoningProvider(ports=ReasoningPorts(llm=llm))
+
+    opp = _opportunity()
+    opp["events"] = [
+        {"event_type": "support_ticket", "evidence": [{"source_type": "ticket", "source_id": "t1", "text": "x"}]},
+        {"event_type": "renewal_signal", "evidence": []},
+    ]
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=opp,
+    )
+
+    assert context is not None
+    # 1 run_reasoning + 2 continuations = 3 LLM calls
+    assert len(llm.calls) == 3
+    assert llm.calls[0]["metadata"]["reasoning_mode"] == "single_pass_synthesis"
+    assert llm.calls[1]["metadata"]["reasoning_mode"] == "multi_pass_continuation"
+    assert llm.calls[2]["metadata"]["reasoning_mode"] == "multi_pass_continuation"
+    # Final state reflects the last continuation.
+    assert context.canonical_reasoning["summary"] == "After event 2"
+    # Generation increments: 1 (initial) → 2 (event 1) → 3 (event 2).
+    assert context.canonical_reasoning["generation"] == 3
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_skips_continuation_when_enable_multi_pass_is_false() -> None:
+    llm = FakeLLMPort([_initial_synthesis_response()])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(enable_multi_pass=False),
+    )
+
+    opp = _opportunity()
+    opp["events"] = [{"event_type": "would_be_ignored", "evidence": []}]
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=opp,
+    )
+
+    assert context is not None
+    # Only the run_reasoning call; the event is silently ignored.
+    assert len(llm.calls) == 1
+    assert context.canonical_reasoning["generation"] == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_caps_continuation_chain_at_max_continuations() -> None:
+    llm = FakeLLMPort([
+        _initial_synthesis_response(),
+        _continuation_response(summary="event 1"),
+        _continuation_response(summary="event 2"),
+    ])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(max_continuations=2),
+    )
+
+    opp = _opportunity()
+    # 4 events but cap is 2.
+    opp["events"] = [{"event_type": f"e{i}", "evidence": []} for i in range(4)]
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=opp,
+    )
+
+    assert context is not None
+    # 1 run_reasoning + 2 continuations (capped) = 3 calls; events 3 and 4 ignored.
+    assert len(llm.calls) == 3
+    assert context.canonical_reasoning["generation"] == 3
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_keeps_prior_state_when_continuation_fails_validation() -> None:
+    """If a mid-chain continuation fails validation, the chain stops and the last good state wins."""
+
+    llm = FakeLLMPort([
+        _initial_synthesis_response(),
+        _continuation_response(summary="After event 1"),  # succeeds
+        # Event 2 returns invalid JSON twice (max_attempts=2 default) → validation failure.
+        {"response": json.dumps({"summary": "no claims"}), "usage": {}},
+        {"response": json.dumps({"summary": "still no claims"}), "usage": {}},
+    ])
+    provider = MultiPassCampaignReasoningProvider(ports=ReasoningPorts(llm=llm))
+
+    opp = _opportunity()
+    opp["events"] = [
+        {"event_type": "good", "evidence": []},
+        {"event_type": "broken", "evidence": []},
+    ]
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=opp,
+    )
+
+    assert context is not None
+    # Result reflects event 1 (the last successful state), not event 2.
+    assert context.canonical_reasoning["summary"] == "After event 1"
+    assert context.canonical_reasoning["generation"] == 2

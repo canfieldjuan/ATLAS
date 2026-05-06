@@ -6,13 +6,24 @@ implements ``CampaignReasoningContextProvider`` so any host that
 already consumes the existing port shape gets multi-pass reasoning by
 swapping the provider, without changing any campaign-generation code.
 
-v0 scope: covers the run_reasoning path only. Continuation
-(``continue_reasoning``), falsification (``check_falsification``),
-narrative planning (``build_narrative_plan``), and output validation
-(``validate_reasoning_output``) are reachable through the same shared
-``ReasoningPorts`` and can be layered on by host code or follow-up PRs;
-this provider deliberately keeps a single LLM call per opportunity to
-match the existing provider ergonomics.
+Per-call flow:
+  1. ``run_reasoning`` produces the initial reasoning state from the
+     opportunity's evidence.
+  2. If ``opportunity["events"]`` is non-empty AND
+     ``config.enable_multi_pass`` is true, each event is fed through
+     ``continue_reasoning`` in sequence so later events refine the
+     prior state. The chain stops on the first continuation that fails
+     validation; the last successful state is what feeds the campaign
+     context.
+  3. The final ``ReasoningResult`` is translated into the
+     ``CampaignReasoningContext`` the campaign generator already
+     consumes.
+
+Falsification (``check_falsification``), narrative planning
+(``build_narrative_plan``), and output validation
+(``validate_reasoning_output``) remain reachable via the shared
+``ReasoningPorts`` for host code that wants them; this provider keeps
+its surface narrow.
 """
 
 from __future__ import annotations
@@ -31,6 +42,15 @@ class MultiPassReasoningProviderConfig:
     default_depth: str = "L2"
     pack_name: str | None = None
     top_thesis_limit: int = 5
+    # When true (default), opportunity["events"] are chained through
+    # continue_reasoning so each event refines the prior state. Set to
+    # false to fall back to the single-pass run_reasoning behavior even
+    # when events are present (useful for host-side budget controls).
+    enable_multi_pass: bool = True
+    # Hard cap on how many events from opportunity["events"] are
+    # consumed in one call. Protects against runaway token spend if a
+    # buggy upstream feeds an unbounded list.
+    max_continuations: int = 8
 
 
 class MultiPassCampaignReasoningProvider:
@@ -64,6 +84,7 @@ class MultiPassCampaignReasoningProvider:
         del scope  # tenant scoping is the host's responsibility upstream
 
         from extracted_reasoning_core.api import (
+            continue_reasoning,
             load_reasoning_pack,
             run_reasoning,
         )
@@ -101,6 +122,25 @@ class MultiPassCampaignReasoningProvider:
             # rather than raising; campaign generation handles None / empty
             # context as host-decision territory.
             return None
+
+        # Chain continue_reasoning for any events on the opportunity. Each
+        # event refines the prior state. The chain stops on the first
+        # continuation that fails validation -- the last successful state
+        # is what feeds the campaign context.
+        events = list(opportunity.get("events") or ())
+        if self._config.enable_multi_pass and events:
+            limit = max(0, int(self._config.max_continuations))
+            for event in events[:limit]:
+                next_result = await continue_reasoning(
+                    result.state,
+                    event if isinstance(event, Mapping) else {"event_type": str(event), "evidence": ()},
+                    ports=self._ports,
+                )
+                if str(next_result.state.get("status") or "") != "completed":
+                    # Continuation failed validation -- keep the prior
+                    # successful state and stop the chain.
+                    break
+                result = next_result
 
         return _result_to_campaign_context(result, limit=self._config.top_thesis_limit)
 
