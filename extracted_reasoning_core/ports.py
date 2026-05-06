@@ -36,6 +36,23 @@ class SemanticCacheStore(Protocol):
         """Invalidate a cached entry."""
 
 
+class WitnessContextPort(Protocol):
+    """Port for host-prepared compressed witness context.
+
+    Pool compression and witness grounding stay host-side; reasoning core only
+    consumes an already-normalized context mapping through this port.
+    """
+
+    async def get_witness_context(
+        self,
+        reasoning_input: Any,
+        *,
+        depth: str,
+        pack: Any | None = None,
+    ) -> Mapping[str, Any]:
+        """Return compressed witness context for a reasoning input."""
+
+
 class ReasoningStateStore(Protocol):
     """Port for long-running reasoning state and continuation checkpoints."""
 
@@ -124,4 +141,5 @@ __all__ = [
     "ReasoningStateStore",
     "SemanticCacheStore",
     "TraceSink",
+    "WitnessContextPort",
 ]
