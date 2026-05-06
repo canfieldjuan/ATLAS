@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping, Sequence
 
 from ._synthesis import (
@@ -1336,8 +1337,14 @@ def validate_reasoning_output(
         blocker for each declared type absent from any claim's
         ``type``/``category`` field.
       * ``blocked_phrasing`` → ``blocked_phrasing:<phrase>`` blocker if
-        any blocked substring (case-insensitive) appears in the summary
-        or any claim text.
+        any blocked phrase (case-insensitive, **word-boundary** match)
+        appears in the result summary or any claim's prose fields. The
+        scanned claim keys are: ``claim``, ``summary``, ``narrative``,
+        ``explanation``, ``rationale``, ``description``. Other claim
+        fields (id, type, source_ids, etc.) are intentionally not
+        scanned to avoid false positives on identifier-shaped strings.
+        Word-boundary matching means ``"promise"`` does NOT block
+        ``"compromise"`` and ``"free"`` does NOT block ``"freedom"``.
 
     Empty claims raises a single ``no_claims`` blocker (always invalid).
 
@@ -1372,15 +1379,20 @@ def validate_reasoning_output(
                 blockers.append(f"missing_required_claim_type:{required}")
 
     if effective_policy.blocked_phrasing:
+        prose_keys = ("claim", "summary", "narrative", "explanation", "rationale", "description")
         haystack_parts = [result.summary or ""]
         for claim in result.claims:
-            for key in ("claim", "summary", "narrative"):
+            for key in prose_keys:
                 value = claim.get(key)
                 if isinstance(value, str):
                     haystack_parts.append(value)
-        haystack = "\n".join(haystack_parts).lower()
+        haystack = "\n".join(haystack_parts)
         for phrase in effective_policy.blocked_phrasing:
-            if str(phrase).lower() in haystack:
+            phrase_str = str(phrase)
+            if not phrase_str:
+                continue
+            pattern = re.compile(rf"\b{re.escape(phrase_str)}\b", re.IGNORECASE)
+            if pattern.search(haystack):
                 blockers.append(f"blocked_phrasing:{phrase}")
 
     return ValidationReport(

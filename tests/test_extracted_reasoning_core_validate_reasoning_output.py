@@ -72,3 +72,35 @@ def test_validate_reasoning_output_blocked_phrasing_blocks_case_insensitive() ->
     assert report.passed is False
     assert "blocked_phrasing:guarantee" in report.blockers
     assert "blocked_phrasing:promise" not in report.blockers
+
+
+def test_validate_reasoning_output_blocked_phrasing_uses_word_boundaries_not_substrings() -> None:
+    """Regression: 'promise' must not match 'compromise', 'free' must not match 'freedom'."""
+
+    claims = (
+        {"claim": "We cannot compromise on quality.", "confidence": 0.8, "source_ids": ["r1"], "type": "driver"},
+        {"claim": "Freedom of choice is preserved.", "confidence": 0.7, "source_ids": ["r2"], "type": "driver"},
+    )
+    policy = OutputPolicy(blocked_phrasing=("promise", "free"))
+    report = validate_reasoning_output(_result(claims=claims), policy=policy)
+    assert report.passed is True, f"unexpected blockers: {report.blockers}"
+    assert "blocked_phrasing:promise" not in report.blockers
+    assert "blocked_phrasing:free" not in report.blockers
+
+
+def test_validate_reasoning_output_blocked_phrasing_scans_extended_prose_fields() -> None:
+    """Banned phrasing in 'description' / 'explanation' / 'rationale' is caught, not just 'claim'."""
+
+    claims = (
+        {
+            "claim": "Renewal pressure rising.",
+            "description": "Customer made a guarantee about competitor switching costs.",
+            "confidence": 0.8,
+            "source_ids": ["r1"],
+            "type": "driver",
+        },
+    )
+    policy = OutputPolicy(blocked_phrasing=("guarantee",))
+    report = validate_reasoning_output(_result(claims=claims), policy=policy)
+    assert report.passed is False
+    assert "blocked_phrasing:guarantee" in report.blockers
