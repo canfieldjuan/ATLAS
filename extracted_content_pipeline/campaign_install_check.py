@@ -122,6 +122,8 @@ def check_campaign_install(
     env = os.environ if environ is None else environ
     normalized_profiles = _normalize_profiles(profiles)
     normalized_sender = _normalize_sender(sender)
+    if "send" in normalized_profiles and normalized_sender == "none":
+        normalized_sender = "resend"
     checks: list[InstallCheck] = [
         _module_check("product_package", "extracted_content_pipeline", required=True),
     ]
