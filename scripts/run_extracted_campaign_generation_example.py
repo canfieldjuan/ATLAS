@@ -28,12 +28,17 @@ from extracted_content_pipeline.services.single_pass_reasoning_provider import (
     SinglePassCampaignReasoningProvider,
     SinglePassReasoningConfig,
 )
+from extracted_content_pipeline.services.multi_pass_reasoning_provider import (  # noqa: E402
+    MultiPassCampaignReasoningProvider,
+    MultiPassReasoningProviderConfig,
+)
 
 
 DEFAULT_PAYLOAD = (
     ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.json"
 )
 DEFAULT_REASONING_CONFIG = SinglePassReasoningConfig()
+DEFAULT_MULTI_PASS_CONFIG = MultiPassReasoningProviderConfig()
 
 
 def _load_payload(path: Path, *, file_format: str = "auto") -> dict[str, Any]:
@@ -106,6 +111,36 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--multi-pass-reasoning",
+        action="store_true",
+        help=(
+            "Generate campaign reasoning context with extracted_reasoning_core "
+            "multi-pass reasoning. Requires --llm pipeline."
+        ),
+    )
+    parser.add_argument(
+        "--multi-pass-pack-name",
+        default=DEFAULT_MULTI_PASS_CONFIG.pack_name,
+        help="Optional extracted_reasoning_core pack name for --multi-pass-reasoning.",
+    )
+    parser.add_argument(
+        "--multi-pass-depth",
+        choices=("L1", "L2", "L3", "L4", "L5"),
+        default=DEFAULT_MULTI_PASS_CONFIG.default_depth,
+        help="Reasoning depth for --multi-pass-reasoning.",
+    )
+    parser.add_argument(
+        "--multi-pass-max-continuations",
+        type=int,
+        default=DEFAULT_MULTI_PASS_CONFIG.max_continuations,
+        help="Maximum opportunity events consumed by --multi-pass-reasoning.",
+    )
+    parser.add_argument(
+        "--multi-pass-disable-chain",
+        action="store_true",
+        help="Run initial reasoning only, even when opportunity events are present.",
+    )
+    parser.add_argument(
         "--reasoning-skill-name",
         default=DEFAULT_REASONING_CONFIG.skill_name,
         help="Skill name for --single-pass-reasoning.",
@@ -150,12 +185,24 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _validate_reasoning_args(args: argparse.Namespace) -> None:
-    if args.reasoning_context and args.single_pass_reasoning:
+    selected = [
+        bool(args.reasoning_context),
+        bool(args.single_pass_reasoning),
+        bool(args.multi_pass_reasoning),
+    ]
+    if sum(1 for item in selected if item) > 1:
         raise SystemExit(
-            "--reasoning-context and --single-pass-reasoning cannot be combined"
+            "--reasoning-context, --single-pass-reasoning, and "
+            "--multi-pass-reasoning cannot be combined"
         )
-    if args.single_pass_reasoning and args.llm != "pipeline":
-        raise SystemExit("--single-pass-reasoning requires --llm pipeline")
+    if (
+        args.single_pass_reasoning or args.multi_pass_reasoning
+    ) and args.llm != "pipeline":
+        raise SystemExit(
+            "reasoning requires --llm pipeline"
+        )
+    if args.multi_pass_max_continuations < 0:
+        raise SystemExit("--multi-pass-max-continuations must be >= 0")
 
 
 def _single_pass_config_from_args(args: argparse.Namespace) -> SinglePassReasoningConfig:
@@ -164,6 +211,15 @@ def _single_pass_config_from_args(args: argparse.Namespace) -> SinglePassReasoni
         max_tokens=int(args.reasoning_max_tokens),
         temperature=float(args.reasoning_temperature),
         include_source_opportunity=bool(args.reasoning_include_source_opportunity),
+    )
+
+
+def _multi_pass_config_from_args(args: argparse.Namespace) -> MultiPassReasoningProviderConfig:
+    return MultiPassReasoningProviderConfig(
+        default_depth=str(args.multi_pass_depth or ""),
+        pack_name=args.multi_pass_pack_name or None,
+        enable_multi_pass=not bool(args.multi_pass_disable_chain),
+        max_continuations=int(args.multi_pass_max_continuations),
     )
 
 
@@ -197,6 +253,13 @@ def _dependency_overrides(args: argparse.Namespace) -> dict[str, Any]:
             llm=llm,
             skills=skills,
             config=_single_pass_config_from_args(args),
+        )
+    if args.multi_pass_reasoning:
+        from extracted_reasoning_core.types import ReasoningPorts  # noqa: PLC0415
+
+        overrides["reasoning_context"] = MultiPassCampaignReasoningProvider(
+            ports=ReasoningPorts(llm=llm),
+            config=_multi_pass_config_from_args(args),
         )
     return overrides
 

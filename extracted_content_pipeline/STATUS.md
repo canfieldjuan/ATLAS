@@ -164,9 +164,14 @@
   ports to build one normalized `CampaignReasoningContext` per opportunity with
   the `digest/b2b_campaign_reasoning_context` prompt, without importing Atlas
   reasoning producers or graph state.
+- `services.multi_pass_reasoning_provider.MultiPassCampaignReasoningProvider`
+  bridges extracted reasoning-core producer APIs into the same
+  `CampaignReasoningContextProvider` port for hosts that want multi-step
+  per-opportunity reasoning without changing campaign generation code.
 - Both the offline and Postgres campaign generation runners can consume
   file-backed reasoning through `--reasoning-context`; they can also opt into
-  the packaged single-pass provider with `--single-pass-reasoning` when the
+  the packaged single-pass provider with `--single-pass-reasoning` or the
+  extracted reasoning-core provider with `--multi-pass-reasoning` when the
   product LLM adapter is configured.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and

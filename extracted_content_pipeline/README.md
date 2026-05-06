@@ -101,7 +101,9 @@ Reasoning is a host/product boundary, not copied into AI Content Ops. The
 campaign generator consumes already-compressed reasoning through
 `CampaignReasoningContextProvider`; see
 `docs/reasoning_handoff_contract.md` for the accepted context shape and the
-no-direct-import rule.
+no-direct-import rule. Lightweight installs can use the packaged single-pass
+provider; higher-depth installs can opt into the extracted reasoning core
+through the multi-pass provider.
 
 `campaign_opportunities.py` defines the customer-data contract for campaign
 generation. Hosts can pass loose opportunity rows from a CRM, warehouse, or
@@ -169,6 +171,16 @@ configured:
 python scripts/run_extracted_campaign_generation_example.py \
   --llm pipeline \
   --single-pass-reasoning
+```
+
+For multi-step reasoning backed by `extracted_reasoning_core`, use the
+multi-pass provider:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py \
+  --llm pipeline \
+  --multi-pass-reasoning \
+  --multi-pass-depth L3
 ```
 
 Use host-provided prompt contracts by pointing at a markdown skill directory:
@@ -263,6 +275,15 @@ Or generate lightweight reasoning context during the DB-backed run:
 python scripts/run_extracted_campaign_generation_postgres.py \
   --account-id acct_123 \
   --single-pass-reasoning
+```
+
+Or opt into extracted reasoning-core multi-pass context:
+
+```bash
+python scripts/run_extracted_campaign_generation_postgres.py \
+  --account-id acct_123 \
+  --multi-pass-reasoning \
+  --multi-pass-depth L3
 ```
 
 Use `--skills-root customer_skills` on the Postgres runner for the same
@@ -472,6 +493,13 @@ packaged single-pass provider:
 
 ```python
 config=CampaignOperationsApiConfig(generation_single_pass_reasoning=True)
+```
+
+Hosts that want extracted reasoning-core orchestration instead can enable the
+multi-pass provider:
+
+```python
+config=CampaignOperationsApiConfig(generation_multi_pass_reasoning=True)
 ```
 
 This adds `POST /campaigns/operations/drafts/generate`,
