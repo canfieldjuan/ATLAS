@@ -1,0 +1,78 @@
+{
+  "_comment": "Expected Stage-8 output. Pass/warn/fail for every validation rule + acceptance test. See build contract §6 and §9.",
+  "story_id": "TBD_case_slug",
+  "status": "passed",
+  "summary": {
+    "passed": 8,
+    "warned": 0,
+    "failed": 0
+  },
+  "findings": [
+    {
+      "rule_id": "CITE-001",
+      "level": "pass",
+      "claim_id": null,
+      "script_position": null,
+      "message": "All script claim references resolved to claim_ids."
+    },
+    {
+      "rule_id": "CITE-002",
+      "level": "pass",
+      "claim_id": null,
+      "script_position": null,
+      "message": "All factual/timeline/entity/disputed/reveal claims have source_id and quote."
+    },
+    {
+      "rule_id": "CITE-003",
+      "level": "pass",
+      "claim_id": null,
+      "script_position": null,
+      "message": "All emotional_inference claims have rewrite_applied=true."
+    },
+    {
+      "rule_id": "CITE-004",
+      "level": "pass",
+      "claim_id": null,
+      "script_position": null,
+      "message": "No disputed claims OR all have >=2 distinct sources."
+    },
+    {
+      "rule_id": "REVEAL-001",
+      "level": "pass",
+      "claim_id": "clm_reveal_01",
+      "script_position": 0.94,
+      "message": "Reveal placement >= 0.92 (10% rule satisfied)."
+    },
+    {
+      "rule_id": "STRUCTURE-001",
+      "level": "pass",
+      "claim_id": null,
+      "script_position": null,
+      "message": "All five beats present in order."
+    },
+    {
+      "rule_id": "NAMED-001",
+      "level": "pass",
+      "claim_id": null,
+      "script_position": null,
+      "message": "No unsupported named-person accusations."
+    },
+    {
+      "rule_id": "REDACT-001",
+      "level": "pass",
+      "claim_id": null,
+      "script_position": null,
+      "message": "No redacted entity surfaced in script body."
+    }
+  ],
+  "acceptance_tests": [
+    {"test_id": "AT-1", "result": "pass"},
+    {"test_id": "AT-2", "result": "pass"},
+    {"test_id": "AT-3", "result": "pass"},
+    {"test_id": "AT-4", "result": "pass"},
+    {"test_id": "AT-5", "result": "pass"},
+    {"test_id": "AT-6", "result": "pass"},
+    {"test_id": "AT-7", "result": "pass"},
+    {"test_id": "AT-8", "result": "pass"}
+  ]
+}
