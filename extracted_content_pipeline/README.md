@@ -220,6 +220,15 @@ the selected account and target mode before inserting the new rows.
 For the full database-backed host install path, see
 `docs/host_install_runbook.md`.
 
+Before connecting workers to a customer database or provider, inspect local
+install readiness without opening network or DB handles:
+
+```bash
+python scripts/check_extracted_content_install.py --profile generation --llm offline
+python scripts/check_extracted_content_install.py --profile all --sender resend
+python scripts/check_extracted_content_install.py --profile all --sender resend --json
+```
+
 ```bash
 python scripts/run_extracted_campaign_generation_postgres.py --account-id acct_123 --limit 10
 ```
