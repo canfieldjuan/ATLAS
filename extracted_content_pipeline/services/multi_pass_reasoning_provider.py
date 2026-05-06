@@ -28,6 +28,7 @@ its surface narrow.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -99,7 +100,6 @@ class MultiPassCampaignReasoningProvider:
         del scope  # tenant scoping is the host's responsibility upstream
 
         from extracted_reasoning_core.api import (
-            check_falsification,
             continue_reasoning,
             load_reasoning_pack,
             run_reasoning,
@@ -191,25 +191,40 @@ class MultiPassCampaignReasoningProvider:
                 for event in events[:events_consumed]:
                     for item in event.get("evidence") or ():
                         consumed_event_evidence.append(_coerce_evidence(item))
-            fresh_evidence = tuple(evidence_items) + tuple(consumed_event_evidence)
+            fresh_evidence = evidence_items + tuple(consumed_event_evidence)
 
-            falsified_ids: list[str] = []
-            falsification_traces: list[Mapping[str, Any]] = []
-            for claim in result.claims:
-                fr = await check_falsification(
+            # Run falsification checks in parallel -- they're independent
+            # per-claim LLM calls. Each check is wrapped so a single
+            # failure (network blip, LLM error) doesn't cascade and
+            # collapse the whole context; the failed claim's trace
+            # records the error and skips invalidation.
+            checks = [
+                _falsify_one(
                     claim,
                     fresh_evidence,
                     policy=self._config.falsification_policy,
                     ports=self._ports,
                 )
+                for claim in result.claims
+            ]
+            check_outcomes = await asyncio.gather(*checks)
+
+            falsified_ids: list[str] = []
+            falsification_traces: list[Mapping[str, Any]] = []
+            for claim, outcome in zip(result.claims, check_outcomes):
                 claim_id = _claim_identity(claim)
-                falsification_traces.append({
-                    "claim_id": claim_id,
-                    "should_invalidate": fr.should_invalidate,
-                    "triggered_conditions": tuple(fr.triggered_conditions),
-                })
-                if fr.should_invalidate:
-                    falsified_ids.append(claim_id)
+                trace_entry: dict[str, Any] = {"claim_id": claim_id}
+                if outcome["error"] is not None:
+                    trace_entry["should_invalidate"] = False
+                    trace_entry["triggered_conditions"] = ()
+                    trace_entry["error"] = outcome["error"]
+                else:
+                    fr = outcome["result"]
+                    trace_entry["should_invalidate"] = fr.should_invalidate
+                    trace_entry["triggered_conditions"] = tuple(fr.triggered_conditions)
+                    if fr.should_invalidate:
+                        falsified_ids.append(claim_id)
+                falsification_traces.append(trace_entry)
             falsified_claim_ids = tuple(falsified_ids)
             falsification_summary = {
                 "evaluated_claim_count": len(result.claims),
@@ -321,6 +336,32 @@ def _result_to_campaign_context(
         },
         delta_summary={},
     )
+
+
+async def _falsify_one(
+    claim: Mapping[str, Any],
+    fresh_evidence: tuple[Any, ...],
+    *,
+    policy: Any,
+    ports: Any,
+) -> dict[str, Any]:
+    """Run check_falsification for one claim, capturing errors per-claim.
+
+    Returns ``{"result": FalsificationResult, "error": None}`` on success
+    and ``{"result": None, "error": "<exc class>: <msg>"}`` on failure
+    so a single bad claim doesn't collapse the whole bridge call. The
+    ``ConfigurationError`` (missing LLM port) is intentionally left to
+    propagate -- that's a host config problem, not a runtime fault.
+    """
+    from extracted_reasoning_core.api import ConfigurationError, check_falsification
+
+    try:
+        fr = await check_falsification(claim, fresh_evidence, policy=policy, ports=ports)
+        return {"result": fr, "error": None}
+    except ConfigurationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- intentional fail-soft per claim
+        return {"result": None, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _claim_identity(claim: Mapping[str, Any]) -> str:

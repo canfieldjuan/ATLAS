@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Mapping, Sequence
 
@@ -499,3 +500,123 @@ async def test_multi_pass_provider_skips_falsification_when_policy_unset() -> No
     assert len(llm.calls) == 1
     # No falsification key in scope_summary when policy is unset.
     assert "falsification" not in context.scope_summary
+
+
+class _RaisingFalsificationLLM:
+    """LLM port that returns a valid synthesis once, then raises on every
+    subsequent call (simulating a network blip during falsification)."""
+
+    def __init__(self, synthesis_response: Mapping[str, Any]) -> None:
+        self._synthesis_response = synthesis_response
+        self._first = True
+        self.calls: list[dict[str, Any]] = []
+
+    async def complete(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        self.calls.append({"metadata": dict(metadata or {})})
+        if self._first:
+            self._first = False
+            return self._synthesis_response
+        raise ConnectionError("simulated LLM outage")
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_runs_falsification_checks_in_parallel() -> None:
+    """asyncio.gather is used so N claims = ~1x latency, not Nx."""
+
+    from extracted_reasoning_core.types import FalsificationPolicy
+
+    barrier = asyncio.Event()
+    in_flight = 0
+    max_in_flight = 0
+
+    class TrackingLLM:
+        def __init__(self, responses: list[Mapping[str, Any]]) -> None:
+            self.responses = list(responses)
+            self.calls: list[dict[str, Any]] = []
+
+        async def complete(
+            self,
+            messages: Sequence[Mapping[str, Any]],
+            *,
+            max_tokens: int,
+            temperature: float,
+            metadata: Mapping[str, Any] | None = None,
+        ) -> Mapping[str, Any]:
+            nonlocal in_flight, max_in_flight
+            self.calls.append({"metadata": dict(metadata or {})})
+            mode = (metadata or {}).get("reasoning_mode")
+            if mode == "falsification_check":
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+                # Hold each falsification call until barrier fires; if
+                # they were sequential this would deadlock on the first
+                # call. Parallelism means all N enter before the barrier
+                # is set.
+                if in_flight >= 2:
+                    barrier.set()
+                await barrier.wait()
+                in_flight -= 1
+            return self.responses.pop(0)
+
+    llm = TrackingLLM([
+        _falsifiable_synthesis_response(),
+        _falsification_response(triggered=[], should_invalidate=False),
+        _falsification_response(triggered=[], should_invalidate=False),
+    ])
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            falsification_policy=FalsificationPolicy(rules=({"id": "x"},), conservative=False),
+        ),
+    )
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    # If the calls were sequential, max_in_flight would be 1 (each call
+    # would complete before the next started). Parallelism puts both
+    # falsification calls in flight before either completes.
+    assert max_in_flight >= 2
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_provider_fails_soft_on_check_falsification_error() -> None:
+    """A check_falsification raise on one claim is captured in the trace; the rest still ship."""
+
+    from extracted_reasoning_core.types import FalsificationPolicy
+
+    llm = _RaisingFalsificationLLM(_falsifiable_synthesis_response())
+    provider = MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            falsification_policy=FalsificationPolicy(rules=({"id": "x"},), conservative=False),
+        ),
+    )
+
+    # Should NOT raise -- the connection error is captured per-claim.
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="acme",
+        target_mode="vendor",
+        opportunity=_opportunity(),
+    )
+
+    assert context is not None
+    f = context.scope_summary["falsification"]
+    # Both claims errored, neither falsified.
+    assert f["falsified_count"] == 0
+    assert all(t.get("error", "").startswith("ConnectionError") for t in f["traces"])
+    # Synthesis claims still survive in the rendered context.
+    assert len(context.top_theses) > 0
