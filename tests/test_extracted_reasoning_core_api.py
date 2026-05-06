@@ -236,8 +236,8 @@ async def test_stubbed_async_entry_points_fail_closed_until_consolidated() -> No
     with pytest.raises(api.ConfigurationError):
         await api.run_reasoning(reasoning_input)
 
-    with pytest.raises(NotImplementedError):
-        await api.continue_reasoning({}, {})
+    with pytest.raises(api.ConfigurationError):
+        await api.continue_reasoning({"status": "completed"}, {"event_type": "noop"})
 
     with pytest.raises(NotImplementedError):
         await api.check_falsification({}, (evidence,))

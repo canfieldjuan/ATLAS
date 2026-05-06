@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-import re
-from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping, Sequence
 
+from ._synthesis import (
+    SynthesisLoopResult,
+    evidence_to_mapping,
+    extract_claims,
+    extract_confidence,
+    extract_summary,
+    invoke_synthesis_loop,
+    synthesis_config_from_pack,
+)
 from .types import (
     ArchetypeMatch,
     EvidenceDecision,
@@ -108,8 +116,6 @@ def evaluate_evidence(
     engine = _ee.get_evidence_engine()
     results = engine.evaluate_conclusions(dict(evidence))
 
-    # insufficient_data short-circuit -> single result with met=True,
-    # confidence="insufficient". Translate to allowed=False.
     if (
         len(results) == 1
         and results[0].conclusion_id == "insufficient_data"
@@ -126,8 +132,6 @@ def evaluate_evidence(
 
     met = [r for r in results if r.met]
     if not met:
-        # No conclusion fired; surface fallback reasons from any
-        # not-met results that carried fallback_label hints.
         reasons = tuple(r.fallback_label for r in results if r.fallback_label)
         return EvidenceDecision(
             allowed=False,
@@ -135,8 +139,6 @@ def evaluate_evidence(
             reasons=reasons,
         )
 
-    # Pick the strongest met-confidence string and translate to a
-    # numeric score. Policy can override the mapping.
     rank = {"high": 0.9, "medium": 0.6, "low": 0.3, "insufficient": 0.0}
     if policy and policy.confidence_labels:
         rank = {**rank, **{k: float(v) for k, v in policy.confidence_labels.items()}}
@@ -199,9 +201,6 @@ def build_temporal_evidence(
             insufficient_data=True,
         )
 
-    # `TemporalEngine` exposes the in-memory helpers we need; pool=None is
-    # safe because we never call the DB-backed methods (`analyze_vendor`,
-    # `_compute_percentiles`, `_infer_category`) from this entry point.
     engine = TemporalEngine(pool=None)
     velocities = engine._compute_velocities(vendor_name, snaps)
     trends = (
@@ -210,10 +209,6 @@ def build_temporal_evidence(
         else []
     )
 
-    # `baselines` is an optional advisory input today; structured anomaly
-    # support is a follow-up. The argument is accepted (and unpacked into a
-    # local) so the public signature is honored even though the value is
-    # not yet consumed.
     _baselines = dict(baselines) if baselines else {}
     del _baselines
 
@@ -245,13 +240,11 @@ async def run_reasoning(
 ) -> ReasoningResult:
     """Run the single-pass reasoning synthesis flow.
 
-    This is the extracted, product-neutral lift of the production
-    per-vendor synthesis loop: build one prompt from already-prepared
-    evidence/witness context, call the shared LLM port, validate the JSON
-    response, and retry with compact validation feedback when validation
-    fails. Host-owned witness compression stays outside this package and
-    is supplied either through ``ReasoningPorts.witness_context`` or the
-    input context.
+    Calls the host LLM port once, validates the JSON response against the
+    summary/claims contract, and retries with compact validation feedback
+    when validation fails. Host-owned witness compression stays outside
+    this package and is supplied either through
+    ``ReasoningPorts.witness_context`` or via ``reasoning_input.context``.
     """
 
     port_bundle = ports or ReasoningPorts()
@@ -266,11 +259,7 @@ async def run_reasoning(
         prompts={},
         policies={},
     )
-    policies = dict(effective_pack.policies or {})
-    max_attempts = max(1, int(policies.get("max_attempts", 2)))
-    feedback_limit = max(1, int(policies.get("feedback_limit", 5)))
-    max_tokens = max(1, int(policies.get("max_tokens", 16384)))
-    temperature = float(policies.get("temperature", 0.3))
+    config = synthesis_config_from_pack(effective_pack)
 
     witness_context = await _resolve_witness_context(
         reasoning_input,
@@ -300,103 +289,57 @@ async def run_reasoning(
             },
         )
 
-    attempts: list[dict[str, Any]] = []
-    failure_reasons: list[str] = []
-    last_text = ""
-    last_candidate: dict[str, Any] | None = None
-    total_tokens = 0
-
     try:
-        for attempt_index in range(max_attempts):
-            attempt_no = attempt_index + 1
-            messages: list[Mapping[str, Any]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": payload_text},
-            ]
-            if attempt_index > 0 and last_text:
-                messages.append({"role": "assistant", "content": last_text})
-            if attempt_index > 0 and failure_reasons:
-                feedback = "\n".join(
-                    f"- {reason}" for reason in failure_reasons[:feedback_limit]
-                )
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Your previous response was rejected. Return a complete "
-                        "corrected JSON object only.\nFix these issues:\n"
-                        f"{feedback}"
-                    ),
-                })
+        loop = await invoke_synthesis_loop(
+            system_prompt=system_prompt,
+            payload_text=payload_text,
+            llm_metadata={
+                "entity_id": reasoning_input.entity_id,
+                "entity_type": reasoning_input.entity_type,
+                "goal": reasoning_input.goal,
+                "depth": depth,
+                "pack": effective_pack.name,
+                "reasoning_mode": "single_pass_synthesis",
+            },
+            config=config,
+            llm_port=port_bundle.llm,
+        )
 
-            response = await port_bundle.llm.complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                metadata={
-                    "entity_id": reasoning_input.entity_id,
-                    "entity_type": reasoning_input.entity_type,
-                    "goal": reasoning_input.goal,
-                    "depth": depth,
-                    "pack": effective_pack.name,
-                    "attempt_no": attempt_no,
-                    "reasoning_mode": "single_pass_synthesis",
-                },
+        if loop.succeeded:
+            result = _synthesis_success_result(
+                loop=loop,
+                reasoning_input=reasoning_input,
+                depth=depth,
+                pack=effective_pack,
+                witness_context=witness_context,
             )
-            text = _response_text(response)
-            last_text = _clean_reasoning_text(text)
-            usage = dict(response.get("usage") or {}) if isinstance(response, Mapping) else {}
-            attempt_tokens = _usage_tokens(usage)
-            total_tokens += attempt_tokens
-
-            parsed = _parse_llm_json(last_text)
-            validation = _validate_reasoning_candidate(parsed)
-            attempts.append({
-                "attempt_no": attempt_no,
-                "valid": validation["valid"],
-                "errors": tuple(validation["errors"]),
-                "warnings": tuple(validation["warnings"]),
-                "tokens_used": attempt_tokens,
-            })
-
-            if validation["valid"]:
-                assert isinstance(parsed, dict)
-                last_candidate = parsed
-                result = _candidate_to_reasoning_result(
-                    parsed,
-                    reasoning_input=reasoning_input,
-                    depth=depth,
-                    pack=effective_pack,
-                    witness_context=witness_context,
-                    attempts=attempts,
-                    tokens_used=total_tokens,
+            if port_bundle.event_sink is not None:
+                await port_bundle.event_sink.emit(
+                    "reasoning.synthesis.completed",
+                    "extracted_reasoning_core.run_reasoning",
+                    {"attempts_used": len(loop.attempts), "tokens_used": loop.total_tokens},
+                    entity_type=reasoning_input.entity_type,
+                    entity_id=reasoning_input.entity_id,
                 )
-                if port_bundle.event_sink is not None:
-                    await port_bundle.event_sink.emit(
-                        "reasoning.synthesis.completed",
-                        "extracted_reasoning_core.run_reasoning",
-                        {"attempts_used": attempt_no, "tokens_used": total_tokens},
-                        entity_type=reasoning_input.entity_type,
-                        entity_id=reasoning_input.entity_id,
-                    )
-                if trace_sink is not None and span is not None:
-                    trace_sink.end_span(
-                        span,
-                        status="ok",
-                        metadata={"attempts_used": attempt_no, "tokens_used": total_tokens},
-                    )
-                return result
+            if trace_sink is not None and span is not None:
+                trace_sink.end_span(
+                    span,
+                    status="ok",
+                    metadata={
+                        "attempts_used": len(loop.attempts),
+                        "tokens_used": loop.total_tokens,
+                    },
+                )
+            return result
 
-            failure_reasons = list(validation["errors"])
-
-        error_text = "; ".join(failure_reasons[:2])[:200] or "validation failed"
         if port_bundle.event_sink is not None:
             await port_bundle.event_sink.emit(
                 "reasoning.synthesis.validation_failed",
                 "extracted_reasoning_core.run_reasoning",
                 {
-                    "attempts_used": max_attempts,
-                    "tokens_used": total_tokens,
-                    "errors": tuple(failure_reasons[:feedback_limit]),
+                    "attempts_used": config.max_attempts,
+                    "tokens_used": loop.total_tokens,
+                    "errors": loop.failure_reasons,
                 },
                 entity_type=reasoning_input.entity_type,
                 entity_id=reasoning_input.entity_id,
@@ -405,28 +348,215 @@ async def run_reasoning(
             trace_sink.end_span(
                 span,
                 status="error",
-                metadata={"attempts_used": max_attempts, "error_text": error_text},
+                metadata={
+                    "attempts_used": config.max_attempts,
+                    "error_text": loop.error_text,
+                },
             )
-        return ReasoningResult(
-            summary="Reasoning synthesis failed validation",
-            claims=(),
-            confidence=0.0,
-            tier=depth,
-            state={
-                "status": "failed",
-                "succeeded": False,
-                "stage": "validation",
-                "error_text": error_text,
-                "reasons": tuple(failure_reasons[:feedback_limit]),
-                "attempts_used": max_attempts,
-                "tokens_used": total_tokens,
+        return _synthesis_failure_result(
+            loop=loop,
+            depth=depth,
+            max_attempts=config.max_attempts,
+            witness_context=witness_context,
+        )
+    except Exception:
+        if trace_sink is not None and span is not None:
+            trace_sink.end_span(span, status="error", metadata={"stage": "exception"})
+        raise
+
+
+async def continue_reasoning(
+    state: Mapping[str, Any],
+    event: Mapping[str, Any],
+    *,
+    ports: ReasoningPorts | None = None,
+) -> ReasoningResult:
+    """Continue a prior reasoning state with a new event.
+
+    Multi-pass refinement: given a prior ``ReasoningResult.state`` and a
+    new event (with new evidence), produce an updated ``ReasoningResult``
+    that supersedes the prior conclusions. Lineage (generation count,
+    prior synthesis hash, events consumed) is tracked in the returned
+    state so callers can chain continuations.
+
+    The function does NOT run a falsification pass; that is reserved for
+    ``check_falsification``. If the new event carries a
+    ``falsification_hint``, it is surfaced in the trace but not acted on
+    separately.
+    """
+
+    port_bundle = ports or ReasoningPorts()
+    if port_bundle.llm is None:
+        raise ConfigurationError(
+            "continue_reasoning requires ReasoningPorts.llm; provide an "
+            "extracted_llm_infrastructure-backed LLM port."
+        )
+
+    prior_status = str(state.get("status") or "")
+    if prior_status != "completed":
+        return _continuation_invalid_state_result(state=state, event=event)
+
+    raw_synthesis = dict(state.get("raw_synthesis") or {})
+    prior_summary = extract_summary(raw_synthesis)
+    prior_claims = extract_claims(raw_synthesis)
+    prior_confidence = extract_confidence(raw_synthesis, prior_claims)
+    prior_synthesis_hash = _hash_prior_synthesis(raw_synthesis)
+    prior_generation = int(state.get("generation") or 1)
+
+    entity_id = str(state.get("entity_id") or "")
+    entity_type = str(state.get("entity_type") or "")
+    goal = str(state.get("goal") or "")
+    depth_value: ReasoningDepth = state.get("depth") or state.get("tier") or "L2"  # type: ignore[assignment]
+    pack_name = str(state.get("pack") or "reasoning_synthesis")
+    pack_version = str(state.get("pack_version") or "1.0")
+    pack = ReasoningPack(
+        name=pack_name,
+        version=pack_version,
+        prompts=dict(state.get("pack_prompts") or {}),
+        policies=dict(state.get("pack_policies") or {}),
+    )
+
+    event_evidence_raw = event.get("evidence") or ()
+    event_evidence = tuple(_coerce_evidence_item(item) for item in event_evidence_raw)
+    reasoning_input = ReasoningInput(
+        entity_id=entity_id,
+        entity_type=entity_type,
+        goal=goal,
+        evidence=event_evidence,
+    )
+
+    witness_context = await _resolve_witness_context(
+        reasoning_input,
+        depth=depth_value,
+        pack=pack,
+        ports=port_bundle,
+    )
+    config = synthesis_config_from_pack(pack)
+    system_prompt = _resolve_continuation_prompt(pack)
+    payload = _build_continuation_payload(
+        prior_summary=prior_summary,
+        prior_claims=prior_claims,
+        prior_confidence=prior_confidence,
+        event=event,
+        witness_context=witness_context,
+        entity_id=entity_id,
+        entity_type=entity_type,
+        goal=goal,
+        depth=depth_value,
+        pack=pack,
+    )
+    payload_text = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+    falsification_hint_seen = bool(event.get("falsification_hint"))
+    event_type = str(event.get("event_type") or "")
+
+    trace_sink = port_bundle.trace_sink
+    span = None
+    if trace_sink is not None:
+        span = trace_sink.start_span(
+            "extracted_reasoning_core.continue_reasoning",
+            metadata={
+                "entity_id": entity_id,
+                "entity_type": entity_type,
+                "depth": depth_value,
+                "pack": pack_name,
+                "event_type": event_type,
+                "prior_generation": prior_generation,
             },
-            trace={
-                "attempts": tuple(attempts),
-                "last_response": last_text,
-                "last_candidate": last_candidate or {},
-                "witness_context_present": bool(witness_context),
+        )
+
+    try:
+        loop = await invoke_synthesis_loop(
+            system_prompt=system_prompt,
+            payload_text=payload_text,
+            llm_metadata={
+                "entity_id": entity_id,
+                "entity_type": entity_type,
+                "goal": goal,
+                "depth": depth_value,
+                "pack": pack_name,
+                "event_type": event_type,
+                "reasoning_mode": "multi_pass_continuation",
             },
+            config=config,
+            llm_port=port_bundle.llm,
+        )
+
+        if loop.succeeded:
+            result = _continuation_success_result(
+                loop=loop,
+                entity_id=entity_id,
+                entity_type=entity_type,
+                goal=goal,
+                pack_name=pack_name,
+                pack_version=pack_version,
+                pack_policies=pack.policies,
+                pack_prompts=pack.prompts,
+                depth=depth_value,
+                generation=prior_generation + 1,
+                prior_synthesis_hash=prior_synthesis_hash,
+                prior_summary=prior_summary,
+                prior_attempts_used=int(state.get("attempts_used") or 0),
+                event_type=event_type,
+                falsification_hint_seen=falsification_hint_seen,
+                witness_context=witness_context,
+            )
+            if port_bundle.event_sink is not None:
+                await port_bundle.event_sink.emit(
+                    "reasoning.continuation.completed",
+                    "extracted_reasoning_core.continue_reasoning",
+                    {
+                        "attempts_used": len(loop.attempts),
+                        "tokens_used": loop.total_tokens,
+                        "generation": prior_generation + 1,
+                    },
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                )
+            if trace_sink is not None and span is not None:
+                trace_sink.end_span(
+                    span,
+                    status="ok",
+                    metadata={
+                        "attempts_used": len(loop.attempts),
+                        "tokens_used": loop.total_tokens,
+                        "generation": prior_generation + 1,
+                    },
+                )
+            return result
+
+        if port_bundle.event_sink is not None:
+            await port_bundle.event_sink.emit(
+                "reasoning.continuation.validation_failed",
+                "extracted_reasoning_core.continue_reasoning",
+                {
+                    "attempts_used": config.max_attempts,
+                    "tokens_used": loop.total_tokens,
+                    "errors": loop.failure_reasons,
+                    "generation": prior_generation + 1,
+                },
+                entity_type=entity_type,
+                entity_id=entity_id,
+            )
+        if trace_sink is not None and span is not None:
+            trace_sink.end_span(
+                span,
+                status="error",
+                metadata={
+                    "attempts_used": config.max_attempts,
+                    "error_text": loop.error_text,
+                },
+            )
+        return _continuation_failure_result(
+            loop=loop,
+            depth=depth_value,
+            max_attempts=config.max_attempts,
+            prior_summary=prior_summary,
+            prior_synthesis_hash=prior_synthesis_hash,
+            generation=prior_generation + 1,
+            event_type=event_type,
+            falsification_hint_seen=falsification_hint_seen,
+            witness_context=witness_context,
         )
     except Exception:
         if trace_sink is not None and span is not None:
@@ -468,6 +598,21 @@ def _resolve_reasoning_prompt(pack: ReasoningPack) -> str:
     )
 
 
+def _resolve_continuation_prompt(pack: ReasoningPack) -> str:
+    for key in ("reasoning_continuation", "continuation", "system_continuation"):
+        prompt = str((pack.prompts or {}).get(key) or "").strip()
+        if prompt:
+            return prompt
+    from .skills.registry import get_skill_registry
+
+    registry = get_skill_registry()
+    return registry.get_prompt("digest/reasoning_continuation") or (
+        "Return a complete refined JSON reasoning synthesis incorporating "
+        "the new event, with summary, claims (each with revised_from), and "
+        "confidence."
+    )
+
+
 def _build_reasoning_payload(
     reasoning_input: ReasoningInput,
     *,
@@ -481,144 +626,62 @@ def _build_reasoning_payload(
         "goal": reasoning_input.goal,
         "depth": depth,
         "pack": {"name": pack.name, "version": pack.version},
-        "evidence": tuple(_evidence_to_mapping(item) for item in reasoning_input.evidence),
+        "evidence": tuple(evidence_to_mapping(item) for item in reasoning_input.evidence),
         "context": dict(reasoning_input.context or {}),
         "witness_context": dict(witness_context or {}),
     }
 
 
-def _evidence_to_mapping(item: EvidenceItem) -> Mapping[str, Any]:
-    if is_dataclass(item):
-        return asdict(item)
-    return dict(item)  # type: ignore[arg-type]
-
-
-def _response_text(response: Mapping[str, Any]) -> str:
-    for key in ("response", "content", "text"):
-        value = response.get(key)
-        if value is not None:
-            return str(value)
-    message = response.get("message")
-    if isinstance(message, Mapping) and message.get("content") is not None:
-        return str(message.get("content"))
-    return json.dumps(response, default=str)
-
-
-def _clean_reasoning_text(text: str) -> str:
-    cleaned = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
-    if "<scratchpad>" in cleaned:
-        cleaned = cleaned.split("</scratchpad>")[-1].strip()
-    return cleaned
-
-
-def _parse_llm_json(text: str) -> Any:
-    try:
-        from extracted_llm_infrastructure.pipelines.llm import parse_json_response
-    except ImportError:
-        parse_json_response = None
-    if parse_json_response is not None:
-        return parse_json_response(text, recover_truncated=True)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
-
-
-def _validate_reasoning_candidate(candidate: Any) -> Mapping[str, Any]:
-    errors: list[str] = []
-    warnings: list[str] = []
-    if not isinstance(candidate, dict):
-        return {"valid": False, "errors": ("LLM did not return a JSON object",), "warnings": ()}
-    if candidate.get("_parse_fallback"):
-        return {"valid": False, "errors": ("LLM did not return valid JSON",), "warnings": ()}
-    summary = _extract_summary(candidate)
-    claims = _extract_claims(candidate)
-    if not summary:
-        errors.append("missing_summary")
-    if not claims:
-        errors.append("missing_claims")
-    confidence = _extract_confidence(candidate, claims)
-    if confidence <= 0.0:
-        warnings.append("zero_or_missing_confidence")
-    return {"valid": not errors, "errors": tuple(errors), "warnings": tuple(warnings)}
-
-
-def _extract_summary(candidate: Mapping[str, Any]) -> str:
-    for key in ("summary", "executive_summary", "causal_narrative"):
-        value = candidate.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        if isinstance(value, Mapping):
-            nested = _extract_summary(value)
-            if nested:
-                return nested
-    contracts = candidate.get("reasoning_contracts")
-    if isinstance(contracts, Mapping):
-        for value in contracts.values():
-            if isinstance(value, Mapping):
-                nested = _extract_summary(value)
-                if nested:
-                    return nested
-    return ""
-
-
-def _extract_claims(candidate: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
-    raw = candidate.get("claims")
-    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
-        claims = tuple(dict(item) if isinstance(item, Mapping) else {"claim": str(item)} for item in raw)
-        if claims:
-            return claims
-    contracts = candidate.get("reasoning_contracts")
-    found: list[Mapping[str, Any]] = []
-    if isinstance(contracts, Mapping):
-        _collect_contract_claims(contracts, found)
-    return tuple(found)
-
-
-def _collect_contract_claims(value: Mapping[str, Any], found: list[Mapping[str, Any]]) -> None:
-    for key, item in value.items():
-        if not isinstance(item, Mapping):
-            continue
-        claim_text = item.get("claim") or item.get("summary") or item.get("narrative")
-        if claim_text:
-            found.append({"claim": str(claim_text), "section": str(key), **dict(item)})
-        nested = item.get("claims") or item.get("sections")
-        if isinstance(nested, Mapping):
-            _collect_contract_claims(nested, found)
-
-
-def _extract_confidence(candidate: Mapping[str, Any], claims: Sequence[Mapping[str, Any]]) -> float:
-    rank = {"high": 0.9, "medium": 0.6, "low": 0.3, "insufficient": 0.0}
-    raw = candidate.get("confidence")
-    if raw is not None:
-        try:
-            return max(0.0, min(1.0, float(raw)))
-        except (TypeError, ValueError):
-            return rank.get(str(raw).strip().lower(), 0.0)
-    values: list[float] = []
-    for claim in claims:
-        value = claim.get("confidence")
-        try:
-            values.append(float(value))
-        except (TypeError, ValueError):
-            values.append(rank.get(str(value or "").strip().lower(), 0.0))
-    return max(values) if values else 0.0
-
-
-def _candidate_to_reasoning_result(
-    candidate: Mapping[str, Any],
+def _build_continuation_payload(
     *,
+    prior_summary: str,
+    prior_claims: Sequence[Mapping[str, Any]],
+    prior_confidence: float,
+    event: Mapping[str, Any],
+    witness_context: Mapping[str, Any],
+    entity_id: str,
+    entity_type: str,
+    goal: str,
+    depth: ReasoningDepth,
+    pack: ReasoningPack,
+) -> Mapping[str, Any]:
+    event_evidence = tuple(
+        evidence_to_mapping(item) for item in (event.get("evidence") or ())
+    )
+    return {
+        "entity_id": entity_id,
+        "entity_type": entity_type,
+        "goal": goal,
+        "depth": depth,
+        "pack": {"name": pack.name, "version": pack.version},
+        "prior_summary": prior_summary,
+        "prior_claims": tuple(dict(c) for c in prior_claims),
+        "prior_confidence": prior_confidence,
+        "event": {
+            "event_type": str(event.get("event_type") or ""),
+            "timestamp": event.get("timestamp"),
+            "source_id": event.get("source_id"),
+            "metadata": dict(event.get("metadata") or {}),
+            "evidence": event_evidence,
+            "falsification_hint": bool(event.get("falsification_hint")),
+        },
+        "witness_context": dict(witness_context or {}),
+    }
+
+
+def _synthesis_success_result(
+    *,
+    loop: SynthesisLoopResult,
     reasoning_input: ReasoningInput,
     depth: ReasoningDepth,
     pack: ReasoningPack,
     witness_context: Mapping[str, Any],
-    attempts: Sequence[Mapping[str, Any]],
-    tokens_used: int,
 ) -> ReasoningResult:
-    claims = _extract_claims(candidate)
-    confidence = _extract_confidence(candidate, claims)
+    candidate = loop.valid_candidate or {}
+    claims = extract_claims(candidate)
+    confidence = extract_confidence(candidate, claims)
     return ReasoningResult(
-        summary=_extract_summary(candidate),
+        summary=extract_summary(candidate),
         claims=claims,
         confidence=confidence,
         tier=depth,
@@ -630,37 +693,205 @@ def _candidate_to_reasoning_result(
             "goal": reasoning_input.goal,
             "pack": pack.name,
             "pack_version": pack.version,
-            "attempts_used": len(attempts),
-            "tokens_used": tokens_used,
+            "pack_policies": dict(pack.policies or {}),
+            "pack_prompts": dict(pack.prompts or {}),
+            "attempts_used": len(loop.attempts),
+            "tokens_used": loop.total_tokens,
+            "depth": depth,
             "raw_synthesis": dict(candidate),
         },
         trace={
-            "attempts": tuple(attempts),
+            "attempts": loop.attempts,
             "witness_context_present": bool(witness_context),
             "validation_warnings": tuple(
                 warning
-                for attempt in attempts
+                for attempt in loop.attempts
                 for warning in attempt.get("warnings", ())
             ),
         },
     )
 
 
-def _usage_tokens(usage: Mapping[str, Any]) -> int:
-    return int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+def _synthesis_failure_result(
+    *,
+    loop: SynthesisLoopResult,
+    depth: ReasoningDepth,
+    max_attempts: int,
+    witness_context: Mapping[str, Any],
+) -> ReasoningResult:
+    return ReasoningResult(
+        summary="Reasoning synthesis failed validation",
+        claims=(),
+        confidence=0.0,
+        tier=depth,
+        state={
+            "status": "failed",
+            "succeeded": False,
+            "stage": "validation",
+            "error_text": loop.error_text,
+            "reasons": loop.failure_reasons,
+            "attempts_used": max_attempts,
+            "tokens_used": loop.total_tokens,
+        },
+        trace={
+            "attempts": loop.attempts,
+            "last_response": loop.last_text,
+            "last_candidate": loop.last_candidate or {},
+            "witness_context_present": bool(witness_context),
+        },
+    )
 
 
-async def continue_reasoning(
+def _continuation_success_result(
+    *,
+    loop: SynthesisLoopResult,
+    entity_id: str,
+    entity_type: str,
+    goal: str,
+    pack_name: str,
+    pack_version: str,
+    pack_policies: Mapping[str, Any],
+    pack_prompts: Mapping[str, Any],
+    depth: ReasoningDepth,
+    generation: int,
+    prior_synthesis_hash: str,
+    prior_summary: str,
+    prior_attempts_used: int,
+    event_type: str,
+    falsification_hint_seen: bool,
+    witness_context: Mapping[str, Any],
+) -> ReasoningResult:
+    candidate = loop.valid_candidate or {}
+    claims = extract_claims(candidate)
+    confidence = extract_confidence(candidate, claims)
+    return ReasoningResult(
+        summary=extract_summary(candidate),
+        claims=claims,
+        confidence=confidence,
+        tier=depth,
+        state={
+            "status": "completed",
+            "succeeded": True,
+            "stage": "continuation",
+            "entity_id": entity_id,
+            "entity_type": entity_type,
+            "goal": goal,
+            "pack": pack_name,
+            "pack_version": pack_version,
+            "pack_policies": dict(pack_policies or {}),
+            "pack_prompts": dict(pack_prompts or {}),
+            "generation": generation,
+            "prior_synthesis_hash": prior_synthesis_hash,
+            "prior_attempts_used": prior_attempts_used,
+            "events_consumed": (event_type,),
+            "attempts_used": len(loop.attempts),
+            "tokens_used": loop.total_tokens,
+            "depth": depth,
+            "raw_synthesis": dict(candidate),
+        },
+        trace={
+            "attempts": loop.attempts,
+            "witness_context_present": bool(witness_context),
+            "prior_summary": prior_summary,
+            "event_type": event_type,
+            "falsification_hint_seen": falsification_hint_seen,
+            "validation_warnings": tuple(
+                warning
+                for attempt in loop.attempts
+                for warning in attempt.get("warnings", ())
+            ),
+        },
+    )
+
+
+def _continuation_failure_result(
+    *,
+    loop: SynthesisLoopResult,
+    depth: ReasoningDepth,
+    max_attempts: int,
+    prior_summary: str,
+    prior_synthesis_hash: str,
+    generation: int,
+    event_type: str,
+    falsification_hint_seen: bool,
+    witness_context: Mapping[str, Any],
+) -> ReasoningResult:
+    return ReasoningResult(
+        summary="Reasoning continuation failed validation",
+        claims=(),
+        confidence=0.0,
+        tier=depth,
+        state={
+            "status": "failed",
+            "succeeded": False,
+            "stage": "continuation_validation",
+            "error_text": loop.error_text,
+            "reasons": loop.failure_reasons,
+            "generation": generation,
+            "prior_synthesis_hash": prior_synthesis_hash,
+            "events_consumed": (event_type,),
+            "attempts_used": max_attempts,
+            "tokens_used": loop.total_tokens,
+        },
+        trace={
+            "attempts": loop.attempts,
+            "last_response": loop.last_text,
+            "last_candidate": loop.last_candidate or {},
+            "witness_context_present": bool(witness_context),
+            "prior_summary": prior_summary,
+            "event_type": event_type,
+            "falsification_hint_seen": falsification_hint_seen,
+        },
+    )
+
+
+def _continuation_invalid_state_result(
+    *,
     state: Mapping[str, Any],
     event: Mapping[str, Any],
-    *,
-    ports: ReasoningPorts | None = None,
 ) -> ReasoningResult:
-    """Continue a prior reasoning state with a new event."""
-    del state
-    del event
-    del ports
-    raise NotImplementedError("continue_reasoning lands with graph/state consolidation")
+    prior_status = str(state.get("status") or "unknown")
+    depth_value: ReasoningDepth = state.get("depth") or state.get("tier") or "L2"  # type: ignore[assignment]
+    return ReasoningResult(
+        summary="Continuation rejected: prior reasoning state is not completed",
+        claims=(),
+        confidence=0.0,
+        tier=depth_value,
+        state={
+            "status": "failed",
+            "succeeded": False,
+            "stage": "continuation_input",
+            "reasons": ("prior_state_not_completed", f"prior_status={prior_status}"),
+            "attempts_used": 0,
+            "tokens_used": 0,
+        },
+        trace={
+            "attempts": (),
+            "prior_status": prior_status,
+            "event_type": str(event.get("event_type") or ""),
+        },
+    )
+
+
+def _hash_prior_synthesis(raw_synthesis: Mapping[str, Any]) -> str:
+    text = json.dumps(raw_synthesis, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _coerce_evidence_item(item: Any) -> Any:
+    if isinstance(item, EvidenceItem):
+        return item
+    if isinstance(item, Mapping):
+        kwargs = dict(item)
+        try:
+            return EvidenceItem(**kwargs)
+        except TypeError:
+            return EvidenceItem(
+                source_type=str(kwargs.get("source_type") or "unknown"),
+                source_id=str(kwargs.get("source_id") or ""),
+                text=str(kwargs.get("text") or ""),
+            )
+    return EvidenceItem(source_type="unknown", source_id="", text=str(item))
 
 
 async def check_falsification(
@@ -744,6 +975,7 @@ __all__ = [
     "build_tiered_pattern_sig",
     "check_falsification",
     "compute_evidence_hash",
+    "continue_reasoning",
     "evaluate_evidence",
     "gather_tier_context",
     "get_required_pools",
@@ -754,7 +986,6 @@ __all__ = [
     "needs_refresh",
     "run_reasoning",
     "score_archetypes",
-    "continue_reasoning",
     "validate_reasoning_output",
     "validate_wedge",
     "wedge_from_archetype",
