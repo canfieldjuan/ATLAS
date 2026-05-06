@@ -84,8 +84,11 @@ Lift directly without modification:
 - **Genre:** true-crime / mystery / "strange, dark, and mysterious"
   YouTube long-form narration. Channel taxonomy menu in the sibling
   doc still applies.
-- **v0 output shape:** 10-minute YouTube mystery scripts, 2–3k words,
-  single-pass-where-possible.
+- **v0 output shape:** narration-ready YouTube mystery scripts,
+  single-pass-where-possible. **Length intentionally narrowed for
+  this engine** to 5–7 minutes / 1,000–1,500 words — see the pinned
+  *v0 cut (locked)* table above. The sibling doc's 10-minute /
+  2–3k-word target is the long-form aspiration (post-v0).
 - **Five-beat script model:** Fast Hook → Character Humanization →
   Contextual Build → Escalation → Delayed Payoff.
 - **Hard invariants:** the 10% rule, the Prefacing Rule.
