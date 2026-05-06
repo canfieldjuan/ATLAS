@@ -74,6 +74,11 @@ class MultiPassReasoningProviderConfig:
     # want to load a pack from the registry can do so themselves via
     # extracted_reasoning_core.api.load_reasoning_pack and pass the
     # result here. When None (default), no narrative plan is produced.
+    #
+    # Note: pack policies are forwarded to build_narrative_plan as-is.
+    # In particular, ``policies["max_sections"]`` silently drops claims
+    # belonging to over-cap sections from the rendered NarrativePlan
+    # (see D20d). Tune defensively if claim-coverage matters.
     narrative_plan_pack: "ReasoningPack | None" = None
 
 
