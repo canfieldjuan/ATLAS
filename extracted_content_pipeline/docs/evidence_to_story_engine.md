@@ -85,10 +85,12 @@ Lift directly without modification:
   YouTube long-form narration. Channel taxonomy menu in the sibling
   doc still applies.
 - **v0 output shape:** narration-ready YouTube mystery scripts,
-  single-pass-where-possible. **Length intentionally narrowed for
-  this engine** to 5–7 minutes / 1,000–1,500 words — see the pinned
-  *v0 cut (locked)* table above. The sibling doc's 10-minute /
-  2–3k-word target is the long-form aspiration (post-v0).
+  single-pass-where-possible. Length carries an explicit
+  long-term/v0 split:
+    - **Long-term output shape:** 10-minute YouTube mystery scripts,
+      2–3k words.
+    - **v0 exception:** 5–7 minutes / ~1,000–1,500 words per the
+      locked v0 cut pinned at the top of this doc.
 - **Five-beat script model:** Fast Hook → Character Humanization →
   Contextual Build → Escalation → Delayed Payoff.
 - **Hard invariants:** the 10% rule, the Prefacing Rule.

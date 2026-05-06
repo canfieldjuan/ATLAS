@@ -85,6 +85,32 @@ If the case turns out to involve sensitive material that shouldn't sit
 in a public repo (private GH project; or this fixture moves to a
 dedicated repo), revisit before locking.
 
+## If the canonical UPI source is unavailable
+
+The manifest cites UPI as the news-article source. If the UPI archive
+is paywalled / bot-blocked / 404'd at paste time, fall back in this
+order:
+
+1. **The Washington Post** — "THE DOMINO'S EFFECT A REAL NOID"
+   (1989-02-01).
+   `https://www.washingtonpost.com/archive/lifestyle/1989/02/01/the-dominos-effect-a-real-noid/4ae20338-a9ed-4fc7-ac85-b80a64ba3906/`
+2. **Snopes fact-check** (rated True; cites WaPo/AP reporting).
+   `https://www.snopes.com/fact-check/dominos-noid-mascot-hostages/`
+
+If a fallback is used, prefix `inputs/news_article.txt` with one
+header line documenting the swap so downstream stages know
+provenance. The manifest stays pointed at UPI.
+
+## Optional future source (parked, not v0)
+
+A second UPI wire story dated 1989-08-23, "Noid to get mental
+treatment", is useful for the case's legal disposition (not-guilty-
+by-reason-of-insanity verdict, psychiatric commitment). It is
+deliberately **not** added to v0 because the v0 contract is locked
+to two sources. Park it here so it isn't lost; revisit when the
+fixture is ready to exercise multi-source disputed-claim flows
+beyond the two-source minimum.
+
 ## Resume condition
 
 This fixture is dormant until the campaign-core spine is product-owned

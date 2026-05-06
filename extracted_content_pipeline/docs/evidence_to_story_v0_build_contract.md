@@ -578,6 +578,57 @@ What v0 deliberately defers and the order of arrival likely:
 
 ---
 
+## v0 implementation PR sequence
+
+When the resume gate clears, v0 lands as a sequence of small, focused
+PRs. Each PR adds one stage's worth of capability and validates
+against the golden fixture before the next one starts. Crawl before
+walk — no agentic orchestration until the boring single-stage I/O
+surfaces are locked.
+
+### PR 1 — Stage 1 source loader + package scaffolding
+
+**Scope (no LLM calls, no claim extraction):**
+
+- `SourceRecord` model (dataclass / pydantic, mirrors §4 Stage 1 output)
+- Manifest parser (`inputs/manifest.json` → typed `SourceRecord` list)
+- YouTube transcript text loader (file path → text + metadata coercion)
+- News article text loader (file path → text + metadata coercion)
+- `story_package/` directory writer
+- `sources.json` generation
+- Tests against the golden fixture manifest
+
+**Acceptance:** running the loader against the golden fixture produces
+a valid `sources.json` matching `expected/sources.json` shape (full-
+text equality not required; shape and key-set parity required per the
+fixture's CI rules).
+
+**Out of scope for PR 1:** Stages 2–9. No LLM. No claim extraction.
+No "agentic" anything. Just deterministic I/O.
+
+### PR 2 — Stage 2 claim extraction
+
+Awaits PR 1 + the golden fixture article body paste.
+
+### PR 3+ — TBD
+
+Subsequent PRs land one stage at a time, in the order defined in §4
+of this contract. Stage gates between PRs:
+
+| After PR | Stage delivered | Approval-gate behavior unlocked |
+| --- | --- | --- |
+| 1 | 1 (sources) | Review sources.json |
+| 2 | 2 (claims) | Review claims.json |
+| 3 | 3–4 (timeline + entities) | — |
+| 4 | 5 (angles) | Review + select angle |
+| 5 | 6 (outline) | Review outline |
+| 6 | 7 (draft) | — |
+| 7 | 8 (validate) | Review validation_report.json |
+| 8 | 9 (voice direction) | Final story_package complete |
+
+Sequencing is suggestive, not contractual. PRs 3–4 may merge if the
+deterministic timeline + entity extraction is small enough.
+
 ## Resume condition
 
 This work resumes only after the campaign-core spine is fully

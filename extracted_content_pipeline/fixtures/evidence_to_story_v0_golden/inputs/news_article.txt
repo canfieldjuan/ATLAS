@@ -6,16 +6,13 @@ Canonical source (per manifest):
   Date:        1989-01-31  (day after the standoff — wire-service contemporaneous)
   URL:         https://www.upi.com/Archives/1989/01/31/Noid-irked-by-Avoid-the-Noid-pizza-commercials/7309602226000/
 
-Fallback sources (in priority order, used only if UPI access fails):
-  1. The Washington Post — "THE DOMINO'S EFFECT A REAL NOID"  (1989-02-01)
-       https://www.washingtonpost.com/archive/lifestyle/1989/02/01/the-dominos-effect-a-real-noid/4ae20338-a9ed-4fc7-ac85-b80a64ba3906/
-  2. Snopes fact-check (rated True; cites WaPo/AP reporting verbatim)
-       https://www.snopes.com/fact-check/dominos-noid-mascot-hostages/
+Fallback sources, paste-acceptable order, are documented in
+../README.md under "If the canonical UPI source is unavailable".
 
-Automated fetch status as of last attempt: UPI returned 403 (bot
-detection), WaPo 403 (paywall + bot detection), Snopes 403
-(Cloudflare), web.archive.org tool-blocked. The article body must
-be pasted manually from a desktop browser.
+Automated fetch from this session: UPI returned 403 (bot detection),
+WaPo 403 (paywall + bot detection), Snopes 403 (Cloudflare),
+web.archive.org tool-blocked. The article body must be pasted
+manually from a desktop browser.
 
 When pasting:
   - Strip ads / navigation / "related stories" / cookie banners
@@ -23,9 +20,8 @@ When pasting:
   - Keep byline + publication + date on the first line
   - If a fallback source is used instead of UPI, prefix the body
     with one header line documenting which source was used. The
-    manifest's `metadata.fallback_sources` block records the
-    candidate set; inline documentation makes provenance obvious
-    to downstream stages.
+    manifest still points at UPI; this header makes the swap
+    obvious to downstream stages.
 
 The Stage-1 loader reads this file as `text` on the corresponding
 SourceRecord. See ../README.md for selection criteria.
