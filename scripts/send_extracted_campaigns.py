@@ -26,6 +26,15 @@ from extracted_content_pipeline.campaign_sender import (  # noqa: E402
     RESEND_API_URL,
     create_campaign_sender,
 )
+from extracted_content_pipeline.campaign_visibility import (  # noqa: E402
+    JsonlVisibilitySink,
+    OPERATION_COMPLETED_EVENT,
+    OPERATION_FAILED_EVENT,
+    OPERATION_STARTED_EVENT,
+    REPORTED_FAILURES_ERROR_TYPE,
+    emit_operation_event,
+    visibility_result_summary,
+)
 
 
 DEFAULT_CAMPAIGN_SENDER_PROVIDER = "resend"
@@ -215,6 +224,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Emit JSON summary instead of a concise text summary.",
     )
+    parser.add_argument(
+        "--visibility-jsonl",
+        type=Path,
+        help="Append campaign operation visibility events to this JSONL file.",
+    )
     return parser.parse_args(argv)
 
 
@@ -288,10 +302,10 @@ async def _main() -> int:
     args = _parse_args()
     if not args.database_url:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
+    visibility = JsonlVisibilitySink(args.visibility_jsonl) if args.visibility_jsonl else None
     provider, provider_config = _sender_config(args)
     _validate_sender_config(provider, provider_config)
     _validate_send_args(args)
-    sender = create_campaign_sender(provider, provider_config)
     config = CampaignSendConfig(
         default_from_email=args.default_from_email or args.ses_from_email or "",
         default_reply_to=args.reply_to,
@@ -300,27 +314,63 @@ async def _main() -> int:
         company_address=args.company_address,
         limit=args.limit,
     )
-    pool = await _create_pool(args.database_url)
+    operation_payload = {"limit": args.limit, "provider": provider}
+    await emit_operation_event(
+        visibility,
+        OPERATION_STARTED_EVENT,
+        "send_queued",
+        operation_payload,
+    )
+    pool = None
     try:
+        sender = create_campaign_sender(provider, provider_config)
+        pool = await _create_pool(args.database_url)
         summary = await send_due_campaigns_from_postgres(
             pool,
             sender=sender,
             config=config,
             limit=args.limit,
         )
+    except Exception as exc:
+        await emit_operation_event(
+            visibility,
+            OPERATION_FAILED_EVENT,
+            "send_queued",
+            {**operation_payload, "error_type": type(exc).__name__},
+        )
+        raise
     finally:
-        close = getattr(pool, "close", None)
-        if close is not None:
+        if pool is not None and (close := getattr(pool, "close", None)) is not None:
             maybe_awaitable = close()
             if hasattr(maybe_awaitable, "__await__"):
                 await maybe_awaitable
 
+    data = summary.as_dict()
+    if data.get("failed"):
+        await emit_operation_event(
+            visibility,
+            OPERATION_FAILED_EVENT,
+            "send_queued",
+            {
+                **operation_payload,
+                "error_type": REPORTED_FAILURES_ERROR_TYPE,
+                "result": visibility_result_summary(data),
+            },
+        )
+    else:
+        await emit_operation_event(
+            visibility,
+            OPERATION_COMPLETED_EVENT,
+            "send_queued",
+            {**operation_payload, "result": visibility_result_summary(data)},
+        )
+
     if args.json:
-        print(json.dumps(summary.as_dict(), indent=2, sort_keys=True))
+        print(json.dumps(data, indent=2, sort_keys=True))
     else:
         print(
             "sent={sent} failed={failed} suppressed={suppressed} skipped={skipped}".format(
-                **summary.as_dict()
+                **data
             )
         )
     return 0

@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .campaign_ports import VisibilitySink
+
 
 Clock = Callable[[], datetime]
+OPERATION_STARTED_EVENT = "campaign_operation_started"
+OPERATION_COMPLETED_EVENT = "campaign_operation_completed"
+OPERATION_FAILED_EVENT = "campaign_operation_failed"
+REPORTED_ERROR_TYPE = "reported_error"
+REPORTED_FAILURES_ERROR_TYPE = "reported_failures"
 
 
 @dataclass(frozen=True)
@@ -110,6 +117,42 @@ def read_jsonl_visibility_events(
     return rows[-max(0, int(limit)) :]
 
 
+def visibility_result_summary(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a compact visibility-safe summary for operation result payloads."""
+
+    summary: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, (bool, int, float)) or value is None:
+            summary[key] = value
+        elif isinstance(value, Sequence) and not isinstance(
+            value,
+            (str, bytes, bytearray),
+        ):
+            if key == "errors":
+                summary["error_count"] = len(value)
+            elif key.endswith("_ids"):
+                summary[f"{key}_count"] = len(value)
+    return summary
+
+
+async def emit_operation_event(
+    visibility: VisibilitySink | None,
+    event_type: str,
+    operation: str,
+    payload: Mapping[str, Any] | None = None,
+) -> None:
+    """Best effort operation event emission for host-facing runners."""
+
+    if visibility is None:
+        return
+    event_payload = {"operation": str(operation)}
+    event_payload.update(dict(payload or {}))
+    try:
+        await visibility.emit(event_type, event_payload)
+    except Exception:
+        return
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -123,8 +166,15 @@ def _json_default(value: Any) -> str:
 
 
 __all__ = [
+    "OPERATION_COMPLETED_EVENT",
+    "OPERATION_FAILED_EVENT",
+    "OPERATION_STARTED_EVENT",
+    "REPORTED_ERROR_TYPE",
+    "REPORTED_FAILURES_ERROR_TYPE",
     "InMemoryVisibilitySink",
     "JsonlVisibilitySink",
     "VisibilityEvent",
+    "emit_operation_event",
     "read_jsonl_visibility_events",
+    "visibility_result_summary",
 ]

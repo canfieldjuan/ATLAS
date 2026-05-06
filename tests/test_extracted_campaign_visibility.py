@@ -8,12 +8,21 @@ import pytest
 from extracted_content_pipeline.campaign_visibility import (
     InMemoryVisibilitySink,
     JsonlVisibilitySink,
+    OPERATION_STARTED_EVENT,
+    emit_operation_event,
     read_jsonl_visibility_events,
+    visibility_result_summary,
 )
 
 
 def _clock() -> datetime:
     return datetime(2026, 5, 5, 19, 20, tzinfo=timezone.utc)
+
+
+class _FailingSink:
+    async def emit(self, event_type: str, payload: dict[str, object]) -> None:
+        _ = event_type, payload
+        raise RuntimeError("visibility path unavailable")
 
 
 @pytest.mark.asyncio
@@ -97,3 +106,28 @@ async def test_read_jsonl_visibility_events_respects_limit(tmp_path: Path) -> No
         row["event_type"]
         for row in read_jsonl_visibility_events(path, limit=2)
     ] == ["two", "three"]
+
+
+def test_visibility_result_summary_compacts_sequence_fields() -> None:
+    assert visibility_result_summary({
+        "generated": 3,
+        "saved_ids": ["one", "two"],
+        "errors": ["bad"],
+        "raw_rows": [{"large": True}],
+        "refreshed": True,
+    }) == {
+        "generated": 3,
+        "saved_ids_count": 2,
+        "error_count": 1,
+        "refreshed": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_emit_operation_event_is_best_effort() -> None:
+    await emit_operation_event(
+        _FailingSink(),
+        OPERATION_STARTED_EVENT,
+        "draft_generation",
+        {"limit": 3},
+    )
