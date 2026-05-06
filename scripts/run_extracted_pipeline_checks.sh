@@ -48,6 +48,7 @@ pytest \
   tests/test_extracted_reasoning_core_continue_reasoning.py \
   tests/test_extracted_reasoning_core_check_falsification.py \
   tests/test_extracted_reasoning_core_build_narrative_plan.py \
+  tests/test_extracted_reasoning_core_semantic_cache.py \
   tests/test_extracted_reasoning_core_archetypes.py \
   tests/test_extracted_reasoning_core_evidence_engine.py \
   tests/test_extracted_reasoning_core_event_trace_ports.py \
