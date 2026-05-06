@@ -33,6 +33,10 @@ from ..campaign_postgres_sequence_progression import (
 )
 from ..campaign_send import CampaignSendConfig
 from ..campaign_sequence_progression import CampaignSequenceProgressionConfig
+from ..services.multi_pass_reasoning_provider import (
+    MultiPassCampaignReasoningProvider,
+    MultiPassReasoningProviderConfig,
+)
 from ..services.single_pass_reasoning_provider import (
     DEFAULT_REASONING_SKILL_NAME,
     SinglePassCampaignReasoningProvider,
@@ -94,6 +98,17 @@ class CampaignOperationsApiConfig:
     generation_reasoning_max_tokens: int = 900
     generation_reasoning_temperature: float = 0.2
     generation_reasoning_include_source_opportunity: bool = True
+    # Multi-pass reasoning (PR-D21f). Mutually exclusive with
+    # generation_single_pass_reasoning. Exposes only the simple knobs;
+    # hosts that need typed knobs (FalsificationPolicy, ReasoningPack,
+    # OutputPolicy) construct MultiPassCampaignReasoningProvider
+    # themselves and pass it via the reasoning_context_provider
+    # FastAPI dependency.
+    generation_multi_pass_reasoning: bool = False
+    generation_multi_pass_pack_name: str | None = None
+    generation_multi_pass_top_thesis_limit: int = 5
+    generation_multi_pass_enable_chain: bool = True
+    generation_multi_pass_max_continuations: int = 8
 
     def __post_init__(self) -> None:
         _validate_default_limit(
@@ -133,6 +148,16 @@ class CampaignOperationsApiConfig:
                 raise ValueError("generation_reasoning_skill_name is required")
             if self.generation_reasoning_max_tokens <= 0:
                 raise ValueError("generation_reasoning_max_tokens must be positive")
+        if self.generation_single_pass_reasoning and self.generation_multi_pass_reasoning:
+            raise ValueError(
+                "generation_single_pass_reasoning and generation_multi_pass_reasoning "
+                "are mutually exclusive"
+            )
+        if self.generation_multi_pass_reasoning:
+            if self.generation_multi_pass_top_thesis_limit <= 0:
+                raise ValueError("generation_multi_pass_top_thesis_limit must be positive")
+            if self.generation_multi_pass_max_continuations < 0:
+                raise ValueError("generation_multi_pass_max_continuations must be non-negative")
 
 
 def _require_fastapi() -> None:
@@ -380,6 +405,20 @@ def _generation_reasoning_context(
 ) -> Any:
     if explicit_reasoning_context is not None:
         return explicit_reasoning_context
+    if config.generation_multi_pass_reasoning:
+        if llm is None:
+            raise HTTPException(status_code=503, detail="Campaign reasoning LLM unavailable")
+        from extracted_reasoning_core.types import ReasoningPorts
+
+        return MultiPassCampaignReasoningProvider(
+            ports=ReasoningPorts(llm=llm),
+            config=MultiPassReasoningProviderConfig(
+                pack_name=config.generation_multi_pass_pack_name,
+                top_thesis_limit=config.generation_multi_pass_top_thesis_limit,
+                enable_multi_pass=config.generation_multi_pass_enable_chain,
+                max_continuations=config.generation_multi_pass_max_continuations,
+            ),
+        )
     if not config.generation_single_pass_reasoning:
         return None
     if llm is None:
@@ -411,12 +450,24 @@ def _operation_readiness(
         and llm_configured
         and skills_configured
     )
+    multi_pass_ready = (
+        bool(config.generation_multi_pass_reasoning) and llm_configured
+    )
     generation_ready = database_available and (
         explicit_reasoning
-        or not config.generation_single_pass_reasoning
+        or (not config.generation_single_pass_reasoning and not config.generation_multi_pass_reasoning)
         or single_pass_ready
+        or multi_pass_ready
     )
     sequence_ready = database_available and bool(_clean(config.sequence_from_email))
+    if explicit_reasoning:
+        reasoning_mode = "explicit_provider"
+    elif config.generation_multi_pass_reasoning:
+        reasoning_mode = "multi_pass"
+    elif config.generation_single_pass_reasoning:
+        reasoning_mode = "single_pass"
+    else:
+        reasoning_mode = "none"
     return {
         "providers": {
             "database": database_available,
@@ -427,13 +478,11 @@ def _operation_readiness(
             "visibility": visibility_provider is not None,
         },
         "reasoning": {
-            "mode": (
-                "explicit_provider"
-                if explicit_reasoning
-                else ("single_pass" if config.generation_single_pass_reasoning else "none")
-            ),
+            "mode": reasoning_mode,
             "single_pass_configured": bool(config.generation_single_pass_reasoning),
             "single_pass_ready": single_pass_ready,
+            "multi_pass_configured": bool(config.generation_multi_pass_reasoning),
+            "multi_pass_ready": multi_pass_ready,
         },
         "features": {
             "draft_generation": generation_ready,

@@ -387,6 +387,8 @@ def test_campaign_operations_router_reports_status() -> None:
             "mode": "explicit_provider",
             "single_pass_configured": False,
             "single_pass_ready": False,
+            "multi_pass_configured": False,
+            "multi_pass_ready": False,
         },
         "features": {
             "draft_generation": True,
@@ -446,6 +448,8 @@ def test_campaign_operations_router_status_reports_single_pass_readiness() -> No
         "mode": "single_pass",
         "single_pass_configured": True,
         "single_pass_ready": False,
+        "multi_pass_configured": False,
+        "multi_pass_ready": False,
     }
     assert payload["features"]["draft_generation"] is False
 
@@ -464,6 +468,8 @@ def test_campaign_operations_router_status_marks_single_pass_ready() -> None:
         "mode": "single_pass",
         "single_pass_configured": True,
         "single_pass_ready": True,
+        "multi_pass_configured": False,
+        "multi_pass_ready": False,
     }
     assert payload["features"]["draft_generation"] is True
 
@@ -481,6 +487,8 @@ def test_campaign_operations_router_status_treats_explicit_reasoning_as_ready() 
         "mode": "explicit_provider",
         "single_pass_configured": True,
         "single_pass_ready": False,
+        "multi_pass_configured": False,
+        "multi_pass_ready": False,
     }
     assert payload["features"]["draft_generation"] is True
 
@@ -1382,3 +1390,86 @@ def test_campaign_operations_router_requires_fastapi(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="FastAPI is required"):
         create_campaign_operations_router(pool_provider=lambda: None)
+
+
+def test_campaign_operations_router_status_reports_multi_pass_readiness() -> None:
+    response = _client(
+        _Pool(),
+        config=CampaignOperationsApiConfig(generation_multi_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["reasoning"] == {
+        "mode": "multi_pass",
+        "single_pass_configured": False,
+        "single_pass_ready": False,
+        "multi_pass_configured": True,
+        "multi_pass_ready": False,
+    }
+    # Configured but no LLM provider -> draft_generation gated off.
+    assert payload["features"]["draft_generation"] is False
+
+
+def test_campaign_operations_router_status_marks_multi_pass_ready() -> None:
+    response = _client(
+        _Pool(),
+        llm=_LLM(),
+        config=CampaignOperationsApiConfig(generation_multi_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reasoning"] == {
+        "mode": "multi_pass",
+        "single_pass_configured": False,
+        "single_pass_ready": False,
+        "multi_pass_configured": True,
+        "multi_pass_ready": True,
+    }
+    # Multi-pass needs LLM only (no SkillStore required) -> ready when LLM
+    # provider is wired, even without skills.
+    assert payload["features"]["draft_generation"] is True
+
+
+def test_campaign_operations_router_status_explicit_provider_beats_multi_pass() -> None:
+    response = _client(
+        _Pool(),
+        reasoning=_Reasoning(),
+        config=CampaignOperationsApiConfig(generation_multi_pass_reasoning=True),
+    ).get("/campaigns/operations/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    # Explicit provider takes precedence over the multi_pass flag, but the
+    # multi_pass_configured flag still reflects the API config.
+    assert payload["reasoning"] == {
+        "mode": "explicit_provider",
+        "single_pass_configured": False,
+        "single_pass_ready": False,
+        "multi_pass_configured": True,
+        "multi_pass_ready": False,
+    }
+
+
+def test_campaign_operations_api_config_rejects_both_reasoning_modes() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        CampaignOperationsApiConfig(
+            generation_single_pass_reasoning=True,
+            generation_multi_pass_reasoning=True,
+        )
+
+
+def test_campaign_operations_api_config_rejects_invalid_multi_pass_limits() -> None:
+    with pytest.raises(ValueError, match="generation_multi_pass_top_thesis_limit"):
+        CampaignOperationsApiConfig(
+            generation_multi_pass_reasoning=True,
+            generation_multi_pass_top_thesis_limit=0,
+        )
+
+    with pytest.raises(ValueError, match="generation_multi_pass_max_continuations"):
+        CampaignOperationsApiConfig(
+            generation_multi_pass_reasoning=True,
+            generation_multi_pass_max_continuations=-1,
+        )
