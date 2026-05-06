@@ -1,0 +1,69 @@
+{
+  "_comment": "Expected Stage-2 output. One claim per assertion that lands in the script. See build contract §5 for schema.",
+  "story_id": "TBD_case_slug",
+  "claims": [
+    {
+      "claim_id": "clm_001",
+      "story_id": "TBD_case_slug",
+      "text": "TBD — assertion as it will appear in the script",
+      "claim_type": "factual",
+      "source_id": "src_news_01",
+      "quote": "TBD — verbatim source excerpt",
+      "source_locator": {
+        "url": "TBD",
+        "paragraph": 0,
+        "timestamp": null,
+        "quote_offset": 0
+      },
+      "confidence": "verified",
+      "mode_constraint": "narrative",
+      "rewrite_applied": false,
+      "original_text": null,
+      "inserted_by": "extraction_pass",
+      "verified_by": null,
+      "verified_at": null
+    },
+    {
+      "claim_id": "clm_002",
+      "story_id": "TBD_case_slug",
+      "text": "Based on the reporting, the situation appears to have left her afraid and isolated.",
+      "claim_type": "emotional_inference",
+      "source_id": "src_news_01",
+      "quote": "TBD — source quote that supports the inference",
+      "source_locator": {
+        "url": "TBD",
+        "paragraph": 0,
+        "timestamp": null,
+        "quote_offset": 0
+      },
+      "confidence": "inferred",
+      "mode_constraint": "narrative",
+      "rewrite_applied": true,
+      "original_text": "She was terrified.",
+      "inserted_by": "drafter",
+      "verified_by": null,
+      "verified_at": null
+    },
+    {
+      "claim_id": "clm_reveal_01",
+      "story_id": "TBD_case_slug",
+      "text": "TBD — the reveal sentence",
+      "claim_type": "reveal",
+      "source_id": "src_news_01",
+      "quote": "TBD — source quote",
+      "source_locator": {
+        "url": "TBD",
+        "paragraph": 0,
+        "timestamp": null,
+        "quote_offset": 0
+      },
+      "confidence": "verified",
+      "mode_constraint": "narrative",
+      "rewrite_applied": false,
+      "original_text": null,
+      "inserted_by": "extraction_pass",
+      "verified_by": null,
+      "verified_at": null
+    }
+  ]
+}

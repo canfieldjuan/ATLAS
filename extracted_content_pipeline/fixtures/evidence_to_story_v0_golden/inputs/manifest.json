@@ -1,0 +1,18 @@
+{
+  "_comment": "Stage-1 input contract. Replace TBD placeholders before running. See ../README.md.",
+  "story_id": "TBD_case_slug",
+  "sources": [
+    {
+      "type": "youtube_transcript",
+      "title": "TBD — channel + episode title",
+      "url": "TBD — full YouTube URL",
+      "text_path": "youtube_transcript.txt"
+    },
+    {
+      "type": "news_article",
+      "title": "TBD — article headline",
+      "url": "TBD — article URL",
+      "text_path": "news_article.txt"
+    }
+  ]
+}

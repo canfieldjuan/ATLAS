@@ -1,0 +1,7 @@
+TBD — paste the news article body here.
+
+Strip ads / nav / "related stories". Preserve paragraph breaks. Keep
+the byline + publication name on the first line for `metadata` parsing.
+
+The Stage-1 loader reads this file as `text` on the corresponding
+SourceRecord. See ../README.md for selection criteria.

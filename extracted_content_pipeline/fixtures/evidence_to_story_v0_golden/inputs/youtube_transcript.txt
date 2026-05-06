@@ -1,0 +1,9 @@
+TBD — paste the YouTube transcript here, verbatim.
+
+Preserve speaker turns and timestamps if present, e.g.:
+
+[00:00:12] Narrator: It was the last call she would ever make...
+[00:00:34] Narrator: Police arrived eleven minutes later.
+
+The Stage-1 loader reads this file as `text` on the corresponding
+SourceRecord. See ../README.md for selection criteria.

@@ -131,7 +131,13 @@ Without typing, the ledger becomes a soup of "everything is a claim"
 and the fact-check gate cannot be specific. Hence: every claim is
 both confidence-banded *and* type-classified.
 
-#### Claim-type taxonomy (seven types)
+#### Claim-type taxonomy (eight types)
+
+`reveal` is a first-class type so the **10% rule** becomes a
+deterministic claim-placement gate (not a keyword scan).
+`reconstructed` is included because Dramatized True Story is a
+planned future mode; it is **excluded from v0** (see the v0 build
+contract).
 
 | Type | What it asserts | Example | Default confidence allowed in Narrative Nonfiction |
 | --- | --- | --- | --- |
@@ -140,18 +146,20 @@ both confidence-banded *and* type-classified.
 | `entity` | A person, place, or organization assertion | "John Doe lived in Chicago." | verified |
 | `emotional_inference` | Internal state attributed to a real subject | "She felt isolated." | inferred (must be soft-rewritten — see below) |
 | `disputed` | A claim where sources disagree | "The defense says the meeting never happened." | disputed |
-| `narrative_transition` | Author voice / scene-setting / pacing — not a factual assertion | "Hours passed before anyone noticed." | unknown (does not require a source row, but is logged) |
-| `reconstructed` | Dialogue or scene-level color invented to render a real event | "He whispered, 'I'm coming home.'" | only allowed in Dramatized True Story mode |
+| `reveal` | The story's final reveal / outcome / perpetrator identity | "Police arrested the neighbor." | verified (placement-gated by the 10% rule) |
+| `transition` | Author voice / scene-setting / pacing — not a factual assertion | "Hours passed before anyone noticed." | unknown (does not require a source row, but is logged) |
+| `reconstructed` | Dialogue or scene-level color invented to render a real event | "He whispered, 'I'm coming home.'" | only allowed in Dramatized True Story mode (post-v0) |
 
 The fact-check stage runs different invariants per type. `factual`,
-`timeline`, and `entity` claims must have a verbatim quote in the
-ledger or be rejected. `emotional_inference` claims must have a soft-
-rewrite applied (see next section). `disputed` claims must cite at
-least two sources and surface the disagreement on-screen.
-`narrative_transition` claims are logged for placement gates (10%
-rule) but do not require a source quote. `reconstructed` claims fail
-the gate in Strict and Narrative modes and are labeled at render time
-in Dramatized.
+`timeline`, `entity`, and `reveal` claims must have a verbatim quote
+in the ledger or be rejected. `emotional_inference` claims must have
+a soft-rewrite applied (see next section). `disputed` claims must
+cite at least two sources and surface the disagreement on-screen.
+`reveal` claims also fire a placement gate so the outcome cannot
+appear in the first 90% of the script. `transition` claims are
+logged for placement gates but do not require a source quote.
+`reconstructed` claims fail the gate in Strict and Narrative modes
+and are labeled at render time in Dramatized.
 
 #### Schema
 
@@ -160,10 +168,14 @@ claim_id          uuid
 story_id          uuid
 text              the assertion as it appears in the script (post-rewrite)
 claim_type        factual | timeline | entity | emotional_inference
-                  | disputed | narrative_transition | reconstructed
-source_id         fk -> sources (nullable for narrative_transition only)
-quote             verbatim excerpt from the source
-locator           page / paragraph / timestamp / url-fragment
+                  | disputed | reveal | transition | reconstructed
+source_id         fk -> sources (nullable for `transition` only)
+quote             verbatim excerpt from the source (nullable for `transition`)
+source_locator:                — structured (no more single-string locators)
+  url             string?
+  paragraph       int?         — 0-indexed paragraph in the source text
+  timestamp       string?      — ISO-8601 duration into a transcript ("00:14:23")
+  quote_offset    int?         — 0-indexed char offset within the source text
 confidence        verified | inferred | disputed | unknown
 mode_constraint   strict | narrative | dramatized
 rewrite_applied   bool — true when the inferred-claim soft-rewrite ran
@@ -174,8 +186,9 @@ verified_at       null | timestamp
 ```
 
 A script cannot pass the fact-check gate unless every claim of type
-`factual | timeline | entity | disputed | reconstructed` has a row,
-and every `emotional_inference` claim has `rewrite_applied=true`.
+`factual | timeline | entity | disputed | reveal | reconstructed`
+has a row, and every `emotional_inference` claim has
+`rewrite_applied=true`.
 
 In Strict Documentary mode, every claim must have
 `confidence='verified'`. In Narrative Nonfiction, `inferred` is
@@ -185,8 +198,8 @@ the underlying source event but flagged separately for the render
 layer.
 
 The ledger also gates the **10% rule** (outcome cannot appear in the
-first 90% of the script) at the claim level: the reveal-claim is
-tagged at extraction time, and the deterministic gate from the
+first 90% of the script) at the claim level: the `reveal` claim type
+is tagged at extraction time, and the deterministic gate from the
 sibling doc's `story_evidence_engine.py` checks claim placement, not
 keyword placement.
 
@@ -340,10 +353,14 @@ the number of agents.
 ## v0 cut
 
 See the **v0 cut (locked)** section pinned near the top of this doc
-for the binding scope and the input → output contract. That section
-supersedes the earlier draft of this section. Resume condition is
-unchanged: the campaign-core spine must be product-owned per
-`remaining_productization_audit.md` before any of this starts.
+for the binding scope and the input → output contract. The
+implementation-ready spec lives in
+[`evidence_to_story_v0_build_contract.md`](evidence_to_story_v0_build_contract.md),
+with a fixture scaffold under
+[`fixtures/evidence_to_story_v0_golden/`](../fixtures/evidence_to_story_v0_golden/).
+Resume condition is unchanged: the campaign-core spine must be
+product-owned per `remaining_productization_audit.md` before any of
+this starts.
 
 ## Name shortlist (parked)
 

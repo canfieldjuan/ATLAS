@@ -1,0 +1,14 @@
+{
+  "_comment": "Expected Stage-3 output. Ordered events from `claim_type=timeline` claims, with confidence bands.",
+  "story_id": "TBD_case_slug",
+  "events": [
+    {
+      "event_id": "evt_01",
+      "occurred_at": "TBD-ISO-8601",
+      "occurred_at_precision": "minute",
+      "description": "TBD — what happened",
+      "claim_ids": ["clm_TBD"],
+      "confidence": "verified"
+    }
+  ]
+}

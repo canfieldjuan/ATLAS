@@ -1,0 +1,51 @@
+{
+  "_comment": "Expected Stage-5 output. Three candidate angles with evidence-strength scores. Min threshold for a candidate is 0.4.",
+  "story_id": "TBD_case_slug",
+  "angles": [
+    {
+      "angle_id": "ang_01",
+      "headline": "TBD",
+      "thesis": "TBD",
+      "evidence_strength": 0.0,
+      "supporting_claim_ids": ["clm_TBD"],
+      "missing_evidence": ["TBD"],
+      "five_beat_fit": {
+        "fast_hook": "TBD",
+        "character_humanization": "TBD",
+        "contextual_build": "TBD",
+        "escalation": "TBD",
+        "delayed_payoff": "TBD"
+      }
+    },
+    {
+      "angle_id": "ang_02",
+      "headline": "TBD",
+      "thesis": "TBD",
+      "evidence_strength": 0.0,
+      "supporting_claim_ids": [],
+      "missing_evidence": [],
+      "five_beat_fit": {
+        "fast_hook": "TBD",
+        "character_humanization": "TBD",
+        "contextual_build": "TBD",
+        "escalation": "TBD",
+        "delayed_payoff": "TBD"
+      }
+    },
+    {
+      "angle_id": "ang_03",
+      "headline": "TBD",
+      "thesis": "TBD",
+      "evidence_strength": 0.0,
+      "supporting_claim_ids": [],
+      "missing_evidence": [],
+      "five_beat_fit": {
+        "fast_hook": "TBD",
+        "character_humanization": "TBD",
+        "contextual_build": "TBD",
+        "escalation": "TBD",
+        "delayed_payoff": "TBD"
+      }
+    }
+  ]
+}
