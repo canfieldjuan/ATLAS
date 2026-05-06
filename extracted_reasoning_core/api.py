@@ -228,10 +228,121 @@ def build_narrative_plan(
     *,
     pack: ReasoningPack,
 ) -> NarrativePlan:
-    """Build a product-neutral narrative plan."""
-    del context
-    del pack
-    raise NotImplementedError("build_narrative_plan lands with narrative consolidation")
+    """Build a product-neutral narrative plan from a reasoning context.
+
+    Pure deterministic transformation: take a reasoning context (either
+    a ``ReasoningResult.state`` dict or a raw synthesis JSON), apply
+    pack policies, and produce an ordered ``NarrativePlan`` with
+    sections, evidence requirements, and state hints. No LLM call.
+
+    Pack policies honored (all optional):
+      * ``min_confidence`` (default 0.0): drop claims below this score.
+      * ``max_sections`` (default 10): cap the number of sections.
+      * ``claim_ordering`` (default "by_confidence"): "by_confidence"
+        sorts claims descending by confidence; "preserve_input" keeps
+        the order from the source.
+      * ``default_section`` (default "main"): section name used when a
+        claim doesn't carry a ``section`` field.
+    """
+
+    raw_synthesis = context.get("raw_synthesis") if isinstance(context.get("raw_synthesis"), Mapping) else None
+    source = raw_synthesis if raw_synthesis else context
+
+    raw_claims = extract_claims(source)
+    summary = extract_summary(source)
+    confidence = extract_confidence(source, raw_claims)
+
+    policies = dict(pack.policies or {})
+    min_confidence = float(policies.get("min_confidence", 0.0))
+    max_sections = max(1, int(policies.get("max_sections", 10)))
+    claim_ordering = str(policies.get("claim_ordering", "by_confidence")).lower()
+    default_section = str(policies.get("default_section", "main"))
+
+    # Filter and order claims.
+    filtered: list[Mapping[str, Any]] = []
+    dropped = 0
+    for claim in raw_claims:
+        claim_conf = _claim_confidence(claim)
+        if claim_conf < min_confidence:
+            dropped += 1
+            continue
+        filtered.append(claim)
+    if claim_ordering == "by_confidence":
+        filtered.sort(key=_claim_confidence, reverse=True)
+
+    # Group by section.
+    section_order: list[str] = []
+    section_claims: dict[str, list[Mapping[str, Any]]] = {}
+    for claim in filtered:
+        section_name = str(claim.get("section") or default_section)
+        if section_name not in section_claims:
+            section_claims[section_name] = []
+            section_order.append(section_name)
+        section_claims[section_name].append(claim)
+
+    if len(section_order) > max_sections:
+        section_order = section_order[:max_sections]
+
+    sections: list[Mapping[str, Any]] = []
+    evidence_requirements: list[Mapping[str, Any]] = []
+    plan_claims: list[Mapping[str, Any]] = []
+
+    for section_name in section_order:
+        claims_in_section = tuple(section_claims[section_name])
+        plan_claims.extend(claims_in_section)
+        section_source_ids = _collect_source_ids(claims_in_section)
+        sections.append({
+            "id": section_name,
+            "title": section_name.replace("_", " ").strip().title() or section_name,
+            "claim_count": len(claims_in_section),
+            "claim_ids": tuple(_claim_id(c) for c in claims_in_section),
+        })
+        evidence_requirements.append({
+            "section_id": section_name,
+            "required_source_ids": section_source_ids,
+            "claim_count": len(claims_in_section),
+        })
+
+    return NarrativePlan(
+        claims=tuple(plan_claims),
+        sections=tuple(sections),
+        evidence_requirements=tuple(evidence_requirements),
+        state_hints={
+            "summary": summary,
+            "overall_confidence": confidence,
+            "claim_count": len(plan_claims),
+            "section_count": len(sections),
+            "dropped_below_confidence": dropped,
+            "pack": pack.name,
+            "pack_version": pack.version,
+            "depth": context.get("depth") or context.get("tier") or "",
+        },
+    )
+
+
+def _claim_confidence(claim: Mapping[str, Any]) -> float:
+    raw = claim.get("confidence")
+    if raw is None:
+        return 0.0
+    rank = {"high": 0.9, "medium": 0.6, "low": 0.3, "insufficient": 0.0}
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+        return rank.get(str(raw).strip().lower(), 0.0)
+
+
+def _claim_id(claim: Mapping[str, Any]) -> str:
+    return str(claim.get("claim_id") or claim.get("id") or claim.get("claim") or "")[:200]
+
+
+def _collect_source_ids(claims: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    seen: list[str] = []
+    for claim in claims:
+        for sid in claim.get("source_ids") or ():
+            sid_str = str(sid)
+            if sid_str and sid_str not in seen:
+                seen.append(sid_str)
+    return tuple(seen)
 
 
 async def run_reasoning(
