@@ -15,7 +15,9 @@ should produce every asset. The UI needs a backend-owned contract for output
 selection, presets, budget checks, missing input checks, and implementation
 status.
 
-The control-surface preview is that contract.
+The control-surface preview is that contract. The generation plan endpoint is
+the next layer: it turns a passing preview into deterministic service steps
+without executing them.
 
 ## Host Mount
 
@@ -46,6 +48,7 @@ or start an autonomous task.
 |---|---|---|
 | `GET` | `/content-ops/control-surfaces` | List output types, presets, required inputs, implementation status, cost estimates, and ingestion profiles. |
 | `POST` | `/content-ops/preview` | Validate a requested preset/output selection and return cost, missing inputs, warnings, and blocked outputs. |
+| `POST` | `/content-ops/plan` | Convert a previewable request into deterministic generation steps. Does not execute generation. |
 
 ## Output Catalog
 
@@ -54,7 +57,7 @@ Current output ids:
 | Output | Status | Notes |
 |---|---|---|
 | `email_campaign` | Implemented | Existing campaign draft path. |
-| `blog_post` | Implemented | Existing content asset path. |
+| `blog_post` | Implemented | Existing content asset path, but not yet service-shaped for the unified planner. |
 | `report` | Implemented | Structured report draft path. |
 | `landing_page` | Not implemented | Included in catalog but blocked by default. |
 | `sales_brief` | Not implemented | Included in catalog but blocked by default. |
@@ -123,6 +126,64 @@ Treat `can_run=false` as a hard stop for generation controls. The UI can still
 show the selected plan, but it should not enable the generate button until
 `missing_inputs`, `blocked_outputs`, and budget warnings are resolved.
 
+## Plan Payload
+
+`POST /content-ops/plan` accepts the same payload as `/content-ops/preview`.
+
+## Plan Response
+
+```json
+{
+  "can_execute": true,
+  "target_mode": "b2b",
+  "limit": 2,
+  "steps": [
+    {
+      "output": "email_campaign",
+      "runner": "CampaignGenerationService.generate",
+      "status": "runnable",
+      "config": {
+        "skill_name": "digest/b2b_campaign_generation",
+        "channels": ["email_cold", "email_followup"],
+        "limit": 2,
+        "max_tokens": 1200,
+        "temperature": 0.4,
+        "quality_revalidation_enabled": true,
+        "quality_prompt_proof_term_limit": 5
+      },
+      "reason": ""
+    },
+    {
+      "output": "report",
+      "runner": "ReportGenerationService.generate",
+      "status": "runnable",
+      "config": {
+        "skill_name": "digest/report_generation",
+        "default_report_type": "vendor_pressure",
+        "limit": 2,
+        "max_tokens": 4096,
+        "temperature": 0.3
+      },
+      "reason": ""
+    }
+  ],
+  "preview": {
+    "can_run": true,
+    "outputs": ["email_campaign", "report"],
+    "estimated_cost_usd": 1.46,
+    "missing_inputs": [],
+    "blocked_outputs": [],
+    "warnings": []
+  }
+}
+```
+
+`can_execute` is stricter than `preview.can_run`. It only becomes true when the
+preview passes and every selected output maps to a runnable service-shaped step.
+For example, `blog_post` can pass preview but currently returns a `planned` step
+because the blog path exists as an autonomous task rather than the same
+service/port interface used by campaigns and reports.
+
 ## UI Contract
 
 The UI should call `/content-ops/preview` whenever any of these change:
@@ -140,7 +201,8 @@ The first UI should be boring in the useful way:
 2. add required inputs
 3. show estimated cost and warnings
 4. disable generation until `can_run=true`
-5. pass the normalized request into the generation endpoint added in a later slice
+5. call `/content-ops/plan` to show the concrete steps before generation
+6. pass the normalized request into the generation endpoint added in a later slice
 
 Do not put prompt settings, retrieval knobs, model choices, or chunking strategy
 in the first UI. Those are backend controls until there is a real product reason
