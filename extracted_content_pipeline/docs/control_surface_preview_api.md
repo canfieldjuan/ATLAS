@@ -57,10 +57,10 @@ Current output ids:
 | Output | Status | Notes |
 |---|---|---|
 | `email_campaign` | Implemented | Existing campaign draft path. |
-| `blog_post` | Implemented | Existing content asset path, but not yet service-shaped for the unified planner. |
+| `blog_post` | Not implemented | Existing autonomous task path, but not yet service-shaped for the unified planner. |
 | `report` | Implemented | Structured report draft path. |
-| `landing_page` | Not implemented | Included in catalog but blocked by default. |
-| `sales_brief` | Not implemented | Included in catalog but blocked by default. |
+| `landing_page` | Implemented | Landing page generation service path. |
+| `sales_brief` | Implemented | Sales brief generation service path. |
 | `signal_extraction` | Not implemented | Included in catalog but blocked by default. |
 
 Future outputs should be added to the catalog first, then exposed through
@@ -76,7 +76,7 @@ Current preset ids:
 | `email_only` | `email_campaign` | Lowest-cost outreach draft run. |
 | `intelligence_report` | `report` | Reference-backed report generation. |
 | `content_marketing` | `blog_post`, `report` | Blog plus report from the same evidence base. |
-| `lead_gen_campaign` | `email_campaign`, `landing_page` | Outreach plus landing page. Landing page remains gated until implemented. |
+| `lead_gen_campaign` | `email_campaign`, `landing_page` | Outreach plus landing page. |
 | `full_campaign` | `email_campaign`, `blog_post`, `report`, `landing_page`, `sales_brief` | Full bundle. Expensive and partially gated. |
 
 ## Preview Payload
@@ -110,7 +110,7 @@ preset.
   "blocked_outputs": [],
   "warnings": [],
   "normalized_request": {
-    "target_mode": "b2b",
+    "target_mode": "vendor_retention",
     "preset": null,
     "outputs": ["email_campaign", "report"],
     "limit": 2,
@@ -135,7 +135,7 @@ show the selected plan, but it should not enable the generate button until
 ```json
 {
   "can_execute": true,
-  "target_mode": "b2b",
+  "target_mode": "vendor_retention",
   "limit": 2,
   "steps": [
     {
@@ -180,9 +180,8 @@ show the selected plan, but it should not enable the generate button until
 
 `can_execute` is stricter than `preview.can_run`. It only becomes true when the
 preview passes and every selected output maps to a runnable service-shaped step.
-For example, `blog_post` can pass preview but currently returns a `planned` step
-because the blog path exists as an autonomous task rather than the same
-service/port interface used by campaigns and reports.
+`blog_post` is blocked at preview time until it exposes the same service/port
+interface used by campaigns, reports, landing pages, and sales briefs.
 
 ## UI Contract
 

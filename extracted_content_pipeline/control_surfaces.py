@@ -39,7 +39,7 @@ class ControlSurfacePreset:
 class ContentOpsRequest:
     """Normalized request shape produced by UI/API control surfaces."""
 
-    target_mode: str = "b2b"
+    target_mode: str = "vendor_retention"
     preset: str | None = None
     outputs: tuple[str, ...] = ()
     limit: int = 1
@@ -99,7 +99,7 @@ OUTPUT_CATALOG: dict[str, OutputDefinition] = {
         id="blog_post",
         label="Blog Post",
         description="Long-form blog draft from intelligence and evidence.",
-        implemented=True,
+        implemented=False,
         estimated_unit_cost_usd=0.45,
         required_inputs=("topic",),
     ),
@@ -115,7 +115,7 @@ OUTPUT_CATALOG: dict[str, OutputDefinition] = {
         id="landing_page",
         label="Landing Page",
         description="Landing page sections for a specific offer and audience.",
-        implemented=False,
+        implemented=True,
         estimated_unit_cost_usd=0.65,
         required_inputs=("offer", "audience"),
     ),
@@ -123,7 +123,7 @@ OUTPUT_CATALOG: dict[str, OutputDefinition] = {
         id="sales_brief",
         label="Sales Brief",
         description="Sales enablement brief from account intelligence.",
-        implemented=False,
+        implemented=True,
         estimated_unit_cost_usd=0.35,
         required_inputs=("target_account",),
     ),
@@ -133,7 +133,7 @@ OUTPUT_CATALOG: dict[str, OutputDefinition] = {
         description="Extracted opportunity or churn signals from source evidence.",
         implemented=False,
         estimated_unit_cost_usd=0.25,
-        required_inputs=("source_material"),
+        required_inputs=("source_material",),
     ),
 }
 
@@ -161,7 +161,7 @@ PRESETS: dict[str, ControlSurfacePreset] = {
         id="lead_gen_campaign",
         label="Lead Gen Campaign",
         outputs=("email_campaign", "landing_page"),
-        description="Outreach plus landing page. Landing page is gated until implemented.",
+        description="Outreach plus landing page.",
     ),
     "full_campaign": ControlSurfacePreset(
         id="full_campaign",
@@ -200,7 +200,8 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
     """Build a ContentOpsRequest from a plain dict payload."""
 
     return ContentOpsRequest(
-        target_mode=str(payload.get("target_mode") or "b2b").strip() or "b2b",
+        target_mode=str(payload.get("target_mode") or "vendor_retention").strip()
+        or "vendor_retention",
         preset=(str(payload.get("preset")).strip() or None)
         if payload.get("preset") is not None
         else None,

@@ -18,7 +18,9 @@ from .control_surfaces import (
     preview_control_surface,
     request_from_mapping,
 )
+from .landing_page_generation import LandingPageGenerationConfig
 from .report_generation import ReportGenerationConfig
+from .sales_brief_generation import SalesBriefGenerationConfig
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,22 @@ def _report_config_for_request(request: ContentOpsRequest) -> ReportGenerationCo
     )
 
 
+def _landing_page_config_for_request(request: ContentOpsRequest) -> LandingPageGenerationConfig:
+    del request
+    return LandingPageGenerationConfig()
+
+
+def _sales_brief_config_for_request(request: ContentOpsRequest) -> SalesBriefGenerationConfig:
+    brief_type = str(
+        request.inputs.get("brief_type")
+        or "pre_call"
+    ).strip() or "pre_call"
+    return SalesBriefGenerationConfig(
+        default_brief_type=brief_type,
+        limit=request.limit,
+    )
+
+
 def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanStep:
     if output == "email_campaign":
         config = _campaign_config_for_request(request)
@@ -127,6 +145,34 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "limit": config.limit,
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
+            },
+        )
+    if output == "landing_page":
+        config = _landing_page_config_for_request(request)
+        return GenerationPlanStep(
+            output=output,
+            runner="LandingPageGenerationService.generate",
+            status="runnable",
+            config={
+                "skill_name": config.skill_name,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
+                "quality_gates_enabled": request.require_quality_gates,
+            },
+        )
+    if output == "sales_brief":
+        config = _sales_brief_config_for_request(request)
+        return GenerationPlanStep(
+            output=output,
+            runner="SalesBriefGenerationService.generate",
+            status="runnable",
+            config={
+                "skill_name": config.skill_name,
+                "default_brief_type": config.default_brief_type,
+                "limit": config.limit,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
+                "quality_gates_enabled": request.require_quality_gates,
             },
         )
     if output == "blog_post":

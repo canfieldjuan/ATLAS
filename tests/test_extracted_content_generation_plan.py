@@ -15,7 +15,7 @@ def test_plan_maps_email_campaign_to_campaign_generation_service():
     )
 
     assert plan["can_execute"] is True
-    assert plan["target_mode"] == "b2b"
+    assert plan["target_mode"] == "vendor_retention"
     assert plan["limit"] == 2
     assert plan["steps"] == [
         {
@@ -70,12 +70,10 @@ def test_plan_marks_blog_as_planned_not_executable_until_service_adapter_exists(
         }
     )
 
-    assert plan["preview"]["can_run"] is True
+    assert plan["preview"]["can_run"] is False
     assert plan["can_execute"] is False
-    assert plan["steps"][0]["output"] == "blog_post"
-    assert plan["steps"][0]["status"] == "planned"
-    assert plan["steps"][0]["runner"] == "extracted_content_pipeline.autonomous.tasks.blog_post_generation"
-    assert "does not yet expose the same service/port interface" in plan["steps"][0]["reason"]
+    assert plan["preview"]["blocked_outputs"] == ["blog_post"]
+    assert plan["steps"] == []
 
 
 def test_plan_stays_non_executable_when_preview_fails_budget():
@@ -95,33 +93,53 @@ def test_plan_stays_non_executable_when_preview_fails_budget():
     assert plan["steps"][0]["status"] == "runnable"
 
 
-def test_plan_omits_blocked_future_outputs_from_steps():
+def test_plan_maps_landing_page_to_landing_page_generation_service():
     plan = build_generation_plan_from_mapping(
         {
             "preset": "lead_gen_campaign",
             "inputs": {
                 "target_account": "Acme",
                 "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
             },
         }
     )
 
-    assert plan["preview"]["blocked_outputs"] == ["landing_page"]
-    assert plan["steps"] == [
-        {
-            "output": "email_campaign",
-            "runner": "CampaignGenerationService.generate",
-            "status": "runnable",
-            "config": {
-                "skill_name": "digest/b2b_campaign_generation",
-                "channels": ["email_cold", "email_followup"],
-                "limit": 1,
-                "max_tokens": 1200,
-                "temperature": 0.4,
-                "quality_revalidation_enabled": True,
-                "quality_prompt_proof_term_limit": 5,
-            },
-            "reason": "",
-        }
+    assert plan["can_execute"] is True
+    assert [step["output"] for step in plan["steps"]] == [
+        "email_campaign",
+        "landing_page",
     ]
-    assert plan["can_execute"] is False
+    assert plan["steps"][1]["runner"] == "LandingPageGenerationService.generate"
+    assert plan["steps"][1]["status"] == "runnable"
+    assert plan["steps"][1]["config"] == {
+        "skill_name": "digest/landing_page_generation",
+        "max_tokens": 4096,
+        "temperature": 0.3,
+        "quality_gates_enabled": True,
+    }
+
+
+def test_plan_maps_sales_brief_to_sales_brief_generation_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "limit": 2,
+            "inputs": {
+                "target_account": "Acme",
+                "brief_type": "renewal",
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "SalesBriefGenerationService.generate"
+    assert plan["steps"][0]["status"] == "runnable"
+    assert plan["steps"][0]["config"] == {
+        "skill_name": "digest/sales_brief_generation",
+        "default_brief_type": "renewal",
+        "limit": 2,
+        "max_tokens": 4096,
+        "temperature": 0.3,
+        "quality_gates_enabled": True,
+    }
