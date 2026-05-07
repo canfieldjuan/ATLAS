@@ -5,6 +5,9 @@
       "target": "extracted_evidence_to_story/__init__.py"
     },
     {
+      "target": "extracted_evidence_to_story/claims.py"
+    },
+    {
       "target": "extracted_evidence_to_story/sources.py"
     }
   ]
