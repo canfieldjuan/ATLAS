@@ -59,6 +59,12 @@ class _LLM:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
+        if isinstance(response, dict):
+            return LLMResponse(
+                content=response["content"],
+                model=response.get("model", "test-model"),
+                usage=response.get("usage", {}),
+            )
         return LLMResponse(
             content=response,
             model="test-model",
@@ -235,10 +241,76 @@ async def test_generate_blocks_low_quality_posts_without_saving() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_reports_unparseable_responses() -> None:
-    service, _blueprints, blog_posts, _llm, _skills = _service(responses=["not json"])
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        responses=["not json", "still not json"]
+    )
 
     result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
 
     assert result.generated == 0
     assert result.errors == ({"blueprint_id": "bp-1", "reason": "unparseable_response"},)
     assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_retries_unparseable_response_once_by_default() -> None:
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        responses=["not json", _valid_blog_json()]
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 1
+    assert len(llm.calls) == 2
+    assert llm.calls[0]["metadata"]["attempt_no"] == 1
+    assert llm.calls[1]["metadata"]["attempt_no"] == 2
+    assert "Previous response excerpt:\nnot json" in llm.calls[1]["messages"][1].content
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.metadata["generation_parse_attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_can_disable_parse_retry() -> None:
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        responses=["not json", _valid_blog_json()],
+        config=BlogPostGenerationConfig(
+            parse_retry_attempts=0,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 0
+    assert result.errors == ({"blueprint_id": "bp-1", "reason": "unparseable_response"},)
+    assert len(llm.calls) == 1
+    assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_accumulates_usage_across_parse_retry_attempts() -> None:
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        responses=[
+            {
+                "content": "not json",
+                "model": "first-model",
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+            {
+                "content": _valid_blog_json(),
+                "model": "final-model",
+                "usage": {"input_tokens": 7, "output_tokens": 3},
+            },
+        ]
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 1
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.metadata["generation_model"] == "final-model"
+    assert draft.metadata["generation_usage"] == {"input_tokens": 12, "output_tokens": 5}
+    assert draft.metadata["generation_parse_attempts"] == 2

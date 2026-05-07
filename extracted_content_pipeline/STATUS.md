@@ -102,7 +102,9 @@
   into Atlas runtime code.
 - `blog_generation` and `blog_ports` provide the standalone blog-post service
   adapter. Hosts inject blueprint storage, draft persistence, skills, and LLM
-  ports instead of calling the legacy autonomous task path.
+  ports instead of calling the legacy autonomous task path. Blog generation
+  retries unparseable LLM JSON once by default and records parse-attempt
+  metadata on saved drafts.
 - `api.control_surfaces` exposes preview, plan, and optional execute routes for
   multi-asset AI Content Ops control surfaces. The execute route is disabled
   unless the host supplies execution services.

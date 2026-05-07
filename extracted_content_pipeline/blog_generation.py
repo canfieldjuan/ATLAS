@@ -23,6 +23,8 @@ class BlogPostGenerationConfig:
     max_tokens: int = 4096
     temperature: float = 0.3
     quality_policy: QualityPolicy | None = None
+    parse_retry_attempts: int = 1
+    parse_retry_response_excerpt_chars: int = 800
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,49 @@ def parse_blog_post_response(text: str) -> dict[str, Any] | None:
         if title and content:
             return {**dict(decoded), "title": title, "content": content}
     return None
+
+
+def _blog_generation_user_prompt(
+    *,
+    base_prompt: str,
+    prior_invalid_response: str = "",
+) -> str:
+    if prior_invalid_response:
+        return (
+            f"{base_prompt}\n\n"
+            "The previous response could not be parsed as the required JSON object. "
+            "Return one JSON object with non-empty title and content. "
+            f"Previous response excerpt:\n{prior_invalid_response}"
+        )
+    return base_prompt
+
+
+def _clip_invalid_response(text: str, *, limit: int) -> str:
+    cleaned = str(text or "").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip()
+
+
+def _accumulate_usage(
+    total: Mapping[str, Any],
+    usage: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    accumulated = dict(total)
+    if not isinstance(usage, Mapping):
+        return accumulated
+    for key, value in usage.items():
+        if isinstance(value, bool):
+            accumulated[key] = value
+        elif isinstance(value, (int, float)):
+            prior = accumulated.get(key)
+            if isinstance(prior, (int, float)) and not isinstance(prior, bool):
+                accumulated[key] = prior + value
+            else:
+                accumulated[key] = value
+        else:
+            accumulated[key] = value
+    return accumulated
 
 
 class BlogPostGenerationService:
@@ -167,32 +212,49 @@ class BlogPostGenerationService:
         blueprint_json = json.dumps(dict(blueprint), separators=(",", ":"), default=str)
         if "{blueprint_json}" in prompt_template:
             system_prompt = prompt_template.replace("{blueprint_json}", blueprint_json)
-            user_prompt = "Generate one blog post from the blueprint above."
+            base_user_prompt = "Generate one blog post from the blueprint above."
         else:
             system_prompt = prompt_template
-            user_prompt = f"Generate one blog post from this blueprint JSON:\n{blueprint_json}"
-        response = await self._llm.complete(
-            [
-                LLMMessage(role="system", content=system_prompt),
-                LLMMessage(role="user", content=user_prompt),
-            ],
-            max_tokens=self._config.max_tokens,
-            temperature=self._config.temperature,
-            metadata={
-                "target_mode": target_mode,
-                "blueprint_id": _blueprint_id(blueprint),
-                "skill_name": self._config.skill_name,
-                "asset_type": "blog_post",
-            },
-        )
-        parsed = parse_blog_post_response(response.content)
-        if not parsed:
-            return None
-        return {
-            **parsed,
-            "_model": response.model,
-            "_usage": dict(response.usage or {}),
-        }
+            base_user_prompt = f"Generate one blog post from this blueprint JSON:\n{blueprint_json}"
+        attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
+        last_response = ""
+        total_usage: dict[str, Any] = {}
+        for attempt_no in range(1, attempts + 1):
+            response = await self._llm.complete(
+                [
+                    LLMMessage(role="system", content=system_prompt),
+                    LLMMessage(
+                        role="user",
+                        content=_blog_generation_user_prompt(
+                            base_prompt=base_user_prompt,
+                            prior_invalid_response=last_response,
+                        ),
+                    ),
+                ],
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+                metadata={
+                    "target_mode": target_mode,
+                    "blueprint_id": _blueprint_id(blueprint),
+                    "skill_name": self._config.skill_name,
+                    "asset_type": "blog_post",
+                    "attempt_no": attempt_no,
+                },
+            )
+            total_usage = _accumulate_usage(total_usage, response.usage)
+            parsed = parse_blog_post_response(response.content)
+            if parsed:
+                return {
+                    **parsed,
+                    "_model": response.model,
+                    "_usage": total_usage,
+                    "_parse_attempts": attempt_no,
+                }
+            last_response = _clip_invalid_response(
+                response.content,
+                limit=max(0, int(self._config.parse_retry_response_excerpt_chars or 0)),
+            )
+        return None
 
     def _quality_check(
         self,
@@ -238,6 +300,7 @@ class BlogPostGenerationService:
             "faq": _mapping_list(parsed.get("faq")),
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
+            "generation_parse_attempts": parsed.get("_parse_attempts"),
         }
         return BlogPostDraft(
             slug=slug,
