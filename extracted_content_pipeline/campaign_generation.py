@@ -120,6 +120,27 @@ def _clip_invalid_response(text: str, *, limit: int) -> str:
     return cleaned[:limit].rstrip()
 
 
+def _accumulate_usage(
+    total: Mapping[str, Any],
+    usage: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    accumulated = dict(total)
+    if not isinstance(usage, Mapping):
+        return accumulated
+    for key, value in usage.items():
+        if isinstance(value, bool):
+            accumulated[key] = value
+        elif isinstance(value, (int, float)):
+            prior = accumulated.get(key)
+            if isinstance(prior, (int, float)) and not isinstance(prior, bool):
+                accumulated[key] = prior + value
+            else:
+                accumulated[key] = value
+        else:
+            accumulated[key] = value
+    return accumulated
+
+
 @dataclass(frozen=True)
 class CampaignGenerationConfig:
     skill_name: str = "digest/b2b_campaign_generation"
@@ -467,6 +488,7 @@ class CampaignGenerationService:
         )
         attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
         last_response = ""
+        total_usage: dict[str, Any] = {}
         for attempt_no in range(1, attempts + 1):
             response = await self._llm.complete(
                 [
@@ -491,12 +513,13 @@ class CampaignGenerationService:
                     "attempt_no": attempt_no,
                 },
             )
+            total_usage = _accumulate_usage(total_usage, response.usage)
             parsed = parse_campaign_draft_response(response.content)
             if parsed:
                 return {
                     **parsed,
                     "_model": response.model,
-                    "_usage": dict(response.usage or {}),
+                    "_usage": total_usage,
                     "_parse_attempts": attempt_no,
                 }
             last_response = _clip_invalid_response(

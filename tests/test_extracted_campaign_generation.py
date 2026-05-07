@@ -81,6 +81,12 @@ class _LLM:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
+        if isinstance(response, dict):
+            return LLMResponse(
+                content=response["content"],
+                model=response.get("model", "test-model"),
+                usage=response.get("usage", {}),
+            )
         return LLMResponse(
             content=response,
             model="test-model",
@@ -871,6 +877,36 @@ async def test_generate_retries_unparseable_response_once_by_default():
     assert "not-json" in retry_prompt
     draft = campaigns.saved[0]["drafts"][0]
     assert draft.subject == "Recovered"
+    assert draft.metadata["generation_parse_attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_accumulates_usage_across_parse_retry_attempts():
+    service, _, campaigns, _llm, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [
+            {
+                "content": "not-json",
+                "model": "first-model",
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+            {
+                "content": '{"subject":"Recovered","body":"Recovered body"}',
+                "model": "final-model",
+                "usage": {"input_tokens": 7, "output_tokens": 3},
+            },
+        ],
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 1
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.metadata["generation_model"] == "final-model"
+    assert draft.metadata["generation_usage"] == {
+        "input_tokens": 12,
+        "output_tokens": 5,
+    }
     assert draft.metadata["generation_parse_attempts"] == 2
 
 
