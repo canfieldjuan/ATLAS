@@ -111,7 +111,9 @@
   product config (`channels=("email_cold", "email_followup")`), including
   passing the generated cold-email context into follow-up prompts without
   importing the copied Atlas campaign task. Hosts can opt into product-owned
-  campaign quality revalidation before generated drafts are accepted.
+  campaign quality revalidation before generated drafts are accepted; when
+  enabled, normalized proof terms are added to the prompt payload before
+  generation and reused by the post-generation gate.
 - Small utility shims now default to local extracted implementations:
   `config`, `pipelines.notify`, `reasoning.wedge_registry`,
   `reasoning.archetypes`, `reasoning.evidence_engine`, `reasoning.temporal`,

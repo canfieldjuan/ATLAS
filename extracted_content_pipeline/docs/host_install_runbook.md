@@ -249,7 +249,9 @@ because prompts only see the opportunity row.
 
 Add `--quality-revalidation` to generation commands when the host wants the
 standalone campaign specificity gate to reject placeholder drafts or drafts
-that miss configured proof-term support before they are saved.
+that miss configured proof-term support before they are saved. The same flag
+adds normalized `campaign_proof_terms` from reasoning anchors/witnesses/proof
+points to the prompt payload before the LLM call.
 
 If a host does not already have reasoning JSON, it can configure
 `SinglePassCampaignReasoningProvider` from

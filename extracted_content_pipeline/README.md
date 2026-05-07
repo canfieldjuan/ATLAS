@@ -221,7 +221,10 @@ python scripts/run_extracted_campaign_generation_example.py \
 
 Add `--quality-revalidation` to the offline example when you want the
 standalone campaign specificity gate to reject drafts with placeholder tokens
-or missing configured proof-term support before they are returned.
+or missing configured proof-term support before they are returned. When
+enabled, the generator also adds normalized `campaign_proof_terms` from
+reasoning anchors/witnesses/proof points to the prompt payload before the LLM
+call.
 
 Use host-provided prompt contracts by pointing at a markdown skill directory:
 
@@ -318,7 +321,9 @@ python scripts/run_extracted_campaign_generation_postgres.py \
 ```
 
 Add `--quality-revalidation` to the Postgres runner to run the same campaign
-specificity gate before generated drafts are persisted.
+specificity gate before generated drafts are persisted. The same flag adds
+normalized proof terms to the prompt payload so generated drafts have the
+evidence terms the gate will later require.
 
 Or generate lightweight reasoning context during the DB-backed run:
 
