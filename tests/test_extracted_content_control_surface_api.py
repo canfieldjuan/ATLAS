@@ -85,6 +85,29 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
 
 
 @pytest.mark.asyncio
+async def test_describe_control_surfaces_requires_generate_method_for_readiness():
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            campaign=object(),
+            report=_CampaignService(),
+        )
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    outputs = {item["id"]: item for item in payload["outputs"]}
+    assert payload["execution"] == {
+        "configured": True,
+        "configured_outputs": ["report"],
+    }
+    assert outputs["email_campaign"]["execution_configured"] is False
+    assert outputs["email_campaign"]["can_execute"] is False
+    assert outputs["report"]["execution_configured"] is True
+    assert outputs["report"]["can_execute"] is True
+
+
+@pytest.mark.asyncio
 async def test_preview_generation_route_returns_preflight_plan():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),

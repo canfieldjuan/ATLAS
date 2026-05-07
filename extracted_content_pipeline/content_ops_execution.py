@@ -45,7 +45,7 @@ class ContentOpsExecutionServices:
             "landing_page",
             "sales_brief",
         ):
-            if self.for_output(output) is not None:
+            if _has_generate_method(self.for_output(output)):
                 outputs.append(output)
         return tuple(outputs)
 
@@ -246,6 +246,10 @@ def _failed_step(step: GenerationPlanStep, error: str) -> ContentOpsStepExecutio
         status="failed",
         error=error,
     )
+
+
+def _has_generate_method(service: Any | None) -> bool:
+    return callable(getattr(service, "generate", None))
 
 
 def _clean(value: Any) -> str:
