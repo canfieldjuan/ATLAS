@@ -154,6 +154,16 @@ python scripts/build_extracted_campaign_opportunities_from_sources.py \
 python scripts/run_extracted_campaign_generation_example.py customer_opportunities.json
 ```
 
+They can also be loaded directly into the Postgres opportunity table:
+
+```bash
+python scripts/load_extracted_campaign_opportunities.py \
+  customer_sources.jsonl \
+  --source-rows \
+  --source-format jsonl \
+  --account-id acct_123
+```
+
 Generate cold-email and follow-up drafts for each opportunity by passing
 channels:
 

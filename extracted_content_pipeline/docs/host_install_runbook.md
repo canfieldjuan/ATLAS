@@ -133,7 +133,7 @@ Unknown columns are preserved in draft metadata and prompt context through the
 normalized opportunity payload.
 
 If a host starts from reviews, transcripts, complaints, or document rows instead
-of ready-made opportunities, convert them first:
+of ready-made opportunities, they can preview the normalized opportunity payload:
 
 ```bash
 python scripts/build_extracted_campaign_opportunities_from_sources.py \
@@ -163,6 +163,17 @@ Write rows:
 python scripts/load_extracted_campaign_opportunities.py \
   customer_opportunities.csv \
   --format csv \
+  --account-id acct_123
+```
+
+Source rows can be loaded directly without writing the intermediate
+opportunity JSON:
+
+```bash
+python scripts/load_extracted_campaign_opportunities.py \
+  customer_sources.jsonl \
+  --source-rows \
+  --source-format jsonl \
   --account-id acct_123
 ```
 
