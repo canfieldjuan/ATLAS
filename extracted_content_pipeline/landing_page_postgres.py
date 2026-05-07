@@ -4,12 +4,14 @@ Mirrors the shape of ``PostgresReportRepository`` (see
 ``report_postgres.py``) but persists ``LandingPageDraft`` rows into the
 ``landing_pages`` table from migration 274. Hosts inject an
 asyncpg-style pool; the adapter does no connection management itself.
+
+Shared JSONB / command-tag helpers live in
+``extracted_content_pipeline.storage._jsonb_helpers``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from typing import Any, Mapping, Sequence
 
 from .campaign_ports import JsonDict, TenantScope
@@ -17,19 +19,12 @@ from .landing_page_ports import (
     LandingPageDraft,
     LandingPageSection,
 )
-
-
-def _jsonb(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, default=str, separators=(",", ":"))
-
-
-def _row_dict(row: Mapping[str, Any] | Any) -> JsonDict:
-    if isinstance(row, Mapping):
-        return dict(row)
-    try:
-        return dict(row)
-    except (TypeError, ValueError):
-        return {}
+from .storage._jsonb_helpers import (
+    decode_jsonb_field,
+    json_dump_jsonb,
+    parse_command_tag,
+    row_to_dict,
+)
 
 
 def _draft_metadata(draft: LandingPageDraft, scope: TenantScope) -> JsonDict:
@@ -67,39 +62,28 @@ def _coerce_section(value: Any) -> LandingPageSection:
     )
 
 
-def _decode_jsonb(raw: Any, *, default: Any) -> Any:
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except (TypeError, ValueError):
-            return default
-    if raw is None:
-        return default
-    return raw
-
-
 def _row_to_draft(row: Mapping[str, Any]) -> LandingPageDraft:
-    sections_raw = _decode_jsonb(row.get("sections"), default=[])
+    sections_raw = decode_jsonb_field(row.get("sections"), default=[])
     if not isinstance(sections_raw, Sequence) or isinstance(sections_raw, (str, bytes)):
         sections_raw = []
 
-    reference_ids_raw = _decode_jsonb(row.get("reference_ids"), default=[])
+    reference_ids_raw = decode_jsonb_field(row.get("reference_ids"), default=[])
     if not isinstance(reference_ids_raw, Sequence) or isinstance(reference_ids_raw, (str, bytes)):
         reference_ids_raw = []
 
-    hero_raw = _decode_jsonb(row.get("hero"), default={})
+    hero_raw = decode_jsonb_field(row.get("hero"), default={})
     if not isinstance(hero_raw, Mapping):
         hero_raw = {}
 
-    cta_raw = _decode_jsonb(row.get("cta"), default={})
+    cta_raw = decode_jsonb_field(row.get("cta"), default={})
     if not isinstance(cta_raw, Mapping):
         cta_raw = {}
 
-    meta_raw = _decode_jsonb(row.get("meta"), default={})
+    meta_raw = decode_jsonb_field(row.get("meta"), default={})
     if not isinstance(meta_raw, Mapping):
         meta_raw = {}
 
-    metadata_raw = _decode_jsonb(row.get("metadata"), default={})
+    metadata_raw = decode_jsonb_field(row.get("metadata"), default={})
     if not isinstance(metadata_raw, Mapping):
         metadata_raw = {}
 
@@ -166,12 +150,12 @@ class PostgresLandingPageRepository:
                 draft.value_prop,
                 draft.title,
                 draft.slug,
-                _jsonb(dict(draft.hero or {})),
-                _jsonb(sections_payload),
-                _jsonb(dict(draft.cta or {})),
-                _jsonb(dict(draft.meta or {})),
-                _jsonb(reference_ids_payload),
-                _jsonb(metadata_payload),
+                json_dump_jsonb(dict(draft.hero or {})),
+                json_dump_jsonb(sections_payload),
+                json_dump_jsonb(dict(draft.cta or {})),
+                json_dump_jsonb(dict(draft.meta or {})),
+                json_dump_jsonb(reference_ids_payload),
+                json_dump_jsonb(metadata_payload),
             )
             saved.append(str(page_id))
         return tuple(saved)
@@ -206,7 +190,7 @@ class PostgresLandingPageRepository:
             params.append(int(limit))
             sql += f" LIMIT ${len(params)}"
         rows = await self.pool.fetch(sql, *params)
-        return tuple(_row_to_draft(_row_dict(row)) for row in rows)
+        return tuple(_row_to_draft(row_to_dict(row)) for row in rows)
 
     async def update_status(
         self,
@@ -233,16 +217,7 @@ class PostgresLandingPageRepository:
             status,
             scope.account_id or "",
         )
-        # asyncpg returns "UPDATE <n>"; 1 == hit, 0 == miss. Defensive
-        # parse so non-asyncpg pools (test fakes, alternative drivers)
-        # that return e.g. "OK" or None don't crash -- treat unknown
-        # shapes as success (matches the prior silent-no-op default).
-        if not isinstance(result, str):
-            return True
-        try:
-            return int(result.rsplit(" ", 1)[-1]) > 0
-        except (ValueError, IndexError):
-            return True
+        return parse_command_tag(result)
 
 
 __all__ = [

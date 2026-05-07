@@ -14,9 +14,27 @@ status-lifecycle semantics as ``b2b_campaigns``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Literal, Mapping, Protocol, Sequence
 
-from .campaign_ports import JsonDict, TenantScope
+from .campaign_ports import JsonDict, TargetMode, TenantScope
+
+
+# Re-exported for convenience so consumers writing reports code can
+# import ``TargetMode`` from this module without round-tripping
+# through ``campaign_ports``.
+__all_re_exports__ = ("TargetMode",)
+
+
+ReportType = Literal[
+    "vendor_pressure",
+    "market_intel",
+    "customer_health",
+    "account_brief",
+]
+"""Recognised ``report_type`` values for ``ReportDraft.report_type``.
+Documents the v0 taxonomy without locking it -- hosts can extend with
+custom snake_case labels (e.g., ``"competitive_audit"``); the alias is
+a type-checker hint, not a runtime check."""
 
 
 @dataclass(frozen=True)
@@ -103,12 +121,17 @@ class ReportRepository(Protocol):
         status: str,
         *,
         scope: TenantScope,
-    ) -> None:
-        """Update a draft's status (draft / queued / approved / rejected / expired)."""
+    ) -> bool:
+        """Update a draft's status (draft / queued / approved / rejected / expired).
+
+        Returns True on hit, False on miss (wrong id or wrong tenant).
+        """
 
 
 __all__ = [
     "ReportDraft",
     "ReportRepository",
     "ReportSection",
+    "ReportType",
+    "TargetMode",
 ]

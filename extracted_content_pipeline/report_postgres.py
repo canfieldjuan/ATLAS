@@ -4,29 +4,25 @@ Mirrors the shape of ``PostgresCampaignRepository`` (see
 ``campaign_postgres.py:240-292``) but persists ``ReportDraft`` rows into
 the ``reports`` table from migration 273. Hosts inject an asyncpg-style
 pool; the adapter does no connection management itself.
+
+Shared JSONB / command-tag helpers live in
+``extracted_content_pipeline.storage._jsonb_helpers`` (extracted in
+PR-ContentAssets-Consistency-1).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from typing import Any, Mapping, Sequence
 
 from .campaign_ports import JsonDict, TenantScope
 from .report_ports import ReportDraft, ReportSection
-
-
-def _jsonb(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, default=str, separators=(",", ":"))
-
-
-def _row_dict(row: Mapping[str, Any] | Any) -> JsonDict:
-    if isinstance(row, Mapping):
-        return dict(row)
-    try:
-        return dict(row)
-    except (TypeError, ValueError):
-        return {}
+from .storage._jsonb_helpers import (
+    decode_jsonb_field,
+    json_dump_jsonb,
+    parse_command_tag,
+    row_to_dict,
+)
 
 
 def _draft_metadata(draft: ReportDraft, scope: TenantScope) -> JsonDict:
@@ -58,30 +54,15 @@ def _coerce_section(value: Any) -> ReportSection:
 
 
 def _row_to_draft(row: Mapping[str, Any]) -> ReportDraft:
-    sections_raw = row.get("sections")
-    if isinstance(sections_raw, str):
-        try:
-            sections_raw = json.loads(sections_raw)
-        except (TypeError, ValueError):
-            sections_raw = []
+    sections_raw = decode_jsonb_field(row.get("sections"), default=[])
     if not isinstance(sections_raw, Sequence) or isinstance(sections_raw, (str, bytes)):
         sections_raw = []
 
-    reference_ids_raw = row.get("reference_ids")
-    if isinstance(reference_ids_raw, str):
-        try:
-            reference_ids_raw = json.loads(reference_ids_raw)
-        except (TypeError, ValueError):
-            reference_ids_raw = []
+    reference_ids_raw = decode_jsonb_field(row.get("reference_ids"), default=[])
     if not isinstance(reference_ids_raw, Sequence) or isinstance(reference_ids_raw, (str, bytes)):
         reference_ids_raw = []
 
-    metadata_raw = row.get("metadata")
-    if isinstance(metadata_raw, str):
-        try:
-            metadata_raw = json.loads(metadata_raw)
-        except (TypeError, ValueError):
-            metadata_raw = {}
+    metadata_raw = decode_jsonb_field(row.get("metadata"), default={})
     if not isinstance(metadata_raw, Mapping):
         metadata_raw = {}
 
@@ -132,9 +113,9 @@ class PostgresReportRepository:
                 draft.report_type,
                 draft.title,
                 draft.summary,
-                _jsonb(sections_payload),
-                _jsonb(reference_ids_payload),
-                _jsonb(metadata_payload),
+                json_dump_jsonb(sections_payload),
+                json_dump_jsonb(reference_ids_payload),
+                json_dump_jsonb(metadata_payload),
             )
             saved.append(str(report_id))
         return tuple(saved)
@@ -169,7 +150,7 @@ class PostgresReportRepository:
             params.append(int(limit))
             sql += f" LIMIT ${len(params)}"
         rows = await self.pool.fetch(sql, *params)
-        return tuple(_row_to_draft(_row_dict(row)) for row in rows)
+        return tuple(_row_to_draft(row_to_dict(row)) for row in rows)
 
     async def update_status(
         self,
@@ -177,8 +158,15 @@ class PostgresReportRepository:
         status: str,
         *,
         scope: TenantScope,
-    ) -> None:
-        await self.pool.execute(
+    ) -> bool:
+        """Scoped status update. Returns True on hit, False on miss.
+
+        Migrated to the bool-returning contract in
+        PR-ContentAssets-Consistency-1 so all four content-asset
+        adapters (campaigns excluded -- it has domain-specific
+        ``mark_*`` methods instead) report hits/misses uniformly.
+        """
+        result = await self.pool.execute(
             """
             UPDATE reports
                SET status = $2,
@@ -190,6 +178,7 @@ class PostgresReportRepository:
             status,
             scope.account_id or "",
         )
+        return parse_command_tag(result)
 
 
 __all__ = [
