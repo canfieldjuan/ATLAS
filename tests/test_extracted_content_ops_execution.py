@@ -113,21 +113,31 @@ async def test_execute_runs_landing_page_with_marketing_campaign_input() -> None
 
 
 @pytest.mark.asyncio
-async def test_execute_blocks_non_executable_plan_without_calling_services() -> None:
+async def test_execute_runs_blog_post_service_with_scope_and_filters() -> None:
     service = _OpportunityService()
+    scope = TenantScope(account_id="acct-1")
 
     result = await execute_content_ops_from_mapping(
         {
             "outputs": ["blog_post"],
-            "inputs": {"topic": "Churn pressure"},
+            "limit": 2,
+            "inputs": {
+                "topic": "Churn pressure",
+                "filters": {"topic_type": "vendor_alternative"},
+            },
         },
-        services=ContentOpsExecutionServices(campaign=service),
+        services=ContentOpsExecutionServices(blog_post=service),
+        scope=scope,
     )
 
-    assert result["status"] == "blocked"
-    assert result["errors"] == [{"reason": "plan_not_executable"}]
-    assert result["steps"] == []
-    assert service.calls == []
+    assert result["status"] == "completed"
+    assert result["steps"][0]["output"] == "blog_post"
+    assert service.calls == [{
+        "scope": scope,
+        "target_mode": "vendor_retention",
+        "limit": 2,
+        "filters": {"topic_type": "vendor_alternative"},
+    }]
 
 
 @pytest.mark.asyncio

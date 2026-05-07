@@ -94,8 +94,12 @@
   without making dashboard storage a product dependency.
 - `content_ops_execution` provides the host-injected execution seam for
   runnable AI Content Ops control-surface plans. It dispatches executable
-  outputs to configured campaign, report, landing-page, and sales-brief
-  services without constructing hidden database, LLM, or Atlas dependencies.
+  outputs to configured campaign, blog-post, report, landing-page, and
+  sales-brief services without constructing hidden database, LLM, or Atlas
+  dependencies.
+- `blog_generation` and `blog_ports` provide the standalone blog-post service
+  adapter. Hosts inject blueprint storage, draft persistence, skills, and LLM
+  ports instead of calling the legacy autonomous task path.
 - `api.control_surfaces` exposes preview, plan, and optional execute routes for
   multi-asset AI Content Ops control surfaces. The execute route is disabled
   unless the host supplies execution services.
