@@ -32,7 +32,13 @@ Recognised ``policy.thresholds`` keys:
   - ``min_sections`` (int): default 1
   - ``max_headline_chars`` (int): warn when ``headline`` is above this;
     default 280 (a reasonable elevator-line ceiling -- the rep should
-    be able to skim it in 5 seconds before walking into the meeting)
+    be able to skim it in 5 seconds before walking into the meeting).
+    Note the deliberate asymmetry with the skill prompt, which tells
+    the LLM to aim for ~140 chars (a tighter "punchy" target). The
+    pack ceiling is the harder bound: the LLM can overshoot the
+    aspirational prompt target by ~2x and still pass the gate, but a
+    rambling 300-char "headline" warns. Two-tier guidance: aim short
+    in the prompt, tolerate up to 280 in the gate.
   - ``min_confidence`` (float): warn when ``metadata["confidence"]`` is
     below this; default 0.0 (no floor)
   - ``pass_score`` (int): default 70
