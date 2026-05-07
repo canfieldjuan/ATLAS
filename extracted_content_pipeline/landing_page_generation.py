@@ -61,6 +61,8 @@ class LandingPageGenerationConfig:
     max_tokens: int = 4096
     temperature: float = 0.3
     quality_policy: QualityPolicy | None = None
+    parse_retry_attempts: int = 1
+    parse_retry_response_excerpt_chars: int = 800
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,46 @@ def parse_landing_page_response(text: str) -> dict[str, Any] | None:
             "sections": coerced_sections,
         }
     return None
+
+
+def _landing_page_user_prompt(prior_invalid_response: str = "") -> str:
+    prompt = "Generate one landing page from the marketing campaign above."
+    if prior_invalid_response:
+        return (
+            f"{prompt}\n\n"
+            "The previous response could not be parsed as the required JSON object. "
+            "Return one JSON object with non-empty title and sections. "
+            f"Previous response excerpt:\n{prior_invalid_response}"
+        )
+    return prompt
+
+
+def _clip_invalid_response(text: str, *, limit: int) -> str:
+    cleaned = str(text or "").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip()
+
+
+def _accumulate_usage(
+    total: Mapping[str, Any],
+    usage: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    accumulated = dict(total)
+    if not isinstance(usage, Mapping):
+        return accumulated
+    for key, value in usage.items():
+        if isinstance(value, bool):
+            accumulated[key] = value
+        elif isinstance(value, (int, float)):
+            prior = accumulated.get(key)
+            if isinstance(prior, (int, float)) and not isinstance(prior, bool):
+                accumulated[key] = prior + value
+            else:
+                accumulated[key] = value
+        else:
+            accumulated[key] = value
+    return accumulated
 
 
 class LandingPageGenerationService:
@@ -284,31 +326,42 @@ class LandingPageGenerationService:
         # via {campaign_json}. User message is structural-only so the
         # campaign isn't sent twice (matches the report-generator fix).
         system_prompt = prompt_template.replace("{campaign_json}", campaign_json)
-        response = await self._llm.complete(
-            [
-                LLMMessage(role="system", content=system_prompt),
-                LLMMessage(
-                    role="user",
-                    content="Generate one landing page from the marketing campaign above.",
-                ),
-            ],
-            max_tokens=self._config.max_tokens,
-            temperature=self._config.temperature,
-            metadata={
-                "campaign_name": campaign_payload.get("name"),
-                "skill_name": self._config.skill_name,
-                "asset_type": "landing_page",
-                "target_mode": _TARGET_MODE,
-            },
-        )
-        parsed = parse_landing_page_response(response.content)
-        if not parsed:
-            return None
-        return {
-            **parsed,
-            "_model": response.model,
-            "_usage": dict(response.usage or {}),
-        }
+        attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
+        last_response = ""
+        total_usage: dict[str, Any] = {}
+        for attempt_no in range(1, attempts + 1):
+            response = await self._llm.complete(
+                [
+                    LLMMessage(role="system", content=system_prompt),
+                    LLMMessage(
+                        role="user",
+                        content=_landing_page_user_prompt(last_response),
+                    ),
+                ],
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+                metadata={
+                    "campaign_name": campaign_payload.get("name"),
+                    "skill_name": self._config.skill_name,
+                    "asset_type": "landing_page",
+                    "target_mode": _TARGET_MODE,
+                    "attempt_no": attempt_no,
+                },
+            )
+            total_usage = _accumulate_usage(total_usage, response.usage)
+            parsed = parse_landing_page_response(response.content)
+            if parsed:
+                return {
+                    **parsed,
+                    "_model": response.model,
+                    "_usage": total_usage,
+                    "_parse_attempts": attempt_no,
+                }
+            last_response = _clip_invalid_response(
+                response.content,
+                limit=max(0, int(self._config.parse_retry_response_excerpt_chars or 0)),
+            )
+        return None
 
     def _quality_check(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
         report_input = QualityInput(
@@ -362,6 +415,7 @@ class LandingPageGenerationService:
         metadata: dict[str, Any] = {
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
+            "generation_parse_attempts": parsed.get("_parse_attempts"),
         }
         return LandingPageDraft(
             campaign_name=campaign.name,
