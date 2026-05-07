@@ -80,7 +80,30 @@ def test_content_ops_execution_smoke_fails_when_required_inputs_missing() -> Non
     )
 
     assert completed.returncode == 1
-    assert "expected completed status, got 'blocked'" in completed.stdout
+    assert "expected completed status, got 'blocked'" in completed.stderr
+
+
+def test_content_ops_execution_smoke_json_failure_keeps_stdout_parseable() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "--outputs",
+            "email_campaign",
+            "--target-account",
+            "",
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert completed.returncode == 1
+    assert payload["status"] == "blocked"
+    assert payload["smoke_errors"] == ["expected completed status, got 'blocked'"]
+    assert "AI Content Ops execution smoke failed" in completed.stderr
 
 
 def test_execution_errors_reports_empty_steps() -> None:

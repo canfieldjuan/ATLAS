@@ -136,11 +136,14 @@ async def _main() -> int:
     )
     errors = _execution_errors(result)
     if args.json:
+        if errors:
+            result = dict(result)
+            result["smoke_errors"] = errors
         print(json.dumps(result, sort_keys=True))
     if errors:
-        print("AI Content Ops execution smoke failed:")
+        print("AI Content Ops execution smoke failed:", file=sys.stderr)
         for error in errors:
-            print(f"- {error}")
+            print(f"- {error}", file=sys.stderr)
         return 1
     if not args.json:
         outputs = [
