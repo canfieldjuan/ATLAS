@@ -72,6 +72,25 @@ def _terms_from_rows(value: Any, *, limit: int) -> list[str]:
     return terms
 
 
+def _revalidation_error_details(revalidation: Mapping[str, Any]) -> dict[str, Any]:
+    audit = revalidation.get("audit")
+    if not isinstance(audit, Mapping):
+        return {}
+    details = {
+        "status": audit.get("status"),
+        "blocking_issues": list(audit.get("blocking_issues") or []),
+        "warnings": list(audit.get("warnings") or []),
+        "primary_blocker": audit.get("primary_blocker"),
+        "used_proof_terms": list(audit.get("used_proof_terms") or []),
+        "unused_proof_terms": list(audit.get("unused_proof_terms") or []),
+    }
+    return {
+        key: value
+        for key, value in details.items()
+        if value not in (None, "", [], {})
+    }
+
+
 @dataclass(frozen=True)
 class CampaignGenerationConfig:
     skill_name: str = "digest/b2b_campaign_generation"
@@ -244,7 +263,7 @@ class CampaignGenerationService:
                         "reason": "unparseable_response",
                     })
                     continue
-                parsed = self._revalidated_parsed(
+                parsed, revalidation_error = self._revalidated_parsed(
                     parsed,
                     opportunity=channel_opportunity,
                     target_mode=target_mode,
@@ -252,11 +271,14 @@ class CampaignGenerationService:
                 )
                 if not parsed:
                     skipped += 1
-                    errors.append({
+                    error = {
                         "target_id": target_id,
                         "channel": channel,
                         "reason": "quality_revalidation_failed",
-                    })
+                    }
+                    if revalidation_error:
+                        error["quality_revalidation"] = revalidation_error
+                    errors.append(error)
                     continue
                 if channel == "email_cold":
                     cold_email_context = {
@@ -450,9 +472,9 @@ class CampaignGenerationService:
         opportunity: Mapping[str, Any],
         target_mode: str,
         channel: str,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         if not self._config.quality_revalidation_enabled:
-            return dict(parsed)
+            return dict(parsed), None
         context = normalize_campaign_reasoning_context(opportunity)
         specificity_context = context.as_dict()
         proof_terms = _clean_term_list(
@@ -478,11 +500,11 @@ class CampaignGenerationService:
         )
         audit = revalidation.get("audit")
         if isinstance(audit, Mapping) and audit.get("blocking_issues"):
-            return None
+            return None, _revalidation_error_details(revalidation)
         return {
             **dict(parsed),
             "_quality_revalidation": revalidation,
-        }
+        }, None
 
     def _metadata(
         self,

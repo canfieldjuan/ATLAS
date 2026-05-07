@@ -607,8 +607,45 @@ async def test_generate_quality_revalidation_blocks_failed_drafts() -> None:
             "target_id": "opp-1",
             "channel": "email",
             "reason": "quality_revalidation_failed",
+            "quality_revalidation": {
+                "status": "fail",
+                "blocking_issues": ["placeholder_token"],
+                "primary_blocker": "placeholder_token",
+            },
         },
     )
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_quality_revalidation_failure_includes_proof_term_details() -> None:
+    config = CampaignGenerationConfig(quality_revalidation_enabled=True)
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "anchor_examples": {
+            "pricing": [
+                {"excerpt_text": "Pricing drove evaluation."},
+            ]
+        },
+    }
+    service, _, campaigns, _, _ = _service(
+        [opportunity],
+        ['{"subject":"Pricing signal","body":"Generic body."}'],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    error = result.errors[0]
+    assert error["reason"] == "quality_revalidation_failed"
+    assert error["quality_revalidation"]["blocking_issues"] == ["missing_anchor_support"]
+    assert error["quality_revalidation"]["primary_blocker"] == "missing_anchor_support"
+    assert error["quality_revalidation"]["unused_proof_terms"] == [
+        "Pricing drove evaluation."
+    ]
     assert campaigns.saved == []
 
 
