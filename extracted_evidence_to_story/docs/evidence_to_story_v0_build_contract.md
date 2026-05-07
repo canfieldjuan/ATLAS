@@ -12,6 +12,13 @@ parked creative sibling at
 > `extracted_content_pipeline` campaign-core spine is fully product-owned
 > per `remaining_productization_audit.md` "Next Concrete Slice".
 
+**Implementation status:** Stage 1 has started in the separate
+`extracted_evidence_to_story` product boundary. The product-owned
+`extracted_evidence_to_story/sources.py` loader and
+`scripts/build_evidence_to_story_sources.py` CLI implement the deterministic
+manifest-to-`sources.json` step only. Stages 2-9 remain unimplemented until
+their own slices land.
+
 When v0 work begins, **every section below must be true at completion**.
 This doc exists to make sure each new file has a reason to exist before
 it is written.
@@ -454,7 +461,7 @@ Stage 8 runs every rule. Any `fail` aborts the package as
 ## 7. Sample fixture requirements
 
 A "golden case" fixture lives at
-[`extracted_content_pipeline/fixtures/evidence_to_story_v0_golden/`](../fixtures/evidence_to_story_v0_golden/).
+[`extracted_evidence_to_story/fixtures/evidence_to_story_v0_golden/`](../fixtures/evidence_to_story_v0_golden/).
 
 Selection criteria for the case (one human-judgment call before any
 v0 build):
