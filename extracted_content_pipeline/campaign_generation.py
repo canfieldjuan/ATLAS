@@ -330,6 +330,7 @@ class CampaignGenerationService:
             context.as_dict(),
             existing=enriched.get("campaign_proof_terms"),
         )
+        enriched.pop("campaign_proof_terms", None)
         if terms:
             enriched["campaign_proof_terms"] = terms
         return enriched
