@@ -23,6 +23,7 @@ LOCAL_UTILITY_SHIM_PATHS = [
     "extracted_content_pipeline/campaign_generation.py",
     "extracted_content_pipeline/campaign_postgres_generation.py",
     "extracted_content_pipeline/campaign_customer_data.py",
+    "extracted_content_pipeline/campaign_source_adapters.py",
     "extracted_content_pipeline/campaign_ports.py",
     "extracted_content_pipeline/config.py",
     "extracted_content_pipeline/autonomous/tasks/_blog_matching.py",

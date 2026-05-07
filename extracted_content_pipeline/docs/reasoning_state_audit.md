@@ -184,8 +184,9 @@ Tier 1 and Tier 2 are implemented for B2B campaign opportunities. Remaining
 choices are about source coverage and product promise, not basic wiring:
 
 1. **Additional source formats.** CRM rows are covered through
-   `campaign_opportunities`; review/complaint data, episode transcripts, and
-   sales call transcripts need their own schema-aware adapters.
+   `campaign_opportunities`; review, complaint, transcript, and document rows
+   are covered by the source-to-opportunity adapter. Episode transcripts and
+   richer domain-specific source bundles still need their own adapters.
 2. **Product promise.** If single-pass meets the sold promise, AI Content Ops is
    operational. If the promise is "multi-pass refinement over your data," the
    multi-pass provider is the floor.
@@ -205,8 +206,8 @@ choices are about source coverage and product promise, not basic wiring:
 | `extracted_reasoning_core` produces reasoning from a source | Yes, through the multi-pass provider |
 
 The remaining structural gap is source breadth, not reasoning-provider wiring.
-CRM/opportunity rows are operational; richer source types need their own
-schema-aware adapters.
+CRM/opportunity rows and common text source rows are operational; richer
+domain-specific bundles need their own schema-aware adapters.
 
 ## References
 

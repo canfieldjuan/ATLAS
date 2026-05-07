@@ -236,6 +236,9 @@
       "target": "extracted_content_pipeline/campaign_customer_data.py"
     },
     {
+      "target": "extracted_content_pipeline/campaign_source_adapters.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_opportunities.py"
     },
     {

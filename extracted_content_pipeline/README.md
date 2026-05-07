@@ -114,6 +114,11 @@ draft metadata fields while preserving custom columns.
 `FileIntelligenceRepository` so hosts can run the generator directly from
 customer exports before wiring a database integration.
 
+`campaign_source_adapters.py` adds a source-to-opportunity adapter for richer
+review, transcript, complaint, or document rows. It preserves source text as
+campaign evidence and outputs the same payload shape as the customer-data
+adapter.
+
 ## Campaign generation example
 
 Run the standalone campaign generator against the included customer-data
@@ -136,6 +141,17 @@ draft metadata:
 
 ```bash
 python scripts/run_extracted_campaign_generation_example.py customer_opportunities.csv --format csv
+```
+
+Review, transcript, complaint, and document source rows can be converted into
+the same opportunity payload first:
+
+```bash
+python scripts/build_extracted_campaign_opportunities_from_sources.py \
+  customer_sources.jsonl \
+  --output customer_opportunities.json
+
+python scripts/run_extracted_campaign_generation_example.py customer_opportunities.json
 ```
 
 Generate cold-email and follow-up drafts for each opportunity by passing

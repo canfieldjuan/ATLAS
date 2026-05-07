@@ -64,11 +64,11 @@ generator reads from Postgres tables specific to its domain:
 | Complaint content | `product_pain_points` (pain_score >= 4.0) | `autonomous/tasks/complaint_content_generation.py:135` |
 | B2B campaign emails | `b2b_reviews`, `b2b_campaigns`, churn views | `autonomous/tasks/b2b_campaign_generation.py:3816-3891` |
 | Vendor briefings | `vendor_targets`, `b2b_intelligence`, evidence vault | `autonomous/tasks/b2b_vendor_briefing.py:3102-3146` |
-| **Campaign generation (standalone)** | **JSON/CSV files** | **`campaign_customer_data.py:77-96`** |
+| **Campaign generation (standalone)** | **JSON/CSV opportunities + source rows** | **`campaign_customer_data.py:77-96`, `campaign_source_adapters.py`** |
 
-`campaign_customer_data.py` is the only file/object-driven loader in the
-package and is the right model to copy when retargeting the pipeline for
-narrative input.
+`campaign_customer_data.py` and `campaign_source_adapters.py` are the
+file/object-driven loaders in the package and are the right model to copy when
+retargeting the pipeline for narrative input.
 
 `EXTRACTED_PIPELINE_STANDALONE=1` skips LLM calls and batch execution but does
 not mock DB reads — the existing tasks still expect a live Postgres. Any

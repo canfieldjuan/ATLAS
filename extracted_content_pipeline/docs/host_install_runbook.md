@@ -132,6 +132,19 @@ Minimum useful columns:
 Unknown columns are preserved in draft metadata and prompt context through the
 normalized opportunity payload.
 
+If a host starts from reviews, transcripts, complaints, or document rows instead
+of ready-made opportunities, convert them first:
+
+```bash
+python scripts/build_extracted_campaign_opportunities_from_sources.py \
+  customer_sources.jsonl \
+  --output customer_opportunities.json
+```
+
+The source adapter copies `review_text`, `transcript`, `complaint`, `content`,
+`body`, `quote`, or `text` into the opportunity `evidence` field, preserving
+source ids and inferred source types for prompt context and later review.
+
 ## Step 4: Load Opportunities Into Postgres
 
 Preview the import:
