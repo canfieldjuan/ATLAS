@@ -127,6 +127,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Override the payload limit.",
     )
     parser.add_argument(
+        "--quality-revalidation",
+        action="store_true",
+        help="Run campaign quality revalidation before accepting generated drafts.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write generated draft JSON to this file instead of stdout.",
@@ -323,6 +328,8 @@ async def _main() -> int:
         ]
     if args.limit is not None:
         payload["limit"] = args.limit
+    if args.quality_revalidation:
+        payload["quality_revalidation_enabled"] = True
 
     result = await generate_campaign_drafts_from_payload(
         payload,

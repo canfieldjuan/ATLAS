@@ -247,6 +247,10 @@ The file-backed reasoning adapter matches rows by target id, company, email, or
 vendor. The generator still works without this file, but output quality is lower
 because prompts only see the opportunity row.
 
+Add `--quality-revalidation` to generation commands when the host wants the
+standalone campaign specificity gate to reject placeholder drafts or drafts
+that miss configured proof-term support before they are saved.
+
 If a host does not already have reasoning JSON, it can configure
 `SinglePassCampaignReasoningProvider` from
 `extracted_content_pipeline.services.single_pass_reasoning_provider`. The

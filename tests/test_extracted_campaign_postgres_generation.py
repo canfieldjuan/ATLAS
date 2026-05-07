@@ -275,6 +275,7 @@ async def test_postgres_runner_cli_wires_pool_offline_and_reasoning_context(
             "offline",
             "--reasoning-context",
             str(reasoning_path),
+            "--quality-revalidation",
             "--visibility-jsonl",
             str(visibility_path),
         ],
@@ -293,6 +294,7 @@ async def test_postgres_runner_cli_wires_pool_offline_and_reasoning_context(
         "confidence": "high",
         "wedge": "renewal pressure",
     }
+    assert metadata["campaign_revalidation"]["audit"]["status"] == "pass"
     assert pool.closed is True
     events = read_jsonl_visibility_events(visibility_path)
     assert [row["event_type"] for row in events] == [

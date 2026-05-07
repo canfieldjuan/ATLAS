@@ -576,6 +576,78 @@ async def test_generate_uses_custom_config_and_omits_source_opportunity():
 
 
 @pytest.mark.asyncio
+async def test_generate_quality_revalidation_is_opt_in() -> None:
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        ['{"subject":"Hi [Name]","body":"Body"}'],
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 1
+    assert campaigns.saved[0]["drafts"][0].subject == "Hi [Name]"
+    assert "campaign_revalidation" not in campaigns.saved[0]["drafts"][0].metadata
+
+
+@pytest.mark.asyncio
+async def test_generate_quality_revalidation_blocks_failed_drafts() -> None:
+    config = CampaignGenerationConfig(quality_revalidation_enabled=True)
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        ['{"subject":"Hi [Name]","body":"Body"}'],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors == (
+        {
+            "target_id": "opp-1",
+            "channel": "email",
+            "reason": "quality_revalidation_failed",
+        },
+    )
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_quality_revalidation_preserves_pass_audit_metadata() -> None:
+    config = CampaignGenerationConfig(quality_revalidation_enabled=True)
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "anchor_examples": {
+            "pricing": [
+                {"excerpt_text": "Pricing drove evaluation."},
+            ]
+        },
+    }
+    service, _, campaigns, _, _ = _service(
+        [opportunity],
+        [
+            json.dumps({
+                "subject": "Pricing signal",
+                "body": "Pricing drove evaluation.",
+            })
+        ],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 1
+    metadata = campaigns.saved[0]["drafts"][0].metadata
+    audit = metadata["campaign_revalidation"]["audit"]
+    assert audit["status"] == "pass"
+    assert audit["used_proof_terms"] == ["Pricing drove evaluation."]
+    assert metadata["campaign_revalidation"]["metadata"]["campaign_proof_terms"] == [
+        "Pricing drove evaluation."
+    ]
+
+
+@pytest.mark.asyncio
 async def test_generate_skips_missing_target_and_unparseable_responses():
     service, _, campaigns, _, _ = _service(
         [

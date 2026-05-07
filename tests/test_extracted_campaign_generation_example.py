@@ -239,6 +239,28 @@ def test_campaign_generation_example_cli_outputs_draft_json() -> None:
     assert result["drafts"][0]["metadata"]["generation_model"] == "offline-deterministic"
 
 
+def test_campaign_generation_example_cli_can_enable_quality_revalidation() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(EXAMPLE_PAYLOAD),
+            "--limit",
+            "1",
+            "--llm",
+            "offline",
+            "--quality-revalidation",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    metadata = result["drafts"][0]["metadata"]
+    assert metadata["campaign_revalidation"]["audit"]["status"] == "pass"
+
+
 def test_campaign_generation_example_cli_generates_from_source_rows() -> None:
     completed = subprocess.run(
         [

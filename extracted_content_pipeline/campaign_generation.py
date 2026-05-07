@@ -27,6 +27,7 @@ from .services.campaign_reasoning_context import (
     campaign_reasoning_context_payload,
     normalize_campaign_reasoning_context,
 )
+from .services.campaign_quality import campaign_quality_revalidation
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class CampaignGenerationConfig:
     temperature: float = 0.4
     include_source_opportunity: bool = True
     channels: tuple[str, ...] = ()
+    quality_revalidation_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -199,6 +201,20 @@ class CampaignGenerationService:
                         "reason": "unparseable_response",
                     })
                     continue
+                parsed = self._revalidated_parsed(
+                    parsed,
+                    opportunity=channel_opportunity,
+                    target_mode=target_mode,
+                    channel=channel,
+                )
+                if not parsed:
+                    skipped += 1
+                    errors.append({
+                        "target_id": target_id,
+                        "channel": channel,
+                        "reason": "quality_revalidation_failed",
+                    })
+                    continue
                 if channel == "email_cold":
                     cold_email_context = {
                         "subject": parsed["subject"],
@@ -343,6 +359,37 @@ class CampaignGenerationService:
             "_usage": dict(response.usage or {}),
         }
 
+    def _revalidated_parsed(
+        self,
+        parsed: Mapping[str, Any],
+        *,
+        opportunity: Mapping[str, Any],
+        target_mode: str,
+        channel: str,
+    ) -> dict[str, Any] | None:
+        if not self._config.quality_revalidation_enabled:
+            return dict(parsed)
+        context = normalize_campaign_reasoning_context(opportunity)
+        revalidation = campaign_quality_revalidation(
+            campaign={
+                **dict(opportunity),
+                "subject": parsed.get("subject") or "",
+                "body": parsed.get("body") or "",
+                "cta": parsed.get("cta") or "",
+                "channel": channel,
+                "target_mode": target_mode,
+            },
+            boundary="generation",
+            specificity_context=context.as_dict(),
+        )
+        audit = revalidation.get("audit")
+        if isinstance(audit, Mapping) and audit.get("blocking_issues"):
+            return None
+        return {
+            **dict(parsed),
+            "_quality_revalidation": revalidation,
+        }
+
     def _metadata(
         self,
         parsed: Mapping[str, Any],
@@ -353,6 +400,7 @@ class CampaignGenerationService:
             "angle_reasoning": parsed.get("angle_reasoning"),
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
+            "campaign_revalidation": parsed.get("_quality_revalidation"),
         }
         context = normalize_campaign_reasoning_context(opportunity)
         metadata.update(campaign_reasoning_context_metadata(context))
