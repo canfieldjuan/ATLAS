@@ -264,6 +264,7 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
         "target_id": "opp-1",
         "channel": "email",
         "skill_name": "digest/b2b_campaign_generation",
+        "attempt_no": 1,
     }
     draft = campaigns.saved[0]["drafts"][0]
     assert draft.target_id == "opp-1"
@@ -273,6 +274,7 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
     assert draft.body == "<p>Pricing note</p>"
     assert draft.metadata["cta"] == "Book time"
     assert draft.metadata["generation_model"] == "test-model"
+    assert draft.metadata["generation_parse_attempts"] == 1
     assert draft.metadata["source_opportunity"]["target_id"] == "opp-1"
     assert draft.metadata["source_opportunity"]["target_mode"] == "churning_company"
     assert draft.metadata["source_opportunity"]["channel"] == "email"
@@ -833,7 +835,7 @@ async def test_generate_skips_missing_target_and_unparseable_responses():
             {"pain": "missing id"},
             {"id": "opp-2"},
         ],
-        ["not-json"],
+        ["not-json", "still-not-json"],
     )
 
     result = await service.generate(scope=TenantScope(), target_mode="churning_company")
@@ -846,6 +848,49 @@ async def test_generate_skips_missing_target_and_unparseable_responses():
         "channel": "email",
         "reason": "unparseable_response",
     }
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_retries_unparseable_response_once_by_default():
+    service, _, campaigns, llm, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [
+            "not-json",
+            '{"subject":"Recovered","body":"Recovered body"}',
+        ],
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 1
+    assert result.skipped == 0
+    assert [call["metadata"]["attempt_no"] for call in llm.calls] == [1, 2]
+    retry_prompt = llm.calls[1]["messages"][1].content
+    assert "previous response was not valid campaign JSON" in retry_prompt
+    assert "not-json" in retry_prompt
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.subject == "Recovered"
+    assert draft.metadata["generation_parse_attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_parse_retry_attempts_can_be_disabled():
+    config = CampaignGenerationConfig(parse_retry_attempts=0)
+    service, _, campaigns, llm, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        ["not-json"],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert len(llm.calls) == 1
+    assert result.errors == (
+        {"target_id": "opp-1", "channel": "email", "reason": "unparseable_response"},
+    )
     assert campaigns.saved == []
 
 

@@ -30,6 +30,8 @@ def test_plan_maps_email_campaign_to_campaign_generation_service():
                 "temperature": 0.4,
                 "quality_revalidation_enabled": True,
                 "quality_prompt_proof_term_limit": 5,
+                "parse_retry_attempts": 1,
+                "parse_retry_response_excerpt_chars": 800,
             },
             "reason": "",
         }

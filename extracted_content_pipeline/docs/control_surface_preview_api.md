@@ -152,7 +152,9 @@ show the selected plan, but it should not enable the generate button until
         "max_tokens": 1200,
         "temperature": 0.4,
         "quality_revalidation_enabled": true,
-        "quality_prompt_proof_term_limit": 5
+        "quality_prompt_proof_term_limit": 5,
+        "parse_retry_attempts": 1,
+        "parse_retry_response_excerpt_chars": 800
       },
       "reason": ""
     },

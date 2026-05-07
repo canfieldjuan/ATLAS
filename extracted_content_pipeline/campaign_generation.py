@@ -91,6 +91,35 @@ def _revalidation_error_details(revalidation: Mapping[str, Any]) -> dict[str, An
     }
 
 
+def _campaign_generation_user_prompt(
+    *,
+    target_mode: str,
+    channel: str,
+    opportunity_json: str,
+    prior_invalid_response: str = "",
+) -> str:
+    prompt = (
+        "Generate one campaign draft from this normalized "
+        f"opportunity.\ntarget_mode={target_mode}\n"
+        f"channel={channel}\n"
+        f"opportunity={opportunity_json}"
+    )
+    if prior_invalid_response:
+        prompt += (
+            "\n\nThe previous response was not valid campaign JSON. "
+            "Return one JSON object with non-empty subject and body. "
+            f"Previous response excerpt:\n{prior_invalid_response}"
+        )
+    return prompt
+
+
+def _clip_invalid_response(text: str, *, limit: int) -> str:
+    cleaned = str(text or "").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip()
+
+
 @dataclass(frozen=True)
 class CampaignGenerationConfig:
     skill_name: str = "digest/b2b_campaign_generation"
@@ -102,6 +131,8 @@ class CampaignGenerationConfig:
     channels: tuple[str, ...] = ()
     quality_revalidation_enabled: bool = False
     quality_prompt_proof_term_limit: int = 5
+    parse_retry_attempts: int = 1
+    parse_retry_response_excerpt_chars: int = 800
 
 
 @dataclass(frozen=True)
@@ -434,36 +465,45 @@ class CampaignGenerationService:
             .replace("{opportunity}", opportunity_json)
             .replace("{opportunity_json}", opportunity_json)
         )
-        response = await self._llm.complete(
-            [
-                LLMMessage(role="system", content=system_prompt),
-                LLMMessage(
-                    role="user",
-                    content=(
-                        "Generate one campaign draft from this normalized "
-                        f"opportunity.\ntarget_mode={target_mode}\n"
-                        f"channel={channel}\n"
-                        f"opportunity={opportunity_json}"
+        attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
+        last_response = ""
+        for attempt_no in range(1, attempts + 1):
+            response = await self._llm.complete(
+                [
+                    LLMMessage(role="system", content=system_prompt),
+                    LLMMessage(
+                        role="user",
+                        content=_campaign_generation_user_prompt(
+                            target_mode=target_mode,
+                            channel=channel,
+                            opportunity_json=opportunity_json,
+                            prior_invalid_response=last_response,
+                        ),
                     ),
-                ),
-            ],
-            max_tokens=self._config.max_tokens,
-            temperature=self._config.temperature,
-            metadata={
-                "target_mode": target_mode,
-                "target_id": opportunity_target_id(opportunity),
-                "channel": channel,
-                "skill_name": self._config.skill_name,
-            },
-        )
-        parsed = parse_campaign_draft_response(response.content)
-        if not parsed:
-            return None
-        return {
-            **parsed,
-            "_model": response.model,
-            "_usage": dict(response.usage or {}),
-        }
+                ],
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+                metadata={
+                    "target_mode": target_mode,
+                    "target_id": opportunity_target_id(opportunity),
+                    "channel": channel,
+                    "skill_name": self._config.skill_name,
+                    "attempt_no": attempt_no,
+                },
+            )
+            parsed = parse_campaign_draft_response(response.content)
+            if parsed:
+                return {
+                    **parsed,
+                    "_model": response.model,
+                    "_usage": dict(response.usage or {}),
+                    "_parse_attempts": attempt_no,
+                }
+            last_response = _clip_invalid_response(
+                response.content,
+                limit=max(0, int(self._config.parse_retry_response_excerpt_chars or 0)),
+            )
+        return None
 
     def _revalidated_parsed(
         self,
@@ -516,6 +556,7 @@ class CampaignGenerationService:
             "angle_reasoning": parsed.get("angle_reasoning"),
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
+            "generation_parse_attempts": parsed.get("_parse_attempts"),
             "campaign_revalidation": parsed.get("_quality_revalidation"),
         }
         context = normalize_campaign_reasoning_context(opportunity)

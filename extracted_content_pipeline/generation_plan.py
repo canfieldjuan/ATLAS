@@ -136,6 +136,8 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "temperature": config.temperature,
                 "quality_revalidation_enabled": config.quality_revalidation_enabled,
                 "quality_prompt_proof_term_limit": config.quality_prompt_proof_term_limit,
+                "parse_retry_attempts": config.parse_retry_attempts,
+                "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
             },
         )
     if output == "report":
