@@ -23,7 +23,7 @@ in the result's ``errors`` payload.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import json
 import re
 from typing import Any

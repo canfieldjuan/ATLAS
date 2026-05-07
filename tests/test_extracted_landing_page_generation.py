@@ -163,8 +163,8 @@ def test_parse_landing_page_response_strips_code_fences_and_extracts_first_objec
 
 def test_parse_landing_page_response_returns_none_when_required_fields_missing() -> None:
     assert parse_landing_page_response("") is None
-    assert parse_landing_page_response('{"title": "x"}') is None  # no sections / hero
-    assert parse_landing_page_response('{"title": "x", "sections": [], "hero": {}}') is None
+    assert parse_landing_page_response('{"title": "x"}') is None  # no sections
+    assert parse_landing_page_response('{"title": "x", "sections": []}') is None  # empty sections
 
 
 def test_parse_landing_page_response_handles_braces_inside_string_values() -> None:
