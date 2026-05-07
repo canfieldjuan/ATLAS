@@ -136,7 +136,7 @@ async def _execute_step(
     scope: TenantScope,
     filters: Mapping[str, Any] | None,
 ) -> tuple[ContentOpsStepExecution, Mapping[str, Any] | None]:
-    if service is None:
+    if not _has_generate_method(service):
         error = {"output": step.output, "reason": "service_not_configured"}
         return _failed_step(step, "service_not_configured"), error
     try:
