@@ -7,12 +7,18 @@
   product boundary, not inside AI Content Ops.
 - `sources.py` implements the deterministic Stage-1 source loader from the v0
   build contract.
+- `claims.py` implements the v0 claim ledger schema (§5 of the build
+  contract): `ClaimRecord`, `SourceLocator`, `ClaimLedger`, per-type
+  invariants (`validate_claim`), cross-claim invariants
+  (`validate_ledger`), the soft-rewrite stamping helper for
+  `emotional_inference` claims, and JSON load/write. Pure data + validators
+  — no LLM, no I/O beyond JSON.
 - `scripts/build_evidence_to_story_sources.py` writes `sources.json` for a
   story package or prints the same payload to stdout.
 
 ## Not Implemented
 
-- Claim extraction
+- Claim extraction (Stage 2 LLM half — populates the schema from `sources.json`)
 - Timeline generation
 - Entity extraction
 - Angle proposal
