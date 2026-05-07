@@ -25,17 +25,22 @@ JsonDict = dict[str, Any]
 # assets, with no shared single-source-of-truth enumeration).
 
 TargetMode = Literal[
+    "vendor_retention",
+    "challenger_intel",
+    "churning_company",
+    "amazon_seller",
     "vendor",
     "account",
     "opportunity",
     "marketing_campaign",
 ]
 """Recognised ``target_mode`` values for the campaign-opportunities
-read port and the per-asset draft tables. ``"vendor"`` / ``"account"``
-/ ``"opportunity"`` are the seller-side opportunity shapes;
+read port and the per-asset draft tables. The first group are active
+campaign runtime modes; ``"vendor"`` / ``"account"`` /
+``"opportunity"`` are seller/report opportunity shapes; and
 ``"marketing_campaign"`` is the per-marketing-campaign trigger used by
-the landing-pages slice. Hosts can pass other strings -- the alias is
-a documented enumeration, not a runtime check."""
+the landing-pages slice. Hosts can pass other strings -- the alias is a
+documented enumeration, not a runtime check."""
 
 
 @dataclass(frozen=True)
