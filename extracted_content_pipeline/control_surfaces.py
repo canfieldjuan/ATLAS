@@ -3,7 +3,7 @@
 This module is intentionally pure and deterministic. It does not call an LLM,
 read a database, or know about HTTP. The UI/API layer should use it to turn
 user-facing choices into a validated generation plan before any expensive work
-runs. Apparently civilization needs a receipt before burning tokens. Fair.
+runs.
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ OUTPUT_CATALOG: dict[str, OutputDefinition] = {
         id="blog_post",
         label="Blog Post",
         description="Long-form blog draft from intelligence and evidence.",
-        implemented=False,
+        implemented=True,
         estimated_unit_cost_usd=0.45,
         required_inputs=("topic",),
     ),
@@ -173,7 +173,7 @@ PRESETS: dict[str, ControlSurfacePreset] = {
             "landing_page",
             "sales_brief",
         ),
-        description="Full bundle, expensive by design. Product managers adore these traps.",
+        description="Full generated-content bundle.",
     ),
 }
 

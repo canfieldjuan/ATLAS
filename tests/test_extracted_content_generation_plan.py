@@ -60,7 +60,7 @@ def test_plan_maps_report_to_report_generation_service():
     }
 
 
-def test_plan_marks_blog_as_planned_not_executable_until_service_adapter_exists():
+def test_plan_maps_blog_to_blog_generation_service():
     plan = build_generation_plan_from_mapping(
         {
             "outputs": ["blog_post"],
@@ -70,10 +70,18 @@ def test_plan_marks_blog_as_planned_not_executable_until_service_adapter_exists(
         }
     )
 
-    assert plan["preview"]["can_run"] is False
-    assert plan["can_execute"] is False
-    assert plan["preview"]["blocked_outputs"] == ["blog_post"]
-    assert plan["steps"] == []
+    assert plan["preview"]["can_run"] is True
+    assert plan["can_execute"] is True
+    assert plan["preview"]["blocked_outputs"] == []
+    assert plan["steps"][0]["runner"] == "BlogPostGenerationService.generate"
+    assert plan["steps"][0]["status"] == "runnable"
+    assert plan["steps"][0]["config"] == {
+        "skill_name": "digest/blog_post_generation",
+        "limit": 1,
+        "max_tokens": 4096,
+        "temperature": 0.3,
+        "topic": "Churn pressure",
+    }
 
 
 def test_plan_stays_non_executable_when_preview_fails_budget():
