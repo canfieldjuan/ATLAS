@@ -36,8 +36,8 @@
   document source rows into normalized campaign opportunities so hosts can feed
   richer text sources into the same generation/import path. The Postgres import
   CLI and offline generation CLI can consume these source rows directly with
-  `--source-rows`, and `examples/campaign_source_rows.jsonl` provides a
-  packaged starter input.
+  `--source-rows`; JSON, JSONL, and CSV source-row exports are supported, and
+  `examples/campaign_source_rows.jsonl` provides a packaged starter input.
 - `campaign_postgres_export` provides a read-only draft export path over
   generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
   handwritten SQL.

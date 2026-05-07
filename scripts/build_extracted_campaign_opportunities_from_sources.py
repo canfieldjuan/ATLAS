@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build campaign opportunities from richer source JSON/JSONL rows."""
+"""Build campaign opportunities from richer source JSON/JSONL/CSV rows."""
 
 from __future__ import annotations
 
@@ -25,10 +25,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "into AI Content Ops campaign opportunities."
         )
     )
-    parser.add_argument("path", type=Path, help="Source JSON or JSONL file.")
+    parser.add_argument("path", type=Path, help="Source JSON, JSONL, or CSV file.")
     parser.add_argument(
         "--format",
-        choices=("auto", "json", "jsonl"),
+        choices=("auto", "json", "jsonl", "csv"),
         default="auto",
         help="Source file format. Defaults to suffix-based detection.",
     )
