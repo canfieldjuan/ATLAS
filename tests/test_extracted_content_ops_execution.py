@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -50,6 +51,33 @@ class _LandingPageService:
         return _Result()
 
 
+class _BarrierOpportunityService:
+    def __init__(
+        self,
+        *,
+        name: str,
+        starts: list[str],
+        all_started: asyncio.Event,
+    ) -> None:
+        self.name = name
+        self.starts = starts
+        self.all_started = all_started
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        limit: int | None = None,
+        filters: Mapping[str, Any] | None = None,
+    ) -> _Result:
+        self.starts.append(self.name)
+        if len(self.starts) == 2:
+            self.all_started.set()
+        await self.all_started.wait()
+        return _Result()
+
+
 @pytest.mark.asyncio
 async def test_execute_runs_email_and_report_services_with_scope_and_filters() -> None:
     campaign = _OpportunityService()
@@ -81,6 +109,42 @@ async def test_execute_runs_email_and_report_services_with_scope_and_filters() -
         "filters": {"status": "ready"},
     }]
     assert report.calls == campaign.calls
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_independent_steps_concurrently_preserving_plan_order() -> None:
+    starts: list[str] = []
+    all_started = asyncio.Event()
+    campaign = _BarrierOpportunityService(
+        name="email_campaign",
+        starts=starts,
+        all_started=all_started,
+    )
+    report = _BarrierOpportunityService(
+        name="report",
+        starts=starts,
+        all_started=all_started,
+    )
+
+    result = await asyncio.wait_for(
+        execute_content_ops_from_mapping(
+            {
+                "outputs": ["email_campaign", "report"],
+                "target_mode": "vendor_retention",
+                "inputs": {
+                    "target_account": "Acme",
+                    "offer": "Churn audit",
+                    "opportunity_id": "opp-1",
+                },
+            },
+            services=ContentOpsExecutionServices(campaign=campaign, report=report),
+        ),
+        timeout=1.0,
+    )
+
+    assert starts == ["email_campaign", "report"]
+    assert result["status"] == "completed"
+    assert [step["output"] for step in result["steps"]] == ["email_campaign", "report"]
 
 
 @pytest.mark.asyncio
