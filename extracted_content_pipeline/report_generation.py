@@ -12,7 +12,7 @@ that pre-structured plan to the LLM as the section spine so the model
 writes prose for each section rather than inventing the structure.
 Without a narrative plan, the LLM structures the report itself.
 
-Quality gating runs through ``extracted_quality_gate.report_pack`` —
+Quality gating runs through ``extracted_quality_gate.report_pack`` -
 deterministic, no LLM, no DB. Drafts that fail the pack are skipped
 and the failure is recorded in the result's ``errors`` payload; the
 caller decides what to do with the rejection (retry, surface to
@@ -58,6 +58,8 @@ class ReportGenerationConfig:
     limit: int = 10
     max_tokens: int = 4096
     temperature: float = 0.3
+    parse_retry_attempts: int = 1
+    parse_retry_response_excerpt_chars: int = 800
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,46 @@ def parse_report_response(text: str) -> dict[str, Any] | None:
             "sections": coerced_sections,
         }
     return None
+
+
+def _report_user_prompt(prior_invalid_response: str = "") -> str:
+    prompt = "Generate one structured report from the opportunity above."
+    if prior_invalid_response:
+        return (
+            f"{prompt}\n\n"
+            "The previous response could not be parsed as the required JSON object. "
+            "Return one JSON object with non-empty title, summary, and sections. "
+            f"Previous response excerpt:\n{prior_invalid_response}"
+        )
+    return prompt
+
+
+def _clip_invalid_response(text: str, *, limit: int) -> str:
+    cleaned = str(text or "").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip()
+
+
+def _accumulate_usage(
+    total: Mapping[str, Any],
+    usage: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    accumulated = dict(total)
+    if not isinstance(usage, Mapping):
+        return accumulated
+    for key, value in usage.items():
+        if isinstance(value, bool):
+            accumulated[key] = value
+        elif isinstance(value, (int, float)):
+            prior = accumulated.get(key)
+            if isinstance(prior, (int, float)) and not isinstance(prior, bool):
+                accumulated[key] = prior + value
+            else:
+                accumulated[key] = value
+        else:
+            accumulated[key] = value
+    return accumulated
 
 
 class ReportGenerationService:
@@ -297,31 +339,39 @@ class ReportGenerationService:
             .replace("{target_mode}", target_mode)
             .replace("{opportunity_json}", opportunity_json)
         )
-        response = await self._llm.complete(
-            [
-                LLMMessage(role="system", content=system_prompt),
-                LLMMessage(
-                    role="user",
-                    content="Generate one structured report from the opportunity above.",
-                ),
-            ],
-            max_tokens=self._config.max_tokens,
-            temperature=self._config.temperature,
-            metadata={
-                "target_mode": target_mode,
-                "target_id": opportunity_target_id(opportunity),
-                "skill_name": self._config.skill_name,
-                "asset_type": "report",
-            },
-        )
-        parsed = parse_report_response(response.content)
-        if not parsed:
-            return None
-        return {
-            **parsed,
-            "_model": response.model,
-            "_usage": dict(response.usage or {}),
-        }
+        attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
+        last_response = ""
+        total_usage: dict[str, Any] = {}
+        for attempt_no in range(1, attempts + 1):
+            response = await self._llm.complete(
+                [
+                    LLMMessage(role="system", content=system_prompt),
+                    LLMMessage(role="user", content=_report_user_prompt(last_response)),
+                ],
+                max_tokens=self._config.max_tokens,
+                temperature=self._config.temperature,
+                metadata={
+                    "target_mode": target_mode,
+                    "target_id": opportunity_target_id(opportunity),
+                    "skill_name": self._config.skill_name,
+                    "asset_type": "report",
+                    "attempt_no": attempt_no,
+                },
+            )
+            total_usage = _accumulate_usage(total_usage, response.usage)
+            parsed = parse_report_response(response.content)
+            if parsed:
+                return {
+                    **parsed,
+                    "_model": response.model,
+                    "_usage": total_usage,
+                    "_parse_attempts": attempt_no,
+                }
+            last_response = _clip_invalid_response(
+                response.content,
+                limit=max(0, int(self._config.parse_retry_response_excerpt_chars or 0)),
+            )
+        return None
 
     def _quality_check(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
         report_input = QualityInput(
@@ -376,6 +426,7 @@ class ReportGenerationService:
         metadata: dict[str, Any] = {
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
+            "generation_parse_attempts": parsed.get("_parse_attempts"),
         }
         if "confidence" in parsed:
             metadata["confidence"] = parsed["confidence"]

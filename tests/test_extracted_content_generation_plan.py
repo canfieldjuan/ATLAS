@@ -59,6 +59,8 @@ def test_plan_maps_report_to_report_generation_service():
         "limit": 3,
         "max_tokens": 4096,
         "temperature": 0.3,
+        "parse_retry_attempts": 1,
+        "parse_retry_response_excerpt_chars": 800,
     }
 
 

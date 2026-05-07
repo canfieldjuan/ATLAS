@@ -105,10 +105,10 @@
   ports instead of calling the legacy autonomous task path. Blog generation
   retries unparseable LLM JSON once by default and records parse-attempt
   metadata on saved drafts.
-- `landing_page_generation` and `sales_brief_generation` use the same
-  parse-retry policy as campaign and blog assets, so all customer-facing
-  generated asset services recover once from malformed LLM JSON while keeping
-  usage metadata accurate across attempts.
+- `report_generation`, `landing_page_generation`, and `sales_brief_generation`
+  use the same parse-retry policy as campaign and blog assets, so all
+  customer-facing generated asset services recover once from malformed LLM JSON
+  while keeping usage metadata accurate across attempts.
 - `api.control_surfaces` exposes preview, plan, and optional execute routes for
   multi-asset AI Content Ops control surfaces. The execute route is disabled
   unless the host supplies execution services.
