@@ -14,6 +14,9 @@ from extracted_content_pipeline.campaign_source_adapters import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts/build_extracted_campaign_opportunities_from_sources.py"
+EXAMPLE_SOURCE_ROWS = (
+    ROOT / "extracted_content_pipeline/examples/campaign_source_rows.jsonl"
+)
 
 
 def test_source_row_maps_review_text_to_campaign_opportunity() -> None:
@@ -109,6 +112,18 @@ def test_load_source_campaign_opportunities_from_jsonl(tmp_path: Path) -> None:
         "complaint-1",
     ]
     assert loaded.opportunities[1]["evidence"][0]["source_type"] == "complaint"
+
+
+def test_packaged_source_rows_example_loads() -> None:
+    loaded = load_source_campaign_opportunities_from_file(EXAMPLE_SOURCE_ROWS)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "review-acme-1",
+        "transcript-northstar-1",
+    ]
+    assert loaded.opportunities[0]["evidence"][0]["source_type"] == "review"
+    assert loaded.opportunities[1]["evidence"][0]["source_type"] == "transcript"
+    assert loaded.warnings == ()
 
 
 def test_source_adapter_cli_outputs_generation_payload(tmp_path: Path) -> None:

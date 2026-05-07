@@ -116,7 +116,7 @@ Source row exports can be smoked directly too:
 
 ```bash
 python scripts/smoke_extracted_content_pipeline_host.py \
-  customer_sources.jsonl \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl
 ```
@@ -146,7 +146,7 @@ of ready-made opportunities, they can preview the normalized opportunity payload
 
 ```bash
 python scripts/build_extracted_campaign_opportunities_from_sources.py \
-  customer_sources.jsonl \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --output customer_opportunities.json
 ```
 
@@ -158,7 +158,7 @@ For an offline draft preview without writing the intermediate opportunity file:
 
 ```bash
 python scripts/run_extracted_campaign_generation_example.py \
-  customer_sources.jsonl \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl \
   --limit 1
@@ -190,7 +190,7 @@ opportunity JSON:
 
 ```bash
 python scripts/load_extracted_campaign_opportunities.py \
-  customer_sources.jsonl \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl \
   --account-id acct_123
