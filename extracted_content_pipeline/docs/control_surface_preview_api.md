@@ -195,6 +195,17 @@ The route is opt-in: hosts must pass a `ContentOpsExecutionServices` provider
 when creating the router. The product does not construct database handles, LLM
 clients, repositories, or senders inside the control-surface API.
 
+Before wiring real providers, hosts can run the offline execution smoke:
+
+```bash
+python scripts/smoke_extracted_content_ops_execution.py
+python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --json
+```
+
+The smoke uses injected deterministic services and exercises the same
+`execute_content_ops_from_mapping(...)` seam as the API route. It does not
+open network, database, sender, or LLM handles.
+
 Runnable outputs dispatch to:
 
 | Output | Service method |
