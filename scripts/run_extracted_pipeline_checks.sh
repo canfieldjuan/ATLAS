@@ -24,6 +24,10 @@ pytest \
   tests/test_extracted_campaign_generation_example.py \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_source_adapters.py \
+  tests/test_extracted_content_control_surfaces.py \
+  tests/test_extracted_content_generation_plan.py \
+  tests/test_extracted_content_control_surface_api.py \
+  tests/test_extracted_content_ops_execution.py \
   tests/test_extracted_report_postgres.py \
   tests/test_extracted_report_generation.py \
   tests/test_extracted_quality_gate_report_pack.py \

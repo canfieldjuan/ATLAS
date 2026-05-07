@@ -2,20 +2,36 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Sequence
 
 try:
-    from fastapi import APIRouter, Body
+    from fastapi import APIRouter, Body, HTTPException
 except ImportError as exc:  # pragma: no cover - exercised in dependency-light CI.
     APIRouter = None
     Body = None
+    HTTPException = None
     _FASTAPI_IMPORT_ERROR: ImportError | None = exc
 else:
     _FASTAPI_IMPORT_ERROR = None
 
+from ..campaign_ports import TenantScope
+from ..content_ops_execution import (
+    ContentOpsExecutionServices,
+    execute_content_ops_from_mapping,
+)
 from ..control_surfaces import OUTPUT_CATALOG, PRESETS, preview_from_mapping
 from ..generation_plan import build_generation_plan_from_mapping
+
+ExecutionServicesProvider = Callable[
+    [],
+    ContentOpsExecutionServices | Awaitable[ContentOpsExecutionServices],
+]
+ScopeProvider = Callable[
+    [],
+    TenantScope | Mapping[str, Any] | None | Awaitable[TenantScope | Mapping[str, Any] | None],
+]
 
 
 def _require_fastapi() -> None:
@@ -42,12 +58,14 @@ class ContentOpsControlSurfaceApiConfig:
 def create_content_ops_control_surface_router(
     *,
     config: ContentOpsControlSurfaceApiConfig | None = None,
+    execution_services_provider: ExecutionServicesProvider | None = None,
+    scope_provider: ScopeProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted AI Content Ops control-surface routes.
 
-    These routes are intentionally preflight-only. They do not invoke LLMs,
-    mutate storage, or kick off autonomous jobs. Revolutionary, apparently.
+    Preview and plan routes are preflight-only. The execute route is opt-in
+    and only calls host-injected services.
     """
 
     _require_fastapi()
@@ -97,7 +115,54 @@ def create_content_ops_control_surface_router(
     async def plan_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return build_generation_plan_from_mapping(payload)
 
+    @router.post("/execute")
+    async def execute_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        if execution_services_provider is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Content Ops execution services are not configured.",
+            )
+        services = await _resolve_provider(execution_services_provider)
+        scope = _scope_from_value(
+            await _resolve_provider(scope_provider)
+            if scope_provider is not None
+            else None
+        )
+        result = await execute_content_ops_from_mapping(
+            payload,
+            services=services,
+            scope=scope,
+        )
+        if result["status"] == "blocked":
+            raise HTTPException(status_code=400, detail=result)
+        return result
+
     return router
+
+
+async def _resolve_provider(provider: Callable[[], Any] | None) -> Any:
+    if provider is None:
+        return None
+    value = provider()
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+def _scope_from_value(value: TenantScope | Mapping[str, Any] | None) -> TenantScope | None:
+    if value is None or isinstance(value, TenantScope):
+        return value
+    return TenantScope(
+        account_id=_clean(value.get("account_id")),
+        user_id=_clean(value.get("user_id")),
+        allowed_vendors=tuple(str(item) for item in value.get("allowed_vendors", ()) or ()),
+        roles=tuple(str(item) for item in value.get("roles", ()) or ()),
+    )
+
+
+def _clean(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 __all__ = [

@@ -239,6 +239,9 @@
       "target": "extracted_content_pipeline/campaign_source_adapters.py"
     },
     {
+      "target": "extracted_content_pipeline/content_ops_execution.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_opportunities.py"
     },
     {
@@ -261,6 +264,9 @@
     },
     {
       "target": "extracted_content_pipeline/api/campaign_operations.py"
+    },
+    {
+      "target": "extracted_content_pipeline/api/control_surfaces.py"
     },
     {
       "target": "extracted_content_pipeline/api/b2b_campaigns.py"

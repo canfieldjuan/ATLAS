@@ -92,6 +92,13 @@
   without exposing credentials. Hosts can inject a `VisibilitySink` provider
   so operation triggers emit best-effort start/completed/failed telemetry
   without making dashboard storage a product dependency.
+- `content_ops_execution` provides the host-injected execution seam for
+  runnable AI Content Ops control-surface plans. It dispatches executable
+  outputs to configured campaign, report, landing-page, and sales-brief
+  services without constructing hidden database, LLM, or Atlas dependencies.
+- `api.control_surfaces` exposes preview, plan, and optional execute routes for
+  multi-asset AI Content Ops control surfaces. The execute route is disabled
+  unless the host supplies execution services.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
