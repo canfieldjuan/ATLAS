@@ -207,3 +207,127 @@ async def test_opportunity_import_cli_wires_pool_and_closes(monkeypatch, capsys,
     assert pool.closed is True
     assert output["inserted"] == 1
     assert output["replace_existing"] is True
+
+
+@pytest.mark.asyncio
+async def test_opportunity_import_cli_dry_run_accepts_source_rows(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    cli = _load_cli_module()
+    data_path = tmp_path / "sources.jsonl"
+    data_path.write_text(
+        json.dumps({
+            "id": "review-1",
+            "company": "Acme",
+            "vendor": "HubSpot",
+            "email": "buyer@example.com",
+            "review_text": "Pricing is a problem.",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "load",
+            str(data_path),
+            "--source-rows",
+            "--source-format",
+            "jsonl",
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    exit_code = await cli._main()
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert output["dry_run"] is True
+    assert output["inserted"] == 1
+    assert output["target_ids"] == ["review-1"]
+    assert output["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_opportunity_import_cli_wires_source_rows_to_database(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    cli = _load_cli_module()
+    data_path = tmp_path / "sources.json"
+    data_path.write_text(
+        json.dumps({
+            "reviews": [
+                {
+                    "id": "review-1",
+                    "company": "Acme",
+                    "vendor": "HubSpot",
+                    "email": "buyer@example.com",
+                    "review_text": "Pricing is a problem.",
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    pool = _Pool()
+
+    async def create_pool(database_url):
+        assert database_url == "postgres://example"
+        return pool
+
+    monkeypatch.setattr(cli, "_create_pool", create_pool)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "load",
+            str(data_path),
+            "--database-url",
+            "postgres://example",
+            "--source-rows",
+            "--account-id",
+            "acct_1",
+            "--json",
+        ],
+    )
+
+    exit_code = await cli._main()
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert output["inserted"] == 1
+    assert pool.closed is True
+    query, args = pool.executed[0]
+    assert "INSERT INTO \"campaign_opportunities\"" in query
+    assert args[0] == "acct_1"
+    assert args[1] == "review-1"
+    assert json.loads(args[12])[0]["text"] == "Pricing is a problem."
+
+
+@pytest.mark.asyncio
+async def test_opportunity_import_cli_rejects_invalid_source_text_limit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    cli = _load_cli_module()
+    data_path = tmp_path / "sources.json"
+    data_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "load",
+            str(data_path),
+            "--source-rows",
+            "--max-source-text-chars",
+            "0",
+            "--dry-run",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="--max-source-text-chars must be positive"):
+        await cli._main()

@@ -22,6 +22,9 @@ from extracted_content_pipeline.campaign_ports import TenantScope  # noqa: E402
 from extracted_content_pipeline.campaign_postgres_import import (  # noqa: E402
     import_campaign_opportunities,
 )
+from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
+    load_source_campaign_opportunities_from_file,
+)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -39,6 +42,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("auto", "json", "csv"),
         default="auto",
         help="Customer data file format.",
+    )
+    parser.add_argument(
+        "--source-rows",
+        action="store_true",
+        help=(
+            "Treat the input as review/transcript/complaint/document source "
+            "rows and convert them into campaign opportunities before import."
+        ),
+    )
+    parser.add_argument(
+        "--source-format",
+        choices=("auto", "json", "jsonl"),
+        default="auto",
+        help="Source-row file format when --source-rows is selected.",
+    )
+    parser.add_argument(
+        "--max-source-text-chars",
+        type=int,
+        default=1200,
+        help="Maximum source text characters copied into each evidence row.",
     )
     parser.add_argument(
         "--target-mode",
@@ -85,11 +108,21 @@ async def _create_pool(database_url: str):
 
 async def _main() -> int:
     args = _parse_args()
-    loaded = load_campaign_opportunities_from_file(
-        args.path,
-        file_format=args.format,
-        target_mode=args.target_mode,
-    )
+    if args.source_rows:
+        if args.max_source_text_chars < 1:
+            raise SystemExit("--max-source-text-chars must be positive")
+        loaded = load_source_campaign_opportunities_from_file(
+            args.path,
+            file_format=args.source_format,
+            target_mode=args.target_mode,
+            max_text_chars=args.max_source_text_chars,
+        )
+    else:
+        loaded = load_campaign_opportunities_from_file(
+            args.path,
+            file_format=args.format,
+            target_mode=args.target_mode,
+        )
     pool = None
     if not args.dry_run:
         if not args.database_url:
