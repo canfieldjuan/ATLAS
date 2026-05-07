@@ -6,6 +6,6 @@ cd "$ROOT_DIR"
 
 bash extracted/_shared/scripts/validate_extracted.sh extracted_evidence_to_story
 bash extracted/_shared/scripts/check_ascii_python.sh extracted_evidence_to_story
-pytest tests/test_extracted_evidence_to_story_sources.py
+python -m pytest tests/test_extracted_evidence_to_story_sources.py
 
 echo "All extracted_evidence_to_story checks completed"
