@@ -108,6 +108,21 @@ async def test_describe_control_surfaces_requires_generate_method_for_readiness(
 
 
 @pytest.mark.asyncio
+async def test_describe_control_surfaces_ignores_invalid_execution_provider_result():
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: object()
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    outputs = {item["id"]: item for item in payload["outputs"]}
+    assert payload["execution"] == {"configured": False, "configured_outputs": []}
+    assert outputs["email_campaign"]["execution_configured"] is False
+    assert outputs["email_campaign"]["can_execute"] is False
+
+
+@pytest.mark.asyncio
 async def test_preview_generation_route_returns_preflight_plan():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
@@ -189,6 +204,28 @@ async def test_execute_generation_route_runs_configured_services():
 async def test_execute_generation_route_requires_configured_services():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["email_campaign"],
+                "inputs": {
+                    "target_account": "Acme",
+                    "offer": "Churn audit",
+                },
+            }
+        )
+
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_rejects_invalid_execution_provider_result():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: object(),
     )
 
     route = _route(router, "/ops/execute", "POST")

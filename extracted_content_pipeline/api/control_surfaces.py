@@ -78,14 +78,10 @@ def create_content_ops_control_surface_router(
 
     @router.get("/control-surfaces")
     async def describe_control_surfaces() -> dict[str, Any]:
-        execution_services = (
-            await _resolve_provider(execution_services_provider)
-            if execution_services_provider is not None
-            else None
-        )
+        execution_services = await _resolve_execution_services(execution_services_provider)
         configured_outputs = set(
             execution_services.configured_outputs()
-            if isinstance(execution_services, ContentOpsExecutionServices)
+            if execution_services is not None
             else ()
         )
         return {
@@ -113,7 +109,7 @@ def create_content_ops_control_surface_router(
                 for item in PRESETS.values()
             ],
             "execution": {
-                "configured": execution_services_provider is not None,
+                "configured": execution_services is not None,
                 "configured_outputs": sorted(configured_outputs),
             },
             "ingestion_profiles": [
@@ -138,7 +134,12 @@ def create_content_ops_control_surface_router(
                 status_code=503,
                 detail="Content Ops execution services are not configured.",
             )
-        services = await _resolve_provider(execution_services_provider)
+        services = await _resolve_execution_services(execution_services_provider)
+        if services is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Content Ops execution services are not configured.",
+            )
         scope = _scope_from_value(
             await _resolve_provider(scope_provider)
             if scope_provider is not None
@@ -154,6 +155,13 @@ def create_content_ops_control_surface_router(
         return result
 
     return router
+
+
+async def _resolve_execution_services(
+    provider: ExecutionServicesProvider | None,
+) -> ContentOpsExecutionServices | None:
+    value = await _resolve_provider(provider)
+    return value if isinstance(value, ContentOpsExecutionServices) else None
 
 
 async def _resolve_provider(provider: Callable[[], Any] | None) -> Any:
