@@ -64,6 +64,30 @@ async def test_preview_generation_route_returns_preflight_plan():
     assert payload["missing_inputs"] == []
 
 
+@pytest.mark.asyncio
+async def test_plan_generation_route_returns_execution_plan():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/plan", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+            "max_cost_usd": 1.0,
+        }
+    )
+
+    assert payload["can_execute"] is True
+    assert payload["steps"][0]["runner"] == "CampaignGenerationService.generate"
+    assert payload["steps"][0]["status"] == "runnable"
+    assert payload["preview"]["can_run"] is True
+
+
 def test_config_requires_absolute_prefix():
     with pytest.raises(ValueError, match="prefix must start with /"):
         ContentOpsControlSurfaceApiConfig(prefix="content-ops")
