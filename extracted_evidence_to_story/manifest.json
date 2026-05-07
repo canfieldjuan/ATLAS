@@ -1,0 +1,11 @@
+{
+  "mappings": [],
+  "owned": [
+    {
+      "target": "extracted_evidence_to_story/__init__.py"
+    },
+    {
+      "target": "extracted_evidence_to_story/sources.py"
+    }
+  ]
+}
