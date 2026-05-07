@@ -16,6 +16,9 @@ class _Pool:
         self.fetchval_calls: list[dict] = []
         self.fetch_calls: list[dict] = []
         self.execute_calls: list[dict] = []
+        # asyncpg returns command tags like "UPDATE 1" / "UPDATE 0";
+        # tests can override this to simulate misses.
+        self.execute_result: object = "UPDATE 1"
 
     async def fetchval(self, query, *args):
         self.fetchval_calls.append({"query": query, "args": args})
@@ -27,7 +30,7 @@ class _Pool:
 
     async def execute(self, query, *args):
         self.execute_calls.append({"query": query, "args": args})
-        return "OK"
+        return self.execute_result
 
 
 def _draft() -> ReportDraft:
@@ -206,22 +209,52 @@ async def test_list_drafts_handles_pre_decoded_jsonb_columns() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_status_runs_scoped_update() -> None:
+async def test_update_status_returns_true_on_hit_and_runs_scoped_update() -> None:
+    """PR-ContentAssets-Consistency-1: bool-returning contract."""
     pool = _Pool()
+    pool.execute_result = "UPDATE 1"
     repo = PostgresReportRepository(pool)
 
-    await repo.update_status(
+    hit = await repo.update_status(
         "report-uuid-1",
         "approved",
         scope=TenantScope(account_id="acct-1"),
     )
 
+    assert hit is True
     assert len(pool.execute_calls) == 1
     args = pool.execute_calls[0]["args"]
     assert args == ("report-uuid-1", "approved", "acct-1")
     sql = pool.execute_calls[0]["query"]
     assert "UPDATE reports" in sql
     assert "account_id = $3" in sql
+
+
+@pytest.mark.asyncio
+async def test_update_status_returns_false_on_miss() -> None:
+    """Wrong report_id or wrong tenant returns False so callers can branch."""
+    pool = _Pool()
+    pool.execute_result = "UPDATE 0"
+    repo = PostgresReportRepository(pool)
+
+    hit = await repo.update_status(
+        "missing-id",
+        "approved",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert hit is False
+
+
+@pytest.mark.asyncio
+async def test_update_status_treats_non_asyncpg_command_tags_as_success() -> None:
+    """Test fakes / alt drivers that return None or 'OK' don't crash; default to True."""
+    pool = _Pool()
+    pool.execute_result = None
+    repo = PostgresReportRepository(pool)
+
+    hit = await repo.update_status("any-id", "approved", scope=TenantScope())
+    assert hit is True
 
 
 @pytest.mark.asyncio

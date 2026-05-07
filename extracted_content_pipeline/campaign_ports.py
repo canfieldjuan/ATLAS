@@ -9,10 +9,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Literal, Mapping, Protocol, Sequence
 
 
 JsonDict = dict[str, Any]
+
+
+# ----- Recognised taxonomy values --------------------------------------------
+# Exported as ``Literal`` aliases for type-checker assistance. The
+# corresponding draft / port fields stay typed as ``str`` so hosts can
+# extend the taxonomy with custom values without forcing ``cast()`` at
+# every call site -- the aliases document the recognised set without
+# locking it. Surfaced as a coordination follow-up from the PR-#354
+# review (taxonomy fields were stringly typed across all four content
+# assets, with no shared single-source-of-truth enumeration).
+
+TargetMode = Literal[
+    "vendor",
+    "account",
+    "opportunity",
+    "marketing_campaign",
+]
+"""Recognised ``target_mode`` values for the campaign-opportunities
+read port and the per-asset draft tables. ``"vendor"`` / ``"account"``
+/ ``"opportunity"`` are the seller-side opportunity shapes;
+``"marketing_campaign"`` is the per-marketing-campaign trigger used by
+the landing-pages slice. Hosts can pass other strings -- the alias is
+a documented enumeration, not a runtime check."""
 
 
 @dataclass(frozen=True)

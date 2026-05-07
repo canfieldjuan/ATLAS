@@ -21,9 +21,21 @@ same status-lifecycle semantics as ``b2b_campaigns`` / ``reports`` /
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Literal, Mapping, Protocol, Sequence
 
-from .campaign_ports import JsonDict, TenantScope
+from .campaign_ports import JsonDict, TargetMode, TenantScope
+
+
+BriefType = Literal[
+    "pre_call",
+    "renewal",
+    "displacement",
+    "discovery",
+]
+"""Recognised ``brief_type`` values for ``SalesBriefDraft.brief_type``.
+Documents the v0 taxonomy without locking it -- hosts can extend with
+custom snake_case labels (e.g., ``"qbr_prep"``, ``"win_back"``); the
+alias is a type-checker hint, not a runtime check."""
 
 
 @dataclass(frozen=True)
@@ -126,7 +138,9 @@ class SalesBriefRepository(Protocol):
 
 
 __all__ = [
+    "BriefType",
     "SalesBriefDraft",
     "SalesBriefRepository",
     "SalesBriefSection",
+    "TargetMode",
 ]

@@ -1,4 +1,11 @@
-"""Postgres repository adapters for the standalone campaign product."""
+"""Postgres repository adapters for the standalone campaign product.
+
+Shared JSONB / command-tag helpers live in
+``extracted_content_pipeline.storage._jsonb_helpers`` (extracted in
+PR-ContentAssets-Consistency-1). The local ``_jsonb`` / ``_row_dict``
+are re-exported as thin aliases for backwards compatibility with any
+in-tree callers that imported them directly.
+"""
 
 from __future__ import annotations
 
@@ -14,22 +21,13 @@ from .campaign_ports import (
     TenantScope,
     WebhookEvent,
 )
+from .storage._jsonb_helpers import (
+    json_dump_jsonb as _jsonb,
+    row_to_dict as _row_dict,
+)
 
 
 JsonDict = dict[str, Any]
-
-
-def _jsonb(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, default=str, separators=(",", ":"))
-
-
-def _row_dict(row: Mapping[str, Any] | Any) -> JsonDict:
-    if isinstance(row, Mapping):
-        return dict(row)
-    try:
-        return dict(row)
-    except (TypeError, ValueError):
-        return {}
 
 
 def _clean(value: Any) -> str:
