@@ -15,6 +15,7 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..control_surfaces import OUTPUT_CATALOG, PRESETS, preview_from_mapping
+from ..generation_plan import build_generation_plan_from_mapping
 
 
 def _require_fastapi() -> None:
@@ -91,6 +92,10 @@ def create_content_ops_control_surface_router(
     @router.post("/preview")
     async def preview_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return preview_from_mapping(payload)
+
+    @router.post("/plan")
+    async def plan_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        return build_generation_plan_from_mapping(payload)
 
     return router
 
