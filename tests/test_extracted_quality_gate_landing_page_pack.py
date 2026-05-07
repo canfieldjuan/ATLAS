@@ -157,6 +157,56 @@ def test_evaluate_landing_page_blocked_phrasing_scans_hero_and_cta() -> None:
     assert "blocked_phrasing:guarantee" in blocker_msgs
 
 
+def test_evaluate_landing_page_blocked_phrasing_scans_hero_cta_label() -> None:
+    """Hero CTA label is its own surface (separate from page-level cta.label) and must be scanned."""
+    policy = QualityPolicy(name="lp_policy", metadata={"blocked_phrasing": ("guarantee",)})
+    report = evaluate_landing_page(
+        _input(
+            hero={
+                "headline": "Stop renewal surprises",
+                "subheadline": "x",
+                "cta_label": "Book a guarantee call",
+                "cta_url": "/demo",
+            },
+        ),
+        policy=policy,
+    )
+    blocker_msgs = {f.message for f in report.blockers}
+    assert "blocked_phrasing:guarantee" in blocker_msgs
+
+
+def test_evaluate_landing_page_blocked_phrasing_scans_meta_description() -> None:
+    """SEO meta description is the most public-facing surface; banned phrases there must block."""
+    policy = QualityPolicy(name="lp_policy", metadata={"blocked_phrasing": ("guarantee",)})
+    report = evaluate_landing_page(
+        _input(
+            meta={
+                "title_tag": "Stop Renewal Surprises | Acme",
+                "description": "We guarantee renewal pricing predictability for every customer.",
+            },
+        ),
+        policy=policy,
+    )
+    blocker_msgs = {f.message for f in report.blockers}
+    assert "blocked_phrasing:guarantee" in blocker_msgs
+
+
+def test_evaluate_landing_page_blocked_phrasing_scans_meta_title_tag() -> None:
+    """Title tag leaks into search snippets and social cards."""
+    policy = QualityPolicy(name="lp_policy", metadata={"blocked_phrasing": ("guarantee",)})
+    report = evaluate_landing_page(
+        _input(
+            meta={
+                "title_tag": "Guarantee Renewal Savings | Acme",
+                "description": "Acme catches renewal pressure 90 days early so you can prevent unplanned churn at scale.",
+            },
+        ),
+        policy=policy,
+    )
+    blocker_msgs = {f.message for f in report.blockers}
+    assert "blocked_phrasing:guarantee" in blocker_msgs
+
+
 def test_evaluate_landing_page_metadata_carries_score_and_section_count() -> None:
     report = evaluate_landing_page(_input())
     assert "score" in report.metadata

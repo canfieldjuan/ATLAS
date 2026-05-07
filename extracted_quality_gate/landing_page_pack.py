@@ -212,8 +212,22 @@ def evaluate_landing_page(
             haystack_parts.append(headline)
         if subheadline:
             haystack_parts.append(subheadline)
+        # Hero CTA label is separate from the page-level CTA -- both get
+        # scanned because either can land banned copy on the page.
+        hero_cta_label = str(hero.get("cta_label") or "").strip()
+        if hero_cta_label:
+            haystack_parts.append(hero_cta_label)
         if cta_label:
             haystack_parts.append(cta_label)
+        # SEO meta is the most public-facing surface (search snippets,
+        # social cards). Banned phrases in title_tag / description hurt
+        # most when they leak there.
+        meta_title_tag = str(meta.get("title_tag") or "").strip()
+        meta_description = str(meta.get("description") or "").strip()
+        if meta_title_tag:
+            haystack_parts.append(meta_title_tag)
+        if meta_description:
+            haystack_parts.append(meta_description)
         for section in sections:
             for key in ("title", "body_markdown"):
                 value = section.get(key)

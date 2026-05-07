@@ -81,12 +81,6 @@ class LandingPageGenerationResult:
         }
 
 
-def _slug_default(name: str) -> str:
-    """URL-safe slug fallback when the LLM doesn't provide one."""
-    text = re.sub(r"[^a-zA-Z0-9\-]+", "-", str(name or "")).strip("-").lower()
-    return text or "untitled"
-
-
 def parse_landing_page_response(text: str) -> dict[str, Any] | None:
     """Extract the first well-formed landing-page JSON object.
 
@@ -94,6 +88,14 @@ def parse_landing_page_response(text: str) -> dict[str, Any] | None:
     fences, then walks the cleaned text with
     ``json.JSONDecoder.raw_decode`` so braces inside string values
     (markdown templates, CSS, etc.) don't trip the parser.
+
+    The parser only enforces what's needed to identify the candidate as
+    a landing-page payload: ``title`` (non-empty) and a non-empty
+    ``sections`` list. Missing or malformed ``hero`` / ``cta`` / ``meta``
+    are NOT rejected here -- the quality pack's specific blockers
+    (``no_hero_headline``, ``no_cta``, etc.) are the right place to
+    surface those failures so callers see exactly what was wrong rather
+    than a generic ``unparseable_response``.
     """
 
     cleaned = str(text or "").strip()
@@ -126,7 +128,6 @@ def parse_landing_page_response(text: str) -> dict[str, Any] | None:
             continue
         title = str(candidate.get("title") or "").strip()
         sections = candidate.get("sections")
-        hero = candidate.get("hero")
         if not title:
             continue
         if not isinstance(sections, Sequence) or isinstance(sections, (str, bytes)):
@@ -134,13 +135,11 @@ def parse_landing_page_response(text: str) -> dict[str, Any] | None:
         coerced_sections = [s for s in sections if isinstance(s, Mapping)]
         if not coerced_sections:
             continue
-        if not isinstance(hero, Mapping):
-            continue
+        # hero / cta / meta validation deferred to the quality pack.
         return {
             **candidate,
             "title": title,
             "sections": coerced_sections,
-            "hero": dict(hero),
         }
     return None
 
@@ -346,7 +345,7 @@ class LandingPageGenerationService:
             if isinstance(s, Mapping)
         )
         title = str(parsed.get("title") or "").strip()
-        slug = str(parsed.get("slug") or "").strip() or _slug_default(campaign.name)
+        slug = str(parsed.get("slug") or "").strip()
         hero = (
             dict(parsed.get("hero") or {}) if isinstance(parsed.get("hero"), Mapping) else {}
         )

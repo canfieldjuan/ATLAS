@@ -196,6 +196,45 @@ def test_parse_landing_page_response_strips_think_blocks_before_decoding() -> No
     assert parsed["title"] == "Acme Q3: Stop Renewal Surprises"
 
 
+def test_parse_landing_page_response_accepts_missing_hero_for_quality_pack_to_judge() -> None:
+    """Missing/non-mapping hero is NOT a parser-level rejection -- the quality pack
+    raises ``no_hero_headline`` so callers see exactly what was wrong rather than a
+    generic ``unparseable_response``."""
+    payload = json.dumps({
+        "title": "Title",
+        "slug": "slug",
+        # hero intentionally omitted
+        "sections": [{"id": "s1", "title": "T", "body_markdown": "b"}],
+        "cta": {"label": "L", "url": "/u"},
+        "meta": {},
+    })
+    parsed = parse_landing_page_response(payload)
+    assert parsed is not None
+    assert parsed["title"] == "Title"
+
+
+@pytest.mark.asyncio
+async def test_generate_blocks_with_no_hero_headline_when_response_omits_hero() -> None:
+    """End-to-end: parser accepts the candidate, quality pack fires no_hero_headline."""
+    response = json.dumps({
+        "title": "Acme Q3: Stop Renewal Surprises",
+        "slug": "acme-q3-launch",
+        # hero omitted -> must surface as a quality blocker, not unparseable_response
+        "sections": [{"id": "s1", "title": "T", "body_markdown": "b"}],
+        "cta": {"label": "L", "url": "/u"},
+        "meta": {},
+    })
+    service, landing_pages, _llm, _skills, _rp = _service(responses=[response])
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 0
+    assert landing_pages.saved == []
+    assert result.errors[0]["reason"] == "quality_blocked"
+    blockers = result.errors[0]["blockers"]
+    assert any("no_hero_headline" in b for b in blockers)
+
+
 # -----------------------
 # Service: generation
 # -----------------------
