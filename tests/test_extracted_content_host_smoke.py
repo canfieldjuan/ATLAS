@@ -142,6 +142,36 @@ def test_host_smoke_cli_accepts_source_rows() -> None:
     assert "generated=2" in completed.stdout
 
 
+def test_host_smoke_cli_accepts_source_row_csv(tmp_path) -> None:
+    source_path = tmp_path / "customer_sources.csv"
+    source_path.write_text(
+        "\n".join([
+            "id,company,vendor,review_text,pain_category",
+            "review-1,Acme,HubSpot,Pricing is a problem,pricing",
+        ]),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source_path),
+            "--source-rows",
+            "--source-format",
+            "csv",
+            "--limit",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "AI Content Ops host smoke passed" in completed.stdout
+    assert "generated=2" in completed.stdout
+
+
 def test_host_smoke_cli_rejects_invalid_source_text_limit(tmp_path) -> None:
     source_path = tmp_path / "customer_sources.json"
     source_path.write_text("[]", encoding="utf-8")

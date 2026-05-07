@@ -121,6 +121,9 @@ python scripts/smoke_extracted_content_pipeline_host.py \
   --source-format jsonl
 ```
 
+For source-row CSV exports, pass `--source-format csv` to the same smoke
+command.
+
 The command exits nonzero if the product cannot generate the minimum expected
 draft shape (`subject`, `body`, `target_id`, and `channel`).
 
@@ -153,6 +156,8 @@ python scripts/build_extracted_campaign_opportunities_from_sources.py \
 The source adapter copies `review_text`, `transcript`, `complaint`, `content`,
 `body`, `quote`, or `text` into the opportunity `evidence` field, preserving
 source ids and inferred source types for prompt context and later review.
+Source rows can be JSON, JSONL, or CSV; pass `--format csv` for CSV source
+exports.
 
 For an offline draft preview without writing the intermediate opportunity file:
 
@@ -195,6 +200,8 @@ python scripts/load_extracted_campaign_opportunities.py \
   --source-format jsonl \
   --account-id acct_123
 ```
+
+For source-row CSV exports, pass `--source-format csv`.
 
 Imports are append-only by default. For repeatable test loads, replace matching
 target ids for the same account and target mode:

@@ -111,7 +111,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--source-format",
-        choices=("auto", "json", "jsonl"),
+        choices=("auto", "json", "jsonl", "csv"),
         default="auto",
         help="Source-row file format when --source-rows is selected.",
     )

@@ -144,7 +144,7 @@ python scripts/run_extracted_campaign_generation_example.py customer_opportuniti
 ```
 
 Review, transcript, complaint, and document source rows can be converted into
-the same opportunity payload first:
+the same opportunity payload first. Source rows can be JSON, JSONL, or CSV:
 
 ```bash
 python scripts/build_extracted_campaign_opportunities_from_sources.py \
@@ -173,6 +173,9 @@ python scripts/load_extracted_campaign_opportunities.py \
   --source-format jsonl \
   --account-id acct_123
 ```
+
+For source-row CSV exports, pass `--source-format csv` to the same conversion,
+generation, import, or smoke commands.
 
 Generate cold-email and follow-up drafts for each opportunity by passing
 channels:
@@ -259,6 +262,8 @@ python scripts/smoke_extracted_content_pipeline_host.py \
   --source-rows \
   --source-format jsonl
 ```
+
+For source-row CSV exports, use `--source-format csv`.
 
 To run the same example through the product LLM adapter, configure the
 `EXTRACTED_CAMPAIGN_LLM_*` environment variables and pass `--llm pipeline`:

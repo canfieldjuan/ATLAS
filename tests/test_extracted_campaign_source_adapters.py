@@ -114,6 +114,28 @@ def test_load_source_campaign_opportunities_from_jsonl(tmp_path: Path) -> None:
     assert loaded.opportunities[1]["evidence"][0]["source_type"] == "complaint"
 
 
+def test_load_source_campaign_opportunities_from_csv(tmp_path: Path) -> None:
+    path = tmp_path / "sources.csv"
+    path.write_text(
+        "\n".join([
+            "id,company,vendor,review_text,pain_category",
+            "review-1,Acme,HubSpot,Pricing is a problem,pricing",
+        ]),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert loaded.opportunities[0]["target_id"] == "review-1"
+    assert loaded.opportunities[0]["company_name"] == "Acme"
+    assert loaded.opportunities[0]["pain_points"] == ["pricing"]
+    assert loaded.opportunities[0]["evidence"] == [{
+        "text": "Pricing is a problem",
+        "source_id": "review-1",
+        "source_type": "review",
+    }]
+
+
 def test_packaged_source_rows_example_loads() -> None:
     loaded = load_source_campaign_opportunities_from_file(EXAMPLE_SOURCE_ROWS)
 
@@ -162,6 +184,38 @@ def test_source_adapter_cli_outputs_generation_payload(tmp_path: Path) -> None:
     assert payload["limit"] == 1
     assert payload["opportunities"][0]["target_id"] == "review-1"
     assert payload["opportunities"][0]["evidence"][0]["text"] == "Pricing is a problem."
+
+
+def test_source_adapter_cli_outputs_csv_generation_payload(tmp_path: Path) -> None:
+    path = tmp_path / "sources.csv"
+    path.write_text(
+        "\n".join([
+            "id,company,vendor,transcript,pain_points",
+            "call-1,Acme,HubSpot,Renewal review is active,renewal pressure",
+        ]),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(path),
+            "--format",
+            "csv",
+            "--target-mode",
+            "vendor_retention",
+            "--limit",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["opportunities"][0]["target_id"] == "call-1"
+    assert payload["opportunities"][0]["evidence"][0]["source_type"] == "transcript"
 
 
 def test_source_adapter_cli_rejects_non_positive_text_limit(tmp_path: Path) -> None:

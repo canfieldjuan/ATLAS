@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import csv
 import json
 from pathlib import Path
 from typing import Any, Literal
@@ -15,7 +16,7 @@ from .campaign_customer_data import (
 from .campaign_opportunities import normalize_campaign_opportunity
 
 
-SourceDataFormat = Literal["auto", "json", "jsonl"]
+SourceDataFormat = Literal["auto", "json", "jsonl", "csv"]
 
 _ROW_LIST_KEYS = ("sources", "documents", "reviews", "transcripts", "complaints", "rows", "data")
 _SOURCE_ID_KEYS = ("source_id", "id", "review_id", "transcript_id", "document_id")
@@ -137,6 +138,8 @@ def source_row_to_campaign_opportunity(
 
 def _load_source_rows(path: Path, *, file_format: SourceDataFormat) -> list[Any]:
     resolved_format = _resolve_format(path, file_format)
+    if resolved_format == "csv":
+        return _load_source_csv_rows(path)
     if resolved_format == "jsonl":
         rows: list[Any] = []
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -156,11 +159,32 @@ def _load_source_rows(path: Path, *, file_format: SourceDataFormat) -> list[Any]
     return [dict(data)]
 
 
-def _resolve_format(path: Path, file_format: SourceDataFormat) -> Literal["json", "jsonl"]:
+def _load_source_csv_rows(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            return rows
+        for row in reader:
+            rows.append({
+                str(key): value
+                for key, value in row.items()
+                if key is not None and value not in (None, "")
+            })
+    return rows
+
+
+def _resolve_format(
+    path: Path,
+    file_format: SourceDataFormat,
+) -> Literal["json", "jsonl", "csv"]:
     if file_format != "auto":
         return file_format
-    if path.suffix.lower() == ".jsonl":
+    suffix = path.suffix.lower()
+    if suffix == ".jsonl":
         return "jsonl"
+    if suffix == ".csv":
+        return "csv"
     return "json"
 
 
