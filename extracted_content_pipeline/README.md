@@ -241,7 +241,15 @@ python scripts/smoke_extracted_content_pipeline_host.py
 
 The smoke command uses the packaged example payload, offline deterministic LLM,
 and cold-email plus follow-up channels by default. Pass a customer JSON or CSV
-file to validate a host export before wiring Postgres or send providers.
+file to validate a host export before wiring Postgres or send providers. Source
+row exports can use the same smoke command with `--source-rows`:
+
+```bash
+python scripts/smoke_extracted_content_pipeline_host.py \
+  customer_sources.jsonl \
+  --source-rows \
+  --source-format jsonl
+```
 
 To run the same example through the product LLM adapter, configure the
 `EXTRACTED_CAMPAIGN_LLM_*` environment variables and pass `--llm pipeline`:
