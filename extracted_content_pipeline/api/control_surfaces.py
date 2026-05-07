@@ -78,6 +78,16 @@ def create_content_ops_control_surface_router(
 
     @router.get("/control-surfaces")
     async def describe_control_surfaces() -> dict[str, Any]:
+        execution_services = (
+            await _resolve_provider(execution_services_provider)
+            if execution_services_provider is not None
+            else None
+        )
+        configured_outputs = set(
+            execution_services.configured_outputs()
+            if isinstance(execution_services, ContentOpsExecutionServices)
+            else ()
+        )
         return {
             "outputs": [
                 {
@@ -85,6 +95,8 @@ def create_content_ops_control_surface_router(
                     "label": item.label,
                     "description": item.description,
                     "implemented": item.implemented,
+                    "execution_configured": item.id in configured_outputs,
+                    "can_execute": item.implemented and item.id in configured_outputs,
                     "estimated_unit_cost_usd": item.estimated_unit_cost_usd,
                     "required_inputs": list(item.required_inputs),
                     "default_max_items": item.default_max_items,
@@ -100,6 +112,10 @@ def create_content_ops_control_surface_router(
                 }
                 for item in PRESETS.values()
             ],
+            "execution": {
+                "configured": execution_services_provider is not None,
+                "configured_outputs": sorted(configured_outputs),
+            },
             "ingestion_profiles": [
                 "domain_specific",
                 "manual",

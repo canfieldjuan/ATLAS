@@ -36,6 +36,19 @@ class ContentOpsExecutionServices:
             return self.sales_brief
         return None
 
+    def configured_outputs(self) -> tuple[str, ...]:
+        outputs: list[str] = []
+        for output in (
+            "email_campaign",
+            "blog_post",
+            "report",
+            "landing_page",
+            "sales_brief",
+        ):
+            if _has_generate_method(self.for_output(output)):
+                outputs.append(output)
+        return tuple(outputs)
+
 
 @dataclass(frozen=True)
 class ContentOpsStepExecution:
@@ -233,6 +246,10 @@ def _failed_step(step: GenerationPlanStep, error: str) -> ContentOpsStepExecutio
         status="failed",
         error=error,
     )
+
+
+def _has_generate_method(service: Any | None) -> bool:
+    return callable(getattr(service, "generate", None))
 
 
 def _clean(value: Any) -> str:

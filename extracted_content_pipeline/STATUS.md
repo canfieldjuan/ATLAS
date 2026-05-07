@@ -111,7 +111,9 @@
   while keeping usage metadata accurate across attempts.
 - `api.control_surfaces` exposes preview, plan, and optional execute routes for
   multi-asset AI Content Ops control surfaces. The execute route is disabled
-  unless the host supplies execution services.
+  unless the host supplies execution services. The catalog route reports which
+  implemented outputs are actually wired to host execution services so admin
+  UIs do not confuse package implementation status with runtime readiness.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
