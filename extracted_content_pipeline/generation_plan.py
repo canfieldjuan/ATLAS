@@ -155,15 +155,19 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
 def build_generation_plan(request: ContentOpsRequest) -> GenerationPlan:
     """Build an execution plan from a content-ops request.
 
-    The plan only becomes executable when preview passes and every selected step
-    is runnable. Planned steps are deliberately not executed by future callers
-    until they get service-shaped adapters.
+    The plan only becomes executable when preview passes, no selected output was
+    blocked, and every selected step is runnable. Planned steps are deliberately
+    not executed by future callers until they get service-shaped adapters.
     """
 
     preview = preview_control_surface(request)
     normalized = preview.normalized_request or request
     steps = tuple(_step_for_output(output, normalized) for output in preview.outputs)
-    can_execute = preview.can_run and all(step.status == "runnable" for step in steps)
+    can_execute = (
+        preview.can_run
+        and not preview.blocked_outputs
+        and all(step.status == "runnable" for step in steps)
+    )
     return GenerationPlan(
         can_execute=can_execute,
         target_mode=normalized.target_mode,
