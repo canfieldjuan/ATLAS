@@ -2,10 +2,11 @@
 
 Date: 2026-05-07
 
-This document covers the pre-generation control surface for AI Content Ops.
-It is intentionally separate from generation, sending, approval, and storage.
-The point is to let a host UI ask what can run, what it will cost, and what is
-missing before the product burns tokens like a tiny ceremonial bonfire.
+This document covers the control surface for AI Content Ops. Preview and plan
+routes are intentionally separate from generation, sending, approval, and
+storage. The optional execute route runs only when a host injects generation
+services. The point is to let a host UI ask what can run, what it will cost,
+and what is missing before the product spends tokens.
 
 ## Why This Exists
 
@@ -39,8 +40,9 @@ app.include_router(
 )
 ```
 
-The router is preflight-only. It does not call an LLM, read or write Postgres,
-or start an autonomous task.
+Preview and plan routes do not call an LLM, read or write Postgres, or start an
+autonomous task. `/execute` is disabled unless the host injects execution
+services; those services own any LLM, database, repository, and sender policy.
 
 ## Routes
 
@@ -49,6 +51,7 @@ or start an autonomous task.
 | `GET` | `/content-ops/control-surfaces` | List output types, presets, required inputs, implementation status, cost estimates, and ingestion profiles. |
 | `POST` | `/content-ops/preview` | Validate a requested preset/output selection and return cost, missing inputs, warnings, and blocked outputs. |
 | `POST` | `/content-ops/plan` | Convert a previewable request into deterministic generation steps. Does not execute generation. |
+| `POST` | `/content-ops/execute` | Execute a runnable plan through host-injected services. Disabled unless the host configures execution services. |
 
 ## Output Catalog
 
@@ -182,6 +185,27 @@ show the selected plan, but it should not enable the generate button until
 preview passes and every selected output maps to a runnable service-shaped step.
 `blog_post` is blocked at preview time until it exposes the same service/port
 interface used by campaigns, reports, landing pages, and sales briefs.
+
+## Execute Route
+
+`POST /content-ops/execute` accepts the same payload as `/preview` and `/plan`.
+The route is opt-in: hosts must pass a `ContentOpsExecutionServices` provider
+when creating the router. The product does not construct database handles, LLM
+clients, repositories, or senders inside the control-surface API.
+
+Runnable outputs dispatch to:
+
+| Output | Service method |
+|---|---|
+| `email_campaign` | `CampaignGenerationService.generate(...)` |
+| `report` | `ReportGenerationService.generate(...)` |
+| `landing_page` | `LandingPageGenerationService.generate(...)` |
+| `sales_brief` | `SalesBriefGenerationService.generate(...)` |
+
+Non-executable plans return HTTP 400 with the blocked execution result. Missing
+execution services return HTTP 503. Service-level failures are reported per
+step as `status="failed"` and the top-level execution status becomes
+`partial`.
 
 ## UI Contract
 

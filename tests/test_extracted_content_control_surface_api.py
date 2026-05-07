@@ -5,6 +5,7 @@ from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
 )
+from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
 
 
 pytestmark = pytest.mark.skipif(
@@ -18,6 +19,20 @@ def _route(router, path: str, method: str):
         if getattr(route, "path", None) == path and method.upper() in getattr(route, "methods", set()):
             return route
     raise AssertionError(f"route not found: {method} {path}")
+
+
+class _CampaignService:
+    def __init__(self):
+        self.calls = []
+
+    async def generate(self, *, scope, target_mode, limit=None, filters=None):
+        self.calls.append({
+            "scope": scope,
+            "target_mode": target_mode,
+            "limit": limit,
+            "filters": dict(filters or {}),
+        })
+        return {"generated": 1, "saved_ids": ["draft-1"]}
 
 
 @pytest.mark.asyncio
@@ -86,6 +101,57 @@ async def test_plan_generation_route_returns_execution_plan():
     assert payload["steps"][0]["runner"] == "CampaignGenerationService.generate"
     assert payload["steps"][0]["status"] == "runnable"
     assert payload["preview"]["can_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_runs_configured_services():
+    service = _CampaignService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(campaign=service),
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["email_campaign"],
+            "limit": 2,
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "filters": {"status": "ready"},
+            },
+        }
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["steps"][0]["result"] == {"generated": 1, "saved_ids": ["draft-1"]}
+    assert service.calls[0]["scope"].account_id == "acct-1"
+    assert service.calls[0]["target_mode"] == "vendor_retention"
+    assert service.calls[0]["limit"] == 2
+    assert service.calls[0]["filters"] == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_requires_configured_services():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["email_campaign"],
+                "inputs": {
+                    "target_account": "Acme",
+                    "offer": "Churn audit",
+                },
+            }
+        )
+
+    assert exc.value.status_code == 503
 
 
 def test_config_requires_absolute_prefix():
