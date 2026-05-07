@@ -148,7 +148,7 @@ the same opportunity payload first:
 
 ```bash
 python scripts/build_extracted_campaign_opportunities_from_sources.py \
-  customer_sources.jsonl \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --output customer_opportunities.json
 
 python scripts/run_extracted_campaign_generation_example.py customer_opportunities.json
@@ -159,7 +159,7 @@ directly:
 
 ```bash
 python scripts/run_extracted_campaign_generation_example.py \
-  customer_sources.jsonl \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl
 ```
@@ -168,7 +168,7 @@ They can also be loaded directly into the Postgres opportunity table:
 
 ```bash
 python scripts/load_extracted_campaign_opportunities.py \
-  customer_sources.jsonl \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl \
   --account-id acct_123
@@ -246,7 +246,7 @@ row exports can use the same smoke command with `--source-rows`:
 
 ```bash
 python scripts/smoke_extracted_content_pipeline_host.py \
-  customer_sources.jsonl \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl
 ```

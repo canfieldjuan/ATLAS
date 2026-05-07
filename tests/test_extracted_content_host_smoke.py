@@ -13,6 +13,9 @@ EXAMPLE_PAYLOAD = (
     ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.json"
 )
 EXAMPLE_CSV = ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.csv"
+EXAMPLE_SOURCE_ROWS = (
+    ROOT / "extracted_content_pipeline/examples/campaign_source_rows.jsonl"
+)
 
 
 def _load_smoke_module():
@@ -118,24 +121,12 @@ def test_host_smoke_cli_accepts_single_object_json_export(tmp_path) -> None:
     assert "generated=2" in completed.stdout
 
 
-def test_host_smoke_cli_accepts_source_rows(tmp_path) -> None:
-    source_path = tmp_path / "customer_sources.jsonl"
-    source_path.write_text(
-        json.dumps({
-            "id": "review-1",
-            "company": "Acme Logistics",
-            "vendor": "HubSpot",
-            "email": "ops@example.com",
-            "review_text": "Pricing is a problem.",
-        }),
-        encoding="utf-8",
-    )
-
+def test_host_smoke_cli_accepts_source_rows() -> None:
     completed = subprocess.run(
         [
             sys.executable,
             str(CLI),
-            str(source_path),
+            str(EXAMPLE_SOURCE_ROWS),
             "--source-rows",
             "--source-format",
             "jsonl",

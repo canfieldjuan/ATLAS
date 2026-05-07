@@ -28,6 +28,9 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_PAYLOAD = (
     ROOT / "extracted_content_pipeline/examples/campaign_generation_payload.json"
 )
+EXAMPLE_SOURCE_ROWS = (
+    ROOT / "extracted_content_pipeline/examples/campaign_source_rows.jsonl"
+)
 CLI = ROOT / "scripts/run_extracted_campaign_generation_example.py"
 
 
@@ -236,24 +239,12 @@ def test_campaign_generation_example_cli_outputs_draft_json() -> None:
     assert result["drafts"][0]["metadata"]["generation_model"] == "offline-deterministic"
 
 
-def test_campaign_generation_example_cli_generates_from_source_rows(tmp_path) -> None:
-    source_path = tmp_path / "customer_sources.jsonl"
-    source_path.write_text(
-        json.dumps({
-            "id": "review-1",
-            "company": "Acme Logistics",
-            "vendor": "HubSpot",
-            "email": "ops@example.com",
-            "review_text": "Pricing is a problem.",
-        }),
-        encoding="utf-8",
-    )
-
+def test_campaign_generation_example_cli_generates_from_source_rows() -> None:
     completed = subprocess.run(
         [
             sys.executable,
             str(CLI),
-            str(source_path),
+            str(EXAMPLE_SOURCE_ROWS),
             "--source-rows",
             "--source-format",
             "jsonl",
@@ -276,8 +267,8 @@ def test_campaign_generation_example_cli_generates_from_source_rows(tmp_path) ->
         "email_followup",
     ]
     source = result["drafts"][0]["metadata"]["source_opportunity"]
-    assert source["target_id"] == "review-1"
-    assert source["evidence"][0]["text"] == "Pricing is a problem."
+    assert source["target_id"] == "review-acme-1"
+    assert source["evidence"][0]["source_type"] == "review"
     assert source["contact_email"] == "ops@example.com"
 
 
