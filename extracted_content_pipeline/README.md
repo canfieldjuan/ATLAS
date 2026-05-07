@@ -224,7 +224,9 @@ standalone campaign specificity gate to reject drafts with placeholder tokens
 or missing configured proof-term support before they are returned. When
 enabled, the generator also adds normalized `campaign_proof_terms` from
 reasoning anchors/witnesses/proof points to the prompt payload before the LLM
-call.
+call. Rejected drafts return `quality_revalidation` details in
+`CampaignGenerationResult.errors`, including blocking issues and unused proof
+terms.
 
 Use host-provided prompt contracts by pointing at a markdown skill directory:
 
@@ -323,7 +325,8 @@ python scripts/run_extracted_campaign_generation_postgres.py \
 Add `--quality-revalidation` to the Postgres runner to run the same campaign
 specificity gate before generated drafts are persisted. The same flag adds
 normalized proof terms to the prompt payload so generated drafts have the
-evidence terms the gate will later require.
+evidence terms the gate will later require. Failed drafts include compact
+revalidation details in the runner result errors.
 
 Or generate lightweight reasoning context during the DB-backed run:
 

@@ -113,7 +113,9 @@
   importing the copied Atlas campaign task. Hosts can opt into product-owned
   campaign quality revalidation before generated drafts are accepted; when
   enabled, normalized proof terms are added to the prompt payload before
-  generation and reused by the post-generation gate.
+  generation and reused by the post-generation gate. Rejected drafts include a
+  compact revalidation audit in `CampaignGenerationResult.errors` so hosted
+  runs can explain skipped output without inspecting logs.
 - Small utility shims now default to local extracted implementations:
   `config`, `pipelines.notify`, `reasoning.wedge_registry`,
   `reasoning.archetypes`, `reasoning.evidence_engine`, `reasoning.temporal`,
