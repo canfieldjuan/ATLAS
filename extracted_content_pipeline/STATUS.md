@@ -97,6 +97,9 @@
   outputs to configured campaign, blog-post, report, landing-page, and
   sales-brief services without constructing hidden database, LLM, or Atlas
   dependencies.
+- `campaign_generation` retries unparseable LLM JSON once by default through
+  product config, improving draft yield without moving provider retry policy
+  into Atlas runtime code.
 - `blog_generation` and `blog_ports` provide the standalone blog-post service
   adapter. Hosts inject blueprint storage, draft persistence, skills, and LLM
   ports instead of calling the legacy autonomous task path.
