@@ -25,6 +25,8 @@ pytest \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_source_adapters.py \
   tests/test_extracted_report_postgres.py \
+  tests/test_extracted_report_generation.py \
+  tests/test_extracted_quality_gate_report_pack.py \
   tests/test_extracted_campaign_postgres_generation.py \
   tests/test_extracted_campaign_postgres_export.py \
   tests/test_extracted_campaign_postgres_review.py \
