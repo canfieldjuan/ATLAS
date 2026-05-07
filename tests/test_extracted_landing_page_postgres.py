@@ -21,6 +21,9 @@ class _Pool:
         self.fetchval_calls: list[dict] = []
         self.fetch_calls: list[dict] = []
         self.execute_calls: list[dict] = []
+        # asyncpg returns command tags like "UPDATE 1" / "UPDATE 0";
+        # tests can override this to simulate misses.
+        self.execute_result: object = "UPDATE 1"
 
     async def fetchval(self, query, *args):
         self.fetchval_calls.append({"query": query, "args": args})
@@ -32,7 +35,7 @@ class _Pool:
 
     async def execute(self, query, *args):
         self.execute_calls.append({"query": query, "args": args})
-        return "OK"
+        return self.execute_result
 
 
 def _draft() -> LandingPageDraft:
@@ -231,22 +234,71 @@ async def test_list_drafts_handles_pre_decoded_jsonb_columns() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_status_runs_scoped_update() -> None:
+async def test_update_status_returns_true_on_hit_and_runs_scoped_update() -> None:
     pool = _Pool()
+    pool.execute_result = "UPDATE 1"
     repo = PostgresLandingPageRepository(pool)
 
-    await repo.update_status(
+    hit = await repo.update_status(
         "lp-uuid-1",
         "approved",
         scope=TenantScope(account_id="acct-1"),
     )
 
+    assert hit is True
     assert len(pool.execute_calls) == 1
     args = pool.execute_calls[0]["args"]
     assert args == ("lp-uuid-1", "approved", "acct-1")
     sql = pool.execute_calls[0]["query"]
     assert "UPDATE landing_pages" in sql
     assert "account_id = $3" in sql
+
+
+@pytest.mark.asyncio
+async def test_update_status_returns_false_on_miss() -> None:
+    """Wrong landing_page_id or wrong tenant returns False so callers can branch."""
+    pool = _Pool()
+    pool.execute_result = "UPDATE 0"
+    repo = PostgresLandingPageRepository(pool)
+
+    hit = await repo.update_status(
+        "missing-id",
+        "approved",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert hit is False
+
+
+@pytest.mark.asyncio
+async def test_update_status_treats_non_asyncpg_command_tags_as_success() -> None:
+    """Test fakes / alt drivers that return 'OK' or None don't crash; default to True."""
+    pool = _Pool()
+    pool.execute_result = None
+    repo = PostgresLandingPageRepository(pool)
+
+    hit = await repo.update_status("any-id", "approved", scope=TenantScope())
+    assert hit is True
+
+
+@pytest.mark.asyncio
+async def test_save_drafts_rejects_non_mapping_non_section_input_with_clear_error() -> None:
+    """A host passing a string / number / None as a section item gets a clear TypeError."""
+    pool = _Pool()
+    pool.fetchval_results = ["lp-uuid-x"]
+    repo = PostgresLandingPageRepository(pool)
+
+    bad_draft = LandingPageDraft(
+        campaign_name="acme",
+        persona="",
+        value_prop="",
+        title="title",
+        slug="slug",
+        sections=("not_a_section_or_mapping",),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(TypeError, match="LandingPageDraft.sections entries must be"):
+        await repo.save_drafts([bad_draft], scope=TenantScope())
 
 
 @pytest.mark.asyncio

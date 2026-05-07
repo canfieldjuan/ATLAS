@@ -44,6 +44,14 @@ def _draft_metadata(draft: LandingPageDraft, scope: TenantScope) -> JsonDict:
 
 
 def _coerce_section(value: Any) -> LandingPageSection:
+    """Coerce a host-supplied section into ``LandingPageSection``.
+
+    Accepts an existing ``LandingPageSection`` or a Mapping with the
+    expected keys. Anything else (str, int, list, None, ...) raises
+    ``TypeError`` so host-side bugs surface at the persistence
+    boundary rather than getting silently coerced into an empty
+    section that the quality pack later rejects.
+    """
     if isinstance(value, LandingPageSection):
         return value
     if isinstance(value, Mapping):
@@ -53,7 +61,10 @@ def _coerce_section(value: Any) -> LandingPageSection:
             body_markdown=str(value.get("body_markdown") or ""),
             metadata=dict(value.get("metadata") or {}),
         )
-    return LandingPageSection(id="", title="", body_markdown=str(value or ""))
+    raise TypeError(
+        "LandingPageDraft.sections entries must be LandingPageSection "
+        f"instances or Mappings; got {type(value).__name__}: {value!r}"
+    )
 
 
 def _decode_jsonb(raw: Any, *, default: Any) -> Any:
@@ -119,6 +130,15 @@ class PostgresLandingPageRepository:
         *,
         scope: TenantScope,
     ) -> Sequence[str]:
+        """Persist drafts; one INSERT per draft (sequential).
+
+        Per-call batches are typically small (1-3 drafts) for the
+        per-campaign trigger shape, so the round-trip count is bounded
+        in practice. Kept sequential for parity with
+        ``PostgresReportRepository`` / ``PostgresCampaignRepository``;
+        a future batch-INSERT optimization would migrate all three for
+        consistency rather than diverging here.
+        """
         saved: list[str] = []
         account_id = scope.account_id or ""
         for draft in drafts:
@@ -194,8 +214,14 @@ class PostgresLandingPageRepository:
         status: str,
         *,
         scope: TenantScope,
-    ) -> None:
-        await self.pool.execute(
+    ) -> bool:
+        """Scoped status update. Returns True on hit, False on miss.
+
+        Parses asyncpg's command tag (e.g., ``"UPDATE 1"``) so a
+        wrong-id or wrong-tenant call surfaces as a False return at
+        the call site rather than a silent no-op.
+        """
+        result = await self.pool.execute(
             """
             UPDATE landing_pages
                SET status = $2,
@@ -207,6 +233,16 @@ class PostgresLandingPageRepository:
             status,
             scope.account_id or "",
         )
+        # asyncpg returns "UPDATE <n>"; 1 == hit, 0 == miss. Defensive
+        # parse so non-asyncpg pools (test fakes, alternative drivers)
+        # that return e.g. "OK" or None don't crash -- treat unknown
+        # shapes as success (matches the prior silent-no-op default).
+        if not isinstance(result, str):
+            return True
+        try:
+            return int(result.rsplit(" ", 1)[-1]) > 0
+        except (ValueError, IndexError):
+            return True
 
 
 __all__ = [

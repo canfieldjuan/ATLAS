@@ -38,5 +38,12 @@ CREATE INDEX IF NOT EXISTS idx_landing_pages_campaign
 CREATE INDEX IF NOT EXISTS idx_landing_pages_status
     ON landing_pages (account_id, status, created_at DESC);
 
+-- Slug index is non-unique in v0: multiple drafts of the same campaign
+-- (e.g., A/B variants, regenerations) may share a slug while in
+-- 'draft' / 'queued' / 'rejected' status. Slug uniqueness only matters
+-- at publish time and is the host's responsibility (e.g., a deploy step
+-- that asserts exactly one 'approved' row per (account_id, slug)). A
+-- partial UNIQUE index can land in a follow-on migration if the
+-- approval workflow needs DB-enforced uniqueness.
 CREATE INDEX IF NOT EXISTS idx_landing_pages_slug
     ON landing_pages (account_id, slug);

@@ -62,7 +62,16 @@ class MarketingCampaign:
 
 @dataclass(frozen=True)
 class LandingPageSection:
-    """A single ordered body section within a landing page."""
+    """A single ordered body section within a landing page.
+
+    Note (deliberate divergence from ``ReportSection``): landing-page
+    sections do NOT carry ``claim_ids`` or ``evidence_ids``. Marketing
+    copy is rendered as flat prose with optional social-proof blocks;
+    per-section claim attribution is a report-level concern. Hosts that
+    want to surface citations can use the draft-level
+    ``LandingPageDraft.reference_ids`` instead. The flexible
+    ``metadata`` bag absorbs any per-section host-specific fields.
+    """
 
     id: str
     title: str
@@ -154,8 +163,16 @@ class LandingPageRepository(Protocol):
         status: str,
         *,
         scope: TenantScope,
-    ) -> None:
-        """Update a draft's status (draft / queued / approved / rejected / expired)."""
+    ) -> bool:
+        """Update a draft's status (draft / queued / approved / rejected / expired).
+
+        Returns ``True`` when exactly one row is updated, ``False`` when
+        no row matches (missing id or wrong tenant scope). This explicit
+        hit/miss return is deliberately stricter than the silent-no-op
+        pattern in ``CampaignRepository`` / ``ReportRepository`` -- a
+        landing page approval flow that targets the wrong id should
+        learn about it at the call site, not silently succeed.
+        """
 
 
 __all__ = [
