@@ -138,6 +138,19 @@ def test_evaluate_report_min_confidence_warns_when_missing() -> None:
     assert "missing_confidence" in warning_codes
 
 
+def test_evaluate_report_blocked_phrasing_auto_wraps_bare_string_policy() -> None:
+    """A host passing blocked_phrasing as a bare string (not a sequence) auto-wraps; no silent no-op."""
+    sections = (_section(body="We GUARANTEE results within 30 days."),)
+    # Bare string instead of tuple/list — historical mistake, should still gate.
+    policy = QualityPolicy(
+        name="report_policy",
+        metadata={"blocked_phrasing": "guarantee"},
+    )
+    report = evaluate_report(_input(sections=sections), policy=policy)
+    blocker_msgs = {f.message for f in report.blockers}
+    assert "blocked_phrasing:guarantee" in blocker_msgs
+
+
 def test_evaluate_report_metadata_carries_score_and_threshold() -> None:
     report = evaluate_report(_input())
     assert "score" in report.metadata

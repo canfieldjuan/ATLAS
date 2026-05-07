@@ -90,10 +90,22 @@ def _threshold_float(policy: QualityPolicy | None, key: str) -> float:
 
 
 def _blocked_phrases(policy: QualityPolicy | None) -> tuple[str, ...]:
+    """Read ``policy.metadata["blocked_phrasing"]`` defensively.
+
+    A bare string is auto-wrapped into a single-element tuple — a
+    plausible host typo (passing ``"guarantee"`` instead of
+    ``("guarantee",)``) shouldn't silently disable the gate. Any other
+    non-Sequence value returns ``()``.
+    """
     if policy is None:
         return ()
-    raw = policy.metadata.get("blocked_phrasing") or ()
-    if isinstance(raw, str) or not isinstance(raw, Sequence):
+    raw = policy.metadata.get("blocked_phrasing")
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        text = raw.strip()
+        return (text,) if text else ()
+    if not isinstance(raw, Sequence):
         return ()
     return tuple(str(item) for item in raw if str(item).strip())
 

@@ -45,6 +45,8 @@ from .services.campaign_reasoning_context import (
     campaign_reasoning_context_payload,
     normalize_campaign_reasoning_context,
 )
+from extracted_quality_gate.report_pack import evaluate_report
+from extracted_quality_gate.types import QualityInput
 
 
 @dataclass(frozen=True)
@@ -79,9 +81,12 @@ class ReportGenerationResult:
 def parse_report_response(text: str) -> dict[str, Any] | None:
     """Mirror of ``parse_campaign_draft_response`` for the report shape.
 
-    Strips ``<think>`` blocks and code fences, then extracts the first
-    well-formed JSON object that carries the minimum report fields
-    (``title`` + ``summary`` + non-empty ``sections``).
+    Strips ``<think>`` blocks and code fences, then walks the cleaned
+    text with ``json.JSONDecoder.raw_decode`` (a real JSON parser, so
+    braces inside string values such as ``body_markdown`` template
+    syntax don't trip it up). Returns the first decoded object that
+    carries the minimum report fields (``title`` + ``summary`` +
+    non-empty ``sections``).
     """
 
     cleaned = str(text or "").strip()
@@ -91,27 +96,21 @@ def parse_report_response(text: str) -> dict[str, Any] | None:
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r"\s*```\s*$", "", cleaned, flags=re.MULTILINE).strip()
 
+    decoder = json.JSONDecoder()
     candidates: list[Any] = []
-    try:
-        candidates.append(json.loads(cleaned))
-    except json.JSONDecodeError:
-        pass
-
-    depth = 0
-    start = -1
-    for index, char in enumerate(cleaned):
-        if char == "{":
-            if depth == 0:
-                start = index
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0 and start >= 0:
-                try:
-                    candidates.append(json.loads(cleaned[start : index + 1]))
-                except json.JSONDecodeError:
-                    pass
-                start = -1
+    index = 0
+    length = len(cleaned)
+    while index < length:
+        if cleaned[index] != "{":
+            index += 1
+            continue
+        try:
+            decoded, end = decoder.raw_decode(cleaned, index)
+        except json.JSONDecodeError:
+            index += 1
+            continue
+        candidates.append(decoded)
+        index = end if end > index else index + 1
 
     for candidate in candidates:
         if isinstance(candidate, list):
@@ -289,10 +288,13 @@ class ReportGenerationService:
         target_mode: str,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
+        # Single source for the opportunity payload: in the system prompt
+        # via {opportunity_json}. The user message is structural-only so
+        # the opportunity isn't sent twice (the reasoning-context block
+        # alone can be the largest part of the request).
         system_prompt = (
             prompt_template
             .replace("{target_mode}", target_mode)
-            .replace("{opportunity}", opportunity_json)
             .replace("{opportunity_json}", opportunity_json)
         )
         response = await self._llm.complete(
@@ -300,11 +302,7 @@ class ReportGenerationService:
                 LLMMessage(role="system", content=system_prompt),
                 LLMMessage(
                     role="user",
-                    content=(
-                        "Generate one structured report from this normalized "
-                        f"opportunity.\ntarget_mode={target_mode}\n"
-                        f"opportunity={opportunity_json}"
-                    ),
+                    content="Generate one structured report from the opportunity above.",
                 ),
             ],
             max_tokens=self._config.max_tokens,
@@ -326,9 +324,6 @@ class ReportGenerationService:
         }
 
     def _quality_check(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
-        from extracted_quality_gate.report_pack import evaluate_report
-        from extracted_quality_gate.types import QualityInput
-
         report_input = QualityInput(
             artifact_type="report",
             context={

@@ -183,6 +183,54 @@ def test_parse_report_response_returns_none_when_required_fields_missing() -> No
     )
 
 
+def test_parse_report_response_handles_braces_inside_string_values() -> None:
+    """body_markdown with template syntax / set notation must not break the parser."""
+
+    payload = json.dumps({
+        "title": "Title",
+        "summary": "Summary text long enough to be valid.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {
+                "id": "s1",
+                "title": "Templates",
+                "body_markdown": "Pricing tiers: {basic, pro} models. Use {project_id} placeholders.",
+                "evidence_ids": ["r1"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    parsed = parse_report_response(payload)
+    assert parsed is not None
+    assert parsed["title"] == "Title"
+    assert "{basic, pro}" in parsed["sections"][0]["body_markdown"]
+
+
+def test_parse_report_response_strips_think_blocks_before_decoding() -> None:
+    """Reasoner output may include <think>...</think> scratchpad ahead of the JSON."""
+
+    payload = (
+        "<think>Considering the opportunity... draft sections for vendor.</think>\n"
+        + json.dumps({
+            "title": "Title",
+            "summary": "Summary text long enough to be valid.",
+            "report_type": "vendor_pressure",
+            "sections": [
+                {
+                    "id": "s1",
+                    "title": "Body",
+                    "body_markdown": "body",
+                    "evidence_ids": ["r1"],
+                }
+            ],
+            "reference_ids": ["r1"],
+        })
+    )
+    parsed = parse_report_response(payload)
+    assert parsed is not None
+    assert parsed["title"] == "Title"
+
+
 # -----------------------
 # Service: generation
 # -----------------------
@@ -305,6 +353,27 @@ async def test_generate_raises_value_error_when_skill_prompt_missing() -> None:
 
     with pytest.raises(ValueError, match="Report generation skill not found"):
         await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+
+@pytest.mark.asyncio
+async def test_generate_substitutes_template_placeholders_in_system_prompt_only() -> None:
+    """Opportunity JSON appears in the system prompt (via {opportunity_json}) but NOT duplicated in the user message."""
+
+    service, _intel, _reports, llm, _skills, _rp = _service(
+        prompts={"digest/report_generation": "MODE={target_mode} OPP={opportunity_json}"},
+    )
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    messages = llm.calls[0]["messages"]
+    system_msg = messages[0].content
+    user_msg = messages[1].content
+    # Opportunity JSON must appear in the system prompt (via the substituted placeholder)
+    assert '"target_id":"vendor-acme"' in system_msg
+    assert "MODE=vendor" in system_msg
+    # And NOT appear in the user message (no duplication)
+    assert '"target_id":"vendor-acme"' not in user_msg
+    assert "vendor-acme" not in user_msg
 
 
 @pytest.mark.asyncio
