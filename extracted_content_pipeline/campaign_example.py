@@ -282,6 +282,9 @@ async def generate_campaign_drafts_from_payload(
             channel=channel,
             channels=channels,
             limit=limit,
+            quality_revalidation_enabled=bool(
+                payload.get("quality_revalidation_enabled")
+            ),
         ),
     )
 

@@ -160,6 +160,7 @@ def test_campaign_operations_router_generates_campaign_drafts(monkeypatch) -> No
             generation_skill_name="digest/custom_campaign_generation",
             generation_max_tokens=900,
             generation_temperature=0.3,
+            generation_quality_revalidation=True,
         ),
     ).post(
         "/campaigns/operations/drafts/generate",
@@ -205,6 +206,7 @@ def test_campaign_operations_router_generates_campaign_drafts(monkeypatch) -> No
     assert config.skill_name == "digest/custom_campaign_generation"
     assert config.max_tokens == 900
     assert config.temperature == 0.3
+    assert config.quality_revalidation_enabled is True
 
 
 def test_campaign_operations_router_emits_visibility_for_generation(monkeypatch) -> None:

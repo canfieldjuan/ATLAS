@@ -20,6 +20,9 @@ from extracted_content_pipeline.campaign_example import (  # noqa: E402
     DeterministicCampaignLLM,
     StaticCampaignSkillStore,
 )
+from extracted_content_pipeline.campaign_generation import (  # noqa: E402
+    CampaignGenerationConfig,
+)
 from extracted_content_pipeline.campaign_postgres_generation import (  # noqa: E402
     generate_campaign_drafts_from_postgres,
 )
@@ -89,6 +92,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--filters-json",
         help="Optional JSON object of opportunity filters.",
+    )
+    parser.add_argument(
+        "--quality-revalidation",
+        action="store_true",
+        help="Run campaign quality revalidation before accepting generated drafts.",
     )
     parser.add_argument(
         "--reasoning-context",
@@ -309,6 +317,12 @@ async def _main() -> int:
             channels=tuple(operation_payload["channels"]),
             limit=args.limit,
             filters=_json_object(args.filters_json),
+            config=CampaignGenerationConfig(
+                channel=args.channel,
+                channels=tuple(operation_payload["channels"]),
+                limit=args.limit,
+                quality_revalidation_enabled=bool(args.quality_revalidation),
+            ),
             **_dependency_overrides(args),
         )
     except Exception as exc:

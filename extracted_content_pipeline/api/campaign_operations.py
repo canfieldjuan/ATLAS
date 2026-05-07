@@ -91,6 +91,7 @@ class CampaignOperationsApiConfig:
     generation_max_tokens: int = 1200
     generation_temperature: float = 0.4
     generation_include_source_opportunity: bool = True
+    generation_quality_revalidation: bool = False
     generation_opportunity_table: str = "campaign_opportunities"
     generation_vendor_targets_table: str = "vendor_targets"
     generation_single_pass_reasoning: bool = False
@@ -382,6 +383,7 @@ def _generation_config(
         max_tokens=config.generation_max_tokens,
         temperature=float(config.generation_temperature),
         include_source_opportunity=config.generation_include_source_opportunity,
+        quality_revalidation_enabled=config.generation_quality_revalidation,
     )
 
 

@@ -219,6 +219,10 @@ python scripts/run_extracted_campaign_generation_example.py \
   --multi-pass-depth L3
 ```
 
+Add `--quality-revalidation` to the offline example when you want the
+standalone campaign specificity gate to reject drafts with placeholder tokens
+or missing configured proof-term support before they are returned.
+
 Use host-provided prompt contracts by pointing at a markdown skill directory:
 
 ```bash
@@ -312,6 +316,9 @@ python scripts/run_extracted_campaign_generation_postgres.py \
   --account-id acct_123 \
   --reasoning-context extracted_content_pipeline/examples/campaign_reasoning_context.json
 ```
+
+Add `--quality-revalidation` to the Postgres runner to run the same campaign
+specificity gate before generated drafts are persisted.
 
 Or generate lightweight reasoning context during the DB-backed run:
 
@@ -525,6 +532,7 @@ app.include_router(
         config=CampaignOperationsApiConfig(
             send_default_from_email="audit@customer.com",
             sequence_from_email="audit@customer.com",
+            generation_quality_revalidation=True,
         ),
         dependencies=[Depends(require_content_ops_admin)],
     )
