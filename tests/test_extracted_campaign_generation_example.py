@@ -236,6 +236,75 @@ def test_campaign_generation_example_cli_outputs_draft_json() -> None:
     assert result["drafts"][0]["metadata"]["generation_model"] == "offline-deterministic"
 
 
+def test_campaign_generation_example_cli_generates_from_source_rows(tmp_path) -> None:
+    source_path = tmp_path / "customer_sources.jsonl"
+    source_path.write_text(
+        json.dumps({
+            "id": "review-1",
+            "company": "Acme Logistics",
+            "vendor": "HubSpot",
+            "email": "ops@example.com",
+            "review_text": "Pricing is a problem.",
+        }),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source_path),
+            "--source-rows",
+            "--source-format",
+            "jsonl",
+            "--channels",
+            "email_cold,email_followup",
+            "--limit",
+            "1",
+            "--llm",
+            "offline",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["result"]["generated"] == 2
+    assert [draft["channel"] for draft in result["drafts"]] == [
+        "email_cold",
+        "email_followup",
+    ]
+    source = result["drafts"][0]["metadata"]["source_opportunity"]
+    assert source["target_id"] == "review-1"
+    assert source["evidence"][0]["text"] == "Pricing is a problem."
+    assert source["contact_email"] == "ops@example.com"
+
+
+def test_campaign_generation_example_cli_rejects_invalid_source_text_limit(tmp_path) -> None:
+    source_path = tmp_path / "customer_sources.json"
+    source_path.write_text("[]", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source_path),
+            "--source-rows",
+            "--max-source-text-chars",
+            "0",
+            "--llm",
+            "offline",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "--max-source-text-chars must be positive" in completed.stderr
+
+
 def test_campaign_generation_example_cli_accepts_reasoning_context_file(tmp_path) -> None:
     reasoning_path = tmp_path / "reasoning.json"
     reasoning_path.write_text(

@@ -35,7 +35,8 @@
 - `campaign_source_adapters` converts review, transcript, complaint, or
   document source rows into normalized campaign opportunities so hosts can feed
   richer text sources into the same generation/import path. The Postgres import
-  CLI can consume these source rows directly with `--source-rows`.
+  CLI and offline generation CLI can consume these source rows directly with
+  `--source-rows`.
 - `campaign_postgres_export` provides a read-only draft export path over
   generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
   handwritten SQL.

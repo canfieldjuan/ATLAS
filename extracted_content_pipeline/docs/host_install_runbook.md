@@ -145,6 +145,16 @@ The source adapter copies `review_text`, `transcript`, `complaint`, `content`,
 `body`, `quote`, or `text` into the opportunity `evidence` field, preserving
 source ids and inferred source types for prompt context and later review.
 
+For an offline draft preview without writing the intermediate opportunity file:
+
+```bash
+python scripts/run_extracted_campaign_generation_example.py \
+  customer_sources.jsonl \
+  --source-rows \
+  --source-format jsonl \
+  --limit 1
+```
+
 ## Step 4: Load Opportunities Into Postgres
 
 Preview the import:
