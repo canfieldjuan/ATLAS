@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -92,34 +93,18 @@ async def execute_content_ops_request(
 
     resolved_scope = scope or TenantScope()
     filters = _filters_from_inputs(request.inputs)
-    executed: list[ContentOpsStepExecution] = []
-    errors: list[Mapping[str, Any]] = []
-    for step in plan.steps:
-        service = services.for_output(step.output)
-        if service is None:
-            errors.append({"output": step.output, "reason": "service_not_configured"})
-            executed.append(_failed_step(step, "service_not_configured"))
-            continue
-        try:
-            result = await _run_step(
-                step,
-                request=request,
-                service=service,
-                scope=resolved_scope,
-                filters=filters,
-            )
-        except Exception as exc:
-            errors.append({"output": step.output, "reason": str(exc)})
-            executed.append(_failed_step(step, str(exc)))
-            continue
-        executed.append(
-            ContentOpsStepExecution(
-                output=step.output,
-                runner=step.runner,
-                status="completed",
-                result=_result_dict(result),
-            )
+    step_results = await asyncio.gather(*(
+        _execute_step(
+            step,
+            request=request,
+            service=services.for_output(step.output),
+            scope=resolved_scope,
+            filters=filters,
         )
+        for step in plan.steps
+    ))
+    executed = [step_result for step_result, _error in step_results]
+    errors = [error for _step_result, error in step_results if error is not None]
 
     status = "completed" if not errors else "partial"
     return ContentOpsExecutionResult(
@@ -127,6 +112,39 @@ async def execute_content_ops_request(
         plan=plan,
         steps=tuple(executed),
         errors=tuple(errors),
+    )
+
+
+async def _execute_step(
+    step: GenerationPlanStep,
+    *,
+    request: ContentOpsRequest,
+    service: Any | None,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> tuple[ContentOpsStepExecution, Mapping[str, Any] | None]:
+    if service is None:
+        error = {"output": step.output, "reason": "service_not_configured"}
+        return _failed_step(step, "service_not_configured"), error
+    try:
+        result = await _run_step(
+            step,
+            request=request,
+            service=service,
+            scope=scope,
+            filters=filters,
+        )
+    except Exception as exc:
+        error = {"output": step.output, "reason": str(exc)}
+        return _failed_step(step, str(exc)), error
+    return (
+        ContentOpsStepExecution(
+            output=step.output,
+            runner=step.runner,
+            status="completed",
+            result=_result_dict(result),
+        ),
+        None,
     )
 
 
