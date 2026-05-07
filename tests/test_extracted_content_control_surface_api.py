@@ -42,10 +42,14 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     route = _route(router, "/content-ops/control-surfaces", "GET")
     payload = await route.endpoint()
 
-    output_ids = {item["id"] for item in payload["outputs"]}
+    outputs = {item["id"]: item for item in payload["outputs"]}
+    output_ids = set(outputs)
     preset_ids = {item["id"] for item in payload["presets"]}
     assert "email_campaign" in output_ids
     assert "landing_page" in output_ids
+    assert outputs["email_campaign"]["execution_configured"] is False
+    assert outputs["email_campaign"]["can_execute"] is False
+    assert payload["execution"] == {"configured": False, "configured_outputs": []}
     assert "email_only" in preset_ids
     assert "lead_gen_campaign" in preset_ids
     assert payload["ingestion_profiles"] == [
@@ -53,6 +57,31 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
         "manual",
         "existing_evidence",
     ]
+
+
+@pytest.mark.asyncio
+async def test_describe_control_surfaces_reports_configured_execution_services():
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            campaign=_CampaignService(),
+            report=_CampaignService(),
+        )
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    outputs = {item["id"]: item for item in payload["outputs"]}
+    assert payload["execution"] == {
+        "configured": True,
+        "configured_outputs": ["email_campaign", "report"],
+    }
+    assert outputs["email_campaign"]["execution_configured"] is True
+    assert outputs["email_campaign"]["can_execute"] is True
+    assert outputs["report"]["execution_configured"] is True
+    assert outputs["report"]["can_execute"] is True
+    assert outputs["blog_post"]["execution_configured"] is False
+    assert outputs["blog_post"]["can_execute"] is False
 
 
 @pytest.mark.asyncio

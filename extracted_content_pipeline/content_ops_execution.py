@@ -36,6 +36,19 @@ class ContentOpsExecutionServices:
             return self.sales_brief
         return None
 
+    def configured_outputs(self) -> tuple[str, ...]:
+        outputs: list[str] = []
+        for output in (
+            "email_campaign",
+            "blog_post",
+            "report",
+            "landing_page",
+            "sales_brief",
+        ):
+            if self.for_output(output) is not None:
+                outputs.append(output)
+        return tuple(outputs)
+
 
 @dataclass(frozen=True)
 class ContentOpsStepExecution:
