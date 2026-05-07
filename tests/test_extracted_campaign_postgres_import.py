@@ -252,6 +252,45 @@ async def test_opportunity_import_cli_dry_run_accepts_source_rows(
 
 
 @pytest.mark.asyncio
+async def test_opportunity_import_cli_dry_run_accepts_source_row_csv(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    cli = _load_cli_module()
+    data_path = tmp_path / "sources.csv"
+    data_path.write_text(
+        "\n".join([
+            "id,company,vendor,email,review_text,pain_category",
+            "review-1,Acme,HubSpot,buyer@example.com,Pricing is a problem,pricing",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "load",
+            str(data_path),
+            "--source-rows",
+            "--source-format",
+            "csv",
+            "--dry-run",
+            "--json",
+        ],
+    )
+
+    exit_code = await cli._main()
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert output["dry_run"] is True
+    assert output["inserted"] == 1
+    assert output["target_ids"] == ["review-1"]
+    assert output["warnings"] == []
+
+
+@pytest.mark.asyncio
 async def test_opportunity_import_cli_wires_source_rows_to_database(
     monkeypatch,
     capsys,
