@@ -30,6 +30,7 @@ pytest \
   tests/test_extracted_landing_page_postgres.py \
   tests/test_extracted_landing_page_generation.py \
   tests/test_extracted_quality_gate_landing_page_pack.py \
+  tests/test_extracted_sales_brief_postgres.py \
   tests/test_extracted_campaign_postgres_generation.py \
   tests/test_extracted_campaign_postgres_export.py \
   tests/test_extracted_campaign_postgres_review.py \
