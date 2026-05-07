@@ -648,6 +648,112 @@ async def test_generate_quality_revalidation_preserves_pass_audit_metadata() -> 
 
 
 @pytest.mark.asyncio
+async def test_generate_quality_revalidation_adds_prompt_proof_terms() -> None:
+    config = CampaignGenerationConfig(quality_revalidation_enabled=True)
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "anchor_examples": {
+            "pricing": [
+                {"excerpt_text": "Pricing drove evaluation."},
+            ]
+        },
+    }
+    service, _, campaigns, llm, _ = _service(
+        [opportunity],
+        [
+            json.dumps({
+                "subject": "Pricing signal",
+                "body": "Pricing drove evaluation.",
+            })
+        ],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert '"campaign_proof_terms":["Pricing drove evaluation."]' in prompt
+    source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    assert source["campaign_proof_terms"] == ["Pricing drove evaluation."]
+
+
+@pytest.mark.asyncio
+async def test_generate_quality_revalidation_preserves_existing_prompt_terms() -> None:
+    config = CampaignGenerationConfig(
+        quality_revalidation_enabled=True,
+        quality_prompt_proof_term_limit=2,
+    )
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "campaign_proof_terms": ["Host supplied proof."],
+        "anchor_examples": {
+            "pricing": [
+                {"excerpt_text": "Pricing drove evaluation."},
+            ]
+        },
+    }
+    service, _, campaigns, llm, _ = _service(
+        [opportunity],
+        [
+            json.dumps({
+                "subject": "Proof signal",
+                "body": "Host supplied proof.",
+            })
+        ],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert (
+        '"campaign_proof_terms":["Host supplied proof.","Pricing drove evaluation."]'
+        in prompt
+    )
+    audit = campaigns.saved[0]["drafts"][0].metadata["campaign_revalidation"]["audit"]
+    assert audit["used_proof_terms"] == ["Host supplied proof."]
+
+
+@pytest.mark.asyncio
+async def test_generate_quality_revalidation_allows_zero_prompt_terms() -> None:
+    config = CampaignGenerationConfig(
+        quality_revalidation_enabled=True,
+        quality_prompt_proof_term_limit=0,
+    )
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Acme",
+        "anchor_examples": {
+            "pricing": [
+                {"excerpt_text": "Pricing drove evaluation."},
+            ]
+        },
+    }
+    service, _, campaigns, llm, _ = _service(
+        [opportunity],
+        [
+            json.dumps({
+                "subject": "Pricing signal",
+                "body": "Pricing drove evaluation.",
+            })
+        ],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert "campaign_proof_terms" not in prompt
+    source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    assert "campaign_proof_terms" not in source
+
+
+@pytest.mark.asyncio
 async def test_generate_skips_missing_target_and_unparseable_responses():
     service, _, campaigns, _, _ = _service(
         [

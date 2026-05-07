@@ -30,6 +30,48 @@ from .services.campaign_reasoning_context import (
 from .services.campaign_quality import campaign_quality_revalidation
 
 
+_PROOF_TERM_TEXT_KEYS = ("excerpt_text", "quote", "text", "anchor", "value")
+
+
+def _dedupe_terms(terms: Sequence[str], *, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    clean: list[str] = []
+    for term in terms:
+        text = str(term or "").strip()
+        if text and text not in clean:
+            clean.append(text)
+        if len(clean) >= limit:
+            break
+    return clean
+
+
+def _clean_term_list(value: Any, *, limit: int) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return _dedupe_terms([str(item or "").strip() for item in value], limit=limit)
+
+
+def _terms_from_rows(value: Any, *, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    terms: list[str] = []
+    for row in value:
+        if not isinstance(row, Mapping):
+            continue
+        for key in _PROOF_TERM_TEXT_KEYS:
+            text = str(row.get(key) or "").strip()
+            if text:
+                terms.append(text)
+                break
+        terms = _dedupe_terms(terms, limit=limit)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
 @dataclass(frozen=True)
 class CampaignGenerationConfig:
     skill_name: str = "digest/b2b_campaign_generation"
@@ -40,6 +82,7 @@ class CampaignGenerationConfig:
     include_source_opportunity: bool = True
     channels: tuple[str, ...] = ()
     quality_revalidation_enabled: bool = False
+    quality_prompt_proof_term_limit: int = 5
 
 
 @dataclass(frozen=True)
@@ -273,7 +316,47 @@ class CampaignGenerationService:
                 "subject": str(cold_email_context.get("subject") or ""),
                 "body": str(cold_email_context.get("body") or ""),
             }
+        if self._config.quality_revalidation_enabled:
+            enriched = self._with_quality_prompt_terms(enriched)
         return enriched
+
+    def _with_quality_prompt_terms(
+        self,
+        opportunity: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        enriched = dict(opportunity)
+        context = normalize_campaign_reasoning_context(enriched)
+        terms = self._campaign_proof_terms(
+            context.as_dict(),
+            existing=enriched.get("campaign_proof_terms"),
+        )
+        if terms:
+            enriched["campaign_proof_terms"] = terms
+        return enriched
+
+    def _campaign_proof_terms(
+        self,
+        context: Mapping[str, Any],
+        *,
+        existing: Any = None,
+    ) -> list[str]:
+        limit = max(0, int(self._config.quality_prompt_proof_term_limit or 0))
+        terms = _clean_term_list(existing, limit=limit)
+        if len(terms) >= limit:
+            return terms
+        anchors = context.get("anchor_examples")
+        if isinstance(anchors, Mapping):
+            for rows in anchors.values():
+                terms.extend(_terms_from_rows(rows, limit=limit - len(terms)))
+                terms = _dedupe_terms(terms, limit=limit)
+                if len(terms) >= limit:
+                    return terms
+        for key in ("witness_highlights", "proof_points", "timing_windows"):
+            terms.extend(_terms_from_rows(context.get(key), limit=limit - len(terms)))
+            terms = _dedupe_terms(terms, limit=limit)
+            if len(terms) >= limit:
+                break
+        return terms
 
     async def _opportunity_with_reasoning_context(
         self,
@@ -370,6 +453,16 @@ class CampaignGenerationService:
         if not self._config.quality_revalidation_enabled:
             return dict(parsed)
         context = normalize_campaign_reasoning_context(opportunity)
+        specificity_context = context.as_dict()
+        proof_terms = _clean_term_list(
+            opportunity.get("campaign_proof_terms"),
+            limit=max(0, int(self._config.quality_prompt_proof_term_limit or 0)),
+        )
+        if proof_terms:
+            specificity_context = {
+                **specificity_context,
+                "campaign_proof_terms": proof_terms,
+            }
         revalidation = campaign_quality_revalidation(
             campaign={
                 **dict(opportunity),
@@ -380,7 +473,7 @@ class CampaignGenerationService:
                 "target_mode": target_mode,
             },
             boundary="generation",
-            specificity_context=context.as_dict(),
+            specificity_context=specificity_context,
         )
         audit = revalidation.get("audit")
         if isinstance(audit, Mapping) and audit.get("blocking_issues"):
