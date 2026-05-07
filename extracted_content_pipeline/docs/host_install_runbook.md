@@ -112,6 +112,15 @@ the same offline path:
 python scripts/smoke_extracted_content_pipeline_host.py customer_opportunities.csv --format csv
 ```
 
+Source row exports can be smoked directly too:
+
+```bash
+python scripts/smoke_extracted_content_pipeline_host.py \
+  customer_sources.jsonl \
+  --source-rows \
+  --source-format jsonl
+```
+
 The command exits nonzero if the product cannot generate the minimum expected
 draft shape (`subject`, `body`, `target_id`, and `channel`).
 

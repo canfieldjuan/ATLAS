@@ -118,6 +118,61 @@ def test_host_smoke_cli_accepts_single_object_json_export(tmp_path) -> None:
     assert "generated=2" in completed.stdout
 
 
+def test_host_smoke_cli_accepts_source_rows(tmp_path) -> None:
+    source_path = tmp_path / "customer_sources.jsonl"
+    source_path.write_text(
+        json.dumps({
+            "id": "review-1",
+            "company": "Acme Logistics",
+            "vendor": "HubSpot",
+            "email": "ops@example.com",
+            "review_text": "Pricing is a problem.",
+        }),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source_path),
+            "--source-rows",
+            "--source-format",
+            "jsonl",
+            "--limit",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "AI Content Ops host smoke passed" in completed.stdout
+    assert "generated=2" in completed.stdout
+
+
+def test_host_smoke_cli_rejects_invalid_source_text_limit(tmp_path) -> None:
+    source_path = tmp_path / "customer_sources.json"
+    source_path.write_text("[]", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source_path),
+            "--source-rows",
+            "--max-source-text-chars",
+            "0",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "--max-source-text-chars must be positive" in completed.stderr
+
+
 def test_host_smoke_cli_fails_when_min_drafts_not_met() -> None:
     completed = subprocess.run(
         [

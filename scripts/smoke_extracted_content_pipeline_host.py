@@ -21,6 +21,9 @@ from extracted_content_pipeline.campaign_customer_data import (  # noqa: E402
 from extracted_content_pipeline.campaign_example import (  # noqa: E402
     generate_campaign_drafts_from_payload,
 )
+from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
+    load_source_campaign_opportunities_from_file,
+)
 
 
 DEFAULT_PAYLOAD = (
@@ -28,7 +31,21 @@ DEFAULT_PAYLOAD = (
 )
 
 
-def _load_payload(path: Path, *, file_format: str) -> dict[str, Any]:
+def _load_payload(
+    path: Path,
+    *,
+    file_format: str,
+    source_rows: bool = False,
+    source_format: str = "auto",
+    max_source_text_chars: int = 1200,
+) -> dict[str, Any]:
+    if source_rows:
+        loaded = load_source_campaign_opportunities_from_file(
+            path,
+            file_format=source_format,
+            max_text_chars=max_source_text_chars,
+        )
+        return loaded.as_payload()
     if file_format == "csv" or (file_format == "auto" and path.suffix.lower() == ".csv"):
         loaded = load_campaign_opportunities_from_file(path, file_format="csv")
         return loaded.as_payload()
@@ -59,6 +76,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("auto", "json", "csv"),
         default="auto",
         help="Input format. Defaults to suffix-based auto detection.",
+    )
+    parser.add_argument(
+        "--source-rows",
+        action="store_true",
+        help=(
+            "Treat the input as review/transcript/complaint/document source "
+            "rows and convert them into campaign opportunities before smoke."
+        ),
+    )
+    parser.add_argument(
+        "--source-format",
+        choices=("auto", "json", "jsonl"),
+        default="auto",
+        help="Source-row file format when --source-rows is selected.",
+    )
+    parser.add_argument(
+        "--max-source-text-chars",
+        type=int,
+        default=1200,
+        help="Maximum source text characters copied into each evidence row.",
     )
     parser.add_argument(
         "--channels",
@@ -102,7 +139,15 @@ def _draft_errors(result: dict[str, Any], *, min_drafts: int) -> list[str]:
 
 async def _main() -> int:
     args = _parse_args()
-    payload = _load_payload(args.payload, file_format=args.format)
+    if args.source_rows and args.max_source_text_chars < 1:
+        raise SystemExit("--max-source-text-chars must be positive")
+    payload = _load_payload(
+        args.payload,
+        file_format=args.format,
+        source_rows=bool(args.source_rows),
+        source_format=args.source_format,
+        max_source_text_chars=int(args.max_source_text_chars),
+    )
     payload["limit"] = int(args.limit)
     payload["channels"] = [
         item.strip()

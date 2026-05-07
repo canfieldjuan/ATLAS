@@ -43,7 +43,7 @@
 - `scripts/smoke_extracted_content_pipeline_host.py` provides a one-command
   offline host smoke test that validates customer-data normalization through
   usable generated draft shape without a database, provider credentials, or
-  send side effects.
+  send side effects. It accepts both opportunity files and source-row files.
 - `campaign_postgres_review` provides a product-owned draft review/status
   update path so hosts can approve, queue, cancel, or expire generated
   `b2b_campaigns` rows after export without handwritten SQL.
