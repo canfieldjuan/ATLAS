@@ -220,3 +220,24 @@ async def test_execute_reports_missing_service_as_partial() -> None:
     assert result["errors"] == [
         {"output": "sales_brief", "reason": "service_not_configured"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_reports_service_without_generate_as_not_configured() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+        },
+        services=ContentOpsExecutionServices(campaign=object()),
+    )
+
+    assert result["status"] == "partial"
+    assert result["steps"][0]["status"] == "failed"
+    assert result["steps"][0]["error"] == "service_not_configured"
+    assert result["errors"] == [
+        {"output": "email_campaign", "reason": "service_not_configured"}
+    ]
