@@ -239,6 +239,12 @@
       "target": "extracted_content_pipeline/campaign_source_adapters.py"
     },
     {
+      "target": "extracted_content_pipeline/blog_ports.py"
+    },
+    {
+      "target": "extracted_content_pipeline/blog_generation.py"
+    },
+    {
       "target": "extracted_content_pipeline/content_ops_execution.py"
     },
     {

@@ -17,6 +17,7 @@ class ContentOpsExecutionServices:
     """Host-provided services for runnable content-ops outputs."""
 
     campaign: Any | None = None
+    blog_post: Any | None = None
     report: Any | None = None
     landing_page: Any | None = None
     sales_brief: Any | None = None
@@ -24,6 +25,8 @@ class ContentOpsExecutionServices:
     def for_output(self, output: str) -> Any | None:
         if output == "email_campaign":
             return self.campaign
+        if output == "blog_post":
+            return self.blog_post
         if output == "report":
             return self.report
         if output == "landing_page":

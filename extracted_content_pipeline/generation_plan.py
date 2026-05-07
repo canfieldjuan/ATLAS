@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from .blog_generation import BlogPostGenerationConfig
 from .campaign_generation import CampaignGenerationConfig
 from .control_surfaces import (
     ContentOpsRequest,
@@ -116,6 +117,10 @@ def _sales_brief_config_for_request(request: ContentOpsRequest) -> SalesBriefGen
     )
 
 
+def _blog_post_config_for_request(request: ContentOpsRequest) -> BlogPostGenerationConfig:
+    return BlogPostGenerationConfig(limit=request.limit)
+
+
 def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanStep:
     if output == "email_campaign":
         config = _campaign_config_for_request(request)
@@ -176,19 +181,18 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             },
         )
     if output == "blog_post":
+        config = _blog_post_config_for_request(request)
         return GenerationPlanStep(
             output=output,
-            runner="extracted_content_pipeline.autonomous.tasks.blog_post_generation",
-            status="planned",
+            runner="BlogPostGenerationService.generate",
+            status="runnable",
             config={
-                "skill_name": "digest/blog_post_generation",
-                "limit": request.limit,
+                "skill_name": config.skill_name,
+                "limit": config.limit,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
                 "topic": request.inputs.get("topic"),
             },
-            reason=(
-                "Blog generation exists as an autonomous task path, but does not "
-                "yet expose the same service/port interface as campaign and report generation."
-            ),
         )
     return GenerationPlanStep(
         output=output,
