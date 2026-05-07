@@ -70,6 +70,12 @@ class _LLM:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
+        if isinstance(response, dict):
+            return LLMResponse(
+                content=response["content"],
+                model=response.get("model", "test-model"),
+                usage=response.get("usage", {}),
+            )
         return LLMResponse(
             content=response,
             model="test-model",
@@ -265,7 +271,7 @@ async def test_generate_persists_one_report_per_opportunity_via_save_drafts() ->
 @pytest.mark.asyncio
 async def test_generate_skips_unparseable_response_and_records_error() -> None:
     service, _intel, reports, _llm, _skills, _rp = _service(
-        responses=["not json garbage"],
+        responses=["not json garbage", "still not json"],
     )
 
     result = await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
@@ -277,6 +283,64 @@ async def test_generate_skips_unparseable_response_and_records_error() -> None:
     assert any(
         err.get("reason") == "unparseable_response" for err in result.errors
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_retries_unparseable_response_once_by_default() -> None:
+    service, _intel, reports, llm, _skills, _rp = _service(
+        responses=["not json garbage", _valid_report_json()]
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    assert result.generated == 1
+    assert len(llm.calls) == 2
+    assert llm.calls[0]["metadata"]["attempt_no"] == 1
+    assert llm.calls[1]["metadata"]["attempt_no"] == 2
+    assert "Previous response excerpt:\nnot json garbage" in llm.calls[1]["messages"][1].content
+    draft = reports.saved[0]["drafts"][0]
+    assert draft.metadata["generation_parse_attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_can_disable_parse_retry() -> None:
+    service, _intel, reports, llm, _skills, _rp = _service(
+        responses=["not json garbage", _valid_report_json()],
+        config=ReportGenerationConfig(parse_retry_attempts=0),
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    assert result.generated == 0
+    assert len(llm.calls) == 1
+    assert reports.saved == []
+    assert any(err.get("reason") == "unparseable_response" for err in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_generate_accumulates_usage_across_parse_retry_attempts() -> None:
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=[
+            {
+                "content": "not json garbage",
+                "model": "first-model",
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+            {
+                "content": _valid_report_json(),
+                "model": "final-model",
+                "usage": {"input_tokens": 7, "output_tokens": 3},
+            },
+        ]
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    assert result.generated == 1
+    draft = reports.saved[0]["drafts"][0]
+    assert draft.metadata["generation_model"] == "final-model"
+    assert draft.metadata["generation_usage"] == {"input_tokens": 12, "output_tokens": 5}
+    assert draft.metadata["generation_parse_attempts"] == 2
 
 
 @pytest.mark.asyncio

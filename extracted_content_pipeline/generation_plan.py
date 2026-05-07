@@ -152,6 +152,8 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "limit": config.limit,
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
+                "parse_retry_attempts": config.parse_retry_attempts,
+                "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
             },
         )
     if output == "landing_page":
@@ -165,6 +167,8 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
                 "quality_gates_enabled": request.require_quality_gates,
+                "parse_retry_attempts": config.parse_retry_attempts,
+                "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
             },
         )
     if output == "sales_brief":
@@ -180,6 +184,8 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
                 "quality_gates_enabled": request.require_quality_gates,
+                "parse_retry_attempts": config.parse_retry_attempts,
+                "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
             },
         )
     if output == "blog_post":
