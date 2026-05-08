@@ -1,4 +1,11 @@
-"""Build Amazon seller campaign opportunities from seller targets."""
+"""Build Amazon seller campaign opportunities from seller targets.
+
+Shared JSONB / row-coercion helpers live in
+``extracted_content_pipeline.storage._jsonb_helpers``. ``_jsonb`` /
+``_row_dict`` are thin aliases for backwards compat. ``import json``
+stays because this file uses ``json.loads`` / ``json.JSONDecodeError``
+directly outside the shared helpers.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +15,11 @@ from datetime import date, datetime
 import json
 import re
 from typing import Any
+
+from .storage._jsonb_helpers import (
+    json_dump_jsonb as _jsonb,
+    row_to_dict as _row_dict,
+)
 
 
 JsonDict = dict[str, Any]
@@ -362,23 +374,10 @@ def _json_sequence(value: Any) -> list[Any]:
     return [value]
 
 
-def _jsonb(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, default=str, separators=(",", ":"))
-
-
 def _json_ready(value: Any) -> Any:
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return value
-
-
-def _row_dict(row: Mapping[str, Any] | Any) -> JsonDict:
-    if isinstance(row, Mapping):
-        return dict(row)
-    try:
-        return dict(row)
-    except (TypeError, ValueError):
-        return {}
 
 
 def _unique(values: Sequence[Any] | Any) -> tuple[str, ...]:

@@ -1,4 +1,9 @@
-"""Postgres seller target helpers for the standalone campaign product."""
+"""Postgres seller target helpers for the standalone campaign product.
+
+Shared row-coercion helper lives in
+``extracted_content_pipeline.storage._jsonb_helpers``. ``_row_dict``
+is a thin alias for backwards compat.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
+
+from .storage._jsonb_helpers import row_to_dict as _row_dict
 
 
 JsonDict = dict[str, Any]
@@ -275,15 +282,6 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_ready(item) for item in value]
     return value
-
-
-def _row_dict(row: Mapping[str, Any] | Any) -> JsonDict:
-    if isinstance(row, Mapping):
-        return dict(row)
-    try:
-        return dict(row)
-    except (TypeError, ValueError):
-        return {}
 
 
 def _clean(value: Any) -> str:

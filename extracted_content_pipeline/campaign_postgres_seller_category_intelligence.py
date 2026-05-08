@@ -1,11 +1,20 @@
-"""Refresh Amazon seller category intelligence snapshots from review data."""
+"""Refresh Amazon seller category intelligence snapshots from review data.
+
+Shared JSONB / row-coercion helpers live in
+``extracted_content_pipeline.storage._jsonb_helpers``. ``_jsonb`` /
+``_row_dict`` are thin aliases for backwards compat.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-import json
 from typing import Any
+
+from .storage._jsonb_helpers import (
+    json_dump_jsonb as _jsonb,
+    row_to_dict as _row_dict,
+)
 
 
 JsonDict = dict[str, Any]
@@ -711,10 +720,6 @@ async def _fetch_top_root_causes(
     ]
 
 
-def _jsonb(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, default=str, separators=(",", ":"))
-
-
 def _clean_sequence(values: Sequence[Any]) -> tuple[str, ...]:
     seen: set[str] = set()
     items: list[str] = []
@@ -742,15 +747,6 @@ def _normalize_limit(value: Any, field_name: str) -> int:
     if limit < 0:
         raise ValueError(f"{field_name} must be non-negative")
     return limit
-
-
-def _row_dict(row: Mapping[str, Any] | Any) -> JsonDict:
-    if isinstance(row, Mapping):
-        return dict(row)
-    try:
-        return dict(row)
-    except (TypeError, ValueError):
-        return {}
 
 
 def _identifier(value: str) -> str:

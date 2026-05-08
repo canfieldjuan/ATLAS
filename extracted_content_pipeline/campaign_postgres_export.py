@@ -1,4 +1,9 @@
-"""Postgres draft export helpers for the standalone campaign product."""
+"""Postgres draft export helpers for the standalone campaign product.
+
+Shared row-coercion helper lives in
+``extracted_content_pipeline.storage._jsonb_helpers``. ``_row_dict``
+is a thin alias for backwards compat.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ from typing import Any
 
 from .campaign_ports import TenantScope
 from .campaign_postgres_generation import tenant_scope_from_mapping
+from .storage._jsonb_helpers import row_to_dict as _row_dict
 
 
 JsonDict = dict[str, Any]
@@ -160,15 +166,6 @@ def _csv_value(value: Any) -> Any:
     if isinstance(value, (Mapping, list, tuple)):
         return json.dumps(value, default=str, separators=(",", ":"))
     return "" if value is None else value
-
-
-def _row_dict(row: Mapping[str, Any] | Any) -> JsonDict:
-    if isinstance(row, Mapping):
-        return dict(row)
-    try:
-        return dict(row)
-    except (TypeError, ValueError):
-        return {}
 
 
 def _clean(value: Any) -> str:
