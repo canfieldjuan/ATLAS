@@ -19,6 +19,7 @@ from extracted_content_pipeline.content_ops_execution import (  # noqa: E402
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
+from extracted_content_pipeline.signal_extraction import SignalExtractionService  # noqa: E402
 
 
 # PR-OptionA-1/2/3 graduated several plan-step fields to load-bearing kwargs
@@ -88,6 +89,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--opportunity-id", default="opp_smoke")
     parser.add_argument("--audience", default="B2B SaaS founders")
     parser.add_argument("--campaign-name", default="Content Ops smoke")
+    parser.add_argument(
+        "--source-material",
+        default="Pricing became hard to justify after renewal.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -103,6 +108,15 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
             "opportunity_id": args.opportunity_id,
             "audience": args.audience,
             "campaign_name": args.campaign_name,
+            "source_material": [
+                {
+                    "id": "source-smoke-1",
+                    "company": args.target_account,
+                    "vendor": "HubSpot",
+                    "text": args.source_material,
+                    "contact_email": "buyer@example.com",
+                }
+            ],
         },
     }
     if args.outputs:
@@ -121,6 +135,7 @@ def _services() -> ContentOpsExecutionServices:
         report=_OpportunityAssetService("report"),
         landing_page=_LandingPageAssetService(),
         sales_brief=_OpportunityAssetService("sales_brief"),
+        signal_extraction=SignalExtractionService(),
     )
 
 
@@ -138,9 +153,20 @@ def _execution_errors(result: Mapping[str, Any]) -> list[str]:
         if step.get("status") != "completed":
             errors.append(f"step {index} did not complete: {step.get('error')}")
         result_payload = step.get("result")
-        if not isinstance(result_payload, Mapping) or not result_payload.get("saved_ids"):
-            errors.append(f"step {index} missing saved_ids")
+        if not _step_has_output_payload(step, result_payload):
+            errors.append(f"step {index} missing output payload")
     return errors
+
+
+def _step_has_output_payload(
+    step: Mapping[str, Any],
+    result_payload: Any,
+) -> bool:
+    if not isinstance(result_payload, Mapping):
+        return False
+    if step.get("output") == "signal_extraction":
+        return bool(result_payload.get("opportunities"))
+    return bool(result_payload.get("saved_ids"))
 
 
 async def _main() -> int:

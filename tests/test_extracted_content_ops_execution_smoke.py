@@ -64,6 +64,30 @@ def test_content_ops_execution_smoke_cli_accepts_output_subset_json() -> None:
     assert payload["steps"][0]["result"]["generated"] == 2
 
 
+def test_content_ops_execution_smoke_cli_runs_signal_extraction_json() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "--outputs",
+            "signal_extraction",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "completed"
+    assert payload["steps"][0]["output"] == "signal_extraction"
+    assert payload["steps"][0]["result"]["generated"] == 1
+    assert (
+        payload["steps"][0]["result"]["opportunities"][0]["target_id"]
+        == "source-smoke-1"
+    )
+
+
 def test_content_ops_execution_smoke_fails_when_required_inputs_missing() -> None:
     completed = subprocess.run(
         [
@@ -112,3 +136,18 @@ def test_execution_errors_reports_empty_steps() -> None:
     assert smoke._execution_errors({"status": "completed", "steps": []}) == [
         "result.steps is missing or empty"
     ]
+
+
+def test_execution_errors_accepts_signal_extraction_opportunities() -> None:
+    smoke = _load_smoke_module()
+
+    assert smoke._execution_errors({
+        "status": "completed",
+        "steps": [
+            {
+                "output": "signal_extraction",
+                "status": "completed",
+                "result": {"opportunities": [{"target_id": "Acme"}]},
+            }
+        ],
+    }) == []
