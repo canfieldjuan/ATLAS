@@ -82,13 +82,17 @@ Current preset ids:
 | `lead_gen_campaign` | `email_campaign`, `landing_page` | Outreach plus landing page. |
 | `full_campaign` | `email_campaign`, `blog_post`, `report`, `landing_page`, `sales_brief` | Full generated-content bundle. |
 
+The catalog endpoint exposes both `estimated_unit_cost_usd` and
+`estimated_retry_adjusted_unit_cost_usd`. Use the retry-adjusted value for
+budget UI and the preview response as the authoritative run estimate.
+
 ## Preview Payload
 
 ```json
 {
   "outputs": ["email_campaign", "report"],
   "limit": 2,
-  "max_cost_usd": 2.0,
+  "max_cost_usd": 3.0,
   "inputs": {
     "target_account": "Acme",
     "offer": "Churn intelligence audit",
@@ -108,7 +112,7 @@ preset.
 {
   "can_run": true,
   "outputs": ["email_campaign", "report"],
-  "estimated_cost_usd": 1.46,
+  "estimated_cost_usd": 2.92,
   "missing_inputs": [],
   "blocked_outputs": [],
   "warnings": [],
@@ -117,7 +121,7 @@ preset.
     "preset": null,
     "outputs": ["email_campaign", "report"],
     "limit": 2,
-    "max_cost_usd": 2.0,
+    "max_cost_usd": 3.0,
     "ingestion_profile": "domain_specific",
     "require_quality_gates": true,
     "allow_unimplemented_outputs": false
@@ -128,6 +132,14 @@ preset.
 Treat `can_run=false` as a hard stop for generation controls. The UI can still
 show the selected plan, but it should not enable the generate button until
 `missing_inputs`, `blocked_outputs`, and budget warnings are resolved.
+`estimated_cost_usd` is conservative: generated assets default to one parse
+retry, so preview budgets include the worst-case retry attempt count.
+
+> **Upgrade note (breaking):** Prior to 2026-05-08, `estimated_cost_usd`
+> reflected a single LLM call per output. It now reflects worst-case retry
+> attempts (default: 2 calls per generated asset). Operators with existing
+> `max_cost_usd` budgets should multiply their previous limit by
+> `default_parse_retry_attempts + 1` (default: x2).
 
 ## Plan Payload
 
@@ -175,7 +187,7 @@ show the selected plan, but it should not enable the generate button until
   "preview": {
     "can_run": true,
     "outputs": ["email_campaign", "report"],
-    "estimated_cost_usd": 1.46,
+    "estimated_cost_usd": 2.92,
     "missing_inputs": [],
     "blocked_outputs": [],
     "warnings": []

@@ -23,6 +23,9 @@ class OutputDefinition:
     estimated_unit_cost_usd: float
     required_inputs: tuple[str, ...] = ()
     default_max_items: int = 1
+    # Must mirror each *GenerationConfig.parse_retry_attempts default used in
+    # generation_plan.py. If a service raises retries, update this field too.
+    default_parse_retry_attempts: int = 1
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,7 @@ OUTPUT_CATALOG: dict[str, OutputDefinition] = {
         implemented=False,
         estimated_unit_cost_usd=0.25,
         required_inputs=("source_material",),
+        default_parse_retry_attempts=0,
     ),
 }
 
@@ -232,11 +236,19 @@ def resolve_outputs(request: ContentOpsRequest) -> tuple[str, ...]:
     return PRESETS["email_only"].outputs
 
 
+def retry_adjusted_unit_cost_usd(definition: OutputDefinition) -> float:
+    """Return the per-item preview budget including default parse retries."""
+
+    attempts = max(1, int(definition.default_parse_retry_attempts) + 1)
+    return definition.estimated_unit_cost_usd * attempts
+
+
 def estimate_cost_usd(outputs: Sequence[str], *, limit: int) -> float:
     """Estimate cost from selected outputs and opportunity limit.
 
-    The estimates are intentionally conservative placeholders. They create a
-    product contract now and can be replaced later with real token accounting.
+    The estimates are intentionally conservative placeholders. Generated
+    assets default to one parse retry, so preview budgets use the worst-case
+    attempt count instead of the first-call cost.
     """
 
     total = 0.0
@@ -244,7 +256,7 @@ def estimate_cost_usd(outputs: Sequence[str], *, limit: int) -> float:
         definition = OUTPUT_CATALOG.get(output_id)
         if not definition:
             continue
-        total += definition.estimated_unit_cost_usd * max(1, limit)
+        total += retry_adjusted_unit_cost_usd(definition) * max(1, limit)
     return total
 
 

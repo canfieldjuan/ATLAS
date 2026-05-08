@@ -21,7 +21,12 @@ from ..content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
-from ..control_surfaces import OUTPUT_CATALOG, PRESETS, preview_from_mapping
+from ..control_surfaces import (
+    OUTPUT_CATALOG,
+    PRESETS,
+    preview_from_mapping,
+    retry_adjusted_unit_cost_usd,
+)
 from ..generation_plan import build_generation_plan_from_mapping
 
 ExecutionServicesProvider = Callable[
@@ -94,6 +99,11 @@ def create_content_ops_control_surface_router(
                     "execution_configured": item.id in configured_outputs,
                     "can_execute": item.implemented and item.id in configured_outputs,
                     "estimated_unit_cost_usd": item.estimated_unit_cost_usd,
+                    "default_parse_retry_attempts": item.default_parse_retry_attempts,
+                    "estimated_retry_adjusted_unit_cost_usd": round(
+                        retry_adjusted_unit_cost_usd(item),
+                        4,
+                    ),
                     "required_inputs": list(item.required_inputs),
                     "default_max_items": item.default_max_items,
                 }
