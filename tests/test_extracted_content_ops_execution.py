@@ -312,7 +312,11 @@ async def test_execute_runs_signal_extraction_service_from_source_material() -> 
 
 
 @pytest.mark.asyncio
-async def test_execute_reports_missing_service_as_partial() -> None:
+async def test_execute_reports_missing_service_as_failed_when_all_steps_fail() -> None:
+    """PR-Audit-MINOR-Batch-1: when every step fails, status is now
+    'failed' (was 'partial' pre-fix -- misled dashboards). Error dict
+    shape now matches ContentOpsStepExecution (output / runner / error)
+    with ``reason`` kept as a backwards-compat alias."""
     result = await execute_content_ops_from_mapping(
         {
             "outputs": ["sales_brief"],
@@ -321,11 +325,16 @@ async def test_execute_reports_missing_service_as_partial() -> None:
         services=ContentOpsExecutionServices(),
     )
 
-    assert result["status"] == "partial"
+    assert result["status"] == "failed"
     assert result["steps"][0]["status"] == "failed"
     assert result["steps"][0]["error"] == "service_not_configured"
     assert result["errors"] == [
-        {"output": "sales_brief", "reason": "service_not_configured"}
+        {
+            "output": "sales_brief",
+            "runner": "SalesBriefGenerationService.generate",
+            "error": "service_not_configured",
+            "reason": "service_not_configured",
+        }
     ]
 
 
@@ -342,11 +351,16 @@ async def test_execute_reports_service_without_generate_as_not_configured() -> N
         services=ContentOpsExecutionServices(campaign=object()),
     )
 
-    assert result["status"] == "partial"
+    assert result["status"] == "failed"  # all (1) steps failed
     assert result["steps"][0]["status"] == "failed"
     assert result["steps"][0]["error"] == "service_not_configured"
     assert result["errors"] == [
-        {"output": "email_campaign", "reason": "service_not_configured"}
+        {
+            "output": "email_campaign",
+            "runner": "CampaignGenerationService.generate",
+            "error": "service_not_configured",
+            "reason": "service_not_configured",
+        }
     ]
 
 
@@ -781,3 +795,42 @@ async def test_execute_threads_quality_gates_enabled_into_blog_post() -> None:
     call = blog.calls[0]
     assert call["quality_gates_enabled"] is True
     assert call["extras"] == {}
+
+
+# -----------------------
+# PR-Audit-MINOR-Batch-1: status distinguishes partial from failed
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_reports_partial_when_only_some_steps_fail() -> None:
+    """When some steps succeed and others fail, status is 'partial'.
+    Reserved for the genuine mixed case -- not 'failed' (which is now
+    all-failed) and not 'completed' (no errors)."""
+
+    campaign = _OpportunityService()
+    # report has no service -> that step fails, but campaign succeeds
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign", "report"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Audit",
+                "opportunity_id": "opp-1",
+            },
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    assert result["status"] == "partial"
+    assert {step["output"]: step["status"] for step in result["steps"]} == {
+        "email_campaign": "completed",
+        "report": "failed",
+    }
+    # Error payload uses the new aligned shape.
+    assert len(result["errors"]) == 1
+    err = result["errors"][0]
+    assert err["output"] == "report"
+    assert err["runner"] == "ReportGenerationService.generate"
+    assert err["error"] == "service_not_configured"
+    assert err["reason"] == "service_not_configured"  # backwards-compat alias

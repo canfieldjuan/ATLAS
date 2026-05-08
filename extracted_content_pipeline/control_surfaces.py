@@ -9,6 +9,7 @@ runs.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
 
@@ -88,7 +89,12 @@ class ControlSurfacePreview:
         }
 
 
-OUTPUT_CATALOG: dict[str, OutputDefinition] = {
+# PR-Audit-MINOR-Batch-1: ``OUTPUT_CATALOG`` and ``PRESETS`` are
+# constants -- wrap them in ``MappingProxyType`` so accidental
+# mutation raises ``TypeError`` rather than silently corrupting the
+# catalog. Reads (``.get(...)``, iteration, membership) work
+# unchanged.
+_OUTPUT_CATALOG_DEFINITIONS: dict[str, OutputDefinition] = {
     "email_campaign": OutputDefinition(
         id="email_campaign",
         label="Email Campaign",
@@ -140,9 +146,10 @@ OUTPUT_CATALOG: dict[str, OutputDefinition] = {
         default_parse_retry_attempts=0,
     ),
 }
+OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType(_OUTPUT_CATALOG_DEFINITIONS)
 
 
-PRESETS: dict[str, ControlSurfacePreset] = {
+_PRESETS_DEFINITIONS: dict[str, ControlSurfacePreset] = {
     "email_only": ControlSurfacePreset(
         id="email_only",
         label="Email Only",
@@ -180,6 +187,7 @@ PRESETS: dict[str, ControlSurfacePreset] = {
         description="Full generated-content bundle.",
     ),
 }
+PRESETS: Mapping[str, ControlSurfacePreset] = MappingProxyType(_PRESETS_DEFINITIONS)
 
 
 def normalize_outputs(raw_outputs: str | Iterable[str] | None) -> tuple[str, ...]:
