@@ -290,10 +290,11 @@ async def test_execute_generation_route_sanitizes_service_failures():
 
 
 @pytest.mark.asyncio
-async def test_execute_generation_route_wraps_execution_provider_exception():
+async def test_execute_generation_route_wraps_execution_provider_exception(caplog):
     def provider():
         raise RuntimeError("postgres://user:secret@example/internal")
 
+    caplog.set_level("WARNING", logger="extracted_content_pipeline.api.control_surfaces")
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
         execution_services_provider=provider,
@@ -313,13 +314,15 @@ async def test_execute_generation_route_wraps_execution_provider_exception():
 
     assert exc.value.status_code == 503
     assert exc.value.detail == "Content Ops execution services are unavailable."
+    assert "postgres://" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_execute_generation_route_wraps_scope_provider_exception():
+async def test_execute_generation_route_wraps_scope_provider_exception(caplog):
     def scope_provider():
         raise RuntimeError("postgres://user:secret@example/internal")
 
+    caplog.set_level("WARNING", logger="extracted_content_pipeline.api.control_surfaces")
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
         execution_services_provider=lambda: ContentOpsExecutionServices(
@@ -342,6 +345,7 @@ async def test_execute_generation_route_wraps_scope_provider_exception():
 
     assert exc.value.status_code == 503
     assert exc.value.detail == "Content Ops scope provider is unavailable."
+    assert "postgres://" not in caplog.text
 
 
 @pytest.mark.asyncio

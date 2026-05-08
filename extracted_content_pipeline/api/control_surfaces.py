@@ -230,7 +230,10 @@ async def _resolve_execution_services(
     try:
         value = await _resolve_provider(provider)
     except Exception as exc:
-        logger.exception("Content Ops execution services provider failed")
+        logger.warning(
+            "Content Ops execution services provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
         raise HTTPException(
             status_code=503,
             detail="Content Ops execution services are unavailable.",
@@ -242,7 +245,10 @@ async def _resolve_scope(provider: ScopeProvider | None) -> TenantScope | None:
     try:
         value = await _resolve_provider(provider) if provider is not None else None
     except Exception as exc:
-        logger.exception("Content Ops scope provider failed")
+        logger.warning(
+            "Content Ops scope provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
         raise HTTPException(
             status_code=503,
             detail="Content Ops scope provider is unavailable.",
