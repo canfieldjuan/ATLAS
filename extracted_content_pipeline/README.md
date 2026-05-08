@@ -585,10 +585,12 @@ smoke before wiring real asset services:
 ```bash
 python scripts/smoke_extracted_content_ops_execution.py
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --json
 ```
 
-This validates the full campaign preset through host-injected deterministic
-services without opening database, network, sender, or LLM handles.
+This validates the full campaign preset and the deterministic source-material
+normalization path through host-injected services without opening database,
+network, sender, or LLM handles.
 
 Hosts can inject a `visibility_provider` when mounting the router. The four
 POST operation routes emit best-effort `campaign_operation_started`,

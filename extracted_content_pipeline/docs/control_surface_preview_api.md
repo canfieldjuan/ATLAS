@@ -217,11 +217,14 @@ Before wiring real providers, hosts can run the offline execution smoke:
 ```bash
 python scripts/smoke_extracted_content_ops_execution.py
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --json
 ```
 
 The smoke uses injected deterministic services and exercises the same
 `execute_content_ops_from_mapping(...)` seam as the API route. It does not
-open network, database, sender, or LLM handles.
+open network, database, sender, or LLM handles. The signal extraction command
+validates the deterministic source-material-to-opportunity path through the
+same execution seam.
 
 Runnable outputs dispatch to:
 
@@ -232,6 +235,7 @@ Runnable outputs dispatch to:
 | `report` | `ReportGenerationService.generate(...)` |
 | `landing_page` | `LandingPageGenerationService.generate(...)` |
 | `sales_brief` | `SalesBriefGenerationService.generate(...)` |
+| `signal_extraction` | `SignalExtractionService.generate(...)` |
 
 Non-executable plans return HTTP 400 with the blocked execution result. Missing
 or failing execution/scope providers return HTTP 503. Service-level failures are
