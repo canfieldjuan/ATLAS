@@ -1,14 +1,24 @@
-"""Postgres draft review helpers for the standalone campaign product."""
+"""Postgres draft review helpers for the standalone campaign product.
+
+Shared JSONB / row-coercion helpers live in
+``extracted_content_pipeline.storage._jsonb_helpers`` (extracted in
+PR-ContentAssets-Consistency-1). The local ``_jsonb`` / ``_row_dict``
+are now thin aliases for the shared helpers -- backwards-compat shim
+for any in-tree caller that imported the private names.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import json
 from typing import Any
 
 from .campaign_ports import TenantScope
 from .campaign_postgres_generation import tenant_scope_from_mapping
+from .storage._jsonb_helpers import (
+    json_dump_jsonb as _jsonb,
+    row_to_dict as _row_dict,
+)
 
 
 JsonDict = dict[str, Any]
@@ -184,10 +194,6 @@ def _normalize_status(value: str) -> str:
     return status
 
 
-def _jsonb(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, default=str, separators=(",", ":"))
-
-
 def _serializable_row(row: Mapping[str, Any]) -> JsonDict:
     return {key: _json_ready(value) for key, value in row.items()}
 
@@ -200,15 +206,6 @@ def _json_ready(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
-
-
-def _row_dict(row: Mapping[str, Any] | Any) -> JsonDict:
-    if isinstance(row, Mapping):
-        return dict(row)
-    try:
-        return dict(row)
-    except (TypeError, ValueError):
-        return {}
 
 
 def _clean(value: Any) -> str:
