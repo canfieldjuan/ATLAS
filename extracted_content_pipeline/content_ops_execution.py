@@ -252,6 +252,7 @@ async def _dispatch_report(
         parse_retry_response_excerpt_chars=_step_config_int(
             step.config, "parse_retry_response_excerpt_chars"
         ),
+        quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
     )
 
 
@@ -324,6 +325,7 @@ async def _dispatch_blog_post(
         parse_retry_response_excerpt_chars=_step_config_int(
             step.config, "parse_retry_response_excerpt_chars"
         ),
+        quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
     )
 
 
