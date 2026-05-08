@@ -132,6 +132,9 @@ async def test_execute_runs_email_and_report_services_with_scope_and_filters() -
     # Plan default channels reach the service even without per-request override.
     assert campaign_call["channels"] == ("email_cold", "email_followup")
     assert campaign_call["default_report_type"] is None
+    # extras locks the kwarg surface: a typo'd kwarg in PR-OptionA-2/3 would
+    # silently land here and never reach the right service field.
+    assert campaign_call["extras"] == {}
     assert len(report.calls) == 1
     report_call = report.calls[0]
     assert report_call["scope"] == scope
@@ -141,6 +144,7 @@ async def test_execute_runs_email_and_report_services_with_scope_and_filters() -
     # Plan default report type reaches the service.
     assert report_call["default_report_type"] == "vendor_pressure"
     assert report_call["channels"] is None
+    assert report_call["extras"] == {}
 
 
 @pytest.mark.asyncio
@@ -239,6 +243,7 @@ async def test_execute_runs_blog_post_service_with_scope_and_filters() -> None:
     assert blog_call["channels"] is None
     assert blog_call["default_report_type"] is None
     assert blog_call["default_brief_type"] is None
+    assert blog_call["extras"] == {}
 
 
 @pytest.mark.asyncio
@@ -308,6 +313,7 @@ async def test_execute_threads_user_selected_channels_into_email_campaign_servic
 
     assert result["status"] == "completed"
     assert campaign.calls[0]["channels"] == ("email_cold",)
+    assert campaign.calls[0]["extras"] == {}
 
 
 @pytest.mark.asyncio
@@ -330,6 +336,7 @@ async def test_execute_falls_back_to_plan_default_channels_when_request_omits_th
 
     assert result["status"] == "completed"
     assert campaign.calls[0]["channels"] == ("email_cold", "email_followup")
+    assert campaign.calls[0]["extras"] == {}
 
 
 @pytest.mark.asyncio
@@ -350,6 +357,7 @@ async def test_execute_threads_user_selected_report_type_into_report_service() -
 
     assert result["status"] == "completed"
     assert report.calls[0]["default_report_type"] == "customer_health"
+    assert report.calls[0]["extras"] == {}
 
 
 @pytest.mark.asyncio
@@ -370,6 +378,7 @@ async def test_execute_threads_user_selected_brief_type_into_sales_brief_service
 
     assert result["status"] == "completed"
     assert sales_brief.calls[0]["default_brief_type"] == "renewal"
+    assert sales_brief.calls[0]["extras"] == {}
 
 
 @pytest.mark.asyncio
