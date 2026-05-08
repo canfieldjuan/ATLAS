@@ -25,12 +25,13 @@ class _CampaignService:
     def __init__(self):
         self.calls = []
 
-    async def generate(self, *, scope, target_mode, limit=None, filters=None):
+    async def generate(self, *, scope, target_mode, limit=None, filters=None, **kwargs):
         self.calls.append({
             "scope": scope,
             "target_mode": target_mode,
             "limit": limit,
             "filters": dict(filters or {}),
+            "kwargs": dict(kwargs),
         })
         return {"generated": 1, "saved_ids": ["draft-1"]}
 
@@ -142,7 +143,7 @@ async def test_preview_generation_route_returns_preflight_plan():
 
     assert payload["can_run"] is True
     assert payload["outputs"] == ["email_campaign"]
-    assert payload["estimated_cost_usd"] == 0.18
+    assert payload["estimated_cost_usd"] == 0.36
     assert payload["missing_inputs"] == []
 
 

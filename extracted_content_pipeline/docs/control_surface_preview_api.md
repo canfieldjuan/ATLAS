@@ -88,7 +88,7 @@ Current preset ids:
 {
   "outputs": ["email_campaign", "report"],
   "limit": 2,
-  "max_cost_usd": 2.0,
+  "max_cost_usd": 3.0,
   "inputs": {
     "target_account": "Acme",
     "offer": "Churn intelligence audit",
@@ -108,7 +108,7 @@ preset.
 {
   "can_run": true,
   "outputs": ["email_campaign", "report"],
-  "estimated_cost_usd": 1.46,
+  "estimated_cost_usd": 2.92,
   "missing_inputs": [],
   "blocked_outputs": [],
   "warnings": [],
@@ -117,7 +117,7 @@ preset.
     "preset": null,
     "outputs": ["email_campaign", "report"],
     "limit": 2,
-    "max_cost_usd": 2.0,
+    "max_cost_usd": 3.0,
     "ingestion_profile": "domain_specific",
     "require_quality_gates": true,
     "allow_unimplemented_outputs": false
@@ -128,6 +128,8 @@ preset.
 Treat `can_run=false` as a hard stop for generation controls. The UI can still
 show the selected plan, but it should not enable the generate button until
 `missing_inputs`, `blocked_outputs`, and budget warnings are resolved.
+`estimated_cost_usd` is conservative: generated assets default to one parse
+retry, so preview budgets include the worst-case retry attempt count.
 
 ## Plan Payload
 
@@ -175,7 +177,7 @@ show the selected plan, but it should not enable the generate button until
   "preview": {
     "can_run": true,
     "outputs": ["email_campaign", "report"],
-    "estimated_cost_usd": 1.46,
+    "estimated_cost_usd": 2.92,
     "missing_inputs": [],
     "blocked_outputs": [],
     "warnings": []

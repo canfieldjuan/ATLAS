@@ -17,7 +17,7 @@ def test_preview_defaults_to_email_only_and_reports_missing_inputs():
     assert preview["can_run"] is False
     assert preview["outputs"] == ["email_campaign"]
     assert preview["missing_inputs"] == ["target_account", "offer"]
-    assert preview["estimated_cost_usd"] == 0.18
+    assert preview["estimated_cost_usd"] == 0.36
 
 
 def test_preview_allows_implemented_outputs_under_budget():
@@ -25,7 +25,7 @@ def test_preview_allows_implemented_outputs_under_budget():
         {
             "outputs": ["email_campaign", "report"],
             "limit": 2,
-            "max_cost_usd": 2.0,
+            "max_cost_usd": 3.0,
             "inputs": {
                 "target_account": "Acme",
                 "offer": "Churn intelligence audit",
@@ -36,7 +36,7 @@ def test_preview_allows_implemented_outputs_under_budget():
 
     assert preview["can_run"] is True
     assert preview["outputs"] == ["email_campaign", "report"]
-    assert preview["estimated_cost_usd"] == 1.46
+    assert preview["estimated_cost_usd"] == 2.92
     assert preview["missing_inputs"] == []
     assert preview["blocked_outputs"] == []
 
@@ -70,7 +70,24 @@ def test_preview_blocks_when_estimate_exceeds_budget():
         )
 
     assert preview["can_run"] is False
-    assert "Estimated cost exceeds max_cost_usd: 1.10 > 0.25" in preview["warnings"]
+    assert "Estimated cost exceeds max_cost_usd: 2.20 > 0.25" in preview["warnings"]
+
+
+def test_preview_budget_gate_uses_retry_adjusted_cost():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["report"],
+            "limit": 2,
+            "max_cost_usd": 1.10,
+            "inputs": {
+                "opportunity_id": "opp_123",
+            },
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["estimated_cost_usd"] == 2.2
+    assert "Estimated cost exceeds max_cost_usd: 2.20 > 1.10" in preview["warnings"]
 
 
 def test_preview_can_include_future_outputs_when_explicitly_allowed():
