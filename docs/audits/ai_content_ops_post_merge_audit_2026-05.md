@@ -47,7 +47,7 @@ surface that this audit walks.
 - [x] `extracted_content_pipeline/content_ops_execution.py` (265 LOC, 6 tests)
 - [x] `extracted_content_pipeline/api/control_surfaces.py` (195 LOC, 10 tests)
 - [x] `extracted_content_pipeline/blog_generation.py` (396 LOC, 9 tests) + `blog_ports.py` (88 LOC)
-- [ ] Parse-retry behavior change across the four existing generators (silent change to already-audited code) — pending
+- [x] Parse-retry behavior change across all five generators (commits `7616fc00`, `124b756e`, `3c4b00d1`)
 
 ---
 
@@ -139,6 +139,14 @@ Ranked by impact:
 12. **MAJOR** — `blog_generation.py`: concurrent writes to
     `blog_posts` from legacy autonomous task + new service. Slug
     uniqueness at DB level needs verification (migrations 084 + 264).
+13. **BLOCKER** — Parse-retry default doubles per-opportunity LLM
+    cost upper bound across all 5 generators, but `OUTPUT_CATALOG`
+    cost estimates and `max_cost_usd` budget gate were not updated.
+    Budget contract broken silently.
+14. **MAJOR** — Pre-existing audited test
+    `test_generate_skips_unparseable_response_and_records_error` was
+    silently rewritten to mask the v0→v1 behavior change. Same test
+    name, different contract.
 
 ---
 
@@ -1150,6 +1158,241 @@ The 9 tests cover:
 
 ---
 
+### Parse-retry behavior change across all 5 generators (commits `7616fc00`, `124b756e`, `3c4b00d1`)
+
+**Scope:** silent behavior change applied uniformly to
+`campaign_generation.py`, `report_generation.py`,
+`landing_page_generation.py`, `sales_brief_generation.py`, and
+`blog_generation.py`. Each now defaults to **one parse retry on
+unparseable LLM JSON** (2 total LLM calls per opportunity), with
+configurable `parse_retry_attempts: int = 1` and
+`parse_retry_response_excerpt_chars: int = 800`.
+
+The pattern in each file:
+
+1. Two new `*GenerationConfig` fields:
+   ```python
+   parse_retry_attempts: int = 1
+   parse_retry_response_excerpt_chars: int = 800
+   ```
+2. Three duplicated helpers per file: `_*_user_prompt(...)`,
+   `_clip_invalid_response`, `_accumulate_usage`
+3. Loop in `_generate_one`:
+   ```python
+   attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
+   for attempt_no in range(1, attempts + 1):
+       response = await self._llm.complete(...)
+       total_usage = _accumulate_usage(total_usage, response.usage)
+       parsed = parse_*_response(response.content)
+       if parsed:
+           return {**parsed, "_parse_attempts": attempt_no, ...}
+       last_response = _clip_invalid_response(response.content, limit=...)
+   return None
+   ```
+4. Metadata records `attempt_no` on each LLM call;
+   `_parse_attempts` recorded on the returned parsed dict and
+   persisted to `metadata.generation_parse_attempts` on the saved
+   draft.
+
+**Important context:** the prior audits of #350 / #352 / #355
+explicitly noted "no validation feedback retry, unlike `run_reasoning`
+— deliberate v0 simplicity choice." That deliberate design has been
+silently reversed in this batch.
+
+#### BLOCKER — Default doubles per-opportunity LLM cost upper bound; budget gate broken
+
+Pre-change: each generator made exactly 1 LLM call per opportunity.
+`control_surfaces.OUTPUT_CATALOG` cost estimates (e.g.,
+`report.estimated_unit_cost_usd = 0.55`) were calibrated against
+that assumption.
+
+Post-change: default is up to 2 LLM calls per opportunity. The
+preview's `estimated_cost_usd` and the `max_cost_usd` budget gate
+under-estimate cost by up to 2× on every output that hits a parse
+retry.
+
+**Failure mode (concrete scenario):**
+
+- User sets `max_cost_usd = 1.10` for 2 reports
+  (unit cost `0.55 × 2 = 1.10`).
+- Preview returns `can_run = True`, `estimated_cost_usd = 1.10`.
+- LLM produces unparseable JSON for both opportunities. Each retries.
+- Actual cost: ~2.20 (2 opportunities × 2 attempts × 0.55).
+- User's budget gate is bypassed at runtime. They get billed double.
+
+This breaks the trust contract on `max_cost_usd`. Severity is
+**BLOCKER** because it's a budget breach hidden behind a "we'll
+handle bad responses for you" feature, with no surface telling the
+operator "your budget might be 2× the estimate."
+
+**Fix paths:**
+
+1. **Conservative cost estimate:** `estimate_cost_usd` returns the
+   worst case `unit_cost × limit × (parse_retry_attempts + 1)`.
+   Always pessimistic; budget gate stays honest.
+2. **Two-tier estimate in preview output:** `estimated_cost_usd`
+   stays at the single-call number; add
+   `max_estimated_cost_usd` reflecting the retry upper bound.
+   Preview surfaces both; budget gate uses the max.
+3. **Default to opt-in retry:** flip `parse_retry_attempts` default
+   to 0. Hosts that want retry enable it explicitly. Cost-estimation
+   contract holds as-is.
+
+Option 1 is least invasive at the API level. Option 3 is most
+correct against the prior v0 design intent. Either way, the current
+state is broken.
+
+#### MAJOR — Pre-existing audited test silently rewritten to mask the change
+
+The audit of PR #350 explicitly verified
+`test_generate_skips_unparseable_response_and_records_error` for
+the report generator: send one unparseable response, assert the
+draft is skipped and the error is recorded.
+
+Commit `3c4b00d1` rewrote that test to send **two** unparseable
+responses (`["not json garbage", "still not json"]`). Same test
+name, different contract:
+
+```python
+# Now in tests/test_extracted_report_generation.py:
+async def test_generate_skips_unparseable_response_and_records_error() -> None:
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=["not json garbage", "still not json"],  # WAS: ["not json garbage"]
+    )
+    ...
+    assert result.skipped == 1
+```
+
+**Failure mode:** the test contract that the v0 audit pinned ("one
+unparseable response → skip") is gone. Anyone reading the test name
+in the future thinks they're verifying the v0 behavior; they're
+actually verifying the v1 retry-then-skip behavior. Silent
+contract drift.
+
+**Fix:** rename the rewritten test to something like
+`test_generate_skips_after_all_retries_unparseable` so the name
+matches the post-change contract. Add (or restore) a separate
+test pinning the single-call behavior with
+`config=ReportGenerationConfig(parse_retry_attempts=0)` if the v0
+contract is still meant to be supported.
+
+The same rewrite happened across all four pre-existing generators
+(`landing_page_generation`, `report_generation`,
+`sales_brief_generation`, plus the campaign one in `7616fc00`).
+
+#### MAJOR — Helpers duplicated across 5 generators
+
+`_clip_invalid_response`, `_accumulate_usage`, and the per-generator
+`_*_user_prompt` helpers are byte-for-byte (or near-byte-for-byte)
+copies across all five generators (~50 LOC × 5 files =
+~250 LOC of duplication).
+
+The earlier `_jsonb_helpers.py` consolidation (commit `aef4fdd4`,
+`PR-ContentAssets-Consistency-1`) demonstrated the pattern. The
+same shape applies here.
+
+**Failure mode:** any future fix to retry semantics (e.g., the
+BLOCKER above — making cost-aware) needs to touch five files. One
+file getting missed = silent inconsistency. Same drift symptom the
+consistency PR was meant to address.
+
+**Fix:** extract to
+`extracted_content_pipeline/services/_parse_retry_helpers.py`. Three
+shared functions:
+
+```python
+def clip_invalid_response(text: str, *, limit: int) -> str: ...
+def accumulate_usage(total: Mapping[str, Any], usage: Mapping[str, Any] | None) -> dict[str, Any]: ...
+
+@dataclass(frozen=True)
+class ParseRetryConfig:
+    parse_retry_attempts: int = 1
+    parse_retry_response_excerpt_chars: int = 800
+```
+
+Per-generator user-prompt helper becomes a one-line wrapper around
+a generic helper that takes the asset-specific base prompt:
+
+```python
+def _retry_aware_user_prompt(
+    *,
+    base_prompt: str,
+    prior_invalid_response: str = "",
+    asset_label: str,  # "campaign JSON", "report JSON", etc.
+) -> str: ...
+```
+
+#### MAJOR — Retry user message embeds prior LLM response excerpt (info-leak inside session)
+
+Same concern as flagged in `blog_generation.py`, now across all
+five generators. The retry user prompt includes
+`f"Previous response excerpt:\n{prior_invalid_response}"` (up to
+800 chars).
+
+**Failure mode:** if the first LLM response leaked something
+(internal IDs, host context the model invented, partial credentials
+in error messages), the retry message re-includes that excerpt as
+input. If the LLM is being audited or if responses are logged with
+different retention than prompts, the second-attempt prompt now
+contains content from the first response. Cross-contamination
+between "model output" and "prompt input" that wasn't there
+before the change.
+
+**Fix:** redact common patterns before echoing OR document the
+trade-off OR set `parse_retry_response_excerpt_chars=0` as default
+(retry without echoing the prior response).
+
+#### MINOR — `attempt_no` metadata duplicates `_parse_attempts` in result
+
+Each LLM call gets `metadata={"attempt_no": N}`. The final returned
+parsed dict gets `"_parse_attempts": attempt_no`. Two sources of
+truth for the same fact. If the host's LLM client records metadata
+to a different surface (e.g., usage tracking) than the result is
+consumed (e.g., persisted `metadata.generation_parse_attempts`),
+they can diverge.
+
+Probably benign; just noisy. Document the precedence or drop one.
+
+#### NIT — `parse_retry_attempts` semantics confusing
+
+`parse_retry_attempts: int = 1` and
+`attempts = max(1, int(parse_retry_attempts or 0) + 1)`. So:
+
+- `parse_retry_attempts=0` → 1 total attempt (no retry)
+- `parse_retry_attempts=1` → 2 total attempts (default)
+- `parse_retry_attempts=3` → 4 total attempts
+
+The name reads as "number of attempts" but the value is "number of
+retries on top of the initial attempt." Common confusing-semantics
+pattern.
+
+**Fix:** rename to `parse_max_retries` (current semantic is
+implicitly this) OR `parse_total_attempts` (and adjust math) OR
+document explicitly in the docstring.
+
+#### Test coverage of the change
+
+For each of the five generators, three new tests pin the new
+behavior:
+
+- `test_generate_retries_unparseable_response_once_by_default`
+- `test_generate_can_disable_parse_retry`
+- `test_generate_accumulates_usage_across_parse_retry_attempts`
+
+Strong positive coverage. Gaps:
+
+- The BLOCKER: no test verifies that `max_cost_usd` accounts for
+  retry upper bound (because it doesn't, by current code)
+- No test for `_accumulate_usage` with an LLM client that returns
+  cumulative usage (would surface the per-call assumption
+  mentioned in the blog_generation MINOR)
+- No test verifies that the rewritten
+  `test_generate_skips_unparseable_response_and_records_error`
+  behavior is the *intended* contract vs. an accidental
+  test-fix-to-silence-failures
+
+---
+
 ## Suggested follow-up PR scope
 
 (Pending the architecture decision above.)
@@ -1196,15 +1439,52 @@ from the API hardening:
 The MINORs and NITs ride along as "incidental cleanup" or stay
 deferred — author's call.
 
+**`PR-ContentOps-PostMergeAudit-1c: fix parse-retry budget breach`**
+
+Independent of -1a / -1b because the parse-retry fix is a focused
+correctness change:
+
+- Pick one of the three fix paths for the cost-estimate / budget
+  contract (conservative-pessimistic estimate, two-tier estimate, or
+  opt-in retry default)
+- Extract `_clip_invalid_response`, `_accumulate_usage`, and the
+  generic retry-aware user-prompt helper into
+  `extracted_content_pipeline/services/_parse_retry_helpers.py`. Five
+  generators import from one source.
+- Either redact common patterns from the prior-response excerpt OR
+  default `parse_retry_response_excerpt_chars=0` (retry without
+  echoing the prior response) OR document the info-leak trade-off
+- Rename the rewritten
+  `test_generate_skips_unparseable_response_and_records_error` to
+  match the new contract (`test_generate_skips_after_all_retries_*`)
+  and add (or restore) a test pinning the no-retry behavior under
+  `parse_retry_attempts=0`
+- Document the `parse_retry_attempts` semantics
+  (`int = N retries on top of initial attempt`) on every config
+  dataclass
+
+This PR can land before -1a / -1b because the changes are localized
+to the parse-retry pattern. -1a's architecture decision affects the
+cost-estimate model only if the executor starts honoring per-call
+config (Option A); -1b is independent.
+
 ---
 
-## What I did not review yet
+## Audit complete
 
-- The parse-retry behavior change applied to the four already-audited
-  generators (`campaign_generation.py`, `report_generation.py`,
-  `landing_page_generation.py`, `sales_brief_generation.py`). Silent
-  change to code that was previously audited as "no validation
-  feedback retry, deliberate v0 simplicity." Need to verify the new
-  default doesn't break cost ceilings or test pinning.
+All six files audited. This doc is now the full record of findings;
+the next move is the architecture decision and the three follow-up
+PRs scoped above.
 
-This doc will be appended as that audit completes.
+Verification that I'd recommend doing as part of -1c (out of scope
+for in-session review):
+
+- Migration check: `grep -A2 "UNIQUE\|CREATE.*INDEX"
+  extracted_content_pipeline/storage/migrations/084_blog_posts.sql
+  extracted_content_pipeline/storage/migrations/264_blog_post_rejection_count.sql`
+  to confirm/refute the slug-uniqueness concern from the
+  `blog_generation.py` audit
+- `blog_pack` `grounded_vendors` usage check:
+  `grep -n "grounded_vendors" extracted_quality_gate/blog_pack.py`
+  to confirm whether the `frozenset` vs `set` type drift matters in
+  practice
