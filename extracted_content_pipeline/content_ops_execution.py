@@ -275,6 +275,7 @@ async def _dispatch_sales_brief(
         parse_retry_response_excerpt_chars=_step_config_int(
             step.config, "parse_retry_response_excerpt_chars"
         ),
+        quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
     )
 
 
@@ -296,6 +297,7 @@ async def _dispatch_landing_page(
         parse_retry_response_excerpt_chars=_step_config_int(
             step.config, "parse_retry_response_excerpt_chars"
         ),
+        quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
     )
 
 
@@ -447,6 +449,27 @@ def _filters_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return filters if isinstance(filters, Mapping) else None
 
 
+# PR-OptionA-4: explicit allowlist of MarketingCampaign.context fields.
+# Prior shape was a "negative-list inversion" -- everything not on a small
+# excluded set leaked into context. That meant standard control-surface
+# inputs (target_account, opportunity_id, channels, report_type, brief_type,
+# filters, ...) all flowed into the landing-page service's campaign payload
+# as if they were intentional context. Audit MAJOR.
+#
+# This list starts conservative -- domain-context fields the landing-page
+# prompt actually consumes. New entries are added explicitly; unrelated
+# request inputs no longer leak by default.
+_MARKETING_CAMPAIGN_CONTEXT_FIELDS: frozenset[str] = frozenset({
+    "industry",
+    "pain_points",
+    "differentiators",
+    "customer_segments",
+    "key_metrics",
+    "proof_points",
+    "competitive_alternatives",
+})
+
+
 def _marketing_campaign_from_inputs(inputs: Mapping[str, Any]) -> MarketingCampaign:
     offer = _clean(inputs.get("offer"))
     audience = _clean(inputs.get("audience"))
@@ -461,7 +484,7 @@ def _marketing_campaign_from_inputs(inputs: Mapping[str, Any]) -> MarketingCampa
         context={
             str(key): value
             for key, value in inputs.items()
-            if key not in {"campaign_name", "offer", "audience", "vendors", "categories", "tags"}
+            if key in _MARKETING_CAMPAIGN_CONTEXT_FIELDS
         },
     )
 

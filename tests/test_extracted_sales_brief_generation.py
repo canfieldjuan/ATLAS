@@ -687,3 +687,58 @@ async def test_generate_per_call_parse_retry_response_excerpt_chars_override():
     assert "XXX" in retry_user_prompt
     excerpt_section = retry_user_prompt.split("excerpt:")[1].lstrip()
     assert len(excerpt_section.rstrip()) <= 50
+
+
+# -----------------------
+# PR-OptionA-4: per-call quality_gates_enabled override
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_quality_gates_enabled_false_skips_quality_gate() -> None:
+    """quality_gates_enabled=False short-circuits the quality gate, even on
+    parses that would normally fail (e.g., missing reference_ids)."""
+
+    bad_response = json.dumps({
+        "title": "Brief",
+        "headline": "punchy",
+        "brief_type": "pre_call",
+        "sections": [
+            {"id": "s1", "title": "T", "body_markdown": "b", "evidence_ids": []}
+        ],
+        "reference_ids": [],  # would normally hit no_references blocker
+    })
+    service, _intel, sales_briefs, _llm, _skills, _rp = _service(responses=[bad_response])
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        quality_gates_enabled=False,
+    )
+
+    # Gate skipped -> the bad parse is persisted.
+    assert result.generated == 1
+    assert len(sales_briefs.saved[0]["drafts"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_quality_gates_enabled_true_still_blocks() -> None:
+    bad_response = json.dumps({
+        "title": "Brief",
+        "headline": "punchy",
+        "brief_type": "pre_call",
+        "sections": [
+            {"id": "s1", "title": "T", "body_markdown": "b", "evidence_ids": []}
+        ],
+        "reference_ids": [],
+    })
+    service, _intel, sales_briefs, _llm, _skills, _rp = _service(responses=[bad_response])
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        quality_gates_enabled=True,
+    )
+
+    assert result.generated == 0
+    assert sales_briefs.saved == []

@@ -61,6 +61,7 @@ class LandingPageGenerationConfig:
     max_tokens: int = 4096
     temperature: float = 0.3
     quality_policy: QualityPolicy | None = None
+    quality_gates_enabled: bool = True
     parse_retry_attempts: int = 1
     parse_retry_response_excerpt_chars: int = 800
 
@@ -213,6 +214,7 @@ class LandingPageGenerationService:
         max_tokens: int | None = None,
         parse_retry_attempts: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
+        quality_gates_enabled: bool | None = None,
     ) -> LandingPageGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -236,6 +238,13 @@ class LandingPageGenerationService:
             self._config.parse_retry_response_excerpt_chars
             if parse_retry_response_excerpt_chars is None
             else int(parse_retry_response_excerpt_chars)
+        )
+        # PR-OptionA-4: when False, skip the quality gate entirely. Lets
+        # operators opt out of gating per call without changing config.
+        resolved_quality_gates_enabled = (
+            self._config.quality_gates_enabled
+            if quality_gates_enabled is None
+            else bool(quality_gates_enabled)
         )
 
         if not str(campaign.name or "").strip():
@@ -284,7 +293,10 @@ class LandingPageGenerationService:
                 errors=({"campaign_name": campaign.name, "reason": "unparseable_response"},),
             )
 
-        quality = self._quality_check(parsed)
+        quality = self._quality_check(
+            parsed,
+            quality_gates_enabled=resolved_quality_gates_enabled,
+        )
         if not quality["passed"]:
             return LandingPageGenerationResult(
                 requested=1,
@@ -393,7 +405,18 @@ class LandingPageGenerationService:
             )
         return None
 
-    def _quality_check(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
+    def _quality_check(
+        self,
+        parsed: Mapping[str, Any],
+        *,
+        quality_gates_enabled: bool = True,
+    ) -> dict[str, Any]:
+        # PR-OptionA-4: opt out of the quality gate per call. The plan
+        # emits ``quality_gates_enabled`` in step.config so the executor
+        # can route the operator's choice to the service. False short-
+        # circuits the gate; True (the default) preserves prior behavior.
+        if not quality_gates_enabled:
+            return {"passed": True, "blockers": ()}
         report_input = QualityInput(
             artifact_type="landing_page",
             context={

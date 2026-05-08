@@ -48,6 +48,7 @@ class _OpportunityService:
         quality_revalidation_enabled: bool | None = None,
         quality_prompt_proof_term_limit: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
+        quality_gates_enabled: bool | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -64,6 +65,7 @@ class _OpportunityService:
             "quality_revalidation_enabled": quality_revalidation_enabled,
             "quality_prompt_proof_term_limit": quality_prompt_proof_term_limit,
             "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
+            "quality_gates_enabled": quality_gates_enabled,
             "extras": dict(extras),
         })
         return _Result()
@@ -82,6 +84,7 @@ class _LandingPageService:
         max_tokens: int | None = None,
         parse_retry_attempts: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
+        quality_gates_enabled: bool | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -91,6 +94,7 @@ class _LandingPageService:
             "max_tokens": max_tokens,
             "parse_retry_attempts": parse_retry_attempts,
             "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
+            "quality_gates_enabled": quality_gates_enabled,
             "extras": dict(extras),
         })
         return _Result()
@@ -624,3 +628,86 @@ async def test_execute_threads_excerpt_kwarg_into_report_sales_brief_blog_landin
         if label != "landing_page":
             assert call.get("quality_revalidation_enabled") is None, label
             assert call.get("quality_prompt_proof_term_limit") is None, label
+
+
+# -----------------------
+# PR-OptionA-4: quality_gates_enabled + MarketingCampaign.context leak fix
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_quality_gates_enabled_into_sales_brief() -> None:
+    """When the plan emits quality_gates_enabled in step.config, the executor
+    threads it through. Default is True; this test only confirms threading."""
+
+    sales_brief = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "inputs": {"target_account": "Acme", "offer": "Audit", "opportunity_id": "opp-1"},
+        },
+        services=ContentOpsExecutionServices(sales_brief=sales_brief),
+    )
+
+    call = sales_brief.calls[0]
+    # Plan default emits quality_gates_enabled=True (from request.require_quality_gates).
+    assert call["quality_gates_enabled"] is True
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_quality_gates_enabled_into_landing_page() -> None:
+    landing = _LandingPageService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {"campaign_name": "Q3", "offer": "Audit", "audience": "VPs"},
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    call = landing.calls[0]
+    assert call["quality_gates_enabled"] is True
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> None:
+    """Audit MAJOR fix: prior shape dumped every non-{name, persona,
+    value_prop, vendors, categories, tags} input field into
+    campaign.context. Now context is an explicit allowlist; standard
+    control-surface inputs (target_account, opportunity_id, channels,
+    filters, etc.) stay out."""
+
+    landing = _LandingPageService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "campaign_name": "Q3",
+                "offer": "Audit",
+                "audience": "VPs",
+                "target_account": "Acme",  # was leaking pre-fix
+                "opportunity_id": "opp-1",  # was leaking pre-fix
+                "filters": {"status": "ready"},  # was leaking pre-fix
+                "channels": ["email_cold"],  # was leaking pre-fix
+                # Allowlisted fields DO flow through:
+                "industry": "fintech",
+                "pain_points": ["churn", "renewal"],
+            },
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    campaign = landing.calls[0]["campaign"]
+    context = dict(campaign.context)
+
+    # Allowlisted fields land in context.
+    assert context.get("industry") == "fintech"
+    assert context.get("pain_points") == ["churn", "renewal"]
+
+    # Pre-fix leakers stay out.
+    assert "target_account" not in context
+    assert "opportunity_id" not in context
+    assert "filters" not in context
+    assert "channels" not in context
