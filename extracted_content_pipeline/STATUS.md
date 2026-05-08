@@ -97,6 +97,10 @@
   outputs to configured campaign, blog-post, report, landing-page, and
   sales-brief services without constructing hidden database, LLM, or Atlas
   dependencies.
+- `scripts/smoke_extracted_content_ops_execution.py` provides a no-network,
+  no-database smoke for the multi-asset Content Ops execution seam. It runs the
+  full campaign preset through injected offline services so hosts can validate
+  execution wiring separately from real provider credentials.
 - `campaign_generation` retries unparseable LLM JSON once by default through
   product config, improving draft yield without moving provider retry policy
   into Atlas runtime code.

@@ -579,6 +579,17 @@ status route reports database availability, injected provider presence, feature
 readiness, and configured limits without resolving sender/LLM/skill providers
 or exposing secrets.
 
+For the multi-asset Content Ops control surface, run the offline execution
+smoke before wiring real asset services:
+
+```bash
+python scripts/smoke_extracted_content_ops_execution.py
+python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --json
+```
+
+This validates the full campaign preset through host-injected deterministic
+services without opening database, network, sender, or LLM handles.
+
 Hosts can inject a `visibility_provider` when mounting the router. The four
 POST operation routes emit best-effort `campaign_operation_started`,
 `campaign_operation_completed`, and `campaign_operation_failed` events through
