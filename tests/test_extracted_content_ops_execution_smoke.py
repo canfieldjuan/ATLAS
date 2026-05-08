@@ -88,6 +88,35 @@ def test_content_ops_execution_smoke_cli_runs_signal_extraction_json() -> None:
     )
 
 
+def test_content_ops_execution_smoke_cli_parameterizes_signal_source_row() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "--outputs",
+            "signal_extraction",
+            "--source-id",
+            "source-42",
+            "--source-vendor",
+            "Salesforce",
+            "--source-contact-email",
+            "ops@example.com",
+            "--source-material",
+            "The renewal created finance pressure.",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    opportunity = payload["steps"][0]["result"]["opportunities"][0]
+    assert opportunity["target_id"] == "source-42"
+    assert opportunity["vendor"] == "Salesforce"
+    assert opportunity["contact_email"] == "ops@example.com"
+
+
 def test_content_ops_execution_smoke_fails_when_required_inputs_missing() -> None:
     completed = subprocess.run(
         [
