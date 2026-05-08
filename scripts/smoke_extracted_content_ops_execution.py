@@ -21,6 +21,14 @@ from extracted_content_pipeline.content_ops_execution import (  # noqa: E402
 )
 
 
+# PR-OptionA-1/2/3 graduated several plan-step fields to load-bearing kwargs
+# (channels, default_report_type, default_brief_type, temperature,
+# max_tokens, parse_retry_attempts, parse_retry_response_excerpt_chars,
+# quality_revalidation_enabled, quality_prompt_proof_term_limit,
+# quality_gates_enabled). The smoke fakes accept (and ignore) those via
+# ``**extras`` -- this CLI exercises the seam end-to-end, not the kwargs
+# contract. Strict per-kwarg assertions live in the dispatcher tests in
+# ``tests/test_extracted_content_ops_execution.py``.
 class _OpportunityAssetService:
     def __init__(self, name: str) -> None:
         self.name = name
@@ -32,8 +40,9 @@ class _OpportunityAssetService:
         target_mode: str,
         limit: int | None = None,
         filters: Mapping[str, Any] | None = None,
+        **extras: Any,
     ) -> dict[str, Any]:
-        del scope
+        del scope, extras
         return {
             "generated": int(limit or 1),
             "asset": self.name,
@@ -44,8 +53,14 @@ class _OpportunityAssetService:
 
 
 class _LandingPageAssetService:
-    async def generate(self, *, scope: Any, campaign: Any) -> dict[str, Any]:
-        del scope
+    async def generate(
+        self,
+        *,
+        scope: Any,
+        campaign: Any,
+        **extras: Any,
+    ) -> dict[str, Any]:
+        del scope, extras
         return {
             "generated": 1,
             "asset": "landing_page",

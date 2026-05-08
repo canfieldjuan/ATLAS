@@ -33,11 +33,35 @@ PR closes the remaining audit MAJORs that don't fit that pattern:
 
 ## Scope (this PR)
 
-Only the two items above. The remaining audit findings
-(`topic` for blog_post -- no service-side landing surface;
-`channel`/`channels` legacy dual-field on
+Only the two items above, plus a smoke-CLI mock fix that became
+necessary mid-PR (see "CI fix piggybacked" below). The remaining
+audit findings (`topic` for blog_post -- no service-side landing
+surface; `channel`/`channels` legacy dual-field on
 `CampaignGenerationConfig`; the 9 MINOR + 2 NIT findings) defer to
 follow-ups.
+
+### CI fix piggybacked
+
+PR #366 (codex/content-ops-execution-smoke) added
+``scripts/smoke_extracted_content_ops_execution.py`` plus
+``tests/test_extracted_content_ops_execution_smoke.py`` to the
+extracted-pipeline CI gate. The smoke fakes
+(``_OpportunityAssetService``, ``_LandingPageAssetService``) had
+strict signatures that pre-dated PR-OptionA-1/2/3, so they reject
+the per-call kwargs the dispatcher now threads through
+(``channels``, ``default_report_type``, ``default_brief_type``,
+temperature/max_tokens/parse-retry knobs, the quality-gate flags).
+#366 merged after #368/#369/#370 but did not update the fakes; this
+PR (#371) is the first PR running CI after that merge, so the
+breakage surfaced here.
+
+Fix: the smoke fakes accept ``**extras`` and discard them. The
+smoke CLI exists to verify the seam end-to-end -- strict per-kwarg
+contract assertions live in
+``tests/test_extracted_content_ops_execution.py``. Folding this
+fix into #371 instead of opening a separate PR avoids a serialized
+3-PR train (#371-fix -> #371-rebase -> #371-merge) for what is
+ultimately a 4-line patch.
 
 ### `quality_gates_enabled`
 
