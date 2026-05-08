@@ -94,7 +94,7 @@ def _blog_generation_user_prompt(
         return (
             f"{base_prompt}\n\n"
             "The previous response could not be parsed as the required JSON object. "
-            "Return one JSON object with non-empty title and content. "
+            "Return one JSON object with a non-empty title. "
             f"Previous response excerpt:\n{prior_invalid_response}"
         )
     return base_prompt

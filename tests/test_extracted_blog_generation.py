@@ -248,6 +248,29 @@ async def test_generate_blocks_low_quality_posts_without_saving() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_routes_missing_content_to_quality_blocked_not_unparseable() -> None:
+    payload = json.loads(_valid_blog_json())
+    payload.pop("content")
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        responses=[json.dumps(payload)],
+        config=BlogPostGenerationConfig(
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 70},
+            )
+        ),
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert any("content_too_short" in blocker for blocker in result.errors[0]["blockers"])
+    assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
 async def test_generate_reports_unparseable_responses() -> None:
     service, _blueprints, blog_posts, _llm, _skills = _service(
         responses=["not json", "still not json"]
