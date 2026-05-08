@@ -456,9 +456,17 @@ def _filters_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:
 # filters, ...) all flowed into the landing-page service's campaign payload
 # as if they were intentional context. Audit MAJOR.
 #
-# This list starts conservative -- domain-context fields the landing-page
-# prompt actually consumes. New entries are added explicitly; unrelated
-# request inputs no longer leak by default.
+# The allowlist is "fields the LLM is allowed to see in campaign.context,"
+# not "fields the prompt consumes by name." The packaged landing-page
+# prompt uses ``{campaign_json}`` as a generic JSON dump, so the LLM sees
+# whatever is in context whether or not the prompt names it. The list
+# starts conservative (domain-context fields hosts have asked for) and
+# grows by explicit additions; unrelated request inputs no longer leak.
+#
+# Backwards-compat note: hosts whose custom landing-page prompts reference
+# context fields outside this allowlist will see empty values post-fix.
+# Add the field here to restore visibility -- see
+# ``plans/PR-OptionA-4.md`` Migration section.
 _MARKETING_CAMPAIGN_CONTEXT_FIELDS: frozenset[str] = frozenset({
     "industry",
     "pain_points",

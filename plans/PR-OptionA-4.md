@@ -57,6 +57,15 @@ touch it.
 
 ### MarketingCampaign.context
 
+**Backwards-compat note:** this is a breaking change for hosts whose
+customized landing-page prompts reference context fields outside the
+new allowlist. The packaged prompt uses ``{campaign_json}`` as a
+generic JSON-dump substitution, so the LLM sees whatever is in
+``campaign.context``; if a host customized the prompt to reference,
+e.g., ``{campaign_json.context.target_account}``, post-fix that
+reference resolves to empty. Migration path is in the Migration
+section below.
+
 Current `_marketing_campaign_from_inputs`:
 
 ```python
@@ -74,9 +83,29 @@ excluded leaks. Standard control-surface inputs (`target_account`,
 `channels`, etc.) all flow into `campaign.context`.
 
 New shape: explicit allowlist of context-meaningful fields. Anything
-not on the allowlist stays out. The allowlist starts conservative
-(domain context fields the landing-page prompt actually consumes)
-and can grow as the contract evolves.
+not on the allowlist stays out. The allowlist is "fields the LLM is
+allowed to see in ``campaign.context``" (the packaged prompt uses a
+generic JSON dump, not field-by-name reference) -- not "fields the
+prompt consumes." It starts conservative and grows by explicit
+additions.
+
+## Migration
+
+Hosts on the prior shape who customized their landing-page prompt
+template to reference context fields not in
+``_MARKETING_CAMPAIGN_CONTEXT_FIELDS`` will see empty values for
+those references post-fix. To restore visibility:
+
+1. Identify the field name your custom prompt references (e.g.,
+   ``target_account``).
+2. Add it to ``_MARKETING_CAMPAIGN_CONTEXT_FIELDS`` in
+   ``content_ops_execution.py``. The list is meant to grow.
+3. Optionally update
+   ``extracted_content_pipeline/docs/control_surface_preview_api.md``
+   to advertise the field as part of the context contract.
+
+Hosts using the packaged prompt unchanged are unaffected -- the
+packaged prompt does not reference context fields by name.
 
 ## Intentional (looks wrong but is deliberate)
 
@@ -107,6 +136,19 @@ and can grow as the contract evolves.
 
 ## Deferred (looks missing but is on purpose)
 
+- **`quality_gates_enabled` for ``report`` and ``blog_post``.** This
+  PR adds it to ``sales_brief`` and ``landing_page`` only, leaving
+  three different per-call gate-skip mechanisms across the five
+  services: ``email_campaign`` uses ``quality_revalidation_enabled``
+  (PR-OptionA-3), ``sales_brief`` / ``landing_page`` use
+  ``quality_gates_enabled`` (this PR), ``report`` / ``blog_post``
+  have no per-call skip. Operators picking "skip quality gates" in
+  the control surface get inconsistent behavior depending on output.
+  **PR-OptionA-5** will add ``quality_gates_enabled`` to
+  ``ReportGenerationConfig`` and ``BlogPostGenerationConfig`` for
+  symmetry. (Could be folded into this PR, but the structural fixes
+  here are tightly scoped; symmetry-completion belongs in its own
+  slice.)
 - `topic` for blog_post (see Intentional).
 - `channel`/`channels` legacy dual-field cleanup -- separate slice.
 - 9 MINOR + 2 NIT findings from the audit -- batch cleanup PR.
