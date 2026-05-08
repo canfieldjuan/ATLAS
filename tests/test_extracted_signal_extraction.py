@@ -81,3 +81,28 @@ async def test_signal_extraction_service_rejects_invalid_limits() -> None:
             source_material="pricing pressure",
             limit=0,
         )
+
+
+@pytest.mark.asyncio
+async def test_signal_extraction_service_stops_after_requested_valid_rows() -> None:
+    service = SignalExtractionService()
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        source_material=[
+            {
+                "id": "review-1",
+                "company": "Acme",
+                "vendor": "HubSpot",
+                "text": "Pricing is a problem.",
+                "contact_email": "buyer@example.com",
+            },
+            {"id": "empty-1", "vendor": "HubSpot"},
+        ],
+        limit=1,
+    )
+
+    assert result.generated == 1
+    assert result.opportunities[0]["target_id"] == "review-1"
+    assert result.warnings == ()

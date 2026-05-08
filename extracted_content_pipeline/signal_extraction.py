@@ -6,9 +6,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .campaign_customer_data import CampaignOpportunityWarning
+from .campaign_customer_data import (
+    CampaignOpportunityWarning,
+    normalize_campaign_opportunity_rows,
+)
 from .campaign_ports import TenantScope
-from .campaign_source_adapters import source_rows_to_campaign_opportunities
+from .campaign_source_adapters import source_row_to_campaign_opportunity
 
 _ROW_LIST_KEYS = ("sources", "documents", "reviews", "transcripts", "complaints", "rows", "data")
 
@@ -70,16 +73,67 @@ class SignalExtractionService:
         )
         if resolved_max_text_chars < 1:
             raise ValueError("max_text_chars must be at least 1")
-        loaded = source_rows_to_campaign_opportunities(
+        return _extract_signals(
             _rows_from_source_material(source_material),
             target_mode=target_mode,
+            limit=resolved_limit,
             max_text_chars=resolved_max_text_chars,
         )
-        return SignalExtractionResult(
-            opportunities=tuple(loaded.opportunities[:resolved_limit]),
-            warnings=loaded.warnings,
+
+
+def _extract_signals(
+    rows: Sequence[Any],
+    *,
+    target_mode: str,
+    limit: int,
+    max_text_chars: int,
+) -> SignalExtractionResult:
+    opportunities: list[dict[str, Any]] = []
+    warnings: list[CampaignOpportunityWarning] = []
+    for index, row in enumerate(rows, start=1):
+        if len(opportunities) >= limit:
+            break
+        if not isinstance(row, Mapping):
+            warnings.append(CampaignOpportunityWarning(
+                code="row_not_object",
+                row_index=index,
+                message="Skipped source row because it is not an object.",
+            ))
+            continue
+        opportunity, row_warnings = source_row_to_campaign_opportunity(
+            row,
+            row_index=index,
+            max_text_chars=max_text_chars,
+        )
+        warnings.extend(row_warnings)
+        if not opportunity:
+            continue
+        normalized = normalize_campaign_opportunity_rows(
+            [opportunity],
             target_mode=target_mode,
         )
+        opportunities.extend(normalized.opportunities)
+        warnings.extend(_warnings_for_row(normalized.warnings, index))
+    return SignalExtractionResult(
+        opportunities=tuple(opportunities[:limit]),
+        warnings=tuple(warnings),
+        target_mode=target_mode,
+    )
+
+
+def _warnings_for_row(
+    warnings: Sequence[CampaignOpportunityWarning],
+    row_index: int,
+) -> tuple[CampaignOpportunityWarning, ...]:
+    return tuple(
+        CampaignOpportunityWarning(
+            code=warning.code,
+            message=warning.message,
+            row_index=row_index if warning.row_index is not None else None,
+            field=warning.field,
+        )
+        for warning in warnings
+    )
 
 
 def _rows_from_source_material(source_material: Any) -> list[Any]:
