@@ -168,8 +168,6 @@ def _loaded_rows(
     )
 
 
-
-
 def _clean(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
