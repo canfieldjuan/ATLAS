@@ -205,6 +205,7 @@ class ReportGenerationService:
         target_mode: str,
         limit: int | None = None,
         filters: Mapping[str, Any] | None = None,
+        default_report_type: str | None = None,
     ) -> ReportGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -268,7 +269,12 @@ class ReportGenerationService:
                 })
                 continue
 
-            drafts.append(self._build_draft(parsed, target_id=target_id, target_mode=target_mode))
+            drafts.append(self._build_draft(
+                parsed,
+                target_id=target_id,
+                target_mode=target_mode,
+                default_report_type=default_report_type,
+            ))
 
         saved_ids: tuple[str, ...] = ()
         if drafts:
@@ -398,6 +404,7 @@ class ReportGenerationService:
         *,
         target_id: str,
         target_mode: str,
+        default_report_type: str | None = None,
     ) -> ReportDraft:
         sections = tuple(
             ReportSection(
@@ -422,7 +429,13 @@ class ReportGenerationService:
                 v = str(evidence_id).strip()
                 if v and v not in ref_seen:
                     ref_seen.append(v)
-        report_type = str(parsed.get("report_type") or self._config.default_report_type)
+        # Per-call override (when present and non-empty) wins over the
+        # construction-time default. PR-OptionA-1: makes the plan's
+        # step.config["default_report_type"] load-bearing at dispatch time.
+        # The LLM's own `report_type` JSON field still wins when present;
+        # this only affects what fills in when the LLM omits it.
+        configured_default = (default_report_type or "").strip() or self._config.default_report_type
+        report_type = str(parsed.get("report_type") or configured_default)
         metadata: dict[str, Any] = {
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
