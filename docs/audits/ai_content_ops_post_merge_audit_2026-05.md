@@ -45,7 +45,7 @@ surface that this audit walks.
 - [x] `extracted_content_pipeline/control_surfaces.py` (342 LOC, 6 tests)
 - [x] `extracted_content_pipeline/generation_plan.py` (251 LOC, 6 tests)
 - [x] `extracted_content_pipeline/content_ops_execution.py` (265 LOC, 6 tests)
-- [ ] `extracted_content_pipeline/api/control_surfaces.py` (195 LOC) — pending
+- [x] `extracted_content_pipeline/api/control_surfaces.py` (195 LOC, 10 tests)
 - [ ] `extracted_content_pipeline/blog_generation.py` (396 LOC) — pending
 - [ ] Parse-retry behavior change across the four existing generators (silent change to already-audited code) — pending
 
@@ -101,28 +101,36 @@ Ranked by impact:
 
 1. **BLOCKER** — `content_ops_execution.py`: plan step config silently
    ignored by executor. Preview lies about what execution will do.
-2. **MAJOR** — `content_ops_execution.py`: `MarketingCampaign.context`
+   Inherited by `api/control_surfaces.py` — the `POST /execute` route
+   exposes the bug to HTTP callers verbatim.
+2. **MAJOR** — `api/control_surfaces.py`: `errors[*].reason` from the
+   executor (raw `str(exc)` from host service exceptions) is returned
+   verbatim to HTTP clients. Information disclosure surface.
+3. **MAJOR** — `api/control_surfaces.py`: `/preview`, `/plan`,
+   `/execute` accept arbitrary unbounded JSON dicts. No Pydantic
+   model, no size limit, no schema validation beyond soft coercions.
+4. **MAJOR** — `content_ops_execution.py`: `MarketingCampaign.context`
    leaks unrelated request inputs (e.g., `report_type`, `opportunity_id`)
    into the landing-page LLM prompt.
-3. **MAJOR** — `content_ops_execution.py`: `landing_page` is a
+5. **MAJOR** — `content_ops_execution.py`: `landing_page` is a
    hard-coded special case; every new asset with a non-standard
    `generate` signature requires another `if` branch.
-4. **MAJOR** — `generation_plan.py`: landing-page step doesn't carry
+6. **MAJOR** — `generation_plan.py`: landing-page step doesn't carry
    `MarketingCampaign` data — masked at runtime by the executor's
    `_marketing_campaign_from_inputs` reaching back into `request.inputs`.
-5. **MAJOR** — `generation_plan.py`: step configs claim per-output
+7. **MAJOR** — `generation_plan.py`: step configs claim per-output
    config (channels, report_type, brief_type) that never reaches the
    service. Same root cause as #1.
-6. **MAJOR** — `generation_plan.py`: `email_campaign` step emits
+8. **MAJOR** — `generation_plan.py`: `email_campaign` step emits
    `channels` (tuple) but `CampaignGenerationConfig` also has legacy
    `channel: str` field. Hidden config fields are a recurring drift
    symptom.
-7. **MAJOR** — `control_surfaces.py`: silent preset-typo fallback to
+9. **MAJOR** — `control_surfaces.py`: silent preset-typo fallback to
    `email_only`. User types `preset="contmarket"`, gets email-only
    output, no diagnostic.
-8. **MAJOR** — `control_surfaces.py`: `outputs` + `preset` both set:
-   preset silently ignored. UI forms that send both think the preset
-   is contributing.
+10. **MAJOR** — `control_surfaces.py`: `outputs` + `preset` both set:
+    preset silently ignored. UI forms that send both think the preset
+    is contributing.
 
 ---
 
@@ -634,6 +642,288 @@ architecture decision.
 
 ---
 
+### `api/control_surfaces.py` (195 LOC, 10 tests)
+
+**On-scope verdict for this file:** FastAPI router factory exposing
+4 routes (`GET /control-surfaces`, `POST /preview`, `POST /plan`,
+`POST /execute`). Soft FastAPI dependency (try/except ImportError) so
+the lower layers stay importable without FastAPI installed — good.
+Execute route correctly opt-in (503 if no provider configured) — good.
+Hosts inject auth via `dependencies` kwarg — standard pattern.
+
+The router itself is thin: it delegates to `preview_from_mapping`,
+`build_generation_plan_from_mapping`, and
+`execute_content_ops_from_mapping`. Most findings here are inherited
+from the layers below + the additional concerns of "this is now an
+HTTP surface."
+
+#### BLOCKER (inherited) — `POST /execute` exposes the per-call-config-silently-ignored bug to HTTP callers
+
+The execute route (L130-155) calls `execute_content_ops_from_mapping`
+and returns its result. Whatever the BLOCKER in
+`content_ops_execution.py` does at the dispatcher layer, an HTTP
+caller hitting `POST /execute` gets exactly that. The route adds no
+guards.
+
+**Failure mode:** an external API consumer sends a JSON request with
+`{"outputs": ["email_campaign"], "inputs": {"channels":
+["email_cold"]}}`, sees a 200 response with the plan showing
+`channels: ["email_cold"]`, and gets back drafts the host service
+generated using its construction-time channel default (likely both
+cold and follow-up). The HTTP layer doesn't reveal the lie any more
+than the in-process layer did, but it makes it remotely exploitable
+as misconfiguration.
+
+**Fix:** depends on the architecture decision. Whichever way the
+underlying BLOCKER is fixed, this route inherits it.
+
+#### MAJOR — Execution error responses leak internal exception strings to HTTP callers
+
+The execute route returns `result` from
+`execute_content_ops_from_mapping` directly to the client (L148-155).
+That payload includes `result["errors"]`, which contains entries
+shaped:
+
+```python
+{"output": step.output, "reason": str(exc)}
+```
+
+`str(exc)` for an arbitrary host service exception leaks whatever
+the exception message contains — DB connection strings if asyncpg
+included one in a traceback, file paths, internal IDs, full tracebacks
+if the service stringifies its own state, etc. The route returns this
+verbatim.
+
+**Failure mode:** information disclosure to API consumers. A request
+that triggers an internal failure can surface infrastructure details
+through the response body. Standard OWASP "verbose error message"
+class.
+
+**Fix:** at the API boundary, sanitize `errors[*].reason` to a stable
+error code (`"execution_failed"`) and log the full reason
+server-side. Or document that hosts must add a response sanitizer
+middleware. Note: the executor itself is host-injected service code
+so the host knows which exceptions are safe to expose — but the
+default should be safe.
+
+#### MAJOR — `/preview`, `/plan`, `/execute` accept arbitrary unbounded JSON dicts
+
+L123, L127, L131:
+```python
+async def preview_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+async def plan_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+async def execute_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+```
+
+No Pydantic model, no size limit, no schema validation beyond the
+soft coercions in `request_from_mapping` (which silently swallow
+malformed types into defaults). FastAPI/Starlette will accept any
+size payload by default unless the host adds middleware. A malicious
+or buggy caller can:
+
+- POST a 10MB JSON object and exhaust memory during parsing
+- POST deeply nested objects that hit Python's recursion limit
+- POST unexpected types that trigger AttributeError downstream
+  (caught by the generic `except Exception` in the executor, but
+  logged + returned as 500 anyway)
+
+**Failure mode:** API DoS surface. Cheap to fix at the parsing layer.
+
+**Fix:** define a Pydantic model that mirrors the `ContentOpsRequest`
+shape and use it as the body type:
+```python
+class ContentOpsRequestModel(BaseModel):
+    target_mode: str = "vendor_retention"
+    preset: Optional[str] = None
+    outputs: Sequence[str] = ()
+    limit: int = Field(1, ge=1, le=1000)
+    max_cost_usd: Optional[float] = Field(None, ge=0)
+    inputs: Mapping[str, Any] = Field(default_factory=dict)
+    ...
+
+@router.post("/preview")
+async def preview_generation(payload: ContentOpsRequestModel) -> dict[str, Any]:
+    return preview_from_mapping(payload.dict())
+```
+
+This locks payload structure, bounds numeric fields, and lets
+FastAPI's parser reject malformed input before it reaches the
+control-surface code. Or document the host responsibility to add a
+size-limiting middleware and accept the schema validation gap.
+
+#### MINOR — `partial` / `failed` execution results return HTTP 200
+
+L153-155:
+```python
+if result["status"] == "blocked":
+    raise HTTPException(status_code=400, detail=result)
+return result
+```
+
+Only `status == "blocked"` (plan not executable: budget violation,
+missing inputs, blocked outputs) maps to 4xx. `status == "partial"`
+or (after the `content_ops_execution.py` MINOR fix) `status ==
+"failed"` returns 200.
+
+**Failure mode:** consumers scripting on HTTP status code think the
+call succeeded when zero outputs were produced or all services
+failed. Standard pattern is to map server-side execution failure to
+5xx (or 207 Multi-Status for partial success).
+
+**Fix:** map status to HTTP code:
+- `blocked` → 400 (current)
+- `failed` (all steps failed) → 502 Bad Gateway (host service issue)
+- `partial` (some succeeded) → 207 Multi-Status (or 200 with
+  documentation that response payload is the source of truth)
+- `completed` → 200 (current)
+
+Or document that HTTP status only signals "did the request reach
+us" and `result.status` is the source of truth. Either is defensible
+if explicit.
+
+#### MINOR — Provider exceptions propagate as bare 500s
+
+`_resolve_provider` (L167-173) doesn't catch exceptions from the
+provider callable. If the provider raises (e.g., DB connection error
+retrieving services, or a misconfigured DI container), the exception
+propagates from the route handler as an unhandled 500 with whatever
+exception message the framework decides to render.
+
+**Failure mode:** same information-disclosure concern as the
+`errors[*].reason` issue above. A provider stack trace at startup
+might include DB credentials in some deployments.
+
+**Fix:** wrap the provider call:
+```python
+try:
+    value = provider()
+    if hasattr(value, "__await__"):
+        value = await value
+except Exception as exc:
+    logger.exception("Content Ops provider failed")
+    raise HTTPException(
+        status_code=503,
+        detail="Content Ops services are temporarily unavailable.",
+    ) from exc
+```
+
+#### MINOR — `describe_control_surfaces` calls the execution-services provider on every request
+
+L81-86:
+```python
+execution_services = await _resolve_execution_services(execution_services_provider)
+configured_outputs = set(
+    execution_services.configured_outputs()
+    if execution_services is not None
+    else ()
+)
+```
+
+If the provider hits a DB or external service to instantiate the
+execution services, every catalog request triggers that work. UI
+admin dashboards that poll this route at 30s intervals would
+re-instantiate every poll.
+
+**Failure mode:** provider-side resource churn (DB connections, LLM
+client objects) in proportion to UI poll frequency, not actual usage.
+
+**Fix:** either (a) cache the result for the lifetime of the router
+(at the cost of services becoming stale until restart), or (b)
+document that providers should be cheap (idempotent factory return,
+not a per-call construction).
+
+#### MINOR — `_scope_from_value` doesn't strip empty strings from `allowed_vendors` / `roles`
+
+L182-183:
+```python
+allowed_vendors=tuple(str(item) for item in value.get("allowed_vendors", ()) or ()),
+roles=tuple(str(item) for item in value.get("roles", ()) or ()),
+```
+
+`account_id` and `user_id` go through `_clean()` (strip + None on
+empty). `allowed_vendors` and `roles` don't. A scope payload with
+`{"allowed_vendors": [""]}` produces `allowed_vendors=("",)`.
+
+**Failure mode:** a downstream tenant-scoping check like
+`vendor in scope.allowed_vendors` would match an empty vendor name
+and bypass scoping. Edge case, but worth tightening since it's a
+security boundary.
+
+**Fix:**
+```python
+allowed_vendors=tuple(
+    item for item in (str(v).strip() for v in value.get("allowed_vendors", ()) or ())
+    if item
+),
+roles=tuple(
+    item for item in (str(r).strip() for r in value.get("roles", ()) or ())
+    if item
+),
+```
+
+#### MINOR — Wrong-type provider return diagnoses as "not configured" (503)
+
+`_resolve_execution_services` (L160-164) silently treats a wrong-type
+provider return as no provider:
+
+```python
+async def _resolve_execution_services(provider):
+    value = await _resolve_provider(provider)
+    return value if isinstance(value, ContentOpsExecutionServices) else None
+```
+
+A host accidentally returning `dict(campaign=...)` instead of
+`ContentOpsExecutionServices(campaign=...)` debugs as a 503
+"services not configured" when the real bug is in the provider.
+
+**Failure mode:** misleading diagnostic. Operator chases provider
+configuration when the bug is provider return type.
+
+**Fix:** raise (or 500) with a clearer message when the provider
+returns a value that's not None and not a
+`ContentOpsExecutionServices`:
+```python
+if value is None:
+    return None
+if not isinstance(value, ContentOpsExecutionServices):
+    logger.error(
+        "Content Ops execution provider returned %r; "
+        "expected ContentOpsExecutionServices",
+        type(value).__name__,
+    )
+    return None  # or raise
+```
+
+#### Test coverage gaps
+
+The 10 tests are reasonably thorough for the API contract:
+- Catalog/presets/ingestion-profiles in describe response ✓
+- Execution-configured reporting (3 variants) ✓
+- Preview/plan endpoint smoke ✓
+- Execute happy path ✓
+- Execute 503 when no provider ✓
+- Execute 503 when provider returns wrong type ✓
+- Config validates absolute prefix ✓
+
+**Not tested (would catch the BLOCKER + MAJORs):**
+- User's `channels=["email_cold"]` POST'd to `/execute` doesn't reach
+  the campaign service. The happy-path test checks
+  `service.calls[0]["target_mode"]`, `["limit"]`, `["filters"]`,
+  `["scope"]` — not what was OR wasn't passed for channels. So the
+  test confirms the bug rather than catching it.
+- `/execute` with a service that raises inside `generate()` —
+  what HTTP response does the consumer see? Verifies the leakage
+  concern above.
+- `/execute` returning `partial` status doesn't surface as HTTP 4xx/5xx
+- `/execute` with a Pydantic validation failure (when added)
+- Auth dependencies actually firing (the `dependencies` param is
+  passed but no test exercises it)
+- `/preview` and `/plan` with malformed payloads (non-dict body, list
+  instead of dict, oversized JSON)
+- Concurrent `/execute` calls racing the host's services
+
+---
+
 ## Suggested follow-up PR scope
 
 (Pending the architecture decision above.)
@@ -660,6 +950,23 @@ Plus three regression tests pinning the BLOCKER:
 2. `report_type="competitive_pressure"` reaches the report service
 3. `MarketingCampaign.context` excludes non-marketing keys
 
+**`PR-ContentOps-PostMergeAudit-1b: harden API surface`**
+
+Separate from -1a so the architectural decision can land independently
+from the API hardening:
+
+- Pydantic request models for `/preview`, `/plan`, `/execute` (bounds
+  payload size, locks schema, validates numeric ranges)
+- Sanitize `errors[*].reason` at the API boundary (replace bare
+  `str(exc)` with stable error codes; full reason logged server-side)
+- Map `partial` / `failed` execution status to appropriate HTTP codes
+  (or document the explicit choice)
+- Wrap provider calls in try/except so provider exceptions don't
+  propagate as bare 500s
+- `_scope_from_value` strips empty/whitespace from `allowed_vendors`
+  / `roles` (security boundary)
+- Test pinning auth dependencies actually fire when configured
+
 The MINORs and NITs ride along as "incidental cleanup" or stay
 deferred — author's call.
 
@@ -667,9 +974,6 @@ deferred — author's call.
 
 ## What I did not review yet
 
-- `extracted_content_pipeline/api/control_surfaces.py` (195 LOC) —
-  FastAPI router on top of all this. Probably surfaces the BLOCKER to
-  HTTP callers; worth knowing how.
 - `extracted_content_pipeline/blog_generation.py` (396 LOC) —
   undeclared 6th asset type. Need to know if it's a supported product
   asset (rev the count to "6 of 5") or an internal seam.
