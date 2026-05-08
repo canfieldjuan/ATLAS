@@ -285,9 +285,14 @@ async def test_execute_generation_route_sanitizes_service_failures():
             }
         )
 
-    assert exc.value.status_code == 207
+    assert exc.value.status_code == 502
     assert exc.value.detail["errors"] == [
-        {"output": "email_campaign", "reason": "execution_failed"}
+        {
+            "output": "email_campaign",
+            "runner": "CampaignGenerationService.generate",
+            "error": "execution_failed",
+            "reason": "execution_failed",
+        }
     ]
     assert exc.value.detail["steps"][0]["error"] == "execution_failed"
     assert "postgres://" not in str(exc.value.detail)
