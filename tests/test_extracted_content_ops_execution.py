@@ -45,6 +45,9 @@ class _OpportunityService:
         temperature: float | None = None,
         max_tokens: int | None = None,
         parse_retry_attempts: int | None = None,
+        quality_revalidation_enabled: bool | None = None,
+        quality_prompt_proof_term_limit: int | None = None,
+        parse_retry_response_excerpt_chars: int | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -58,6 +61,9 @@ class _OpportunityService:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "parse_retry_attempts": parse_retry_attempts,
+            "quality_revalidation_enabled": quality_revalidation_enabled,
+            "quality_prompt_proof_term_limit": quality_prompt_proof_term_limit,
+            "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
             "extras": dict(extras),
         })
         return _Result()
@@ -75,6 +81,7 @@ class _LandingPageService:
         temperature: float | None = None,
         max_tokens: int | None = None,
         parse_retry_attempts: int | None = None,
+        parse_retry_response_excerpt_chars: int | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -83,6 +90,7 @@ class _LandingPageService:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "parse_retry_attempts": parse_retry_attempts,
+            "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
             "extras": dict(extras),
         })
         return _Result()
@@ -531,3 +539,88 @@ async def test_execute_threads_llm_tuning_kwargs_into_blog_post() -> None:
     assert call["max_tokens"] == 4096
     assert call["parse_retry_attempts"] == 1
     assert call["extras"] == {}
+
+
+# -----------------------
+# PR-OptionA-3: quality + retry-excerpt knobs
+# (quality_revalidation_enabled / quality_prompt_proof_term_limit /
+# parse_retry_response_excerpt_chars) flow from plan defaults into
+# every service call.
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_quality_and_excerpt_kwargs_into_email_campaign() -> None:
+    """Plan defaults for the campaign-only quality knobs reach the service.
+    The bool flag, the int term-limit, and the int excerpt-chars all flow
+    through the email_campaign dispatcher."""
+
+    campaign = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    call = campaign.calls[0]
+    # CampaignGenerationConfig defaults
+    assert call["quality_revalidation_enabled"] is True
+    assert call["quality_prompt_proof_term_limit"] == 5
+    assert call["parse_retry_response_excerpt_chars"] == 800
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_excerpt_kwarg_into_report_sales_brief_blog_landing() -> None:
+    """parse_retry_response_excerpt_chars reaches every service via its
+    dispatcher; quality_revalidation_enabled / proof_term_limit are
+    campaign-only and stay None for the others."""
+
+    report = _OpportunityService()
+    sales_brief = _OpportunityService()
+    blog = _OpportunityService()
+    landing = _LandingPageService()
+
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["report"],
+            "inputs": {"target_account": "Acme", "offer": "Audit", "opportunity_id": "opp-1"},
+        },
+        services=ContentOpsExecutionServices(report=report),
+    )
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "inputs": {"target_account": "Acme", "offer": "Audit", "opportunity_id": "opp-1"},
+        },
+        services=ContentOpsExecutionServices(sales_brief=sales_brief),
+    )
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {"target_account": "Acme", "topic": "Churn"},
+        },
+        services=ContentOpsExecutionServices(blog_post=blog),
+    )
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {"campaign_name": "Q3", "offer": "Audit", "audience": "VPs"},
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    for label, call in (
+        ("report", report.calls[0]),
+        ("sales_brief", sales_brief.calls[0]),
+        ("blog_post", blog.calls[0]),
+        ("landing_page", landing.calls[0]),
+    ):
+        assert call["parse_retry_response_excerpt_chars"] == 800, label
+        assert call["extras"] == {}, label
+        # Campaign-only kwargs are absent on the non-campaign services.
+        if label != "landing_page":
+            assert call.get("quality_revalidation_enabled") is None, label
+            assert call.get("quality_prompt_proof_term_limit") is None, label

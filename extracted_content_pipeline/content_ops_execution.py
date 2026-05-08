@@ -220,6 +220,15 @@ async def _dispatch_email_campaign(
         temperature=_step_config_float(step.config, "temperature"),
         max_tokens=_step_config_int(step.config, "max_tokens"),
         parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
+        quality_revalidation_enabled=_step_config_bool(
+            step.config, "quality_revalidation_enabled"
+        ),
+        quality_prompt_proof_term_limit=_step_config_int(
+            step.config, "quality_prompt_proof_term_limit"
+        ),
+        parse_retry_response_excerpt_chars=_step_config_int(
+            step.config, "parse_retry_response_excerpt_chars"
+        ),
     )
 
 
@@ -240,6 +249,9 @@ async def _dispatch_report(
         temperature=_step_config_float(step.config, "temperature"),
         max_tokens=_step_config_int(step.config, "max_tokens"),
         parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
+        parse_retry_response_excerpt_chars=_step_config_int(
+            step.config, "parse_retry_response_excerpt_chars"
+        ),
     )
 
 
@@ -260,6 +272,9 @@ async def _dispatch_sales_brief(
         temperature=_step_config_float(step.config, "temperature"),
         max_tokens=_step_config_int(step.config, "max_tokens"),
         parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
+        parse_retry_response_excerpt_chars=_step_config_int(
+            step.config, "parse_retry_response_excerpt_chars"
+        ),
     )
 
 
@@ -278,6 +293,9 @@ async def _dispatch_landing_page(
         temperature=_step_config_float(step.config, "temperature"),
         max_tokens=_step_config_int(step.config, "max_tokens"),
         parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
+        parse_retry_response_excerpt_chars=_step_config_int(
+            step.config, "parse_retry_response_excerpt_chars"
+        ),
     )
 
 
@@ -301,6 +319,9 @@ async def _dispatch_blog_post(
         temperature=_step_config_float(step.config, "temperature"),
         max_tokens=_step_config_int(step.config, "max_tokens"),
         parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
+        parse_retry_response_excerpt_chars=_step_config_int(
+            step.config, "parse_retry_response_excerpt_chars"
+        ),
     )
 
 
@@ -378,6 +399,23 @@ def _step_config_float(config: Mapping[str, Any], key: str) -> float | None:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _step_config_bool(config: Mapping[str, Any], key: str) -> bool | None:
+    """Pull a bool from step.config or return None.
+
+    Used for ``quality_revalidation_enabled``. Returns None on missing
+    key or non-bool values; we deliberately avoid coercing strings like
+    ``"yes"`` / ``"true"`` because a mis-typed step.config entry should
+    fall through to the service's config default rather than silently
+    landing the wrong value.
+    """
+    if not isinstance(config, Mapping):
+        return None
+    raw = config.get(key)
+    if isinstance(raw, bool):
+        return raw
+    return None
 
 
 def _step_config_sequence(

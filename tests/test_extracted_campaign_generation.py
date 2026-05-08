@@ -1131,3 +1131,70 @@ async def test_generate_llm_tuning_kwargs_none_falls_back_to_construction_config
 
     assert llm.calls[0]["temperature"] == 0.7
     assert llm.calls[0]["max_tokens"] == 999
+
+
+# -----------------------
+# PR-OptionA-3: per-call quality + retry-excerpt overrides
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_quality_revalidation_enabled_override():
+    """When the executor passes quality_revalidation_enabled=False, the
+    revalidation step is skipped even though config has it on (and vice
+    versa). The smoking-gun: an operator picking 'skip revalidation' in
+    the control surface actually skips it."""
+
+    valid = '{"subject":"Hi","body":"Body"}'
+    service, _, _, llm, _ = _service(
+        [{"id": "opp-1"}],
+        [valid],
+        config=CampaignGenerationConfig(
+            quality_revalidation_enabled=True,  # construction default
+            channels=("email_cold",),
+        ),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="churning_company",
+        quality_revalidation_enabled=False,  # override to skip
+    )
+
+    # When revalidation is skipped, no revalidation LLM call happens; only
+    # the initial generation LLM call. (Construction-time True would have
+    # forced an extra revalidation call for each generated draft.)
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_parse_retry_response_excerpt_chars_override():
+    """The override controls how much of a prior invalid response gets
+    embedded in the retry user prompt."""
+
+    long_invalid = "X" * 5000
+    service, _, _, llm, _ = _service(
+        [{"id": "opp-1"}],
+        [long_invalid, '{"subject":"Hi","body":"Body"}'],
+        config=CampaignGenerationConfig(
+            channels=("email_cold",),
+            parse_retry_attempts=1,
+            parse_retry_response_excerpt_chars=200,  # construction default
+        ),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="churning_company",
+        parse_retry_response_excerpt_chars=50,  # tighter cap
+    )
+
+    # Second LLM call's user message should contain at most 50 chars of
+    # the prior invalid response.
+    retry_user_prompt = llm.calls[1]["messages"][1].content
+    # Prompt format: "...Previous response excerpt:\n<excerpt>"
+    assert "XXX" in retry_user_prompt  # excerpt is present
+    excerpt_section = retry_user_prompt.split("excerpt:")[1].lstrip()
+    # Excerpt is clipped to 50 chars; the construction-time default of 200
+    # would have shown 200 chars.
+    assert len(excerpt_section.rstrip()) <= 50
