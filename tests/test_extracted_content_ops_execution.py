@@ -42,6 +42,9 @@ class _OpportunityService:
         channels: Any | None = None,
         default_report_type: str | None = None,
         default_brief_type: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        parse_retry_attempts: int | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -52,6 +55,9 @@ class _OpportunityService:
             "channels": channels,
             "default_report_type": default_report_type,
             "default_brief_type": default_brief_type,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "parse_retry_attempts": parse_retry_attempts,
             "extras": dict(extras),
         })
         return _Result()
@@ -61,8 +67,24 @@ class _LandingPageService:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    async def generate(self, *, scope: TenantScope, campaign: Any) -> _Result:
-        self.calls.append({"scope": scope, "campaign": campaign})
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        campaign: Any,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        parse_retry_attempts: int | None = None,
+        **extras: Any,
+    ) -> _Result:
+        self.calls.append({
+            "scope": scope,
+            "campaign": campaign,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "parse_retry_attempts": parse_retry_attempts,
+            "extras": dict(extras),
+        })
         return _Result()
 
 
@@ -402,3 +424,110 @@ async def test_execute_landing_page_dispatcher_unchanged_no_per_call_overrides()
     assert result["status"] == "completed"
     assert len(landing.calls) == 1
     assert landing.calls[0]["campaign"].name == "Q3 audit"
+
+
+# -----------------------
+# PR-OptionA-2: LLM-tuning kwargs (temperature / max_tokens /
+# parse_retry_attempts) flow from plan defaults into every service call.
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_llm_tuning_kwargs_into_email_campaign() -> None:
+    """Plan-default temperature/max_tokens/parse_retry_attempts (from the
+    CampaignGenerationConfig defaults the plan layer reads) reach the
+    service via dispatch."""
+
+    campaign = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    call = campaign.calls[0]
+    # Plan emits the construction-time config defaults; they are now
+    # threaded as named kwargs rather than relying on the service's
+    # construction-time config alone.
+    assert call["temperature"] == 0.4  # CampaignGenerationConfig default
+    assert call["max_tokens"] == 1200
+    assert call["parse_retry_attempts"] == 1
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_llm_tuning_kwargs_into_report() -> None:
+    report = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["report"],
+            "inputs": {"target_account": "Acme", "offer": "Audit", "opportunity_id": "opp-1"},
+        },
+        services=ContentOpsExecutionServices(report=report),
+    )
+
+    call = report.calls[0]
+    assert call["temperature"] == 0.3
+    assert call["max_tokens"] == 4096
+    assert call["parse_retry_attempts"] == 1
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_llm_tuning_kwargs_into_sales_brief() -> None:
+    sales_brief = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "inputs": {"target_account": "Acme", "offer": "Audit", "opportunity_id": "opp-1"},
+        },
+        services=ContentOpsExecutionServices(sales_brief=sales_brief),
+    )
+
+    call = sales_brief.calls[0]
+    assert call["temperature"] == 0.3
+    assert call["max_tokens"] == 4096
+    assert call["parse_retry_attempts"] == 1
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_llm_tuning_kwargs_into_landing_page() -> None:
+    landing = _LandingPageService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {"campaign_name": "Q3", "offer": "Audit", "audience": "VPs"},
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    call = landing.calls[0]
+    assert call["temperature"] == 0.3
+    assert call["max_tokens"] == 4096
+    assert call["parse_retry_attempts"] == 1
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_llm_tuning_kwargs_into_blog_post() -> None:
+    """Blog_post graduates to its own dispatcher in PR-OptionA-2 so the
+    LLM-tuning kwargs reach the service. Previously it was on the default
+    dispatcher and the kwargs were silently dropped."""
+
+    blog = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {"target_account": "Acme", "topic": "Churn"},
+        },
+        services=ContentOpsExecutionServices(blog_post=blog),
+    )
+
+    call = blog.calls[0]
+    assert call["temperature"] == 0.3  # BlogPostGenerationConfig default
+    assert call["max_tokens"] == 4096
+    assert call["parse_retry_attempts"] == 1
+    assert call["extras"] == {}

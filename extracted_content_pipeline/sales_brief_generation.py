@@ -222,12 +222,28 @@ class SalesBriefGenerationService:
         limit: int | None = None,
         filters: Mapping[str, Any] | None = None,
         default_brief_type: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        parse_retry_attempts: int | None = None,
     ) -> SalesBriefGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
             raise ValueError(
                 f"Sales-brief generation skill not found: {self._config.skill_name}"
             )
+
+        # PR-OptionA-2: per-call LLM-tuning overrides; None falls through.
+        resolved_temperature = (
+            self._config.temperature if temperature is None else float(temperature)
+        )
+        resolved_max_tokens = (
+            self._config.max_tokens if max_tokens is None else int(max_tokens)
+        )
+        resolved_parse_retry_attempts = (
+            self._config.parse_retry_attempts
+            if parse_retry_attempts is None
+            else int(parse_retry_attempts)
+        )
 
         requested = int(limit or self._config.limit)
         opportunities = [
@@ -266,6 +282,9 @@ class SalesBriefGenerationService:
                     prompt_template,
                     opportunity=opportunity,
                     target_mode=target_mode,
+                    temperature=resolved_temperature,
+                    max_tokens=resolved_max_tokens,
+                    parse_retry_attempts=resolved_parse_retry_attempts,
                 )
             except Exception as exc:
                 skipped += 1
@@ -354,6 +373,9 @@ class SalesBriefGenerationService:
         *,
         opportunity: Mapping[str, Any],
         target_mode: str,
+        temperature: float,
+        max_tokens: int,
+        parse_retry_attempts: int,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
         # Single source for the opportunity payload: in the system prompt
@@ -364,7 +386,7 @@ class SalesBriefGenerationService:
             .replace("{target_mode}", target_mode)
             .replace("{opportunity_json}", opportunity_json)
         )
-        attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
+        attempts = max(1, int(parse_retry_attempts or 0) + 1)
         last_response = ""
         total_usage: dict[str, Any] = {}
         for attempt_no in range(1, attempts + 1):
@@ -376,8 +398,8 @@ class SalesBriefGenerationService:
                         content=_sales_brief_user_prompt(last_response),
                     ),
                 ],
-                max_tokens=self._config.max_tokens,
-                temperature=self._config.temperature,
+                max_tokens=max_tokens,
+                temperature=temperature,
                 metadata={
                     "target_mode": target_mode,
                     "target_id": opportunity_target_id(opportunity),

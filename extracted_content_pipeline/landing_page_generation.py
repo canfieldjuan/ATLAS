@@ -209,12 +209,28 @@ class LandingPageGenerationService:
         *,
         scope: TenantScope,
         campaign: MarketingCampaign,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        parse_retry_attempts: int | None = None,
     ) -> LandingPageGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
             raise ValueError(
                 f"Landing-page generation skill not found: {self._config.skill_name}"
             )
+
+        # PR-OptionA-2: per-call LLM-tuning overrides; None falls through.
+        resolved_temperature = (
+            self._config.temperature if temperature is None else float(temperature)
+        )
+        resolved_max_tokens = (
+            self._config.max_tokens if max_tokens is None else int(max_tokens)
+        )
+        resolved_parse_retry_attempts = (
+            self._config.parse_retry_attempts
+            if parse_retry_attempts is None
+            else int(parse_retry_attempts)
+        )
 
         if not str(campaign.name or "").strip():
             return LandingPageGenerationResult(
@@ -241,6 +257,9 @@ class LandingPageGenerationService:
             parsed = await self._generate_one(
                 prompt_template,
                 campaign_payload=campaign_payload,
+                temperature=resolved_temperature,
+                max_tokens=resolved_max_tokens,
+                parse_retry_attempts=resolved_parse_retry_attempts,
             )
         except Exception as exc:
             return LandingPageGenerationResult(
@@ -320,13 +339,16 @@ class LandingPageGenerationService:
         prompt_template: str,
         *,
         campaign_payload: Mapping[str, Any],
+        temperature: float,
+        max_tokens: int,
+        parse_retry_attempts: int,
     ) -> dict[str, Any] | None:
         campaign_json = json.dumps(dict(campaign_payload), separators=(",", ":"), default=str)
         # Single source for the campaign payload: in the system prompt
         # via {campaign_json}. User message is structural-only so the
         # campaign isn't sent twice (matches the report-generator fix).
         system_prompt = prompt_template.replace("{campaign_json}", campaign_json)
-        attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
+        attempts = max(1, int(parse_retry_attempts or 0) + 1)
         last_response = ""
         total_usage: dict[str, Any] = {}
         for attempt_no in range(1, attempts + 1):
@@ -338,8 +360,8 @@ class LandingPageGenerationService:
                         content=_landing_page_user_prompt(last_response),
                     ),
                 ],
-                max_tokens=self._config.max_tokens,
-                temperature=self._config.temperature,
+                max_tokens=max_tokens,
+                temperature=temperature,
                 metadata={
                     "campaign_name": campaign_payload.get("name"),
                     "skill_name": self._config.skill_name,
