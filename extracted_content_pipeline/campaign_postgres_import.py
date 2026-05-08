@@ -1,12 +1,19 @@
-"""Postgres importer for standalone campaign opportunity data."""
+"""Postgres importer for standalone campaign opportunity data.
+
+Shared JSONB helper lives in
+``extracted_content_pipeline.storage._jsonb_helpers`` (extracted in
+PR-ContentAssets-Consistency-1). Local ``_jsonb`` is now a thin
+alias for the shared helper -- backwards-compat shim for any in-tree
+caller that imported the private name.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import json
 from typing import Any
 
+from .storage._jsonb_helpers import json_dump_jsonb as _jsonb
 from .campaign_customer_data import (
     CampaignOpportunityLoadResult,
     CampaignOpportunityWarning,
@@ -161,8 +168,6 @@ def _loaded_rows(
     )
 
 
-def _jsonb(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, default=str, separators=(",", ":"))
 
 
 def _clean(value: Any) -> str | None:
