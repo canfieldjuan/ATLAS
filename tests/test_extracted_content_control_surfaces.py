@@ -170,3 +170,33 @@ def test_request_from_mapping_rejects_non_positive_budget():
 def test_request_from_mapping_rejects_non_object_inputs():
     with pytest.raises(ValueError, match="inputs must be an object"):
         request_from_mapping({"inputs": ["target_account", "Acme"]})
+
+
+# -----------------------
+# PR-Audit-MINOR-Batch-1: OUTPUT_CATALOG / PRESETS are immutable
+# -----------------------
+
+
+def test_output_catalog_rejects_assignment():
+    """PR-Audit-MINOR-Batch-1 NIT: OUTPUT_CATALOG was a mutable
+    module-level dict. Anything in the process could mutate it. Now
+    wrapped in MappingProxyType -- assignment raises TypeError."""
+    from extracted_content_pipeline.control_surfaces import OUTPUT_CATALOG
+
+    # Reads still work.
+    assert "email_campaign" in OUTPUT_CATALOG
+    assert OUTPUT_CATALOG["email_campaign"].id == "email_campaign"
+
+    # Assignment is rejected.
+    with pytest.raises(TypeError):
+        OUTPUT_CATALOG["new_output"] = OUTPUT_CATALOG["email_campaign"]  # type: ignore[index]
+
+
+def test_presets_rejects_assignment():
+    from extracted_content_pipeline.control_surfaces import PRESETS
+
+    assert "email_only" in PRESETS
+    assert PRESETS["email_only"].id == "email_only"
+
+    with pytest.raises(TypeError):
+        PRESETS["new_preset"] = PRESETS["email_only"]  # type: ignore[index]

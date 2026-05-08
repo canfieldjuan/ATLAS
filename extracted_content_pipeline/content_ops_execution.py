@@ -123,7 +123,15 @@ async def execute_content_ops_request(
     executed = [step_result for step_result, _error in step_results]
     errors = [error for _step_result, error in step_results if error is not None]
 
-    status = "completed" if not errors else "partial"
+    # Distinguish "every step failed" from "some failed." Pre-fix, all-failed
+    # was reported as "partial," which misled operator dashboards into
+    # assuming some steps succeeded.
+    if not errors:
+        status = "completed"
+    elif plan.steps and len(errors) >= len(plan.steps):
+        status = "failed"
+    else:
+        status = "partial"
     return ContentOpsExecutionResult(
         status=status,
         plan=plan,
@@ -141,7 +149,7 @@ async def _execute_step(
     filters: Mapping[str, Any] | None,
 ) -> tuple[ContentOpsStepExecution, Mapping[str, Any] | None]:
     if not _has_generate_method(service):
-        error = {"output": step.output, "reason": "service_not_configured"}
+        error = _step_error_dict(step, "service_not_configured")
         return _failed_step(step, "service_not_configured"), error
     try:
         result = await _run_step(
@@ -152,7 +160,7 @@ async def _execute_step(
             filters=filters,
         )
     except Exception as exc:
-        error = {"output": step.output, "reason": str(exc)}
+        error = _step_error_dict(step, str(exc))
         return _failed_step(step, str(exc)), error
     return (
         ContentOpsStepExecution(
@@ -537,6 +545,22 @@ def _result_dict(result: Any) -> dict[str, Any]:
     if isinstance(result, Mapping):
         return dict(result)
     return {"value": result}
+
+
+def _step_error_dict(step: GenerationPlanStep, error: str) -> dict[str, Any]:
+    """Build the result-level error dict for a failed step.
+
+    Aligns the shape with ``ContentOpsStepExecution`` (output, runner,
+    error). ``reason`` is preserved as a backwards-compat alias for
+    hosts that key on the older field name; future cleanup can drop it
+    once host migration completes.
+    """
+    return {
+        "output": step.output,
+        "runner": step.runner,
+        "error": error,
+        "reason": error,
+    }
 
 
 def _failed_step(step: GenerationPlanStep, error: str) -> ContentOpsStepExecution:
