@@ -1,6 +1,9 @@
+import pytest
+
 from extracted_content_pipeline.control_surfaces import (
     normalize_outputs,
     preview_from_mapping,
+    request_from_mapping,
 )
 
 
@@ -155,3 +158,18 @@ def test_preview_can_include_future_outputs_when_explicitly_allowed():
     assert preview["can_run"] is True
     assert preview["outputs"] == ["signal_extraction"]
     assert preview["blocked_outputs"] == []
+
+
+def test_request_from_mapping_rejects_zero_limit():
+    with pytest.raises(ValueError, match="limit must be at least 1; got 0"):
+        request_from_mapping({"limit": 0})
+
+
+def test_request_from_mapping_rejects_non_positive_budget():
+    with pytest.raises(ValueError, match="max_cost_usd must be positive; got -1"):
+        request_from_mapping({"max_cost_usd": -1})
+
+
+def test_request_from_mapping_rejects_non_object_inputs():
+    with pytest.raises(ValueError, match="inputs must be an object"):
+        request_from_mapping({"inputs": ["target_account", "Acme"]})
