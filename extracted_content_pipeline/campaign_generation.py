@@ -267,6 +267,9 @@ class CampaignGenerationService:
         temperature: float | None = None,
         max_tokens: int | None = None,
         parse_retry_attempts: int | None = None,
+        quality_revalidation_enabled: bool | None = None,
+        quality_prompt_proof_term_limit: int | None = None,
+        parse_retry_response_excerpt_chars: int | None = None,
     ) -> CampaignGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -286,6 +289,22 @@ class CampaignGenerationService:
             self._config.parse_retry_attempts
             if parse_retry_attempts is None
             else int(parse_retry_attempts)
+        )
+        # PR-OptionA-3: quality + retry-excerpt knobs. Same shape.
+        resolved_quality_revalidation_enabled = (
+            self._config.quality_revalidation_enabled
+            if quality_revalidation_enabled is None
+            else bool(quality_revalidation_enabled)
+        )
+        resolved_quality_prompt_proof_term_limit = (
+            self._config.quality_prompt_proof_term_limit
+            if quality_prompt_proof_term_limit is None
+            else int(quality_prompt_proof_term_limit)
+        )
+        resolved_parse_retry_response_excerpt_chars = (
+            self._config.parse_retry_response_excerpt_chars
+            if parse_retry_response_excerpt_chars is None
+            else int(parse_retry_response_excerpt_chars)
         )
 
         requested = int(limit or self._config.limit)
@@ -326,6 +345,8 @@ class CampaignGenerationService:
                     opportunity,
                     channel=channel,
                     cold_email_context=cold_email_context,
+                    quality_revalidation_enabled=resolved_quality_revalidation_enabled,
+                    quality_prompt_proof_term_limit=resolved_quality_prompt_proof_term_limit,
                 )
                 try:
                     parsed = await self._generate_one(
@@ -336,6 +357,7 @@ class CampaignGenerationService:
                         temperature=resolved_temperature,
                         max_tokens=resolved_max_tokens,
                         parse_retry_attempts=resolved_parse_retry_attempts,
+                        parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
                     )
                 except Exception as exc:
                     skipped += 1
@@ -358,6 +380,8 @@ class CampaignGenerationService:
                     opportunity=channel_opportunity,
                     target_mode=target_mode,
                     channel=channel,
+                    quality_revalidation_enabled=resolved_quality_revalidation_enabled,
+                    quality_prompt_proof_term_limit=resolved_quality_prompt_proof_term_limit,
                 )
                 if not parsed:
                     skipped += 1
@@ -424,6 +448,8 @@ class CampaignGenerationService:
         *,
         channel: str,
         cold_email_context: Mapping[str, Any] | None = None,
+        quality_revalidation_enabled: bool,
+        quality_prompt_proof_term_limit: int,
     ) -> dict[str, Any]:
         enriched = dict(opportunity)
         enriched["channel"] = channel
@@ -432,19 +458,25 @@ class CampaignGenerationService:
                 "subject": str(cold_email_context.get("subject") or ""),
                 "body": str(cold_email_context.get("body") or ""),
             }
-        if self._config.quality_revalidation_enabled:
-            enriched = self._with_quality_prompt_terms(enriched)
+        if quality_revalidation_enabled:
+            enriched = self._with_quality_prompt_terms(
+                enriched,
+                quality_prompt_proof_term_limit=quality_prompt_proof_term_limit,
+            )
         return enriched
 
     def _with_quality_prompt_terms(
         self,
         opportunity: Mapping[str, Any],
+        *,
+        quality_prompt_proof_term_limit: int,
     ) -> dict[str, Any]:
         enriched = dict(opportunity)
         context = normalize_campaign_reasoning_context(enriched)
         terms = self._campaign_proof_terms(
             context.as_dict(),
             existing=enriched.get("campaign_proof_terms"),
+            quality_prompt_proof_term_limit=quality_prompt_proof_term_limit,
         )
         enriched.pop("campaign_proof_terms", None)
         if terms:
@@ -456,8 +488,9 @@ class CampaignGenerationService:
         context: Mapping[str, Any],
         *,
         existing: Any = None,
+        quality_prompt_proof_term_limit: int,
     ) -> list[str]:
-        limit = max(0, int(self._config.quality_prompt_proof_term_limit or 0))
+        limit = max(0, int(quality_prompt_proof_term_limit or 0))
         terms = _clean_term_list(existing, limit=limit)
         if len(terms) >= limit:
             return terms
@@ -522,6 +555,7 @@ class CampaignGenerationService:
         temperature: float,
         max_tokens: int,
         parse_retry_attempts: int,
+        parse_retry_response_excerpt_chars: int,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
         system_prompt = (
@@ -569,7 +603,7 @@ class CampaignGenerationService:
                 }
             last_response = _clip_invalid_response(
                 response.content,
-                limit=max(0, int(self._config.parse_retry_response_excerpt_chars or 0)),
+                limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
             )
         return None
 
@@ -580,14 +614,16 @@ class CampaignGenerationService:
         opportunity: Mapping[str, Any],
         target_mode: str,
         channel: str,
+        quality_revalidation_enabled: bool,
+        quality_prompt_proof_term_limit: int,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        if not self._config.quality_revalidation_enabled:
+        if not quality_revalidation_enabled:
             return dict(parsed), None
         context = normalize_campaign_reasoning_context(opportunity)
         specificity_context = context.as_dict()
         proof_terms = _clean_term_list(
             opportunity.get("campaign_proof_terms"),
-            limit=max(0, int(self._config.quality_prompt_proof_term_limit or 0)),
+            limit=max(0, int(quality_prompt_proof_term_limit or 0)),
         )
         if proof_terms:
             specificity_context = {

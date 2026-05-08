@@ -493,3 +493,31 @@ async def test_generate_llm_tuning_kwargs_none_falls_back_to_construction_config
 
     assert llm.calls[0]["temperature"] == 0.7
     assert llm.calls[0]["max_tokens"] == 999
+
+
+# -----------------------
+# PR-OptionA-3: per-call parse_retry_response_excerpt_chars override
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_parse_retry_response_excerpt_chars_override():
+    long_invalid = "X" * 5000
+    service, _lp, llm, _skills, _rp = _service(
+        responses=[long_invalid, _valid_response()],
+        config=LandingPageGenerationConfig(
+            parse_retry_attempts=1,
+            parse_retry_response_excerpt_chars=200,
+        ),
+    )
+
+    await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        campaign=_campaign(),
+        parse_retry_response_excerpt_chars=50,
+    )
+
+    retry_user_prompt = llm.calls[1]["messages"][1].content
+    assert "XXX" in retry_user_prompt
+    excerpt_section = retry_user_prompt.split("excerpt:")[1].lstrip()
+    assert len(excerpt_section.rstrip()) <= 50
