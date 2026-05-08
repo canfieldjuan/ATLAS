@@ -71,8 +71,16 @@ def parse_blog_post_response(text: str) -> dict[str, Any] | None:
         if not isinstance(decoded, Mapping):
             continue
         title = str(decoded.get("title") or "").strip()
-        content = str(decoded.get("content") or "").strip()
-        if title and content:
+        # PR-Audit-MINOR-Batch-2: parser identifies a candidate (non-empty
+        # ``title``); the quality pack judges the rest. Pre-fix required
+        # both ``title`` AND ``content`` so a missing-content draft would
+        # collapse to ``unparseable_response`` -- a missing-content blocker
+        # at the quality-pack layer is more useful. (Empty content fires
+        # ``content_too_short`` because zero words is below any min_words.)
+        # ``content`` is still stripped here when present so downstream
+        # consumers see normalized whitespace.
+        if title:
+            content = str(decoded.get("content") or "").strip()
             return {**dict(decoded), "title": title, "content": content}
     return None
 
@@ -393,9 +401,20 @@ def _blueprint_id(blueprint: Mapping[str, Any]) -> str:
     ).strip()
 
 
+# PR-Audit-MINOR-Batch-2: cap slug length at 100 chars. Pre-fix, a
+# 2000-char title produced a 2000-char slug -- valid but unwieldy for
+# CMS / URL routing (most expect <100). Truncation rather than
+# rejection: a long-title draft is still valid; the slug just gets
+# clipped. ``rstrip("-")`` after the cut prevents trailing-hyphen
+# artifacts (``"a-very-long--"``).
+_MAX_SLUG_CHARS = 100
+
+
 def _slugify(value: Any) -> str:
     text = str(value or "blog-post").strip().lower()
     slug = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    if len(slug) > _MAX_SLUG_CHARS:
+        slug = slug[:_MAX_SLUG_CHARS].rstrip("-")
     return slug or "blog-post"
 
 

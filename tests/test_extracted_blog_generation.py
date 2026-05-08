@@ -173,9 +173,17 @@ def test_parse_blog_post_response_strips_code_fences() -> None:
 
 
 def test_parse_blog_post_response_returns_none_when_required_fields_missing() -> None:
+    """PR-Audit-MINOR-Batch-2: parser only requires ``title`` as the
+    "is this a candidate" filter; ``content`` is delegated to the
+    quality pack (empty content fires ``content_too_short``)."""
     assert parse_blog_post_response("") is None
-    assert parse_blog_post_response('{"title": "No content"}') is None
+    # Missing title -> not a candidate.
     assert parse_blog_post_response('{"content": "No title"}') is None
+    # Missing content -> still a candidate; the quality pack judges it.
+    parsed = parse_blog_post_response('{"title": "No content"}')
+    assert parsed is not None
+    assert parsed["title"] == "No content"
+    assert parsed["content"] == ""
 
 
 @pytest.mark.asyncio
@@ -396,3 +404,39 @@ async def test_generate_per_call_parse_retry_response_excerpt_chars_override():
     assert "XXX" in retry_user_prompt
     excerpt_section = retry_user_prompt.split("excerpt:")[1].lstrip()
     assert len(excerpt_section.rstrip()) <= 50
+
+
+# -----------------------
+# PR-Audit-MINOR-Batch-2: slug length cap + parser-strictness loosening
+# -----------------------
+
+
+def test_slugify_truncates_to_100_chars():
+    """A long title produces a clipped slug, not a 2000-char monstrosity."""
+    from extracted_content_pipeline.blog_generation import _slugify
+
+    long_title = "this is a very long blog post title " * 20  # ~700 chars
+    slug = _slugify(long_title)
+    assert len(slug) <= 100
+    # No trailing hyphen artifact from the truncation point.
+    assert not slug.endswith("-")
+
+
+def test_slugify_short_input_unchanged():
+    from extracted_content_pipeline.blog_generation import _slugify
+
+    assert _slugify("Short Title") == "short-title"
+    assert _slugify("") == "blog-post"
+    assert _slugify(None) == "blog-post"
+
+
+def test_parse_blog_post_response_accepts_missing_content_for_quality_pack_to_judge():
+    """End-to-end shape: a JSON candidate with title but no content
+    is still returned by the parser; the executor passes it to the
+    quality pack which fires ``content_too_short`` on empty content.
+    Pre-fix, missing content collapsed to ``unparseable_response``."""
+    parsed = parse_blog_post_response('{"title": "Has title only"}')
+    assert parsed is not None
+    assert parsed["title"] == "Has title only"
+    # Content is normalized to "" -- quality pack handles the rest.
+    assert parsed["content"] == ""
