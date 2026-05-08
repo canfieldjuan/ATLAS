@@ -159,6 +159,12 @@ def _accumulate_usage(
 @dataclass(frozen=True)
 class CampaignGenerationConfig:
     skill_name: str = "digest/b2b_campaign_generation"
+    # Legacy single-channel field. Hosts should construct with the
+    # ``channels`` tuple instead. ``_channels()`` keeps a fallback
+    # (``self._config.channels or (self._config.channel,)``) so
+    # existing hosts keep working, but new code should not set
+    # ``channel=``. Removal is queued for a future versioned breaking-
+    # change slice -- see plans/PR-Campaign-Channel-Legacy-Cleanup.md.
     channel: str = "email"
     limit: int = 20
     max_tokens: int = 1200

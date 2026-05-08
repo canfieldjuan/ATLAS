@@ -560,7 +560,7 @@ async def test_generate_uses_provider_canonical_reasoning_context_without_other_
 async def test_generate_uses_custom_config_and_omits_source_opportunity():
     config = CampaignGenerationConfig(
         skill_name="custom",
-        channel="linkedin",
+        channels=("linkedin",),  # supported multi-channel field
         max_tokens=300,
         temperature=0.2,
         include_source_opportunity=False,
@@ -1230,3 +1230,31 @@ async def test_generate_per_call_quality_prompt_proof_term_limit_override():
     assert len(found_terms) <= 2, (
         f"override should cap proof terms at 2; saw {len(found_terms)}: {found_terms}"
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_legacy_channel_field_still_resolves_when_channels_unset():
+    """Lock the legacy ``channel`` field's fallback contract until the
+    breaking-change removal slice lands. ``_channels()`` does
+    ``self._config.channels or (self._config.channel,)`` -- when ``channels``
+    is empty, ``channel`` should still resolve as a one-tuple. After
+    PR-Campaign-Config-V2 removes the field this test goes away with it.
+
+    See plans/PR-Campaign-Channel-Legacy-Cleanup.md.
+    """
+
+    config = CampaignGenerationConfig(channel="legacy_only")  # no channels=
+    service, _, campaigns, llm, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [json.dumps({"subject": "Hi", "body": "<p>Body</p>"})],
+        config=config,
+    )
+
+    await service.generate(scope=TenantScope(), target_mode="churning_company")
+
+    # Single LLM call (one channel) using the legacy field's value.
+    assert len(llm.calls) == 1
+    assert "channel=legacy_only" in llm.calls[0]["messages"][1].content
+    drafts = campaigns.saved[0]["drafts"]
+    assert len(drafts) == 1
+    assert drafts[0].channel == "legacy_only"
