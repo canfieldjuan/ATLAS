@@ -634,3 +634,58 @@ async def test_generate_per_call_parse_retry_response_excerpt_chars_override():
     assert "XXX" in retry_user_prompt
     excerpt_section = retry_user_prompt.split("excerpt:")[1].lstrip()
     assert len(excerpt_section.rstrip()) <= 50
+
+
+# -----------------------
+# PR-OptionA-5: per-call quality_gates_enabled override
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_quality_gates_enabled_false_skips_quality_gate() -> None:
+    """quality_gates_enabled=False short-circuits the quality gate. A
+    response missing references would normally hit no_references blocker;
+    with the gate skipped, it persists."""
+
+    bad_response = json.dumps({
+        "title": "Acme",
+        "summary": "Findings.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {"id": "s1", "title": "T", "body_markdown": "b", "evidence_ids": []}
+        ],
+        "reference_ids": [],  # would normally hit no_references blocker
+    })
+    service, _intel, reports, _llm, _skills, _rp = _service(responses=[bad_response])
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor",
+        quality_gates_enabled=False,
+    )
+
+    assert result.generated == 1
+    assert len(reports.saved[0]["drafts"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_quality_gates_enabled_true_still_blocks() -> None:
+    bad_response = json.dumps({
+        "title": "Acme",
+        "summary": "Findings.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {"id": "s1", "title": "T", "body_markdown": "b", "evidence_ids": []}
+        ],
+        "reference_ids": [],
+    })
+    service, _intel, reports, _llm, _skills, _rp = _service(responses=[bad_response])
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor",
+        quality_gates_enabled=True,
+    )
+
+    assert result.generated == 0
+    assert reports.saved == []

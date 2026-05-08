@@ -711,3 +711,42 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
     assert "opportunity_id" not in context
     assert "filters" not in context
     assert "channels" not in context
+
+
+# -----------------------
+# PR-OptionA-5: quality_gates_enabled symmetry for report + blog_post
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_quality_gates_enabled_into_report() -> None:
+    """Plan now emits quality_gates_enabled for report; executor threads it."""
+
+    report = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["report"],
+            "inputs": {"target_account": "Acme", "offer": "Audit", "opportunity_id": "opp-1"},
+        },
+        services=ContentOpsExecutionServices(report=report),
+    )
+
+    call = report.calls[0]
+    assert call["quality_gates_enabled"] is True
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_quality_gates_enabled_into_blog_post() -> None:
+    blog = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {"target_account": "Acme", "topic": "Churn"},
+        },
+        services=ContentOpsExecutionServices(blog_post=blog),
+    )
+
+    call = blog.calls[0]
+    assert call["quality_gates_enabled"] is True
+    assert call["extras"] == {}

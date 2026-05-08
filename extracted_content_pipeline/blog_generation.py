@@ -23,6 +23,7 @@ class BlogPostGenerationConfig:
     max_tokens: int = 4096
     temperature: float = 0.3
     quality_policy: QualityPolicy | None = None
+    quality_gates_enabled: bool = True
     parse_retry_attempts: int = 1
     parse_retry_response_excerpt_chars: int = 800
 
@@ -148,6 +149,7 @@ class BlogPostGenerationService:
         max_tokens: int | None = None,
         parse_retry_attempts: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
+        quality_gates_enabled: bool | None = None,
     ) -> BlogPostGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -169,6 +171,13 @@ class BlogPostGenerationService:
             self._config.parse_retry_response_excerpt_chars
             if parse_retry_response_excerpt_chars is None
             else int(parse_retry_response_excerpt_chars)
+        )
+        # PR-OptionA-5: per-call quality gate opt-out (symmetry with
+        # the other content-asset services).
+        resolved_quality_gates_enabled = (
+            self._config.quality_gates_enabled
+            if quality_gates_enabled is None
+            else bool(quality_gates_enabled)
         )
 
         requested = int(limit or self._config.limit)
@@ -203,7 +212,11 @@ class BlogPostGenerationService:
                 skipped += 1
                 errors.append({"blueprint_id": blueprint_id, "reason": "unparseable_response"})
                 continue
-            quality = self._quality_check(parsed, blueprint=blueprint)
+            quality = self._quality_check(
+                parsed,
+                blueprint=blueprint,
+                quality_gates_enabled=resolved_quality_gates_enabled,
+            )
             if not quality["passed"]:
                 skipped += 1
                 errors.append({
@@ -291,7 +304,12 @@ class BlogPostGenerationService:
         parsed: Mapping[str, Any],
         *,
         blueprint: Mapping[str, Any],
+        quality_gates_enabled: bool = True,
     ) -> dict[str, Any]:
+        # PR-OptionA-5: opt out of the quality gate per call. Same shape
+        # as report / sales_brief / landing_page.
+        if not quality_gates_enabled:
+            return {"passed": True, "blockers": ()}
         context = _quality_context(parsed, blueprint)
         quality = evaluate_blog_post(
             QualityInput(

@@ -59,6 +59,7 @@ def test_plan_maps_report_to_report_generation_service():
         "limit": 3,
         "max_tokens": 4096,
         "temperature": 0.3,
+        "quality_gates_enabled": True,
         "parse_retry_attempts": 1,
         "parse_retry_response_excerpt_chars": 800,
     }
@@ -84,6 +85,7 @@ def test_plan_maps_blog_to_blog_generation_service():
         "limit": 1,
         "max_tokens": 4096,
         "temperature": 0.3,
+        "quality_gates_enabled": True,
         "parse_retry_attempts": 1,
         "parse_retry_response_excerpt_chars": 800,
         "topic": "Churn pressure",
