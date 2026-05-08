@@ -54,6 +54,7 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     preset_ids = {item["id"] for item in payload["presets"]}
     assert "email_campaign" in output_ids
     assert "landing_page" in output_ids
+    assert outputs["signal_extraction"]["implemented"] is True
     assert outputs["email_campaign"]["execution_configured"] is False
     assert outputs["email_campaign"]["can_execute"] is False
     assert outputs["email_campaign"]["estimated_unit_cost_usd"] == 0.18
@@ -75,6 +76,7 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
         execution_services_provider=lambda: ContentOpsExecutionServices(
             campaign=_CampaignService(),
             report=_CampaignService(),
+            signal_extraction=_CampaignService(),
         )
     )
 
@@ -84,12 +86,14 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
     outputs = {item["id"]: item for item in payload["outputs"]}
     assert payload["execution"] == {
         "configured": True,
-        "configured_outputs": ["email_campaign", "report"],
+        "configured_outputs": ["email_campaign", "report", "signal_extraction"],
     }
     assert outputs["email_campaign"]["execution_configured"] is True
     assert outputs["email_campaign"]["can_execute"] is True
     assert outputs["report"]["execution_configured"] is True
     assert outputs["report"]["can_execute"] is True
+    assert outputs["signal_extraction"]["execution_configured"] is True
+    assert outputs["signal_extraction"]["can_execute"] is True
     assert outputs["blog_post"]["execution_configured"] is False
     assert outputs["blog_post"]["can_execute"] is False
 

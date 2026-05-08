@@ -1,0 +1,158 @@
+"""Deterministic source-material extraction for AI Content Ops."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from .campaign_customer_data import (
+    CampaignOpportunityWarning,
+    normalize_campaign_opportunity_rows,
+)
+from .campaign_ports import TenantScope
+from .campaign_source_adapters import source_row_to_campaign_opportunity
+
+_ROW_LIST_KEYS = ("sources", "documents", "reviews", "transcripts", "complaints", "rows", "data")
+
+
+@dataclass(frozen=True)
+class SignalExtractionConfig:
+    """Config for deterministic source-row extraction."""
+
+    limit: int = 1
+    max_text_chars: int = 1200
+
+
+@dataclass(frozen=True)
+class SignalExtractionResult:
+    """Normalized opportunities extracted from source material."""
+
+    opportunities: tuple[dict[str, Any], ...]
+    warnings: tuple[CampaignOpportunityWarning, ...] = ()
+    target_mode: str = "vendor_retention"
+
+    @property
+    def generated(self) -> int:
+        return len(self.opportunities)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "generated": self.generated,
+            "target_mode": self.target_mode,
+            "opportunities": [dict(row) for row in self.opportunities],
+            "warnings": [warning.as_dict() for warning in self.warnings],
+        }
+
+
+class SignalExtractionService:
+    """Convert host-provided source material into campaign opportunities."""
+
+    def __init__(self, config: SignalExtractionConfig | None = None) -> None:
+        self.config = config or SignalExtractionConfig()
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        source_material: Any,
+        limit: int | None = None,
+        max_text_chars: int | None = None,
+        **kwargs: Any,
+    ) -> SignalExtractionResult:
+        del scope
+        del kwargs
+        resolved_limit = int(limit) if limit is not None else self.config.limit
+        if resolved_limit < 1:
+            raise ValueError("limit must be at least 1")
+        resolved_max_text_chars = (
+            int(max_text_chars)
+            if max_text_chars is not None
+            else self.config.max_text_chars
+        )
+        if resolved_max_text_chars < 1:
+            raise ValueError("max_text_chars must be at least 1")
+        return _extract_signals(
+            _rows_from_source_material(source_material),
+            target_mode=target_mode,
+            limit=resolved_limit,
+            max_text_chars=resolved_max_text_chars,
+        )
+
+
+def _extract_signals(
+    rows: Sequence[Any],
+    *,
+    target_mode: str,
+    limit: int,
+    max_text_chars: int,
+) -> SignalExtractionResult:
+    opportunities: list[dict[str, Any]] = []
+    warnings: list[CampaignOpportunityWarning] = []
+    for index, row in enumerate(rows, start=1):
+        if len(opportunities) >= limit:
+            break
+        if not isinstance(row, Mapping):
+            warnings.append(CampaignOpportunityWarning(
+                code="row_not_object",
+                row_index=index,
+                message="Skipped source row because it is not an object.",
+            ))
+            continue
+        opportunity, row_warnings = source_row_to_campaign_opportunity(
+            row,
+            row_index=index,
+            max_text_chars=max_text_chars,
+        )
+        warnings.extend(row_warnings)
+        if not opportunity:
+            continue
+        normalized = normalize_campaign_opportunity_rows(
+            [opportunity],
+            target_mode=target_mode,
+        )
+        opportunities.extend(normalized.opportunities)
+        warnings.extend(_warnings_for_row(normalized.warnings, index))
+    return SignalExtractionResult(
+        opportunities=tuple(opportunities[:limit]),
+        warnings=tuple(warnings),
+        target_mode=target_mode,
+    )
+
+
+def _warnings_for_row(
+    warnings: Sequence[CampaignOpportunityWarning],
+    row_index: int,
+) -> tuple[CampaignOpportunityWarning, ...]:
+    return tuple(
+        CampaignOpportunityWarning(
+            code=warning.code,
+            message=warning.message,
+            row_index=row_index if warning.row_index is not None else None,
+            field=warning.field,
+        )
+        for warning in warnings
+    )
+
+
+def _rows_from_source_material(source_material: Any) -> list[Any]:
+    if isinstance(source_material, str):
+        text = source_material.strip()
+        return [{"text": text}] if text else []
+    if isinstance(source_material, Mapping):
+        for key in _ROW_LIST_KEYS:
+            value = source_material.get(key)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                return list(value)
+        return [dict(source_material)]
+    if isinstance(source_material, Sequence) and not isinstance(source_material, (bytes, bytearray)):
+        return list(source_material)
+    return []
+
+
+__all__ = [
+    "SignalExtractionConfig",
+    "SignalExtractionResult",
+    "SignalExtractionService",
+]
