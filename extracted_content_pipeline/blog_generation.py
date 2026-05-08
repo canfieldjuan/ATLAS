@@ -144,10 +144,26 @@ class BlogPostGenerationService:
         target_mode: str,
         limit: int | None = None,
         filters: Mapping[str, Any] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        parse_retry_attempts: int | None = None,
     ) -> BlogPostGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
             raise ValueError(f"Blog generation skill not found: {self._config.skill_name}")
+
+        # PR-OptionA-2: per-call LLM-tuning overrides; None falls through.
+        resolved_temperature = (
+            self._config.temperature if temperature is None else float(temperature)
+        )
+        resolved_max_tokens = (
+            self._config.max_tokens if max_tokens is None else int(max_tokens)
+        )
+        resolved_parse_retry_attempts = (
+            self._config.parse_retry_attempts
+            if parse_retry_attempts is None
+            else int(parse_retry_attempts)
+        )
 
         requested = int(limit or self._config.limit)
         rows = await self._blueprints.read_blog_blueprints(
@@ -168,6 +184,9 @@ class BlogPostGenerationService:
                     prompt_template,
                     blueprint=blueprint,
                     target_mode=target_mode,
+                    temperature=resolved_temperature,
+                    max_tokens=resolved_max_tokens,
+                    parse_retry_attempts=resolved_parse_retry_attempts,
                 )
             except Exception as exc:
                 skipped += 1
@@ -208,6 +227,9 @@ class BlogPostGenerationService:
         *,
         blueprint: Mapping[str, Any],
         target_mode: str,
+        temperature: float,
+        max_tokens: int,
+        parse_retry_attempts: int,
     ) -> dict[str, Any] | None:
         blueprint_json = json.dumps(dict(blueprint), separators=(",", ":"), default=str)
         if "{blueprint_json}" in prompt_template:
@@ -216,7 +238,7 @@ class BlogPostGenerationService:
         else:
             system_prompt = prompt_template
             base_user_prompt = f"Generate one blog post from this blueprint JSON:\n{blueprint_json}"
-        attempts = max(1, int(self._config.parse_retry_attempts or 0) + 1)
+        attempts = max(1, int(parse_retry_attempts or 0) + 1)
         last_response = ""
         total_usage: dict[str, Any] = {}
         for attempt_no in range(1, attempts + 1):
@@ -231,8 +253,8 @@ class BlogPostGenerationService:
                         ),
                     ),
                 ],
-                max_tokens=self._config.max_tokens,
-                temperature=self._config.temperature,
+                max_tokens=max_tokens,
+                temperature=temperature,
                 metadata={
                     "target_mode": target_mode,
                     "blueprint_id": _blueprint_id(blueprint),

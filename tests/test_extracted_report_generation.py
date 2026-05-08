@@ -547,3 +547,59 @@ async def test_generate_per_call_default_report_type_falls_back_when_none():
 
     saved_drafts = reports.saved[0]["drafts"]
     assert saved_drafts[0].report_type == "vendor_pressure"
+
+
+# -----------------------
+# PR-OptionA-2: per-call temperature/max_tokens/parse_retry_attempts overrides
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_llm_tuning_overrides_win_over_construction_config():
+    """Verify the resolved-value param is what reaches the LLM, not
+    self._config -- catches typos in _generate_one that read self._config.X
+    instead of the resolved params."""
+
+    service, _intel, _reports, llm, _skills, _rp = _service(
+        responses=[
+            "not parseable",  # forces a retry
+            _valid_report_json(),
+        ],
+        config=ReportGenerationConfig(
+            temperature=0.3,
+            max_tokens=4096,
+            parse_retry_attempts=0,  # would mean 1 LLM call without override
+        ),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor",
+        temperature=0.95,
+        max_tokens=2048,
+        parse_retry_attempts=1,  # 1 + 1 retry = 2 calls
+    )
+
+    assert len(llm.calls) == 2
+    for call in llm.calls:
+        assert call["temperature"] == 0.95
+        assert call["max_tokens"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_generate_llm_tuning_kwargs_none_falls_back_to_construction_config():
+    service, _intel, _reports, llm, _skills, _rp = _service(
+        responses=[_valid_report_json()],
+        config=ReportGenerationConfig(temperature=0.7, max_tokens=999),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor",
+        temperature=None,
+        max_tokens=None,
+        parse_retry_attempts=None,
+    )
+
+    assert llm.calls[0]["temperature"] == 0.7
+    assert llm.calls[0]["max_tokens"] == 999

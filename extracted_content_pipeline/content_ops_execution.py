@@ -217,6 +217,9 @@ async def _dispatch_email_campaign(
         limit=request.limit,
         filters=filters,
         channels=_step_config_sequence(step.config, "channels"),
+        temperature=_step_config_float(step.config, "temperature"),
+        max_tokens=_step_config_int(step.config, "max_tokens"),
+        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
     )
 
 
@@ -234,6 +237,9 @@ async def _dispatch_report(
         limit=request.limit,
         filters=filters,
         default_report_type=_step_config_text(step.config, "default_report_type"),
+        temperature=_step_config_float(step.config, "temperature"),
+        max_tokens=_step_config_int(step.config, "max_tokens"),
+        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
     )
 
 
@@ -251,6 +257,9 @@ async def _dispatch_sales_brief(
         limit=request.limit,
         filters=filters,
         default_brief_type=_step_config_text(step.config, "default_brief_type"),
+        temperature=_step_config_float(step.config, "temperature"),
+        max_tokens=_step_config_int(step.config, "max_tokens"),
+        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
     )
 
 
@@ -262,10 +271,36 @@ async def _dispatch_landing_page(
     scope: TenantScope,
     filters: Mapping[str, Any] | None,
 ) -> Any:
-    del step, filters  # unused: landing pages take a campaign, not a target_mode
+    del filters  # unused: landing pages take a campaign, not a target_mode
     return await service.generate(
         scope=scope,
         campaign=_marketing_campaign_from_inputs(request.inputs),
+        temperature=_step_config_float(step.config, "temperature"),
+        max_tokens=_step_config_int(step.config, "max_tokens"),
+        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
+    )
+
+
+async def _dispatch_blog_post(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    # PR-OptionA-2: blog_post graduates from _dispatch_default into its own
+    # handler so the LLM-tuning kwargs (temperature/max_tokens/
+    # parse_retry_attempts) reach BlogPostGenerationService.generate. The
+    # generic dispatcher remains for genuinely no-config future outputs.
+    return await service.generate(
+        scope=scope,
+        target_mode=request.target_mode,
+        limit=request.limit,
+        filters=filters,
+        temperature=_step_config_float(step.config, "temperature"),
+        max_tokens=_step_config_int(step.config, "max_tokens"),
+        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
     )
 
 
@@ -296,6 +331,7 @@ _DISPATCH: Mapping[str, Any] = {
     "report": _dispatch_report,
     "sales_brief": _dispatch_sales_brief,
     "landing_page": _dispatch_landing_page,
+    "blog_post": _dispatch_blog_post,
 }
 
 
@@ -306,6 +342,42 @@ def _step_config_text(config: Mapping[str, Any], key: str) -> str | None:
         return None
     text = str(raw).strip()
     return text or None
+
+
+def _step_config_int(config: Mapping[str, Any], key: str) -> int | None:
+    """Pull an int from step.config or return None.
+
+    Used for ``max_tokens`` / ``parse_retry_attempts``. Returns None on
+    missing key, non-numeric values, or booleans (Python's ``True/False``
+    are technically ``int`` subclasses; we don't want a mis-typed bool to
+    silently coerce to 0/1 here).
+    """
+    if not isinstance(config, Mapping):
+        return None
+    raw = config.get(key)
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _step_config_float(config: Mapping[str, Any], key: str) -> float | None:
+    """Pull a float from step.config or return None.
+
+    Used for ``temperature``. Returns None on missing key, non-numeric
+    values, or booleans (same rationale as ``_step_config_int``).
+    """
+    if not isinstance(config, Mapping):
+        return None
+    raw = config.get(key)
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _step_config_sequence(

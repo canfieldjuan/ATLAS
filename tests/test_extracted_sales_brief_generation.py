@@ -605,3 +605,57 @@ async def test_generate_per_call_default_brief_type_falls_back_when_none():
 
     saved_drafts = sales_briefs.saved[0]["drafts"]
     assert saved_drafts[0].brief_type == "pre_call"
+
+
+# -----------------------
+# PR-OptionA-2: per-call temperature/max_tokens/parse_retry_attempts overrides
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_llm_tuning_overrides_win_over_construction_config():
+    """Resolved-value param reaches the LLM, not self._config.X."""
+
+    service, _intel, _briefs, llm, _skills, _rp = _service(
+        responses=[
+            "not parseable",
+            _valid_brief_json(),
+        ],
+        config=SalesBriefGenerationConfig(
+            temperature=0.3,
+            max_tokens=4096,
+            parse_retry_attempts=0,
+        ),
+    )
+
+    await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        temperature=0.95,
+        max_tokens=2048,
+        parse_retry_attempts=1,
+    )
+
+    assert len(llm.calls) == 2
+    for call in llm.calls:
+        assert call["temperature"] == 0.95
+        assert call["max_tokens"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_generate_llm_tuning_kwargs_none_falls_back_to_construction_config():
+    service, _intel, _briefs, llm, _skills, _rp = _service(
+        responses=[_valid_brief_json()],
+        config=SalesBriefGenerationConfig(temperature=0.7, max_tokens=999),
+    )
+
+    await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        temperature=None,
+        max_tokens=None,
+        parse_retry_attempts=None,
+    )
+
+    assert llm.calls[0]["temperature"] == 0.7
+    assert llm.calls[0]["max_tokens"] == 999

@@ -1063,3 +1063,71 @@ async def test_generate_per_call_channels_override_empty_falls_back_to_default()
 
     assert len(llm.calls) == 2
     assert {d.channel for d in campaigns.saved[0]["drafts"]} == {"email_cold", "email_followup"}
+
+
+# -----------------------
+# PR-OptionA-2: per-call temperature/max_tokens/parse_retry_attempts overrides
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_llm_tuning_overrides_win_over_construction_config():
+    """Per-call temperature/max_tokens/parse_retry_attempts kwargs override
+    the construction-time config; the LLM client receives the overridden
+    values and the retry budget honors the override."""
+
+    service, _, _, llm, _ = _service(
+        [{"id": "opp-1"}],
+        [
+            "not parseable",  # forces a retry
+            "still not parseable",
+            '{"subject":"Hi","body":"Body"}',
+        ],
+        config=CampaignGenerationConfig(
+            temperature=0.4,
+            max_tokens=1200,
+            parse_retry_attempts=0,  # construction default would be 1 LLM call
+            channels=("email_cold",),
+        ),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="churning_company",
+        temperature=0.95,  # plan-supplied
+        max_tokens=2048,
+        parse_retry_attempts=2,  # 1 + 2 retries = 3 calls total
+    )
+
+    # 3 calls = override raised retry budget from 0 to 2.
+    assert len(llm.calls) == 3
+    # Every call honors the per-call temperature / max_tokens override.
+    for call in llm.calls:
+        assert call["temperature"] == 0.95
+        assert call["max_tokens"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_generate_llm_tuning_kwargs_none_falls_back_to_construction_config():
+    """A None override leaves the construction-time config in place."""
+
+    service, _, _, llm, _ = _service(
+        [{"id": "opp-1"}],
+        ['{"subject":"Hi","body":"Body"}'],
+        config=CampaignGenerationConfig(
+            temperature=0.7,
+            max_tokens=999,
+            channels=("email_cold",),
+        ),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="churning_company",
+        temperature=None,
+        max_tokens=None,
+        parse_retry_attempts=None,
+    )
+
+    assert llm.calls[0]["temperature"] == 0.7
+    assert llm.calls[0]["max_tokens"] == 999
