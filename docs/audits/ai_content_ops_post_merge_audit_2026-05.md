@@ -46,7 +46,7 @@ surface that this audit walks.
 - [x] `extracted_content_pipeline/generation_plan.py` (251 LOC, 6 tests)
 - [x] `extracted_content_pipeline/content_ops_execution.py` (265 LOC, 6 tests)
 - [x] `extracted_content_pipeline/api/control_surfaces.py` (195 LOC, 10 tests)
-- [ ] `extracted_content_pipeline/blog_generation.py` (396 LOC) — pending
+- [x] `extracted_content_pipeline/blog_generation.py` (396 LOC, 9 tests) + `blog_ports.py` (88 LOC)
 - [ ] Parse-retry behavior change across the four existing generators (silent change to already-audited code) — pending
 
 ---
@@ -131,6 +131,14 @@ Ranked by impact:
 10. **MAJOR** — `control_surfaces.py`: `outputs` + `preset` both set:
     preset silently ignored. UI forms that send both think the preset
     is contributing.
+11. **MAJOR** — `blog_generation.py`: blog generator consumes a
+    different port (`BlogBlueprintRepository`) and ignores `topic`
+    from `request.inputs`. Specific instance of #1 with a twist —
+    the user input the catalog declares isn't passed AND the actual
+    data source is host-injected blueprints.
+12. **MAJOR** — `blog_generation.py`: concurrent writes to
+    `blog_posts` from legacy autonomous task + new service. Slug
+    uniqueness at DB level needs verification (migrations 084 + 264).
 
 ---
 
@@ -924,6 +932,224 @@ The 10 tests are reasonably thorough for the API contract:
 
 ---
 
+### `blog_generation.py` (396 LOC, 9 tests) + `blog_ports.py` (88 LOC)
+
+**On-scope verdict for these files:** Standalone blog-post generator
+service mirroring `ReportGenerationService` /
+`SalesBriefGenerationService` shape. Reuses pre-existing storage
+(`blog_posts` table, migration 084 + 264) and pre-existing quality
+pack (`extracted_quality_gate.blog_pack`, PR-B4a era).
+
+**Important nuance to my earlier "5 of 5 → 6 silently" framing:** this
+is NOT a brand-new asset type smuggled in. Blog already had storage
+and a quality pack; what was missing was a standalone
+`BlogPostGenerationService` matching the new control-surface pattern.
+The diff still expands the asset surface from 5 to 6 in the control
+catalog, but the underlying blog product was already in the codebase
+— this just wraps it in the new service shape.
+
+**Lessons from earlier reviews applied:**
+
+- ✅ `json.JSONDecoder.raw_decode` parser (PR-Reports-1b lesson)
+- ✅ System prompt `{blueprint_json}` once; user message structural
+  (with template-fallback if placeholder missing) (PR-Reports-1b
+  lesson)
+- ✅ Quality pack imported at module top (PR-Reports-1b lesson)
+- ✅ `BlogPostRepository.update_status` Protocol returns `bool`
+  (PR-LandingPage-1a lesson)
+- ✅ Parse-retry with usage accumulation across attempts (new
+  pattern from `3c4b00d1` / `124b756e`)
+- ✅ `_slugify` collapses non-alphanumeric runs to single dashes
+  (correct fix not present in `landing_page_generation`'s
+  `_slug_default`)
+
+#### MAJOR — Blog generator consumes a different port; user's `topic` input from control surface doesn't reach the service
+
+`BlogPostGenerationService.generate(scope, target_mode, limit,
+filters)` consumes `BlogBlueprintRepository.read_blog_blueprints` —
+NOT `IntelligenceRepository.read_campaign_opportunities` like the
+other generators. Blueprints are produced by some other host-side
+process (legacy autonomous task, manual import, etc.) and the
+generator just consumes them.
+
+`control_surfaces.OUTPUT_CATALOG["blog_post"]` declares
+`required_inputs=("topic",)` — but:
+- The user's `topic` from `request.inputs` doesn't reach the service.
+  `generate()` takes only `target_mode`, `limit`, `filters`.
+- The actual blog source data is the host-injected
+  `BlogBlueprintRepository`, which the operator can't influence
+  per-call.
+
+**Failure mode:** a user picking blog_post and entering
+`topic="Renewal pressure"` in the control surface gets blog posts
+generated from whatever their host's blueprint repository returns
+(presumably whatever blueprints were prepared by the legacy
+autonomous task or a separate ingestion step). The topic input is
+decorative.
+
+This is a specific manifestation of the BLOCKER from
+`content_ops_execution.py`, with a twist: the input the catalog
+declares ("topic") isn't passed to the service either way, AND the
+actual data source is a separate port.
+
+**Fix (depends on architecture decision):**
+- **Option A (plan-as-execution-contract):** Add a `topic` filter
+  the executor passes through to `generate(filters={"topic": ...})`.
+  Requires `BlogBlueprintRepository.read_blog_blueprints` to support
+  filtering by topic.
+- **Option B (host-pre-configures):** Change
+  `OUTPUT_CATALOG["blog_post"].required_inputs` from `("topic",)` to
+  `()`. Document that blog post generation pulls from host-side
+  blueprints, not per-call inputs. The control surface stops
+  prompting for a topic.
+
+#### MAJOR — Concurrent writes to `blog_posts` table from legacy autonomous task and new service
+
+The legacy `b2b_blog_post_generation` autonomous task (in
+`atlas_brain/autonomous/tasks/`) writes to the same `blog_posts`
+table. With the new `BlogPostGenerationService` exposed via control
+surfaces, two write paths exist for the same table:
+
+1. The legacy autonomous task running on its scheduled cadence
+2. The new service called via `POST /content-ops/execute`
+
+If both run concurrently and produce blog posts with the same slug
+(e.g., both processing the same blueprint), the writes collide.
+
+**Verification needed:** does migration 084 (or 264) enforce
+`UNIQUE(slug)` or `UNIQUE(account_id, slug)`? If yes, the second
+write fails with an integrity error. If no, both rows persist with
+the same slug and downstream consumers (URL routing, listing) get
+ambiguous results.
+
+I haven't audited the migrations but I'd recommend verifying:
+
+```bash
+grep -A2 "CREATE.*INDEX\|UNIQUE" extracted_content_pipeline/storage/migrations/084_blog_posts.sql
+grep -A2 "CREATE.*INDEX\|UNIQUE" extracted_content_pipeline/storage/migrations/264_blog_post_rejection_count.sql
+```
+
+**Failure mode:** silent slug collision, ambiguous post resolution.
+
+**Fix:** if uniqueness isn't enforced at the DB level, either add a
+constraint migration OR have the new service check for existing
+slugs before insert (and either skip, version, or fail-loudly).
+
+#### MINOR — `parse_blog_post_response` rejects valid JSON missing title or content
+
+L74:
+```python
+if title and content:
+    return {**dict(decoded), "title": title, "content": content}
+return None
+```
+
+If the LLM returns valid JSON with `{"title": "..."}` but no
+`content` (or vice versa), parser returns `None` and the executor
+reports `unparseable_response`. The quality pack would have given a
+specific `no_content` blocker.
+
+Same parser-strictness pattern from the `landing_page_generation.py`
+audit, same fix: parser should accept any well-formed JSON object
+with at least one identifying field; quality pack judges the rest.
+
+**Fix:** change to `if title:` (relax content requirement at parser
+layer; quality pack handles missing content).
+
+#### MINOR — `_accumulate_usage` assumes per-call usage from the LLM client
+
+L101-119: accumulates usage across retry attempts under the
+assumption that each `_llm.complete` call returns *just that call's*
+usage. If a host's LLM client returns *cumulative* usage across the
+session (some clients do), retries double-count tokens.
+
+**Failure mode:** inflated cost reporting in
+`metadata.generation_usage.input_tokens`. Doesn't break anything
+upstream because the field is just informational, but operators
+debugging cost will be confused.
+
+**Fix:** docstring on `_accumulate_usage` (or
+`BlogPostGenerationConfig.parse_retry_attempts`) noting the
+"per-call usage" assumption. Or detect cumulative usage by checking
+if the new attempt's `input_tokens` is monotonically increasing.
+
+#### MINOR — Slug has no length limit
+
+L348-351:
+```python
+def _slugify(value: Any) -> str:
+    text = str(value or "blog-post").strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return slug or "blog-post"
+```
+
+A 2000-char title becomes a 2000-char slug. Most CMS / URL routing
+expects slugs <100 chars. The `blog_posts` table column is presumably
+TEXT (no DB-level limit) but URLs would be unwieldy.
+
+**Fix:** add a length cap:
+```python
+return slug[:96].rstrip("-") or "blog-post"
+```
+
+#### MINOR — Retry user message includes 800-char excerpt of prior LLM response
+
+`_blog_generation_user_prompt` (L84-91) embeds up to 800 chars of
+the prior invalid response in the retry user message. If the LLM
+echoed sensitive data in its first attempt (e.g., parts of the
+blueprint, host-specific identifiers, internal IDs), the retry
+message re-includes that excerpt.
+
+**Failure mode:** information leak within the same LLM session.
+Probably benign because the model already saw the data, but worth
+noting if the LLM is being audited or if responses are logged with
+different retention than blueprints.
+
+**Fix:** redact common patterns from the excerpt OR note in the
+config docstring that `parse_retry_response_excerpt_chars=0`
+disables the echo entirely.
+
+#### NIT — `grounded_vendors` is `frozenset` where blog_pack docstring says `set`
+
+L334:
+```python
+"grounded_vendors": frozenset(_string_tuple(blueprint.get("grounded_vendors"))),
+```
+
+`blog_pack`'s docstring (L42) declares `grounded_vendors: set[str]`.
+`isinstance(frozenset(...), set)` is False. If `blog_pack` does
+duck-typing (`vendor in grounded_vendors`), this works. If it does
+`isinstance(grounded_vendors, set)`, it doesn't.
+
+**Verification needed:** quick grep of `blog_pack.py` for
+`isinstance.*grounded_vendors` or set-only operations. If any exist,
+swap `frozenset(...)` to `set(...)`. If duck-typing only, fine as-is.
+
+#### Test coverage gaps
+
+The 9 tests cover:
+- Parser strips code fences ✓
+- Parser returns None for missing fields ✓ (pins the parser-strictness MINOR)
+- Generate happy path via ports ✓
+- Blueprint in user message when template lacks placeholder ✓
+- Blocks low-quality posts ✓
+- Reports unparseable ✓
+- Parse retry behavior (3 paths: default-on, disabled, usage accumulation) ✓ — strong pinning of the new pattern from `3c4b00d1` / `124b756e`
+
+**Not tested:**
+- The MAJOR: end-to-end `topic` from control surface doesn't reach
+  `generate()` (the test calls `generate()` directly; the
+  control-surface roundtrip isn't tested at all)
+- Concurrent writes to `blog_posts` from legacy + new code paths
+- Slug edge cases (empty, very long, only-special-chars)
+- `parse_blog_post_response` accepts a valid JSON missing only
+  `content` and lets quality pack fail it (would catch the
+  parser-strictness MINOR)
+- `_accumulate_usage` with cumulative-usage LLM client (would
+  surface the assumption MINOR)
+
+---
+
 ## Suggested follow-up PR scope
 
 (Pending the architecture decision above.)
@@ -974,9 +1200,6 @@ deferred — author's call.
 
 ## What I did not review yet
 
-- `extracted_content_pipeline/blog_generation.py` (396 LOC) —
-  undeclared 6th asset type. Need to know if it's a supported product
-  asset (rev the count to "6 of 5") or an internal seam.
 - The parse-retry behavior change applied to the four already-audited
   generators (`campaign_generation.py`, `report_generation.py`,
   `landing_page_generation.py`, `sales_brief_generation.py`). Silent
@@ -984,4 +1207,4 @@ deferred — author's call.
   feedback retry, deliberate v0 simplicity." Need to verify the new
   default doesn't break cost ceilings or test pinning.
 
-This doc will be appended as those audits complete.
+This doc will be appended as that audit completes.
