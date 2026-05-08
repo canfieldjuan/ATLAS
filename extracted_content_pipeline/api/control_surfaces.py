@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Sequence
 
 try:
     from fastapi import APIRouter, Body, HTTPException
+    from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 except ImportError as exc:  # pragma: no cover - exercised in dependency-light CI.
     APIRouter = None
     Body = None
     HTTPException = None
+    BaseModel = None
+    ConfigDict = None
+    Field = None
+    ValidationError = None
+    field_validator = None
     _FASTAPI_IMPORT_ERROR: ImportError | None = exc
 else:
     _FASTAPI_IMPORT_ERROR = None
@@ -38,6 +45,13 @@ ScopeProvider = Callable[
     TenantScope | Mapping[str, Any] | None | Awaitable[TenantScope | Mapping[str, Any] | None],
 ]
 
+logger = logging.getLogger(__name__)
+
+_MAX_INPUT_KEYS = 50
+_MAX_INPUT_DEPTH = 6
+_MAX_INPUT_STRING_CHARS = 10000
+_SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
+
 
 def _require_fastapi() -> None:
     if _FASTAPI_IMPORT_ERROR is None:
@@ -58,6 +72,42 @@ class ContentOpsControlSurfaceApiConfig:
     def __post_init__(self) -> None:
         if not str(self.prefix or "").strip().startswith("/"):
             raise ValueError("prefix must start with /")
+
+
+if BaseModel is not None:
+
+    class ContentOpsRequestModel(BaseModel):
+        """Bounded API request body for Content Ops preview/plan/execute."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        target_mode: str = Field("vendor_retention", min_length=1, max_length=80)
+        preset: str | None = Field(default=None, max_length=80)
+        outputs: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
+        limit: int = Field(1, ge=1, le=1000)
+        max_cost_usd: float | None = Field(default=None, gt=0)
+        inputs: dict[str, Any] = Field(default_factory=dict, max_length=_MAX_INPUT_KEYS)
+        ingestion_profile: str = Field("domain_specific", min_length=1, max_length=80)
+        require_quality_gates: bool = True
+        allow_unimplemented_outputs: bool = False
+
+        @field_validator("outputs")
+        @classmethod
+        def _validate_outputs(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+            for item in value:
+                text = str(item or "").strip()
+                if not text or len(text) > 80:
+                    raise ValueError("outputs entries must be 1-80 characters")
+            return value
+
+        @field_validator("inputs")
+        @classmethod
+        def _validate_inputs(cls, value: dict[str, Any]) -> dict[str, Any]:
+            _validate_input_shape(value, depth=0)
+            return value
+
+else:  # pragma: no cover - module import fallback when FastAPI is unavailable.
+    ContentOpsRequestModel = Any
 
 
 def create_content_ops_control_surface_router(
@@ -130,15 +180,21 @@ def create_content_ops_control_surface_router(
         }
 
     @router.post("/preview")
-    async def preview_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        return preview_from_mapping(payload)
+    async def preview_generation(
+        payload: ContentOpsRequestModel = Body(...),
+    ) -> dict[str, Any]:
+        return preview_from_mapping(_payload_to_mapping(payload))
 
     @router.post("/plan")
-    async def plan_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        return build_generation_plan_from_mapping(payload)
+    async def plan_generation(
+        payload: ContentOpsRequestModel = Body(...),
+    ) -> dict[str, Any]:
+        return build_generation_plan_from_mapping(_payload_to_mapping(payload))
 
     @router.post("/execute")
-    async def execute_generation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    async def execute_generation(
+        payload: ContentOpsRequestModel = Body(...),
+    ) -> dict[str, Any]:
         if execution_services_provider is None:
             raise HTTPException(
                 status_code=503,
@@ -150,18 +206,19 @@ def create_content_ops_control_surface_router(
                 status_code=503,
                 detail="Content Ops execution services are not configured.",
             )
-        scope = _scope_from_value(
-            await _resolve_provider(scope_provider)
-            if scope_provider is not None
-            else None
-        )
+        scope = await _resolve_scope(scope_provider)
         result = await execute_content_ops_from_mapping(
-            payload,
+            _payload_to_mapping(payload),
             services=services,
             scope=scope,
         )
+        result = _sanitize_execution_result(result)
         if result["status"] == "blocked":
             raise HTTPException(status_code=400, detail=result)
+        if result["status"] == "failed":
+            raise HTTPException(status_code=502, detail=result)
+        if result["status"] == "partial":
+            raise HTTPException(status_code=207, detail=result)
         return result
 
     return router
@@ -170,8 +227,33 @@ def create_content_ops_control_surface_router(
 async def _resolve_execution_services(
     provider: ExecutionServicesProvider | None,
 ) -> ContentOpsExecutionServices | None:
-    value = await _resolve_provider(provider)
+    try:
+        value = await _resolve_provider(provider)
+    except Exception as exc:
+        logger.warning(
+            "Content Ops execution services provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops execution services are unavailable.",
+        ) from exc
     return value if isinstance(value, ContentOpsExecutionServices) else None
+
+
+async def _resolve_scope(provider: ScopeProvider | None) -> TenantScope | None:
+    try:
+        value = await _resolve_provider(provider) if provider is not None else None
+    except Exception as exc:
+        logger.warning(
+            "Content Ops scope provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops scope provider is unavailable.",
+        ) from exc
+    return _scope_from_value(value)
 
 
 async def _resolve_provider(provider: Callable[[], Any] | None) -> Any:
@@ -189,8 +271,8 @@ def _scope_from_value(value: TenantScope | Mapping[str, Any] | None) -> TenantSc
     return TenantScope(
         account_id=_clean(value.get("account_id")),
         user_id=_clean(value.get("user_id")),
-        allowed_vendors=tuple(str(item) for item in value.get("allowed_vendors", ()) or ()),
-        roles=tuple(str(item) for item in value.get("roles", ()) or ()),
+        allowed_vendors=_clean_sequence(value.get("allowed_vendors", ())),
+        roles=_clean_sequence(value.get("roles", ())),
     )
 
 
@@ -199,7 +281,89 @@ def _clean(value: Any) -> str | None:
     return text or None
 
 
+def _clean_sequence(value: Any) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes, bytearray)):
+        candidates = (value,)
+    else:
+        candidates = value or ()
+    cleaned: list[str] = []
+    for item in candidates:
+        text = _clean(item)
+        if text:
+            cleaned.append(text)
+    return tuple(cleaned)
+
+
+def _payload_to_mapping(payload: Any) -> dict[str, Any]:
+    if BaseModel is not None and isinstance(payload, ContentOpsRequestModel):
+        return payload.model_dump()
+    try:
+        return ContentOpsRequestModel.model_validate(payload).model_dump()
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+
+
+def _validate_input_shape(value: Any, *, depth: int) -> None:
+    if depth > _MAX_INPUT_DEPTH:
+        raise ValueError("inputs are too deeply nested")
+    if isinstance(value, Mapping):
+        if len(value) > _MAX_INPUT_KEYS:
+            raise ValueError("inputs has too many keys")
+        for key, nested in value.items():
+            if len(str(key)) > 100:
+                raise ValueError("inputs keys must be 100 characters or fewer")
+            _validate_input_shape(nested, depth=depth + 1)
+    elif isinstance(value, (list, tuple)):
+        if len(value) > _MAX_INPUT_KEYS:
+            raise ValueError("inputs arrays are too large")
+        for nested in value:
+            _validate_input_shape(nested, depth=depth + 1)
+    elif isinstance(value, str) and len(value) > _MAX_INPUT_STRING_CHARS:
+        raise ValueError("inputs strings are too large")
+
+
+def _sanitize_execution_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    sanitized = dict(result)
+    sanitized["errors"] = [
+        _sanitize_error(error)
+        for error in sanitized.get("errors", ()) or ()
+    ]
+    sanitized["steps"] = [
+        _sanitize_step(step)
+        for step in sanitized.get("steps", ()) or ()
+    ]
+    return sanitized
+
+
+def _sanitize_error(error: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = dict(error)
+    cleaned["reason"] = _safe_execution_reason(cleaned.get("reason"))
+    return cleaned
+
+
+def _sanitize_step(step: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = dict(step)
+    if cleaned.get("error"):
+        cleaned["error"] = _safe_execution_reason(cleaned.get("error"))
+    return cleaned
+
+
+def _safe_execution_reason(reason: Any) -> str:
+    text = str(reason or "").strip()
+    if text in _SAFE_EXECUTION_REASONS:
+        return text
+    return "execution_failed"
+
+
+def _validation_detail(exc: ValidationError) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in error.items() if key != "ctx"}
+        for error in exc.errors()
+    ]
+
+
 __all__ = [
     "ContentOpsControlSurfaceApiConfig",
+    "ContentOpsRequestModel",
     "create_content_ops_control_surface_router",
 ]
