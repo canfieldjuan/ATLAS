@@ -82,6 +82,10 @@ Current preset ids:
 | `lead_gen_campaign` | `email_campaign`, `landing_page` | Outreach plus landing page. |
 | `full_campaign` | `email_campaign`, `blog_post`, `report`, `landing_page`, `sales_brief` | Full generated-content bundle. |
 
+The catalog endpoint exposes both `estimated_unit_cost_usd` and
+`estimated_retry_adjusted_unit_cost_usd`. Use the retry-adjusted value for
+budget UI and the preview response as the authoritative run estimate.
+
 ## Preview Payload
 
 ```json
@@ -130,6 +134,12 @@ show the selected plan, but it should not enable the generate button until
 `missing_inputs`, `blocked_outputs`, and budget warnings are resolved.
 `estimated_cost_usd` is conservative: generated assets default to one parse
 retry, so preview budgets include the worst-case retry attempt count.
+
+> **Upgrade note (breaking):** Prior to 2026-05-08, `estimated_cost_usd`
+> reflected a single LLM call per output. It now reflects worst-case retry
+> attempts (default: 2 calls per generated asset). Operators with existing
+> `max_cost_usd` budgets should multiply their previous limit by
+> `default_parse_retry_attempts + 1` (default: x2).
 
 ## Plan Payload
 
