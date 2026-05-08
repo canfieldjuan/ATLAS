@@ -93,6 +93,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--source-material",
         default="Pricing became hard to justify after renewal.",
     )
+    parser.add_argument("--source-id", default="source-smoke-1")
+    parser.add_argument("--source-vendor", default="HubSpot")
+    parser.add_argument("--source-contact-email", default="buyer@example.com")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -110,11 +113,11 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
             "campaign_name": args.campaign_name,
             "source_material": [
                 {
-                    "id": "source-smoke-1",
+                    "id": str(args.source_id or "").strip() or "source-smoke-1",
                     "company": args.target_account,
-                    "vendor": "HubSpot",
+                    "vendor": args.source_vendor,
                     "text": args.source_material,
-                    "contact_email": "buyer@example.com",
+                    "contact_email": args.source_contact_email,
                 }
             ],
         },
