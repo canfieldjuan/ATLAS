@@ -163,3 +163,29 @@ def test_plan_maps_sales_brief_to_sales_brief_generation_service():
         "parse_retry_attempts": 1,
         "parse_retry_response_excerpt_chars": 800,
     }
+
+
+def test_plan_maps_signal_extraction_to_signal_extraction_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["signal_extraction"],
+            "limit": 3,
+            "inputs": {
+                "source_material": [
+                    {
+                        "id": "review-1",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing pressure came up at renewal.",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "SignalExtractionService.generate"
+    assert plan["steps"][0]["status"] == "runnable"
+    assert plan["steps"][0]["config"] == {
+        "limit": 3,
+        "max_text_chars": 1200,
+    }

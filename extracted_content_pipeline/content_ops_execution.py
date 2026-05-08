@@ -22,6 +22,7 @@ class ContentOpsExecutionServices:
     report: Any | None = None
     landing_page: Any | None = None
     sales_brief: Any | None = None
+    signal_extraction: Any | None = None
 
     def for_output(self, output: str) -> Any | None:
         if output == "email_campaign":
@@ -34,6 +35,8 @@ class ContentOpsExecutionServices:
             return self.landing_page
         if output == "sales_brief":
             return self.sales_brief
+        if output == "signal_extraction":
+            return self.signal_extraction
         return None
 
     def configured_outputs(self) -> tuple[str, ...]:
@@ -44,6 +47,7 @@ class ContentOpsExecutionServices:
             "report",
             "landing_page",
             "sales_brief",
+            "signal_extraction",
         ):
             if _has_generate_method(self.for_output(output)):
                 outputs.append(output)
@@ -329,6 +333,24 @@ async def _dispatch_blog_post(
     )
 
 
+async def _dispatch_signal_extraction(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    del filters
+    return await service.generate(
+        scope=scope,
+        target_mode=request.target_mode,
+        source_material=request.inputs.get("source_material"),
+        limit=request.limit,
+        max_text_chars=_step_config_int(step.config, "max_text_chars"),
+    )
+
+
 async def _dispatch_default(
     *,
     step: GenerationPlanStep,
@@ -357,6 +379,7 @@ _DISPATCH: Mapping[str, Any] = {
     "sales_brief": _dispatch_sales_brief,
     "landing_page": _dispatch_landing_page,
     "blog_post": _dispatch_blog_post,
+    "signal_extraction": _dispatch_signal_extraction,
 }
 
 

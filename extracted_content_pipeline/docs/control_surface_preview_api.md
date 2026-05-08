@@ -68,7 +68,7 @@ Current output ids:
 | `report` | Implemented | Structured report draft path. |
 | `landing_page` | Implemented | Landing page generation service path. |
 | `sales_brief` | Implemented | Sales brief generation service path. |
-| `signal_extraction` | Not implemented | Included in catalog but blocked by default. |
+| `signal_extraction` | Implemented | Deterministic source-row normalization into campaign opportunities; no LLM call. |
 
 Future outputs should be added to the catalog first, then exposed through
 presets only after the implementation and quality gate exist. Yes, this is less

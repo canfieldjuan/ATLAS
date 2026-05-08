@@ -133,6 +133,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/campaign_example.py" in owned
     assert "extracted_content_pipeline/campaign_customer_data.py" in owned
     assert "extracted_content_pipeline/campaign_source_adapters.py" in owned
+    assert "extracted_content_pipeline/signal_extraction.py" in owned
     assert "extracted_content_pipeline/campaign_opportunities.py" in owned
     assert "extracted_content_pipeline/settings.py" in owned
     assert "extracted_content_pipeline/api/__init__.py" in owned

@@ -95,7 +95,7 @@ def test_missing_required_inputs_treats_empty_tuple_as_missing():
     assert preview["missing_inputs"] == ["topic"]
 
 
-def test_preview_blocks_unimplemented_outputs_by_default():
+def test_preview_allows_signal_extraction_when_source_material_present():
     preview = preview_from_mapping(
         {
             "outputs": ["signal_extraction"],
@@ -105,10 +105,10 @@ def test_preview_blocks_unimplemented_outputs_by_default():
         }
     )
 
-    assert preview["can_run"] is False
-    assert preview["outputs"] == []
-    assert preview["blocked_outputs"] == ["signal_extraction"]
-    assert "Output not implemented yet: signal_extraction" in preview["warnings"]
+    assert preview["can_run"] is True
+    assert preview["outputs"] == ["signal_extraction"]
+    assert preview["blocked_outputs"] == []
+    assert preview["estimated_cost_usd"] == 0.0
 
 
 def test_preview_blocks_when_estimate_exceeds_budget():
@@ -144,20 +144,17 @@ def test_preview_budget_gate_uses_retry_adjusted_cost():
     assert "Estimated cost exceeds max_cost_usd: 2.20 > 1.10" in preview["warnings"]
 
 
-def test_preview_can_include_future_outputs_when_explicitly_allowed():
+def test_preview_keeps_signal_extraction_blocked_without_source_material():
     preview = preview_from_mapping(
         {
             "outputs": ["signal_extraction"],
-            "allow_unimplemented_outputs": True,
-            "inputs": {
-                "source_material": "review export",
-            },
+            "inputs": {},
         }
     )
 
-    assert preview["can_run"] is True
+    assert preview["can_run"] is False
     assert preview["outputs"] == ["signal_extraction"]
-    assert preview["blocked_outputs"] == []
+    assert preview["missing_inputs"] == ["source_material"]
 
 
 def test_request_from_mapping_rejects_zero_limit():

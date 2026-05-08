@@ -11,6 +11,7 @@ from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
+from extracted_content_pipeline.signal_extraction import SignalExtractionService
 
 
 @dataclass(frozen=True)
@@ -278,6 +279,36 @@ async def test_execute_runs_blog_post_service_with_scope_and_filters() -> None:
     assert blog_call["default_report_type"] is None
     assert blog_call["default_brief_type"] is None
     assert blog_call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_signal_extraction_service_from_source_material() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["signal_extraction"],
+            "inputs": {
+                "source_material": [
+                    {
+                        "id": "review-1",
+                        "company": "Acme",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing is a problem.",
+                        "contact_email": "buyer@example.com",
+                    }
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            signal_extraction=SignalExtractionService()
+        ),
+    )
+
+    assert result["status"] == "completed"
+    step = result["steps"][0]
+    assert step["output"] == "signal_extraction"
+    assert step["result"]["generated"] == 1
+    assert step["result"]["opportunities"][0]["target_id"] == "review-1"
+    assert step["result"]["warnings"] == []
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,7 @@ from .control_surfaces import (
 from .landing_page_generation import LandingPageGenerationConfig
 from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
+from .signal_extraction import SignalExtractionConfig
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,12 @@ def _blog_post_config_for_request(request: ContentOpsRequest) -> BlogPostGenerat
     return BlogPostGenerationConfig(limit=request.limit)
 
 
+def _signal_extraction_config_for_request(
+    request: ContentOpsRequest,
+) -> SignalExtractionConfig:
+    return SignalExtractionConfig(limit=request.limit)
+
+
 def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanStep:
     if output == "email_campaign":
         config = _campaign_config_for_request(request)
@@ -204,6 +211,17 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
                 "topic": request.inputs.get("topic"),
+            },
+        )
+    if output == "signal_extraction":
+        config = _signal_extraction_config_for_request(request)
+        return GenerationPlanStep(
+            output=output,
+            runner="SignalExtractionService.generate",
+            status="runnable",
+            config={
+                "limit": config.limit,
+                "max_text_chars": config.max_text_chars,
             },
         )
     return GenerationPlanStep(

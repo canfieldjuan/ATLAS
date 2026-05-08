@@ -38,6 +38,9 @@
   CLI and offline generation CLI can consume these source rows directly with
   `--source-rows`; JSON, JSONL, and CSV source-row exports are supported, and
   `examples/campaign_source_rows.jsonl` provides a packaged starter input.
+- `signal_extraction` exposes source-row normalization as a runnable AI Content
+  Ops output. It converts inline source material into normalized opportunities
+  without LLM, database, or Atlas dependencies.
 - `campaign_postgres_export` provides a read-only draft export path over
   generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
   handwritten SQL.
