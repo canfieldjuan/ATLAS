@@ -560,7 +560,7 @@ async def test_generate_uses_provider_canonical_reasoning_context_without_other_
 async def test_generate_uses_custom_config_and_omits_source_opportunity():
     config = CampaignGenerationConfig(
         skill_name="custom",
-        channel="linkedin",
+        channels=("linkedin",),  # supported multi-channel field
         max_tokens=300,
         temperature=0.2,
         include_source_opportunity=False,
