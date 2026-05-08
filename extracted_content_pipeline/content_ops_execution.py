@@ -185,17 +185,151 @@ async def _run_step(
     scope: TenantScope,
     filters: Mapping[str, Any] | None,
 ) -> Any:
-    if step.output == "landing_page":
-        return await service.generate(
-            scope=scope,
-            campaign=_marketing_campaign_from_inputs(request.inputs),
-        )
+    """Dispatch a step to its per-output handler.
+
+    PR-OptionA-1 refactor: replaces the previous "landing_page special-case
+    + everything-else generic" branch with a per-output handler table so
+    each output's `step.config` can be threaded into its service signature
+    without growing more `if step.output == ...` branches. New outputs
+    register a one-line handler entry instead of editing this function.
+    """
+    handler = _DISPATCH.get(step.output, _dispatch_default)
+    return await handler(
+        step=step,
+        service=service,
+        request=request,
+        scope=scope,
+        filters=filters,
+    )
+
+
+async def _dispatch_email_campaign(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    return await service.generate(
+        scope=scope,
+        target_mode=request.target_mode,
+        limit=request.limit,
+        filters=filters,
+        channels=_step_config_sequence(step.config, "channels"),
+    )
+
+
+async def _dispatch_report(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    return await service.generate(
+        scope=scope,
+        target_mode=request.target_mode,
+        limit=request.limit,
+        filters=filters,
+        default_report_type=_step_config_text(step.config, "default_report_type"),
+    )
+
+
+async def _dispatch_sales_brief(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    return await service.generate(
+        scope=scope,
+        target_mode=request.target_mode,
+        limit=request.limit,
+        filters=filters,
+        default_brief_type=_step_config_text(step.config, "default_brief_type"),
+    )
+
+
+async def _dispatch_landing_page(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    del step, filters  # unused: landing pages take a campaign, not a target_mode
+    return await service.generate(
+        scope=scope,
+        campaign=_marketing_campaign_from_inputs(request.inputs),
+    )
+
+
+async def _dispatch_default(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    """Fallback for outputs that don't yet thread step.config kwargs.
+
+    Currently used by `blog_post`. Future outputs that need per-call
+    config kwargs should register their own handler in `_DISPATCH`.
+    """
+    del step  # config is informational for outputs without per-call overrides
     return await service.generate(
         scope=scope,
         target_mode=request.target_mode,
         limit=request.limit,
         filters=filters,
     )
+
+
+_DISPATCH: Mapping[str, Any] = {
+    "email_campaign": _dispatch_email_campaign,
+    "report": _dispatch_report,
+    "sales_brief": _dispatch_sales_brief,
+    "landing_page": _dispatch_landing_page,
+}
+
+
+def _step_config_text(config: Mapping[str, Any], key: str) -> str | None:
+    """Pull a non-empty string from step.config or return None."""
+    raw = config.get(key) if isinstance(config, Mapping) else None
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def _step_config_sequence(
+    config: Mapping[str, Any],
+    key: str,
+) -> tuple[str, ...] | None:
+    """Pull a non-empty string sequence from step.config or return None.
+
+    Accepts either a list/tuple or a comma-separated string. Empty values
+    return None so the service falls through to its construction-time
+    default rather than coercing to an empty channel set.
+    """
+    if not isinstance(config, Mapping):
+        return None
+    raw = config.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        items = [item.strip() for item in raw.split(",") if item.strip()]
+    elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray)):
+        items = [str(item).strip() for item in raw if str(item).strip()]
+    else:
+        return None
+    return tuple(items) if items else None
 
 
 def _filters_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:

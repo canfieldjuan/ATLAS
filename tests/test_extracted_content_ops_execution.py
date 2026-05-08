@@ -22,6 +22,13 @@ class _Result:
 
 
 class _OpportunityService:
+    """Records every kwarg the executor passes; tolerates new optional kwargs.
+
+    Accepts the smoking-gun per-call overrides PR-OptionA-1 threads through
+    (`channels`, `default_report_type`, `default_brief_type`) plus a generic
+    `**extras` so future overrides don't require touching this fake.
+    """
+
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
@@ -32,12 +39,20 @@ class _OpportunityService:
         target_mode: str,
         limit: int | None = None,
         filters: Mapping[str, Any] | None = None,
+        channels: Any | None = None,
+        default_report_type: str | None = None,
+        default_brief_type: str | None = None,
+        **extras: Any,
     ) -> _Result:
         self.calls.append({
             "scope": scope,
             "target_mode": target_mode,
             "limit": limit,
             "filters": dict(filters or {}),
+            "channels": channels,
+            "default_report_type": default_report_type,
+            "default_brief_type": default_brief_type,
+            "extras": dict(extras),
         })
         return _Result()
 
@@ -70,7 +85,9 @@ class _BarrierOpportunityService:
         target_mode: str,
         limit: int | None = None,
         filters: Mapping[str, Any] | None = None,
+        **extras: Any,
     ) -> _Result:
+        del extras  # PR-OptionA-1 may pass channels/default_*type kwargs.
         self.starts.append(self.name)
         if len(self.starts) == 2:
             self.all_started.set()
@@ -102,13 +119,32 @@ async def test_execute_runs_email_and_report_services_with_scope_and_filters() -
 
     assert result["status"] == "completed"
     assert [step["output"] for step in result["steps"]] == ["email_campaign", "report"]
-    assert campaign.calls == [{
-        "scope": scope,
-        "target_mode": "vendor_retention",
-        "limit": 2,
-        "filters": {"status": "ready"},
-    }]
-    assert report.calls == campaign.calls
+    # Both services receive scope, target_mode, limit, filters; the executor
+    # also threads each output's smoking-gun step.config field as a kwarg
+    # (channels for email_campaign, default_report_type for report).
+    # PR-OptionA-1: this is what makes plan-as-execution-contract real.
+    assert len(campaign.calls) == 1
+    campaign_call = campaign.calls[0]
+    assert campaign_call["scope"] == scope
+    assert campaign_call["target_mode"] == "vendor_retention"
+    assert campaign_call["limit"] == 2
+    assert campaign_call["filters"] == {"status": "ready"}
+    # Plan default channels reach the service even without per-request override.
+    assert campaign_call["channels"] == ("email_cold", "email_followup")
+    assert campaign_call["default_report_type"] is None
+    # extras locks the kwarg surface: a typo'd kwarg in PR-OptionA-2/3 would
+    # silently land here and never reach the right service field.
+    assert campaign_call["extras"] == {}
+    assert len(report.calls) == 1
+    report_call = report.calls[0]
+    assert report_call["scope"] == scope
+    assert report_call["target_mode"] == "vendor_retention"
+    assert report_call["limit"] == 2
+    assert report_call["filters"] == {"status": "ready"}
+    # Plan default report type reaches the service.
+    assert report_call["default_report_type"] == "vendor_pressure"
+    assert report_call["channels"] is None
+    assert report_call["extras"] == {}
 
 
 @pytest.mark.asyncio
@@ -196,12 +232,18 @@ async def test_execute_runs_blog_post_service_with_scope_and_filters() -> None:
 
     assert result["status"] == "completed"
     assert result["steps"][0]["output"] == "blog_post"
-    assert service.calls == [{
-        "scope": scope,
-        "target_mode": "vendor_retention",
-        "limit": 2,
-        "filters": {"topic_type": "vendor_alternative"},
-    }]
+    # blog_post stays on the default dispatcher in PR-OptionA-1; per-call
+    # config kwargs are deferred to PR-OptionA-2 (see plans/PR-OptionA-1.md).
+    assert len(service.calls) == 1
+    blog_call = service.calls[0]
+    assert blog_call["scope"] == scope
+    assert blog_call["target_mode"] == "vendor_retention"
+    assert blog_call["limit"] == 2
+    assert blog_call["filters"] == {"topic_type": "vendor_alternative"}
+    assert blog_call["channels"] is None
+    assert blog_call["default_report_type"] is None
+    assert blog_call["default_brief_type"] is None
+    assert blog_call["extras"] == {}
 
 
 @pytest.mark.asyncio
@@ -241,3 +283,122 @@ async def test_execute_reports_service_without_generate_as_not_configured() -> N
     assert result["errors"] == [
         {"output": "email_campaign", "reason": "service_not_configured"}
     ]
+
+
+# -----------------------
+# PR-OptionA-1: smoking-gun fields (channels, default_report_type,
+# default_brief_type) flow from plan into the service call.
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_user_selected_channels_into_email_campaign_service() -> None:
+    """The audit's specific failure mode: user picks channels=['email_cold'] in the
+    control surface, plan records it in step.config, and the executor MUST pass
+    it to the service. Before PR-OptionA-1, the service used its construction-
+    time default and the user's selection was silently dropped."""
+
+    campaign = _OpportunityService()
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "channels": ["email_cold"],
+            },
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    assert result["status"] == "completed"
+    assert campaign.calls[0]["channels"] == ("email_cold",)
+    assert campaign.calls[0]["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_falls_back_to_plan_default_channels_when_request_omits_them() -> None:
+    """No request-level override -> plan emits the construction-time default
+    channels and the executor still threads them through (so the service
+    behavior is identical, but the plan is now the single source of truth)."""
+
+    campaign = _OpportunityService()
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    assert result["status"] == "completed"
+    assert campaign.calls[0]["channels"] == ("email_cold", "email_followup")
+    assert campaign.calls[0]["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_user_selected_report_type_into_report_service() -> None:
+    report = _OpportunityService()
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["report"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "opportunity_id": "opp-1",
+                "report_type": "customer_health",
+            },
+        },
+        services=ContentOpsExecutionServices(report=report),
+    )
+
+    assert result["status"] == "completed"
+    assert report.calls[0]["default_report_type"] == "customer_health"
+    assert report.calls[0]["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_user_selected_brief_type_into_sales_brief_service() -> None:
+    sales_brief = _OpportunityService()
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "opportunity_id": "opp-1",
+                "brief_type": "renewal",
+            },
+        },
+        services=ContentOpsExecutionServices(sales_brief=sales_brief),
+    )
+
+    assert result["status"] == "completed"
+    assert sales_brief.calls[0]["default_brief_type"] == "renewal"
+    assert sales_brief.calls[0]["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_landing_page_dispatcher_unchanged_no_per_call_overrides() -> None:
+    """Landing page still gets the campaign-from-inputs dispatch (no per-call
+    overrides in this PR; deferred to PR-OptionA-2)."""
+
+    landing = _LandingPageService()
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "campaign_name": "Q3 audit",
+                "offer": "Audit",
+                "audience": "VPs",
+            },
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    assert result["status"] == "completed"
+    assert len(landing.calls) == 1
+    assert landing.calls[0]["campaign"].name == "Q3 audit"

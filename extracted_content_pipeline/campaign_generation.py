@@ -33,6 +33,21 @@ from .services.campaign_quality import campaign_quality_revalidation
 _PROOF_TERM_TEXT_KEYS = ("excerpt_text", "quote", "text", "anchor", "value")
 
 
+def _normalize_channels(items: Sequence[Any]) -> tuple[str, ...]:
+    """Strip + dedupe channel ids while preserving insertion order.
+
+    Shared between the per-call override path and the construction-time
+    config fallback so both apply identical normalization. Empty / blank
+    items are dropped silently. Empty input yields an empty tuple.
+    """
+    seen: list[str] = []
+    for item in items:
+        channel = str(item or "").strip()
+        if channel and channel not in seen:
+            seen.append(channel)
+    return tuple(seen)
+
+
 def _dedupe_terms(terms: Sequence[str], *, limit: int) -> list[str]:
     if limit <= 0:
         return []
@@ -248,6 +263,7 @@ class CampaignGenerationService:
         target_mode: str,
         limit: int | None = None,
         filters: Mapping[str, Any] | None = None,
+        channels: Sequence[str] | None = None,
     ) -> CampaignGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -267,7 +283,7 @@ class CampaignGenerationService:
         drafts: list[CampaignDraft] = []
         errors: list[dict[str, Any]] = []
         skipped = 0
-        channels = self._channels()
+        resolved_channels = self._channels(override=channels)
         for opportunity in opportunities:
             target_id = opportunity_target_id(opportunity)
             if not target_id:
@@ -286,7 +302,7 @@ class CampaignGenerationService:
                 errors.append({"target_id": target_id, "reason": str(exc)})
                 continue
             cold_email_context: dict[str, str] | None = None
-            for channel in channels:
+            for channel in resolved_channels:
                 channel_opportunity = self._opportunity_for_channel(
                     opportunity,
                     channel=channel,
@@ -362,19 +378,23 @@ class CampaignGenerationService:
             errors=tuple(errors),
         )
 
-    def _channels(self) -> tuple[str, ...]:
+    def _channels(self, *, override: Sequence[str] | None = None) -> tuple[str, ...]:
+        # Per-call override (when present) wins over the construction-time
+        # config. PR-OptionA-1: makes the plan's step.config["channels"]
+        # load-bearing at dispatch time so the control surface preview's
+        # channel selection actually reaches the service. None or an empty
+        # override falls through to the existing config-then-default chain.
+        if override is not None:
+            override_channels = _normalize_channels(override)
+            if override_channels:
+                return override_channels
         raw_value = self._config.channels or (self._config.channel,)
-        raw: Sequence[str]
         if isinstance(raw_value, str):
-            raw = raw_value.split(",")
+            raw: Sequence[str] = raw_value.split(",")
         else:
             raw = raw_value
-        channels: list[str] = []
-        for item in raw:
-            channel = str(item or "").strip()
-            if channel and channel not in channels:
-                channels.append(channel)
-        return tuple(channels or ("email",))
+        normalized = _normalize_channels(raw)
+        return normalized or ("email",)
 
     def _opportunity_for_channel(
         self,

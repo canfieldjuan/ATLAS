@@ -986,3 +986,80 @@ async def test_generate_raises_clear_error_when_skill_missing():
 
     with pytest.raises(ValueError, match="Campaign generation skill not found"):
         await service.generate(scope=TenantScope(), target_mode="churning_company")
+
+
+# -----------------------
+# PR-OptionA-1: per-call channels override (plan-as-execution-contract)
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_channels_override_wins_over_construction_config():
+    """When the executor threads `channels=` from step.config, the call wins
+    over the construction-time config. PR-OptionA-1 makes this load-bearing."""
+
+    service, _intel, campaigns, llm, _skills = _service(
+        [{"id": "opp-1"}],
+        ['{"subject":"Hi","body":"Body"}'],
+        config=CampaignGenerationConfig(channels=("email_cold", "email_followup")),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="churning_company",
+        channels=["email_cold"],  # plan picks cold-only
+    )
+
+    # The construction-time config had two channels; the per-call override
+    # narrowed it to one, so the LLM is invoked exactly once.
+    assert len(llm.calls) == 1
+    drafts = campaigns.saved[0]["drafts"]
+    assert len(drafts) == 1
+    assert drafts[0].channel == "email_cold"
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_channels_override_falls_back_when_none():
+    """A None override leaves the construction-time channels config in place."""
+
+    service, _intel, campaigns, llm, _skills = _service(
+        [{"id": "opp-1"}],
+        [
+            '{"subject":"Hi","body":"Body"}',
+            '{"subject":"Hi","body":"Body"}',
+        ],
+        config=CampaignGenerationConfig(channels=("email_cold", "email_followup")),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="churning_company",
+        channels=None,  # no per-call override
+    )
+
+    # Both channels from the construction-time config were used.
+    assert len(llm.calls) == 2
+    assert {d.channel for d in campaigns.saved[0]["drafts"]} == {"email_cold", "email_followup"}
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_channels_override_empty_falls_back_to_default():
+    """An empty override is treated as "no override", not "no channels"."""
+
+    service, _intel, campaigns, llm, _skills = _service(
+        [{"id": "opp-1"}],
+        [
+            '{"subject":"Hi","body":"Body"}',
+            '{"subject":"Hi","body":"Body"}',
+        ],
+        config=CampaignGenerationConfig(channels=("email_cold", "email_followup")),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="churning_company",
+        channels=[],  # empty override -> fall back, don't zero out
+    )
+
+    assert len(llm.calls) == 2
+    assert {d.channel for d in campaigns.saved[0]["drafts"]} == {"email_cold", "email_followup"}

@@ -528,3 +528,80 @@ async def test_generate_aggregates_section_evidence_into_reference_ids_no_duplic
     draft = sales_briefs.saved[0]["drafts"][0]
     # Order preserved: explicit list first, then section evidence ids in insertion order
     assert draft.reference_ids == ("r1", "r4", "r2", "r3")
+
+
+# -----------------------
+# PR-OptionA-1: per-call default_brief_type override
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_default_brief_type_override_when_llm_omits_type():
+    """When the LLM doesn't include a `brief_type` in its JSON, the per-call
+    override (from the plan's step.config) wins over the construction-time
+    default."""
+
+    response = json.dumps({
+        "title": "Acme",
+        "headline": "elevator",
+        # brief_type intentionally omitted
+        "sections": [{"id": "s1", "title": "S", "body_markdown": "b", "evidence_ids": ["r1"]}],
+        "reference_ids": ["r1"],
+    })
+    service, _intel, sales_briefs, _llm, _skills, _rp = _service(
+        responses=[response],
+        config=SalesBriefGenerationConfig(default_brief_type="pre_call"),
+    )
+
+    await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        default_brief_type="renewal",  # plan-supplied override
+    )
+
+    saved_drafts = sales_briefs.saved[0]["drafts"]
+    assert saved_drafts[0].brief_type == "renewal"
+
+
+@pytest.mark.asyncio
+async def test_generate_llm_supplied_brief_type_still_wins_over_per_call_override():
+    """The per-call override only fills in when the LLM omits `brief_type`."""
+
+    service, _intel, sales_briefs, _llm, _skills, _rp = _service(
+        responses=[_valid_brief_json(brief_type="pre_call")],
+        config=SalesBriefGenerationConfig(default_brief_type="pre_call"),
+    )
+
+    await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        default_brief_type="renewal",  # ignored: LLM supplied pre_call
+    )
+
+    saved_drafts = sales_briefs.saved[0]["drafts"]
+    assert saved_drafts[0].brief_type == "pre_call"
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_default_brief_type_falls_back_when_none():
+    """A None override leaves the construction-time default in place."""
+
+    response = json.dumps({
+        "title": "Acme",
+        "headline": "elevator",
+        "sections": [{"id": "s1", "title": "S", "body_markdown": "b", "evidence_ids": ["r1"]}],
+        "reference_ids": ["r1"],
+    })
+    service, _intel, sales_briefs, _llm, _skills, _rp = _service(
+        responses=[response],
+        config=SalesBriefGenerationConfig(default_brief_type="pre_call"),
+    )
+
+    await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        default_brief_type=None,
+    )
+
+    saved_drafts = sales_briefs.saved[0]["drafts"]
+    assert saved_drafts[0].brief_type == "pre_call"

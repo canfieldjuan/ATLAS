@@ -469,3 +469,81 @@ async def test_generate_aggregates_section_evidence_ids_into_reference_ids() -> 
     draft = reports.saved[0]["drafts"][0]
     # Top-level reference_ids preserved + section evidence ids unioned without dupes.
     assert draft.reference_ids == ("r0", "r1", "r2", "r3")
+
+
+# -----------------------
+# PR-OptionA-1: per-call default_report_type override
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_default_report_type_override_when_llm_omits_type():
+    """When the LLM doesn't include a `report_type` in its JSON, the per-call
+    override (from the plan's step.config) wins over the construction-time
+    default. The LLM-supplied value still wins when present (tested below)."""
+
+    response = json.dumps({
+        "title": "Acme",
+        "summary": "Findings.",
+        # report_type intentionally omitted from LLM output
+        "sections": [{"id": "s1", "title": "S", "body_markdown": "b", "evidence_ids": ["r1"]}],
+        "reference_ids": ["r1"],
+    })
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=[response],
+        config=ReportGenerationConfig(default_report_type="vendor_pressure"),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor",
+        default_report_type="customer_health",  # plan-supplied override
+    )
+
+    saved_drafts = reports.saved[0]["drafts"]
+    assert saved_drafts[0].report_type == "customer_health"
+
+
+@pytest.mark.asyncio
+async def test_generate_llm_supplied_report_type_still_wins_over_per_call_override():
+    """The per-call override only fills in when the LLM omits `report_type`.
+    LLM JSON value still wins so model-driven type selection remains intact."""
+
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=[_valid_report_json()],  # already includes report_type=vendor_pressure
+        config=ReportGenerationConfig(default_report_type="vendor_pressure"),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor",
+        default_report_type="customer_health",  # ignored: LLM supplied vendor_pressure
+    )
+
+    saved_drafts = reports.saved[0]["drafts"]
+    assert saved_drafts[0].report_type == "vendor_pressure"
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_default_report_type_falls_back_when_none():
+    """A None override leaves the construction-time default in place."""
+
+    response = json.dumps({
+        "title": "Acme",
+        "summary": "Findings.",
+        "sections": [{"id": "s1", "title": "S", "body_markdown": "b", "evidence_ids": ["r1"]}],
+        "reference_ids": ["r1"],
+    })
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=[response],
+        config=ReportGenerationConfig(default_report_type="vendor_pressure"),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor",
+        default_report_type=None,
+    )
+
+    saved_drafts = reports.saved[0]["drafts"]
+    assert saved_drafts[0].report_type == "vendor_pressure"

@@ -221,6 +221,7 @@ class SalesBriefGenerationService:
         target_mode: str,
         limit: int | None = None,
         filters: Mapping[str, Any] | None = None,
+        default_brief_type: str | None = None,
     ) -> SalesBriefGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -287,7 +288,12 @@ class SalesBriefGenerationService:
                 continue
 
             drafts.append(
-                self._build_draft(parsed, target_id=target_id, target_mode=target_mode)
+                self._build_draft(
+                    parsed,
+                    target_id=target_id,
+                    target_mode=target_mode,
+                    default_brief_type=default_brief_type,
+                )
             )
 
         saved_ids: tuple[str, ...] = ()
@@ -420,6 +426,7 @@ class SalesBriefGenerationService:
         *,
         target_id: str,
         target_mode: str,
+        default_brief_type: str | None = None,
     ) -> SalesBriefDraft:
         sections = tuple(
             SalesBriefSection(
@@ -444,7 +451,12 @@ class SalesBriefGenerationService:
                 v = str(evidence_id).strip()
                 if v and v not in ref_seen:
                     ref_seen.append(v)
-        brief_type = str(parsed.get("brief_type") or self._config.default_brief_type)
+        # Per-call override (when present and non-empty) wins over the
+        # construction-time default. PR-OptionA-1: makes the plan's
+        # step.config["default_brief_type"] load-bearing at dispatch time.
+        # The LLM's own `brief_type` JSON field still wins when present.
+        configured_default = (default_brief_type or "").strip() or self._config.default_brief_type
+        brief_type = str(parsed.get("brief_type") or configured_default)
         metadata: dict[str, Any] = {
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
