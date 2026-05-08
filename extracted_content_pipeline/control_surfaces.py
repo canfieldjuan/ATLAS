@@ -94,7 +94,7 @@ class ControlSurfacePreview:
 # mutation raises ``TypeError`` rather than silently corrupting the
 # catalog. Reads (``.get(...)``, iteration, membership) work
 # unchanged.
-_OUTPUT_CATALOG_DEFINITIONS: dict[str, OutputDefinition] = {
+OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
     "email_campaign": OutputDefinition(
         id="email_campaign",
         label="Email Campaign",
@@ -145,11 +145,10 @@ _OUTPUT_CATALOG_DEFINITIONS: dict[str, OutputDefinition] = {
         required_inputs=("source_material",),
         default_parse_retry_attempts=0,
     ),
-}
-OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType(_OUTPUT_CATALOG_DEFINITIONS)
+})
 
 
-_PRESETS_DEFINITIONS: dict[str, ControlSurfacePreset] = {
+PRESETS: Mapping[str, ControlSurfacePreset] = MappingProxyType({
     "email_only": ControlSurfacePreset(
         id="email_only",
         label="Email Only",
@@ -186,8 +185,7 @@ _PRESETS_DEFINITIONS: dict[str, ControlSurfacePreset] = {
         ),
         description="Full generated-content bundle.",
     ),
-}
-PRESETS: Mapping[str, ControlSurfacePreset] = MappingProxyType(_PRESETS_DEFINITIONS)
+})
 
 
 def normalize_outputs(raw_outputs: str | Iterable[str] | None) -> tuple[str, ...]:
