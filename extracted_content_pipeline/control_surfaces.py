@@ -203,6 +203,22 @@ def normalize_outputs(raw_outputs: str | Iterable[str] | None) -> tuple[str, ...
 def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
     """Build a ContentOpsRequest from a plain dict payload."""
 
+    limit = int(payload.get("limit") if payload.get("limit") is not None else 1)
+    if limit < 1:
+        raise ValueError(f"limit must be at least 1; got {limit}")
+
+    max_cost_usd = (
+        float(payload["max_cost_usd"])
+        if payload.get("max_cost_usd") is not None
+        else None
+    )
+    if max_cost_usd is not None and max_cost_usd <= 0:
+        raise ValueError(f"max_cost_usd must be positive; got {max_cost_usd:g}")
+
+    raw_inputs = payload.get("inputs")
+    if raw_inputs is not None and not isinstance(raw_inputs, Mapping):
+        raise ValueError("inputs must be an object")
+
     return ContentOpsRequest(
         target_mode=str(payload.get("target_mode") or "vendor_retention").strip()
         or "vendor_retention",
@@ -210,13 +226,9 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
         if payload.get("preset") is not None
         else None,
         outputs=normalize_outputs(payload.get("outputs")),
-        limit=max(1, int(payload.get("limit") or 1)),
-        max_cost_usd=(
-            float(payload["max_cost_usd"])
-            if payload.get("max_cost_usd") is not None
-            else None
-        ),
-        inputs=payload.get("inputs") if isinstance(payload.get("inputs"), Mapping) else {},
+        limit=limit,
+        max_cost_usd=max_cost_usd,
+        inputs=raw_inputs if isinstance(raw_inputs, Mapping) else {},
         ingestion_profile=str(payload.get("ingestion_profile") or "domain_specific").strip()
         or "domain_specific",
         require_quality_gates=bool(payload.get("require_quality_gates", True)),
