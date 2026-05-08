@@ -36,6 +36,12 @@ class _CampaignService:
         return {"generated": 1, "saved_ids": ["draft-1"]}
 
 
+class _FailingCampaignService:
+    async def generate(self, **kwargs):
+        del kwargs
+        raise RuntimeError("postgres://user:secret@example/internal")
+
+
 @pytest.mark.asyncio
 async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     router = create_content_ops_control_surface_router()
@@ -203,7 +209,11 @@ async def test_execute_generation_route_runs_configured_services():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
         execution_services_provider=lambda: ContentOpsExecutionServices(campaign=service),
-        scope_provider=lambda: {"account_id": "acct-1"},
+        scope_provider=lambda: {
+            "account_id": " acct-1 ",
+            "allowed_vendors": [" Acme ", "", "   "],
+            "roles": [" admin ", ""],
+        },
     )
 
     route = _route(router, "/ops/execute", "POST")
@@ -222,6 +232,8 @@ async def test_execute_generation_route_runs_configured_services():
     assert payload["status"] == "completed"
     assert payload["steps"][0]["result"] == {"generated": 1, "saved_ids": ["draft-1"]}
     assert service.calls[0]["scope"].account_id == "acct-1"
+    assert service.calls[0]["scope"].allowed_vendors == ("Acme",)
+    assert service.calls[0]["scope"].roles == ("admin",)
     assert service.calls[0]["target_mode"] == "vendor_retention"
     assert service.calls[0]["limit"] == 2
     assert service.calls[0]["filters"] == {"status": "ready"}
@@ -246,6 +258,113 @@ async def test_execute_generation_route_requires_configured_services():
         )
 
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_sanitizes_service_failures():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            campaign=_FailingCampaignService()
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["email_campaign"],
+                "inputs": {
+                    "target_account": "Acme",
+                    "offer": "Churn audit",
+                },
+            }
+        )
+
+    assert exc.value.status_code == 207
+    assert exc.value.detail["errors"] == [
+        {"output": "email_campaign", "reason": "execution_failed"}
+    ]
+    assert exc.value.detail["steps"][0]["error"] == "execution_failed"
+    assert "postgres://" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_wraps_execution_provider_exception():
+    def provider():
+        raise RuntimeError("postgres://user:secret@example/internal")
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=provider,
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["email_campaign"],
+                "inputs": {
+                    "target_account": "Acme",
+                    "offer": "Churn audit",
+                },
+            }
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Content Ops execution services are unavailable."
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_wraps_scope_provider_exception():
+    def scope_provider():
+        raise RuntimeError("postgres://user:secret@example/internal")
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            campaign=_CampaignService()
+        ),
+        scope_provider=scope_provider,
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["email_campaign"],
+                "inputs": {
+                    "target_account": "Acme",
+                    "offer": "Churn audit",
+                },
+            }
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Content Ops scope provider is unavailable."
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_rejects_invalid_payload_shape():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["email_campaign"],
+                "limit": 0,
+                "unexpected": "not allowed",
+                "inputs": {
+                    "target_account": "Acme",
+                    "offer": "Churn audit",
+                },
+            }
+        )
+
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio

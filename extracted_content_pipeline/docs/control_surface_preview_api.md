@@ -43,6 +43,10 @@ app.include_router(
 Preview and plan routes do not call an LLM, read or write Postgres, or start an
 autonomous task. `/execute` is disabled unless the host injects execution
 services; those services own any LLM, database, repository, and sender policy.
+All request bodies are validated by the router before reaching the planning
+layer: unknown top-level fields are rejected, `limit` is bounded to 1-1000,
+`max_cost_usd` must be positive when supplied, and `inputs` has conservative
+size and nesting limits.
 
 ## Routes
 
@@ -229,9 +233,11 @@ Runnable outputs dispatch to:
 | `sales_brief` | `SalesBriefGenerationService.generate(...)` |
 
 Non-executable plans return HTTP 400 with the blocked execution result. Missing
-execution services return HTTP 503. Service-level failures are reported per
-step as `status="failed"` and the top-level execution status becomes
-`partial`.
+or failing execution/scope providers return HTTP 503. Service-level failures are
+sanitized at the API boundary: internal exception messages are replaced with
+stable reason codes. Partial executions return HTTP 207 with the execution
+result in the response body; fully failed executions return HTTP 502 if the
+executor reports `status="failed"`.
 
 ## UI Contract
 
