@@ -338,6 +338,8 @@ def _sanitize_execution_result(result: Mapping[str, Any]) -> dict[str, Any]:
 def _sanitize_error(error: Mapping[str, Any]) -> dict[str, Any]:
     cleaned = dict(error)
     cleaned["reason"] = _safe_execution_reason(cleaned.get("reason"))
+    if cleaned.get("error"):
+        cleaned["error"] = _safe_execution_reason(cleaned.get("error"))
     return cleaned
 
 
