@@ -1198,3 +1198,35 @@ async def test_generate_per_call_parse_retry_response_excerpt_chars_override():
     # Excerpt is clipped to 50 chars; the construction-time default of 200
     # would have shown 200 chars.
     assert len(excerpt_section.rstrip()) <= 50
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_quality_prompt_proof_term_limit_override():
+    """The override caps how many proof terms reach the prompt. With 5 terms
+    in the opportunity and an override of 2, only 2 terms should land in the
+    system prompt's serialized opportunity payload. Catches typos in the
+    deep helper chain (_with_quality_prompt_terms -> _campaign_proof_terms)
+    where the threaded param could be dropped."""
+
+    service, _, _, llm, _ = _service(
+        [{"id": "opp-1", "campaign_proof_terms": ["t1", "t2", "t3", "t4", "t5"]}],
+        ['{"subject":"Hi","body":"Body"}'],
+        config=CampaignGenerationConfig(
+            quality_revalidation_enabled=True,
+            quality_prompt_proof_term_limit=5,  # construction default would allow all 5
+            channels=("email_cold",),
+        ),
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="churning_company",
+        quality_prompt_proof_term_limit=2,  # override caps at 2
+    )
+
+    # Proof terms surface in the system prompt via the opportunity JSON.
+    system_prompt = llm.calls[0]["messages"][0].content
+    found_terms = [term for term in ("t1", "t2", "t3", "t4", "t5") if term in system_prompt]
+    assert len(found_terms) <= 2, (
+        f"override should cap proof terms at 2; saw {len(found_terms)}: {found_terms}"
+    )
