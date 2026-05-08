@@ -521,3 +521,62 @@ async def test_generate_per_call_parse_retry_response_excerpt_chars_override():
     assert "XXX" in retry_user_prompt
     excerpt_section = retry_user_prompt.split("excerpt:")[1].lstrip()
     assert len(excerpt_section.rstrip()) <= 50
+
+
+# -----------------------
+# PR-OptionA-4: per-call quality_gates_enabled override
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_quality_gates_enabled_false_skips_quality_gate() -> None:
+    """When the executor passes quality_gates_enabled=False, the service
+    short-circuits the quality gate. A response that would normally fail
+    the gate (e.g., missing CTA) now lands as generated."""
+
+    bad_response = json.dumps({
+        "title": "ok",
+        "slug": "ok",
+        "hero": {"headline": "h", "subheadline": "s", "cta_label": "L", "cta_url": "/u"},
+        "sections": [{"id": "s1", "title": "T", "body_markdown": "b"}],
+        "cta": {},  # would normally hit no_cta blocker
+        "meta": {},
+        "reference_ids": [],
+    })
+    service, landing_pages, _llm, _skills, _rp = _service(responses=[bad_response])
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        campaign=_campaign(),
+        quality_gates_enabled=False,
+    )
+
+    # Gate skipped -> the bad parse is persisted.
+    assert result.generated == 1
+    assert len(landing_pages.saved[0]["drafts"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_quality_gates_enabled_true_still_blocks() -> None:
+    """When the executor passes True (or None falls back to construction
+    default), the gate still runs. Behavior parity with prior PRs."""
+
+    bad_response = json.dumps({
+        "title": "ok",
+        "slug": "ok",
+        "hero": {"headline": "h", "subheadline": "s", "cta_label": "L", "cta_url": "/u"},
+        "sections": [{"id": "s1", "title": "T", "body_markdown": "b"}],
+        "cta": {},
+        "meta": {},
+        "reference_ids": [],
+    })
+    service, landing_pages, _llm, _skills, _rp = _service(responses=[bad_response])
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        campaign=_campaign(),
+        quality_gates_enabled=True,
+    )
+
+    assert result.generated == 0
+    assert landing_pages.saved == []
