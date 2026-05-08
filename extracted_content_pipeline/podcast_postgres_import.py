@@ -1,13 +1,18 @@
-"""Postgres importer for podcast transcripts."""
+"""Postgres importer for podcast transcripts.
+
+Shared JSONB helper lives in
+``extracted_content_pipeline.storage._jsonb_helpers``. ``_jsonb`` is
+a thin alias for backwards compat.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import json
 from typing import Any
 
 from .campaign_ports import TenantScope
+from .storage._jsonb_helpers import json_dump_jsonb as _jsonb
 from .podcast_transcript_data import (
     PodcastTranscriptLoadResult,
     PodcastTranscriptWarning,
@@ -151,8 +156,6 @@ def _loaded_rows(
     )
 
 
-def _jsonb(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, default=str, separators=(",", ":"))
 
 
 def _clean(value: Any) -> str | None:
