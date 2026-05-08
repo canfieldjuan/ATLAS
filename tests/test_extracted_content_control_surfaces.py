@@ -41,6 +41,57 @@ def test_preview_allows_implemented_outputs_under_budget():
     assert preview["blocked_outputs"] == []
 
 
+def test_preview_blocks_unknown_preset_instead_of_falling_back_to_email():
+    preview = preview_from_mapping(
+        {
+            "preset": "contmarket",
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn intelligence audit",
+            },
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["outputs"] == []
+    assert preview["blocked_outputs"] == ["contmarket"]
+    assert "Unknown preset: contmarket" in preview["warnings"]
+
+
+def test_preview_warns_when_outputs_override_preset():
+    preview = preview_from_mapping(
+        {
+            "preset": "full_campaign",
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn intelligence audit",
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["outputs"] == ["email_campaign"]
+    assert (
+        "Preset ignored because explicit outputs were provided: full_campaign"
+        in preview["warnings"]
+    )
+
+
+def test_missing_required_inputs_treats_empty_tuple_as_missing():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {
+                "topic": (),
+            },
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["missing_inputs"] == ["topic"]
+
+
 def test_preview_blocks_unimplemented_outputs_by_default():
     preview = preview_from_mapping(
         {

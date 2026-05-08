@@ -233,6 +233,7 @@ def resolve_outputs(request: ContentOpsRequest) -> tuple[str, ...]:
         preset = PRESETS.get(request.preset)
         if preset:
             return preset.outputs
+        return ()
     return PRESETS["email_only"].outputs
 
 
@@ -273,7 +274,7 @@ def missing_required_inputs(
             continue
         for input_name in definition.required_inputs:
             value = provided_inputs.get(input_name)
-            if value in (None, "", [], {}):
+            if value in (None, "", [], {}, (), set()):
                 if input_name not in missing:
                     missing.append(input_name)
     return tuple(missing)
@@ -285,6 +286,15 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
     outputs = resolve_outputs(request)
     warnings: list[str] = []
     blocked: list[str] = []
+
+    if request.outputs and request.preset:
+        warnings.append(
+            f"Preset ignored because explicit outputs were provided: {request.preset}"
+        )
+
+    if request.preset and not request.outputs and request.preset not in PRESETS:
+        blocked.append(request.preset)
+        warnings.append(f"Unknown preset: {request.preset}")
 
     unknown_outputs = tuple(output for output in outputs if output not in OUTPUT_CATALOG)
     for output_id in unknown_outputs:
