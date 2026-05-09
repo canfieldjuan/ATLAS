@@ -17,6 +17,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from extracted_content_pipeline.campaign_ports import TenantScope  # noqa: E402
+from extracted_content_pipeline.blog_post_export import export_blog_post_drafts  # noqa: E402
+from extracted_content_pipeline.blog_post_postgres import (  # noqa: E402
+    PostgresBlogPostRepository,
+)
 from extracted_content_pipeline.landing_page_export import (  # noqa: E402
     export_landing_page_drafts,
 )
@@ -33,7 +37,7 @@ from extracted_content_pipeline.sales_brief_postgres import (  # noqa: E402
 )
 
 
-ASSET_CHOICES = ("report", "landing_page", "sales_brief")
+ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -54,6 +58,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--target-mode", default=None, help="Report/sales brief target_mode filter.")
     parser.add_argument("--report-type", default=None, help="Report type filter.")
+    parser.add_argument("--topic-type", default=None, help="Blog post topic_type filter.")
     parser.add_argument("--campaign-name", default=None, help="Landing page campaign_name filter.")
     parser.add_argument("--slug", default=None, help="Landing page slug filter.")
     parser.add_argument("--brief-type", default=None, help="Sales brief type filter.")
@@ -106,6 +111,14 @@ async def _main() -> int:
 async def _export_for_asset(args: argparse.Namespace, pool: Any):
     scope = TenantScope(account_id=args.account_id)
     status = _status_arg(args.status)
+    if args.asset == "blog_post":
+        return await export_blog_post_drafts(
+            PostgresBlogPostRepository(pool),
+            scope=scope,
+            status=status,
+            topic_type=args.topic_type,
+            limit=args.limit,
+        )
     if args.asset == "report":
         return await export_report_drafts(
             PostgresReportRepository(pool),
