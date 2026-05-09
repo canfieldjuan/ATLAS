@@ -1,6 +1,6 @@
 # In-Flight PRs
 
-Last updated: 2026-05-09T21:03Z by codex-content-ops-asset-export-cli
+Last updated: 2026-05-09T21:13Z by codex-content-ops-asset-review-cli
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
