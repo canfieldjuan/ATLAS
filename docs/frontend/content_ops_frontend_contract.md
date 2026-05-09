@@ -353,9 +353,9 @@ UI rules:
 - `email_campaign` should summarize `generated`, `saved_ids`, and
   `errors.length` before the raw JSON block so users do not need to
   inspect the result payload for the common draft-generation case.
-- `report`, `landing_page`, and `sales_brief` should summarize their
-  shared generated-asset result shape: `requested`, `generated`,
-  `skipped`, `saved_ids`, and `errors.length`.
+- `blog_post`, `report`, `landing_page`, and `sales_brief` should
+  summarize their shared generated-asset result shape: `requested`,
+  `generated`, `skipped`, `saved_ids`, and `errors.length`.
 - `signal_extraction` should summarize `generated`, `target_mode`,
   `warnings.length`, and a short list of extracted opportunities
   before the raw JSON block.
@@ -483,9 +483,9 @@ src/domain/
   (`email_campaign | blog_post | report | landing_page | sales_brief
   | signal_extraction`) — each translates `step.result` into a
   presentation
-- Generated-asset result summary for `report`, `landing_page`, and
-  `sales_brief`, all of which currently expose `requested`,
-  `generated`, `skipped`, `saved_ids`, and `errors`
+- Generated-asset result summary for `blog_post`, `report`,
+  `landing_page`, and `sales_brief`, all of which currently expose
+  `requested`, `generated`, `skipped`, `saved_ids`, and `errors`
 - Signal extraction table (driven by `SignalExtractionResultView`)
 - Reasoning context drawer (driven by `CampaignReasoningContextView`)
 

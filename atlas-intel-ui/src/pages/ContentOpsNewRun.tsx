@@ -905,7 +905,7 @@ function ExecutionStepSummary({
   if (output === 'email_campaign') {
     return <GeneratedAssetSummary result={result} generatedLabel="Drafts generated" />
   }
-  if (['report', 'landing_page', 'sales_brief'].includes(output)) {
+  if (['blog_post', 'report', 'landing_page', 'sales_brief'].includes(output)) {
     return <GeneratedAssetSummary result={result} generatedLabel="Assets generated" />
   }
   return null
