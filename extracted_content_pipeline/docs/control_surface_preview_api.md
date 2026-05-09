@@ -219,7 +219,7 @@ Before wiring real providers, hosts can run the offline execution smoke:
 
 ```bash
 python scripts/smoke_extracted_content_ops_execution.py
-python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --target-mode challenger_intel --no-quality-gates --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
 ```
 
@@ -227,7 +227,9 @@ The smoke uses injected deterministic services and exercises the same
 `execute_content_ops_from_mapping(...)` seam as the API route. It does not
 open network, database, sender, or LLM handles. The signal extraction command
 validates the deterministic source-material-to-opportunity path through the
-same execution seam.
+same execution seam. `--no-quality-gates` verifies request wiring for hosts
+that need to smoke-test policy overrides; production hosts should leave quality
+gates enabled unless their own policy layer disables them.
 
 Runnable outputs dispatch to:
 
