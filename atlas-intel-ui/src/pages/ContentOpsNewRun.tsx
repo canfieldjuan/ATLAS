@@ -927,12 +927,17 @@ function GeneratedAssetSummary({
     ? result.saved_ids.filter((id): id is string => typeof id === 'string')
     : []
   const errorCount = Array.isArray(result.errors) ? result.errors.length : null
+  const reasoningContextsUsed =
+    typeof result.reasoning_contexts_used === 'number'
+      ? result.reasoning_contexts_used
+      : null
 
   if (
     requested === null &&
     generated === null &&
     skipped === null &&
     savedIds.length === 0 &&
+    reasoningContextsUsed === null &&
     errorCount === null
   ) {
     return null
@@ -963,6 +968,14 @@ function GeneratedAssetSummary({
           <span>
             Errors:{' '}
             <span className="font-medium text-slate-100">{errorCount}</span>
+          </span>
+        )}
+        {reasoningContextsUsed !== null && (
+          <span>
+            Reasoning used:{' '}
+            <span className="font-medium text-slate-100">
+              {reasoningContextsUsed}
+            </span>
           </span>
         )}
       </div>

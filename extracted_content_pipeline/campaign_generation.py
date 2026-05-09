@@ -154,6 +154,7 @@ class CampaignGenerationResult:
     requested: int = 0
     generated: int = 0
     skipped: int = 0
+    reasoning_contexts_used: int = 0
     saved_ids: tuple[str, ...] = ()
     errors: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
@@ -162,6 +163,7 @@ class CampaignGenerationResult:
             "requested": self.requested,
             "generated": self.generated,
             "skipped": self.skipped,
+            "reasoning_contexts_used": self.reasoning_contexts_used,
             "saved_ids": list(self.saved_ids),
             "errors": list(self.errors),
         }
@@ -212,6 +214,10 @@ def parse_campaign_draft_response(text: str) -> dict[str, Any] | None:
         if subject and body:
             return {**candidate, "subject": subject, "body": body}
     return None
+
+
+def _has_prompt_reasoning_context(opportunity: Mapping[str, Any]) -> bool:
+    return isinstance(opportunity.get("campaign_reasoning_context"), Mapping)
 
 
 class CampaignGenerationService:
@@ -313,6 +319,7 @@ class CampaignGenerationService:
         drafts: list[CampaignDraft] = []
         errors: list[dict[str, Any]] = []
         skipped = 0
+        reasoning_contexts_used = 0
         resolved_channels = self._channels(override=channels)
         for opportunity in opportunities:
             target_id = opportunity_target_id(opportunity)
@@ -391,6 +398,8 @@ class CampaignGenerationService:
                         "subject": parsed["subject"],
                         "body": parsed["body"],
                     }
+                if _has_prompt_reasoning_context(channel_opportunity):
+                    reasoning_contexts_used += 1
                 drafts.append(
                     CampaignDraft(
                         target_id=target_id,
@@ -412,6 +421,7 @@ class CampaignGenerationService:
             requested=len(opportunities),
             generated=len(drafts),
             skipped=skipped,
+            reasoning_contexts_used=reasoning_contexts_used,
             saved_ids=saved_ids,
             errors=tuple(errors),
         )
