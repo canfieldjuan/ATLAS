@@ -10,6 +10,7 @@ from typing import Any
 
 from .blog_ports import BlogBlueprintRepository, BlogPostDraft, BlogPostRepository
 from .campaign_ports import LLMClient, LLMMessage, SkillStore, TenantScope
+from .services._parse_retry_helpers import accumulate_usage, clip_invalid_response
 from extracted_quality_gate.blog_pack import evaluate_blog_post
 from extracted_quality_gate.types import QualityInput, QualityPolicy
 
@@ -98,34 +99,6 @@ def _blog_generation_user_prompt(
             f"Previous response excerpt:\n{prior_invalid_response}"
         )
     return base_prompt
-
-
-def _clip_invalid_response(text: str, *, limit: int) -> str:
-    cleaned = str(text or "").strip()
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[:limit].rstrip()
-
-
-def _accumulate_usage(
-    total: Mapping[str, Any],
-    usage: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    accumulated = dict(total)
-    if not isinstance(usage, Mapping):
-        return accumulated
-    for key, value in usage.items():
-        if isinstance(value, bool):
-            accumulated[key] = value
-        elif isinstance(value, (int, float)):
-            prior = accumulated.get(key)
-            if isinstance(prior, (int, float)) and not isinstance(prior, bool):
-                accumulated[key] = prior + value
-            else:
-                accumulated[key] = value
-        else:
-            accumulated[key] = value
-    return accumulated
 
 
 class BlogPostGenerationService:
@@ -292,7 +265,7 @@ class BlogPostGenerationService:
                     "attempt_no": attempt_no,
                 },
             )
-            total_usage = _accumulate_usage(total_usage, response.usage)
+            total_usage = accumulate_usage(total_usage, response.usage)
             parsed = parse_blog_post_response(response.content)
             if parsed:
                 return {
@@ -301,7 +274,7 @@ class BlogPostGenerationService:
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
                 }
-            last_response = _clip_invalid_response(
+            last_response = clip_invalid_response(
                 response.content,
                 limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
             )
