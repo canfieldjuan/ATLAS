@@ -136,6 +136,7 @@ class BlogPostGenerationService:
         parse_retry_attempts: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
+        topic: str | None = None,
     ) -> BlogPostGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -165,6 +166,9 @@ class BlogPostGenerationService:
             if quality_gates_enabled is None
             else bool(quality_gates_enabled)
         )
+        # PR-Blog-Topic-Per-Call: operator-supplied topic for this run.
+        # Empty string when None so prompt substitution is a clean no-op.
+        resolved_topic = (topic or "").strip()
 
         requested = int(limit or self._config.limit)
         rows = await self._blueprints.read_blog_blueprints(
@@ -189,6 +193,7 @@ class BlogPostGenerationService:
                     max_tokens=resolved_max_tokens,
                     parse_retry_attempts=resolved_parse_retry_attempts,
                     parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
+                    topic=resolved_topic,
                 )
             except Exception as exc:
                 skipped += 1
@@ -237,6 +242,7 @@ class BlogPostGenerationService:
         max_tokens: int,
         parse_retry_attempts: int,
         parse_retry_response_excerpt_chars: int,
+        topic: str = "",
     ) -> dict[str, Any] | None:
         blueprint_json = json.dumps(dict(blueprint), separators=(",", ":"), default=str)
         if "{blueprint_json}" in prompt_template:
@@ -245,6 +251,11 @@ class BlogPostGenerationService:
         else:
             system_prompt = prompt_template
             base_user_prompt = f"Generate one blog post from this blueprint JSON:\n{blueprint_json}"
+        # PR-Blog-Topic-Per-Call: operator-supplied topic substitutes into
+        # the ``{topic}`` placeholder. Empty topic resolves to "" so hosts
+        # on the prior prompt (without ``{topic}``) are unaffected -- the
+        # ``replace()`` is a no-op when the placeholder isn't present.
+        system_prompt = system_prompt.replace("{topic}", topic)
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}

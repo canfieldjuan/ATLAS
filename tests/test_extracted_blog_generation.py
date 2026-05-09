@@ -463,3 +463,74 @@ def test_parse_blog_post_response_accepts_missing_content_for_quality_pack_to_ju
     assert parsed["title"] == "Has title only"
     # Content is normalized to "" -- quality pack handles the rest.
     assert parsed["content"] == ""
+
+
+# -----------------------
+# PR-Blog-Topic-Per-Call: per-call topic kwarg substitutes into the prompt
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_per_call_topic_substitutes_into_prompt():
+    """Operator-supplied topic reaches the system prompt via the
+    ``{topic}`` placeholder."""
+
+    service, _bps, _drafts, llm, _skills = _service(
+        prompts={
+            "digest/blog_post_generation": "Focus: {topic}\n\nWrite from {blueprint_json}"
+        }
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+        topic="Renewal pricing pressure on mid-market SaaS",
+    )
+
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "Focus: Renewal pricing pressure on mid-market SaaS" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_no_topic_resolves_placeholder_to_empty_string():
+    """No-topic case: the ``{topic}`` placeholder still gets substituted
+    (to ``""``), keeping the prompt structurally clean."""
+
+    service, _bps, _drafts, llm, _skills = _service(
+        prompts={
+            "digest/blog_post_generation": "Focus: {topic}\n\nWrite from {blueprint_json}"
+        }
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+        topic=None,
+    )
+
+    system_prompt = llm.calls[0]["messages"][0].content
+    # Placeholder substituted with empty string -- "Focus: \n\n..." remains.
+    assert "{topic}" not in system_prompt
+    assert "Focus: \n" in system_prompt or "Focus:\n" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_topic_no_placeholder_no_op():
+    """Hosts on the prior prompt without ``{topic}`` are unaffected."""
+
+    service, _bps, _drafts, llm, _skills = _service(
+        prompts={"digest/blog_post_generation": "Write from {blueprint_json}"}
+    )
+
+    await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+        topic="Some topic",
+    )
+
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "Some topic" not in system_prompt  # no placeholder, no substitution
+    assert "{topic}" not in system_prompt

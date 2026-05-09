@@ -347,6 +347,9 @@ async def _dispatch_blog_post(
     # handler so the LLM-tuning kwargs (temperature/max_tokens/
     # parse_retry_attempts) reach BlogPostGenerationService.generate. The
     # generic dispatcher remains for genuinely no-config future outputs.
+    # PR-Blog-Topic-Per-Call: ``topic`` is now load-bearing too; the plan
+    # emits ``step.config["topic"]`` from ``request.inputs.get("topic")``
+    # and the service's prompt has a ``{topic}`` placeholder.
     return await service.generate(
         scope=scope,
         target_mode=request.target_mode,
@@ -359,6 +362,7 @@ async def _dispatch_blog_post(
             step.config, "parse_retry_response_excerpt_chars"
         ),
         quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
+        topic=_step_config_text(step.config, "topic"),
     )
 
 
