@@ -189,7 +189,10 @@ def create_content_ops_control_surface_router(
     async def plan_generation(
         payload: ContentOpsRequestModel = Body(...),
     ) -> dict[str, Any]:
-        return build_generation_plan_from_mapping(_payload_to_mapping(payload))
+        try:
+            return build_generation_plan_from_mapping(_payload_to_mapping(payload))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/execute")
     async def execute_generation(
@@ -207,11 +210,14 @@ def create_content_ops_control_surface_router(
                 detail="Content Ops execution services are not configured.",
             )
         scope = await _resolve_scope(scope_provider)
-        result = await execute_content_ops_from_mapping(
-            _payload_to_mapping(payload),
-            services=services,
-            scope=scope,
-        )
+        try:
+            result = await execute_content_ops_from_mapping(
+                _payload_to_mapping(payload),
+                services=services,
+                scope=scope,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         result = _sanitize_execution_result(result)
         if result["status"] == "blocked":
             raise HTTPException(status_code=400, detail=result)
