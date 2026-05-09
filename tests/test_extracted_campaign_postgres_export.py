@@ -58,7 +58,19 @@ def _row(**overrides):
         "cta": "Review plan",
         "llm_model": "offline",
         "created_at": datetime(2026, 5, 4, tzinfo=timezone.utc),
-        "metadata": {"scope": {"account_id": "acct_1"}},
+        "metadata": {
+            "scope": {"account_id": "acct_1"},
+            "generation_usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+            "generation_parse_attempts": 2,
+            "reasoning_context": {
+                "wedge": "price_squeeze",
+                "confidence": "high",
+            },
+        },
     }
     row.update(overrides)
     return row
@@ -98,6 +110,13 @@ async def test_list_campaign_drafts_filters_review_rows() -> None:
     )
     assert result.rows[0]["created_at"] == "2026-05-04 00:00:00+00:00"
     assert result.filters["account_id"] == "acct_1"
+    assert result.rows[0]["generation_input_tokens"] == 10
+    assert result.rows[0]["generation_output_tokens"] == 5
+    assert result.rows[0]["generation_total_tokens"] == 15
+    assert result.rows[0]["generation_parse_attempts"] == 2
+    assert result.rows[0]["reasoning_context_used"] is True
+    assert result.rows[0]["reasoning_wedge"] == "price_squeeze"
+    assert result.rows[0]["reasoning_confidence"] == "high"
 
 
 @pytest.mark.asyncio
@@ -165,8 +184,50 @@ def test_campaign_draft_export_result_renders_csv() -> None:
     csv_text = result.as_csv()
 
     assert "company_name,vendor_name" in csv_text
+    assert "generation_input_tokens,generation_output_tokens" in csv_text
+    assert "reasoning_context_used,reasoning_wedge,reasoning_confidence" in csv_text
     assert "Acme" in csv_text
     assert "{\"\"scope\"\":{\"\"account_id\"\":\"\"acct_1\"\"}" in csv_text
+
+
+@pytest.mark.asyncio
+async def test_list_campaign_drafts_derives_summary_from_json_metadata_string() -> None:
+    metadata = json.dumps(
+        {
+            "generation_usage": {"input_tokens": 8, "output_tokens": 4},
+            "generation_parse_attempts": 1,
+            "reasoning_context": {
+                "wedge": "support_erosion",
+                "confidence": "medium",
+            },
+        }
+    )
+    pool = _Pool(rows=[_row(metadata=metadata)])
+
+    result = await list_campaign_drafts(pool, limit=1)
+
+    assert result.rows[0]["generation_input_tokens"] == 8
+    assert result.rows[0]["generation_output_tokens"] == 4
+    assert result.rows[0]["generation_total_tokens"] is None
+    assert result.rows[0]["generation_parse_attempts"] == 1
+    assert result.rows[0]["reasoning_context_used"] is True
+    assert result.rows[0]["reasoning_wedge"] == "support_erosion"
+    assert result.rows[0]["reasoning_confidence"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_list_campaign_drafts_defaults_summary_fields_without_metadata() -> None:
+    pool = _Pool(rows=[_row(metadata={})])
+
+    result = await list_campaign_drafts(pool, limit=1)
+
+    assert result.rows[0]["generation_input_tokens"] is None
+    assert result.rows[0]["generation_output_tokens"] is None
+    assert result.rows[0]["generation_total_tokens"] is None
+    assert result.rows[0]["generation_parse_attempts"] is None
+    assert result.rows[0]["reasoning_context_used"] is False
+    assert result.rows[0]["reasoning_wedge"] is None
+    assert result.rows[0]["reasoning_confidence"] is None
 
 
 @pytest.mark.asyncio
@@ -204,6 +265,8 @@ async def test_campaign_draft_export_cli_outputs_json(monkeypatch, capsys) -> No
     assert pool.closed is True
     assert output["count"] == 1
     assert output["rows"][0]["company_name"] == "Acme"
+    assert output["rows"][0]["generation_input_tokens"] == 10
+    assert output["rows"][0]["reasoning_context_used"] is True
 
 
 @pytest.mark.asyncio
