@@ -25,6 +25,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code into the container
 COPY ./atlas_brain ./atlas_brain
 
+# Copy the extracted standalone packages so the host's api package
+# can lazy-import them at startup (Content Ops control-surface
+# routes are mounted in atlas_brain/api/__init__.py via
+# `from extracted_content_pipeline.api.control_surfaces import ...`
+# inside a try/except). When the packages are absent the import
+# logs a warning and the route is skipped, but the prod image
+# should ship them so the new screens are functional.
+COPY ./extracted_content_pipeline ./extracted_content_pipeline
+COPY ./extracted_quality_gate ./extracted_quality_gate
+COPY ./extracted_reasoning_core ./extracted_reasoning_core
+COPY ./extracted ./extracted
+
 # Expose the port the app runs on
 EXPOSE 8000
 
