@@ -113,6 +113,7 @@ class PostgresBlogPostRepository:
                     llm_model = EXCLUDED.llm_model,
                     source_report_date = EXCLUDED.source_report_date
                 WHERE blog_posts.status != 'published'
+                  AND blog_posts.account_id = EXCLUDED.account_id
                 RETURNING id
                 """,
                 account_id,

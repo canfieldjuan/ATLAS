@@ -71,6 +71,19 @@ async def test_save_drafts_persists_scope_metadata_and_returns_ids() -> None:
 
 
 @pytest.mark.asyncio
+async def test_save_drafts_skips_cross_tenant_slug_conflict() -> None:
+    pool = _Pool()
+    pool.fetchval_results = [None]
+    repo = PostgresBlogPostRepository(pool)
+
+    saved = await repo.save_drafts([_draft()], scope=TenantScope(account_id="acct-b"))
+
+    assert saved == ()
+    sql = pool.fetchval_calls[0]["query"]
+    assert "blog_posts.account_id = EXCLUDED.account_id" in sql
+
+
+@pytest.mark.asyncio
 async def test_list_drafts_filters_by_status_topic_and_scope() -> None:
     pool = _Pool()
     pool.fetch_rows = [
