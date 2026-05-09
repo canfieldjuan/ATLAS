@@ -727,6 +727,7 @@ Several small utility shims provide product-owned local behavior by default so t
   `PipelineLLMClient`, and the local skill registry for DB-backed draft
   generation
 - `campaign_postgres_export.py`: read-only draft export for host review flows
+- `report_export.py`: read-only structured report export for host review flows
 - `campaign_postgres_seller_targets.py`: seller target CRUD/list helpers for
   Amazon seller campaign installs
 - `campaign_postgres_seller_opportunities.py`: prepares Amazon seller

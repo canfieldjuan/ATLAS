@@ -313,6 +313,7 @@ class ReportGenerationService:
                 target_id=target_id,
                 target_mode=target_mode,
                 default_report_type=default_report_type,
+                opportunity=opportunity,
             ))
 
         saved_ids: tuple[str, ...] = ()
@@ -458,6 +459,7 @@ class ReportGenerationService:
         target_id: str,
         target_mode: str,
         default_report_type: str | None = None,
+        opportunity: Mapping[str, Any] | None = None,
     ) -> ReportDraft:
         sections = tuple(
             ReportSection(
@@ -494,6 +496,9 @@ class ReportGenerationService:
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
         }
+        if opportunity is not None:
+            context = normalize_campaign_reasoning_context(opportunity)
+            metadata.update(campaign_reasoning_context_metadata(context))
         if "confidence" in parsed:
             metadata["confidence"] = parsed["confidence"]
         return ReportDraft(
