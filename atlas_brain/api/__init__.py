@@ -60,9 +60,6 @@ from .b2b_evidence import router as b2b_evidence_router
 from .b2b_vendor_claims import router as b2b_vendor_claims_router
 from .b2b_challenger_claims import router as b2b_challenger_claims_router
 from fastapi import Depends
-from extracted_content_pipeline.api.control_surfaces import (
-    create_content_ops_control_surface_router,
-)
 from ..auth.dependencies import require_b2b_plan
 
 logger = logging.getLogger("atlas.api")
@@ -149,7 +146,16 @@ router.include_router(b2b_challenger_claims_router)
 # the same B2B audience. Without this every /api/v1/content-ops/*
 # endpoint would be reachable without a token (the frontend's
 # ProtectedRoute is UI-only gating).
+#
+# The `extracted_content_pipeline` import is inside the try so the
+# host's prod Docker image (which copies only ./atlas_brain) doesn't
+# crash at startup; the image installs the extracted package via the
+# requirements path when present, otherwise the content-ops surface
+# is logged as disabled and existing routes keep serving.
 try:
+    from extracted_content_pipeline.api.control_surfaces import (
+        create_content_ops_control_surface_router,
+    )
     content_ops_router = create_content_ops_control_surface_router(
         dependencies=[Depends(require_b2b_plan("b2b_growth"))],
     )
