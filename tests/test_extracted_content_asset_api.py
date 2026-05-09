@@ -216,6 +216,24 @@ def test_generated_asset_router_rejects_unknown_asset() -> None:
     assert "asset must be one of" in response.json()["detail"]
 
 
+def test_generated_asset_router_rejects_unknown_asset_before_pool_resolution() -> None:
+    app = FastAPI()
+    calls = 0
+
+    async def pool_provider():
+        nonlocal calls
+        calls += 1
+        raise AssertionError("pool provider should not be touched")
+
+    app.include_router(create_generated_asset_router(pool_provider=pool_provider))
+
+    response = TestClient(app).get("/content-assets/blog_post/drafts")
+
+    assert response.status_code == 400
+    assert "asset must be one of" in response.json()["detail"]
+    assert calls == 0
+
+
 def test_generated_asset_router_rejects_empty_review_status() -> None:
     response = _client(_Pool()).post(
         "/content-assets/report/drafts/review",

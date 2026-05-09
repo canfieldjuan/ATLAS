@@ -152,10 +152,11 @@ def create_generated_asset_router(
         brief_type: str | None = Query(None),
         limit: int | None = Query(None, ge=0),
     ) -> dict[str, Any]:
+        asset_name = _asset_arg(asset)
         pool = await _resolve_pool(pool_provider)
         scope = await _resolve_scope(scope_provider)
         result = await _export_for_asset(
-            _asset_arg(asset),
+            asset_name,
             pool,
             scope=scope,
             status=_status_filter(status, resolved_config),
@@ -180,9 +181,9 @@ def create_generated_asset_router(
         limit: int | None = Query(None, ge=0),
         format: str = Query("csv", description="csv or json"),
     ) -> Any:
+        asset_name = _asset_arg(asset)
         pool = await _resolve_pool(pool_provider)
         scope = await _resolve_scope(scope_provider)
-        asset_name = _asset_arg(asset)
         result = await _export_for_asset(
             asset_name,
             pool,
@@ -212,10 +213,10 @@ def create_generated_asset_router(
         asset: str,
         payload: dict[str, Any] = Body(...),
     ) -> dict[str, Any]:
+        asset_name = _asset_arg(asset)
         pool = await _resolve_pool(pool_provider)
         scope = await _resolve_scope(scope_provider)
         tenant = _tenant_scope(scope)
-        asset_name = _asset_arg(asset)
         asset_id = _clean(payload.get("id") or payload.get("asset_id"))
         if not asset_id:
             raise HTTPException(status_code=400, detail="id is required")
