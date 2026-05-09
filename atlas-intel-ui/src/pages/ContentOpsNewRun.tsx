@@ -58,6 +58,13 @@ export default function ContentOpsNewRun() {
     )
   }
 
+  // Codex P2 fix: any form mutation invalidates a stale preview verdict so
+  // the user never sees a "Can run" badge that doesn't match the current
+  // form state. Re-submit yields a fresh verdict.
+  const markStale = () => {
+    setSubmitState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
+  }
+
   const togglePreset = (presetId: string) => {
     const preset = catalog.presets.find((p) => p.id === presetId)
     if (!preset) return
@@ -66,6 +73,7 @@ export default function ContentOpsNewRun() {
       preset: prev.preset === presetId ? null : presetId,
       outputs: prev.preset === presetId ? prev.outputs : [...preset.outputs],
     }))
+    markStale()
   }
 
   const toggleOutput = (outputId: string) => {
@@ -78,6 +86,7 @@ export default function ContentOpsNewRun() {
           : [...prev.outputs, outputId],
       }
     })
+    markStale()
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -230,7 +239,10 @@ export default function ContentOpsNewRun() {
           </p>
           <textarea
             value={inputsJson}
-            onChange={(e) => setInputsJson(e.target.value)}
+            onChange={(e) => {
+              setInputsJson(e.target.value)
+              markStale()
+            }}
             rows={6}
             spellCheck={false}
             className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
@@ -251,12 +263,13 @@ export default function ContentOpsNewRun() {
                 min={1}
                 max={1000}
                 value={request.limit}
-                onChange={(e) =>
+                onChange={(e) => {
                   setRequest((p) => ({
                     ...p,
                     limit: Math.max(1, Math.min(1000, Number(e.target.value) || 1)),
                   }))
-                }
+                  markStale()
+                }}
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
               />
             </label>
@@ -268,11 +281,20 @@ export default function ContentOpsNewRun() {
                 min={0}
                 value={request.maxCostUsd ?? ''}
                 onChange={(e) => {
+                  // Codex P2 fix: backend pydantic validator declares
+                  // max_cost_usd with gt=0 (control_surfaces.py:88), so
+                  // submitting 0 always fails. Treat 0 / negative / blank
+                  // as "no cap" client-side.
                   const v = e.target.value
+                  const parsed = v === '' ? null : Number(v)
                   setRequest((p) => ({
                     ...p,
-                    maxCostUsd: v === '' ? null : Math.max(0, Number(v) || 0),
+                    maxCostUsd:
+                      parsed === null || !Number.isFinite(parsed) || parsed <= 0
+                        ? null
+                        : parsed,
                   }))
+                  markStale()
                 }}
                 placeholder="(no cap)"
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
@@ -282,9 +304,10 @@ export default function ContentOpsNewRun() {
               <span className="text-slate-300">Ingestion profile</span>
               <select
                 value={request.ingestionProfile}
-                onChange={(e) =>
+                onChange={(e) => {
                   setRequest((p) => ({ ...p, ingestionProfile: e.target.value }))
-                }
+                  markStale()
+                }}
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
               >
                 {catalog.ingestionProfiles.map((profile) => (
@@ -299,9 +322,10 @@ export default function ContentOpsNewRun() {
                 <input
                   type="checkbox"
                   checked={request.requireQualityGates}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setRequest((p) => ({ ...p, requireQualityGates: e.target.checked }))
-                  }
+                    markStale()
+                  }}
                   className="h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500"
                 />
                 <span className="text-slate-300">Require quality gates</span>
@@ -310,12 +334,13 @@ export default function ContentOpsNewRun() {
                 <input
                   type="checkbox"
                   checked={request.allowUnimplementedOutputs}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setRequest((p) => ({
                       ...p,
                       allowUnimplementedOutputs: e.target.checked,
                     }))
-                  }
+                    markStale()
+                  }}
                   className="h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500"
                 />
                 <span className="text-slate-300">Allow unimplemented outputs</span>
