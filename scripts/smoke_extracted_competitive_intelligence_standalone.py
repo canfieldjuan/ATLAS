@@ -1,62 +1,94 @@
 #!/usr/bin/env python3
-"""Smoke-check the competitive-intelligence standalone substrate."""
+"""Standalone-mode smoke-check for extracted_competitive_intelligence.
+
+Four phases:
+
+1. **Import sweep** -- manifest-driven (mappings + owned) plus a small
+   curated list of standalone substrate modules not yet on the
+   manifest. Catches drift when a new mirror is added.
+2. **Owner verification** -- specific module-attr-substrate triples
+   that assert the standalone substrate is being used (not a fallback).
+   Hardcoded by design: each entry encodes a substrate-routing
+   decision.
+3. **Atlas-fallback probes** -- namespaces that must fail closed
+   under the toggle. Hardcoded by design.
+4. **Owned-files atlas_brain scan** -- manifest-driven (owned only).
+   Mappings are byte-synced from atlas_brain and may legitimately
+   contain atlas_brain. text; scanning them is a category error.
+
+Failure gate: any exception or check failure breaks the gate.
+Tighter than the default-mode smokes (#427, #428) -- under the
+standalone toggle, the substrate is meant to handle everything; any
+import failure is a substrate gap.
+
+See plans/PR-Audit-ManifestDrivenSmokes-2.md for rationale.
+"""
 
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGE = "extracted_competitive_intelligence"
+
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 os.environ["EXTRACTED_COMP_INTEL_STANDALONE"] = "1"
 os.environ.setdefault("EXTRACTED_LLM_INFRA_STANDALONE", "1")
 
-MODULES = [
-    "extracted_competitive_intelligence.config",
-    "extracted_competitive_intelligence.storage.database",
-    "extracted_competitive_intelligence.auth.dependencies",
-    "extracted_competitive_intelligence.services.protocols",
-    "extracted_competitive_intelligence.services.llm_router",
-    "extracted_competitive_intelligence.services.vendor_registry",
-    "extracted_competitive_intelligence.services.vendor_target_selection",
+
+# Standalone substrate modules that are imported but not yet listed in
+# the manifest. Adding them to manifest.owned is a separate slice (see
+# Deferred section in plans/PR-Audit-ManifestDrivenSmokes-2.md).
+_EXTRA_STANDALONE_SHIMS = (
+    "extracted_competitive_intelligence.autonomous.tasks.campaign_suppression",
+    "extracted_competitive_intelligence.pipelines.llm",
+    "extracted_competitive_intelligence.services.b2b.pdf_renderer",
     "extracted_competitive_intelligence.services.campaign_sender",
     "extracted_competitive_intelligence.services.crm_provider",
     "extracted_competitive_intelligence.services.email_provider",
-    "extracted_competitive_intelligence.services.scraping.capabilities",
-    "extracted_competitive_intelligence.services.scraping.sources",
-    "extracted_competitive_intelligence.autonomous.tasks.campaign_suppression",
-    "extracted_competitive_intelligence.mcp.b2b.vendor_registry",
-    "extracted_competitive_intelligence.mcp.b2b.write_ports",
-    "extracted_competitive_intelligence.mcp.b2b.write_intelligence",
-    "extracted_competitive_intelligence.pipelines.llm",
-    "extracted_competitive_intelligence.templates.email.vendor_briefing",
-    "extracted_competitive_intelligence.services.b2b.source_impact",
-    "extracted_competitive_intelligence.services.b2b.anthropic_batch",
-    "extracted_competitive_intelligence.services.b2b.challenger_dashboard_claims",
-    "extracted_competitive_intelligence.services.b2b.competitive_set_ports",
-    "extracted_competitive_intelligence.services.b2b.battle_card_ports",
-    "extracted_competitive_intelligence.services.b2b.vendor_briefing_delivery",
-    "extracted_competitive_intelligence.services.b2b.vendor_briefing_repository",
-    "extracted_competitive_intelligence.services.b2b.vendor_briefing_ports",
-    "extracted_competitive_intelligence.services.b2b.vendor_briefing_api_ports",
-    "extracted_competitive_intelligence.services.b2b.llm_exact_cache",
-    "extracted_competitive_intelligence.services.b2b.pdf_renderer",
-    "extracted_competitive_intelligence.services.b2b_competitive_sets",
-    "extracted_competitive_intelligence.autonomous.tasks._b2b_batch_utils",
-    "extracted_competitive_intelligence.autonomous.tasks._b2b_cross_vendor_synthesis",
-    "extracted_competitive_intelligence.reasoning.ecosystem",
-    "extracted_competitive_intelligence.reasoning.cross_vendor_selection",
-    "extracted_competitive_intelligence.reasoning.single_pass_prompts.cross_vendor_battle",
-    "extracted_competitive_intelligence.reasoning.single_pass_prompts.battle_card_reasoning",
-    "extracted_competitive_intelligence.templates.email.vendor_report_delivery",
-    "extracted_competitive_intelligence.templates.email.vendor_checkout_confirmation",
-    "extracted_competitive_intelligence.api.b2b_vendor_briefing",
-]
+)
+
+
+def _target_to_module(target: str) -> str:
+    assert target.endswith(".py"), target
+    base = target[: -len(".py")]
+    if base.endswith("/__init__"):
+        base = base[: -len("/__init__")]
+    return base.replace("/", ".")
+
+
+def _load_manifest() -> dict:
+    return json.loads((ROOT / PACKAGE / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _load_modules(manifest: dict) -> list[str]:
+    """Manifest entries (mappings + owned) plus _EXTRA_STANDALONE_SHIMS."""
+    entries = manifest.get("mappings", []) + manifest.get("owned", [])
+    manifest_modules = {
+        _target_to_module(e["target"])
+        for e in entries
+        if e["target"].endswith(".py")
+        and "/migrations/" not in e["target"]
+        and not e["target"].endswith("/__init__.py")
+    }
+    return sorted(manifest_modules | set(_EXTRA_STANDALONE_SHIMS))
+
+
+def _load_owned_files(manifest: dict) -> list[Path]:
+    """Owned .py files from manifest -- the canonical set for the
+    'still imports atlas_brain' scan."""
+    return sorted(
+        ROOT / e["target"]
+        for e in manifest.get("owned", [])
+        if e["target"].endswith(".py")
+    )
 
 
 def _assert_owner(module_name: str, attr_name: str, expected_prefix: str) -> None:
@@ -71,7 +103,11 @@ def _assert_owner(module_name: str, attr_name: str, expected_prefix: str) -> Non
 
 def main() -> int:
     failed: list[str] = []
-    for module_name in MODULES:
+    manifest = _load_manifest()
+
+    # Phase 1 -- import sweep (manifest-driven + curated shims)
+    modules = _load_modules(manifest)
+    for module_name in modules:
         try:
             importlib.import_module(module_name)
             print(f"OK {module_name}", flush=True)
@@ -79,6 +115,7 @@ def main() -> int:
             print(f"FAIL {module_name}: {type(exc).__name__}: {exc}", flush=True)
             failed.append(module_name)
 
+    # Phase 2 -- owner verification (substrate routing assertions)
     checks = [
         (
             "extracted_competitive_intelligence.config",
@@ -148,6 +185,7 @@ def main() -> int:
             print(f"FAIL {module_name}.{attr_name}: {exc}", flush=True)
             failed.append(f"{module_name}.{attr_name}")
 
+    # Phase 3 -- fallback probes (substrate must fail closed)
     for module_name in (
         "extracted_competitive_intelligence.services",
         "extracted_competitive_intelligence.services.b2b",
@@ -164,36 +202,13 @@ def main() -> int:
         print(f"FAIL {module_name}: Atlas fallback did not fail closed", flush=True)
         failed.append(module_name)
 
-    owned_files = (
-        ROOT / "extracted_competitive_intelligence" / "services" / "vendor_registry.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "vendor_target_selection.py",
-        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "vendor_registry.py",
-        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "displacement.py",
-        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "cross_vendor.py",
-        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "write_intelligence.py",
-        ROOT / "extracted_competitive_intelligence" / "mcp" / "b2b" / "write_ports.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "scraping" / "capabilities.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "source_impact.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "challenger_dashboard_claims.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "competitive_set_ports.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "battle_card_ports.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "vendor_briefing_delivery.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "vendor_briefing_ports.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "b2b" / "vendor_briefing_api_ports.py",
-        ROOT / "extracted_competitive_intelligence" / "services" / "b2b_competitive_sets.py",
-        ROOT / "extracted_competitive_intelligence" / "autonomous" / "tasks" / "_b2b_batch_utils.py",
-        ROOT / "extracted_competitive_intelligence" / "autonomous" / "tasks" / "_b2b_cross_vendor_synthesis.py",
-        ROOT / "extracted_competitive_intelligence" / "templates" / "email" / "vendor_briefing.py",
-        ROOT / "extracted_competitive_intelligence" / "templates" / "email" / "vendor_report_delivery.py",
-        ROOT / "extracted_competitive_intelligence" / "templates" / "email" / "vendor_checkout_confirmation.py",
-        ROOT / "extracted_competitive_intelligence" / "api" / "b2b_vendor_briefing.py",
-        ROOT / "extracted_competitive_intelligence" / "reasoning" / "ecosystem.py",
-        ROOT / "extracted_competitive_intelligence" / "reasoning" / "cross_vendor_selection.py",
-        ROOT / "extracted_competitive_intelligence" / "reasoning" / "single_pass_prompts" / "cross_vendor_battle.py",
-        ROOT / "extracted_competitive_intelligence" / "reasoning" / "single_pass_prompts" / "battle_card_reasoning.py",
-    )
-    for module_path in owned_files:
-        if "atlas_brain." in module_path.read_text():
+    # Phase 4 -- owned-files atlas_brain scan (manifest-driven)
+    for module_path in _load_owned_files(manifest):
+        if not module_path.exists():
+            print(f"FAIL {module_path.relative_to(ROOT)}: missing owned file", flush=True)
+            failed.append(str(module_path.relative_to(ROOT)))
+            continue
+        if "atlas_brain." in module_path.read_text(encoding="utf-8"):
             print(f"FAIL {module_path.relative_to(ROOT)}: still imports Atlas", flush=True)
             failed.append(str(module_path.relative_to(ROOT)))
 
