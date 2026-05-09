@@ -382,6 +382,27 @@ python scripts/review_extracted_content_assets.py --asset landing_page --id <lan
 python scripts/review_extracted_content_assets.py --asset sales_brief --id <brief-id> --account-id acct_123 --status rejected
 ```
 
+FastAPI hosts can mount the generated asset router for the same report, landing
+page, and sales brief review loop:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.generated_assets import create_generated_asset_router
+
+
+app.include_router(
+    create_generated_asset_router(
+        pool_provider=get_pool,
+        scope_provider=current_tenant_scope,
+        dependencies=[Depends(require_content_ops_user)],
+    )
+)
+```
+
+This adds JSON draft listing, CSV/JSON export, and scoped status-update routes
+for generated assets without importing Atlas API globals.
+
 Hosts with FastAPI apps can mount the same draft review/export loop through a
 router factory. The host injects its database pool, tenant scope, and auth
 dependencies:
@@ -764,6 +785,8 @@ Several small utility shims provide product-owned local behavior by default so t
   operation triggers with optional `VisibilitySink` telemetry
 - `api/b2b_campaigns.py`: optional FastAPI router factory for host-mounted
   B2B draft list/export/review routes
+- `api/generated_assets.py`: optional FastAPI router factory for host-mounted
+  report, landing page, and sales brief list/export/review routes
 - `api/seller_campaigns.py`: optional FastAPI router factory for host-mounted
   seller target management, category refresh, opportunity preparation, and
   seller draft review routes

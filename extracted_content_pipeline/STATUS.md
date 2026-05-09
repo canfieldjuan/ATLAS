@@ -59,6 +59,9 @@
 - `scripts/review_extracted_content_assets.py` exposes scoped status updates
   for exported report, landing page, and sales brief drafts without handwritten
   SQL.
+- `api.generated_assets` provides a FastAPI router factory around generated
+  report, landing page, and sales brief list/export/review workflows. Hosts
+  inject pool providers, tenant scope, and auth dependencies.
 - `scripts/smoke_extracted_content_pipeline_host.py` provides a one-command
   offline host smoke test that validates customer-data normalization through
   usable generated draft shape without a database, provider credentials, or
