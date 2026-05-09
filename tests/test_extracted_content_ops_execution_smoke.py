@@ -75,6 +75,33 @@ def test_content_ops_execution_smoke_cli_accepts_output_subset_json() -> None:
     )
 
 
+def test_content_ops_execution_smoke_cli_can_validate_reasoning_usage_json() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "--outputs",
+            "email_campaign,landing_page",
+            "--limit",
+            "2",
+            "--with-reasoning",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    email_step, landing_step = payload["steps"]
+    assert email_step["result"]["reasoning_contexts_used"] == 2
+    assert email_step["reasoning"]["contexts_used"] == 2
+    assert email_step["reasoning"]["provider_configured"] is True
+    assert landing_step["result"]["reasoning_contexts_used"] == 1
+    assert landing_step["reasoning"]["contexts_used"] == 1
+    assert landing_step["reasoning"]["provider_configured"] is True
+
+
 def test_content_ops_execution_smoke_cli_runs_signal_extraction_json() -> None:
     completed = subprocess.run(
         [

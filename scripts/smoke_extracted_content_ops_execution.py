@@ -60,6 +60,24 @@ class _OpportunityAssetService:
         return result
 
 
+class _ReasoningAwareOpportunityAssetService(_OpportunityAssetService):
+    def __init__(self, name: str, provider: Any | None = None) -> None:
+        super().__init__(name)
+        self.provider = provider
+
+    def with_reasoning_context(
+        self,
+        provider: Any | None,
+    ) -> "_ReasoningAwareOpportunityAssetService":
+        return _ReasoningAwareOpportunityAssetService(self.name, provider=provider)
+
+    async def generate(self, **kwargs: Any) -> dict[str, Any]:
+        result = await super().generate(**kwargs)
+        if self.provider is not None:
+            result["reasoning_contexts_used"] = int(result.get("generated") or 0)
+        return result
+
+
 class _LandingPageAssetService:
     async def generate(
         self,
@@ -77,6 +95,23 @@ class _LandingPageAssetService:
         }
         if "quality_gates_enabled" in extras:
             result["quality_gates_enabled"] = extras["quality_gates_enabled"]
+        return result
+
+
+class _ReasoningAwareLandingPageAssetService(_LandingPageAssetService):
+    def __init__(self, provider: Any | None = None) -> None:
+        self.provider = provider
+
+    def with_reasoning_context(
+        self,
+        provider: Any | None,
+    ) -> "_ReasoningAwareLandingPageAssetService":
+        return _ReasoningAwareLandingPageAssetService(provider=provider)
+
+    async def generate(self, **kwargs: Any) -> dict[str, Any]:
+        result = await super().generate(**kwargs)
+        if self.provider is not None:
+            result["reasoning_contexts_used"] = int(result.get("generated") or 0)
         return result
 
 
@@ -124,6 +159,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Omit to use the service default (1200)."
         ),
     )
+    parser.add_argument(
+        "--with-reasoning",
+        action="store_true",
+        help=(
+            "Attach a fake host reasoning provider to reasoning-aware "
+            "generated-asset services."
+        ),
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -163,15 +206,28 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def _services() -> ContentOpsExecutionServices:
-    return ContentOpsExecutionServices(
-        campaign=_OpportunityAssetService("email_campaign"),
-        blog_post=_OpportunityAssetService("blog_post"),
-        report=_OpportunityAssetService("report"),
-        landing_page=_LandingPageAssetService(),
-        sales_brief=_OpportunityAssetService("sales_brief"),
+def _services(*, reasoning: bool = False) -> ContentOpsExecutionServices:
+    opportunity_service = (
+        _ReasoningAwareOpportunityAssetService
+        if reasoning
+        else _OpportunityAssetService
+    )
+    landing_page: Any = (
+        _ReasoningAwareLandingPageAssetService()
+        if reasoning
+        else _LandingPageAssetService()
+    )
+    services = ContentOpsExecutionServices(
+        campaign=opportunity_service("email_campaign"),
+        blog_post=opportunity_service("blog_post"),
+        report=opportunity_service("report"),
+        landing_page=landing_page,
+        sales_brief=opportunity_service("sales_brief"),
         signal_extraction=SignalExtractionService(),
     )
+    if reasoning:
+        services = services.with_reasoning_context(object())
+    return services
 
 
 def _execution_errors(result: Mapping[str, Any]) -> list[str]:
@@ -208,7 +264,7 @@ async def _main() -> int:
     args = _parse_args()
     result = await execute_content_ops_from_mapping(
         _payload(args),
-        services=_services(),
+        services=_services(reasoning=bool(args.with_reasoning)),
     )
     errors = _execution_errors(result)
     if args.json:
