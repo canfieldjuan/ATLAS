@@ -54,7 +54,16 @@ A new page at `/content-ops/new` that:
    `${API_BASE}/api/v1/content-ops` so the dev Vite proxy
    handles the request and the mount aligns with the existing
    `client.ts` / `b2bClient.ts` convention. ~5 LOC delta.
-4. `plans/PR-Content-Ops-Screen-1-New-Run.md` (this file).
+4. `atlas_brain/api/__init__.py` -- mount the
+   `extracted_content_pipeline` content-ops router into the
+   host's aggregate `api_router`. Without this the screen
+   404s in dev. Added in the fix-up commit after the Codex P1
+   review on round 4. The router is mounted with no
+   `execution_services_provider` for v0 -- preview / plan /
+   GET control-surfaces work; execute correctly returns 503
+   until execution services are wired in a follow-up slice.
+   ~12 LOC delta.
+5. `plans/PR-Content-Ops-Screen-1-New-Run.md` (this file).
 
 ### What's NOT in this slice
 
@@ -164,6 +173,14 @@ unchanged.
 - URL-state preservation of the form across reloads.
 - Component extraction (`<RadioCard>`, `<OutputChip>`,
   `<PreviewVerdictPanel>`) once ≥3 callers exist.
+- **Wiring `execution_services_provider` into the host mount.**
+  v0 mounts the content-ops router with no provider, so
+  `/execute` returns 503 by design. A follow-up slice wires
+  the host's existing `IntelligenceRepository` /
+  `CampaignRepository` / `BlogPostRepository` / etc. (already
+  present in the host for `/api/v1/b2b/*` routes) into a
+  `ContentOpsExecutionServices` factory and passes it through.
+  Preview and plan work without it.
 
 ## Verification
 

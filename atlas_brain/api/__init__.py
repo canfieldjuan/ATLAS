@@ -59,6 +59,9 @@ from .b2b_win_loss import router as b2b_win_loss_router
 from .b2b_evidence import router as b2b_evidence_router
 from .b2b_vendor_claims import router as b2b_vendor_claims_router
 from .b2b_challenger_claims import router as b2b_challenger_claims_router
+from extracted_content_pipeline.api.control_surfaces import (
+    create_content_ops_control_surface_router,
+)
 
 logger = logging.getLogger("atlas.api")
 
@@ -132,3 +135,16 @@ router.include_router(b2b_win_loss_router)
 router.include_router(b2b_evidence_router)
 router.include_router(b2b_vendor_claims_router)
 router.include_router(b2b_challenger_claims_router)
+
+# AI Content Ops control-surface routes (preview / plan / execute /
+# control-surfaces). Mounted with no execution_services_provider yet
+# -- preview / plan / GET control-surfaces work; execute correctly
+# returns 503 ("Content Ops execution services are not configured.")
+# until the host wires execution services in a follow-up slice.
+try:
+    content_ops_router = create_content_ops_control_surface_router()
+    router.include_router(content_ops_router)
+except Exception as exc:  # pragma: no cover - defensive at import time
+    logger.warning(
+        "Content Ops router disabled during api package import: %s", exc
+    )
