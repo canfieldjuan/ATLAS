@@ -56,13 +56,16 @@ A new page at `/content-ops/new` that:
    `client.ts` / `b2bClient.ts` convention. ~5 LOC delta.
 4. `atlas_brain/api/__init__.py` -- mount the
    `extracted_content_pipeline` content-ops router into the
-   host's aggregate `api_router`. Without this the screen
-   404s in dev. Added in the fix-up commit after the Codex P1
-   review on round 4. The router is mounted with no
+   host's aggregate `api_router`, gated behind the
+   `require_b2b_plan("b2b_growth")` dependency (same auth gate
+   as `b2b_campaigns_router`; the frontend's `ProtectedRoute`
+   is UI-only and does not protect the API surface). Added
+   across two fix-up commits after Codex P1 reviews on rounds
+   4 and 7. The router is mounted with no
    `execution_services_provider` for v0 -- preview / plan /
    GET control-surfaces work; execute correctly returns 503
    until execution services are wired in a follow-up slice.
-   ~12 LOC delta.
+   ~22 LOC delta.
 5. `plans/PR-Content-Ops-Screen-1-New-Run.md` (this file).
 
 ### What's NOT in this slice
