@@ -591,11 +591,12 @@ async def test_generate_no_reasoning_provider_passes_blueprint_unchanged() -> No
 
     service, _, _, llm, _ = _service()  # no reasoning_context kwarg
 
-    await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
 
     system_prompt = llm.calls[0]["messages"][0].content
     assert "reasoning_context" not in system_prompt
     assert "campaign_reasoning_context" not in system_prompt
+    assert result.as_dict()["reasoning_contexts_used"] == 0
 
 
 @pytest.mark.asyncio
@@ -620,7 +621,7 @@ async def test_generate_with_reasoning_provider_merges_context_into_blueprint() 
     )
     service, _, blog_posts, llm, _ = _service(reasoning_context=reasoning)
 
-    await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
 
     # Provider was called with the blueprint id + the fixed reasoning
     # target_mode (not the call-site target_mode).
@@ -634,6 +635,7 @@ async def test_generate_with_reasoning_provider_merges_context_into_blueprint() 
     assert "reasoning_context" in system_prompt
     assert "campaign_reasoning_context" in system_prompt
     assert "Renewal pricing rose 22 percent" in system_prompt
+    assert result.as_dict()["reasoning_contexts_used"] == 1
 
     # Draft metadata captured reasoning signal.
     drafts = blog_posts.saved[0]["drafts"]
@@ -653,12 +655,13 @@ async def test_generate_with_reasoning_provider_returning_empty_is_noop() -> Non
     reasoning = _ReasoningProvider(None)  # provider returns nothing
     service, _, blog_posts, llm, _ = _service(reasoning_context=reasoning)
 
-    await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
 
     assert reasoning.calls  # the provider was consulted
     system_prompt = llm.calls[0]["messages"][0].content
     assert "reasoning_context" not in system_prompt
     assert "campaign_reasoning_context" not in system_prompt
+    assert result.as_dict()["reasoning_contexts_used"] == 0
 
     drafts = blog_posts.saved[0]["drafts"]
     assert drafts

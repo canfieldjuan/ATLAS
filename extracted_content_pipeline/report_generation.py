@@ -74,6 +74,7 @@ class ReportGenerationResult:
     requested: int
     generated: int
     skipped: int
+    reasoning_contexts_used: int = 0
     saved_ids: tuple[str, ...] = ()
     errors: tuple[Mapping[str, Any], ...] = ()
 
@@ -82,6 +83,7 @@ class ReportGenerationResult:
             "requested": self.requested,
             "generated": self.generated,
             "skipped": self.skipped,
+            "reasoning_contexts_used": self.reasoning_contexts_used,
             "saved_ids": list(self.saved_ids),
             "errors": list(self.errors),
         }
@@ -143,6 +145,10 @@ def parse_report_response(text: str) -> dict[str, Any] | None:
             "sections": coerced_sections,
         }
     return None
+
+
+def _has_prompt_reasoning_context(payload: Mapping[str, Any]) -> bool:
+    return isinstance(payload.get("campaign_reasoning_context"), Mapping)
 
 
 def _report_user_prompt(prior_invalid_response: str = "") -> str:
@@ -248,6 +254,7 @@ class ReportGenerationService:
         drafts: list[ReportDraft] = []
         errors: list[dict[str, Any]] = []
         skipped = 0
+        reasoning_contexts_used = 0
         for opportunity in opportunities:
             target_id = opportunity_target_id(opportunity)
             if not target_id:
@@ -299,6 +306,8 @@ class ReportGenerationService:
                 })
                 continue
 
+            if _has_prompt_reasoning_context(opportunity):
+                reasoning_contexts_used += 1
             drafts.append(self._build_draft(
                 parsed,
                 target_id=target_id,
@@ -316,6 +325,7 @@ class ReportGenerationService:
             requested=len(opportunities),
             generated=len(drafts),
             skipped=skipped,
+            reasoning_contexts_used=reasoning_contexts_used,
             saved_ids=saved_ids,
             errors=tuple(errors),
         )

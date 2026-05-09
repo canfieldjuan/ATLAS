@@ -388,11 +388,15 @@ async def test_generate_consumes_reasoning_context_via_provider() -> None:
         reasoning_context=context,
     )
 
-    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+    )
 
     assert reasoning_provider is not None
     assert len(reasoning_provider.calls) == 1
     assert reasoning_provider.calls[0]["target_id"] == "vendor-acme"
+    assert result.as_dict()["reasoning_contexts_used"] == 1
 
 
 @pytest.mark.asyncio
