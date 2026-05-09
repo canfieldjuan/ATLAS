@@ -373,6 +373,15 @@ python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id ac
 python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id acct_123 --status cancelled --reason "customer rejected"
 ```
 
+Generated reports, landing pages, and sales briefs use the matching asset
+review CLI:
+
+```bash
+python scripts/review_extracted_content_assets.py --asset report --id <report-id> --account-id acct_123 --status approved
+python scripts/review_extracted_content_assets.py --asset landing_page --id <landing-page-id> --account-id acct_123 --status queued
+python scripts/review_extracted_content_assets.py --asset sales_brief --id <brief-id> --account-id acct_123 --status rejected
+```
+
 Hosts with FastAPI apps can mount the same draft review/export loop through a
 router factory. The host injects its database pool, tenant scope, and auth
 dependencies:
@@ -732,6 +741,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `sales_brief_export.py`: read-only sales brief export for host review flows
 - `scripts/export_extracted_content_assets.py`: host-facing report, landing
   page, and sales brief export CLI
+- `scripts/review_extracted_content_assets.py`: host-facing report, landing
+  page, and sales brief status-update CLI
 - `campaign_postgres_seller_targets.py`: seller target CRUD/list helpers for
   Amazon seller campaign installs
 - `campaign_postgres_seller_opportunities.py`: prepares Amazon seller
