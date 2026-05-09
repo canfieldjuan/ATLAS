@@ -46,6 +46,7 @@ pytest \
   tests/test_extracted_campaign_postgres_export.py \
   tests/test_extracted_report_export.py \
   tests/test_extracted_landing_page_export.py \
+  tests/test_extracted_sales_brief_export.py \
   tests/test_extracted_campaign_postgres_review.py \
   tests/test_extracted_campaign_postgres_seller_targets.py \
   tests/test_extracted_campaign_postgres_seller_opportunities.py \

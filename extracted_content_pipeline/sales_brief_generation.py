@@ -331,6 +331,7 @@ class SalesBriefGenerationService:
                     target_id=target_id,
                     target_mode=target_mode,
                     default_brief_type=default_brief_type,
+                    opportunity=opportunity,
                 )
             )
 
@@ -479,6 +480,7 @@ class SalesBriefGenerationService:
         target_id: str,
         target_mode: str,
         default_brief_type: str | None = None,
+        opportunity: Mapping[str, Any] | None = None,
     ) -> SalesBriefDraft:
         sections = tuple(
             SalesBriefSection(
@@ -514,6 +516,9 @@ class SalesBriefGenerationService:
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
         }
+        if opportunity is not None:
+            context = normalize_campaign_reasoning_context(opportunity)
+            metadata.update(campaign_reasoning_context_metadata(context))
         if "confidence" in parsed:
             metadata["confidence"] = parsed["confidence"]
         return SalesBriefDraft(
