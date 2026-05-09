@@ -24,6 +24,7 @@ class OutputDefinition:
     estimated_unit_cost_usd: float
     required_inputs: tuple[str, ...] = ()
     default_max_items: int = 1
+    reasoning_requirement: str = "absent"
     # Must mirror each *GenerationConfig.parse_retry_attempts default used in
     # generation_plan.py. If a service raises retries, update this field too.
     default_parse_retry_attempts: int = 1
@@ -103,6 +104,7 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         estimated_unit_cost_usd=0.18,
         required_inputs=("target_account", "offer"),
         default_max_items=3,
+        reasoning_requirement="optional_host_context",
     ),
     "blog_post": OutputDefinition(
         id="blog_post",
@@ -119,6 +121,7 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         implemented=True,
         estimated_unit_cost_usd=0.55,
         required_inputs=("opportunity_id",),
+        reasoning_requirement="optional_host_context",
     ),
     "landing_page": OutputDefinition(
         id="landing_page",
@@ -127,6 +130,7 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         implemented=True,
         estimated_unit_cost_usd=0.65,
         required_inputs=("offer", "audience"),
+        reasoning_requirement="optional_host_context",
     ),
     "sales_brief": OutputDefinition(
         id="sales_brief",
@@ -135,6 +139,7 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         implemented=True,
         estimated_unit_cost_usd=0.35,
         required_inputs=("target_account",),
+        reasoning_requirement="optional_host_context",
     ),
     "signal_extraction": OutputDefinition(
         id="signal_extraction",

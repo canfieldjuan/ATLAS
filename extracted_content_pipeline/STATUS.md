@@ -121,7 +121,9 @@
   multi-asset AI Content Ops control surfaces. The execute route is disabled
   unless the host supplies execution services. The catalog route reports which
   implemented outputs are actually wired to host execution services so admin
-  UIs do not confuse package implementation status with runtime readiness.
+  UIs do not confuse package implementation status with runtime readiness. The
+  output catalog also reports whether each output can consume host-provided
+  reasoning context or does not use the reasoning-provider path.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
