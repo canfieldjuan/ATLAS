@@ -9,6 +9,7 @@ bash scripts/check_ascii_python.sh
 python scripts/check_extracted_imports.py
 python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
 python scripts/smoke_extracted_pipeline_imports.py
+python scripts/smoke_extracted_pipeline_standalone.py
 python scripts/audit_extracted_standalone.py --fail-on-debt
 pytest \
   tests/test_extracted_campaign_analytics.py \
