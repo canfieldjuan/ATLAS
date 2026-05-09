@@ -203,6 +203,9 @@
       "target": "extracted_content_pipeline/report_export.py"
     },
     {
+      "target": "extracted_content_pipeline/landing_page_export.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_postgres_review.py"
     },
     {

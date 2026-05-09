@@ -306,7 +306,11 @@ class LandingPageGenerationService:
                 },),
             )
 
-        draft = self._build_draft(parsed, campaign=campaign)
+        draft = self._build_draft(
+            parsed,
+            campaign=campaign,
+            campaign_payload=campaign_payload,
+        )
         saved_ids = tuple(
             str(item) for item in await self._landing_pages.save_drafts([draft], scope=scope)
         )
@@ -439,6 +443,7 @@ class LandingPageGenerationService:
         parsed: Mapping[str, Any],
         *,
         campaign: MarketingCampaign,
+        campaign_payload: Mapping[str, Any] | None = None,
     ) -> LandingPageDraft:
         sections = tuple(
             LandingPageSection(
@@ -470,6 +475,9 @@ class LandingPageGenerationService:
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
         }
+        if campaign_payload is not None:
+            context = normalize_campaign_reasoning_context(campaign_payload)
+            metadata.update(campaign_reasoning_context_metadata(context))
         return LandingPageDraft(
             campaign_name=campaign.name,
             persona=campaign.persona,
