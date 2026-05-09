@@ -375,10 +375,15 @@ def _generation_config(
     channels: tuple[str, ...],
     limit: int,
 ) -> CampaignGenerationConfig:
+    # PR-Campaign-Config-V2: ``CampaignGenerationConfig`` no longer
+    # carries the legacy single ``channel`` field. The wrapper API still
+    # accepts ``channel`` as a per-call hint; we normalize it into the
+    # ``channels`` tuple here so the dataclass only sees the supported
+    # surface.
+    resolved_channels = channels or ((channel,) if channel else ())
     return CampaignGenerationConfig(
         skill_name=config.generation_skill_name,
-        channel=channel,
-        channels=channels,
+        channels=resolved_channels,
         limit=limit,
         max_tokens=config.generation_max_tokens,
         temperature=float(config.generation_temperature),

@@ -49,15 +49,24 @@ Tightly scoped. **Two structural changes, both in
      428 keeps `_channels()` returning at least `("email",)` when
      the host construction supplies no channels at all -- preserving
      the "default to email" behavior without the dead config field.
-2. `tests/test_extracted_campaign_generation.py`
+2. `extracted_content_pipeline/api/campaign_operations.py`
+   - `_generation_config()` helper used to forward `channel=` through
+     to the dataclass; normalize `channel` -> `channels=(channel,)`
+     internally and drop the kwarg from the dataclass construction.
+     Wrapper API stays unchanged for hosts.
+3. `extracted_content_pipeline/campaign_postgres_generation.py`
+   - `generate_campaign_drafts_from_postgres()` builds a default
+     config when none is supplied; same normalization pattern.
+     Wrapper API stays unchanged for hosts.
+4. `extracted_content_pipeline/campaign_example.py`
+   - Same normalization in the example helper.
+5. `scripts/run_extracted_campaign_generation_postgres.py`
+   - CLI runner constructs a config from `--channel` / `--channels`
+     args; normalize before passing to the dataclass.
+6. `tests/test_extracted_campaign_generation.py`
    - Remove
      `test_generate_legacy_channel_field_still_resolves_when_channels_unset`
      (lines 1235-1260). It exercises the now-removed code path.
-
-That's it. No other call sites construct
-`CampaignGenerationConfig(channel=...)` -- verified via
-`grep -rn "CampaignGenerationConfig(channel="` returning only the
-deferred test.
 
 ## Mechanism
 

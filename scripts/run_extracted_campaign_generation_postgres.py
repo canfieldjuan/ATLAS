@@ -318,8 +318,12 @@ async def _main() -> int:
             limit=args.limit,
             filters=_json_object(args.filters_json),
             config=CampaignGenerationConfig(
-                channel=args.channel,
-                channels=tuple(operation_payload["channels"]),
+                # PR-Campaign-Config-V2: legacy ``channel`` field is gone;
+                # normalize the CLI's ``--channel`` arg into the
+                # ``channels`` tuple before constructing the dataclass.
+                channels=tuple(operation_payload["channels"]) or (
+                    (args.channel,) if args.channel else ()
+                ),
                 limit=args.limit,
                 quality_revalidation_enabled=bool(args.quality_revalidation),
             ),
