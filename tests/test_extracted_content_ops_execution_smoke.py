@@ -47,7 +47,7 @@ def test_content_ops_execution_smoke_cli_accepts_output_subset_json() -> None:
             "--outputs",
             "email_campaign,report",
             "--target-mode",
-            "account_expansion",
+            "challenger_intel",
             "--limit",
             "2",
             "--json",
@@ -64,8 +64,8 @@ def test_content_ops_execution_smoke_cli_accepts_output_subset_json() -> None:
         "report",
     ]
     assert payload["steps"][0]["result"]["generated"] == 2
-    assert payload["steps"][0]["result"]["target_mode"] == "account_expansion"
-    assert payload["steps"][1]["result"]["target_mode"] == "account_expansion"
+    assert payload["steps"][0]["result"]["target_mode"] == "challenger_intel"
+    assert payload["steps"][1]["result"]["target_mode"] == "challenger_intel"
 
 
 def test_content_ops_execution_smoke_cli_runs_signal_extraction_json() -> None:
