@@ -52,7 +52,7 @@ size and nesting limits.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/content-ops/control-surfaces` | List output types, presets, required inputs, implementation status, execution-service readiness, cost estimates, and ingestion profiles. |
+| `GET` | `/content-ops/control-surfaces` | List output types, presets, required inputs, implementation status, execution-service readiness, reasoning-provider readiness, cost estimates, and ingestion profiles. |
 | `POST` | `/content-ops/preview` | Validate a requested preset/output selection and return cost, missing inputs, warnings, and blocked outputs. |
 | `POST` | `/content-ops/plan` | Convert a previewable request into deterministic generation steps. Does not execute generation. |
 | `POST` | `/content-ops/execute` | Execute a runnable plan through host-injected services. Disabled unless the host configures execution services. |

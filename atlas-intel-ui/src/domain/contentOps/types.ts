@@ -49,6 +49,9 @@ export interface ContentOpsCatalog {
     configured: boolean
     configuredOutputs: string[]
   }
+  reasoning: {
+    configured: boolean
+  }
   ingestionProfiles: string[]
 }
 

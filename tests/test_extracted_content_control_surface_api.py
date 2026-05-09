@@ -64,6 +64,7 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert outputs["blog_post"]["reasoning_requirement"] == "absent"
     assert outputs["signal_extraction"]["reasoning_requirement"] == "absent"
     assert payload["execution"] == {"configured": False, "configured_outputs": []}
+    assert payload["reasoning"] == {"configured": False}
     assert "email_only" in preset_ids
     assert "lead_gen_campaign" in preset_ids
     assert payload["ingestion_profiles"] == [
@@ -99,6 +100,20 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
     assert outputs["signal_extraction"]["can_execute"] is True
     assert outputs["blog_post"]["execution_configured"] is False
     assert outputs["blog_post"]["can_execute"] is False
+    assert payload["reasoning"] == {"configured": False}
+
+
+@pytest.mark.asyncio
+async def test_describe_control_surfaces_reports_reasoning_provider_status():
+    router = create_content_ops_control_surface_router(
+        reasoning_context_provider=lambda: object()
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    assert payload["execution"] == {"configured": False, "configured_outputs": []}
+    assert payload["reasoning"] == {"configured": True}
 
 
 @pytest.mark.asyncio
@@ -135,6 +150,7 @@ async def test_describe_control_surfaces_ignores_invalid_execution_provider_resu
 
     outputs = {item["id"]: item for item in payload["outputs"]}
     assert payload["execution"] == {"configured": False, "configured_outputs": []}
+    assert payload["reasoning"] == {"configured": False}
     assert outputs["email_campaign"]["execution_configured"] is False
     assert outputs["email_campaign"]["can_execute"] is False
 

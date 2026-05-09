@@ -65,6 +65,9 @@ export interface ContentOpsCatalogResponse {
     configured: boolean
     configured_outputs: string[]
   }
+  reasoning: {
+    configured: boolean
+  }
   ingestion_profiles: string[]
 }
 

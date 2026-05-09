@@ -158,5 +158,8 @@
     "domain_specific",
     "manual",
     "existing_evidence"
-  ]
+  ],
+  "reasoning": {
+    "configured": true
+  }
 }

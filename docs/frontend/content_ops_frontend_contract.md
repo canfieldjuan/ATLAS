@@ -50,8 +50,8 @@ with bounded sizes (max 50 input keys, depth 6, string ≤ 10000 chars,
 Composed at `api/control_surfaces.py:101-131`. The static portion is
 cached at module import (PR-Describe-Control-Surfaces-Cache, #397);
 only the per-output `execution_configured` / `can_execute` and
-top-level `execution.{configured,configured_outputs}` flags are
-recomputed per request.
+top-level `execution.{configured,configured_outputs}` /
+`reasoning.configured` flags are recomputed per request.
 
 ```jsonc
 {
@@ -80,6 +80,9 @@ recomputed per request.
   "execution": {
     "configured": true,
     "configured_outputs": ["blog_post", "email_campaign", "report"]
+  },
+  "reasoning": {
+    "configured": true
   },
   "ingestion_profiles": ["domain_specific", "manual", "existing_evidence"]
 }
@@ -188,6 +191,7 @@ interface ContentOpsCatalog {
   outputs: OutputDefinitionView[];
   presets: ControlSurfacePresetView[];
   execution: { configured: boolean; configuredOutputs: string[] };
+  reasoning: { configured: boolean };
   ingestionProfiles: string[];           // ["domain_specific", "manual", "existing_evidence"]
 }
 
@@ -387,6 +391,11 @@ AND the host has wired `CampaignReasoningContextProvider`
 threads the resulting `CampaignReasoningContext`
 (`campaign_ports.py:53-99`) into the prompt. The execution result
 typically surfaces this context in `step.result` for review.
+
+The catalog-level `reasoning.configured` flag tells the UI whether
+the host mounted a route-level reasoning provider. It is separate
+from each output's `reasoning_requirement`: an output can support
+reasoning even when the current host has not wired a provider.
 
 ```ts
 interface CampaignReasoningContextView {
