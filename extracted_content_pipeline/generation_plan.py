@@ -125,7 +125,29 @@ def _blog_post_config_for_request(request: ContentOpsRequest) -> BlogPostGenerat
 def _signal_extraction_config_for_request(
     request: ContentOpsRequest,
 ) -> SignalExtractionConfig:
-    return SignalExtractionConfig(limit=request.limit)
+    config = SignalExtractionConfig(limit=request.limit)
+    max_text_chars = _positive_int_input(request.inputs, "source_max_text_chars")
+    if max_text_chars is None:
+        return config
+    return SignalExtractionConfig(
+        limit=config.limit,
+        max_text_chars=max_text_chars,
+    )
+
+
+def _positive_int_input(inputs: Mapping[str, Any], key: str) -> int | None:
+    raw = inputs.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        raise ValueError(f"{key} must be an integer")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be an integer") from None
+    if value < 1:
+        raise ValueError(f"{key} must be at least 1; got {value}")
+    return value
 
 
 def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanStep:

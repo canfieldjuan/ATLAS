@@ -101,6 +101,8 @@ def test_content_ops_execution_smoke_cli_parameterizes_signal_source_row() -> No
             "Salesforce",
             "--source-contact-email",
             "ops@example.com",
+            "--source-max-text-chars",
+            "11",
             "--source-material",
             "The renewal created finance pressure.",
             "--json",
@@ -115,6 +117,7 @@ def test_content_ops_execution_smoke_cli_parameterizes_signal_source_row() -> No
     assert opportunity["target_id"] == "source-42"
     assert opportunity["vendor"] == "Salesforce"
     assert opportunity["contact_email"] == "ops@example.com"
+    assert opportunity["evidence"][0]["text"] == "The renewal"
 
 
 def test_content_ops_execution_smoke_fails_when_required_inputs_missing() -> None:

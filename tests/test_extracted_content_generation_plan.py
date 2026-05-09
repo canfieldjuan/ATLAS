@@ -1,3 +1,5 @@
+import pytest
+
 from extracted_content_pipeline.generation_plan import build_generation_plan_from_mapping
 
 
@@ -189,3 +191,31 @@ def test_plan_maps_signal_extraction_to_signal_extraction_service():
         "limit": 3,
         "max_text_chars": 1200,
     }
+
+
+def test_plan_threads_signal_extraction_source_text_cap():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["signal_extraction"],
+            "inputs": {
+                "source_material": "Pricing pressure came up at renewal.",
+                "source_max_text_chars": 12,
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["config"]["max_text_chars"] == 12
+
+
+def test_plan_rejects_invalid_signal_extraction_source_text_cap():
+    with pytest.raises(ValueError, match="source_max_text_chars must be at least 1"):
+        build_generation_plan_from_mapping(
+            {
+                "outputs": ["signal_extraction"],
+                "inputs": {
+                    "source_material": "Pricing pressure came up at renewal.",
+                    "source_max_text_chars": 0,
+                },
+            }
+        )

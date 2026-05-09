@@ -287,6 +287,7 @@ async def test_execute_runs_signal_extraction_service_from_source_material() -> 
         {
             "outputs": ["signal_extraction"],
             "inputs": {
+                "source_max_text_chars": 7,
                 "source_material": [
                     {
                         "id": "review-1",
@@ -307,7 +308,9 @@ async def test_execute_runs_signal_extraction_service_from_source_material() -> 
     step = result["steps"][0]
     assert step["output"] == "signal_extraction"
     assert step["result"]["generated"] == 1
-    assert step["result"]["opportunities"][0]["target_id"] == "review-1"
+    opportunity = step["result"]["opportunities"][0]
+    assert opportunity["target_id"] == "review-1"
+    assert opportunity["evidence"][0]["text"] == "Pricing"
     assert step["result"]["warnings"] == []
 
 

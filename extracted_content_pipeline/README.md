@@ -585,7 +585,7 @@ smoke before wiring real asset services:
 ```bash
 python scripts/smoke_extracted_content_ops_execution.py
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --json
-python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 1200 --json
 ```
 
 This validates the full campaign preset and the deterministic source-material

@@ -96,6 +96,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-id", default="source-smoke-1")
     parser.add_argument("--source-vendor", default="HubSpot")
     parser.add_argument("--source-contact-email", default="buyer@example.com")
+    parser.add_argument("--source-max-text-chars", type=int)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -122,6 +123,8 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
             ],
         },
     }
+    if args.source_max_text_chars is not None:
+        payload["inputs"]["source_max_text_chars"] = args.source_max_text_chars
     if args.outputs:
         payload["outputs"] = [
             item.strip()
