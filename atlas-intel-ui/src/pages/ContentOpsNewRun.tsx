@@ -43,6 +43,10 @@ export default function ContentOpsNewRun() {
   const [request, setRequest] = useState<ContentOpsRequest>(() =>
     fromWireRequest({}),
   )
+  // Codex P2 fix v3: keep the max-cost input as a string draft so the
+  // user can type `0.` mid-entry without React re-rendering as `0` and
+  // swallowing the decimal point. Parsed to a number at submit time.
+  const [maxCostUsdInput, setMaxCostUsdInput] = useState<string>('')
   const [inputsJson, setInputsJson] = useState<string>(DEFAULT_INPUTS_JSON)
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' })
   // Codex P2 fix: request-id ref so a stale in-flight preview response
@@ -117,15 +121,19 @@ export default function ContentOpsNewRun() {
       return
     }
 
-    // Submit-time normalization: backend's pydantic validator declares
-    // max_cost_usd with gt=0; collapse 0 / negative to null so we never
-    // round-trip a request the API would reject.
+    // Submit-time max-cost parse + normalization. The input is a string
+    // draft (so decimals like "0.50" can be typed); parse here and
+    // collapse 0 / negative / unparseable to null because the backend's
+    // pydantic validator declares max_cost_usd with gt=0
+    // (control_surfaces.py:88).
+    const trimmedMaxCost = maxCostUsdInput.trim()
+    const parsedMaxCost = trimmedMaxCost === '' ? null : Number(trimmedMaxCost)
     const normalizedMaxCost =
-      request.maxCostUsd === null ||
-      !Number.isFinite(request.maxCostUsd) ||
-      request.maxCostUsd <= 0
+      parsedMaxCost === null ||
+      !Number.isFinite(parsedMaxCost) ||
+      parsedMaxCost <= 0
         ? null
-        : request.maxCostUsd
+        : parsedMaxCost
     const domainRequest: ContentOpsRequest = {
       ...request,
       inputs: parsedInputs,
@@ -301,24 +309,16 @@ export default function ContentOpsNewRun() {
             <label className="block text-sm">
               <span className="text-slate-300">Max cost (USD)</span>
               <input
-                type="number"
-                step={0.01}
-                min={0}
-                value={request.maxCostUsd ?? ''}
+                type="text"
+                inputMode="decimal"
+                value={maxCostUsdInput}
                 onChange={(e) => {
-                  // Codex P2 fix v2: keep 0 valid in form state during typing
-                  // so the user can keep keying a sub-dollar value like "0.50"
-                  // (the prior `<= 0 -> null` clobbered the input the moment
-                  // they typed "0"). The submit handler normalizes 0 / negative
-                  // values to null before sending, matching the backend's
-                  // `gt=0` validator (control_surfaces.py:88).
-                  const v = e.target.value
-                  const parsed = v === '' ? null : Number(v)
-                  setRequest((p) => ({
-                    ...p,
-                    maxCostUsd:
-                      parsed === null || !Number.isFinite(parsed) ? null : parsed,
-                  }))
+                  // Codex P2 fix v3: render from the raw string draft
+                  // so the user can type "0.", "0.5", "0.50" without
+                  // mid-keystroke coercion to a number that re-renders
+                  // as "0" and swallows the decimal point. Parsed to a
+                  // number only at submit time.
+                  setMaxCostUsdInput(e.target.value)
                   markStale()
                 }}
                 placeholder="(no cap)"
