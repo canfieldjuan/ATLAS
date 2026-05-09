@@ -2,6 +2,7 @@ import React from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ArrowRightLeft, Shield, Mail, Check } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
+import SeoHead from '../components/SeoHead'
 
 const AtlasHeroScene = React.lazy(() => import('../components/AtlasHeroScene'))
 
@@ -55,9 +56,43 @@ const PLANS = [
   },
 ]
 
+const LANDING_JSON_LD = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'WebSite',
+      name: 'Atlas Intelligence',
+      url: 'https://atlas-intel-ui-two.vercel.app',
+    },
+    {
+      '@type': 'SoftwareApplication',
+      name: 'Atlas Intelligence',
+      applicationCategory: 'BusinessApplication',
+      operatingSystem: 'Web',
+      description:
+        'Amazon review intelligence platform for tracking competitor complaints, safety signals, and customer migration patterns across your product category.',
+      offers: {
+        '@type': 'AggregateOffer',
+        lowPrice: '49',
+        highPrice: '399',
+        priceCurrency: 'USD',
+      },
+      url: 'https://atlas-intel-ui-two.vercel.app/landing',
+    },
+  ],
+}
+
 export default function Landing() {
   return (
-    <PublicLayout>
+    <>
+      <SeoHead
+        title="Atlas Intelligence — Amazon Review Monitoring & Competitor Signals"
+        description="Track competitor complaints, safety signals, and customer migration patterns across your Amazon product category. Start free for 14 days."
+        canonical="https://atlas-intel-ui-two.vercel.app/landing"
+        ogType="website"
+        jsonLd={LANDING_JSON_LD}
+      />
+      <PublicLayout>
       {/* Hero */}
       <section className="mx-auto px-6 pt-8 pb-24 text-center">
         <React.Suspense fallback={<div className="h-[300px]" />}>
@@ -148,5 +183,6 @@ export default function Landing() {
         </div>
       </section>
     </PublicLayout>
+    </>
   )
 }

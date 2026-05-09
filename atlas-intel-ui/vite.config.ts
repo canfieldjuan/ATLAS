@@ -31,13 +31,14 @@ function sitemapPlugin() {
 
       const today = new Date().toISOString().split('T')[0]
       const urls = [
-        { loc: 'https://atlas-intel-ui-two.vercel.app/', priority: '1.0', changefreq: 'weekly' },
+        { loc: 'https://atlas-intel-ui-two.vercel.app/landing', priority: '1.0', changefreq: 'weekly' },
         { loc: 'https://atlas-intel-ui-two.vercel.app/blog', priority: '0.9', changefreq: 'daily' },
         ...slugs.map(slug => ({
           loc: `https://atlas-intel-ui-two.vercel.app/blog/${slug}`,
           priority: '0.7',
           changefreq: 'monthly',
         })),
+        { loc: 'https://atlas-intel-ui-two.vercel.app/', priority: '0.3', changefreq: 'monthly' },
       ]
 
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
