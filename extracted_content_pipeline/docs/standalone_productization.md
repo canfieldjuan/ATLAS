@@ -185,6 +185,13 @@ review path for generated structured reports. It calls the host-injected
 report sections and metadata, and derives top-level generation and reasoning
 summary columns for operator review without requiring direct SQL access.
 
+`extracted_content_pipeline/landing_page_export.py` owns the equivalent
+read-only review path for generated landing pages. It calls the host-injected
+`LandingPageRepository.list_drafts()` port, emits JSON or CSV rows, preserves
+hero, section, CTA, SEO meta, and metadata payloads, and derives top-level
+generation and reasoning summary columns for operator review without requiring
+direct SQL access.
+
 `extracted_content_pipeline/campaign_postgres_review.py` owns the write side of
 that host review loop. It updates selected `b2b_campaigns` rows by explicit
 campaign id, optional account scope, and source-status guard so hosts can move
