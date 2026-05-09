@@ -615,6 +615,21 @@ For hosted installs that want extracted reasoning-core orchestration, set
 `MultiPassCampaignReasoningProvider` from the injected LLM provider. Explicit
 `reasoning_context_provider` injection still takes precedence.
 
+Before mounting real generated-asset services, validate the host reasoning
+handoff through the offline execution smoke:
+
+```bash
+python scripts/smoke_extracted_content_ops_execution.py \
+  --outputs email_campaign,landing_page \
+  --with-reasoning \
+  --json
+```
+
+The smoke uses fake generated-asset services and a fake provider object only.
+It fails if the JSON result omits `result.reasoning_contexts_used` or the
+step-level `reasoning.contexts_used` audit field, so hosts can verify the
+execution seam without opening database, network, sender, or LLM handles.
+
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/campaigns/operations/status` | Report database availability, provider presence, feature readiness, and configured limits for admin dashboards. |
