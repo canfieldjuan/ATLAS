@@ -217,7 +217,7 @@ Before wiring real providers, hosts can run the offline execution smoke:
 ```bash
 python scripts/smoke_extracted_content_ops_execution.py
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --json
-python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 1200 --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
 ```
 
 The smoke uses injected deterministic services and exercises the same

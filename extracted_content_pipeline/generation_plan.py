@@ -139,7 +139,7 @@ def _positive_int_input(inputs: Mapping[str, Any], key: str) -> int | None:
     raw = inputs.get(key)
     if raw is None:
         return None
-    if isinstance(raw, bool):
+    if isinstance(raw, (bool, float)):
         raise ValueError(f"{key} must be an integer")
     try:
         value = int(raw)

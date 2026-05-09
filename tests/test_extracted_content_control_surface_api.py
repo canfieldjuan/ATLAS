@@ -208,6 +208,28 @@ async def test_plan_generation_route_returns_execution_plan():
 
 
 @pytest.mark.asyncio
+async def test_plan_generation_route_rejects_invalid_signal_text_cap_as_400():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/plan", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["signal_extraction"],
+                "inputs": {
+                    "source_material": "Pricing pressure came up at renewal.",
+                    "source_max_text_chars": 0,
+                },
+            }
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "source_max_text_chars must be at least 1; got 0"
+
+
+@pytest.mark.asyncio
 async def test_execute_generation_route_runs_configured_services():
     service = _CampaignService()
     router = create_content_ops_control_surface_router(
@@ -241,6 +263,31 @@ async def test_execute_generation_route_runs_configured_services():
     assert service.calls[0]["target_mode"] == "vendor_retention"
     assert service.calls[0]["limit"] == 2
     assert service.calls[0]["filters"] == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_rejects_invalid_signal_text_cap_as_400():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            signal_extraction=_CampaignService()
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["signal_extraction"],
+                "inputs": {
+                    "source_material": "Pricing pressure came up at renewal.",
+                    "source_max_text_chars": 0,
+                },
+            }
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "source_max_text_chars must be at least 1; got 0"
 
 
 @pytest.mark.asyncio
