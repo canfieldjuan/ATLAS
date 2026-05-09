@@ -124,6 +124,9 @@
   UIs do not confuse package implementation status with runtime readiness. The
   output catalog also reports whether each output can consume host-provided
   reasoning context or does not use the reasoning-provider path.
+- Execution result summaries do not currently expose consumed reasoning
+  payloads. Hosts can see whether reasoning is configured in the catalog, but a
+  per-step reasoning drawer needs a future explicit execution-result field.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
