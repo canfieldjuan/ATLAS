@@ -1,41 +1,79 @@
-# PR: Content Ops Generated Asset Result Summaries
+# PR: Content Ops generated asset result summaries
 
-Date: 2026-05-09
-Owner: codex-content-ops-asset-summaries
+## Why this slice exists
 
-## Goal
+The execute panel already summarizes `email_campaign` and
+`signal_extraction`, but the implemented generated-asset outputs still
+fall through to raw JSON. That makes successful report, landing-page,
+and sales-brief runs harder to scan even though their backend result
+contracts already share the same small status shape.
 
-Extend the Content Ops execution panel beyond `email_campaign` and
-`signal_extraction` so implemented generated-asset outputs also show a
-useful summary before the raw JSON payload.
+This closes the next frontend-contract gap for Content Ops execution
+results without changing backend behavior.
 
-## Scope
+## Scope (this PR)
 
-- Add a shared result summary for `report`, `landing_page`, and
-  `sales_brief`.
-- Preserve the existing `email_campaign` summary behavior.
-- Keep raw JSON details available for every step.
-- Update the frontend contract doc to name the shared result shape.
+1. Add a shared generated-asset result summary for `report`,
+   `landing_page`, and `sales_brief`.
+2. Preserve the existing `email_campaign` summary behavior while
+   routing it through the same display component.
+3. Keep raw JSON details available for every execution step.
+4. Update the frontend contract doc with the shared result shape.
+5. Claim this slice in the extraction coordination table while the PR
+   is open.
 
-## Verified Contracts
+### Files touched
 
-`ReportGenerationResult`, `LandingPageGenerationResult`, and
-`SalesBriefGenerationResult` all expose:
+- `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx`
+- `docs/frontend/content_ops_frontend_contract.md`
+- `docs/extraction/coordination/inflight.md`
+- `plans/PR-Content-Ops-Generated-Asset-Result-Summaries.md`
 
-- `requested`
-- `generated`
-- `skipped`
-- `saved_ids`
-- `errors`
+## Mechanism
 
-The UI can summarize these fields without changing backend contracts.
+`ExecutionStepSummary` now routes:
 
-## Out Of Scope
+- `signal_extraction` to the existing signal summary.
+- `email_campaign` to `GeneratedAssetSummary` with the label
+  `Drafts generated`.
+- `report`, `landing_page`, and `sales_brief` to
+  `GeneratedAssetSummary` with the label `Assets generated`.
 
-- Blog post summary adapter. Its result contract needs a separate read.
-- Backend result-shape changes.
-- Competitive-intelligence files currently claimed by another session.
+`GeneratedAssetSummary` defensively reads only stable primitive fields:
+`requested`, `generated`, `skipped`, `saved_ids`, and `errors`. Missing
+or malformed fields are ignored, and the raw JSON details remain below
+the summary.
 
-## Validation
+## Intentional
 
-- `npm run build` in `atlas-intel-ui`.
+- No backend changes. The UI consumes the existing `as_dict()` result
+  contracts.
+- No new per-output custom cards for `report`, `landing_page`, or
+  `sales_brief`; their result contracts are identical enough for one
+  shared summary.
+- No blog-post adapter in this slice. Its result shape needs a separate
+  read before adding a summary.
+- No component-test harness added; this page currently validates through
+  the frontend build path.
+
+## Deferred
+
+- Blog-post execution result summary after its backend result contract
+  is read and mapped.
+- Rich generated-asset details, such as titles or preview snippets,
+  once those fields are stable across all asset services.
+- Component-level tests for `ContentOpsNewRun` if the frontend test
+  harness is introduced.
+
+## Verification
+
+- `cd atlas-intel-ui && npm ci`
+- `cd atlas-intel-ui && npm run build`
+- `git diff --check`
+- Confirmed no non-ASCII added lines in the TypeScript diff.
+
+## Estimated diff size
+
+- 4 files.
+- About 90 inserted lines and 4 deleted lines.
+- Well below the 400-line soft PR budget.
