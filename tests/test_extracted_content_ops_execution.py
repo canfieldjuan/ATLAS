@@ -892,14 +892,17 @@ async def test_execute_step_reports_reasoning_audit_when_provider_attached():
     exposing the full prompt context payload."""
 
     provider = object()
-    campaign = _ReasoningAwareOpportunityService(reasoning_context=provider)
+    campaign = _ReasoningAwareOpportunityService()
+    services = ContentOpsExecutionServices(campaign=campaign).with_reasoning_context(
+        provider
+    )
 
     result = await execute_content_ops_from_mapping(
         {
             "outputs": ["email_campaign"],
             "inputs": {"target_account": "Acme", "offer": "Audit"},
         },
-        services=ContentOpsExecutionServices(campaign=campaign),
+        services=services,
     )
 
     assert result["steps"][0]["reasoning"] == {

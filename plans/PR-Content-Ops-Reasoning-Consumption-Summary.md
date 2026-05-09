@@ -28,9 +28,10 @@ and whether a provider was attached.
 
 ## Mechanism
 
-The executor computes the per-step audit from the output catalog and
-the injected service object. Outputs with
-`reasoning_requirement="optional_host_context"` get:
+The executor computes the per-step audit from the output catalog, the
+injected service object, and the bundle-level reasoning-provider flag
+set by `ContentOpsExecutionServices.with_reasoning_context(provider)`.
+Outputs with `reasoning_requirement="optional_host_context"` get:
 
 - `requirement`
 - `service_supports_reasoning`

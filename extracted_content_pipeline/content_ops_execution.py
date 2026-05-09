@@ -32,6 +32,7 @@ class ContentOpsExecutionServices:
     landing_page: Any | None = None
     sales_brief: Any | None = None
     signal_extraction: Any | None = None
+    reasoning_provider_configured: bool = False
 
     def for_output(self, output: str) -> Any | None:
         if output == "email_campaign":
@@ -85,6 +86,7 @@ class ContentOpsExecutionServices:
             sales_brief=_rebind_reasoning(self.sales_brief, provider),
             # signal_extraction stays as-is; it does not consume reasoning.
             signal_extraction=self.signal_extraction,
+            reasoning_provider_configured=provider is not None,
         )
 
 
@@ -176,6 +178,7 @@ async def execute_content_ops_request(
             service=services.for_output(step.output),
             scope=resolved_scope,
             filters=filters,
+            reasoning_provider_configured=services.reasoning_provider_configured,
         )
         for step in plan.steps
     ))
@@ -206,10 +209,19 @@ async def _execute_step(
     service: Any | None,
     scope: TenantScope,
     filters: Mapping[str, Any] | None,
+    reasoning_provider_configured: bool,
 ) -> tuple[ContentOpsStepExecution, Mapping[str, Any] | None]:
     if not _has_generate_method(service):
         error = _step_error_dict(step, "service_not_configured")
-        return _failed_step(step, "service_not_configured", service=service), error
+        return (
+            _failed_step(
+                step,
+                "service_not_configured",
+                service=service,
+                reasoning_provider_configured=reasoning_provider_configured,
+            ),
+            error,
+        )
     try:
         result = await _run_step(
             step,
@@ -220,14 +232,26 @@ async def _execute_step(
         )
     except Exception as exc:
         error = _step_error_dict(step, str(exc))
-        return _failed_step(step, str(exc), service=service), error
+        return (
+            _failed_step(
+                step,
+                str(exc),
+                service=service,
+                reasoning_provider_configured=reasoning_provider_configured,
+            ),
+            error,
+        )
     return (
         ContentOpsStepExecution(
             output=step.output,
             runner=step.runner,
             status="completed",
             result=_result_dict(result),
-            reasoning=_step_reasoning_audit(step, service),
+            reasoning=_step_reasoning_audit(
+                step,
+                service,
+                reasoning_provider_configured=reasoning_provider_configured,
+            ),
         ),
         None,
     )
@@ -632,13 +656,18 @@ def _failed_step(
     error: str,
     *,
     service: Any | None,
+    reasoning_provider_configured: bool,
 ) -> ContentOpsStepExecution:
     return ContentOpsStepExecution(
         output=step.output,
         runner=step.runner,
         status="failed",
         error=error,
-        reasoning=_step_reasoning_audit(step, service),
+        reasoning=_step_reasoning_audit(
+            step,
+            service,
+            reasoning_provider_configured=reasoning_provider_configured,
+        ),
     )
 
 
@@ -649,6 +678,8 @@ def _has_generate_method(service: Any | None) -> bool:
 def _step_reasoning_audit(
     step: GenerationPlanStep,
     service: Any | None,
+    *,
+    reasoning_provider_configured: bool,
 ) -> dict[str, Any]:
     definition = OUTPUT_CATALOG.get(step.output)
     requirement = (
@@ -657,17 +688,16 @@ def _step_reasoning_audit(
         else "absent"
     )
     service_supports = callable(getattr(service, "with_reasoning_context", None))
-    provider_configured = getattr(service, "_reasoning_context", None) is not None
     if (
         requirement == "absent"
         and not service_supports
-        and not provider_configured
+        and not reasoning_provider_configured
     ):
         return {}
     return {
         "requirement": requirement,
         "service_supports_reasoning": service_supports,
-        "provider_configured": provider_configured,
+        "provider_configured": reasoning_provider_configured,
     }
 
 
