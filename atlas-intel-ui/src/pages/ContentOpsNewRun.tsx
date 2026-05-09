@@ -902,23 +902,59 @@ function ExecutionStepSummary({
   if (output === 'signal_extraction') {
     return <SignalExtractionSummary result={result} />
   }
-  if (output !== 'email_campaign') return null
+  if (output === 'email_campaign') {
+    return <GeneratedAssetSummary result={result} generatedLabel="Drafts generated" />
+  }
+  if (['report', 'landing_page', 'sales_brief'].includes(output)) {
+    return <GeneratedAssetSummary result={result} generatedLabel="Assets generated" />
+  }
+  return null
+}
 
+function GeneratedAssetSummary({
+  result,
+  generatedLabel,
+}: {
+  result: Record<string, unknown>
+  generatedLabel: string
+}) {
+  const requested = typeof result.requested === 'number' ? result.requested : null
   const generated = typeof result.generated === 'number' ? result.generated : null
+  const skipped = typeof result.skipped === 'number' ? result.skipped : null
   const savedIds = Array.isArray(result.saved_ids)
     ? result.saved_ids.filter((id): id is string => typeof id === 'string')
     : []
   const errorCount = Array.isArray(result.errors) ? result.errors.length : null
 
-  if (generated === null && savedIds.length === 0 && errorCount === null) return null
+  if (
+    requested === null &&
+    generated === null &&
+    skipped === null &&
+    savedIds.length === 0 &&
+    errorCount === null
+  ) {
+    return null
+  }
 
   return (
     <div className="mb-3 space-y-2 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
       <div className="flex flex-wrap items-center gap-3">
+        {requested !== null && (
+          <span>
+            Requested:{' '}
+            <span className="font-medium text-slate-100">{requested}</span>
+          </span>
+        )}
         {generated !== null && (
           <span>
-            Drafts generated:{' '}
+            {generatedLabel}:{' '}
             <span className="font-medium text-slate-100">{generated}</span>
+          </span>
+        )}
+        {skipped !== null && (
+          <span>
+            Skipped:{' '}
+            <span className="font-medium text-slate-100">{skipped}</span>
           </span>
         )}
         {errorCount !== null && (
