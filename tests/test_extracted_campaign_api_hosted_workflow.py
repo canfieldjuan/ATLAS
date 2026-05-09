@@ -16,6 +16,7 @@ from extracted_content_pipeline.api.campaign_operations import (
     CampaignOperationsApiConfig,
     create_campaign_operations_router,
 )
+from extracted_content_pipeline.api.generated_assets import create_generated_asset_router
 from extracted_content_pipeline.campaign_ports import TenantScope
 
 
@@ -23,7 +24,25 @@ CAMPAIGN_ID = "00000000-0000-0000-0000-000000000011"
 
 
 class _Pool:
-    is_initialized = True
+    def __init__(
+        self,
+        rows: list[dict[str, Any]] | None = None,
+        *,
+        execute_result: str = "UPDATE 1",
+    ) -> None:
+        self.is_initialized = True
+        self.rows = list(rows or [])
+        self.execute_result = execute_result
+        self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetch(self, query, *args):
+        self.fetch_calls.append((str(query), args))
+        return self.rows
+
+    async def execute(self, query, *args):
+        self.execute_calls.append((str(query), args))
+        return self.execute_result
 
 
 class _Result:
@@ -110,6 +129,13 @@ def _host_client(
     )
     app.include_router(
         create_b2b_campaign_router(
+            pool_provider=pool_provider,
+            scope_provider=scope_provider,
+            dependencies=dependencies,
+        )
+    )
+    app.include_router(
+        create_generated_asset_router(
             pool_provider=pool_provider,
             scope_provider=scope_provider,
             dependencies=dependencies,
@@ -288,3 +314,72 @@ def test_hosted_campaign_api_workflow_keeps_host_auth_before_product_calls(
     assert response.status_code == 403
     assert response.json()["detail"] == "forbidden"
     assert calls == []
+
+
+def test_hosted_workflow_mounts_generated_asset_router_with_shared_ports() -> None:
+    pool = _Pool(rows=[{
+        "target_id": "vendor-acme",
+        "target_mode": "vendor_retention",
+        "report_type": "vendor_pressure",
+        "title": "Acme report",
+        "summary": "Pricing pressure dominates.",
+        "sections": [
+            {
+                "id": "summary",
+                "title": "Summary",
+                "body_markdown": "Body",
+            }
+        ],
+        "reference_ids": ["r1"],
+        "metadata": {"reasoning_context": {"wedge": "price_squeeze"}},
+    }])
+    scope = TenantScope(account_id="acct_1", user_id="user_1")
+    counters: dict[str, int] = {}
+
+    client = _host_client(
+        pool=pool,
+        sender=_Sender(),
+        llm=_LLM(),
+        skills=_Skills(),
+        reasoning=_Reasoning(),
+        scope=scope,
+        counters=counters,
+    )
+
+    list_response = client.get(
+        "/content-assets/report/drafts"
+        "?target_mode=vendor_retention&report_type=vendor_pressure&limit=5"
+    )
+    review_response = client.post(
+        "/content-assets/report/drafts/review",
+        json={"id": "report-uuid-1", "status": "approved"},
+    )
+
+    assert list_response.status_code == 200
+    assert review_response.status_code == 200
+    assert list_response.json()["rows"][0]["reasoning_wedge"] == "price_squeeze"
+    assert review_response.json() == {
+        "account_id": "acct_1",
+        "asset": "report",
+        "id": "report-uuid-1",
+        "status": "approved",
+        "updated": True,
+    }
+
+    fetch_query, fetch_args = pool.fetch_calls[0]
+    execute_query, execute_args = pool.execute_calls[0]
+    assert "FROM reports" in fetch_query
+    assert fetch_args == (
+        "acct_1",
+        "draft",
+        "vendor_retention",
+        "vendor_pressure",
+        5,
+    )
+    assert "UPDATE reports" in execute_query
+    assert execute_args == ("report-uuid-1", "approved", "acct_1")
+    assert counters == {
+        "auth": 2,
+        "scope": 2,
+        "pool": 2,
+    }
