@@ -344,6 +344,9 @@ UI rules:
   blocked-plan panel.
 - The step's `result` is runner-specific; render via per-output
   view adapters (see below).
+- The MVP execute view may render `result` as read-only JSON while
+  per-output adapters are still landing. It must still surface
+  step-level status, runner, and `error` inline.
 
 ### Signal extraction (special case)
 
