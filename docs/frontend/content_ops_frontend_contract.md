@@ -99,7 +99,7 @@ top-level `execution.{configured,configured_outputs}` /
 | `GenerationPlanStep` | `generation_plan.py:28-45` | `output`, `runner`, `status`, `config`, `reason` |
 | `GenerationPlan` | `generation_plan.py:48-65` | `can_execute`, `target_mode`, `limit`, `steps`, `preview` |
 | `ContentOpsExecutionServices` | `content_ops_execution.py:16-63` | `campaign`, `blog_post`, `report`, `landing_page`, `sales_brief`, `signal_extraction` (host-port bundle) |
-| `ContentOpsStepExecution` | `content_ops_execution.py:66-83` | `output`, `runner`, `status`, `result`, `error` |
+| `ContentOpsStepExecution` | `content_ops_execution.py:102-123` | `output`, `runner`, `status`, `result`, `error`, optional `reasoning` |
 | `ContentOpsExecutionResult` | `content_ops_execution.py:86-101` | `status`, `plan`, `steps`, `errors` |
 | `SignalExtractionConfig` | `signal_extraction.py:19-24` | `limit`, `max_text_chars` |
 | `SignalExtractionResult` | `signal_extraction.py:27-45` | `opportunities`, `warnings`, `target_mode` (+ `generated` property) |
@@ -551,7 +551,8 @@ Dumb components only. No fetch, no business rules.
 - Visual workflow builder
 - Model-selection UX
 - Reasoning Context Drawer until `/content-ops/execute` exposes an
-  explicit consumed-reasoning context or reasoning-audit result field.
+  explicit consumed-reasoning payload field. The current `reasoning`
+  audit only exposes readiness and `contexts_used` counts.
 - Collaboration / role-permission flows
 - CMS export
 - Approval workflow (no backend approval state on the control-surface
@@ -584,7 +585,7 @@ Every claim in this doc cites a real file:line at HEAD `a4020c1`:
 | `_step_for_output` per-runner shapes | `extracted_content_pipeline/generation_plan.py:165-266` |
 | `ContentOpsExecutionServices` | `extracted_content_pipeline/content_ops_execution.py:16-63` |
 | `ContentOpsExecutionResult` status logic | `extracted_content_pipeline/content_ops_execution.py:147-155` |
-| `ContentOpsStepExecution` | `extracted_content_pipeline/content_ops_execution.py:66-83` |
+| `ContentOpsStepExecution` | `extracted_content_pipeline/content_ops_execution.py:102-123` |
 | `SignalExtractionConfig` / `SignalExtractionResult` / `SignalExtractionService` | `extracted_content_pipeline/signal_extraction.py:19-81` |
 | `CampaignReasoningContext` (11 fields) | `extracted_content_pipeline/campaign_ports.py:53-99` |
 
