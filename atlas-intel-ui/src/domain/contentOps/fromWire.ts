@@ -192,13 +192,21 @@ export function fromWirePlan(wire: GenerationPlanResponse): GenerationPlan {
 export function fromWireStepExecution(
   wire: WireStepExecution,
 ): ContentOpsStepExecution {
-  return {
+  const step: ContentOpsStepExecution = {
     output: wire.output,
     runner: wire.runner,
     status: wire.status,
     result: { ...wire.result },
     error: wire.error,
   }
+  if (wire.reasoning) {
+    step.reasoning = {
+      requirement: wire.reasoning.requirement,
+      serviceSupportsReasoning: wire.reasoning.service_supports_reasoning,
+      providerConfigured: wire.reasoning.provider_configured,
+    }
+  }
+  return step
 }
 
 export function fromWireExecution(

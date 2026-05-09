@@ -122,12 +122,19 @@ export type ContentOpsExecutionStatus =
 
 export type ContentOpsStepStatus = 'completed' | 'failed' | 'skipped'
 
+export interface ContentOpsStepReasoningAudit {
+  requirement: ReasoningRequirement
+  serviceSupportsReasoning: boolean
+  providerConfigured: boolean
+}
+
 export interface ContentOpsStepExecution {
   output: string
   runner: string
   status: ContentOpsStepStatus
   result: Record<string, unknown>
   error: string
+  reasoning?: ContentOpsStepReasoningAudit
 }
 
 export interface ContentOpsExecutionResult {

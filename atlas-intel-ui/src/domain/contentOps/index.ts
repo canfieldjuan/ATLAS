@@ -12,6 +12,7 @@ export type {
   ContentOpsRequest,
   ContentOpsRun,
   ContentOpsStepExecution,
+  ContentOpsStepReasoningAudit,
   ContentOpsStepStatus,
   ControlSurfacePresetView,
   ControlSurfacePreview,

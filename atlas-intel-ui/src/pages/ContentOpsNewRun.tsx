@@ -17,6 +17,7 @@ import {
   type ContentOpsCatalog,
   type ContentOpsExecutionResult,
   type ContentOpsRequest,
+  type ContentOpsStepReasoningAudit,
   type ControlSurfacePreview,
   type GenerationPlan,
   type GenerationPlanStep,
@@ -866,6 +867,7 @@ function ExecutionPanel({ result }: { result: ContentOpsExecutionResult }) {
                 Error: {step.error}
               </div>
             )}
+            {step.reasoning && <ReasoningAuditBadge audit={step.reasoning} />}
             <ExecutionStepSummary output={step.output} result={step.result} />
             {Object.keys(step.result).length > 0 && (
               <details className="text-xs text-slate-400">
@@ -977,6 +979,33 @@ function GeneratedAssetSummary({
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function ReasoningAuditBadge({ audit }: { audit: ContentOpsStepReasoningAudit }) {
+  if (audit.requirement === 'absent' && !audit.serviceSupportsReasoning) {
+    return null
+  }
+  const ready = audit.providerConfigured && audit.serviceSupportsReasoning
+  const label = ready
+    ? 'Reasoning provider attached'
+    : audit.serviceSupportsReasoning
+      ? 'Reasoning provider absent'
+      : 'Reasoning seam unavailable'
+  return (
+    <div
+      className={clsx(
+        'mb-3 inline-flex max-w-full flex-wrap items-center gap-2 rounded-md border px-2 py-1 text-xs',
+        ready
+          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+          : 'border-slate-700 bg-slate-900/70 text-slate-400',
+      )}
+    >
+      <span>{label}</span>
+      <span className="font-mono text-[11px] opacity-80">
+        {audit.requirement}
+      </span>
     </div>
   )
 }
