@@ -21,6 +21,7 @@ type SubmitState =
   | { kind: 'idle' }
   | { kind: 'submitting' }
   | { kind: 'invalid_inputs_json'; message: string }
+  | { kind: 'invalid_max_cost'; message: string }
   | { kind: 'error'; message: string }
   | { kind: 'success'; preview: ControlSurfacePreview }
 
@@ -122,18 +123,31 @@ export default function ContentOpsNewRun() {
     }
 
     // Submit-time max-cost parse + normalization. The input is a string
-    // draft (so decimals like "0.50" can be typed); parse here and
-    // collapse 0 / negative / unparseable to null because the backend's
-    // pydantic validator declares max_cost_usd with gt=0
-    // (control_surfaces.py:88).
+    // draft (so decimals like "0.50" can be typed); parse here.
+    //
+    // Codex P2 fix: max-cost is a spend cap -- if the user typed a
+    // non-empty unparseable value like "$10", silently dropping the
+    // cap is unsafe (they think they capped spend; reality is no
+    // cap). Reject non-empty unparseable / non-positive input
+    // explicitly. Blank stays "no cap" per the backend's optional
+    // field semantics; the backend's pydantic validator (gt=0) means
+    // 0 / negative would also be rejected -- we surface the rejection
+    // here so the user sees a clear error rather than a silent strip.
     const trimmedMaxCost = maxCostUsdInput.trim()
-    const parsedMaxCost = trimmedMaxCost === '' ? null : Number(trimmedMaxCost)
-    const normalizedMaxCost =
-      parsedMaxCost === null ||
-      !Number.isFinite(parsedMaxCost) ||
-      parsedMaxCost <= 0
-        ? null
-        : parsedMaxCost
+    let normalizedMaxCost: number | null = null
+    if (trimmedMaxCost !== '') {
+      const parsed = Number(trimmedMaxCost)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        if (requestId !== submitRequestIdRef.current) return
+        setSubmitState({
+          kind: 'invalid_max_cost',
+          message:
+            'Max cost must be a positive number (e.g. 0.50). Leave blank for no cap.',
+        })
+        return
+      }
+      normalizedMaxCost = parsed
+    }
     const domainRequest: ContentOpsRequest = {
       ...request,
       inputs: parsedInputs,
@@ -402,6 +416,11 @@ export default function ContentOpsNewRun() {
       {submitState.kind === 'invalid_inputs_json' && (
         <div className="mt-6 rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
           Invalid inputs JSON: {submitState.message}
+        </div>
+      )}
+      {submitState.kind === 'invalid_max_cost' && (
+        <div className="mt-6 rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          Invalid max cost: {submitState.message}
         </div>
       )}
       {submitState.kind === 'error' && (
