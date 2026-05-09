@@ -220,6 +220,7 @@ export default function ContentOpsNewRun() {
     // Bump id so a stale plan response can't overwrite a newer one.
     const requestId = ++submitRequestIdRef.current
     setPlanState({ kind: 'submitting' })
+    setExecutionState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
 
     const parsed = buildDomainRequest()
     if (!parsed.ok) {
