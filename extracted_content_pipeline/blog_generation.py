@@ -10,7 +10,11 @@ from typing import Any
 
 from .blog_ports import BlogBlueprintRepository, BlogPostDraft, BlogPostRepository
 from .campaign_ports import LLMClient, LLMMessage, SkillStore, TenantScope
-from .services._parse_retry_helpers import accumulate_usage, clip_invalid_response
+from .services._parse_retry_helpers import (
+    accumulate_usage,
+    clip_invalid_response,
+    parse_attempt_limit,
+)
 from extracted_quality_gate.blog_pack import evaluate_blog_post
 from extracted_quality_gate.types import QualityInput, QualityPolicy
 
@@ -240,7 +244,7 @@ class BlogPostGenerationService:
         else:
             system_prompt = prompt_template
             base_user_prompt = f"Generate one blog post from this blueprint JSON:\n{blueprint_json}"
-        attempts = max(1, int(parse_retry_attempts or 0) + 1)
+        attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}
         for attempt_no in range(1, attempts + 1):
