@@ -409,13 +409,19 @@ When an output has `reasoning_requirement="optional_host_context"`
 AND the host has wired `CampaignReasoningContextProvider`
 (`extracted_content_pipeline/campaign_ports.py:171`), the runner
 threads the resulting `CampaignReasoningContext`
-(`campaign_ports.py:53-99`) into the prompt. The execution result
-typically surfaces this context in `step.result` for review.
+(`campaign_ports.py:53-99`) into the prompt.
 
 The catalog-level `reasoning.configured` flag tells the UI whether
 the host mounted a route-level reasoning provider. It is separate
 from each output's `reasoning_requirement`: an output can support
 reasoning even when the current host has not wired a provider.
+
+Important runtime boundary: `ContentOpsStepExecution.result` currently
+contains the per-service summary returned by `as_dict()` (counts,
+saved IDs, warnings, and errors). It does **not** reliably expose the
+consumed reasoning payload. A Reasoning Context Drawer should wait for
+a backend execution-result field that explicitly carries consumed
+reasoning context or a compact reasoning audit summary.
 
 ```ts
 interface CampaignReasoningContextView {
@@ -436,9 +442,9 @@ interface CampaignReasoningContextView {
 UI rules:
 - Show a "Reasoning context" badge next to each output card when
   `reasoningRequirement="optional_host_context"`.
-- Drawer state: `not_applicable` / `not_provided` / `available` /
-  `used`. "Used" appears once an execution completes and the step
-  result contains reasoning context.
+- Treat the badge as configuration readiness only. Do not infer that a
+  specific execution step used reasoning unless the backend returns an
+  explicit per-step reasoning audit field.
 
 ---
 
@@ -487,7 +493,6 @@ src/domain/
   `landing_page`, and `sales_brief`, all of which currently expose
   `requested`, `generated`, `skipped`, `saved_ids`, and `errors`
 - Signal extraction table (driven by `SignalExtractionResultView`)
-- Reasoning context drawer (driven by `CampaignReasoningContextView`)
 
 ### UI layer
 
@@ -521,10 +526,6 @@ Dumb components only. No fetch, no business rules.
    - When `signal_extraction` was in the run, render its result via
      the special-case view.
 
-5. **Reasoning Context Drawer**
-   - Per-step, side panel showing the reasoning context the runner
-     consumed (when surfaced in `step.result`).
-
 ---
 
 ## Out of scope for this contract
@@ -533,6 +534,8 @@ Dumb components only. No fetch, no business rules.
 - Full asset editor UX
 - Visual workflow builder
 - Model-selection UX
+- Reasoning Context Drawer until `/content-ops/execute` exposes an
+  explicit consumed-reasoning context or reasoning-audit result field.
 - Collaboration / role-permission flows
 - CMS export
 - Approval workflow (no backend approval state on the control-surface
