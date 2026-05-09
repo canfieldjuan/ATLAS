@@ -164,7 +164,7 @@ def test_output_catalog_states_reasoning_requirement():
     assert OUTPUT_CATALOG["report"].reasoning_requirement == "optional_host_context"
     assert OUTPUT_CATALOG["landing_page"].reasoning_requirement == "optional_host_context"
     assert OUTPUT_CATALOG["sales_brief"].reasoning_requirement == "optional_host_context"
-    assert OUTPUT_CATALOG["blog_post"].reasoning_requirement == "absent"
+    assert OUTPUT_CATALOG["blog_post"].reasoning_requirement == "optional_host_context"
     assert OUTPUT_CATALOG["signal_extraction"].reasoning_requirement == "absent"
 
 

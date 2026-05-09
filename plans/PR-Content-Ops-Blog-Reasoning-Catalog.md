@@ -47,10 +47,17 @@ Execution behavior is already wired through
 - Explicit per-step consumed-reasoning audit field in execution
   results.
 - Reasoning Context Drawer UI after that backend field exists.
+- Optional blog key-parity follow-up: `BlogPostGenerationService`
+  currently writes the normalized provider payload under
+  `reasoning_context`; landing pages also write
+  `campaign_reasoning_context`. Both reach the prompt today, but exact
+  key parity can be added if downstream tooling later inspects the
+  second key directly.
 
 ## Verification
 
 - `python -m pytest tests/test_extracted_content_control_surface_api.py`
+- `python -m pytest tests/test_extracted_content_control_surfaces.py`
 - `git diff --check`
 
 ## Estimated diff size
