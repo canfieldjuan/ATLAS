@@ -60,6 +60,24 @@ class _OpportunityAssetService:
         return result
 
 
+class _ReasoningAwareOpportunityAssetService(_OpportunityAssetService):
+    def __init__(self, name: str, provider: Any | None = None) -> None:
+        super().__init__(name)
+        self.provider = provider
+
+    def with_reasoning_context(
+        self,
+        provider: Any | None,
+    ) -> "_ReasoningAwareOpportunityAssetService":
+        return _ReasoningAwareOpportunityAssetService(self.name, provider=provider)
+
+    async def generate(self, **kwargs: Any) -> dict[str, Any]:
+        result = await super().generate(**kwargs)
+        if self.provider is not None:
+            result["reasoning_contexts_used"] = int(result.get("generated") or 0)
+        return result
+
+
 class _LandingPageAssetService:
     async def generate(
         self,
@@ -77,6 +95,23 @@ class _LandingPageAssetService:
         }
         if "quality_gates_enabled" in extras:
             result["quality_gates_enabled"] = extras["quality_gates_enabled"]
+        return result
+
+
+class _ReasoningAwareLandingPageAssetService(_LandingPageAssetService):
+    def __init__(self, provider: Any | None = None) -> None:
+        self.provider = provider
+
+    def with_reasoning_context(
+        self,
+        provider: Any | None,
+    ) -> "_ReasoningAwareLandingPageAssetService":
+        return _ReasoningAwareLandingPageAssetService(provider=provider)
+
+    async def generate(self, **kwargs: Any) -> dict[str, Any]:
+        result = await super().generate(**kwargs)
+        if self.provider is not None:
+            result["reasoning_contexts_used"] = int(result.get("generated") or 0)
         return result
 
 
@@ -124,6 +159,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Omit to use the service default (1200)."
         ),
     )
+    parser.add_argument(
+        "--with-reasoning",
+        action="store_true",
+        help=(
+            "Attach a fake host reasoning provider to reasoning-aware "
+            "generated-asset services."
+        ),
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -163,18 +206,35 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def _services() -> ContentOpsExecutionServices:
-    return ContentOpsExecutionServices(
-        campaign=_OpportunityAssetService("email_campaign"),
-        blog_post=_OpportunityAssetService("blog_post"),
-        report=_OpportunityAssetService("report"),
-        landing_page=_LandingPageAssetService(),
-        sales_brief=_OpportunityAssetService("sales_brief"),
+def _services(*, reasoning: bool = False) -> ContentOpsExecutionServices:
+    opportunity_service = (
+        _ReasoningAwareOpportunityAssetService
+        if reasoning
+        else _OpportunityAssetService
+    )
+    landing_page: Any = (
+        _ReasoningAwareLandingPageAssetService()
+        if reasoning
+        else _LandingPageAssetService()
+    )
+    services = ContentOpsExecutionServices(
+        campaign=opportunity_service("email_campaign"),
+        blog_post=opportunity_service("blog_post"),
+        report=opportunity_service("report"),
+        landing_page=landing_page,
+        sales_brief=opportunity_service("sales_brief"),
         signal_extraction=SignalExtractionService(),
     )
+    if reasoning:
+        services = services.with_reasoning_context(object())
+    return services
 
 
-def _execution_errors(result: Mapping[str, Any]) -> list[str]:
+def _execution_errors(
+    result: Mapping[str, Any],
+    *,
+    require_reasoning_usage: bool = False,
+) -> list[str]:
     if result.get("status") != "completed":
         return [f"expected completed status, got {result.get('status')!r}"]
     steps = result.get("steps")
@@ -190,6 +250,8 @@ def _execution_errors(result: Mapping[str, Any]) -> list[str]:
         result_payload = step.get("result")
         if not _step_has_output_payload(step, result_payload):
             errors.append(f"step {index} missing output payload")
+        if require_reasoning_usage and step.get("output") != "signal_extraction":
+            errors.extend(_reasoning_usage_errors(index, step, result_payload))
     return errors
 
 
@@ -204,13 +266,47 @@ def _step_has_output_payload(
     return bool(result_payload.get("saved_ids"))
 
 
+def _reasoning_usage_errors(
+    index: int,
+    step: Mapping[str, Any],
+    result_payload: Any,
+) -> list[str]:
+    errors: list[str] = []
+    result_count = (
+        result_payload.get("reasoning_contexts_used")
+        if isinstance(result_payload, Mapping)
+        else None
+    )
+    reasoning = step.get("reasoning")
+    audit_count = (
+        reasoning.get("contexts_used")
+        if isinstance(reasoning, Mapping)
+        else None
+    )
+    if not isinstance(result_count, int) or isinstance(result_count, bool):
+        errors.append(f"step {index} missing result.reasoning_contexts_used")
+    if not isinstance(audit_count, int) or isinstance(audit_count, bool):
+        errors.append(f"step {index} missing reasoning.contexts_used")
+    if isinstance(result_count, int) and isinstance(audit_count, int):
+        if not isinstance(result_count, bool) and not isinstance(audit_count, bool):
+            if result_count != audit_count:
+                errors.append(
+                    f"step {index} reasoning usage mismatch: "
+                    f"result={result_count} audit={audit_count}"
+                )
+    return errors
+
+
 async def _main() -> int:
     args = _parse_args()
     result = await execute_content_ops_from_mapping(
         _payload(args),
-        services=_services(),
+        services=_services(reasoning=bool(args.with_reasoning)),
     )
-    errors = _execution_errors(result)
+    errors = _execution_errors(
+        result,
+        require_reasoning_usage=bool(args.with_reasoning),
+    )
     if args.json:
         if errors:
             result = dict(result)
