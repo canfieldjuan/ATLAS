@@ -1077,6 +1077,11 @@ class BatchView(BaseModel):
     updated_at: str
     submitted_at: Optional[str] = None
     completed_at: Optional[str] = None
+    # PR-D6g: count of items that were satisfied from the customer's
+    # exact cache at submit time and never sent to Anthropic. The
+    # underlying llm_usage rows (zero tokens, cache_hit=true with
+    # savings metadata) drive cache_savings_usd on /api/v1/llm/usage.
+    cache_prefiltered_items: int = 0
 
 
 def _batch_record_to_view(record) -> BatchView:
@@ -1102,6 +1107,7 @@ def _batch_record_to_view(record) -> BatchView:
         updated_at=_fmt(record.updated_at) or "",
         submitted_at=_fmt(record.submitted_at),
         completed_at=_fmt(record.completed_at),
+        cache_prefiltered_items=record.cache_prefiltered_items,
     )
 
 

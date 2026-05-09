@@ -121,6 +121,12 @@ class CustomerBatchRecord:
     # retry attempt. The refresh path skips retry when this is
     # within the cooldown window, preventing poll-storms.
     last_usage_retry_at: Optional[datetime] = None
+    # PR-D6g: count of items satisfied from the customer's exact
+    # cache at submit time. These items never reach Anthropic; the
+    # underlying llm_usage rows (zero tokens, cache_hit=true with
+    # savings metadata) drive cache_savings_usd on /usage. Defaults
+    # to 0 -- back-compat with rows from before migration 323.
+    cache_prefiltered_items: int = 0
 
 
 def _row_to_record(row: Any) -> CustomerBatchRecord:
@@ -155,6 +161,13 @@ def _row_to_record(row: Any) -> CustomerBatchRecord:
             row["last_usage_retry_at"]
             if "last_usage_retry_at" in row.keys()
             else None
+        ),
+        # PR-D6g migration 323. Defensive .get pattern so mocks /
+        # rows from before the migration still produce a record.
+        cache_prefiltered_items=(
+            int(row["cache_prefiltered_items"] or 0)
+            if "cache_prefiltered_items" in row.keys()
+            else 0
         ),
     )
 
@@ -205,7 +218,8 @@ async def submit_customer_batch(
                    status, total_items, completed_items, failed_items,
                    error_text, created_at, updated_at, submitted_at,
                    completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
             FROM llm_gateway_batches
             WHERE account_id = $1 AND idempotency_key = $2
             """,
@@ -278,7 +292,8 @@ async def submit_customer_batch(
                           status, total_items, completed_items, failed_items,
                           error_text, created_at, updated_at, submitted_at,
                           completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
                 """,
                 existing["id"],
                 account_id,
@@ -302,7 +317,8 @@ async def submit_customer_batch(
                            status, total_items, completed_items, failed_items,
                            error_text, created_at, updated_at, submitted_at,
                            completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
                     FROM llm_gateway_batches
                     WHERE id = $1 AND account_id = $2
                     """,
@@ -377,7 +393,8 @@ async def submit_customer_batch(
                               status, total_items, completed_items, failed_items,
                               error_text, created_at, updated_at, submitted_at,
                               completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
                     """,
                     account_id,
                     model,
@@ -395,7 +412,8 @@ async def submit_customer_batch(
                        status, total_items, completed_items, failed_items,
                        error_text, created_at, updated_at, submitted_at,
                        completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
                 FROM llm_gateway_batches
                 WHERE account_id = $1 AND idempotency_key = $2
                 """,
@@ -486,7 +504,8 @@ async def submit_customer_batch(
                       status, total_items, completed_items, failed_items,
                       error_text, created_at, updated_at, submitted_at,
                       completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
             """,
             row["id"],
             f"Anthropic batch submit failed: {exc}",
@@ -514,7 +533,8 @@ async def submit_customer_batch(
                   status, total_items, completed_items, failed_items,
                   error_text, created_at, updated_at, submitted_at,
                   completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
         """,
         row["id"],
         str(provider_batch_id) if provider_batch_id else None,
@@ -542,7 +562,8 @@ async def get_customer_batch(
                status, total_items, completed_items, failed_items,
                error_text, created_at, updated_at, submitted_at,
                completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
         FROM llm_gateway_batches
         WHERE id = $1 AND account_id = $2
         """,
@@ -689,7 +710,8 @@ async def refresh_customer_batch_status(
                   status, total_items, completed_items, failed_items,
                   error_text, created_at, updated_at, submitted_at,
                   completed_at, usage_tracked,
-                          anthropic_call_initiated_at, last_usage_retry_at
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
         """,
         batch_id,
         new_status,
