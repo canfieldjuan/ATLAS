@@ -77,6 +77,7 @@ class LandingPageGenerationResult:
     requested: int
     generated: int
     skipped: int
+    reasoning_contexts_used: int = 0
     saved_ids: tuple[str, ...] = ()
     errors: tuple[Mapping[str, Any], ...] = ()
 
@@ -85,6 +86,7 @@ class LandingPageGenerationResult:
             "requested": self.requested,
             "generated": self.generated,
             "skipped": self.skipped,
+            "reasoning_contexts_used": self.reasoning_contexts_used,
             "saved_ids": list(self.saved_ids),
             "errors": list(self.errors),
         }
@@ -151,6 +153,10 @@ def parse_landing_page_response(text: str) -> dict[str, Any] | None:
             "sections": coerced_sections,
         }
     return None
+
+
+def _has_prompt_reasoning_context(payload: Mapping[str, Any]) -> bool:
+    return isinstance(payload.get("campaign_reasoning_context"), Mapping)
 
 
 def _landing_page_user_prompt(prior_invalid_response: str = "") -> str:
@@ -308,6 +314,9 @@ class LandingPageGenerationService:
             requested=1,
             generated=1,
             skipped=0,
+            reasoning_contexts_used=(
+                1 if _has_prompt_reasoning_context(campaign_payload) else 0
+            ),
             saved_ids=saved_ids,
         )
 

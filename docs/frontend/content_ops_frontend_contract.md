@@ -363,7 +363,8 @@ UI rules:
   payload for the common draft-generation case.
 - `blog_post`, `report`, `landing_page`, and `sales_brief` should
   summarize their shared generated-asset result shape: `requested`,
-  `generated`, `skipped`, `saved_ids`, and `errors.length`.
+  `generated`, `skipped`, `reasoning_contexts_used` when present,
+  `saved_ids`, and `errors.length`.
 - `signal_extraction` should summarize `generated`, `target_mode`,
   `warnings.length`, and a short list of extracted opportunities
   before the raw JSON block.

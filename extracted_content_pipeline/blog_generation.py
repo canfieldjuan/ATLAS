@@ -57,6 +57,7 @@ class BlogPostGenerationResult:
     requested: int
     generated: int
     skipped: int
+    reasoning_contexts_used: int = 0
     saved_ids: tuple[str, ...] = ()
     errors: tuple[Mapping[str, Any], ...] = ()
 
@@ -65,6 +66,7 @@ class BlogPostGenerationResult:
             "requested": self.requested,
             "generated": self.generated,
             "skipped": self.skipped,
+            "reasoning_contexts_used": self.reasoning_contexts_used,
             "saved_ids": list(self.saved_ids),
             "errors": list(self.errors),
         }
@@ -107,6 +109,10 @@ def parse_blog_post_response(text: str) -> dict[str, Any] | None:
             content = str(decoded.get("content") or "").strip()
             return {**dict(decoded), "title": title, "content": content}
     return None
+
+
+def _has_prompt_reasoning_context(payload: Mapping[str, Any]) -> bool:
+    return isinstance(payload.get("campaign_reasoning_context"), Mapping)
 
 
 def _blog_generation_user_prompt(
@@ -222,6 +228,7 @@ class BlogPostGenerationService:
         drafts: list[BlogPostDraft] = []
         errors: list[dict[str, Any]] = []
         skipped = 0
+        reasoning_contexts_used = 0
         for row in rows:
             blueprint = await self._blueprint_with_reasoning_context(
                 scope=scope,
@@ -260,6 +267,8 @@ class BlogPostGenerationService:
                     "blockers": quality["blockers"],
                 })
                 continue
+            if _has_prompt_reasoning_context(blueprint):
+                reasoning_contexts_used += 1
             drafts.append(self._build_draft(parsed, blueprint=blueprint))
 
         saved_ids: tuple[str, ...] = ()
@@ -272,6 +281,7 @@ class BlogPostGenerationService:
             requested=len(rows),
             generated=len(drafts),
             skipped=skipped,
+            reasoning_contexts_used=reasoning_contexts_used,
             saved_ids=saved_ids,
             errors=tuple(errors),
         )
