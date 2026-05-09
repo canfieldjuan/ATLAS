@@ -139,6 +139,56 @@ async def test_describe_control_surfaces_ignores_invalid_execution_provider_resu
     assert outputs["email_campaign"]["can_execute"] is False
 
 
+# -----------------------
+# PR-Describe-Control-Surfaces-Cache: static portion is cached at import.
+# Verify two consecutive calls return mutually independent dicts (no
+# aliasing into the cache) and that the cache is computed once.
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_describe_control_surfaces_returns_independent_dict_per_call():
+    """Per-call mutation must not leak into the next call's response."""
+
+    router = create_content_ops_control_surface_router()
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+
+    first = await route.endpoint()
+    first["outputs"][0]["label"] = "MUTATED"
+    first["outputs"][0]["required_inputs"].append("injected_field")
+    first["presets"][0]["outputs"].append("injected_output")
+    first["ingestion_profiles"].append("injected_profile")
+
+    second = await route.endpoint()
+    assert second["outputs"][0]["label"] != "MUTATED"
+    assert "injected_field" not in second["outputs"][0]["required_inputs"]
+    assert "injected_output" not in second["presets"][0]["outputs"]
+    assert "injected_profile" not in second["ingestion_profiles"]
+
+
+@pytest.mark.asyncio
+async def test_describe_control_surfaces_static_cache_is_not_rebuilt_per_request(monkeypatch):
+    """``_build_static_catalog_payload`` is invoked at import, not per
+    request. The spy is installed after import, so this asserts the
+    builder is not re-invoked per request (not the import-time call)."""
+
+    call_count = {"n": 0}
+    original = api_module._build_static_catalog_payload
+
+    def _spy() -> object:
+        call_count["n"] += 1
+        return original()
+
+    monkeypatch.setattr(api_module, "_build_static_catalog_payload", _spy)
+
+    router = create_content_ops_control_surface_router()
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    await route.endpoint()
+    await route.endpoint()
+
+    assert call_count["n"] == 0
+
+
 @pytest.mark.asyncio
 async def test_preview_generation_route_returns_preflight_plan():
     router = create_content_ops_control_surface_router(
