@@ -45,6 +45,7 @@ pytest \
   tests/test_extracted_campaign_postgres_generation.py \
   tests/test_extracted_campaign_postgres_export.py \
   tests/test_extracted_content_asset_export_cli.py \
+  tests/test_extracted_content_asset_review_cli.py \
   tests/test_extracted_report_export.py \
   tests/test_extracted_landing_page_export.py \
   tests/test_extracted_sales_brief_export.py \
