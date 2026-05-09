@@ -595,6 +595,7 @@ async def test_generate_no_reasoning_provider_passes_blueprint_unchanged() -> No
 
     system_prompt = llm.calls[0]["messages"][0].content
     assert "reasoning_context" not in system_prompt
+    assert "campaign_reasoning_context" not in system_prompt
 
 
 @pytest.mark.asyncio
@@ -631,6 +632,7 @@ async def test_generate_with_reasoning_provider_merges_context_into_blueprint() 
     # LLM saw the merged blueprint JSON.
     system_prompt = llm.calls[0]["messages"][0].content
     assert "reasoning_context" in system_prompt
+    assert "campaign_reasoning_context" in system_prompt
     assert "Renewal pricing rose 22 percent" in system_prompt
 
     # Draft metadata captured reasoning signal.
@@ -656,6 +658,7 @@ async def test_generate_with_reasoning_provider_returning_empty_is_noop() -> Non
     assert reasoning.calls  # the provider was consulted
     system_prompt = llm.calls[0]["messages"][0].content
     assert "reasoning_context" not in system_prompt
+    assert "campaign_reasoning_context" not in system_prompt
 
     drafts = blog_posts.saved[0]["drafts"]
     assert drafts

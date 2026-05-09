@@ -299,10 +299,10 @@ class BlogPostGenerationService:
         if not provided_context.has_content():
             return blueprint
         enriched = dict(blueprint)
-        enriched["reasoning_context"] = campaign_reasoning_context_payload(
-            provided_context
-        )
+        reasoning_payload = campaign_reasoning_context_payload(provided_context)
         enriched.update(campaign_reasoning_context_metadata(provided_context))
+        enriched["reasoning_context"] = reasoning_payload
+        enriched["campaign_reasoning_context"] = reasoning_payload
         return enriched
 
     async def _generate_one(
