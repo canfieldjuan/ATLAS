@@ -138,13 +138,6 @@ def _campaign_generation_user_prompt(
 @dataclass(frozen=True)
 class CampaignGenerationConfig:
     skill_name: str = "digest/b2b_campaign_generation"
-    # Legacy single-channel field. Hosts should construct with the
-    # ``channels`` tuple instead. ``_channels()`` keeps a fallback
-    # (``self._config.channels or (self._config.channel,)``) so
-    # existing hosts keep working, but new code should not set
-    # ``channel=``. Removal is queued for a future versioned breaking-
-    # change slice -- see plans/PR-Campaign-Channel-Legacy-Cleanup.md.
-    channel: str = "email"
     limit: int = 20
     max_tokens: int = 1200
     temperature: float = 0.4
@@ -419,7 +412,7 @@ class CampaignGenerationService:
             override_channels = _normalize_channels(override)
             if override_channels:
                 return override_channels
-        raw_value = self._config.channels or (self._config.channel,)
+        raw_value = self._config.channels
         if isinstance(raw_value, str):
             raw: Sequence[str] = raw_value.split(",")
         else:
