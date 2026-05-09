@@ -45,7 +45,19 @@ def _draft_row(**overrides):
         "cta": "Review plan",
         "llm_model": "offline",
         "created_at": datetime(2026, 5, 4, tzinfo=timezone.utc),
-        "metadata": {"scope": {"account_id": "acct_1"}},
+        "metadata": {
+            "scope": {"account_id": "acct_1"},
+            "generation_usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+            "generation_parse_attempts": 2,
+            "reasoning_context": {
+                "wedge": "price_squeeze",
+                "confidence": "high",
+            },
+        },
     }
     row.update(overrides)
     return row
@@ -147,7 +159,10 @@ def test_b2b_campaign_router_exports_csv() -> None:
         response.headers["content-disposition"]
     )
     assert "company_name,vendor_name" in response.text
+    assert "generation_input_tokens,generation_output_tokens" in response.text
+    assert "reasoning_context_used,reasoning_wedge,reasoning_confidence" in response.text
     assert "Acme" in response.text
+    assert "price_squeeze" in response.text
 
 
 def test_b2b_campaign_router_exports_json_when_requested() -> None:
@@ -156,7 +171,15 @@ def test_b2b_campaign_router_exports_json_when_requested() -> None:
     response = _client(pool).get("/b2b/campaigns/drafts/export?format=json")
 
     assert response.status_code == 200
-    assert response.json()["rows"][0]["vendor_name"] == "LegacyCRM"
+    row = response.json()["rows"][0]
+    assert row["vendor_name"] == "LegacyCRM"
+    assert row["generation_input_tokens"] == 10
+    assert row["generation_output_tokens"] == 5
+    assert row["generation_total_tokens"] == 15
+    assert row["generation_parse_attempts"] == 2
+    assert row["reasoning_context_used"] is True
+    assert row["reasoning_wedge"] == "price_squeeze"
+    assert row["reasoning_confidence"] == "high"
 
 
 def test_b2b_campaign_router_rejects_unknown_export_format() -> None:

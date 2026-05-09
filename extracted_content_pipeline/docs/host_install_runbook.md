@@ -439,6 +439,10 @@ The router exposes:
 | `GET` | `/b2b/campaigns/drafts/export` | Export scoped drafts as CSV or JSON. |
 | `POST` | `/b2b/campaigns/drafts/review` | Approve, queue, cancel, or expire selected drafts. |
 
+The mounted list/export routes use the same export helper as the CLI, so JSON
+and CSV responses include the generation-usage and reasoning summary fields
+documented above.
+
 Amazon seller installs can mount the seller-specific router:
 
 ```python
