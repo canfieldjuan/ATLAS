@@ -49,6 +49,7 @@ from .services._parse_retry_helpers import (
     accumulate_usage,
     clip_invalid_response,
     parse_attempt_limit,
+    retry_prompt_with_invalid_response,
 )
 from extracted_quality_gate.report_pack import evaluate_report
 from extracted_quality_gate.types import QualityInput
@@ -146,14 +147,14 @@ def parse_report_response(text: str) -> dict[str, Any] | None:
 
 def _report_user_prompt(prior_invalid_response: str = "") -> str:
     prompt = "Generate one structured report from the opportunity above."
-    if prior_invalid_response:
-        return (
-            f"{prompt}\n\n"
+    return retry_prompt_with_invalid_response(
+        prompt,
+        prior_invalid_response=prior_invalid_response,
+        instruction=(
             "The previous response could not be parsed as the required JSON object. "
-            "Return one JSON object with non-empty title, summary, and sections. "
-            f"Previous response excerpt:\n{prior_invalid_response}"
-        )
-    return prompt
+            "Return one JSON object with non-empty title, summary, and sections."
+        ),
+    )
 
 
 class ReportGenerationService:

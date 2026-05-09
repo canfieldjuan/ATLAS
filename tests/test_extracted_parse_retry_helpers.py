@@ -4,6 +4,7 @@ from extracted_content_pipeline.services._parse_retry_helpers import (
     accumulate_usage,
     clip_invalid_response,
     parse_attempt_limit,
+    retry_prompt_with_invalid_response,
 )
 
 
@@ -23,6 +24,22 @@ def test_parse_attempt_limit_counts_initial_attempt_plus_retries() -> None:
 
 def test_parse_attempt_limit_clamps_negative_values_to_initial_attempt() -> None:
     assert parse_attempt_limit(-3) == 1
+
+
+def test_retry_prompt_with_invalid_response_returns_base_without_prior() -> None:
+    assert retry_prompt_with_invalid_response(
+        "Base prompt",
+        prior_invalid_response="",
+        instruction="Return JSON.",
+    ) == "Base prompt"
+
+
+def test_retry_prompt_with_invalid_response_appends_instruction_and_excerpt() -> None:
+    assert retry_prompt_with_invalid_response(
+        "Base prompt",
+        prior_invalid_response="{bad",
+        instruction="Return JSON.",
+    ) == "Base prompt\n\nReturn JSON. Previous response excerpt:\n{bad"
 
 
 def test_accumulate_usage_adds_numeric_fields() -> None:

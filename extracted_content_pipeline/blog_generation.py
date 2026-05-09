@@ -14,6 +14,7 @@ from .services._parse_retry_helpers import (
     accumulate_usage,
     clip_invalid_response,
     parse_attempt_limit,
+    retry_prompt_with_invalid_response,
 )
 from extracted_quality_gate.blog_pack import evaluate_blog_post
 from extracted_quality_gate.types import QualityInput, QualityPolicy
@@ -95,14 +96,14 @@ def _blog_generation_user_prompt(
     base_prompt: str,
     prior_invalid_response: str = "",
 ) -> str:
-    if prior_invalid_response:
-        return (
-            f"{base_prompt}\n\n"
+    return retry_prompt_with_invalid_response(
+        base_prompt,
+        prior_invalid_response=prior_invalid_response,
+        instruction=(
             "The previous response could not be parsed as the required JSON object. "
-            "Return one JSON object with a non-empty title. "
-            f"Previous response excerpt:\n{prior_invalid_response}"
-        )
-    return base_prompt
+            "Return one JSON object with a non-empty title."
+        ),
+    )
 
 
 class BlogPostGenerationService:

@@ -50,6 +50,7 @@ from .services._parse_retry_helpers import (
     accumulate_usage,
     clip_invalid_response,
     parse_attempt_limit,
+    retry_prompt_with_invalid_response,
 )
 from extracted_quality_gate.landing_page_pack import evaluate_landing_page
 from extracted_quality_gate.types import QualityInput, QualityPolicy
@@ -154,14 +155,14 @@ def parse_landing_page_response(text: str) -> dict[str, Any] | None:
 
 def _landing_page_user_prompt(prior_invalid_response: str = "") -> str:
     prompt = "Generate one landing page from the marketing campaign above."
-    if prior_invalid_response:
-        return (
-            f"{prompt}\n\n"
+    return retry_prompt_with_invalid_response(
+        prompt,
+        prior_invalid_response=prior_invalid_response,
+        instruction=(
             "The previous response could not be parsed as the required JSON object. "
-            "Return one JSON object with non-empty title and sections. "
-            f"Previous response excerpt:\n{prior_invalid_response}"
-        )
-    return prompt
+            "Return one JSON object with non-empty title and sections."
+        ),
+    )
 
 
 class LandingPageGenerationService:
