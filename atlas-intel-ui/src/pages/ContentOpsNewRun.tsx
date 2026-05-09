@@ -81,6 +81,7 @@ export default function ContentOpsNewRun() {
       </div>
     )
   }
+  const reasoningConfigured = catalog.reasoning.configured
 
   // Codex P2 fix: any form mutation invalidates a stale preview verdict
   // and plan panel so the user never sees a "Can run" badge or plan
@@ -228,7 +229,7 @@ export default function ContentOpsNewRun() {
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-100">Content Ops · New Run</h1>
           <p className="mt-1 text-sm text-slate-400">
@@ -236,15 +237,27 @@ export default function ContentOpsNewRun() {
             you commit.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={refresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh catalog
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={clsx(
+              'rounded-full border px-3 py-1 text-xs font-medium',
+              reasoningConfigured
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                : 'border-slate-700 bg-slate-900 text-slate-400',
+            )}
+          >
+            Reasoning {reasoningConfigured ? 'ready' : 'not configured'}
+          </span>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={refreshing}
+            className="flex items-center gap-2 rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh catalog
+          </button>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-8">
@@ -315,6 +328,18 @@ export default function ContentOpsNewRun() {
                       {!output.implemented && (
                         <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400">
                           coming soon
+                        </span>
+                      )}
+                      {output.reasoningRequirement !== 'absent' && (
+                        <span
+                          className={clsx(
+                            'rounded px-1.5 py-0.5 text-[10px]',
+                            reasoningConfigured
+                              ? 'bg-emerald-500/10 text-emerald-300'
+                              : 'bg-slate-700 text-slate-400',
+                          )}
+                        >
+                          reasoning {reasoningConfigured ? 'ready' : 'unavailable'}
                         </span>
                       )}
                     </div>

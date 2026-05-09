@@ -226,6 +226,11 @@ UI rules:
   injected the runner).
 - `implemented=false` ⇒ show "Coming soon" badge; user can still
   preview if they tick `allowUnimplementedOutputs`.
+- Show catalog-level `reasoning.configured` near the run controls.
+  For outputs whose `reasoningRequirement` is not `"absent"`, show
+  whether host reasoning context is ready or unavailable. This is
+  informational only; optional host reasoning does not block preview
+  or planning.
 
 ### Request
 
