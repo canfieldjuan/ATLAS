@@ -113,6 +113,7 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         implemented=True,
         estimated_unit_cost_usd=0.45,
         required_inputs=("topic",),
+        reasoning_requirement="optional_host_context",
     ),
     "report": OutputDefinition(
         id="report",
