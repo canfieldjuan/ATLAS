@@ -1,0 +1,22 @@
+{
+  "can_run": true,
+  "outputs": [
+    "email_campaign"
+  ],
+  "estimated_cost_usd": 0.36,
+  "missing_inputs": [],
+  "blocked_outputs": [],
+  "warnings": [],
+  "normalized_request": {
+    "target_mode": "vendor_retention",
+    "preset": null,
+    "outputs": [
+      "email_campaign"
+    ],
+    "limit": 1,
+    "max_cost_usd": null,
+    "ingestion_profile": "domain_specific",
+    "require_quality_gates": true,
+    "allow_unimplemented_outputs": false
+  }
+}
