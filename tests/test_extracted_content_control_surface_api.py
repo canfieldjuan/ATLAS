@@ -61,7 +61,7 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert outputs["email_campaign"]["default_parse_retry_attempts"] == 1
     assert outputs["email_campaign"]["estimated_retry_adjusted_unit_cost_usd"] == 0.36
     assert outputs["email_campaign"]["reasoning_requirement"] == "optional_host_context"
-    assert outputs["blog_post"]["reasoning_requirement"] == "absent"
+    assert outputs["blog_post"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["signal_extraction"]["reasoning_requirement"] == "absent"
     assert payload["execution"] == {"configured": False, "configured_outputs": []}
     assert payload["reasoning"] == {"configured": False}

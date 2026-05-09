@@ -127,8 +127,8 @@ but the values used in `OUTPUT_CATALOG` are:
   without it
 
 Outputs currently flagged `optional_host_context`: `email_campaign`,
-`report`, `landing_page`, `sales_brief`. Outputs flagged `absent`:
-`blog_post`, `signal_extraction`.
+`blog_post`, `report`, `landing_page`, `sales_brief`. Outputs flagged
+`absent`: `signal_extraction`.
 
 ### Execution status vocabulary
 
