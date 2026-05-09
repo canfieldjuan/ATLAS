@@ -50,6 +50,9 @@
 - `landing_page_export` provides a read-only draft export path over generated
   landing pages so hosts can review JSON/CSV outputs without handwritten SQL or
   a mounted landing page API.
+- `sales_brief_export` provides a read-only draft export path over generated
+  sales briefs so hosts can review JSON/CSV outputs without handwritten SQL or
+  a mounted sales brief API.
 - `scripts/smoke_extracted_content_pipeline_host.py` provides a one-command
   offline host smoke test that validates customer-data normalization through
   usable generated draft shape without a database, provider credentials, or
