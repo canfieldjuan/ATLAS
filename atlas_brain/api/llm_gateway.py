@@ -174,6 +174,13 @@ class ChatResponse(BaseModel):
     model: str
     response: str
     usage: ChatUsage
+    # PR-D6e: explicit signal for cache hit. True when the response
+    # came from the exact-text cache (lookup_cached_text returned a
+    # row); False on a normal provider call. Customers previously
+    # had to infer this from usage = 0/0/0, which was ambiguous if
+    # they actually sent zero-token input. Defaults to False so
+    # existing clients that ignore the field are unaffected.
+    cached: bool = False
 
 
 class UsageBreakdownRow(BaseModel):
@@ -422,6 +429,7 @@ async def chat(
                 output_tokens=0,
                 total_tokens=0,
             ),
+            cached=True,
         )
 
     # Capture full response (text + usage) via direct SDK call.
@@ -521,6 +529,7 @@ async def chat(
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
         ),
+        cached=False,
     )
 
 
