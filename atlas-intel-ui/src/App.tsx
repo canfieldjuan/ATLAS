@@ -31,6 +31,7 @@ const CompetitorDisplacement = lazy(() => import('./pages/b2b/CompetitorDisplace
 const B2BReports = lazy(() => import('./pages/b2b/B2BReports'))
 const B2BReviews = lazy(() => import('./pages/b2b/B2BReviews'))
 const B2BCampaigns = lazy(() => import('./pages/b2b/B2BCampaigns'))
+const ContentOpsNewRun = lazy(() => import('./pages/ContentOpsNewRun'))
 
 function renderLazyRoute(Component: ComponentType) {
   return (
@@ -83,6 +84,9 @@ export default function App() {
                     <Route path="/b2b/reports" element={renderLazyRoute(B2BReports)} />
                     <Route path="/b2b/reviews" element={renderLazyRoute(B2BReviews)} />
                     <Route path="/b2b/campaigns" element={renderLazyRoute(B2BCampaigns)} />
+
+                    {/* Content Ops routes */}
+                    <Route path="/content-ops/new" element={renderLazyRoute(ContentOpsNewRun)} />
                   </Routes>
                 </Layout>
               </ProtectedRoute>
