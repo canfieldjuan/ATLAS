@@ -103,7 +103,19 @@ def _report_config_for_request(request: ContentOpsRequest) -> ReportGenerationCo
 
 
 def _landing_page_config_for_request(request: ContentOpsRequest) -> LandingPageGenerationConfig:
-    del request
+    """Return defaults; the request is intentionally not consumed.
+
+    Other ``_*_config_for_request`` helpers thread ``request.inputs``
+    or ``request.limit`` into their config. Landing pages are
+    per-campaign single-shot (one MarketingCampaign in, one draft
+    out) so ``limit`` doesn't apply, and per-call inputs land on the
+    ``MarketingCampaign`` payload built by
+    ``content_ops_execution._marketing_campaign_from_inputs`` rather
+    than on the config dataclass. Discarding the request here is
+    deliberate -- documented to close the audit-trail gap on the
+    helper-shape asymmetry (PR-Audit-MINOR-Batch-3).
+    """
+    del request  # intentional; see docstring
     return LandingPageGenerationConfig()
 
 

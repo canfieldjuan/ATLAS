@@ -42,7 +42,18 @@ def accumulate_usage(
     total: Mapping[str, Any],
     usage: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Accumulate numeric usage fields while preserving non-numeric metadata."""
+    """Accumulate numeric usage fields while preserving non-numeric metadata.
+
+    **Assumes per-call usage.** ``usage`` is treated as the cost of *this
+    call only*; numeric fields are summed across calls. If the host's
+    LLM client returns *cumulative* session usage instead (some clients
+    do), retried generations will double-count tokens and inflate
+    ``metadata.generation_usage.input_tokens`` etc. Doesn't break
+    upstream behavior -- the field is informational -- but operators
+    debugging cost reports will see inflated numbers. If your client
+    emits cumulative usage, normalize to per-call before passing to
+    this helper.
+    """
 
     accumulated = dict(total)
     if not isinstance(usage, Mapping):
