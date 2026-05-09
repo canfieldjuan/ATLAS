@@ -21,6 +21,23 @@ def parse_attempt_limit(parse_retry_attempts: int) -> int:
     return max(1, int(parse_retry_attempts or 0) + 1)
 
 
+def retry_prompt_with_invalid_response(
+    base_prompt: str,
+    *,
+    prior_invalid_response: str,
+    instruction: str,
+) -> str:
+    """Append the standard invalid-response retry context when needed."""
+
+    if not prior_invalid_response:
+        return base_prompt
+    return (
+        f"{base_prompt}\n\n"
+        f"{instruction} "
+        f"Previous response excerpt:\n{prior_invalid_response}"
+    )
+
+
 def accumulate_usage(
     total: Mapping[str, Any],
     usage: Mapping[str, Any] | None,

@@ -32,6 +32,7 @@ from .services._parse_retry_helpers import (
     accumulate_usage,
     clip_invalid_response,
     parse_attempt_limit,
+    retry_prompt_with_invalid_response,
 )
 
 
@@ -124,13 +125,14 @@ def _campaign_generation_user_prompt(
         f"channel={channel}\n"
         f"opportunity={opportunity_json}"
     )
-    if prior_invalid_response:
-        prompt += (
-            "\n\nThe previous response was not valid campaign JSON. "
-            "Return one JSON object with non-empty subject and body. "
-            f"Previous response excerpt:\n{prior_invalid_response}"
-        )
-    return prompt
+    return retry_prompt_with_invalid_response(
+        prompt,
+        prior_invalid_response=prior_invalid_response,
+        instruction=(
+            "The previous response was not valid campaign JSON. "
+            "Return one JSON object with non-empty subject and body."
+        ),
+    )
 
 
 @dataclass(frozen=True)
