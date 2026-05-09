@@ -591,3 +591,41 @@ async def test_execute_route_without_reasoning_provider_passes_services_unchange
     # The original instance handled the request; no wrapping happened.
     assert len(base.calls) == 1
     assert base.calls[0]["reasoning_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_execute_route_reasoning_provider_returning_none_rebinds_to_none():
+    """Reviewer-flagged plan-vs-code divergence: when the host wires a
+    ``reasoning_context_provider`` that resolves to ``None`` for
+    tenant-policy reasons, the bundle is derived with reasoning
+    rebound to ``None`` -- not silently bypassed. Otherwise
+    construction-time reasoning would leak through.
+
+    Verifies the fix gates derivation on whether the kwarg was
+    supplied (not on the resolved value).
+    """
+
+    sentinel_construction_time = object()
+    base = _ReasoningCapturingService(reasoning_context=sentinel_construction_time)
+
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            campaign=base
+        ),
+        # Kwarg IS supplied, but resolves to None per request.
+        reasoning_context_provider=lambda: None,
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        }
+    )
+
+    # Construction-time reasoning is NOT leaked through; the derived
+    # bundle was constructed with rebind-to-None. The base instance
+    # itself is unchanged (cached service stays intact).
+    assert base.calls == []  # original untouched, kept its construction-time reasoning
+    assert base._reasoning_context is sentinel_construction_time  # preserved

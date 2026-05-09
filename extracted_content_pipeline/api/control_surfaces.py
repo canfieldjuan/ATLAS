@@ -274,10 +274,17 @@ def create_content_ops_control_surface_router(
         # bundle. The base services from execution_services_provider
         # are not mutated; the derivation rebinds reasoning on each
         # opt-in service via with_reasoning_context().
-        reasoning_context = await _resolve_reasoning_context(
-            reasoning_context_provider
-        )
-        if reasoning_context is not None:
+        #
+        # Gate on whether the kwarg was supplied at router construction,
+        # not on the resolved value -- when a host wires a per-request
+        # provider that returns None for tenant-policy reasons, the
+        # bundle is derived with reasoning rebound to None (predictable,
+        # no leak of construction-time reasoning). When the kwarg was
+        # never supplied, leave the host-baked reasoning alone.
+        if reasoning_context_provider is not None:
+            reasoning_context = await _resolve_reasoning_context(
+                reasoning_context_provider
+            )
             services = services.with_reasoning_context(reasoning_context)
         scope = await _resolve_scope(scope_provider)
         try:
