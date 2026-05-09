@@ -867,3 +867,58 @@ async def test_execute_threads_topic_into_blog_post_dispatcher() -> None:
     call = blog.calls[0]
     assert call["topic"] == "Renewal pricing pressure"
     assert call["extras"] == {}
+
+
+# -----------------------
+# PR-ControlSurfaces-Reasoning-Provider: bundle-level helper
+# -----------------------
+
+
+def test_services_with_reasoning_context_derives_new_bundle_with_provider_attached():
+    """``ContentOpsExecutionServices.with_reasoning_context`` returns a
+    derived bundle where each opt-in service has been rebound via its
+    own ``with_reasoning_context``. Services that don't expose the
+    helper (or are None) are passed through unchanged."""
+
+    class _OptInService:
+        def __init__(self, reasoning_context=None):
+            self._reasoning_context = reasoning_context
+
+        def with_reasoning_context(self, provider):
+            return _OptInService(reasoning_context=provider)
+
+    class _OpaqueService:
+        # No with_reasoning_context method.
+        async def generate(self, **kwargs):
+            del kwargs
+            return {}
+
+    base_opt_in = _OptInService()
+    base_opaque = _OpaqueService()
+
+    base = ContentOpsExecutionServices(
+        campaign=base_opt_in,
+        signal_extraction=base_opaque,
+        # blog_post / report / landing_page / sales_brief left None.
+    )
+
+    sentinel = object()
+    derived = base.with_reasoning_context(sentinel)
+
+    # Different bundle, original unchanged.
+    assert derived is not base
+    assert base.campaign is base_opt_in  # untouched
+    assert base_opt_in._reasoning_context is None  # not mutated
+
+    # The opt-in service got a new instance with the sentinel attached.
+    assert derived.campaign is not base_opt_in
+    assert derived.campaign._reasoning_context is sentinel
+
+    # The opaque service was passed through (no helper, no rebind).
+    assert derived.signal_extraction is base_opaque
+
+    # None slots stay None.
+    assert derived.blog_post is None
+    assert derived.report is None
+    assert derived.landing_page is None
+    assert derived.sales_brief is None

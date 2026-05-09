@@ -44,6 +44,13 @@ ScopeProvider = Callable[
     [],
     TenantScope | Mapping[str, Any] | None | Awaitable[TenantScope | Mapping[str, Any] | None],
 ]
+# PR-ControlSurfaces-Reasoning-Provider: per-request reasoning provider
+# resolved at /execute and merged into the services bundle via
+# ContentOpsExecutionServices.with_reasoning_context().
+ReasoningContextProvider = Callable[
+    [],
+    Any | Awaitable[Any],
+]
 
 logger = logging.getLogger(__name__)
 
@@ -193,12 +200,21 @@ def create_content_ops_control_surface_router(
     config: ContentOpsControlSurfaceApiConfig | None = None,
     execution_services_provider: ExecutionServicesProvider | None = None,
     scope_provider: ScopeProvider | None = None,
+    reasoning_context_provider: ReasoningContextProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted AI Content Ops control-surface routes.
 
     Preview and plan routes are preflight-only. The execute route is opt-in
     and only calls host-injected services.
+
+    PR-ControlSurfaces-Reasoning-Provider: when
+    ``reasoning_context_provider`` is supplied, the /execute route
+    resolves it per request and derives a reasoning-aware services
+    bundle via ``ContentOpsExecutionServices.with_reasoning_context``
+    before invoking the executor. The base services from
+    ``execution_services_provider`` are not mutated. Mirrors the
+    legacy ``api.campaign_operations`` reasoning seam.
     """
 
     _require_fastapi()
@@ -253,6 +269,16 @@ def create_content_ops_control_surface_router(
                 status_code=503,
                 detail="Content Ops execution services are not configured.",
             )
+        # PR-ControlSurfaces-Reasoning-Provider: resolve the optional
+        # per-request reasoning provider and derive a reasoning-aware
+        # bundle. The base services from execution_services_provider
+        # are not mutated; the derivation rebinds reasoning on each
+        # opt-in service via with_reasoning_context().
+        reasoning_context = await _resolve_reasoning_context(
+            reasoning_context_provider
+        )
+        if reasoning_context is not None:
+            services = services.with_reasoning_context(reasoning_context)
         scope = await _resolve_scope(scope_provider)
         try:
             result = await execute_content_ops_from_mapping(
@@ -289,6 +315,25 @@ async def _resolve_execution_services(
             detail="Content Ops execution services are unavailable.",
         ) from exc
     return value if isinstance(value, ContentOpsExecutionServices) else None
+
+
+async def _resolve_reasoning_context(
+    provider: ReasoningContextProvider | None,
+) -> Any | None:
+    if provider is None:
+        return None
+    try:
+        value = await _resolve_provider(provider)
+    except Exception as exc:
+        logger.warning(
+            "Content Ops reasoning context provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops reasoning context provider is unavailable.",
+        ) from exc
+    return value
 
 
 async def _resolve_scope(provider: ScopeProvider | None) -> TenantScope | None:

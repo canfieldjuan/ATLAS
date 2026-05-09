@@ -148,6 +148,23 @@ class BlogPostGenerationService:
         self._reasoning_context = reasoning_context
         self._config = config or BlogPostGenerationConfig()
 
+    def with_reasoning_context(
+        self,
+        provider: CampaignReasoningContextProvider | None,
+    ) -> "BlogPostGenerationService":
+        # PR-ControlSurfaces-Reasoning-Provider: route-level seam. The
+        # /execute route derives a fresh services bundle per request
+        # so a host-supplied reasoning provider can be wired without
+        # mutating the cached service instance.
+        return BlogPostGenerationService(
+            blueprints=self._blueprints,
+            blog_posts=self._blog_posts,
+            llm=self._llm,
+            skills=self._skills,
+            reasoning_context=provider,
+            config=self._config,
+        )
+
     async def generate(
         self,
         *,
