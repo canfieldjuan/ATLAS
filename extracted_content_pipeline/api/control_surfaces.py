@@ -156,6 +156,7 @@ def create_content_ops_control_surface_router(
                     ),
                     "required_inputs": list(item.required_inputs),
                     "default_max_items": item.default_max_items,
+                    "reasoning_requirement": item.reasoning_requirement,
                 }
                 for item in OUTPUT_CATALOG.values()
             ],

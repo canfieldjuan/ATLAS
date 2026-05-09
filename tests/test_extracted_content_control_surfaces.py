@@ -157,6 +157,17 @@ def test_preview_keeps_signal_extraction_blocked_without_source_material():
     assert preview["missing_inputs"] == ["source_material"]
 
 
+def test_output_catalog_states_reasoning_requirement():
+    from extracted_content_pipeline.control_surfaces import OUTPUT_CATALOG
+
+    assert OUTPUT_CATALOG["email_campaign"].reasoning_requirement == "optional_host_context"
+    assert OUTPUT_CATALOG["report"].reasoning_requirement == "optional_host_context"
+    assert OUTPUT_CATALOG["landing_page"].reasoning_requirement == "optional_host_context"
+    assert OUTPUT_CATALOG["sales_brief"].reasoning_requirement == "optional_host_context"
+    assert OUTPUT_CATALOG["blog_post"].reasoning_requirement == "absent"
+    assert OUTPUT_CATALOG["signal_extraction"].reasoning_requirement == "absent"
+
+
 def test_request_from_mapping_rejects_zero_limit():
     with pytest.raises(ValueError, match="limit must be at least 1; got 0"):
         request_from_mapping({"limit": 0})

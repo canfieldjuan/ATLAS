@@ -61,18 +61,21 @@ size and nesting limits.
 
 Current output ids:
 
-| Output | Status | Notes |
-|---|---|---|
-| `email_campaign` | Implemented | Existing campaign draft path. |
-| `blog_post` | Implemented | Blog-post generation service path. |
-| `report` | Implemented | Structured report draft path. |
-| `landing_page` | Implemented | Landing page generation service path. |
-| `sales_brief` | Implemented | Sales brief generation service path. |
-| `signal_extraction` | Implemented | Deterministic source-row normalization into campaign opportunities; no LLM call. |
+| Output | Status | Reasoning | Notes |
+|---|---|---|---|
+| `email_campaign` | Implemented | `optional_host_context` | Existing campaign draft path. |
+| `blog_post` | Implemented | `absent` | Blog-post generation service path. |
+| `report` | Implemented | `optional_host_context` | Structured report draft path. |
+| `landing_page` | Implemented | `optional_host_context` | Landing page generation service path. |
+| `sales_brief` | Implemented | `optional_host_context` | Sales brief generation service path. |
+| `signal_extraction` | Implemented | `absent` | Deterministic source-row normalization into campaign opportunities; no LLM call. |
 
 Future outputs should be added to the catalog first, then exposed through
 presets only after the implementation and quality gate exist. Yes, this is less
 exciting than shipping a toggle that lies to users. That is the point.
+`optional_host_context` means the output can consume precomputed reasoning from
+a host or separate reasoning product, but does not run synthesis internally.
+`absent` means the output does not use the reasoning-provider path.
 
 ## Presets
 
