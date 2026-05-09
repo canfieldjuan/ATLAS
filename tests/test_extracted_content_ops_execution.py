@@ -50,6 +50,7 @@ class _OpportunityService:
         quality_prompt_proof_term_limit: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
+        topic: str | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -67,6 +68,7 @@ class _OpportunityService:
             "quality_prompt_proof_term_limit": quality_prompt_proof_term_limit,
             "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
             "quality_gates_enabled": quality_gates_enabled,
+            "topic": topic,
             "extras": dict(extras),
         })
         return _Result()
@@ -837,3 +839,31 @@ async def test_execute_reports_partial_when_only_some_steps_fail() -> None:
     assert err["runner"] == "ReportGenerationService.generate"
     assert err["error"] == "service_not_configured"
     assert err["reason"] == "service_not_configured"  # backwards-compat alias
+
+
+# -----------------------
+# PR-Blog-Topic-Per-Call: dispatcher threads topic from step.config
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_topic_into_blog_post_dispatcher() -> None:
+    """The plan emits ``step.config["topic"]`` from
+    ``request.inputs.get("topic")``; the executor's blog dispatcher
+    threads it through to ``BlogPostGenerationService.generate``."""
+
+    blog = _OpportunityService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {
+                "target_account": "Acme",
+                "topic": "Renewal pricing pressure",
+            },
+        },
+        services=ContentOpsExecutionServices(blog_post=blog),
+    )
+
+    call = blog.calls[0]
+    assert call["topic"] == "Renewal pricing pressure"
+    assert call["extras"] == {}
