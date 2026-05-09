@@ -3,6 +3,12 @@ from __future__ import annotations
 import pytest
 
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.campaign_ports import CampaignReasoningContext
+from extracted_content_pipeline.campaign_ports import LLMResponse
+from extracted_content_pipeline.report_generation import (
+    ReportGenerationConfig,
+    ReportGenerationService,
+)
 from extracted_content_pipeline.report_export import (
     ReportDraftExportResult,
     export_report_drafts,
@@ -40,6 +46,60 @@ class _Repository:
 
     async def update_status(self, report_id, status, *, scope):
         raise NotImplementedError
+
+
+class _Intelligence:
+    def __init__(self, opportunities) -> None:
+        self.opportunities = tuple(opportunities)
+
+    async def read_campaign_opportunities(self, *, scope, target_mode, limit, filters=None):
+        return self.opportunities
+
+    async def read_vendor_targets(self, *, scope, target_mode, vendor_name=None):  # pragma: no cover
+        raise AssertionError("not used")
+
+
+class _SavingRepository(_Repository):
+    async def save_drafts(self, drafts, *, scope):
+        self.drafts = tuple(drafts)
+        return tuple(f"report-{index + 1}" for index, _ in enumerate(drafts))
+
+
+class _LLM:
+    async def complete(self, messages, *, max_tokens, temperature, metadata=None):
+        return LLMResponse(
+            content=(
+                '{"title":"Acme report","summary":"Pricing pressure dominates",'
+                '"report_type":"vendor_pressure","sections":[{"id":"summary",'
+                '"title":"Summary","body_markdown":"Pricing pressure is rising",'
+                '"evidence_ids":["r1"]}],"reference_ids":["r1"]}'
+            ),
+            model="test-model",
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+
+
+class _Skills:
+    def get_prompt(self, name):
+        return "TEMPLATE {target_mode}: {opportunity_json}"
+
+
+class _ReasoningProvider:
+    async def read_campaign_reasoning_context(
+        self,
+        *,
+        scope,
+        target_id,
+        target_mode,
+        opportunity,
+    ):
+        return CampaignReasoningContext(
+            canonical_reasoning={
+                "wedge": "price_squeeze",
+                "confidence": "high",
+                "summary": "Pricing pressure creates displacement risk.",
+            },
+        )
 
 
 def _draft(**overrides) -> ReportDraft:
@@ -149,6 +209,37 @@ async def test_export_report_drafts_defaults_summary_fields_without_metadata() -
     assert row["reasoning_context_used"] is False
     assert row["reasoning_wedge"] is None
     assert row["reasoning_confidence"] is None
+
+
+@pytest.mark.asyncio
+async def test_generated_report_export_includes_reasoning_summary_fields() -> None:
+    repo = _SavingRepository()
+    service = ReportGenerationService(
+        intelligence=_Intelligence([
+            {
+                "target_id": "vendor-acme",
+                "vendor_name": "Acme",
+                "evidence": [{"id": "r1", "quote": "Pricing pressure is rising"}],
+            }
+        ]),
+        reports=repo,
+        llm=_LLM(),
+        skills=_Skills(),
+        reasoning_context=_ReasoningProvider(),
+        config=ReportGenerationConfig(),
+    )
+
+    generated = await service.generate(
+        scope=TenantScope(account_id="acct_1"),
+        target_mode="vendor_retention",
+    )
+    exported = await export_report_drafts(repo, scope=TenantScope(account_id="acct_1"))
+
+    assert generated.reasoning_contexts_used == 1
+    row = exported.rows[0]
+    assert row["reasoning_context_used"] is True
+    assert row["reasoning_wedge"] == "price_squeeze"
+    assert row["reasoning_confidence"] == "high"
 
 
 @pytest.mark.asyncio
