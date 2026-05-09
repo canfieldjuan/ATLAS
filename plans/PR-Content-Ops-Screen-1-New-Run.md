@@ -188,6 +188,14 @@ unchanged.
 - `cd atlas-intel-ui && npx eslint src/pages/ContentOpsNewRun.tsx
   src/App.tsx` -- clean.
 - `cd atlas-intel-ui && npm run build` -- builds.
+- `bash scripts/check_ascii_python.sh` -- clean (the script is
+  scoped to `extracted_content_pipeline`; this slice doesn't
+  touch that package, but running for completeness per AGENTS.md
+  §3b).
+- `python -c "open('atlas_brain/api/__init__.py').read().encode('ascii')"`
+  -- clean (the host change `atlas_brain/api/__init__.py` is
+  outside the package script's scope; verified ASCII-clean
+  separately).
 - Manual: `npm run dev` and exercise the page -- pick a preset,
   select outputs, type inputs, submit, see preview verdict
   render.
@@ -199,14 +207,19 @@ form + verdict panel + race-condition guard + `SubmitState`
 discriminated union added more than the rough mental model
 projected. Updated for transparency.
 
-- `ContentOpsNewRun.tsx`: ~497 LOC actual (initial estimate
-  ~280 LOC).
+- `ContentOpsNewRun.tsx`: ~520 LOC actual (initial estimate
+  ~280 LOC; grew further across the Codex review rounds for the
+  `SubmitState` race guard, `markStale`, max-cost string draft,
+  and `invalid_max_cost` validation state).
 - `App.tsx`: ~3 LOC.
 - `api/contentOps.ts`: ~5 LOC delta (BASE path realignment,
   added in fix-up commit after the Codex P1 review).
-- Plan doc: ~210 LOC actual (post-update).
+- `atlas_brain/api/__init__.py`: ~16 LOC delta (mount the
+  content-ops router into the host's aggregate `api_router`,
+  added in fix-up commit after the Codex P1 round 4 review).
+- Plan doc: ~225 LOC actual (post-update).
 
-Total actual: **~715 LOC**. Over the 400 soft cap. The screen
+Total actual: **~770 LOC**. Over the 400 soft cap. The screen
 is a structurally indivisible vertical slice -- splitting at
 "page skeleton" vs "form" leaves an unusable half-screen and
 the race-condition / max-cost / state-machine logic depends on
