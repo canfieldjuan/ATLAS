@@ -92,6 +92,12 @@ export default function ContentOpsNewRun() {
       const has = prev.outputs.includes(outputId)
       return {
         ...prev,
+        // Codex P2 fix: customizing outputs implies "explicit outputs
+        // override preset"; clearing the preset matches the backend's
+        // contract (preview_control_surface emits the
+        // "Preset ignored because explicit outputs were provided"
+        // warning otherwise; control_surfaces.py:313-316).
+        preset: null,
         outputs: has
           ? prev.outputs.filter((o) => o !== outputId)
           : [...prev.outputs, outputId],
@@ -148,8 +154,16 @@ export default function ContentOpsNewRun() {
       }
       normalizedMaxCost = parsed
     }
+    // Codex P2 fix: when a preset is active and the user hasn't
+    // customized outputs (toggleOutput would have cleared the preset
+    // if they had), send an empty outputs array so the backend
+    // resolves the preset itself. Sending both triggers
+    // preview_control_surface's "Preset ignored because explicit
+    // outputs were provided" warning (control_surfaces.py:313-316).
+    const submitOutputs = request.preset ? [] : request.outputs
     const domainRequest: ContentOpsRequest = {
       ...request,
+      outputs: submitOutputs,
       inputs: parsedInputs,
       maxCostUsd: normalizedMaxCost,
     }
