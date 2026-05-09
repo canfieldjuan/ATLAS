@@ -241,15 +241,17 @@ async def _execute_step(
             ),
             error,
         )
+    result_dict = _result_dict(result)
     return (
         ContentOpsStepExecution(
             output=step.output,
             runner=step.runner,
             status="completed",
-            result=_result_dict(result),
+            result=result_dict,
             reasoning=_step_reasoning_audit(
                 step,
                 service,
+                result=result_dict,
                 reasoning_provider_configured=reasoning_provider_configured,
             ),
         ),
@@ -679,6 +681,7 @@ def _step_reasoning_audit(
     step: GenerationPlanStep,
     service: Any | None,
     *,
+    result: Mapping[str, Any] | None = None,
     reasoning_provider_configured: bool,
 ) -> dict[str, Any]:
     definition = OUTPUT_CATALOG.get(step.output)
@@ -698,7 +701,19 @@ def _step_reasoning_audit(
         "requirement": requirement,
         "service_supports_reasoning": service_supports,
         "provider_configured": reasoning_provider_configured,
+        "contexts_used": _reasoning_contexts_used(result),
     }
+
+
+def _reasoning_contexts_used(result: Mapping[str, Any] | None) -> int:
+    if result is None:
+        return 0
+    raw = result.get("reasoning_contexts_used")
+    if isinstance(raw, bool):
+        return 0
+    if isinstance(raw, int) and raw > 0:
+        return raw
+    return 0
 
 
 def _clean(value: Any) -> str:

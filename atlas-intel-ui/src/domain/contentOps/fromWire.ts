@@ -205,6 +205,9 @@ export function fromWireStepExecution(
       serviceSupportsReasoning: wire.reasoning.service_supports_reasoning,
       providerConfigured: wire.reasoning.provider_configured,
     }
+    if (typeof wire.reasoning.contexts_used === 'number') {
+      step.reasoning.contextsUsed = wire.reasoning.contexts_used
+    }
   }
   return step
 }

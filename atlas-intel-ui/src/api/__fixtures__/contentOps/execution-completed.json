@@ -66,7 +66,8 @@
       "reasoning": {
         "requirement": "optional_host_context",
         "service_supports_reasoning": true,
-        "provider_configured": true
+        "provider_configured": true,
+        "contexts_used": 2
       }
     }
   ],

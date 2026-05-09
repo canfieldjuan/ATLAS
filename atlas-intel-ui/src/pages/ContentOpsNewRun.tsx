@@ -1019,6 +1019,11 @@ function ReasoningAuditBadge({ audit }: { audit: ContentOpsStepReasoningAudit })
       <span className="font-mono text-[11px] opacity-80">
         {audit.requirement}
       </span>
+      {typeof audit.contextsUsed === 'number' && (
+        <span className="font-mono text-[11px] opacity-80">
+          used {audit.contextsUsed}
+        </span>
+      )}
     </div>
   )
 }

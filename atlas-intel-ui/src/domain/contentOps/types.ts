@@ -126,6 +126,7 @@ export interface ContentOpsStepReasoningAudit {
   requirement: ReasoningRequirement
   serviceSupportsReasoning: boolean
   providerConfigured: boolean
+  contextsUsed?: number
 }
 
 export interface ContentOpsStepExecution {

@@ -131,6 +131,7 @@ export interface ContentOpsStepReasoningAudit {
   requirement: 'absent' | 'optional_host_context' | string
   service_supports_reasoning: boolean
   provider_configured: boolean
+  contexts_used?: number
 }
 
 export interface ContentOpsStepExecution {
