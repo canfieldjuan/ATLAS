@@ -1,7 +1,7 @@
 # Content Ops Frontend Contract
 
 Date: 2026-05-09
-Code reference HEAD: `a4020c1` (post PR-Campaign-Config-V2 #398)
+Code reference HEAD: `d66649a9`
 
 This document defines the frontend domain model for the **AI Content Ops**
 product, grounded entirely in the real backend surface that exists today
@@ -100,7 +100,7 @@ top-level `execution.{configured,configured_outputs}` /
 | `GenerationPlan` | `generation_plan.py:48-65` | `can_execute`, `target_mode`, `limit`, `steps`, `preview` |
 | `ContentOpsExecutionServices` | `content_ops_execution.py:16-63` | `campaign`, `blog_post`, `report`, `landing_page`, `sales_brief`, `signal_extraction` (host-port bundle) |
 | `ContentOpsStepExecution` | `content_ops_execution.py:102-123` | `output`, `runner`, `status`, `result`, `error`, optional `reasoning` |
-| `ContentOpsExecutionResult` | `content_ops_execution.py:86-101` | `status`, `plan`, `steps`, `errors` |
+| `ContentOpsExecutionResult` | `content_ops_execution.py:126-141` | `status`, `plan`, `steps`, `errors` |
 | `SignalExtractionConfig` | `signal_extraction.py:19-24` | `limit`, `max_text_chars` |
 | `SignalExtractionResult` | `signal_extraction.py:27-45` | `opportunities`, `warnings`, `target_mode` (+ `generated` property) |
 
@@ -132,7 +132,7 @@ Outputs currently flagged `optional_host_context`: `email_campaign`,
 
 ### Execution status vocabulary
 
-`ContentOpsExecutionResult.status` (`content_ops_execution.py:147-155`):
+`ContentOpsExecutionResult.status` (`content_ops_execution.py:188-197`):
 
 - `"completed"` — every step succeeded
 - `"failed"` — every step failed (distinguished from `partial`
@@ -564,7 +564,7 @@ These can land later; they don't block v0 of the frontend.
 
 ## Code references summary
 
-Every claim in this doc cites a real file:line at HEAD `a4020c1`:
+Every claim in this doc cites a real file:line at HEAD `d66649a9`:
 
 | Topic | Citation |
 | --- | --- |
@@ -584,7 +584,7 @@ Every claim in this doc cites a real file:line at HEAD `a4020c1`:
 | Per-output config builders | `extracted_content_pipeline/generation_plan.py:68-148` |
 | `_step_for_output` per-runner shapes | `extracted_content_pipeline/generation_plan.py:165-266` |
 | `ContentOpsExecutionServices` | `extracted_content_pipeline/content_ops_execution.py:16-63` |
-| `ContentOpsExecutionResult` status logic | `extracted_content_pipeline/content_ops_execution.py:147-155` |
+| `ContentOpsExecutionResult` status logic | `extracted_content_pipeline/content_ops_execution.py:188-197` |
 | `ContentOpsStepExecution` | `extracted_content_pipeline/content_ops_execution.py:102-123` |
 | `SignalExtractionConfig` / `SignalExtractionResult` / `SignalExtractionService` | `extracted_content_pipeline/signal_extraction.py:19-81` |
 | `CampaignReasoningContext` (11 fields) | `extracted_content_pipeline/campaign_ports.py:53-99` |
