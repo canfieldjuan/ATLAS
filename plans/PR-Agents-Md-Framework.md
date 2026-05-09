@@ -45,6 +45,12 @@ Documentation only. Two files.
    - Cross-references the existing `AUDITOR_PROMPT.md` (broader
      canonical / integration / scope auditor) so the two prompts are
      complementary, not duplicative.
+   - **Section 7 -- Bootstrapping a fresh reviewer session.**
+     Copy-pastable prompt block that seeds a new reviewer Claude
+     session with the framework, the audit gauntlet, the package's
+     manifest discipline, and a recent-PR summary. The user paste
+     the block when the prior reviewer session dies; the new session
+     arrives audit-ready.
 
 2. `plans/PR-Agents-Md-Framework.md` (this file).
 
