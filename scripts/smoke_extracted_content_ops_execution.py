@@ -230,7 +230,11 @@ def _services(*, reasoning: bool = False) -> ContentOpsExecutionServices:
     return services
 
 
-def _execution_errors(result: Mapping[str, Any]) -> list[str]:
+def _execution_errors(
+    result: Mapping[str, Any],
+    *,
+    require_reasoning_usage: bool = False,
+) -> list[str]:
     if result.get("status") != "completed":
         return [f"expected completed status, got {result.get('status')!r}"]
     steps = result.get("steps")
@@ -246,6 +250,8 @@ def _execution_errors(result: Mapping[str, Any]) -> list[str]:
         result_payload = step.get("result")
         if not _step_has_output_payload(step, result_payload):
             errors.append(f"step {index} missing output payload")
+        if require_reasoning_usage and step.get("output") != "signal_extraction":
+            errors.extend(_reasoning_usage_errors(index, step, result_payload))
     return errors
 
 
@@ -260,13 +266,47 @@ def _step_has_output_payload(
     return bool(result_payload.get("saved_ids"))
 
 
+def _reasoning_usage_errors(
+    index: int,
+    step: Mapping[str, Any],
+    result_payload: Any,
+) -> list[str]:
+    errors: list[str] = []
+    result_count = (
+        result_payload.get("reasoning_contexts_used")
+        if isinstance(result_payload, Mapping)
+        else None
+    )
+    reasoning = step.get("reasoning")
+    audit_count = (
+        reasoning.get("contexts_used")
+        if isinstance(reasoning, Mapping)
+        else None
+    )
+    if not isinstance(result_count, int) or isinstance(result_count, bool):
+        errors.append(f"step {index} missing result.reasoning_contexts_used")
+    if not isinstance(audit_count, int) or isinstance(audit_count, bool):
+        errors.append(f"step {index} missing reasoning.contexts_used")
+    if isinstance(result_count, int) and isinstance(audit_count, int):
+        if not isinstance(result_count, bool) and not isinstance(audit_count, bool):
+            if result_count != audit_count:
+                errors.append(
+                    f"step {index} reasoning usage mismatch: "
+                    f"result={result_count} audit={audit_count}"
+                )
+    return errors
+
+
 async def _main() -> int:
     args = _parse_args()
     result = await execute_content_ops_from_mapping(
         _payload(args),
         services=_services(reasoning=bool(args.with_reasoning)),
     )
-    errors = _execution_errors(result)
+    errors = _execution_errors(
+        result,
+        require_reasoning_usage=bool(args.with_reasoning),
+    )
     if args.json:
         if errors:
             result = dict(result)
