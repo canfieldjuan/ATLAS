@@ -53,6 +53,84 @@ _MAX_INPUT_STRING_CHARS = 10000
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
 
 
+def _build_static_catalog_payload() -> Mapping[str, Any]:
+    # PR-Describe-Control-Surfaces-Cache: the outputs/presets metadata
+    # is a pure function of the immutable OUTPUT_CATALOG and PRESETS
+    # MappingProxyType globals. Computing it once at import lets the
+    # GET /content-ops/control-surfaces hot path skip 6 + 5 per-item
+    # dict constructions per request.
+    return {
+        "outputs": tuple(
+            {
+                "id": item.id,
+                "label": item.label,
+                "description": item.description,
+                "implemented": item.implemented,
+                "estimated_unit_cost_usd": item.estimated_unit_cost_usd,
+                "default_parse_retry_attempts": item.default_parse_retry_attempts,
+                "estimated_retry_adjusted_unit_cost_usd": round(
+                    retry_adjusted_unit_cost_usd(item),
+                    4,
+                ),
+                "required_inputs": tuple(item.required_inputs),
+                "default_max_items": item.default_max_items,
+                "reasoning_requirement": item.reasoning_requirement,
+            }
+            for item in OUTPUT_CATALOG.values()
+        ),
+        "presets": tuple(
+            {
+                "id": item.id,
+                "label": item.label,
+                "description": item.description,
+                "outputs": tuple(item.outputs),
+            }
+            for item in PRESETS.values()
+        ),
+        "ingestion_profiles": (
+            "domain_specific",
+            "manual",
+            "existing_evidence",
+        ),
+    }
+
+
+_STATIC_CATALOG_PAYLOAD: Mapping[str, Any] = _build_static_catalog_payload()
+
+
+def _compose_describe_response(
+    *,
+    static: Mapping[str, Any],
+    configured_outputs: frozenset[str],
+    execution_configured: bool,
+) -> dict[str, Any]:
+    # Re-project the cached static template into a fresh dict tree so
+    # the caller can serialize / mutate without aliasing the module-
+    # level cache. Per-output flags are the only fields that depend
+    # on the host-injected execution services.
+    return {
+        "outputs": [
+            {
+                **base,
+                "required_inputs": list(base["required_inputs"]),
+                "execution_configured": base["id"] in configured_outputs,
+                "can_execute": base["implemented"]
+                and base["id"] in configured_outputs,
+            }
+            for base in static["outputs"]
+        ],
+        "presets": [
+            {**preset, "outputs": list(preset["outputs"])}
+            for preset in static["presets"]
+        ],
+        "execution": {
+            "configured": execution_configured,
+            "configured_outputs": sorted(configured_outputs),
+        },
+        "ingestion_profiles": list(static["ingestion_profiles"]),
+    }
+
+
 def _require_fastapi() -> None:
     if _FASTAPI_IMPORT_ERROR is None:
         return
@@ -134,51 +212,16 @@ def create_content_ops_control_surface_router(
     @router.get("/control-surfaces")
     async def describe_control_surfaces() -> dict[str, Any]:
         execution_services = await _resolve_execution_services(execution_services_provider)
-        configured_outputs = set(
+        configured_outputs = frozenset(
             execution_services.configured_outputs()
             if execution_services is not None
             else ()
         )
-        return {
-            "outputs": [
-                {
-                    "id": item.id,
-                    "label": item.label,
-                    "description": item.description,
-                    "implemented": item.implemented,
-                    "execution_configured": item.id in configured_outputs,
-                    "can_execute": item.implemented and item.id in configured_outputs,
-                    "estimated_unit_cost_usd": item.estimated_unit_cost_usd,
-                    "default_parse_retry_attempts": item.default_parse_retry_attempts,
-                    "estimated_retry_adjusted_unit_cost_usd": round(
-                        retry_adjusted_unit_cost_usd(item),
-                        4,
-                    ),
-                    "required_inputs": list(item.required_inputs),
-                    "default_max_items": item.default_max_items,
-                    "reasoning_requirement": item.reasoning_requirement,
-                }
-                for item in OUTPUT_CATALOG.values()
-            ],
-            "presets": [
-                {
-                    "id": item.id,
-                    "label": item.label,
-                    "description": item.description,
-                    "outputs": list(item.outputs),
-                }
-                for item in PRESETS.values()
-            ],
-            "execution": {
-                "configured": execution_services is not None,
-                "configured_outputs": sorted(configured_outputs),
-            },
-            "ingestion_profiles": [
-                "domain_specific",
-                "manual",
-                "existing_evidence",
-            ],
-        }
+        return _compose_describe_response(
+            static=_STATIC_CATALOG_PAYLOAD,
+            configured_outputs=configured_outputs,
+            execution_configured=execution_services is not None,
+        )
 
     @router.post("/preview")
     async def preview_generation(
