@@ -10,7 +10,11 @@ from extracted_content_pipeline.blog_generation import (
     parse_blog_post_response,
 )
 from extracted_content_pipeline.blog_ports import BlogPostDraft
-from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
+from extracted_content_pipeline.campaign_ports import (
+    CampaignReasoningContext,
+    LLMResponse,
+    TenantScope,
+)
 from extracted_quality_gate.types import QualityPolicy
 
 
@@ -142,7 +146,41 @@ def _valid_blog_json(**overrides):
     return json.dumps(payload)
 
 
-def _service(*, rows=None, responses=None, prompts=None, config=None):
+class _ReasoningProvider:
+    """Fake CampaignReasoningContextProvider for blog tests.
+
+    Mirrors the shape used by tests/test_extracted_landing_page_generation.py.
+    """
+
+    def __init__(self, context):
+        self.context = context
+        self.calls = []
+
+    async def read_campaign_reasoning_context(
+        self,
+        *,
+        scope,
+        target_id,
+        target_mode,
+        opportunity,
+    ):
+        self.calls.append({
+            "scope": scope,
+            "target_id": target_id,
+            "target_mode": target_mode,
+            "opportunity": dict(opportunity or {}),
+        })
+        return self.context
+
+
+def _service(
+    *,
+    rows=None,
+    responses=None,
+    prompts=None,
+    config=None,
+    reasoning_context=None,
+):
     blueprints = _Blueprints(rows or [_blueprint()])
     blog_posts = _BlogPosts()
     llm = _LLM(responses or [_valid_blog_json()])
@@ -154,6 +192,7 @@ def _service(*, rows=None, responses=None, prompts=None, config=None):
         blog_posts=blog_posts,
         llm=llm,
         skills=skills,
+        reasoning_context=reasoning_context,
         config=config or BlogPostGenerationConfig(
             quality_policy=QualityPolicy(
                 name="blog_post",
@@ -534,3 +573,92 @@ async def test_generate_topic_no_placeholder_no_op():
     system_prompt = llm.calls[0]["messages"][0].content
     assert "Some topic" not in system_prompt  # no placeholder, no substitution
     assert "{topic}" not in system_prompt
+
+
+# -----------------------
+# PR-Blog-Reasoning-Parity: blog generator accepts an optional
+# reasoning_context provider and merges its payload into the
+# blueprint before the LLM call. Mirrors the pattern in
+# tests/test_extracted_landing_page_generation.py.
+# -----------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_no_reasoning_provider_passes_blueprint_unchanged() -> None:
+    """The default (no provider wired) path leaves the blueprint
+    untouched -- the LLM sees the original JSON, no reasoning_context
+    field is injected."""
+
+    service, _, _, llm, _ = _service()  # no reasoning_context kwarg
+
+    await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "reasoning_context" not in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_with_reasoning_provider_merges_context_into_blueprint() -> None:
+    """When the provider returns non-empty context, the blueprint
+    JSON sent to the LLM gains a ``reasoning_context`` payload, and
+    the draft metadata records the reasoning provider tier."""
+
+    reasoning = _ReasoningProvider(
+        CampaignReasoningContext(
+            top_theses=(
+                {
+                    "claim": "Renewal pricing rose 22 percent",
+                    "confidence": 0.9,
+                    "source_ids": ["r1"],
+                },
+            ),
+            canonical_reasoning={
+                "summary": "HubSpot pricing pressure intensifies in Q3.",
+            },
+        )
+    )
+    service, _, blog_posts, llm, _ = _service(reasoning_context=reasoning)
+
+    await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    # Provider was called with the blueprint id + the fixed reasoning
+    # target_mode (not the call-site target_mode).
+    assert reasoning.calls
+    call = reasoning.calls[0]
+    assert call["target_id"] == "bp-1"
+    assert call["target_mode"] == "blog_blueprint"
+
+    # LLM saw the merged blueprint JSON.
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "reasoning_context" in system_prompt
+    assert "Renewal pricing rose 22 percent" in system_prompt
+
+    # Draft metadata captured reasoning signal.
+    drafts = blog_posts.saved[0]["drafts"]
+    assert drafts
+    metadata = drafts[0].metadata
+    # Metadata fields come from campaign_reasoning_context_metadata; at
+    # minimum the provider tier should be visible to consumers.
+    assert any("reasoning" in str(key) for key in metadata.keys()), metadata
+
+
+@pytest.mark.asyncio
+async def test_generate_with_reasoning_provider_returning_empty_is_noop() -> None:
+    """When the provider returns no content, the blueprint is not
+    enriched -- ``reasoning_context`` does not appear in the prompt
+    and no reasoning metadata is added to the draft."""
+
+    reasoning = _ReasoningProvider(None)  # provider returns nothing
+    service, _, blog_posts, llm, _ = _service(reasoning_context=reasoning)
+
+    await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert reasoning.calls  # the provider was consulted
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "reasoning_context" not in system_prompt
+
+    drafts = blog_posts.saved[0]["drafts"]
+    assert drafts
+    metadata = drafts[0].metadata
+    # No reasoning-shaped metadata fields when the context was empty.
+    assert not any("reasoning" in str(key) for key in metadata.keys()), metadata

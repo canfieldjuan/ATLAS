@@ -9,15 +9,33 @@ import re
 from typing import Any
 
 from .blog_ports import BlogBlueprintRepository, BlogPostDraft, BlogPostRepository
-from .campaign_ports import LLMClient, LLMMessage, SkillStore, TenantScope
+from .campaign_ports import (
+    CampaignReasoningContextProvider,
+    LLMClient,
+    LLMMessage,
+    SkillStore,
+    TenantScope,
+)
 from .services._parse_retry_helpers import (
     accumulate_usage,
     clip_invalid_response,
     parse_attempt_limit,
     retry_prompt_with_invalid_response,
 )
+from .services.campaign_reasoning_context import (
+    campaign_reasoning_context_metadata,
+    campaign_reasoning_context_payload,
+    normalize_campaign_reasoning_context,
+)
 from extracted_quality_gate.blog_pack import evaluate_blog_post
 from extracted_quality_gate.types import QualityInput, QualityPolicy
+
+
+# PR-Blog-Reasoning-Parity: fixed lookup mode for the reasoning-context
+# port. Mirrors landing_page_generation's _TARGET_MODE constant; the
+# call-site target_mode (e.g. "vendor_retention") is an unrelated
+# tenant-scope concept.
+_BLOG_REASONING_TARGET_MODE = "blog_blueprint"
 
 
 @dataclass(frozen=True)
@@ -116,12 +134,18 @@ class BlogPostGenerationService:
         blog_posts: BlogPostRepository,
         llm: LLMClient,
         skills: SkillStore,
+        reasoning_context: CampaignReasoningContextProvider | None = None,
         config: BlogPostGenerationConfig | None = None,
     ):
         self._blueprints = blueprints
         self._blog_posts = blog_posts
         self._llm = llm
         self._skills = skills
+        # PR-Blog-Reasoning-Parity: brings blog to constructor parity
+        # with the other 4 generators. When wired, supplemental
+        # reasoning context is merged into each blueprint before the
+        # LLM call -- additive enrichment, not replacement.
+        self._reasoning_context = reasoning_context
         self._config = config or BlogPostGenerationConfig()
 
     async def generate(
@@ -182,7 +206,10 @@ class BlogPostGenerationService:
         errors: list[dict[str, Any]] = []
         skipped = 0
         for row in rows:
-            blueprint = dict(row)
+            blueprint = await self._blueprint_with_reasoning_context(
+                scope=scope,
+                blueprint=dict(row),
+            )
             blueprint_id = _blueprint_id(blueprint)
             try:
                 parsed = await self._generate_one(
@@ -231,6 +258,35 @@ class BlogPostGenerationService:
             saved_ids=saved_ids,
             errors=tuple(errors),
         )
+
+    async def _blueprint_with_reasoning_context(
+        self,
+        *,
+        scope: TenantScope,
+        blueprint: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        # PR-Blog-Reasoning-Parity: mirrors landing_page_generation's
+        # _payload_with_reasoning_context shape. When no provider is
+        # wired the blueprint passes through unchanged. When the
+        # provider returns no content the blueprint also passes
+        # through unchanged so empty / missing reasoning is a no-op.
+        if self._reasoning_context is None:
+            return blueprint
+        provided = await self._reasoning_context.read_campaign_reasoning_context(
+            scope=scope,
+            target_id=_blueprint_id(blueprint),
+            target_mode=_BLOG_REASONING_TARGET_MODE,
+            opportunity=blueprint,
+        )
+        provided_context = normalize_campaign_reasoning_context(provided)
+        if not provided_context.has_content():
+            return blueprint
+        enriched = dict(blueprint)
+        enriched["reasoning_context"] = campaign_reasoning_context_payload(
+            provided_context
+        )
+        enriched.update(campaign_reasoning_context_metadata(provided_context))
+        return enriched
 
     async def _generate_one(
         self,
@@ -347,6 +403,18 @@ class BlogPostGenerationService:
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
         }
+        # PR-Blog-Reasoning-Parity: surface reasoning audit fields on
+        # the draft metadata when the blueprint carried merged context.
+        # Mirrors campaign / report / sales_brief metadata threading.
+        for reasoning_key in (
+            "reasoning_context",
+            "reasoning_anchor_examples",
+            "reasoning_witness_highlights",
+            "reasoning_reference_ids",
+            "reasoning_provider",
+        ):
+            if reasoning_key in blueprint:
+                metadata[reasoning_key] = blueprint[reasoning_key]
         return BlogPostDraft(
             slug=slug,
             title=title,
