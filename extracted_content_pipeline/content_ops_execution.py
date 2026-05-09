@@ -15,7 +15,16 @@ from .landing_page_ports import MarketingCampaign
 
 @dataclass(frozen=True)
 class ContentOpsExecutionServices:
-    """Host-provided services for runnable content-ops outputs."""
+    """Host-provided services for runnable content-ops outputs.
+
+    Services bundled here run **concurrently** when multiple outputs
+    are requested in a single plan -- the executor uses
+    ``asyncio.gather`` over plan steps. Each service must therefore be
+    safe under concurrent ``generate()`` invocation. Pure functions
+    and pool-backed services are fine; services with shared in-memory
+    state need locking or per-call scoping. See
+    ``execute_content_ops_request`` for the full concurrency contract.
+    """
 
     campaign: Any | None = None
     blog_post: Any | None = None
@@ -98,7 +107,19 @@ async def execute_content_ops_request(
     services: ContentOpsExecutionServices,
     scope: TenantScope | None = None,
 ) -> ContentOpsExecutionResult:
-    """Execute a runnable content-ops plan using host-provided services."""
+    """Execute a runnable content-ops plan using host-provided services.
+
+    **Concurrency contract (PR-Audit-MINOR-Batch-3):** plan steps run
+    concurrently via ``asyncio.gather``. Host-injected services may
+    therefore see overlapping ``generate()`` calls. Hosts must inject
+    services that are **safe under concurrent invocation** -- pure
+    functions, services backed by a connection pool, or services with
+    appropriate locks. A service that maintains in-memory state
+    (counters, queues, caches without per-call scoping) will race
+    silently. Hosts migrating from a single-step execution path
+    should audit their service for shared state before adopting the
+    control surface.
+    """
 
     plan = build_generation_plan(request)
     if not plan.can_execute:
