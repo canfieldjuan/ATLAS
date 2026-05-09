@@ -83,6 +83,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated output ids. Overrides --preset when supplied.",
     )
     parser.add_argument("--limit", type=int, default=1)
+    parser.add_argument("--target-mode", default="vendor_retention")
     parser.add_argument("--target-account", default="Acme")
     parser.add_argument("--offer", default="Churn intelligence audit")
     parser.add_argument("--topic", default="Churn pressure")
@@ -111,6 +112,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _payload(args: argparse.Namespace) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "preset": str(args.preset or "").strip() or "full_campaign",
+        "target_mode": str(args.target_mode or "").strip() or "vendor_retention",
         "limit": max(1, int(args.limit or 1)),
         "inputs": {
             "target_account": args.target_account,
