@@ -97,6 +97,7 @@ async def test_example_generates_drafts_from_customer_opportunity_payload() -> N
         "requested": 1,
         "generated": 1,
         "skipped": 0,
+        "reasoning_contexts_used": 0,
         "saved_ids": ["draft-1"],
         "errors": [],
     }

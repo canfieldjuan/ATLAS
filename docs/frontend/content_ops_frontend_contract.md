@@ -345,6 +345,7 @@ interface ContentOpsStepReasoningAudit {
   requirement: "absent" | "optional_host_context" | string;
   service_supports_reasoning: boolean;
   provider_configured: boolean;
+  contexts_used?: number;
 }
 ```
 
@@ -431,8 +432,11 @@ warnings, and errors). It does **not** reliably expose the consumed
 reasoning payload. `ContentOpsStepExecution.reasoning` is a compact
 readiness audit only: it tells the UI whether the output can use host
 reasoning, whether the service supports the seam, and whether a
-provider was attached. A Reasoning Context Drawer still requires a
-future field that carries the consumed context itself.
+provider was attached. When the service result includes
+`reasoning_contexts_used`, the audit also exposes `contexts_used` as
+the count of generated assets that actually consumed reasoning context.
+A Reasoning Context Drawer still requires a future field that carries
+the consumed context itself.
 
 ```ts
 interface CampaignReasoningContextView {

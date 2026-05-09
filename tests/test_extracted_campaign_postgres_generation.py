@@ -117,6 +117,7 @@ async def test_generate_campaign_drafts_from_postgres_reads_generates_and_saves(
         "requested": 1,
         "generated": 1,
         "skipped": 0,
+        "reasoning_contexts_used": 0,
         "saved_ids": ["campaign-1"],
         "errors": [],
     }
@@ -306,6 +307,7 @@ async def test_postgres_runner_cli_wires_pool_offline_and_reasoning_context(
     assert events[1]["payload"]["result"] == {
         "error_count": 0,
         "generated": 1,
+        "reasoning_contexts_used": 1,
         "requested": 1,
         "saved_ids_count": 1,
         "skipped": 0,

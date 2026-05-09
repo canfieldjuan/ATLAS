@@ -17,9 +17,14 @@ from extracted_content_pipeline.signal_extraction import SignalExtractionService
 @dataclass(frozen=True)
 class _Result:
     generated: int = 1
+    reasoning_contexts_used: int = 0
 
     def as_dict(self) -> dict[str, Any]:
-        return {"generated": self.generated, "saved_ids": ["draft-1"]}
+        return {
+            "generated": self.generated,
+            "reasoning_contexts_used": self.reasoning_contexts_used,
+            "saved_ids": ["draft-1"],
+        }
 
 
 class _OpportunityService:
@@ -909,6 +914,7 @@ async def test_execute_step_reports_reasoning_audit_when_provider_attached():
         "requirement": "optional_host_context",
         "service_supports_reasoning": True,
         "provider_configured": True,
+        "contexts_used": 0,
     }
 
 
@@ -928,6 +934,66 @@ async def test_execute_step_reports_reasoning_audit_when_provider_absent():
         "requirement": "optional_host_context",
         "service_supports_reasoning": True,
         "provider_configured": False,
+        "contexts_used": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_step_reports_actual_reasoning_contexts_used():
+    class _ReasoningUsageService(_ReasoningAwareOpportunityService):
+        async def generate(self, **kwargs: Any) -> _Result:
+            self.calls.append(dict(kwargs))
+            return _Result(generated=2, reasoning_contexts_used=2)
+
+    services = ContentOpsExecutionServices(
+        campaign=_ReasoningUsageService(),
+        reasoning_provider_configured=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=services,
+    )
+
+    assert result["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": True,
+        "contexts_used": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_step_omits_contexts_used_when_result_is_uninstrumented():
+    class _UninstrumentedResult:
+        def as_dict(self) -> dict[str, Any]:
+            return {"generated": 1, "saved_ids": ["draft-1"]}
+
+    class _UninstrumentedReasoningService(_ReasoningAwareOpportunityService):
+        async def generate(self, **kwargs: Any) -> _UninstrumentedResult:
+            self.calls.append(dict(kwargs))
+            return _UninstrumentedResult()
+
+    services = ContentOpsExecutionServices(
+        campaign=_UninstrumentedReasoningService(),
+        reasoning_provider_configured=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=services,
+    )
+
+    assert result["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": True,
     }
 
 
