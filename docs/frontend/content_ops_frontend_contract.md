@@ -318,6 +318,9 @@ UI rules:
   on the step card.
 - `canExecute=true` ⇒ show "Execute" button; otherwise show why
   (`preview.warnings` + per-step `reason`).
+- The button is enabled only when `plan.canExecute=true`,
+  `catalog.execution.configured=true`, and every planned output is
+  listed in `catalog.execution.configuredOutputs`.
 
 ### Execution result
 

@@ -572,6 +572,7 @@ export default function ContentOpsNewRun() {
         <PlanPanel
           plan={planState.plan}
           executionConfigured={catalog.execution.configured}
+          configuredOutputs={catalog.execution.configuredOutputs}
           executionState={executionState}
           onExecute={handleExecute}
         />
@@ -708,15 +709,21 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 function PlanPanel({
   plan,
   executionConfigured,
+  configuredOutputs,
   executionState,
   onExecute,
 }: {
   plan: GenerationPlan
   executionConfigured: boolean
+  configuredOutputs: string[]
   executionState: ExecutionState
   onExecute: () => void
 }) {
-  const canExecute = plan.canExecute && executionConfigured
+  const configuredOutputSet = new Set(configuredOutputs)
+  const planOutputsConfigured = plan.steps.every((step) =>
+    configuredOutputSet.has(step.output),
+  )
+  const canExecute = plan.canExecute && executionConfigured && planOutputsConfigured
   const executing = executionState.kind === 'submitting'
   return (
     <section className="mt-6 rounded-lg border border-slate-800 bg-slate-900/60 p-5">
@@ -746,7 +753,9 @@ function PlanPanel({
               ? 'Plan is blocked; cannot execute.'
               : !executionConfigured
                 ? 'Host execution services not configured.'
-                : 'Execute this plan through host services.'
+                : !planOutputsConfigured
+                  ? 'One or more planned outputs are missing host execution services.'
+                  : 'Execute this plan through host services.'
           }
           className={clsx(
             'flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50',
