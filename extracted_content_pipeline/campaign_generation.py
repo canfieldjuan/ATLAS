@@ -234,6 +234,20 @@ class CampaignGenerationService:
         self._reasoning_context = reasoning_context
         self._config = config or CampaignGenerationConfig()
 
+    def with_reasoning_context(
+        self,
+        provider: CampaignReasoningContextProvider | None,
+    ) -> "CampaignGenerationService":
+        # PR-ControlSurfaces-Reasoning-Provider: route-level seam.
+        return CampaignGenerationService(
+            intelligence=self._intelligence,
+            campaigns=self._campaigns,
+            llm=self._llm,
+            skills=self._skills,
+            reasoning_context=provider,
+            config=self._config,
+        )
+
     async def generate(
         self,
         *,

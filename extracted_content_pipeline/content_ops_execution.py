@@ -62,6 +62,40 @@ class ContentOpsExecutionServices:
                 outputs.append(output)
         return tuple(outputs)
 
+    def with_reasoning_context(
+        self,
+        provider: Any | None,
+    ) -> "ContentOpsExecutionServices":
+        """Return a derived bundle with each reasoning-aware service rebound.
+
+        PR-ControlSurfaces-Reasoning-Provider: the /execute route resolves
+        a host-supplied ``reasoning_context_provider`` per request and
+        derives a fresh services bundle so the cached service instances
+        in ``execution_services_provider`` are not mutated. Services that
+        opt in expose ``with_reasoning_context(provider) -> Self``;
+        services that don't (e.g. signal_extraction, which doesn't
+        consume reasoning context) are passed through unchanged.
+        """
+
+        return ContentOpsExecutionServices(
+            campaign=_rebind_reasoning(self.campaign, provider),
+            blog_post=_rebind_reasoning(self.blog_post, provider),
+            report=_rebind_reasoning(self.report, provider),
+            landing_page=_rebind_reasoning(self.landing_page, provider),
+            sales_brief=_rebind_reasoning(self.sales_brief, provider),
+            # signal_extraction stays as-is; it does not consume reasoning.
+            signal_extraction=self.signal_extraction,
+        )
+
+
+def _rebind_reasoning(service: Any | None, provider: Any | None) -> Any | None:
+    if service is None:
+        return None
+    helper = getattr(service, "with_reasoning_context", None)
+    if helper is None:
+        return service
+    return helper(provider)
+
 
 @dataclass(frozen=True)
 class ContentOpsStepExecution:

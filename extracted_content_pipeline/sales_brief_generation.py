@@ -193,6 +193,20 @@ class SalesBriefGenerationService:
         self._reasoning_context = reasoning_context
         self._config = config or SalesBriefGenerationConfig()
 
+    def with_reasoning_context(
+        self,
+        provider: CampaignReasoningContextProvider | None,
+    ) -> "SalesBriefGenerationService":
+        # PR-ControlSurfaces-Reasoning-Provider: route-level seam.
+        return SalesBriefGenerationService(
+            intelligence=self._intelligence,
+            sales_briefs=self._sales_briefs,
+            llm=self._llm,
+            skills=self._skills,
+            reasoning_context=provider,
+            config=self._config,
+        )
+
     async def generate(
         self,
         *,
