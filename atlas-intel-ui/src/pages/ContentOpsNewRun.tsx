@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Loader2, Play, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -45,6 +45,10 @@ export default function ContentOpsNewRun() {
   )
   const [inputsJson, setInputsJson] = useState<string>(DEFAULT_INPUTS_JSON)
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' })
+  // Codex P2 fix: request-id ref so a stale in-flight preview response
+  // can't overwrite a verdict the user has since invalidated by editing
+  // the form. Mirrors the pattern in src/hooks/useApiData.ts.
+  const submitRequestIdRef = useRef(0)
 
   if (error) {
     return <PageError error={error} onRetry={refresh} />
@@ -60,8 +64,10 @@ export default function ContentOpsNewRun() {
 
   // Codex P2 fix: any form mutation invalidates a stale preview verdict so
   // the user never sees a "Can run" badge that doesn't match the current
-  // form state. Re-submit yields a fresh verdict.
+  // form state. Bumping the request id also drops any in-flight preview
+  // response so it can't overwrite the verdict for a newer form state.
   const markStale = () => {
+    submitRequestIdRef.current += 1
     setSubmitState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
   }
 
@@ -91,6 +97,8 @@ export default function ContentOpsNewRun() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    // Bump the id so any prior in-flight request is ignored on resolve.
+    const requestId = ++submitRequestIdRef.current
     setSubmitState({ kind: 'submitting' })
 
     let parsedInputs: Record<string, unknown>
@@ -101,6 +109,7 @@ export default function ContentOpsNewRun() {
         throw new Error('inputs must be a JSON object')
       }
     } catch (err) {
+      if (requestId !== submitRequestIdRef.current) return
       setSubmitState({
         kind: 'invalid_inputs_json',
         message: err instanceof Error ? err.message : String(err),
@@ -111,8 +120,11 @@ export default function ContentOpsNewRun() {
     const domainRequest: ContentOpsRequest = { ...request, inputs: parsedInputs }
     try {
       const wirePreview = await previewContentOpsRun(toWireRequest(domainRequest))
+      // Drop the response if a newer mutation / submission has happened.
+      if (requestId !== submitRequestIdRef.current) return
       setSubmitState({ kind: 'success', preview: fromWirePreview(wirePreview) })
     } catch (err) {
+      if (requestId !== submitRequestIdRef.current) return
       setSubmitState({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
