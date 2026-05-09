@@ -1,0 +1,52 @@
+{
+  "can_execute": false,
+  "target_mode": "vendor_retention",
+  "limit": 1,
+  "steps": [
+    {
+      "output": "email_campaign",
+      "runner": "CampaignGenerationService.generate",
+      "status": "runnable",
+      "config": {
+        "skill_name": "digest/b2b_campaign_generation",
+        "channels": [
+          "email_cold",
+          "email_followup"
+        ],
+        "limit": 1,
+        "max_tokens": 1200,
+        "temperature": 0.4,
+        "quality_revalidation_enabled": true,
+        "quality_prompt_proof_term_limit": 5,
+        "parse_retry_attempts": 1,
+        "parse_retry_response_excerpt_chars": 800
+      },
+      "reason": ""
+    }
+  ],
+  "preview": {
+    "can_run": false,
+    "outputs": [
+      "email_campaign"
+    ],
+    "estimated_cost_usd": 0.36,
+    "missing_inputs": [
+      "target_account",
+      "offer"
+    ],
+    "blocked_outputs": [],
+    "warnings": [],
+    "normalized_request": {
+      "target_mode": "vendor_retention",
+      "preset": null,
+      "outputs": [
+        "email_campaign"
+      ],
+      "limit": 1,
+      "max_cost_usd": null,
+      "ingestion_profile": "domain_specific",
+      "require_quality_gates": true,
+      "allow_unimplemented_outputs": false
+    }
+  }
+}
