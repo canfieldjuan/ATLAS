@@ -350,9 +350,9 @@ UI rules:
 - The MVP execute view may render `result` as read-only JSON while
   per-output adapters are still landing. It must still surface
   step-level status, runner, and `error` inline.
-- `email_campaign` should summarize `generated` and `saved_ids`
-  before the raw JSON block so users do not need to inspect the
-  result payload for the common draft-generation case.
+- `email_campaign` should summarize `generated`, `saved_ids`, and
+  `errors.length` before the raw JSON block so users do not need to
+  inspect the result payload for the common draft-generation case.
 - `signal_extraction` should summarize `generated`, `target_mode`,
   `warnings.length`, and a short list of extracted opportunities
   before the raw JSON block.

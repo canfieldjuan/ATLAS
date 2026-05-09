@@ -908,11 +908,12 @@ function ExecutionStepSummary({
   const savedIds = Array.isArray(result.saved_ids)
     ? result.saved_ids.filter((id): id is string => typeof id === 'string')
     : []
+  const errorCount = Array.isArray(result.errors) ? result.errors.length : null
 
-  if (generated === null && savedIds.length === 0) return null
+  if (generated === null && savedIds.length === 0 && errorCount === null) return null
 
   return (
-    <div className="mb-3 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+    <div className="mb-3 space-y-2 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
       <div className="flex flex-wrap items-center gap-3">
         {generated !== null && (
           <span>
@@ -920,13 +921,26 @@ function ExecutionStepSummary({
             <span className="font-medium text-slate-100">{generated}</span>
           </span>
         )}
-        {savedIds.length > 0 && (
+        {errorCount !== null && (
           <span>
-            Saved:{' '}
-            <span className="font-mono text-slate-100">{savedIds.join(', ')}</span>
+            Errors:{' '}
+            <span className="font-medium text-slate-100">{errorCount}</span>
           </span>
         )}
       </div>
+      {savedIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span>Saved:</span>
+          {savedIds.map((id) => (
+            <span
+              key={id}
+              className="max-w-full break-all rounded bg-slate-950/60 px-1.5 py-0.5 font-mono text-slate-100"
+            >
+              {id}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

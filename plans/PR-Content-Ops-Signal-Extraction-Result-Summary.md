@@ -16,6 +16,9 @@ Files touched:
    - Extend `ExecutionStepSummary` with a `signal_extraction` branch.
    - Summarize `generated`, `target_mode`, `warnings.length`, and a
      short list of extracted opportunities.
+   - Review follow-up: include `vendor_name` in the opportunity label
+     fallback, surface `email_campaign` `errors.length`, and render
+     saved IDs as wrapping chips instead of one long string.
    - Keep raw result JSON rendering for every output.
 
 2. `docs/frontend/content_ops_frontend_contract.md`
@@ -43,7 +46,9 @@ Unknown payload fields still render under the raw JSON block.
 - No backend changes.
 - No attempt to render full opportunity details; this slice only
   makes the execution result scannable.
-- No changes to `email_campaign` summary behavior.
+- No backend or API changes to `email_campaign` behavior. The UI
+  summary may still surface existing `errors` and wrap existing
+  `saved_ids` more readably.
 
 ## Deferred
 
