@@ -246,6 +246,7 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
         "requested": 1,
         "generated": 1,
         "skipped": 0,
+        "reasoning_contexts_used": 0,
         "saved_ids": ["draft-1"],
         "errors": [],
     }
@@ -336,6 +337,7 @@ async def test_generate_expands_configured_channels_and_passes_cold_context():
         "requested": 1,
         "generated": 2,
         "skipped": 0,
+        "reasoning_contexts_used": 0,
         "saved_ids": ["draft-1", "draft-2"],
         "errors": [],
     }
@@ -409,6 +411,7 @@ async def test_generate_uses_host_reasoning_context_without_pool_compression_imp
     result = await service.generate(scope=scope, target_mode="vendor_retention")
 
     assert result.generated == 1
+    assert result.as_dict()["reasoning_contexts_used"] == 1
     assert provider.calls[0]["scope"] == scope
     assert provider.calls[0]["target_id"] == "opp-1"
     assert provider.calls[0]["target_mode"] == "vendor_retention"
@@ -538,6 +541,7 @@ async def test_generate_uses_provider_canonical_reasoning_context_without_other_
     )
 
     assert result.generated == 1
+    assert result.as_dict()["reasoning_contexts_used"] == 1
     prompt = llm.calls[0]["messages"][0].content
     assert "renewal pressure" in prompt
     assert "Acme is reviewing vendors before renewal." in prompt
@@ -1230,5 +1234,4 @@ async def test_generate_per_call_quality_prompt_proof_term_limit_override():
     assert len(found_terms) <= 2, (
         f"override should cap proof terms at 2; saw {len(found_terms)}: {found_terms}"
     )
-
 
