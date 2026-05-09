@@ -899,6 +899,9 @@ function ExecutionStepSummary({
   output: string
   result: Record<string, unknown>
 }) {
+  if (output === 'signal_extraction') {
+    return <SignalExtractionSummary result={result} />
+  }
   if (output !== 'email_campaign') return null
 
   const generated = typeof result.generated === 'number' ? result.generated : null
@@ -926,6 +929,89 @@ function ExecutionStepSummary({
       </div>
     </div>
   )
+}
+
+function SignalExtractionSummary({ result }: { result: Record<string, unknown> }) {
+  const generated = typeof result.generated === 'number' ? result.generated : null
+  const targetMode =
+    typeof result.target_mode === 'string' ? result.target_mode : null
+  const warningCount = Array.isArray(result.warnings)
+    ? result.warnings.length
+    : null
+  const opportunities = Array.isArray(result.opportunities)
+    ? result.opportunities.filter(isRecord).slice(0, 3)
+    : []
+
+  if (
+    generated === null &&
+    targetMode === null &&
+    warningCount === null &&
+    opportunities.length === 0
+  ) {
+    return null
+  }
+
+  return (
+    <div className="mb-3 space-y-2 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+      <div className="flex flex-wrap items-center gap-3">
+        {generated !== null && (
+          <span>
+            Opportunities:{' '}
+            <span className="font-medium text-slate-100">{generated}</span>
+          </span>
+        )}
+        {targetMode && (
+          <span>
+            Target mode:{' '}
+            <span className="font-mono text-slate-100">{targetMode}</span>
+          </span>
+        )}
+        {warningCount !== null && (
+          <span>
+            Warnings:{' '}
+            <span className="font-medium text-slate-100">{warningCount}</span>
+          </span>
+        )}
+      </div>
+      {opportunities.length > 0 && (
+        <ul className="space-y-1 text-slate-400">
+          {opportunities.map((opportunity, index) => (
+            <li key={opportunityKey(opportunity, index)}>
+              {opportunityLabel(opportunity)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function opportunityKey(
+  opportunity: Record<string, unknown>,
+  index: number,
+): string {
+  const key = opportunity.target_id ?? opportunity.source_id ?? opportunity.contact_email
+  return typeof key === 'string' && key ? key : String(index)
+}
+
+function opportunityLabel(opportunity: Record<string, unknown>): string {
+  const company = stringField(opportunity, 'company_name') ?? stringField(opportunity, 'company')
+  const vendor = stringField(opportunity, 'vendor')
+  const email = stringField(opportunity, 'contact_email')
+  const id = stringField(opportunity, 'target_id') ?? stringField(opportunity, 'source_id')
+  return [company, vendor, email, id].filter(Boolean).join(' | ') || 'Opportunity'
+}
+
+function stringField(
+  value: Record<string, unknown>,
+  key: string,
+): string | null {
+  const field = value[key]
+  return typeof field === 'string' && field ? field : null
 }
 
 function executionDetailMessage(detail: unknown): string {

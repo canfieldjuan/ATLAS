@@ -353,6 +353,9 @@ UI rules:
 - `email_campaign` should summarize `generated` and `saved_ids`
   before the raw JSON block so users do not need to inspect the
   result payload for the common draft-generation case.
+- `signal_extraction` should summarize `generated`, `target_mode`,
+  `warnings.length`, and a short list of extracted opportunities
+  before the raw JSON block.
 
 ### Signal extraction (special case)
 
