@@ -318,6 +318,9 @@ UI rules:
   on the step card.
 - `canExecute=true` ⇒ show "Execute" button; otherwise show why
   (`preview.warnings` + per-step `reason`).
+- The button is enabled only when `plan.canExecute=true`,
+  `catalog.execution.configured=true`, and every planned output is
+  listed in `catalog.execution.configuredOutputs`.
 
 ### Execution result
 
@@ -344,6 +347,9 @@ UI rules:
   blocked-plan panel.
 - The step's `result` is runner-specific; render via per-output
   view adapters (see below).
+- The MVP execute view may render `result` as read-only JSON while
+  per-output adapters are still landing. It must still surface
+  step-level status, runner, and `error` inline.
 
 ### Signal extraction (special case)
 

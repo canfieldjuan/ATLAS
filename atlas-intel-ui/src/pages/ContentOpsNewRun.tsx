@@ -2,17 +2,20 @@ import { useMemo, useRef, useState } from 'react'
 import { ChevronRight, Loader2, Play, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
+  executeContentOpsRun,
   fetchContentOpsControlSurfaces,
   planContentOpsRun,
   previewContentOpsRun,
 } from '../api/contentOps'
 import {
   fromWireCatalog,
+  fromWireExecution,
   fromWirePlan,
   fromWirePreview,
   fromWireRequest,
   toWireRequest,
   type ContentOpsCatalog,
+  type ContentOpsExecutionResult,
   type ContentOpsRequest,
   type ControlSurfacePreview,
   type GenerationPlan,
@@ -37,6 +40,12 @@ type PlanState =
   | { kind: 'submitting' }
   | { kind: 'error'; message: string }
   | { kind: 'success'; plan: GenerationPlan }
+
+type ExecutionState =
+  | { kind: 'idle' }
+  | { kind: 'submitting' }
+  | { kind: 'error'; message: string }
+  | { kind: 'success'; result: ContentOpsExecutionResult }
 
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
 
@@ -64,6 +73,9 @@ export default function ContentOpsNewRun() {
   const [inputsJson, setInputsJson] = useState<string>(DEFAULT_INPUTS_JSON)
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' })
   const [planState, setPlanState] = useState<PlanState>({ kind: 'idle' })
+  const [executionState, setExecutionState] = useState<ExecutionState>({
+    kind: 'idle',
+  })
   // Codex P2 fix: request-id ref so a stale in-flight preview/plan
   // response can't overwrite a result the user has since invalidated
   // by editing the form. Both preview and plan share the same id
@@ -92,6 +104,7 @@ export default function ContentOpsNewRun() {
     submitRequestIdRef.current += 1
     setSubmitState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
     setPlanState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
+    setExecutionState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
   }
 
   const togglePreset = (presetId: string) => {
@@ -181,6 +194,7 @@ export default function ContentOpsNewRun() {
     // never overwritten), and the Build-plan CTA would stay disabled
     // indefinitely until the user mutates the form.
     setPlanState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
+    setExecutionState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
 
     const parsed = buildDomainRequest()
     if (!parsed.ok) {
@@ -206,6 +220,7 @@ export default function ContentOpsNewRun() {
     // Bump id so a stale plan response can't overwrite a newer one.
     const requestId = ++submitRequestIdRef.current
     setPlanState({ kind: 'submitting' })
+    setExecutionState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
 
     const parsed = buildDomainRequest()
     if (!parsed.ok) {
@@ -221,6 +236,40 @@ export default function ContentOpsNewRun() {
     } catch (err) {
       if (requestId !== submitRequestIdRef.current) return
       setPlanState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  const handleExecute = async () => {
+    const requestId = ++submitRequestIdRef.current
+    setExecutionState({ kind: 'submitting' })
+
+    const parsed = buildDomainRequest()
+    if (!parsed.ok) {
+      if (requestId !== submitRequestIdRef.current) return
+      setExecutionState({ kind: 'error', message: parsed.message })
+      return
+    }
+
+    try {
+      const outcome = await executeContentOpsRun(toWireRequest(parsed.domainRequest))
+      if (requestId !== submitRequestIdRef.current) return
+      if ('result' in outcome) {
+        setExecutionState({
+          kind: 'success',
+          result: fromWireExecution(outcome.result),
+        })
+        return
+      }
+      setExecutionState({
+        kind: 'error',
+        message: executionDetailMessage(outcome.detail),
+      })
+    } catch (err) {
+      if (requestId !== submitRequestIdRef.current) return
+      setExecutionState({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
       })
@@ -524,12 +573,23 @@ export default function ContentOpsNewRun() {
         <PlanPanel
           plan={planState.plan}
           executionConfigured={catalog.execution.configured}
+          configuredOutputs={catalog.execution.configuredOutputs}
+          executionState={executionState}
+          onExecute={handleExecute}
         />
       )}
       {planState.kind === 'error' && (
         <div className="mt-6 rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
           Plan failed: {planState.message}
         </div>
+      )}
+      {executionState.kind === 'error' && (
+        <div className="mt-6 rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          Execute failed: {executionState.message}
+        </div>
+      )}
+      {executionState.kind === 'success' && (
+        <ExecutionPanel result={executionState.result} />
       )}
     </div>
   )
@@ -650,11 +710,22 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 function PlanPanel({
   plan,
   executionConfigured,
+  configuredOutputs,
+  executionState,
+  onExecute,
 }: {
   plan: GenerationPlan
   executionConfigured: boolean
+  configuredOutputs: string[]
+  executionState: ExecutionState
+  onExecute: () => void
 }) {
-  const canExecute = plan.canExecute && executionConfigured
+  const configuredOutputSet = new Set(configuredOutputs)
+  const planOutputsConfigured = plan.steps.every((step) =>
+    configuredOutputSet.has(step.output),
+  )
+  const canExecute = plan.canExecute && executionConfigured && planOutputsConfigured
+  const executing = executionState.kind === 'submitting'
   return (
     <section className="mt-6 rounded-lg border border-slate-800 bg-slate-900/60 p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -676,18 +747,30 @@ function PlanPanel({
         </div>
         <button
           type="button"
-          disabled
+          onClick={onExecute}
+          disabled={!canExecute || executing}
           title={
             !plan.canExecute
               ? 'Plan is blocked; cannot execute.'
               : !executionConfigured
                 ? 'Host execution services not configured.'
-                : 'Execute screen ships in the next slice.'
+                : !planOutputsConfigured
+                  ? 'One or more planned outputs are missing host execution services.'
+                  : 'Execute this plan through host services.'
           }
-          className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-800/40 px-3 py-1.5 text-xs font-medium text-slate-400 disabled:cursor-not-allowed"
+          className={clsx(
+            'flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50',
+            canExecute
+              ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20'
+              : 'border-slate-700 bg-slate-800/40 text-slate-400',
+          )}
         >
-          <Play className="h-3.5 w-3.5" />
-          Execute {canExecute ? '(coming soon)' : '(disabled)'}
+          {executing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Play className="h-3.5 w-3.5" />
+          )}
+          Execute {canExecute ? '' : '(disabled)'}
         </button>
       </div>
 
@@ -734,4 +817,85 @@ function PlanStepCard({ step }: { step: GenerationPlanStep }) {
       )}
     </div>
   )
+}
+
+function ExecutionPanel({ result }: { result: ContentOpsExecutionResult }) {
+  const tone =
+    result.status === 'completed'
+      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+      : result.status === 'partial' || result.status === 'blocked'
+        ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+        : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+  return (
+    <section className="mt-6 rounded-lg border border-slate-800 bg-slate-900/60 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className={clsx('rounded-full border px-3 py-0.5 text-xs font-medium', tone)}>
+            Execution: {result.status}
+          </span>
+          <span className="text-sm text-slate-400">
+            {result.steps.length} step{result.steps.length === 1 ? '' : 's'}
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {result.steps.map((step) => (
+          <div
+            key={`${step.output}-${step.runner}`}
+            className="rounded-md border border-slate-800 bg-slate-950/40 p-3"
+          >
+            <div className="mb-2 flex items-center gap-3">
+              <span className="font-mono text-sm text-slate-100">{step.output}</span>
+              <span
+                className={clsx(
+                  'rounded px-2 py-0.5 text-[10px] uppercase tracking-wide',
+                  step.status === 'completed'
+                    ? 'bg-emerald-500/10 text-emerald-300'
+                    : step.status === 'skipped'
+                      ? 'bg-slate-700 text-slate-400'
+                      : 'bg-rose-500/10 text-rose-200',
+                )}
+              >
+                {step.status}
+              </span>
+              <span className="text-xs text-slate-500">{step.runner}</span>
+            </div>
+            {step.error && (
+              <div className="mb-2 rounded bg-rose-500/5 px-2 py-1 text-xs text-rose-200">
+                Error: {step.error}
+              </div>
+            )}
+            {Object.keys(step.result).length > 0 && (
+              <details className="text-xs text-slate-400">
+                <summary className="cursor-pointer text-slate-500 hover:text-slate-300">
+                  Result ({Object.keys(step.result).length} fields)
+                </summary>
+                <pre className="mt-2 overflow-x-auto rounded bg-slate-950/80 p-2 font-mono text-[11px] text-slate-300">
+                  {JSON.stringify(step.result, null, 2)}
+                </pre>
+              </details>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {result.errors.length > 0 && (
+        <Section label="Execution errors">
+          <pre className="overflow-x-auto rounded-md bg-slate-950/80 p-3 font-mono text-xs text-rose-100">
+            {JSON.stringify(result.errors, null, 2)}
+          </pre>
+        </Section>
+      )}
+    </section>
+  )
+}
+
+function executionDetailMessage(detail: unknown): string {
+  if (typeof detail === 'string') return detail
+  try {
+    return JSON.stringify(detail)
+  } catch {
+    return 'Execution request failed.'
+  }
 }
