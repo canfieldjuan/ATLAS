@@ -866,6 +866,7 @@ function ExecutionPanel({ result }: { result: ContentOpsExecutionResult }) {
                 Error: {step.error}
               </div>
             )}
+            <ExecutionStepSummary output={step.output} result={step.result} />
             {Object.keys(step.result).length > 0 && (
               <details className="text-xs text-slate-400">
                 <summary className="cursor-pointer text-slate-500 hover:text-slate-300">
@@ -888,6 +889,42 @@ function ExecutionPanel({ result }: { result: ContentOpsExecutionResult }) {
         </Section>
       )}
     </section>
+  )
+}
+
+function ExecutionStepSummary({
+  output,
+  result,
+}: {
+  output: string
+  result: Record<string, unknown>
+}) {
+  if (output !== 'email_campaign') return null
+
+  const generated = typeof result.generated === 'number' ? result.generated : null
+  const savedIds = Array.isArray(result.saved_ids)
+    ? result.saved_ids.filter((id): id is string => typeof id === 'string')
+    : []
+
+  if (generated === null && savedIds.length === 0) return null
+
+  return (
+    <div className="mb-3 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+      <div className="flex flex-wrap items-center gap-3">
+        {generated !== null && (
+          <span>
+            Drafts generated:{' '}
+            <span className="font-medium text-slate-100">{generated}</span>
+          </span>
+        )}
+        {savedIds.length > 0 && (
+          <span>
+            Saved:{' '}
+            <span className="font-mono text-slate-100">{savedIds.join(', ')}</span>
+          </span>
+        )}
+      </div>
+    </div>
   )
 }
 
