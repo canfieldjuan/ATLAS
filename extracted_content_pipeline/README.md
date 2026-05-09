@@ -584,13 +584,15 @@ smoke before wiring real asset services:
 
 ```bash
 python scripts/smoke_extracted_content_ops_execution.py
-python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --target-mode challenger_intel --no-quality-gates --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
 ```
 
 This validates the full campaign preset and the deterministic source-material
 normalization path through host-injected services without opening database,
-network, sender, or LLM handles.
+network, sender, or LLM handles. `--no-quality-gates` is an execution-smoke
+override for checking the request wiring; production hosts should leave quality
+gates enabled unless they intentionally disable them in their own policy layer.
 
 Hosts can inject a `visibility_provider` when mounting the router. The four
 POST operation routes emit best-effort `campaign_operation_started`,

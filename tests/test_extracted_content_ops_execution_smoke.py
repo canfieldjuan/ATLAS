@@ -48,6 +48,7 @@ def test_content_ops_execution_smoke_cli_accepts_output_subset_json() -> None:
             "email_campaign,report",
             "--target-mode",
             "challenger_intel",
+            "--no-quality-gates",
             "--limit",
             "2",
             "--json",
@@ -66,6 +67,12 @@ def test_content_ops_execution_smoke_cli_accepts_output_subset_json() -> None:
     assert payload["steps"][0]["result"]["generated"] == 2
     assert payload["steps"][0]["result"]["target_mode"] == "challenger_intel"
     assert payload["steps"][1]["result"]["target_mode"] == "challenger_intel"
+    assert payload["steps"][0]["result"]["quality_revalidation_enabled"] is False
+    assert payload["steps"][1]["result"]["quality_gates_enabled"] is False
+    assert (
+        payload["plan"]["preview"]["normalized_request"]["require_quality_gates"]
+        is False
+    )
 
 
 def test_content_ops_execution_smoke_cli_runs_signal_extraction_json() -> None:

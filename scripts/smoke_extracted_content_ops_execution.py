@@ -26,7 +26,7 @@ from extracted_content_pipeline.signal_extraction import SignalExtractionService
 # (channels, default_report_type, default_brief_type, temperature,
 # max_tokens, parse_retry_attempts, parse_retry_response_excerpt_chars,
 # quality_revalidation_enabled, quality_prompt_proof_term_limit,
-# quality_gates_enabled). The smoke fakes accept (and ignore) those via
+# quality_gates_enabled). The smoke fakes accept those via
 # ``**extras`` -- this CLI exercises the seam end-to-end, not the kwargs
 # contract. Strict per-kwarg assertions live in the dispatcher tests in
 # ``tests/test_extracted_content_ops_execution.py``.
@@ -43,14 +43,21 @@ class _OpportunityAssetService:
         filters: Mapping[str, Any] | None = None,
         **extras: Any,
     ) -> dict[str, Any]:
-        del scope, extras
-        return {
+        del scope
+        result = {
             "generated": int(limit or 1),
             "asset": self.name,
             "target_mode": target_mode,
             "filters": dict(filters or {}),
             "saved_ids": [f"{self.name}-draft-1"],
         }
+        if "quality_gates_enabled" in extras:
+            result["quality_gates_enabled"] = extras["quality_gates_enabled"]
+        if "quality_revalidation_enabled" in extras:
+            result["quality_revalidation_enabled"] = extras[
+                "quality_revalidation_enabled"
+            ]
+        return result
 
 
 class _LandingPageAssetService:
@@ -61,13 +68,16 @@ class _LandingPageAssetService:
         campaign: Any,
         **extras: Any,
     ) -> dict[str, Any]:
-        del scope, extras
-        return {
+        del scope
+        result = {
             "generated": 1,
             "asset": "landing_page",
             "campaign_name": getattr(campaign, "name", ""),
             "saved_ids": ["landing-page-draft-1"],
         }
+        if "quality_gates_enabled" in extras:
+            result["quality_gates_enabled"] = extras["quality_gates_enabled"]
+        return result
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -83,7 +93,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated output ids. Overrides --preset when supplied.",
     )
     parser.add_argument("--limit", type=int, default=1)
-    parser.add_argument("--target-mode", default="vendor_retention")
+    parser.add_argument(
+        "--target-mode",
+        default="vendor_retention",
+        help="Target mode to pass through the execution request.",
+    )
+    parser.add_argument(
+        "--no-quality-gates",
+        action="store_true",
+        help="Set require_quality_gates=false in the execution request.",
+    )
     parser.add_argument("--target-account", default="Acme")
     parser.add_argument("--offer", default="Churn intelligence audit")
     parser.add_argument("--topic", default="Churn pressure")
@@ -113,6 +132,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "preset": str(args.preset or "").strip() or "full_campaign",
         "target_mode": str(args.target_mode or "").strip() or "vendor_retention",
+        "require_quality_gates": not bool(args.no_quality_gates),
         "limit": max(1, int(args.limit or 1)),
         "inputs": {
             "target_account": args.target_account,
