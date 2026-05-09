@@ -1,18 +1,22 @@
 import { useMemo, useRef, useState } from 'react'
-import { Loader2, Play, RefreshCw } from 'lucide-react'
+import { ChevronRight, Loader2, Play, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   fetchContentOpsControlSurfaces,
+  planContentOpsRun,
   previewContentOpsRun,
 } from '../api/contentOps'
 import {
   fromWireCatalog,
+  fromWirePlan,
   fromWirePreview,
   fromWireRequest,
   toWireRequest,
   type ContentOpsCatalog,
   type ContentOpsRequest,
   type ControlSurfacePreview,
+  type GenerationPlan,
+  type GenerationPlanStep,
 } from '../domain/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
@@ -24,6 +28,15 @@ type SubmitState =
   | { kind: 'invalid_max_cost'; message: string }
   | { kind: 'error'; message: string }
   | { kind: 'success'; preview: ControlSurfacePreview }
+
+// Screen 2 (Plan Preview): parallel state for the plan response.
+// Lives alongside SubmitState so the user can see preview + plan
+// stacked. Form mutations clear both via markStale().
+type PlanState =
+  | { kind: 'idle' }
+  | { kind: 'submitting' }
+  | { kind: 'error'; message: string }
+  | { kind: 'success'; plan: GenerationPlan }
 
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
 
@@ -50,9 +63,11 @@ export default function ContentOpsNewRun() {
   const [maxCostUsdInput, setMaxCostUsdInput] = useState<string>('')
   const [inputsJson, setInputsJson] = useState<string>(DEFAULT_INPUTS_JSON)
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' })
-  // Codex P2 fix: request-id ref so a stale in-flight preview response
-  // can't overwrite a verdict the user has since invalidated by editing
-  // the form. Mirrors the pattern in src/hooks/useApiData.ts.
+  const [planState, setPlanState] = useState<PlanState>({ kind: 'idle' })
+  // Codex P2 fix: request-id ref so a stale in-flight preview/plan
+  // response can't overwrite a result the user has since invalidated
+  // by editing the form. Both preview and plan share the same id
+  // namespace -- any form mutation invalidates both.
   const submitRequestIdRef = useRef(0)
 
   if (error) {
@@ -67,13 +82,15 @@ export default function ContentOpsNewRun() {
     )
   }
 
-  // Codex P2 fix: any form mutation invalidates a stale preview verdict so
-  // the user never sees a "Can run" badge that doesn't match the current
-  // form state. Bumping the request id also drops any in-flight preview
-  // response so it can't overwrite the verdict for a newer form state.
+  // Codex P2 fix: any form mutation invalidates a stale preview verdict
+  // and plan panel so the user never sees a "Can run" badge or plan
+  // panel that doesn't match the current form state. Bumping the
+  // request id also drops any in-flight preview / plan response so it
+  // can't overwrite the panels for a newer form state.
   const markStale = () => {
     submitRequestIdRef.current += 1
     setSubmitState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
+    setPlanState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
   }
 
   const togglePreset = (presetId: string) => {
@@ -100,12 +117,18 @@ export default function ContentOpsNewRun() {
     markStale()
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    // Bump the id so any prior in-flight request is ignored on resolve.
-    const requestId = ++submitRequestIdRef.current
-    setSubmitState({ kind: 'submitting' })
+  type ParsedRequest =
+    | { ok: true; domainRequest: ContentOpsRequest }
+    | {
+        ok: false
+        kind: 'invalid_inputs_json' | 'invalid_max_cost'
+        message: string
+      }
 
+  // Shared submit-time parse for both preview and plan. Validates the
+  // inputs JSON and the max-cost string draft against the backend's
+  // pydantic constraints before either round-trip.
+  const buildDomainRequest = (): ParsedRequest => {
     let parsedInputs: Record<string, unknown>
     try {
       const trimmed = inputsJson.trim()
@@ -114,53 +137,83 @@ export default function ContentOpsNewRun() {
         throw new Error('inputs must be a JSON object')
       }
     } catch (err) {
-      if (requestId !== submitRequestIdRef.current) return
-      setSubmitState({
+      return {
+        ok: false,
         kind: 'invalid_inputs_json',
         message: err instanceof Error ? err.message : String(err),
-      })
-      return
+      }
     }
 
-    // Submit-time max-cost parse + normalization. The input is a string
-    // draft (so decimals like "0.50" can be typed); parse here.
-    //
-    // Codex P2 fix: max-cost is a spend cap -- if the user typed a
-    // non-empty unparseable value like "$10", silently dropping the
-    // cap is unsafe (they think they capped spend; reality is no
-    // cap). Reject non-empty unparseable / non-positive input
-    // explicitly. Blank stays "no cap" per the backend's optional
-    // field semantics; the backend's pydantic validator (gt=0) means
-    // 0 / negative would also be rejected -- we surface the rejection
-    // here so the user sees a clear error rather than a silent strip.
     const trimmedMaxCost = maxCostUsdInput.trim()
     let normalizedMaxCost: number | null = null
     if (trimmedMaxCost !== '') {
       const parsed = Number(trimmedMaxCost)
       if (!Number.isFinite(parsed) || parsed <= 0) {
-        if (requestId !== submitRequestIdRef.current) return
-        setSubmitState({
+        return {
+          ok: false,
           kind: 'invalid_max_cost',
           message:
             'Max cost must be a positive number (e.g. 0.50). Leave blank for no cap.',
-        })
-        return
+        }
       }
       normalizedMaxCost = parsed
     }
-    const domainRequest: ContentOpsRequest = {
-      ...request,
-      inputs: parsedInputs,
-      maxCostUsd: normalizedMaxCost,
+
+    return {
+      ok: true,
+      domainRequest: {
+        ...request,
+        inputs: parsedInputs,
+        maxCostUsd: normalizedMaxCost,
+      },
     }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    // Bump the id so any prior in-flight request is ignored on resolve.
+    const requestId = ++submitRequestIdRef.current
+    setSubmitState({ kind: 'submitting' })
+
+    const parsed = buildDomainRequest()
+    if (!parsed.ok) {
+      if (requestId !== submitRequestIdRef.current) return
+      setSubmitState({ kind: parsed.kind, message: parsed.message })
+      return
+    }
+
     try {
-      const wirePreview = await previewContentOpsRun(toWireRequest(domainRequest))
-      // Drop the response if a newer mutation / submission has happened.
+      const wirePreview = await previewContentOpsRun(toWireRequest(parsed.domainRequest))
       if (requestId !== submitRequestIdRef.current) return
       setSubmitState({ kind: 'success', preview: fromWirePreview(wirePreview) })
     } catch (err) {
       if (requestId !== submitRequestIdRef.current) return
       setSubmitState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  const handlePlan = async () => {
+    // Bump id so a stale plan response can't overwrite a newer one.
+    const requestId = ++submitRequestIdRef.current
+    setPlanState({ kind: 'submitting' })
+
+    const parsed = buildDomainRequest()
+    if (!parsed.ok) {
+      if (requestId !== submitRequestIdRef.current) return
+      setPlanState({ kind: 'error', message: parsed.message })
+      return
+    }
+
+    try {
+      const wirePlan = await planContentOpsRun(toWireRequest(parsed.domainRequest))
+      if (requestId !== submitRequestIdRef.current) return
+      setPlanState({ kind: 'success', plan: fromWirePlan(wirePlan) })
+    } catch (err) {
+      if (requestId !== submitRequestIdRef.current) return
+      setPlanState({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
       })
@@ -429,29 +482,78 @@ export default function ContentOpsNewRun() {
         </div>
       )}
       {submitState.kind === 'success' && (
-        <PreviewVerdict preview={submitState.preview} />
+        <PreviewVerdict
+          preview={submitState.preview}
+          planState={planState}
+          onBuildPlan={handlePlan}
+          executionConfigured={catalog.execution.configured}
+        />
+      )}
+      {planState.kind === 'success' && (
+        <PlanPanel
+          plan={planState.plan}
+          executionConfigured={catalog.execution.configured}
+        />
+      )}
+      {planState.kind === 'error' && (
+        <div className="mt-6 rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          Plan failed: {planState.message}
+        </div>
       )}
     </div>
   )
 }
 
-function PreviewVerdict({ preview }: { preview: ControlSurfacePreview }) {
+function PreviewVerdict({
+  preview,
+  planState,
+  onBuildPlan,
+  executionConfigured,
+}: {
+  preview: ControlSurfacePreview
+  planState: PlanState
+  onBuildPlan: () => void
+  executionConfigured: boolean
+}) {
+  const planning = planState.kind === 'submitting'
   return (
     <section className="mt-8 rounded-lg border border-slate-800 bg-slate-900/60 p-5">
-      <div className="mb-3 flex items-center gap-3">
-        <span
-          className={clsx(
-            'rounded-full px-3 py-0.5 text-xs font-medium',
-            preview.canRun
-              ? 'bg-emerald-500/20 text-emerald-300'
-              : 'bg-amber-500/20 text-amber-200',
-          )}
-        >
-          {preview.canRun ? 'Can run' : 'Blocked'}
-        </span>
-        <span className="text-sm text-slate-400">
-          Estimated cost: ${preview.estimatedCostUsd.toFixed(2)}
-        </span>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            className={clsx(
+              'rounded-full px-3 py-0.5 text-xs font-medium',
+              preview.canRun
+                ? 'bg-emerald-500/20 text-emerald-300'
+                : 'bg-amber-500/20 text-amber-200',
+            )}
+          >
+            {preview.canRun ? 'Can run' : 'Blocked'}
+          </span>
+          <span className="text-sm text-slate-400">
+            Estimated cost: ${preview.estimatedCostUsd.toFixed(2)}
+          </span>
+        </div>
+        {preview.canRun && (
+          <button
+            type="button"
+            onClick={onBuildPlan}
+            disabled={planning}
+            title={
+              executionConfigured
+                ? 'Build the plan that the backend would execute.'
+                : 'Build a read-only plan (host execution services not configured).'
+            }
+            className="flex items-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
+          >
+            {planning ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+            Build plan
+          </button>
+        )}
       </div>
 
       {preview.outputs.length > 0 && (
@@ -510,6 +612,95 @@ function Section({ label, children }: { label: string; children: React.ReactNode
         {label}
       </div>
       {children}
+    </div>
+  )
+}
+
+function PlanPanel({
+  plan,
+  executionConfigured,
+}: {
+  plan: GenerationPlan
+  executionConfigured: boolean
+}) {
+  const canExecute = plan.canExecute && executionConfigured
+  return (
+    <section className="mt-6 rounded-lg border border-slate-800 bg-slate-900/60 p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            className={clsx(
+              'rounded-full px-3 py-0.5 text-xs font-medium',
+              plan.canExecute
+                ? 'bg-emerald-500/20 text-emerald-300'
+                : 'bg-amber-500/20 text-amber-200',
+            )}
+          >
+            Plan: {plan.canExecute ? 'Can execute' : 'Blocked'}
+          </span>
+          <span className="text-sm text-slate-400">
+            {plan.steps.length} step{plan.steps.length === 1 ? '' : 's'} ·
+            target_mode={plan.targetMode} · limit={plan.limit}
+          </span>
+        </div>
+        <button
+          type="button"
+          disabled
+          title={
+            !plan.canExecute
+              ? 'Plan is blocked; cannot execute.'
+              : !executionConfigured
+                ? 'Host execution services not configured.'
+                : 'Execute screen ships in the next slice.'
+          }
+          className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-800/40 px-3 py-1.5 text-xs font-medium text-slate-400 disabled:cursor-not-allowed"
+        >
+          <Play className="h-3.5 w-3.5" />
+          Execute {canExecute ? '(coming soon)' : '(disabled)'}
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {plan.steps.map((step) => (
+          <PlanStepCard key={step.output} step={step} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function PlanStepCard({ step }: { step: GenerationPlanStep }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
+      <div className="mb-2 flex items-center gap-3">
+        <span className="font-mono text-sm text-slate-100">{step.output}</span>
+        <span
+          className={clsx(
+            'rounded px-2 py-0.5 text-[10px] uppercase tracking-wide',
+            step.status === 'runnable'
+              ? 'bg-emerald-500/10 text-emerald-300'
+              : 'bg-amber-500/10 text-amber-200',
+          )}
+        >
+          {step.status}
+        </span>
+        <span className="text-xs text-slate-500">{step.runner}</span>
+      </div>
+      {step.status === 'blocked' && step.reason && (
+        <div className="mb-2 rounded bg-amber-500/5 px-2 py-1 text-xs text-amber-200">
+          Blocked: {step.reason}
+        </div>
+      )}
+      {Object.keys(step.config).length > 0 && (
+        <details className="text-xs text-slate-400">
+          <summary className="cursor-pointer text-slate-500 hover:text-slate-300">
+            Config ({Object.keys(step.config).length} fields)
+          </summary>
+          <pre className="mt-2 overflow-x-auto rounded bg-slate-950/80 p-2 font-mono text-[11px] text-slate-300">
+            {JSON.stringify(step.config, null, 2)}
+          </pre>
+        </details>
+      )}
     </div>
   )
 }
