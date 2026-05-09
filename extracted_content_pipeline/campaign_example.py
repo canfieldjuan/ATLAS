@@ -279,8 +279,10 @@ async def generate_campaign_drafts_from_payload(
         skills=skill_store,
         reasoning_context=reasoning_context,
         config=CampaignGenerationConfig(
-            channel=channel,
-            channels=channels,
+            # PR-Campaign-Config-V2: legacy ``channel`` field is gone;
+            # normalize the example payload's ``channel`` hint into the
+            # ``channels`` tuple before constructing the dataclass.
+            channels=channels or ((channel,) if channel else ()),
             limit=limit,
             quality_revalidation_enabled=bool(
                 payload.get("quality_revalidation_enabled")

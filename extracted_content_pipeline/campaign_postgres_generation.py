@@ -58,9 +58,13 @@ async def generate_campaign_drafts_from_postgres(
 ) -> CampaignGenerationResult:
     """Generate and persist campaign drafts from Postgres opportunity rows."""
 
+    # PR-Campaign-Config-V2: ``CampaignGenerationConfig`` no longer
+    # carries the legacy single ``channel`` field. Normalize the
+    # wrapper's per-call ``channel`` hint into the ``channels`` tuple
+    # so only the supported surface reaches the dataclass.
+    resolved_channels = channels or ((channel,) if channel else ())
     generation_config = config or CampaignGenerationConfig(
-        channel=channel,
-        channels=channels,
+        channels=resolved_channels,
         limit=limit,
     )
     service = CampaignGenerationService(
