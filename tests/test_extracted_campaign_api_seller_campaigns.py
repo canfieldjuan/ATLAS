@@ -91,7 +91,19 @@ def _campaign_row(**overrides):
         "cta": "Review category report",
         "llm_model": "offline",
         "created_at": datetime(2026, 5, 4, tzinfo=timezone.utc),
-        "metadata": {"scope": {"account_id": "acct_1"}},
+        "metadata": {
+            "scope": {"account_id": "acct_1"},
+            "generation_usage": {
+                "input_tokens": 8,
+                "output_tokens": 4,
+                "total_tokens": 12,
+            },
+            "generation_parse_attempts": 1,
+            "reasoning_context": {
+                "wedge": "category_shift",
+                "confidence": "medium",
+            },
+        },
     }
     row.update(overrides)
     return row
@@ -993,7 +1005,10 @@ def test_seller_campaign_router_exports_seller_drafts_csv() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
     assert "seller_campaign_drafts.csv" in response.headers["content-disposition"]
+    assert "generation_input_tokens,generation_output_tokens" in response.text
+    assert "reasoning_context_used,reasoning_wedge,reasoning_confidence" in response.text
     assert "Acme Seller" in response.text
+    assert "category_shift" in response.text
 
 
 def test_seller_campaign_router_reviews_only_seller_drafts() -> None:
