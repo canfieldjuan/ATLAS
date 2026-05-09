@@ -290,6 +290,9 @@
       "target": "extracted_content_pipeline/api/b2b_campaigns.py"
     },
     {
+      "target": "extracted_content_pipeline/api/generated_assets.py"
+    },
+    {
       "target": "extracted_content_pipeline/api/seller_campaigns.py"
     },
     {

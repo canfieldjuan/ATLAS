@@ -59,6 +59,7 @@ pytest \
   tests/test_extracted_campaign_api_webhooks.py \
   tests/test_extracted_campaign_api_operations.py \
   tests/test_extracted_campaign_api_hosted_workflow.py \
+  tests/test_extracted_content_asset_api.py \
   tests/test_extracted_campaign_api_b2b_campaigns.py \
   tests/test_extracted_campaign_api_seller_campaigns.py \
   tests/test_extracted_campaign_postgres_sequence_progression.py \

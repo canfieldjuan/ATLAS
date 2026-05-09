@@ -209,6 +209,11 @@ loop for generated assets. Hosts pass `--asset`, `--id`, `--status`, and an
 optional `--account-id`; the CLI calls the matching product-owned Postgres
 repository and emits a JSON hit/miss result without requiring ad hoc SQL.
 
+`extracted_content_pipeline/api/generated_assets.py` owns the host-mounted
+FastAPI surface for generated asset review workflows. It exposes list, CSV/JSON
+export, and status-update routes for reports, landing pages, and sales briefs
+while requiring the host to inject database, tenant scope, and auth providers.
+
 `extracted_content_pipeline/campaign_postgres_review.py` owns the write side of
 that host review loop. It updates selected `b2b_campaigns` rows by explicit
 campaign id, optional account scope, and source-status guard so hosts can move
