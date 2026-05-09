@@ -75,6 +75,9 @@ export function fromWireCatalog(
       configured: wire.execution.configured,
       configuredOutputs: [...wire.execution.configured_outputs],
     },
+    reasoning: {
+      configured: wire.reasoning.configured,
+    },
     ingestionProfiles: [...wire.ingestion_profiles],
   }
 }

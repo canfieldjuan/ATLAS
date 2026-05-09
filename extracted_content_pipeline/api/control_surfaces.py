@@ -110,6 +110,7 @@ def _compose_describe_response(
     static: Mapping[str, Any],
     configured_outputs: frozenset[str],
     execution_configured: bool,
+    reasoning_configured: bool,
 ) -> dict[str, Any]:
     # Re-project the cached static template into a fresh dict tree so
     # the caller can serialize / mutate without aliasing the module-
@@ -133,6 +134,9 @@ def _compose_describe_response(
         "execution": {
             "configured": execution_configured,
             "configured_outputs": sorted(configured_outputs),
+        },
+        "reasoning": {
+            "configured": reasoning_configured,
         },
         "ingestion_profiles": list(static["ingestion_profiles"]),
     }
@@ -237,6 +241,7 @@ def create_content_ops_control_surface_router(
             static=_STATIC_CATALOG_PAYLOAD,
             configured_outputs=configured_outputs,
             execution_configured=execution_services is not None,
+            reasoning_configured=reasoning_context_provider is not None,
         )
 
     @router.post("/preview")
