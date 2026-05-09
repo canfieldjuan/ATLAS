@@ -1000,7 +1000,7 @@ function opportunityKey(
 
 function opportunityLabel(opportunity: Record<string, unknown>): string {
   const company = stringField(opportunity, 'company_name') ?? stringField(opportunity, 'company')
-  const vendor = stringField(opportunity, 'vendor')
+  const vendor = stringField(opportunity, 'vendor_name') ?? stringField(opportunity, 'vendor')
   const email = stringField(opportunity, 'contact_email')
   const id = stringField(opportunity, 'target_id') ?? stringField(opportunity, 'source_id')
   return [company, vendor, email, id].filter(Boolean).join(' | ') || 'Opportunity'
