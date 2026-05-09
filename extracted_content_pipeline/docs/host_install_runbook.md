@@ -443,6 +443,84 @@ The mounted list/export routes use the same export helper as the CLI, so JSON
 and CSV responses include the generation-usage and reasoning summary fields
 documented above.
 
+Export generated reports, landing pages, or sales briefs through the generated
+asset CLI when the host needs the same review loop for non-campaign outputs:
+
+```bash
+python scripts/export_extracted_content_assets.py \
+  --asset report \
+  --account-id acct_123 \
+  --target-mode vendor_retention \
+  --report-type vendor_pressure \
+  --format csv \
+  --output report_drafts.csv
+
+python scripts/export_extracted_content_assets.py \
+  --asset landing_page \
+  --account-id acct_123 \
+  --campaign-name renewal-play \
+  --format json
+
+python scripts/export_extracted_content_assets.py \
+  --asset sales_brief \
+  --account-id acct_123 \
+  --target-mode vendor_retention \
+  --brief-type pre_call \
+  --limit 20
+```
+
+Move reviewed generated assets through host-defined lifecycle statuses without
+writing SQL:
+
+```bash
+python scripts/review_extracted_content_assets.py \
+  --asset report \
+  --id <report-id> \
+  --account-id acct_123 \
+  --status approved
+
+python scripts/review_extracted_content_assets.py \
+  --asset landing_page \
+  --id <landing-page-id> \
+  --account-id acct_123 \
+  --status published
+
+python scripts/review_extracted_content_assets.py \
+  --asset sales_brief \
+  --id <brief-id> \
+  --account-id acct_123 \
+  --status ready_for_call
+```
+
+Or mount the generated asset API router beside the campaign draft router:
+
+```python
+from fastapi import Depends
+
+from extracted_content_pipeline.api.generated_assets import create_generated_asset_router
+
+
+app.include_router(
+    create_generated_asset_router(
+        pool_provider=get_pool,
+        scope_provider=current_tenant_scope,
+        dependencies=[Depends(require_content_ops_user)],
+    )
+)
+```
+
+The generated asset router exposes:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/content-assets/{asset}/drafts` | List generated asset drafts as JSON. |
+| `GET` | `/content-assets/{asset}/drafts/export` | Export generated asset drafts as CSV or JSON. |
+| `POST` | `/content-assets/{asset}/drafts/review` | Update one generated asset status by id. |
+
+Supported `{asset}` values are `report`, `landing_page`, and `sales_brief`.
+Review statuses are host-defined strings; the product does not impose a fixed
+status vocabulary for these generated asset tables.
+
 Amazon seller installs can mount the seller-specific router:
 
 ```python
