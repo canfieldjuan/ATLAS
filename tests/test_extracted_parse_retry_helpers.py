@@ -3,6 +3,7 @@ from __future__ import annotations
 from extracted_content_pipeline.services._parse_retry_helpers import (
     accumulate_usage,
     clip_invalid_response,
+    parse_attempt_limit,
 )
 
 
@@ -12,6 +13,16 @@ def test_clip_invalid_response_strips_and_caps_text() -> None:
 
 def test_clip_invalid_response_returns_cleaned_text_when_within_limit() -> None:
     assert clip_invalid_response("  ok  ", limit=10) == "ok"
+
+
+def test_parse_attempt_limit_counts_initial_attempt_plus_retries() -> None:
+    assert parse_attempt_limit(0) == 1
+    assert parse_attempt_limit(1) == 2
+    assert parse_attempt_limit(2) == 3
+
+
+def test_parse_attempt_limit_clamps_negative_values_to_initial_attempt() -> None:
+    assert parse_attempt_limit(-3) == 1
 
 
 def test_accumulate_usage_adds_numeric_fields() -> None:

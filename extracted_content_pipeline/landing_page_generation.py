@@ -46,7 +46,11 @@ from .services.campaign_reasoning_context import (
     campaign_reasoning_context_payload,
     normalize_campaign_reasoning_context,
 )
-from .services._parse_retry_helpers import accumulate_usage, clip_invalid_response
+from .services._parse_retry_helpers import (
+    accumulate_usage,
+    clip_invalid_response,
+    parse_attempt_limit,
+)
 from extracted_quality_gate.landing_page_pack import evaluate_landing_page
 from extracted_quality_gate.types import QualityInput, QualityPolicy
 
@@ -341,7 +345,7 @@ class LandingPageGenerationService:
         # via {campaign_json}. User message is structural-only so the
         # campaign isn't sent twice (matches the report-generator fix).
         system_prompt = prompt_template.replace("{campaign_json}", campaign_json)
-        attempts = max(1, int(parse_retry_attempts or 0) + 1)
+        attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}
         for attempt_no in range(1, attempts + 1):

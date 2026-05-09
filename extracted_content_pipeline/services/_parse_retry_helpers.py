@@ -15,6 +15,12 @@ def clip_invalid_response(text: str, *, limit: int) -> str:
     return cleaned[:limit].rstrip()
 
 
+def parse_attempt_limit(parse_retry_attempts: int) -> int:
+    """Return total parse attempts: one initial attempt plus configured retries."""
+
+    return max(1, int(parse_retry_attempts or 0) + 1)
+
+
 def accumulate_usage(
     total: Mapping[str, Any],
     usage: Mapping[str, Any] | None,
