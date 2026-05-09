@@ -53,6 +53,9 @@
 - `sales_brief_export` provides a read-only draft export path over generated
   sales briefs so hosts can review JSON/CSV outputs without handwritten SQL or
   a mounted sales brief API.
+- `scripts/export_extracted_content_assets.py` exposes the report, landing
+  page, and sales brief export helpers as a host-facing JSON/CSV CLI backed by
+  the product-owned Postgres repositories.
 - `scripts/smoke_extracted_content_pipeline_host.py` provides a one-command
   offline host smoke test that validates customer-data normalization through
   usable generated draft shape without a database, provider credentials, or

@@ -198,6 +198,12 @@ read-only review path for generated sales briefs. It calls the host-injected
 brief sections and metadata, and derives top-level generation and reasoning
 summary columns for operator review without requiring direct SQL access.
 
+`scripts/export_extracted_content_assets.py` exposes those generated-asset
+export helpers to operators. Hosts choose `--asset report`, `--asset
+landing_page`, or `--asset sales_brief`; the CLI creates the product-owned
+Postgres repository, applies the relevant filters, and writes JSON or CSV
+without requiring ad hoc SQL.
+
 `extracted_content_pipeline/campaign_postgres_review.py` owns the write side of
 that host review loop. It updates selected `b2b_campaigns` rows by explicit
 campaign id, optional account scope, and source-status guard so hosts can move

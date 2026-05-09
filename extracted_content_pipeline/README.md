@@ -730,6 +730,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `report_export.py`: read-only structured report export for host review flows
 - `landing_page_export.py`: read-only landing page export for host review flows
 - `sales_brief_export.py`: read-only sales brief export for host review flows
+- `scripts/export_extracted_content_assets.py`: host-facing report, landing
+  page, and sales brief export CLI
 - `campaign_postgres_seller_targets.py`: seller target CRUD/list helpers for
   Amazon seller campaign installs
 - `campaign_postgres_seller_opportunities.py`: prepares Amazon seller
