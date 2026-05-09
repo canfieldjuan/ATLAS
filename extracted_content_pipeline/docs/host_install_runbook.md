@@ -392,6 +392,11 @@ python scripts/export_extracted_campaign_drafts.py \
   --output campaign_drafts.csv
 ```
 
+CSV and JSON exports include `generation_input_tokens`,
+`generation_output_tokens`, `generation_total_tokens`,
+`generation_parse_attempts`, `reasoning_context_used`, `reasoning_wedge`, and
+`reasoning_confidence` as top-level fields derived from saved draft metadata.
+
 Approve or queue selected drafts after review:
 
 ```bash

@@ -360,6 +360,11 @@ python scripts/export_extracted_campaign_drafts.py --account-id acct_123 --limit
 python scripts/export_extracted_campaign_drafts.py --account-id acct_123 --format csv --output campaign_drafts.csv
 ```
 
+The draft export keeps the full `metadata` JSON and also exposes scan-friendly
+summary fields: `generation_input_tokens`, `generation_output_tokens`,
+`generation_total_tokens`, `generation_parse_attempts`,
+`reasoning_context_used`, `reasoning_wedge`, and `reasoning_confidence`.
+
 After review, update selected draft rows without writing SQL:
 
 ```bash
