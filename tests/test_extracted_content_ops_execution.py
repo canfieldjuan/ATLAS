@@ -967,6 +967,37 @@ async def test_execute_step_reports_actual_reasoning_contexts_used():
 
 
 @pytest.mark.asyncio
+async def test_execute_step_omits_contexts_used_when_result_is_uninstrumented():
+    class _UninstrumentedResult:
+        def as_dict(self) -> dict[str, Any]:
+            return {"generated": 1, "saved_ids": ["draft-1"]}
+
+    class _UninstrumentedReasoningService(_ReasoningAwareOpportunityService):
+        async def generate(self, **kwargs: Any) -> _UninstrumentedResult:
+            self.calls.append(dict(kwargs))
+            return _UninstrumentedResult()
+
+    services = ContentOpsExecutionServices(
+        campaign=_UninstrumentedReasoningService(),
+        reasoning_provider_configured=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=services,
+    )
+
+    assert result["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_execute_step_omits_reasoning_audit_for_absent_requirement():
     signal = SignalExtractionService()
 

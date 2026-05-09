@@ -697,23 +697,26 @@ def _step_reasoning_audit(
         and not reasoning_provider_configured
     ):
         return {}
-    return {
+    audit = {
         "requirement": requirement,
         "service_supports_reasoning": service_supports,
         "provider_configured": reasoning_provider_configured,
-        "contexts_used": _reasoning_contexts_used(result),
     }
+    contexts_used = _reasoning_contexts_used(result)
+    if contexts_used is not None:
+        audit["contexts_used"] = contexts_used
+    return audit
 
 
-def _reasoning_contexts_used(result: Mapping[str, Any] | None) -> int:
+def _reasoning_contexts_used(result: Mapping[str, Any] | None) -> int | None:
     if result is None:
-        return 0
+        return None
     raw = result.get("reasoning_contexts_used")
     if isinstance(raw, bool):
-        return 0
-    if isinstance(raw, int) and raw > 0:
+        return None
+    if isinstance(raw, int) and raw >= 0:
         return raw
-    return 0
+    return None
 
 
 def _clean(value: Any) -> str:
