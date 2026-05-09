@@ -48,8 +48,8 @@ Compile-time-only contract verification. No new dependencies.
       catch fixture-vs-interface drift.
     - The file is type-only; nothing runs at runtime.
 
-11. `atlas-intel-ui/tsconfig.json` -- add `"resolveJsonModule": true`
-    if not already enabled, so the fixture imports type-check.
+11. `atlas-intel-ui/tsconfig.app.json` -- add `"resolveJsonModule": true`
+    so the fixture imports type-check.
 
 12. `plans/PR-Content-Ops-Contract-Tests.md` (this file).
 
@@ -60,33 +60,58 @@ shape, not invented. Each fixture sits under
 `__fixtures__/contentOps/` so the location signals "test data,
 not runtime payload."
 
-`contentOps.contract.ts` imports each fixture and feeds it to a
-`satisfies` clause:
+The naive approach -- typed assignment, e.g.
+`const _catalog: ContentOpsCatalogResponse = catalogFixture` --
+fails because TypeScript widens JSON-imported literals to
+`string`. Wire interfaces use literal-string unions
+(e.g. `status: "completed" | "partial" | "failed" | "blocked"`)
+that JSON's inferred `status: string` does not satisfy. A naive
+`as <Type>` cast also doesn't work: it's too permissive (initial
+testing showed it accepted a JSON missing `ingestion_profiles`
+without complaint).
+
+The shipped harness uses two complementary gates:
+
+**Gate 1 -- structural drift via `Loosen<T>` + `satisfies`:**
 
 ```ts
-import catalogFixture from './__fixtures__/contentOps/catalog.json'
-import type { ContentOpsCatalogResponse } from './contentOps'
+type Loosen<T> = T extends string
+  ? string
+  : T extends Array<infer U>
+    ? Loosen<U>[]
+    : T extends object
+      ? { [K in keyof T]: Loosen<T[K]> }
+      : T
 
-const _catalog: ContentOpsCatalogResponse = catalogFixture
-//   ^-- fails to compile if fixture drifts from interface.
+export const __catalogContract = catalogFixture satisfies
+  Loosen<ContentOpsCatalogResponse>
 ```
 
-A complementary `Exact<A, B>` helper catches the inverse drift
-(extra fields in the fixture that the interface doesn't model):
+`Loosen<T>` recursively widens literal-string unions in `T` to
+`string`, so JSON's inferred `status: string` is compatible at
+the structural layer. `satisfies` then enforces "no missing
+required fields, no extra properties." Removing `ingestion_profiles`
+from a fixture trips this gate (verified manually: produces
+`TS1360 Property 'ingestion_profiles' is missing`).
+
+**Gate 2 -- literal vocabulary via `Record<UnionType, true>`:**
 
 ```ts
-type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends
-  (<T>() => T extends B ? 1 : 2)
-  ? true
-  : false
-
-const _catalogExact: Exact<typeof catalogFixture, ContentOpsCatalogResponse> = true
-//                                                                            ^--
-//   compile error if the fixture has fields the interface doesn't define.
+const _executionStatusCoverage: Record<
+  ContentOpsExecutionResult['status'],
+  true
+> = { completed: true, partial: true, failed: true, blocked: true }
 ```
 
-`tsc -b --noEmit` is the gate. CI (or the developer running
-`npm run build`) catches drift in either direction.
+`Record<UnionType, true>` requires exactly the keys in the union.
+Adding a new literal to the wire union (`"queued"`) makes the
+assignment fail because `queued` isn't in the object. Removing a
+literal makes the existing key excess. This gate catches enum
+drift in both directions.
+
+The two gates close the contract envelope: Gate 1 covers shape,
+Gate 2 covers enum vocabulary. `tsc -b --noEmit` is the runner;
+CI (or `npm run build`) catches drift in either gate.
 
 The `executeContentOpsRun` discriminator union is checked via
 shape-only fixtures for each outcome kind -- the *runtime* code
@@ -142,12 +167,19 @@ the next slice; runtime tests need Vitest).
 
 ## Estimated diff size
 
-- 9 JSON fixtures × ~30 LOC each = ~270 LOC.
-- `contentOps.contract.ts`: ~80 LOC.
-- `tsconfig.json` tweak: ~1 LOC.
-- Plan doc: ~140 LOC.
+Initial estimate undershot the JSON fixtures; real backend output
+is more verbose than the rough mental model.
 
-Total: ~490 LOC. Marginally over the 400 soft cap; the JSON
-fixtures dominate (~55% of the diff) and they're the value-
-bearing artifact. Reviewer can flag if the fixture-density
-should split into "envelope-only" vs "per-output" slices.
+- 9 JSON fixtures dumped from real backend code: ~590 LOC actual
+  (initial estimate ~270 LOC; backend dataclasses serialize more
+  verbosely than expected).
+- `contentOps.contract.ts`: ~108 LOC actual (initial estimate ~80).
+- `tsconfig.app.json` tweak: 1 LOC.
+- Plan doc: ~150 LOC.
+
+Total actual: ~852 LOC. Over the 400 soft cap, justified because
+the JSON fixtures dominate (~70% of the diff) and the contract
+gate is only useful end-to-end -- splitting at any layer leaves
+the harness half-formed. Reviewer can flag if the fixture-density
+should split into "envelope-only" vs "per-output" slices in the
+follow-up that adds step-result-payload coverage.
