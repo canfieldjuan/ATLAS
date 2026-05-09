@@ -61,7 +61,12 @@
           "draft-2"
         ]
       },
-      "error": ""
+      "error": "",
+      "reasoning": {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true,
+        "provider_configured": true
+      }
     }
   ],
   "errors": []
