@@ -34,6 +34,13 @@ _EXPORT_COLUMNS = (
     "body",
     "cta",
     "llm_model",
+    "generation_input_tokens",
+    "generation_output_tokens",
+    "generation_total_tokens",
+    "generation_parse_attempts",
+    "reasoning_context_used",
+    "reasoning_wedge",
+    "reasoning_confidence",
     "created_at",
     "metadata",
 )
@@ -146,10 +153,41 @@ def _normalize_limit(value: Any) -> int:
 
 
 def _serializable_row(row: Mapping[str, Any]) -> JsonDict:
-    return {
+    output = {
         key: _json_ready(value)
         for key, value in row.items()
     }
+    output.update(_metadata_summary(output.get("metadata")))
+    return output
+
+
+def _metadata_summary(value: Any) -> JsonDict:
+    metadata = _metadata_mapping(value)
+    usage = _metadata_mapping(metadata.get("generation_usage"))
+    reasoning = _metadata_mapping(metadata.get("reasoning_context"))
+    return {
+        "generation_input_tokens": usage.get("input_tokens"),
+        "generation_output_tokens": usage.get("output_tokens"),
+        "generation_total_tokens": usage.get("total_tokens"),
+        "generation_parse_attempts": metadata.get("generation_parse_attempts"),
+        "reasoning_context_used": bool(reasoning),
+        "reasoning_wedge": reasoning.get("wedge"),
+        "reasoning_confidence": reasoning.get("confidence"),
+    }
+
+
+def _metadata_mapping(value: Any) -> JsonDict:
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items()}
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, Mapping):
+            return {str(key): item for key, item in parsed.items()}
+        return {}
+    return {}
 
 
 def _json_ready(value: Any) -> Any:

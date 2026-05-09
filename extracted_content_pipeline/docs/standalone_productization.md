@@ -174,7 +174,10 @@ selected account, target mode, and target ids.
 `extracted_content_pipeline/campaign_postgres_export.py` owns the read-only
 review path for generated drafts. It filters saved `b2b_campaigns` rows by
 account, status, target mode, channel, vendor, or company and emits JSON or CSV
-for host review workflows.
+for host review workflows. The export preserves raw `metadata` and derives
+top-level review columns for generation usage and reasoning context status so
+operators can audit token cost and reasoning consumption without unpacking the
+metadata blob.
 
 `extracted_content_pipeline/campaign_postgres_review.py` owns the write side of
 that host review loop. It updates selected `b2b_campaigns` rows by explicit

@@ -392,6 +392,11 @@ python scripts/export_extracted_campaign_drafts.py \
   --output campaign_drafts.csv
 ```
 
+CSV and JSON exports include `generation_input_tokens`,
+`generation_output_tokens`, `generation_total_tokens`,
+`generation_parse_attempts`, `reasoning_context_used`, `reasoning_wedge`, and
+`reasoning_confidence` as top-level fields derived from saved draft metadata.
+
 Approve or queue selected drafts after review:
 
 ```bash
@@ -614,6 +619,21 @@ For hosted installs that want extracted reasoning-core orchestration, set
 `generation_multi_pass_reasoning=True`. The route builds
 `MultiPassCampaignReasoningProvider` from the injected LLM provider. Explicit
 `reasoning_context_provider` injection still takes precedence.
+
+Before mounting real generated-asset services, validate the host reasoning
+handoff through the offline execution smoke:
+
+```bash
+python scripts/smoke_extracted_content_ops_execution.py \
+  --outputs email_campaign,landing_page \
+  --with-reasoning \
+  --json
+```
+
+The smoke uses fake generated-asset services and a fake provider object only.
+It fails if the JSON result omits `result.reasoning_contexts_used` or the
+step-level `reasoning.contexts_used` audit field, so hosts can verify the
+execution seam without opening database, network, sender, or LLM handles.
 
 | Method | Path | Purpose |
 |---|---|---|

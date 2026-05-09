@@ -220,6 +220,7 @@ Before wiring real providers, hosts can run the offline execution smoke:
 ```bash
 python scripts/smoke_extracted_content_ops_execution.py
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --target-mode challenger_intel --no-quality-gates --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
 ```
 
@@ -230,6 +231,9 @@ validates the deterministic source-material-to-opportunity path through the
 same execution seam. `--no-quality-gates` verifies request wiring for hosts
 that need to smoke-test policy overrides; production hosts should leave quality
 gates enabled unless their own policy layer disables them.
+`--with-reasoning` attaches a fake host reasoning provider to the generated-
+asset fake services and verifies that `result.reasoning_contexts_used` matches
+the step-level `reasoning.contexts_used` audit field.
 
 Runnable outputs dispatch to:
 
