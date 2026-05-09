@@ -129,6 +129,189 @@ class CustomerBatchRecord:
     cache_prefiltered_items: int = 0
 
 
+# PR-D6g-2: per-item cache-hit usage row. Mirrors _CACHE_HIT_USAGE_INSERT_SQL
+# in api/llm_gateway.py but tagged for /batch -- direct INSERT (not via
+# trace_llm_call) because the tracer's _store_local short-circuits on
+# all-zero token rows. The cache savings dashboard (/api/v1/llm/usage)
+# reads metadata.cache_savings_usd to dollarize the avoided cost.
+_CACHE_HIT_BATCH_USAGE_INSERT_SQL = """
+INSERT INTO llm_usage (
+    span_name, operation_type, model_name, model_provider,
+    input_tokens, output_tokens, total_tokens,
+    billable_input_tokens, cached_tokens, cache_write_tokens,
+    cost_usd, duration_ms, status, metadata,
+    api_endpoint, account_id
+) VALUES (
+    'llm_gateway.batch', 'llm_call', $1, $2,
+    0, 0, 0,
+    0, 0, 0,
+    0, 0, 'completed', $3::jsonb,
+    'llm_gateway.batch', $4
+)
+"""
+
+_CACHE_SAVINGS_METADATA_KEY = "cache_savings_usd"
+
+
+async def _try_prefilter_batch_through_cache(
+    pool: Any,
+    *,
+    account_id: _uuid.UUID,
+    provider: str,
+    model: str,
+    items: Sequence["CustomerBatchItem"],
+) -> Optional[list[dict[str, Any]]]:
+    """Return a list of hit-info dicts iff EVERY item is a cache hit.
+    Otherwise return None and let the caller continue normal submission.
+
+    Lazy-imports the cache helpers so this module's import surface
+    isn't widened for callers who don't trigger the short-circuit.
+
+    PR-D6g-2 handles the 100%-hit case only: a customer re-submits an
+    identical batch (e.g., retry of a deterministic workload), every
+    item hits the exact cache, atlas marks the row ``status='ended'``
+    without calling Anthropic. Partial-hit handling (submit only
+    misses) is PR-D6g-3 -- requires coordinated changes to the
+    refresh / poll path that this slice does not touch.
+    """
+    from .b2b.llm_exact_cache import (
+        build_request_envelope,
+        is_llm_gateway_exact_cache_enabled,
+        lookup_cached_text,
+    )
+
+    if not is_llm_gateway_exact_cache_enabled():
+        return None
+
+    # Same namespace as /chat -- cross-endpoint cache sharing. A
+    # customer's prior /chat call with the same prompt populates
+    # the cache; a later /batch with the same prompt hits.
+    namespace = "llm_gateway.chat"
+    account_id_str = str(account_id)
+
+    hits: list[dict[str, Any]] = []
+    for item in items:
+        envelope = build_request_envelope(
+            provider=provider,
+            model=model,
+            messages=[
+                {"role": str(m.role), "content": str(m.content)}
+                for m in item.messages
+            ],
+            max_tokens=item.max_tokens,
+            temperature=item.temperature,
+        )
+        try:
+            cache_hit = await lookup_cached_text(
+                namespace,
+                envelope,
+                pool=pool,
+                account_id=account_id_str,
+            )
+        except Exception:
+            logger.exception(
+                "submit_customer_batch cache lookup failed account=%s",
+                account_id,
+            )
+            return None  # Fail-open: any error -> normal submission
+
+        if cache_hit is None:
+            return None  # Any miss -> normal submission
+
+        cached_usage = cache_hit.get("usage") or {}
+        try:
+            savings = _estimate_cost_usd(
+                model=cache_hit.get("model") or model,
+                input_tokens=int(cached_usage.get("input_tokens", 0) or 0),
+                output_tokens=int(cached_usage.get("output_tokens", 0) or 0),
+                cached_tokens=int(cached_usage.get("cached_tokens", 0) or 0),
+                cache_write_tokens=int(
+                    cached_usage.get("cache_write_tokens", 0) or 0
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "submit_customer_batch cache-hit savings estimate failed; "
+                "row will record 0.0",
+            )
+            savings = 0.0
+
+        hits.append(
+            {
+                "custom_id": item.custom_id,
+                "response_text": cache_hit["response_text"],
+                "usage": cached_usage,
+                "cache_savings_usd": savings,
+            }
+        )
+    return hits
+
+
+async def _insert_all_cache_hit_batch(
+    pool: Any,
+    *,
+    account_id: _uuid.UUID,
+    model: str,
+    items: Sequence["CustomerBatchItem"],
+    all_hits: list[dict[str, Any]],
+    normalized_key: Optional[str],
+) -> Any:
+    """100%-hit short-circuit: INSERT a terminal batch row and write a
+    zero-token llm_usage row per hit. No Anthropic call.
+
+    Status is ``ended`` at INSERT time -- the batch was already done
+    the moment we looked it up. ``submitted_at`` and ``completed_at``
+    both stamp NOW; ``usage_tracked=TRUE`` because the per-item rows
+    are written below in the same transaction. ``cache_prefiltered_items``
+    equals ``total_items`` (every item was satisfied from cache).
+    """
+    item_count = len(items)
+    async with pool.transaction() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO llm_gateway_batches (
+                account_id, provider, model, status, total_items,
+                completed_items, cache_prefiltered_items, idempotency_key,
+                submitted_at, completed_at, usage_tracked
+            ) VALUES (
+                $1, 'anthropic', $2, 'ended', $3,
+                $3, $3, $4,
+                NOW(), NOW(), TRUE
+            )
+            RETURNING id, account_id, provider, provider_batch_id, model,
+                      status, total_items, completed_items, failed_items,
+                      error_text, created_at, updated_at, submitted_at,
+                      completed_at, usage_tracked,
+                          anthropic_call_initiated_at, last_usage_retry_at,
+                          cache_prefiltered_items
+            """,
+            account_id,
+            model,
+            item_count,
+            normalized_key,
+        )
+        batch_id = row["id"]
+        for hit in all_hits:
+            metadata = json.dumps(
+                {
+                    "account_id": str(account_id),
+                    "endpoint": "llm_gateway.batch",
+                    "cache_hit": True,
+                    _CACHE_SAVINGS_METADATA_KEY: hit["cache_savings_usd"],
+                    "batch_id": str(batch_id),
+                    "custom_id": hit["custom_id"],
+                }
+            )
+            await conn.execute(
+                _CACHE_HIT_BATCH_USAGE_INSERT_SQL,
+                model,
+                "anthropic",
+                metadata,
+                account_id,
+            )
+    return row
+
+
 def _row_to_record(row: Any) -> CustomerBatchRecord:
     return CustomerBatchRecord(
         id=row["id"],
@@ -368,6 +551,40 @@ async def submit_customer_batch(
                 existing["status"],
             )
             row = resumed
+
+    # PR-D6g-2: 100%-hit short-circuit. Before doing the normal
+    # INSERT-then-Anthropic flow, check whether every item in the
+    # batch is already in the customer's exact cache. If yes, skip
+    # the Anthropic call entirely, mark the batch ``status='ended'``
+    # at INSERT time, and write zero-token llm_usage rows for each
+    # cache hit so /api/v1/llm/usage rollups surface the savings.
+    #
+    # Only fires when ``row is None`` (no idempotency replay, no
+    # resume from crash). Lookups happen AFTER the replay/resume
+    # checks above so a retry of the same key always replays the
+    # original record rather than creating a duplicate ``ended`` row.
+    #
+    # Partial-hit handling (some items hit, some miss) is PR-D6g-3 --
+    # requires coordinated changes to the refresh / poll path that
+    # this slice does not touch.
+    if row is None:
+        all_hits = await _try_prefilter_batch_through_cache(
+            pool,
+            account_id=account_id,
+            provider="anthropic",
+            model=model,
+            items=items,
+        )
+        if all_hits is not None:
+            row = await _insert_all_cache_hit_batch(
+                pool,
+                account_id=account_id,
+                model=model,
+                items=items,
+                all_hits=all_hits,
+                normalized_key=normalized_key,
+            )
+            return _row_to_record(row)
 
     # Insert pre-submit so a crash mid-call still leaves a queued row
     # the customer can see. The idempotency_key column is NULL when
