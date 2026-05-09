@@ -174,6 +174,12 @@ export default function ContentOpsNewRun() {
     // Bump the id so any prior in-flight request is ignored on resolve.
     const requestId = ++submitRequestIdRef.current
     setSubmitState({ kind: 'submitting' })
+    // Codex P2 fix: also reset planState. A previewing-while-planning
+    // sequence would otherwise leave planState stuck at 'submitting'
+    // (its in-flight response is dropped by the requestId guard but
+    // never overwritten), and the Build-plan CTA would stay disabled
+    // indefinitely until the user mutates the form.
+    setPlanState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
 
     const parsed = buildDomainRequest()
     if (!parsed.ok) {
