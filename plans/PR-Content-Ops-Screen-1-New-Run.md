@@ -59,14 +59,25 @@ A new page at `/content-ops/new` that:
    host's aggregate `api_router`, gated behind the
    `require_b2b_plan("b2b_growth")` dependency (same auth gate
    as `b2b_campaigns_router`; the frontend's `ProtectedRoute`
-   is UI-only and does not protect the API surface). Added
-   across two fix-up commits after Codex P1 reviews on rounds
-   4 and 7. The router is mounted with no
+   is UI-only and does not protect the API surface). The
+   `extracted_content_pipeline` import lives inside the
+   `try/except` block so the host doesn't crash startup when
+   the package is absent (the lazy-import + Dockerfile copy
+   pattern; see item 5). The router is mounted with no
    `execution_services_provider` for v0 -- preview / plan /
    GET control-surfaces work; execute correctly returns 503
    until execution services are wired in a follow-up slice.
-   ~22 LOC delta.
-5. `plans/PR-Content-Ops-Screen-1-New-Run.md` (this file).
+   ~32 LOC delta (added across Codex P1 review rounds 4, 7,
+   and 8).
+5. `Dockerfile` -- copy the four extracted packages
+   (`extracted_content_pipeline`, `extracted_quality_gate`,
+   `extracted_reasoning_core`, `extracted`) into the prod
+   image so the host's lazy-import in
+   `atlas_brain/api/__init__.py` resolves at runtime. Added
+   in fix-up after Codex P1 round 9. Without this the route
+   ships disabled in prod (lazy-import catches
+   `ModuleNotFoundError` and logs the warning). ~12 LOC delta.
+6. `plans/PR-Content-Ops-Screen-1-New-Run.md` (this file).
 
 ### What's NOT in this slice
 
@@ -105,11 +116,13 @@ Standard React patterns matching the existing repo:
     | { kind: 'idle' }
     | { kind: 'submitting' }
     | { kind: 'invalid_inputs_json'; message: string }
+    | { kind: 'invalid_max_cost'; message: string }
     | { kind: 'error'; message: string }
     | { kind: 'success'; preview: ControlSurfacePreview }
   ```
-  Co-locates loading / parse-error / API-error / success in one
-  variable; the verdict panel switches on `kind`.
+  Co-locates loading / parse-error / max-cost-error / API-error
+  / success in one variable; the verdict panel switches on
+  `kind`.
 - `submitRequestIdRef` + `markStale()` race-condition guard:
   any form mutation bumps the request id; `handleSubmit`
   captures the id at submit time and drops the response if a
@@ -120,22 +133,33 @@ Standard React patterns matching the existing repo:
   response with `fromWirePreview`, store in state -- but only
   if the captured request id still matches.
 
-The preset → outputs auto-fill is one-way: selecting a preset
-clones the preset's outputs into the form. Subsequently
-unchecking an output drops it from the form's outputs without
-clearing the preset selection (the contract notes the backend
-warns about this and falls back to explicit outputs).
+The preset → outputs interaction is bidirectional: selecting a
+preset clones the preset's outputs into the form (visual hint
+that the preset will resolve to those outputs). Toggling any
+output then clears the preset (`toggleOutput` sets `preset:
+null`) so the form moves into "explicit outputs" mode -- the
+backend's `preview_control_surface` flags the dual-set state
+with a "Preset ignored because explicit outputs were provided"
+warning otherwise. At submit time, when a preset is still
+active (user never toggled), `outputs` is sent as `[]` so the
+backend resolves the preset itself; that mirrors the contract's
+preset XOR outputs semantic.
 
 The JSON textarea uses a try/catch parse on submit: parse
 errors surface as a toast-style inline error; valid parses go
 through. No live syntax highlighting -- v0.
 
-`max_cost_usd` is normalized at submit time, not on every
-keystroke, so the user can type sub-dollar values like `0.50`
-without the input clobbering itself when the leading `0` is
-typed. The submit handler maps `0` / negative / blank values to
-`null` (no cap) before sending, matching the backend's pydantic
-`gt=0` validator.
+`max_cost_usd` is parsed at submit time, not on every keystroke,
+so the user can type sub-dollar values like `0.50` without the
+input clobbering itself when the leading `0` is typed. The
+submit handler:
+- Blank input -> `null` (no cap; matches the backend's optional
+  field semantic).
+- Non-empty unparseable / non-positive (`$10`, `0`, negative,
+  `NaN`) -> the verdict panel renders an inline
+  `invalid_max_cost` error and submission is blocked.
+  Silent-drop on a spend cap is unsafe: the user thinks they
+  capped, the backend would otherwise interpret it as no cap.
 
 The API mount aligns with the existing repo convention: the
 adapter targets `${API_BASE}/api/v1/content-ops`, matching
@@ -152,10 +176,14 @@ unchanged.
   source labels?). Shipping a JSON textarea unblocks the rest
   of the screen and lets us see the screen in use before
   committing to a shape. Plan-doc explicitly defers.
-- **Outputs / preset interaction is one-way.** Picking a preset
-  fills outputs; tweaking outputs doesn't clear the preset
-  display. Keeps the UI predictable; matches the backend's
-  behavior of "explicit outputs override preset."
+- **Outputs / preset interaction enforces preset XOR outputs.**
+  Picking a preset auto-fills the form's outputs as a visual
+  hint. The moment the user toggles any output, the preset is
+  cleared (the form moves into explicit-outputs mode). Submit
+  sends `outputs=[]` when the preset is still active so the
+  backend resolves the preset itself; sending both would
+  trigger the backend's "Preset ignored because explicit
+  outputs were provided" warning.
 - **No URL state for the form.** v0 doesn't survive page
   reload; that's a follow-up. The contract doc doesn't promise
   URL-state preservation.
@@ -210,19 +238,23 @@ form + verdict panel + race-condition guard + `SubmitState`
 discriminated union added more than the rough mental model
 projected. Updated for transparency.
 
-- `ContentOpsNewRun.tsx`: ~520 LOC actual (initial estimate
+- `ContentOpsNewRun.tsx`: ~529 LOC actual (initial estimate
   ~280 LOC; grew further across the Codex review rounds for the
   `SubmitState` race guard, `markStale`, max-cost string draft,
-  and `invalid_max_cost` validation state).
+  `invalid_max_cost` validation state, preset / outputs XOR
+  enforcement).
 - `App.tsx`: ~3 LOC.
 - `api/contentOps.ts`: ~5 LOC delta (BASE path realignment,
   added in fix-up commit after the Codex P1 review).
-- `atlas_brain/api/__init__.py`: ~16 LOC delta (mount the
-  content-ops router into the host's aggregate `api_router`,
-  added in fix-up commit after the Codex P1 round 4 review).
-- Plan doc: ~225 LOC actual (post-update).
+- `atlas_brain/api/__init__.py`: ~32 LOC delta (mount the
+  content-ops router into the host's aggregate `api_router`
+  with `require_b2b_plan("b2b_growth")` auth gate and lazy
+  import; added across Codex P1 review rounds 4, 7, and 8).
+- `Dockerfile`: ~12 LOC delta (copy the four extracted packages
+  into the prod image; added after Codex P1 round 9).
+- Plan doc: ~245 LOC actual (post-update).
 
-Total actual: **~770 LOC**. Over the 400 soft cap. The screen
+Total actual: **~826 LOC**. Over the 400 soft cap. The screen
 is a structurally indivisible vertical slice -- splitting at
 "page skeleton" vs "form" leaves an unusable half-screen and
 the race-condition / max-cost / state-machine logic depends on
