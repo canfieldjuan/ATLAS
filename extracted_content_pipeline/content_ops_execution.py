@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .campaign_ports import TenantScope
-from .control_surfaces import ContentOpsRequest, request_from_mapping
+from .control_surfaces import OUTPUT_CATALOG, ContentOpsRequest, request_from_mapping
 from .generation_plan import GenerationPlan, GenerationPlanStep, build_generation_plan
 from .landing_page_ports import MarketingCampaign
 
@@ -106,15 +106,19 @@ class ContentOpsStepExecution:
     status: str
     result: Mapping[str, Any] = field(default_factory=dict)
     error: str = ""
+    reasoning: Mapping[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "output": self.output,
             "runner": self.runner,
             "status": self.status,
             "result": dict(self.result),
             "error": self.error,
         }
+        if self.reasoning:
+            data["reasoning"] = dict(self.reasoning)
+        return data
 
 
 @dataclass(frozen=True)
@@ -205,7 +209,7 @@ async def _execute_step(
 ) -> tuple[ContentOpsStepExecution, Mapping[str, Any] | None]:
     if not _has_generate_method(service):
         error = _step_error_dict(step, "service_not_configured")
-        return _failed_step(step, "service_not_configured"), error
+        return _failed_step(step, "service_not_configured", service=service), error
     try:
         result = await _run_step(
             step,
@@ -216,13 +220,14 @@ async def _execute_step(
         )
     except Exception as exc:
         error = _step_error_dict(step, str(exc))
-        return _failed_step(step, str(exc)), error
+        return _failed_step(step, str(exc), service=service), error
     return (
         ContentOpsStepExecution(
             output=step.output,
             runner=step.runner,
             status="completed",
             result=_result_dict(result),
+            reasoning=_step_reasoning_audit(step, service),
         ),
         None,
     )
@@ -622,17 +627,48 @@ def _step_error_dict(step: GenerationPlanStep, error: str) -> dict[str, Any]:
     }
 
 
-def _failed_step(step: GenerationPlanStep, error: str) -> ContentOpsStepExecution:
+def _failed_step(
+    step: GenerationPlanStep,
+    error: str,
+    *,
+    service: Any | None,
+) -> ContentOpsStepExecution:
     return ContentOpsStepExecution(
         output=step.output,
         runner=step.runner,
         status="failed",
         error=error,
+        reasoning=_step_reasoning_audit(step, service),
     )
 
 
 def _has_generate_method(service: Any | None) -> bool:
     return callable(getattr(service, "generate", None))
+
+
+def _step_reasoning_audit(
+    step: GenerationPlanStep,
+    service: Any | None,
+) -> dict[str, Any]:
+    definition = OUTPUT_CATALOG.get(step.output)
+    requirement = (
+        definition.reasoning_requirement
+        if definition is not None
+        else "absent"
+    )
+    service_supports = callable(getattr(service, "with_reasoning_context", None))
+    provider_configured = getattr(service, "_reasoning_context", None) is not None
+    if (
+        requirement == "absent"
+        and not service_supports
+        and not provider_configured
+    ):
+        return {}
+    return {
+        "requirement": requirement,
+        "service_supports_reasoning": service_supports,
+        "provider_configured": provider_configured,
+    }
 
 
 def _clean(value: Any) -> str:

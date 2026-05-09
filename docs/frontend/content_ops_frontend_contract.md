@@ -338,6 +338,13 @@ interface ContentOpsStepExecution {
   status: "completed" | "failed" | "skipped";   // step-level
   result: Record<string, unknown>;              // runner-specific result blob
   error: string;                                // populated when status="failed"
+  reasoning?: ContentOpsStepReasoningAudit;     // compact readiness audit only
+}
+
+interface ContentOpsStepReasoningAudit {
+  requirement: "absent" | "optional_host_context" | string;
+  service_supports_reasoning: boolean;
+  provider_configured: boolean;
 }
 ```
 
@@ -416,12 +423,14 @@ the host mounted a route-level reasoning provider. It is separate
 from each output's `reasoning_requirement`: an output can support
 reasoning even when the current host has not wired a provider.
 
-Important runtime boundary: `ContentOpsStepExecution.result` currently
-contains the per-service summary returned by `as_dict()` (counts,
-saved IDs, warnings, and errors). It does **not** reliably expose the
-consumed reasoning payload. A Reasoning Context Drawer should wait for
-a backend execution-result field that explicitly carries consumed
-reasoning context or a compact reasoning audit summary.
+Important runtime boundary: `ContentOpsStepExecution.result` contains
+the per-service summary returned by `as_dict()` (counts, saved IDs,
+warnings, and errors). It does **not** reliably expose the consumed
+reasoning payload. `ContentOpsStepExecution.reasoning` is a compact
+readiness audit only: it tells the UI whether the output can use host
+reasoning, whether the service supports the seam, and whether a
+provider was attached. A Reasoning Context Drawer still requires a
+future field that carries the consumed context itself.
 
 ```ts
 interface CampaignReasoningContextView {
@@ -442,9 +451,10 @@ interface CampaignReasoningContextView {
 UI rules:
 - Show a "Reasoning context" badge next to each output card when
   `reasoningRequirement="optional_host_context"`.
-- Treat the badge as configuration readiness only. Do not infer that a
-  specific execution step used reasoning unless the backend returns an
-  explicit per-step reasoning audit field.
+- Treat catalog badges as configuration readiness only. Use
+  `step.reasoning` for execution-level readiness ("provider attached" /
+  "provider absent") but do not render a context drawer from it; it is
+  not the prompt payload.
 
 ---
 

@@ -74,6 +74,18 @@ class _OpportunityService:
         return _Result()
 
 
+class _ReasoningAwareOpportunityService(_OpportunityService):
+    def __init__(self, reasoning_context: Any | None = None) -> None:
+        super().__init__()
+        self._reasoning_context = reasoning_context
+
+    def with_reasoning_context(
+        self,
+        provider: Any | None,
+    ) -> "_ReasoningAwareOpportunityService":
+        return _ReasoningAwareOpportunityService(reasoning_context=provider)
+
+
 class _LandingPageService:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -872,6 +884,63 @@ async def test_execute_threads_topic_into_blog_post_dispatcher() -> None:
 # -----------------------
 # PR-ControlSurfaces-Reasoning-Provider: bundle-level helper
 # -----------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_step_reports_reasoning_audit_when_provider_attached():
+    """Execution results expose a compact per-step reasoning audit without
+    exposing the full prompt context payload."""
+
+    provider = object()
+    campaign = _ReasoningAwareOpportunityService(reasoning_context=provider)
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    assert result["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_step_reports_reasoning_audit_when_provider_absent():
+    campaign = _ReasoningAwareOpportunityService()
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    assert result["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_step_omits_reasoning_audit_for_absent_requirement():
+    signal = SignalExtractionService()
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["signal_extraction"],
+            "inputs": {"source_material": "Acme switched from HubSpot."},
+        },
+        services=ContentOpsExecutionServices(signal_extraction=signal),
+    )
+
+    assert "reasoning" not in result["steps"][0]
 
 
 def test_services_with_reasoning_context_derives_new_bundle_with_provider_attached():
