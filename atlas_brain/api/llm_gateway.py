@@ -301,13 +301,36 @@ async def _resolve_byok_or_503(pool, provider: str, account_id: str) -> str:
 # ---- /chat (sync) -------------------------------------------------------
 
 
+def _cache_control_disables_cache(cache_control: str | None) -> bool:
+    """Return True when the request's ``Cache-Control`` header carries
+    a ``no-store`` directive (RFC 7234). Customer-supplied bypass for
+    sensitive prompts they don't want cached. Header is comma-separated
+    directives; presence of ``no-store`` (case-insensitive, with or
+    without a value) disables both lookup and store."""
+    if not cache_control:
+        return False
+    for directive in cache_control.split(","):
+        token = directive.strip().lower()
+        # Some Cache-Control directives take args (e.g. max-age=N);
+        # strip the value suffix before comparing the directive name.
+        token = token.split("=", 1)[0].strip()
+        if token == "no-store":
+            return True
+    return False
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     body: ChatRequest,
     user: AuthUser = Depends(require_llm_plan("llm_trial")),
+    cache_control: str | None = Header(default=None, alias="Cache-Control"),
 ) -> ChatResponse:
     """Sync chat completion. Account-scoped via the API key auth path
-    (PR-D1) and plan-gated to llm_trial+ (PR-D2)."""
+    (PR-D1) and plan-gated to llm_trial+ (PR-D2).
+
+    PR-D6f: customer-supplied ``Cache-Control: no-store`` header
+    bypasses both the exact-cache lookup and the post-call store.
+    Useful for sensitive prompts the customer doesn't want cached."""
     _validate_chat_provider(body.provider)
 
     pool = get_db_pool()
@@ -351,8 +374,10 @@ async def chat(
         temperature=body.temperature,
         extra={"system": system_prompt} if system_prompt else None,
     )
+    cache_disabled = _cache_control_disables_cache(cache_control)
+
     cache_hit = None
-    if is_llm_gateway_exact_cache_enabled():
+    if is_llm_gateway_exact_cache_enabled() and not cache_disabled:
         try:
             cache_hit = await lookup_cached_text(
                 _LLM_CHAT_CACHE_NAMESPACE,
@@ -493,9 +518,10 @@ async def chat(
     # PR-D6b: store the response in the exact cache so an identical
     # subsequent call from this account hits. Skipped on empty
     # response (lookup_cached_text would treat it as a non-hit anyway)
-    # and on flag off. Cache write failures must not fail the chat
-    # response -- log and proceed.
-    if text and is_llm_gateway_exact_cache_enabled():
+    # and on flag off. PR-D6f: also skipped when the request carries
+    # ``Cache-Control: no-store``. Cache write failures must not fail
+    # the chat response -- log and proceed.
+    if text and is_llm_gateway_exact_cache_enabled() and not cache_disabled:
         try:
             await store_cached_text(
                 _LLM_CHAT_CACHE_NAMESPACE,
