@@ -117,7 +117,20 @@ export default function ContentOpsNewRun() {
       return
     }
 
-    const domainRequest: ContentOpsRequest = { ...request, inputs: parsedInputs }
+    // Submit-time normalization: backend's pydantic validator declares
+    // max_cost_usd with gt=0; collapse 0 / negative to null so we never
+    // round-trip a request the API would reject.
+    const normalizedMaxCost =
+      request.maxCostUsd === null ||
+      !Number.isFinite(request.maxCostUsd) ||
+      request.maxCostUsd <= 0
+        ? null
+        : request.maxCostUsd
+    const domainRequest: ContentOpsRequest = {
+      ...request,
+      inputs: parsedInputs,
+      maxCostUsd: normalizedMaxCost,
+    }
     try {
       const wirePreview = await previewContentOpsRun(toWireRequest(domainRequest))
       // Drop the response if a newer mutation / submission has happened.
@@ -293,18 +306,18 @@ export default function ContentOpsNewRun() {
                 min={0}
                 value={request.maxCostUsd ?? ''}
                 onChange={(e) => {
-                  // Codex P2 fix: backend pydantic validator declares
-                  // max_cost_usd with gt=0 (control_surfaces.py:88), so
-                  // submitting 0 always fails. Treat 0 / negative / blank
-                  // as "no cap" client-side.
+                  // Codex P2 fix v2: keep 0 valid in form state during typing
+                  // so the user can keep keying a sub-dollar value like "0.50"
+                  // (the prior `<= 0 -> null` clobbered the input the moment
+                  // they typed "0"). The submit handler normalizes 0 / negative
+                  // values to null before sending, matching the backend's
+                  // `gt=0` validator (control_surfaces.py:88).
                   const v = e.target.value
                   const parsed = v === '' ? null : Number(v)
                   setRequest((p) => ({
                     ...p,
                     maxCostUsd:
-                      parsed === null || !Number.isFinite(parsed) || parsed <= 0
-                        ? null
-                        : parsed,
+                      parsed === null || !Number.isFinite(parsed) ? null : parsed,
                   }))
                   markStale()
                 }}

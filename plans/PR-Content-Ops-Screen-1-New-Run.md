@@ -45,10 +45,16 @@ A new page at `/content-ops/new` that:
 ### Files touched
 
 1. `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx` (new) -- the
-   v0 page component. ~280 LOC.
+   v0 page component. **~497 LOC** (initial estimate ~280 LOC
+   undershot; the form + verdict panel + race-condition guard
+   came in heavier than projected).
 2. `atlas-intel-ui/src/App.tsx` -- register the route at
    `/content-ops/new` and the lazy import. ~3 LOC.
-3. `plans/PR-Content-Ops-Screen-1-New-Run.md` (this file).
+3. `atlas-intel-ui/src/api/contentOps.ts` -- update `BASE` to
+   `${API_BASE}/api/v1/content-ops` so the dev Vite proxy
+   handles the request and the mount aligns with the existing
+   `client.ts` / `b2bClient.ts` convention. ~5 LOC delta.
+4. `plans/PR-Content-Ops-Screen-1-New-Run.md` (this file).
 
 ### What's NOT in this slice
 
@@ -80,11 +86,27 @@ Standard React patterns matching the existing repo:
   loading.
 - Local `useState<ContentOpsRequest>` for the form state, seeded
   with sane defaults from `fromWireRequest({})`.
-- Local `useState<ControlSurfacePreview | null>` for the preview
-  response.
+- Single `SubmitState` discriminated union state for the
+  preview lifecycle:
+  ```ts
+  type SubmitState =
+    | { kind: 'idle' }
+    | { kind: 'submitting' }
+    | { kind: 'invalid_inputs_json'; message: string }
+    | { kind: 'error'; message: string }
+    | { kind: 'success'; preview: ControlSurfacePreview }
+  ```
+  Co-locates loading / parse-error / API-error / success in one
+  variable; the verdict panel switches on `kind`.
+- `submitRequestIdRef` + `markStale()` race-condition guard:
+  any form mutation bumps the request id; `handleSubmit`
+  captures the id at submit time and drops the response if a
+  newer mutation has happened. Mirrors the pattern in
+  `src/hooks/useApiData.ts`.
 - Submit handler: build a domain request, call
   `toWireRequest(domain) → previewContentOpsRun(wire)`, map the
-  response with `fromWirePreview`, store in state.
+  response with `fromWirePreview`, store in state -- but only
+  if the captured request id still matches.
 
 The preset → outputs auto-fill is one-way: selecting a preset
 clones the preset's outputs into the form. Subsequently
@@ -95,6 +117,19 @@ warns about this and falls back to explicit outputs).
 The JSON textarea uses a try/catch parse on submit: parse
 errors surface as a toast-style inline error; valid parses go
 through. No live syntax highlighting -- v0.
+
+`max_cost_usd` is normalized at submit time, not on every
+keystroke, so the user can type sub-dollar values like `0.50`
+without the input clobbering itself when the leading `0` is
+typed. The submit handler maps `0` / negative / blank values to
+`null` (no cap) before sending, matching the backend's pydantic
+`gt=0` validator.
+
+The API mount aligns with the existing repo convention: the
+adapter targets `${API_BASE}/api/v1/content-ops`, matching
+`client.ts` (`/api/v1/consumer/dashboard`) and `b2bClient.ts`
+(`/api/v1/b2b/tenant`). The Vite dev proxy handles `/api/*`
+unchanged.
 
 ## Intentional
 
@@ -142,11 +177,20 @@ through. No live syntax highlighting -- v0.
 
 ## Estimated diff size
 
-- `ContentOpsNewRun.tsx`: ~280 LOC.
-- `App.tsx`: ~3 LOC.
-- Plan doc: ~150 LOC.
+Initial estimate undershot the page component by ~75% -- the
+form + verdict panel + race-condition guard + `SubmitState`
+discriminated union added more than the rough mental model
+projected. Updated for transparency.
 
-Total: ~435 LOC. Marginally over the 400 soft cap. Splitting
-the screen into "page skeleton" vs "form" leaves an unusable
-half-screen; the screen is a structurally indivisible vertical
-slice.
+- `ContentOpsNewRun.tsx`: ~497 LOC actual (initial estimate
+  ~280 LOC).
+- `App.tsx`: ~3 LOC.
+- `api/contentOps.ts`: ~5 LOC delta (BASE path realignment,
+  added in fix-up commit after the Codex P1 review).
+- Plan doc: ~210 LOC actual (post-update).
+
+Total actual: **~715 LOC**. Over the 400 soft cap. The screen
+is a structurally indivisible vertical slice -- splitting at
+"page skeleton" vs "form" leaves an unusable half-screen and
+the race-condition / max-cost / state-machine logic depends on
+the full form being present.

@@ -21,7 +21,13 @@
 import { tryRefreshToken } from '../auth/AuthContext'
 import { API_BASE } from './config'
 
-const BASE = `${API_BASE}/content-ops`
+// Mount under /api/v1/content-ops to match the Vite dev proxy
+// (/api/*) and the existing backend mount convention used by
+// `client.ts` and `b2bClient.ts` (`/api/v1/...`). The host
+// application is expected to mount the content-ops router there
+// via `ContentOpsControlSurfaceApiConfig(prefix="/api/v1/content-ops")`
+// or equivalent.
+const BASE = `${API_BASE}/api/v1/content-ops`
 
 // ---------------------------------------------------------------------------
 // Wire types
