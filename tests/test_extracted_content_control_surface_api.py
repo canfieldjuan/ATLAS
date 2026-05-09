@@ -167,9 +167,10 @@ async def test_describe_control_surfaces_returns_independent_dict_per_call():
 
 
 @pytest.mark.asyncio
-async def test_describe_control_surfaces_static_cache_is_built_once(monkeypatch):
+async def test_describe_control_surfaces_static_cache_is_not_rebuilt_per_request(monkeypatch):
     """``_build_static_catalog_payload`` is invoked at import, not per
-    request. Two requests should not call it again."""
+    request. The spy is installed after import, so this asserts the
+    builder is not re-invoked per request (not the import-time call)."""
 
     call_count = {"n": 0}
     original = api_module._build_static_catalog_payload
