@@ -157,9 +157,35 @@ try:
         create_content_ops_control_surface_router,
     )
     from .._content_ops_services import build_content_ops_execution_services
+    from .._content_ops_scope import (
+        build_content_ops_scope,
+        set_current_auth_user,
+    )
+    from ..auth.dependencies import AuthUser
+
+    async def _capture_content_ops_auth_user(
+        user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+    ) -> AuthUser:
+        """Bridge the per-request AuthUser to the
+        `_content_ops_scope` ContextVar so the route's
+        `scope_provider` can read it. Composing on top of
+        `require_b2b_plan` keeps the existing auth gate (paying
+        tier check, B2B product check, past-due guard) intact.
+        Closes the Codex P1 cross-tenant safety issue from
+        PR #454 (E2): drafts now persist under the
+        authenticated tenant's account_id rather than empty
+        string.
+        """
+
+        set_current_auth_user(user)
+        return user
+
     content_ops_router = create_content_ops_control_surface_router(
-        dependencies=[Depends(require_b2b_plan("b2b_growth"))],
-        execution_services_provider=build_content_ops_execution_services,
+        dependencies=[Depends(_capture_content_ops_auth_user)],
+        execution_services_provider=lambda: (
+            build_content_ops_execution_services(enable_db_services=True)
+        ),
+        scope_provider=build_content_ops_scope,
     )
     router.include_router(content_ops_router)
 except Exception as exc:  # pragma: no cover - defensive at import time
