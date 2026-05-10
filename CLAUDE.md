@@ -385,7 +385,7 @@ service required.
 
 ## MCP Servers
 
-Seven MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
+Nine MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
 All share `ATLAS_MCP_TRANSPORT` (stdio/sse), `ATLAS_MCP_HOST`, and `ATLAS_MCP_AUTH_TOKEN` config.
 Each server has an independent enable/disable toggle (`ATLAS_MCP_<NAME>_ENABLED`).
 
@@ -498,7 +498,8 @@ python -m atlas_brain.mcp.invoicing_server --sse
 Tools: `create_invoice`, `get_invoice`, `list_invoices`, `update_invoice`,
 `send_invoice`, `record_payment`, `mark_void`, `customer_balance`,
 `payment_history`, `create_service`, `list_services`, `get_service`,
-`update_service`, `set_service_status`, `search_invoices`
+`update_service`, `set_service_status`, `search_invoices`,
+`list_pending_drafts`, `approve_and_send`, `export_invoice_pdf`
 
 ### Intelligence MCP Server (33 tools)
 ```bash
@@ -509,14 +510,29 @@ python -m atlas_brain.mcp.intelligence_server
 python -m atlas_brain.mcp.intelligence_server --sse
 ```
 
-Tools (Strategic): `generate_intelligence_report`, `list_intelligence_reports`,
-`get_intelligence_report`, `list_pressure_baselines`, `analyze_risk_sensors`,
+Tools (Strategic, 8): `generate_intelligence_report`,
+`list_intelligence_reports`, `get_intelligence_report`,
+`list_pressure_baselines`, `analyze_risk_sensors`,
 `run_intervention_pipeline`, `list_pending_approvals`, `review_approval`
 
-Tools (Consumer Product): `search_product_reviews`, `get_product_review`,
-`list_pain_points`, `list_brands`, `get_brand_intelligence`,
-`list_market_reports`, `get_market_report`, `get_consumer_pipeline_status`,
-`list_complaint_content`
+Tools (Consumer product reviews, 9): `search_product_reviews`,
+`get_product_review`, `list_pain_points`, `list_brands`,
+`get_brand_intelligence`, `list_market_reports`, `get_market_report`,
+`get_consumer_pipeline_status`, `list_complaint_content`
+
+Tools (Brand registry + fuzzy matching, 4): `list_brand_registry`,
+`fuzzy_brand_search`, `add_brand_to_registry`, `add_brand_alias`
+
+Tools (Brand history + change events, 4): `get_brand_history`,
+`list_product_change_events`, `list_concurrent_events`,
+`get_brand_correlation`
+
+Tools (Consumer corrections, 3): `create_consumer_correction`,
+`list_consumer_corrections`, `revert_consumer_correction`
+
+Tools (Displacement + delivery, 5): `list_product_displacement_edges`,
+`get_product_displacement_history`, `export_market_report_pdf`,
+`export_brand_report_pdf`, `send_brand_health_digest`
 
 **Intelligence + Consumer product reviews**: Strategic entity intelligence
 (pressure baselines, behavioral risk, interventions) plus consumer product
@@ -793,8 +809,9 @@ from→to flows) · `/b2b/reports` · `/b2b/reviews` · `/b2b/campaigns`.
 
 Same architectural shape ported to consumer product reviews (Amazon, etc.):
 brand registry + fuzzy matching (`pg_trgm` + difflib), displacement edges,
-pain points, market reports, MCP `intelligence_server` (17 tools — 8
-strategic + 9 consumer-product). See
+pain points, market reports, MCP `intelligence_server` (33 tools — 8
+strategic + 9 consumer product + 4 brand registry + 4 brand history/change
+events + 3 corrections + 5 displacement/delivery). See
 `docs/consumer_intelligence_roadmap.md` (phases 0–6+ marked complete).
 
 ---
