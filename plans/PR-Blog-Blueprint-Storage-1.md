@@ -31,11 +31,15 @@ Three files plus the plan doc:
    to `273_reports.sql` (the most recent migration). Fields:
    `id`, `account_id`, `target_mode`, `topic_type`, `slug`,
    `suggested_title`, `payload` (JSONB -- the full blueprint
-   dict the LLM consumes), `status`, `created_at`, `consumed_at`.
-   Indexes on `(account_id, target_mode, status, created_at)`
-   for the read path, plus a unique index on
-   `(account_id, target_mode, slug)` to prevent duplicates from
-   the host's idempotent generators.
+   dict the LLM consumes), `created_at`, `consumed_at`. Soft-
+   delete is the `consumed_at` timestamp (NULL = unconsumed);
+   no separate `status` column. Indexes:
+   - Unique on `(account_id, target_mode, slug)` to prevent
+     duplicates from the host's idempotent generators.
+   - Partial on `(account_id, target_mode, created_at DESC)
+     WHERE consumed_at IS NULL` for the default read path.
+   - On `(account_id, target_mode, topic_type, created_at
+     DESC)` for the topic_type-filtered read.
 
 2. **`extracted_content_pipeline/blog_blueprint_postgres.py`** (new):
    `PostgresBlogBlueprintRepository(pool=...)` -- frozen
@@ -60,18 +64,25 @@ Three files plus the plan doc:
      `consumed_at IS NULL` by default.
 
 3. **`tests/test_extracted_blog_blueprint_postgres.py`** (new):
-   ~6 tests pinning the round-trip + scope-isolation contract,
+   8 tests pinning the round-trip + scope-isolation contract,
    following `test_extracted_blog_post_postgres.py` shape (fake
    pool with `fetch` / `fetchval` / `execute` recorders).
-   - `save_blueprints` round-trips payload through JSONB
-     round-trip
+   - `save_blueprints` round-trips payload through JSONB.
+   - `save_blueprints` upsert clears `consumed_at` so re-saved
+     blueprints are eligible for re-generation.
    - `read_blog_blueprints` filters by `account_id` +
-     `target_mode` + `consumed_at IS NULL`
-   - `read_blog_blueprints` honors `limit`
-   - `read_blog_blueprints` returns merged payload + row metadata
-   - `mark_consumed` sets the `consumed_at` timestamp
+     `target_mode` + `consumed_at IS NULL` and applies the
+     LIMIT.
+   - `read_blog_blueprints` honors the `topic_type` filter.
+   - `read_blog_blueprints` returns merged payload + row
+     metadata so the generator sees a self-contained dict.
    - `read_blog_blueprints` with no rows returns `()`
-     (defensive empty-table canary)
+     (defensive empty-table canary).
+   - `mark_consumed` issues the tenant-scoped UPDATE AND
+     returns the integer count parsed from the
+     `"UPDATE N"` command tag.
+   - `mark_consumed` with empty ids short-circuits (no DB
+     roundtrip).
 
 ### What's NOT in this slice
 
@@ -181,14 +192,16 @@ merges row metadata so the generator sees a single dict.
 
 ## Estimated diff size
 
-- Migration: ~30 LOC.
-- Repository: ~150 LOC.
-- Tests: ~200 LOC.
-- Plan doc: ~150 LOC.
+- Migration: ~37 LOC.
+- Repository: ~210 LOC (slightly above the original ~150
+  estimate after the inline `mark_consumed` integer-count
+  parse + expanded docstrings).
+- Tests: ~265 LOC (8 tests rather than the projected 6).
+- Plan doc: ~205 LOC.
 
-Total: ~530 LOC. Slightly over the 400 LOC soft cap. The
-storage layer is indivisible -- the migration, repo
-implementation, and tests must ship together for the schema
-to be useful. A test-only PR with no implementation has no
-review value, and an implementation-only PR with no migration
-has no schema to bind to.
+Total actual: ~717 LOC. ~75% over the 400 LOC soft cap.
+Indivisible -- the migration, repo implementation, and tests
+must ship together for the schema to be useful. A test-only
+PR with no implementation has no review value, and an
+implementation-only PR with no migration has no schema to
+bind to.

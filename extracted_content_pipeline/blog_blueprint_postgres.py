@@ -27,7 +27,6 @@ from .campaign_ports import JsonDict, TenantScope
 from .storage._jsonb_helpers import (
     decode_jsonb_field,
     json_dump_jsonb,
-    parse_command_tag,
     row_to_dict,
 )
 
@@ -171,9 +170,14 @@ class PostgresBlogBlueprintRepository:
     ) -> int:
         """Flag blueprints as consumed so they drop out of reads.
 
-        Returns the count of rows actually updated -- mismatched
-        ids (already-consumed, wrong tenant) are silently
-        skipped. ``consumed_at`` defaults to ``NOW()`` server-side.
+        Returns the count of rows actually updated, parsed from
+        asyncpg's ``"UPDATE N"`` command tag. Mismatched ids
+        (already-consumed, wrong tenant) are silently skipped --
+        callers can compare the return to ``len(blueprint_ids)``
+        to detect partial-batch failures. Test fakes that return
+        a non-string command tag fall back to
+        ``len(blueprint_ids)``. ``consumed_at`` defaults to
+        ``NOW()`` server-side.
         """
 
         if not blueprint_ids:
@@ -191,7 +195,12 @@ class PostgresBlogBlueprintRepository:
             list(blueprint_ids),
             consumed_at,
         )
-        return 1 if parse_command_tag(result) else 0
+        if isinstance(result, str):
+            try:
+                return int(result.rsplit(" ", 1)[-1])
+            except (ValueError, IndexError):
+                return len(blueprint_ids)
+        return len(blueprint_ids)
 
 
 __all__ = [

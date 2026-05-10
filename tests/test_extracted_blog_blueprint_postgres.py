@@ -6,7 +6,7 @@ the missing concrete implementation of the package's
 last unwired Content Ops slot). The bundle factory's blog_post
 wiring slice depends on this storage layer landing first.
 
-Test inventory (7 tests):
+Test inventory (8 tests):
 
 1. `save_blueprints` round-trips payload through JSONB.
 2. `save_blueprints` upsert resets `consumed_at` so the row
@@ -19,7 +19,10 @@ Test inventory (7 tests):
 6. `read_blog_blueprints` with no rows returns `()`
    (empty-table canary).
 7. `mark_consumed` issues the UPDATE with the expected
-   tenant-scoped predicate.
+   tenant-scoped predicate AND returns the integer count
+   parsed from the "UPDATE N" command tag.
+8. `mark_consumed` with empty ids short-circuits (no DB
+   roundtrip, returns 0).
 
 Test harness uses an asyncpg-shaped fake pool (matches
 `tests/test_extracted_blog_post_postgres.py`).
@@ -225,6 +228,11 @@ async def test_read_blog_blueprints_empty_table_returns_empty_tuple() -> None:
 
 @pytest.mark.asyncio
 async def test_mark_consumed_issues_tenant_scoped_update() -> None:
+    """Pin the actual integer count parse from asyncpg's
+    "UPDATE N" command tag -- callers compare the return to
+    `len(blueprint_ids)` to detect partial-batch failures, so
+    coercing to a 0/1 bool would silently mis-report."""
+
     pool = _Pool()
     pool.execute_result = "UPDATE 2"
     repo = PostgresBlogBlueprintRepository(pool=pool)
@@ -234,7 +242,7 @@ async def test_mark_consumed_issues_tenant_scoped_update() -> None:
         scope=TenantScope(account_id="acct-1"),
     )
 
-    assert hits == 1  # parse_command_tag returns True -> 1 here
+    assert hits == 2
     query = pool.execute_calls[0]["query"]
     assert "account_id = $1" in query
     assert "id = ANY($2::uuid[])" in query
@@ -242,3 +250,18 @@ async def test_mark_consumed_issues_tenant_scoped_update() -> None:
     args = pool.execute_calls[0]["args"]
     assert args[0] == "acct-1"
     assert args[1] == ["bp-uuid-1", "bp-uuid-2"]
+
+
+@pytest.mark.asyncio
+async def test_mark_consumed_with_empty_ids_short_circuits() -> None:
+    """Empty input must skip the DB roundtrip -- otherwise an
+    `id = ANY('{}'::uuid[])` predicate would still execute
+    once per call. Returns 0."""
+
+    pool = _Pool()
+    repo = PostgresBlogBlueprintRepository(pool=pool)
+
+    hits = await repo.mark_consumed([], scope=TenantScope(account_id="acct-1"))
+
+    assert hits == 0
+    assert pool.execute_calls == []
