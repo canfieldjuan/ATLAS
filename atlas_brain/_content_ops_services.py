@@ -75,6 +75,7 @@ def build_content_ops_execution_services(
     llm_factory: Optional[Callable[[], LLMClient | None]] = None,
     skills_factory: Optional[Callable[[], SkillStore]] = None,
     pool_factory: Optional[Callable[[], Any]] = None,
+    enable_db_services: bool = False,
 ) -> ContentOpsExecutionServices:
     """Return the host's Content Ops execution-services bundle.
 
@@ -84,9 +85,23 @@ def build_content_ops_execution_services(
     callers omit the kwargs and the factory imports the host
     singletons on demand.
 
-    Slots not yet populated remain `None`; the executor returns
-    `service_not_configured` per output. As host repositories
-    arrive, follow-up slices populate the remaining slots.
+    `enable_db_services` (default `False`) gates DB-backed
+    generators (currently `landing_page`). It defaults off
+    because the host's content-ops route mount in
+    `atlas_brain/api/__init__.py` does not yet pass a
+    `scope_provider`, so the executor would fall back to an
+    empty `TenantScope` and persist drafts under
+    `account_id=""` -- cross-tenant leakage in any
+    authenticated B2B deployment. Codex P1 review on PR #454
+    flagged this. The follow-up slice (E2.5) wires
+    `scope_provider` from the authenticated `AuthUser` and
+    flips this flag on. Tests pass `enable_db_services=True`
+    explicitly to exercise the wiring path.
+
+    Slots not yet populated remain `None`; the executor
+    returns `service_not_configured` per output. As host
+    repositories arrive, follow-up slices populate the
+    remaining slots.
     """
 
     if llm_factory is None:
@@ -106,15 +121,16 @@ def build_content_ops_execution_services(
 
         pool_factory = get_db_pool
 
-    llm = llm_factory()
-    skills = skills_factory()
-    pool = pool_factory()
-
-    landing_page = _build_landing_page_service(
-        llm=llm,
-        skills=skills,
-        pool=pool,
-    )
+    landing_page = None
+    if enable_db_services:
+        llm = llm_factory()
+        skills = skills_factory()
+        pool = pool_factory()
+        landing_page = _build_landing_page_service(
+            llm=llm,
+            skills=skills,
+            pool=pool,
+        )
 
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,

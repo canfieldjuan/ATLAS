@@ -106,16 +106,17 @@ async def test_signal_extraction_runs_through_host_bundle() -> None:
     assert step["result"]["target_mode"] == "vendor_retention"
 
 
-def test_landing_page_wired_when_llm_active() -> None:
-    """E2 canary: when the LLM factory returns a non-None client,
-    the bundle's `landing_page` slot is populated and
-    `configured_outputs()` advertises both `landing_page` and
-    `signal_extraction`."""
+def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
+    """E2 canary: when the LLM factory returns a non-None client
+    AND `enable_db_services=True`, the bundle's `landing_page`
+    slot is populated and `configured_outputs()` advertises
+    both `landing_page` and `signal_extraction`."""
 
     services = build_content_ops_execution_services(
         llm_factory=_make_llm_stub,
         skills_factory=_make_skill_store_stub,
         pool_factory=_make_pool_stub,
+        enable_db_services=True,
     )
 
     assert services.landing_page is not None
@@ -126,16 +127,35 @@ def test_landing_page_wired_when_llm_active() -> None:
 
 
 def test_landing_page_slot_stays_none_when_no_active_llm() -> None:
-    """E2 fallback: when `build_content_ops_llm_client` would
-    return `None` (no active host model), the bundle's
-    `landing_page` slot stays `None` so the executor can
-    surface `service_not_configured` to the UI's Execute
-    enable-state."""
+    """E2 fallback: with `enable_db_services=True` but no active
+    LLM, the bundle's `landing_page` slot stays `None` so the
+    executor can surface `service_not_configured` to the UI's
+    Execute enable-state."""
 
     services = build_content_ops_execution_services(
         llm_factory=_no_llm,
         skills_factory=_make_skill_store_stub,
         pool_factory=_make_pool_stub,
+        enable_db_services=True,
+    )
+
+    assert services.landing_page is None
+    assert services.configured_outputs() == ("signal_extraction",)
+
+
+def test_landing_page_slot_stays_none_in_production_default() -> None:
+    """Codex P1 fix: production callers omit `enable_db_services`
+    (default `False`) so DB-backed generators stay unwired
+    until the route mount also wires a `scope_provider` (E2.5).
+    Without that, drafts would persist under empty
+    `account_id` -- cross-tenant leakage. Pin the safe
+    default."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_make_llm_stub,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        # enable_db_services intentionally omitted -- defaults False.
     )
 
     assert services.landing_page is None
@@ -148,12 +168,14 @@ async def test_unwired_outputs_still_return_service_not_configured() -> None:
     `sales_brief` slots `None`. The executor's per-step
     dispatcher must surface that as `service_not_configured`
     rather than silently succeeding. Picking `report` since
-    `landing_page` is no longer in the unwired set after E2."""
+    `landing_page` is no longer in the unwired set when
+    `enable_db_services=True`."""
 
     services = build_content_ops_execution_services(
         llm_factory=_make_llm_stub,
         skills_factory=_make_skill_store_stub,
         pool_factory=_make_pool_stub,
+        enable_db_services=True,
     )
 
     result = await execute_content_ops_from_mapping(
@@ -169,16 +191,17 @@ async def test_unwired_outputs_still_return_service_not_configured() -> None:
     assert result["errors"][0]["reason"] == "service_not_configured"
 
 
-def test_bundle_only_advertises_wired_outputs_with_llm() -> None:
+def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
     """`configured_outputs()` is the source of truth the catalog
     endpoint surfaces in `execution.configured_outputs`. With
-    LLM wired, the bundle advertises landing_page +
-    signal_extraction."""
+    LLM wired AND `enable_db_services=True`, the bundle
+    advertises landing_page + signal_extraction."""
 
     services = build_content_ops_execution_services(
         llm_factory=_make_llm_stub,
         skills_factory=_make_skill_store_stub,
         pool_factory=_make_pool_stub,
+        enable_db_services=True,
     )
     assert services.configured_outputs() == (
         "landing_page",
@@ -187,12 +210,13 @@ def test_bundle_only_advertises_wired_outputs_with_llm() -> None:
 
 
 def test_bundle_only_advertises_wired_outputs_without_llm() -> None:
-    """Without an active LLM, only `signal_extraction` is
-    advertised."""
+    """Without an active LLM (even with `enable_db_services=True`),
+    only `signal_extraction` is advertised."""
 
     services = build_content_ops_execution_services(
         llm_factory=_no_llm,
         skills_factory=_make_skill_store_stub,
         pool_factory=_make_pool_stub,
+        enable_db_services=True,
     )
     assert services.configured_outputs() == ("signal_extraction",)

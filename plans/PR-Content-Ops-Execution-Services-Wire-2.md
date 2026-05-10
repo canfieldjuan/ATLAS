@@ -1,4 +1,31 @@
-# PR: wire `landing_page` into the execution-services bundle (E2 of N)
+# PR: prepare `landing_page` wiring (E2 of N) — gated off in production until E2.5 wires scope
+
+## Updates from review
+
+Codex P1 review on the initial commit (`3a215645`) flagged
+that turning on `landing_page` in production while the host
+mount in `atlas_brain/api/__init__.py` doesn't pass a
+`scope_provider` would persist drafts under empty
+`account_id` -- cross-tenant leakage in any authenticated
+B2B deployment.
+
+Response: the `_build_landing_page_service` helper, the DI
+kwargs, and the test inventory all stay as-is (proves the
+wiring works mechanically). The production code path now
+gates the actual wiring behind a new
+`enable_db_services` kwarg defaulting to `False`. Production
+callers (`atlas_brain/api/__init__.py`'s
+`build_content_ops_execution_services()`) leave the bundle's
+`landing_page` slot `None` until the follow-up slice (E2.5)
+wires `scope_provider` from the authenticated `AuthUser`
+and flips the flag on. New regression test
+`test_landing_page_slot_stays_none_in_production_default`
+pins the safe default.
+
+This slice's value: the wiring helper is in place and tested,
+ready for E2.5 to flip the switch the moment scope is wired.
+
+
 
 ## Why this slice exists
 
