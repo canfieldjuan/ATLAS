@@ -1,8 +1,8 @@
 """Pin the host's Content Ops execution-services bundle.
 
-`atlas_brain/api/_content_ops_services.py` builds a
+`atlas_brain/_content_ops_services.py` builds a
 `ContentOpsExecutionServices` with `signal_extraction` populated
-and the other 5 slots left `None`. Two regression tests:
+and the other 5 slots left `None`. Three regression tests:
 
 1. `signal_extraction` runs through the full executor with the
    bundle attached -- proves the wiring closes the prior 503
@@ -12,9 +12,13 @@ and the other 5 slots left `None`. Two regression tests:
    `service_not_configured` -- confirms the bundle doesn't
    silently mask outputs we haven't wired yet.
 
+3. `configured_outputs()` advertises only the wired output --
+   pins the source-of-truth the catalog endpoint exposes in
+   `execution.configured_outputs`.
+
 When follow-up slices add `campaign` / `blog_post` / etc.,
-test 2 needs an updated expected-set; treat it as the canary
-that the bundle's slot population matches the plan.
+tests 2 and 3 need updated expected-sets; treat them as the
+canary that the bundle's slot population matches the plan.
 """
 
 from __future__ import annotations

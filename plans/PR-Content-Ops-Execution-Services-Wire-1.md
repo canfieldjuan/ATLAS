@@ -40,7 +40,8 @@ Tightly bounded:
 2. **Modify `atlas_brain/api/__init__.py`** to import the
    factory and pass it to
    `create_content_ops_control_surface_router(
-   execution_services_provider=lambda: build_content_ops_execution_services())`.
+   execution_services_provider=build_content_ops_execution_services)`
+   as a bare function reference.
 3. **One regression test** in
    `tests/test_atlas_content_ops_execution_services.py` pinning
    that the bundle round-trips through the executor for
