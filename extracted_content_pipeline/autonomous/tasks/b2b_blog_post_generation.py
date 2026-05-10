@@ -23,7 +23,7 @@ import logging
 import re
 from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Awaitable, Callable, Optional
 
 from ...config import settings
 from ...storage.database import get_db_pool
@@ -54,6 +54,31 @@ from ._b2b_specificity import (
 )
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_blog_post_generation")
+
+
+# Per-blueprint published hook. Hosts that want to react to each
+# stored blueprint (e.g. fan it out to per-tenant subscribers in
+# atlas_brain) install a callback via ``set_blueprint_published_hook``.
+# Default ``None`` keeps the autonomous task standalone-portable --
+# this module must remain importable inside ``extracted_content_pipeline``
+# without the host's per-tenant fanout chain.
+BlueprintPublishedHook = Callable[[Any, Any], Awaitable[None]]
+_blueprint_published_hook: Optional[BlueprintPublishedHook] = None
+
+
+def set_blueprint_published_hook(
+    hook: Optional[BlueprintPublishedHook],
+) -> None:
+    """Install / clear the per-blueprint published callback.
+
+    Called once at host wiring time (see
+    ``atlas_brain/autonomous/tasks/_b2b_blog_post_generation_host.py``).
+    Passing ``None`` clears the hook -- useful for tests that want
+    the standalone path.
+    """
+
+    global _blueprint_published_hook
+    _blueprint_published_hook = hook
 
 
 async def _fetch_latest_evidence_vault(
@@ -3237,6 +3262,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 continue
 
+            if _blueprint_published_hook is not None:
+                try:
+                    await _blueprint_published_hook(pool, blueprint)
+                except Exception as exc:
+                    logger.warning(
+                        "Blog blueprint published hook exception: %s", exc,
+                    )
+
             from ..visibility import record_attempt
             await record_attempt(
                 pool, artifact_type="blog_post", artifact_id=blueprint.slug,
@@ -3468,6 +3501,14 @@ async def _regenerate_existing_posts(
                 attempt_no=1,
             )
             if post_id:
+                if _blueprint_published_hook is not None:
+                    try:
+                        await _blueprint_published_hook(pool, blueprint)
+                    except Exception as exc:
+                        logger.warning(
+                            "Blog blueprint published hook exception: %s",
+                            exc,
+                        )
                 results.append({
                     "post_id": str(post_id),
                     "topic_type": topic_type,
