@@ -14,21 +14,29 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory:
+Test inventory (8 tests):
 
 1. `signal_extraction` runs through the full executor with the
    bundle attached.
-2. `landing_page` is populated when an LLM is wired (E2 canary).
+2. `landing_page` is populated when an LLM is wired AND
+   `enable_db_services=True` (E2 canary).
 3. `landing_page` slot stays `None` when no LLM is active
    (E2 fallback behavior).
-4. Unwired outputs still return `service_not_configured` --
+4. `landing_page` slot stays `None` when pool is None
+   (defensive early-startup guard).
+5. `landing_page` slot stays `None` in production default
+   (Codex P1 safety: `enable_db_services=False` until E2.5
+   wires `scope_provider`).
+6. Unwired outputs still return `service_not_configured` --
    confirms the bundle doesn't silently mask the remaining 4
    slots (`campaign`, `blog_post`, `report`, `sales_brief`).
-5. `configured_outputs()` advertises the right tuple
-   depending on LLM presence.
+7. `configured_outputs()` advertises landing_page +
+   signal_extraction with LLM + `enable_db_services=True`.
+8. `configured_outputs()` advertises only signal_extraction
+   without an LLM (or in default production mode).
 
 When follow-up slices add `campaign` / `blog_post` / etc.,
-tests 4 and 5 need updated expected-sets.
+tests 6 and 7 need updated expected-sets.
 """
 
 from __future__ import annotations
@@ -139,6 +147,27 @@ def test_landing_page_slot_stays_none_when_no_active_llm() -> None:
         enable_db_services=True,
     )
 
+    assert services.landing_page is None
+    assert services.configured_outputs() == ("signal_extraction",)
+
+
+def test_landing_page_slot_stays_none_when_pool_is_none() -> None:
+    """Defensive guard: if `get_db_pool()` would return `None`
+    during early host startup (before `init_database()` runs),
+    `_build_landing_page_service` skips the slot the same way
+    it does for an absent LLM. Better than building a
+    `PostgresLandingPageRepository(pool=None)` that would
+    fail on first query."""
+
+    def _no_pool() -> Any:
+        return None
+
+    services = build_content_ops_execution_services(
+        llm_factory=_make_llm_stub,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_no_pool,
+        enable_db_services=True,
+    )
     assert services.landing_page is None
     assert services.configured_outputs() == ("signal_extraction",)
 

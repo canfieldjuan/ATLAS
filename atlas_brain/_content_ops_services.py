@@ -24,7 +24,7 @@ See `plans/PR-Content-Ops-Execution-Services-Wire-2.md`.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from extracted_content_pipeline.campaign_ports import LLMClient, SkillStore
 from extracted_content_pipeline.content_ops_execution import (
@@ -61,7 +61,12 @@ def _build_landing_page_service(
     catalog endpoint exposes to the UI's Execute enable-state.
     """
 
-    if llm is None:
+    if llm is None or pool is None:
+        # Pool can be None during early host startup before
+        # `init_database()` has run; treat the same as the
+        # no-LLM branch -- skip the slot rather than build a
+        # repo against a dead pool that would fail at first
+        # query.
         return None
     return LandingPageGenerationService(
         landing_pages=PostgresLandingPageRepository(pool=pool),
@@ -72,9 +77,9 @@ def _build_landing_page_service(
 
 def build_content_ops_execution_services(
     *,
-    llm_factory: Optional[Callable[[], LLMClient | None]] = None,
-    skills_factory: Optional[Callable[[], SkillStore]] = None,
-    pool_factory: Optional[Callable[[], Any]] = None,
+    llm_factory: Callable[[], LLMClient | None] | None = None,
+    skills_factory: Callable[[], SkillStore] | None = None,
+    pool_factory: Callable[[], Any] | None = None,
     enable_db_services: bool = False,
 ) -> ContentOpsExecutionServices:
     """Return the host's Content Ops execution-services bundle.
