@@ -145,12 +145,12 @@
   UIs do not confuse package implementation status with runtime readiness. The
   output catalog also reports whether each output can consume host-provided
   reasoning context or does not use the reasoning-provider path.
-- Execution result summaries expose compact reasoning consumption counts when a
-  generated-asset service reports them: runner results can include
-  `reasoning_contexts_used`, and the per-step `reasoning` audit mirrors that
-  count as `contexts_used`. Services can also opt into
-  `consumed_reasoning_contexts`; the per-step `reasoning` audit surfaces those
-  rows as `consumed_contexts` for future reasoning-drawer UIs.
+- Execution result summaries expose compact reasoning consumption counts and
+  bounded consumed-context payloads for the five LLM-backed generated-asset
+  services. Runner results include `reasoning_contexts_used` and, when
+  reasoning reached the prompt, `consumed_reasoning_contexts`; the per-step
+  `reasoning` audit mirrors those as `contexts_used` and `consumed_contexts`
+  for future reasoning-drawer UIs.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared

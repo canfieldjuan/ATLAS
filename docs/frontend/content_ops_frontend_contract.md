@@ -551,8 +551,9 @@ Dumb components only. No fetch, no business rules.
 - Visual workflow builder
 - Model-selection UX
 - Full Reasoning Context Drawer UX. `/content-ops/execute` now exposes
-  `reasoning.consumed_contexts` when services opt in, but the actual
-  drawer component and per-output service adoption land separately.
+  `reasoning.consumed_contexts` for LLM-backed generated assets when
+  reasoning reaches the prompt, but the actual drawer component lands
+  separately.
 - Collaboration / role-permission flows
 - CMS export
 - Approval workflow (no backend approval state on the control-surface
