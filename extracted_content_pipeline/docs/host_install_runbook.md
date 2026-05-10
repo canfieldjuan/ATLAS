@@ -443,8 +443,9 @@ The mounted list/export routes use the same export helper as the CLI, so JSON
 and CSV responses include the generation-usage and reasoning summary fields
 documented above.
 
-Export generated reports, landing pages, or sales briefs through the generated
-asset CLI when the host needs the same review loop for non-campaign outputs:
+Export generated reports, blog posts, landing pages, or sales briefs through
+the generated asset CLI when the host needs the same review loop for
+non-campaign outputs:
 
 ```bash
 python scripts/export_extracted_content_assets.py \
@@ -454,6 +455,13 @@ python scripts/export_extracted_content_assets.py \
   --report-type vendor_pressure \
   --format csv \
   --output report_drafts.csv
+
+python scripts/export_extracted_content_assets.py \
+  --asset blog_post \
+  --account-id acct_123 \
+  --topic-type vendor_showdown \
+  --format csv \
+  --output blog_post_drafts.csv
 
 python scripts/export_extracted_content_assets.py \
   --asset landing_page \
@@ -476,6 +484,12 @@ writing SQL:
 python scripts/review_extracted_content_assets.py \
   --asset report \
   --id <report-id> \
+  --account-id acct_123 \
+  --status approved
+
+python scripts/review_extracted_content_assets.py \
+  --asset blog_post \
+  --id <blog-post-id> \
   --account-id acct_123 \
   --status approved
 
@@ -517,9 +531,9 @@ The generated asset router exposes:
 | `GET` | `/content-assets/{asset}/drafts/export` | Export generated asset drafts as CSV or JSON. |
 | `POST` | `/content-assets/{asset}/drafts/review` | Update one generated asset status by id. |
 
-Supported `{asset}` values are `report`, `landing_page`, and `sales_brief`.
-Review statuses are host-defined strings; the product does not impose a fixed
-status vocabulary for these generated asset tables.
+Supported `{asset}` values are `report`, `blog_post`, `landing_page`, and
+`sales_brief`. Review statuses are host-defined strings; the product does not
+impose a fixed status vocabulary for these generated asset tables.
 
 Amazon seller installs can mount the seller-specific router:
 
