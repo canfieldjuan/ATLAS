@@ -56,7 +56,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ STT/TTS for voice interface
 - ✅ PostgreSQL for conversation persistence
 - ✅ Contacts CRM — `contacts` table + NocoDB browser UI (http://localhost:8090)
-- ✅ 7 MCP servers: CRM (10 tools), Email (8), Twilio (10), Calendar (8), Invoicing (15), Intelligence (8), B2B Churn (60+)
+- ✅ 9 MCP servers: CRM (10), Email (8), Twilio (10), Calendar (8), Invoicing (15), Intelligence (17), B2B Churn (60+), Universal Scraper (5), Memory (15)
+- ✅ B2B churn intelligence pipeline (16 review sites, vendor displacement graph, parser-version telemetry, calibration, webhook delivery)
+- ✅ Content Ops pipeline (blog post + B2B campaign generation, signal extraction, reasoning context, generated-asset review API)
+- ✅ Knowledge graph memory (Postgres short-term + Neo4j/Graphiti long-term via `graphiti-wrapper`)
+- ✅ Multi-tenant SaaS auth (JWT + plan-based access control under `atlas_brain/auth/`)
 
 ### Future Capabilities (Planned)
 - 🔲 Unified always-on voice interface (wake word "Hey Atlas")
@@ -197,59 +201,104 @@ curl -X POST http://127.0.0.1:8000/api/v1/devices/intent \
   -d '{"query": "turn on the living room lights"}'
 ```
 
-## Architecture
+## Repository Layout
+
+The repo is a monorepo: the Python `atlas_brain` server, several extracted standalone Python packages (`extracted_*`), the standalone `atlas_comms` / `atlas_edge` / `atlas_video-processing` services, six React+Vite frontends (`atlas-*-ui`, `atlas-mobile`, `portfolio-ui`), and a Neo4j/Graphiti knowledge-graph wrapper.
+
+```
+ATLAS/
+├── atlas_brain/                 # Main FastAPI server (the "Brain")
+├── atlas_comms/                 # Standalone communications service (Twilio/SignalWire)
+├── atlas_edge/                  # Edge-node capabilities (Jetson)
+├── atlas_video-processing/      # Video pipeline (SAM 3, etc.)
+├── graphiti-wrapper/            # Neo4j + Graphiti GraphRAG service (port 8001)
+├── asr_server.py                # Standalone ASR (Nemotron) FastAPI server, port 8081
+├── webhook_dispatcher.py        # Outbound webhook delivery for B2B intelligence
+│
+├── extracted_competitive_intelligence/  # Standalone competitive-intel package
+├── extracted_content_pipeline/          # Blog post + B2B campaign generation (active iteration)
+├── extracted_evidence_to_story/         # Evidence-to-narrative pipeline
+├── extracted_llm_infrastructure/        # LLM provider ports + adapters
+├── extracted_quality_gate/              # Quality / validation gates
+├── extracted_reasoning_core/            # Cross-domain reasoning event bus
+│
+├── atlas-admin-ui/   atlas-churn-ui/   atlas-intel-ui/   atlas-ui/
+├── atlas-mobile/     portfolio-ui/     animated-robot-logo/
+│
+├── tests/                       # 600+ tests, pytest-based
+├── scripts/                     # 159 audit/run/validate/backfill scripts
+├── docs/                        # Architecture, audits, runbooks, roadmaps
+├── plans/                       # 65+ per-PR plan docs (AGENTS.md workflow)
+│
+├── AGENTS.md                    # Multi-session builder/reviewer contract (READ FIRST)
+├── AUDITOR_PROMPT.md            # Cross-cutting audit prompt
+├── CANONICAL.md                 # Which implementation is the real one
+├── INTEGRATION_MAP.md           # What's wired to what
+├── BUILD_SPEC.md                # P0/P1/P2 priorities, definition of done
+└── CLAUDE.md                    # (this file)
+```
+
+### `atlas_brain/` package map (35 packages)
 
 ```
 atlas_brain/
-├── main.py                      # FastAPI app with lifespan management
-├── config.py                    # Pydantic Settings for configuration
+├── main.py                      # FastAPI app + lifespan
+├── config.py                    # Pydantic Settings (env_prefix=ATLAS_*)
+├── _content_ops_*.py            # Content-Ops scope/services/infra wiring
 │
-├── api/                         # API layer (routing only)
-│   ├── dependencies.py          # FastAPI Depends (inject services)
-│   ├── health.py                # /ping, /health
-│   ├── query/                   # AI inference endpoints
-│   │   ├── text.py              # POST /query/text
-│   │   ├── audio.py             # POST /query/audio, WS /ws/query/audio
-│   │   └── vision.py            # POST /query/vision
-│   └── models/                  # Model management
-│       └── management.py        # GET/POST /models/stt, /models/llm
-│   └── devices/                 # Device control
-│       └── control.py           # /devices/*, /devices/intent
-│
+├── api/                         # 50+ FastAPI routers (health, query, devices,
+│                                #   b2b_*, content-ops, blog, billing, identity, …)
+├── agents/                      # LangGraph agent orchestration (memory, tools, entity tracker)
+├── alerts/                      # Centralized alert system (vision, audio, HA, security)
+├── auth/                        # SaaS auth: JWT, password hashing, plan tiers
+├── autonomous/                  # Scheduled & alert-driven headless tasks (incl. blog gen)
+├── capabilities/                # Device protocols, registry, action dispatch
+│   ├── backends/                # mqtt, homeassistant
+│   └── devices/                 # lights, switches, …
+├── comms/                       # Re-exports atlas_comms (phone STT/LLM/TTS local)
+├── discovery/                   # SSDP / mDNS device discovery
+├── escalation/                  # Security event classification + LLM synthesis
+├── events/                      # System event broadcast (real-time UI feed)
+├── jobs/                        # Background jobs (e.g. NightlyMemorySync)
+├── mcp/                         # 9 MCP servers (see "MCP Servers" below)
+│   └── b2b/                     # B2B-churn server module split
+├── memory/                      # MemoryService, RAG client, token budgeting
+├── modes/                       # Operating modes (tool groupings, model prefs)
+├── orchestration/               # Runtime context (faces, speakers, objects), CUDA lock
+├── pipelines/                   # Pipeline registry (news, complaints, SaaS reviews, …)
+├── presence/                    # Proxies to atlas_vision occupancy
+├── reasoning/                   # Event-driven cross-domain reasoning
 ├── schemas/                     # Pydantic request/response models
-│   └── query.py
-│
-├── services/                    # AI model services
-│   ├── protocols.py             # LLMService protocol
-│   ├── base.py                  # BaseModelService with shared utilities
-│   ├── registry.py              # ServiceRegistry for hot-swapping (LLM)
-│   ├── crm_provider.py          # CRM: DatabaseCRMProvider (direct asyncpg)
-│   ├── email_provider.py        # Email: GmailEmailProvider + ResendEmailProvider
-│   └── stt/
-│       └── nemotron.py          # @register_stt("nemotron")
-│
-└── capabilities/                # Device/integration system
-    ├── protocols.py             # Capability, CapabilityState, ActionResult
-    ├── registry.py              # CapabilityRegistry
-    ├── actions.py               # ActionDispatcher, Intent
-    ├── intent_parser.py         # LLM → Intent extraction
-    ├── backends/                # Communication backends
-    │   ├── base.py              # Backend protocol
-    │   ├── mqtt.py              # MQTTBackend
-    │   └── homeassistant.py     # HomeAssistantBackend
-    └── devices/                 # Device implementations
-        ├── lights.py            # MQTTLight, HomeAssistantLight
-        └── switches.py          # MQTTSwitch, HomeAssistantSwitch
-
-atlas_brain/mcp/                 # MCP servers (Claude Desktop / Cursor compatible)
-├── crm_server.py                # CRM MCP server          (10 tools, port 8056)
-├── email_server.py              # Email MCP server         (8 tools, port 8057)
-├── twilio_server.py             # Twilio MCP server        (10 tools, port 8058)
-├── calendar_server.py           # Calendar MCP server      (8 tools, port 8059)
-├── invoicing_server.py          # Invoicing MCP server     (15 tools, port 8060)
-├── intelligence_server.py       # Intelligence MCP server  (17 tools, port 8061)
-└── b2b_churn_server.py          # B2B Churn MCP server     (60+ tools, port 8062)
+├── security/                    # WiFi threat detection, network IDS
+├── services/                    # 55 modules: providers, embeddings, registries, audits
+│   ├── b2b/                     # B2B-specific services
+│   ├── llm/                     # LLM router + adapters
+│   ├── embedding/               # Embedding services
+│   ├── scraping/                # Universal scrape engine
+│   └── speaker_id/              # Speaker recognition
+├── skills/                      # Markdown-prompt skills (b2b, call, digest, email,
+│                                #   intelligence, invoicing, security, sms)
+├── storage/                     # Postgres persistence (sessions, conversations, terminals)
+├── templates/                   # Email + message templates
+├── tools/                       # Info-query tools (weather, traffic, calendar, email, …)
+├── utils/                       # Time/format helpers
+├── vision/                      # MQTT subscription to atlas_vision detections
+└── voice/                       # Local voice-to-voice (wake word, VAD, capture, playback)
 ```
+
+### `atlas_brain/mcp/` MCP servers (9)
+
+| Server                  | Port | Tools | Module                                |
+|-------------------------|------|-------|---------------------------------------|
+| CRM                     | 8056 | 10    | `atlas_brain.mcp.crm_server`          |
+| Email                   | 8057 | 8     | `atlas_brain.mcp.email_server`        |
+| Twilio                  | 8058 | 10    | `atlas_brain.mcp.twilio_server`       |
+| Calendar                | 8059 | 8     | `atlas_brain.mcp.calendar_server`     |
+| Invoicing               | 8060 | 15    | `atlas_brain.mcp.invoicing_server`    |
+| Intelligence            | 8061 | 17    | `atlas_brain.mcp.intelligence_server` |
+| B2B Churn Intelligence  | 8062 | 60+   | `atlas_brain.mcp.b2b_churn_server` (split into `mcp/b2b/`) |
+| Universal Scraper       | 8063 | 5     | `atlas_brain.mcp.scraper_server`      |
+| Memory (Graphiti+Postgres) | 8064 | 15 | `atlas_brain.mcp.memory_server`       |
 
 ## Key Patterns
 
@@ -578,6 +627,44 @@ ATLAS_MCP_B2B_CHURN_ENABLED=true
 ATLAS_MCP_B2B_CHURN_PORT=8062
 ```
 
+### Universal Scraper MCP Server (5 tools)
+```bash
+# stdio mode (Claude Desktop / Cursor)
+python -m atlas_brain.mcp.scraper_server
+
+# SSE HTTP mode (port 8063)
+python -m atlas_brain.mcp.scraper_server --sse
+```
+
+Tools: `scrape_url`, `scrape_multi`, `get_scrape_job`, `get_scrape_results`,
+`list_scrape_jobs`
+
+LLM-powered extraction from any site with caller-supplied schema. Supports
+pagination and Playwright JS rendering for dynamic pages.
+
+### Memory MCP Server (15 tools)
+```bash
+# stdio mode (Claude Desktop / Cursor)
+python -m atlas_brain.mcp.memory_server
+
+# SSE HTTP mode (port 8064)
+python -m atlas_brain.mcp.memory_server --sse
+```
+
+**Graph tools** (Postgres + Neo4j knowledge graph via `graphiti-wrapper` on
+`localhost:8001`): `search_memory`, `search_memory_enhanced`,
+`search_memory_temporal`, `get_entity`, `traverse_graph`, `find_shortest_path`,
+`add_fact`, `add_episode`, `delete_episode`, `enhance_prompt`,
+`analyze_sentiment`
+
+**Conversation tools** (Postgres `conversation_turns`): `search_conversations`,
+`get_session_history`, `list_sessions`
+
+**Combined**: `get_context` (parallel graph + conversation lookup, unified result).
+
+The wrapper service is started with `start-graphiti.sh` (compose file
+`docker-compose.graphiti.yml`).
+
 ### Claude Desktop config (`~/.claude/claude_desktop_config.json`)
 ```json
 {
@@ -616,10 +703,23 @@ ATLAS_MCP_B2B_CHURN_PORT=8062
       "command": "python",
       "args": ["-m", "atlas_brain.mcp.b2b_churn_server"],
       "cwd": "/path/to/ATLAS"
+    },
+    "atlas-scraper": {
+      "command": "python",
+      "args": ["-m", "atlas_brain.mcp.scraper_server"],
+      "cwd": "/path/to/ATLAS"
+    },
+    "atlas-memory": {
+      "command": "python",
+      "args": ["-m", "atlas_brain.mcp.memory_server"],
+      "cwd": "/path/to/ATLAS"
     }
   }
 }
 ```
+
+A working development copy of this config also lives at `.mcp.json` in the
+repo root.
 
 ## Environment Requirements
 
@@ -629,3 +729,201 @@ ATLAS_MCP_B2B_CHURN_PORT=8062
 - NVIDIA Container Toolkit installed on host (see `install_nvidia_toolkit.sh`)
 - Docker and Docker Compose
 - Ollama for LLM serving
+
+---
+
+## Multi-Session PR Workflow (AGENTS.md)
+
+Atlas uses **two coordinated Claude Code sessions** for non-trivial work: a
+**builder** (writes the plan, the code, the PR) and a **reviewer** (audits the
+PR independently). The full contract lives in `AGENTS.md`; the highlights:
+
+- **Plan first.** Every non-trivial PR ships a plan doc at
+  `plans/PR-<Slice-Name>.md` with these 7 required sections, in order:
+  Why this slice exists / Scope / Mechanism / Intentional / Deferred /
+  Verification / Estimated diff size.
+- **Diff budget:** target **<400 LOC** per PR (soft cap). Over-budget PRs
+  must justify the overage in *Why this slice exists*.
+- **PR body** mirrors the plan-doc framing, with `Plan: plans/PR-<Slice>.md`
+  as the lead line. Same shape goes in the commit message.
+- **Branch naming:** `claude/pr-<slice-name>` for builder branches;
+  `claude/<topic>` for non-PR scratch.
+- **Open as draft** until the reviewer LGTMs.
+- **Reviewer verdicts:** `BLOCKER` / `MAJOR` / `NIT` / `LGTM`. Reviewer
+  reproduces the builder's verification commands; doesn't trust claims.
+- **No "while I was here" cleanups.** Plan and implementation ship together;
+  off-scope changes go to a follow-up slice (added to *Deferred*).
+
+When extending a Claude Code session in this repo, **read `AGENTS.md` first**
+if the task is a non-trivial PR. For one-off scratch / exploration, the
+contract doesn't apply.
+
+Companion docs:
+- `AUDITOR_PROMPT.md` — cross-cutting auditor prompt (canonical / integration / scope / debt)
+- `CANONICAL.md` — which implementation is the real one
+- `INTEGRATION_MAP.md` — what's wired to what
+- `BUILD_SPEC.md` — P0/P1/P2 priorities, definition of done
+- `CONTEXT.md` — session notes, known debt
+
+---
+
+## Testing
+
+Pytest is the only test runner. Config is in `pytest.ini`:
+
+```ini
+[pytest]
+testpaths = tests
+asyncio_mode = auto
+markers =
+    integration: marks tests as integration tests (require database)
+    e2e:         marks tests as end-to-end tests (require all services)
+    slow:        marks tests as slow running
+```
+
+```bash
+# Activate venv first
+source .venv/bin/activate
+
+# Full unit suite (skip DB-bound tests)
+pytest -m "not integration and not e2e"
+
+# Just one test file
+pytest tests/test_blog_post_postgres.py -v
+
+# Run integration tests (requires Postgres + Neo4j up)
+docker compose up -d postgres
+pytest -m integration
+
+# Single keyword filter
+pytest -k "campaign and not slow"
+```
+
+`tests/` has 600+ files at the top level plus `tests/atlas_edge/`,
+`tests/security/`, `tests/fixtures/`, and a shared `conftest.py`.
+
+### Per-package validation gauntlets
+
+Each `extracted_*` package has a CI-equivalent local sweep. Run before
+pushing changes that touch that package:
+
+```bash
+# extracted_content_pipeline (active iteration)
+bash scripts/validate_extracted_content_pipeline.sh
+python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
+python scripts/audit_extracted_standalone.py --fail-on-debt
+bash scripts/check_ascii_python.sh
+bash scripts/run_extracted_pipeline_checks.sh                      # full CI mirror
+
+# Sync touched files from atlas_brain → extracted (only if synced files changed)
+bash extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline
+
+# Other packages
+bash scripts/validate_extracted_competitive_intelligence.sh
+bash scripts/run_extracted_competitive_intelligence_checks.sh
+bash scripts/validate_extracted_llm_infrastructure.sh
+bash scripts/run_extracted_llm_infrastructure_checks.sh
+bash scripts/run_extracted_evidence_to_story_checks.sh
+
+# Reasoning rollout / hybrid checks
+python scripts/check_reasoning_rollout_readiness.py
+bash scripts/run_hybrid_reasoning_checks.sh
+bash scripts/run_reasoning_provider_port_compat_checks.sh
+```
+
+`scripts/` also holds ~150 backfill / audit utilities (e.g.
+`audit_g2_raw_capture.py`, `backfill_blog_seo.py`,
+`run_b2b_enrichment_until_exhausted.py`). These are one-off ops tools, not
+part of CI.
+
+---
+
+## Extracted Packages
+
+Atlas extracts cohesive subsystems into standalone Python packages so they
+can be exercised, tested, and (eventually) shipped independently of the main
+brain. Six packages exist today:
+
+| Package                              | Purpose |
+|--------------------------------------|---------|
+| `extracted_content_pipeline/`        | Blog post + B2B campaign generation, signal extraction, generated-asset workflow. **Active iteration.** |
+| `extracted_competitive_intelligence/`| Competitive-intel scoring, vendor displacement reasoning |
+| `extracted_evidence_to_story/`       | Evidence → narrative pipeline (claims, citations, witness propagation) |
+| `extracted_llm_infrastructure/`      | LLM provider ports, adapters, batch + cost telemetry |
+| `extracted_quality_gate/`            | Validation / quality gates (blog quality, witness quality, etc.) |
+| `extracted_reasoning_core/`          | Cross-domain reasoning event bus + entity locking |
+
+### Manifest discipline
+
+Each `extracted_<name>/manifest.json` has `mappings` entries with two shapes:
+
+- **Synced files** — entries with both `source` (path under `atlas_brain/`)
+  and `target`. The source is canonical; edit `atlas_brain/...` and let
+  `extracted/_shared/scripts/sync_extracted.sh <package>` propagate.
+- **Owned files** — entries with `target` only. The package copy is canonical.
+  Edit in place. The sync script does not overwrite it.
+
+Quickly check which side a file lives on:
+
+```bash
+grep -B2 '"target": "<path>"' <package>/manifest.json
+```
+
+A `source` line means synced; absence (just `target`) means owned.
+
+---
+
+## Sub-Projects
+
+| Path                          | Stack             | Purpose |
+|-------------------------------|-------------------|---------|
+| `atlas-admin-ui/`             | React + Vite + TS | Internal admin dashboard |
+| `atlas-churn-ui/`             | React + Vite + TS | B2B churn intelligence dashboard |
+| `atlas-intel-ui/`             | React + Vite + TS | Strategic intelligence dashboard |
+| `atlas-ui/`                   | React + Vite + TS | Main consumer dashboard |
+| `atlas-mobile/`               | React Native      | Mobile app |
+| `portfolio-ui/`               | React + Vite + TS | Portfolio management UI |
+| `animated-robot-logo/`        | static / animation| Logo animation assets |
+| `atlas_comms/`                | Python service    | Standalone Twilio/SignalWire bridge |
+| `atlas_edge/`                 | Python service    | Edge-node capabilities (Jetson) |
+| `atlas_video-processing/`     | Python service    | Video pipeline (SAM 3) |
+| `graphiti-wrapper/`           | Python service    | Neo4j + Graphiti GraphRAG service (port 8001) |
+
+UI projects each have their own `package.json`; run `npm install && npm run dev`
+inside the directory. Python sub-services have their own `requirements*.txt`
+and Dockerfiles (`Dockerfile.graphiti`, `Dockerfile`).
+
+Compose files for sub-services:
+- `docker-compose.yml` — main brain + Postgres + NocoDB
+- `docker-compose.graphiti.yml` — Neo4j + Graphiti wrapper (use `start-graphiti.sh`)
+- `docker-compose.ha.yml` / `docker-compose.homeassistant.yml` — Home Assistant
+- `docker-compose.wyze.yml` — Wyze cam bridge
+
+---
+
+## Key Conventions
+
+- **Config**: every setting goes through `atlas_brain/config.py`
+  (Pydantic Settings, `env_prefix=ATLAS_*`). Never read `os.environ`
+  directly — add a typed field on the relevant `BaseSettings` subclass.
+- **Async-first**: all I/O is `async def`. Database access is `asyncpg` or
+  the typed providers in `atlas_brain/services/` — no synchronous DB calls.
+- **Single source of truth for CRM**: `crm_provider.get_crm_provider()`
+  returns `DatabaseCRMProvider`. Don't reach into the `contacts` table from
+  random callers.
+- **Provider-agnostic ports**: email (`email_provider`), calendar
+  (`calendar_provider`), LLM (`llm_router`) all expose ports with multiple
+  adapters. Add new providers behind the existing port; don't fork.
+- **MCP servers are thin**: each `atlas_brain/mcp/<name>_server.py` should
+  delegate to a service in `atlas_brain/services/`, not embed business
+  logic. Tools = transport, services = behavior.
+- **Skills = injectable prompts**: domain prompts live as markdown under
+  `atlas_brain/skills/<domain>/`. Load via `skills/registry.py`. Don't
+  hard-code domain prompts inline.
+- **Plans are mandatory** for non-trivial PRs (see *Multi-Session PR
+  Workflow* above). No code without a plan doc.
+- **ASCII Python**: `scripts/check_ascii_python.sh` is part of CI.
+  Non-ASCII characters in `.py` files break the gate. Use ASCII-only
+  identifiers and string literals.
+- **No `--no-verify`**: never bypass pre-commit / CI gates without explicit
+  user authorization.
