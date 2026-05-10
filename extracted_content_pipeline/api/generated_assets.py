@@ -19,6 +19,8 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_ports import TenantScope
+from ..blog_post_export import export_blog_post_drafts
+from ..blog_post_postgres import PostgresBlogPostRepository
 from ..landing_page_export import export_landing_page_drafts
 from ..landing_page_postgres import PostgresLandingPageRepository
 from ..report_export import export_report_drafts
@@ -30,7 +32,7 @@ from ..sales_brief_postgres import PostgresSalesBriefRepository
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[Any]]
 
-ASSET_CHOICES = ("report", "landing_page", "sales_brief")
+ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief")
 
 
 def _require_fastapi() -> None:
@@ -149,6 +151,7 @@ def create_generated_asset_router(
         report_type: str | None = Query(None),
         campaign_name: str | None = Query(None),
         slug: str | None = Query(None),
+        topic_type: str | None = Query(None),
         brief_type: str | None = Query(None),
         limit: int | None = Query(None, ge=0),
     ) -> dict[str, Any]:
@@ -164,6 +167,7 @@ def create_generated_asset_router(
             report_type=report_type,
             campaign_name=campaign_name,
             slug=slug,
+            topic_type=topic_type,
             brief_type=brief_type,
             limit=_api_limit(limit, resolved_config),
         )
@@ -177,6 +181,7 @@ def create_generated_asset_router(
         report_type: str | None = Query(None),
         campaign_name: str | None = Query(None),
         slug: str | None = Query(None),
+        topic_type: str | None = Query(None),
         brief_type: str | None = Query(None),
         limit: int | None = Query(None, ge=0),
         format: str = Query("csv", description="csv or json"),
@@ -193,6 +198,7 @@ def create_generated_asset_router(
             report_type=report_type,
             campaign_name=campaign_name,
             slug=slug,
+            topic_type=topic_type,
             brief_type=brief_type,
             limit=_api_limit(limit, resolved_config),
         )
@@ -249,9 +255,18 @@ async def _export_for_asset(
     report_type: str | None,
     campaign_name: str | None,
     slug: str | None,
+    topic_type: str | None,
     brief_type: str | None,
     limit: int,
 ) -> Any:
+    if asset == "blog_post":
+        return await export_blog_post_drafts(
+            PostgresBlogPostRepository(pool),
+            scope=scope,
+            status=status,
+            topic_type=topic_type,
+            limit=limit,
+        )
     if asset == "report":
         return await export_report_drafts(
             PostgresReportRepository(pool),
@@ -290,6 +305,8 @@ async def _update_asset_status(
     status: str,
     scope: TenantScope,
 ) -> bool:
+    if asset == "blog_post":
+        return await PostgresBlogPostRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "report":
         return await PostgresReportRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "landing_page":

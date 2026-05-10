@@ -17,6 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from extracted_content_pipeline.campaign_ports import TenantScope  # noqa: E402
+from extracted_content_pipeline.blog_post_postgres import (  # noqa: E402
+    PostgresBlogPostRepository,
+)
 from extracted_content_pipeline.landing_page_postgres import (  # noqa: E402
     PostgresLandingPageRepository,
 )
@@ -26,7 +29,7 @@ from extracted_content_pipeline.sales_brief_postgres import (  # noqa: E402
 )
 
 
-ASSET_CHOICES = ("report", "landing_page", "sales_brief")
+ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -79,6 +82,12 @@ async def _main() -> int:
 
 async def _review_asset(args: argparse.Namespace, pool: Any) -> bool:
     scope = TenantScope(account_id=args.account_id)
+    if args.asset == "blog_post":
+        return await PostgresBlogPostRepository(pool).update_status(
+            args.asset_id,
+            args.status,
+            scope=scope,
+        )
     if args.asset == "report":
         return await PostgresReportRepository(pool).update_status(
             args.asset_id,

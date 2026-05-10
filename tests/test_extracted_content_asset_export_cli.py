@@ -53,6 +53,25 @@ def _report_row():
     }
 
 
+def _blog_post_row():
+    return {
+        "slug": "acme-pricing-pressure",
+        "title": "Acme Pricing Pressure",
+        "description": "Pricing pressure dominates.",
+        "topic_type": "vendor_alternative",
+        "tags": ["pricing"],
+        "content": "body",
+        "charts": [],
+        "data_context": {
+            "_metadata": {
+                "generation_usage": {"input_tokens": 9, "output_tokens": 4},
+                "reasoning_context": {"wedge": "price_squeeze", "confidence": "high"},
+            }
+        },
+        "llm_model": "fake-llm",
+    }
+
+
 def _landing_page_row():
     return {
         "campaign_name": "acme-launch",
@@ -126,6 +145,44 @@ async def test_asset_export_cli_outputs_report_json(monkeypatch, capsys) -> None
     assert output["count"] == 1
     assert output["rows"][0]["target_id"] == "vendor-acme"
     assert output["rows"][0]["reasoning_context_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_asset_export_cli_outputs_blog_post_json(monkeypatch, capsys) -> None:
+    cli = _load_cli_module()
+    pool = _Pool(rows=[_blog_post_row()])
+
+    async def create_pool(database_url):
+        return pool
+
+    monkeypatch.setattr(cli, "_create_pool", create_pool)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "export",
+            "--database-url",
+            "postgres://example",
+            "--asset",
+            "blog_post",
+            "--account-id",
+            "acct_1",
+            "--topic-type",
+            "vendor_alternative",
+            "--limit",
+            "4",
+        ],
+    )
+
+    exit_code = await cli._main()
+
+    output = json.loads(capsys.readouterr().out)
+    query, args = pool.fetch_calls[0]
+    assert exit_code == 0
+    assert "FROM blog_posts" in query
+    assert args == ("acct_1", "draft", "vendor_alternative", 4)
+    assert output["rows"][0]["slug"] == "acme-pricing-pressure"
+    assert output["rows"][0]["reasoning_wedge"] == "price_squeeze"
 
 
 @pytest.mark.asyncio
