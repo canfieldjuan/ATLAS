@@ -201,11 +201,37 @@ omit the kwarg and get the canonical singleton.
 ## Verification
 
 - `pytest tests/test_atlas_content_ops_infrastructure.py` --
-  7 passed.
+  9 passed.
 - AST-parse of the new module + the test file.
 - ASCII-clean check on the new module + test file (the
   package-scoped `check_ascii_python.sh` script doesn't cover
   `atlas_brain/`; we run `read().encode('ascii')` separately).
+
+## Updates from review
+
+After Codex review of the initial commit:
+
+- **Codex P1 fix**: cloud backends (OpenRouter / Groq /
+  Together / Ollama) read `msg.tool_calls` and
+  `msg.tool_call_id` during payload conversion. The
+  `SimpleNamespace` host-message shape now includes both
+  fields with `None` defaults so payload conversion
+  succeeds without re-introducing the heavy
+  `services.protocols` import. New regression test
+  `test_host_llm_client_messages_carry_tool_call_attributes`
+  pins the contract.
+- **Codex P2 fix**: skills the next-slice services depend on
+  by default (`digest/landing_page_generation`,
+  `digest/report_generation`,
+  `digest/sales_brief_generation`,
+  `digest/b2b_campaign_reasoning_context`) live only in the
+  extracted package. The skill-store factory now uses the
+  extracted package's `get_skill_registry(root=
+  atlas_brain/skills/)`, which already does host-first /
+  packaged-fallback. Host overrides win; missing host skills
+  resolve through the packaged defaults. New regression test
+  `test_host_skill_store_falls_back_to_packaged_skills` pins
+  this for all four packaged-only skill names.
 
 ## Estimated diff size
 

@@ -34,18 +34,38 @@ from extracted_content_pipeline.campaign_ports import LLMMessage
 
 
 def test_host_skill_store_returns_existing_skill_content() -> None:
-    """Skill adapter resolves a real host skill via `get_skill_registry()`."""
+    """Skill store resolves a host-shipped skill via the host
+    overrides root."""
 
     store = build_content_ops_skill_store()
-    # The blog-post skill ships with the repo at
-    # atlas_brain/skills/digest/blog_post_generation.md.
     prompt = store.get_prompt("digest/blog_post_generation")
     assert isinstance(prompt, str)
     assert len(prompt) > 0
 
 
+def test_host_skill_store_falls_back_to_packaged_skills() -> None:
+    """Codex P2 fix: skills that the extracted services depend on
+    by default (e.g. `digest/landing_page_generation`,
+    `digest/report_generation`, `digest/sales_brief_generation`,
+    `digest/b2b_campaign_reasoning_context`) live in the
+    extracted package, not in `atlas_brain/skills/`. The factory
+    must fall back to the packaged copies so the next slice's
+    services don't immediately fail with "skill not found"."""
+
+    store = build_content_ops_skill_store()
+    for name in (
+        "digest/landing_page_generation",
+        "digest/report_generation",
+        "digest/sales_brief_generation",
+        "digest/b2b_campaign_reasoning_context",
+    ):
+        prompt = store.get_prompt(name)
+        assert isinstance(prompt, str), name
+        assert len(prompt) > 0, name
+
+
 def test_host_skill_store_returns_none_for_missing_skill() -> None:
-    """Skill adapter doesn't raise on lookup miss."""
+    """Skill store doesn't raise on lookup miss."""
 
     store = build_content_ops_skill_store()
     assert store.get_prompt("digest/__definitely_not_a_real_skill__") is None
@@ -105,6 +125,42 @@ async def test_host_llm_client_translates_messages_and_response() -> None:
         "response": "Hello, world.",
         "usage": {"input_tokens": 5, "output_tokens": 3},
     }
+
+
+@pytest.mark.asyncio
+async def test_host_llm_client_messages_carry_tool_call_attributes() -> None:
+    """Codex P1 fix: cloud backends (OpenRouter / Groq / Together /
+    Ollama) read `msg.tool_calls` and `msg.tool_call_id` while
+    converting messages to provider payloads. Without these
+    attributes the adapter would AttributeError before any
+    Content Ops generation request reached the backend. Pin the
+    duck-typed shape includes them with `None` defaults."""
+
+    captured: dict[str, Any] = {}
+
+    class _ToolReadingFakeLLM:
+        model_info = None
+
+        def chat(self, messages, *, max_tokens, temperature):
+            del max_tokens, temperature
+            # Simulates how OpenRouter / Groq / Ollama backends
+            # touch every message during payload conversion.
+            for msg in messages:
+                _ = msg.role
+                _ = msg.content
+                _ = msg.tool_calls
+                _ = msg.tool_call_id
+            captured["read_succeeded"] = True
+            return {"response": "ok"}
+
+    client = _HostLLMClient(_ToolReadingFakeLLM())
+    response = await client.complete(
+        [LLMMessage(role="user", content="hi")],
+        max_tokens=8,
+        temperature=0.0,
+    )
+    assert captured["read_succeeded"] is True
+    assert response.content == "ok"
 
 
 @pytest.mark.asyncio

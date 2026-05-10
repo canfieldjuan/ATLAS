@@ -71,17 +71,26 @@ class _HostLLMClient:
         metadata: Mapping[str, Any] | None = None,
     ) -> LLMResponse:
         del metadata  # host chat() doesn't accept arbitrary metadata today.
-        # The host's `chat()` reads only `.role` and `.content` from each
-        # message; we pass `SimpleNamespace` rather than importing the
-        # host's `Message` dataclass because importing
+        # The host's `chat()` reads `.role` / `.content`, and the cloud
+        # backends (OpenRouter / Groq / Together / Ollama) additionally
+        # read `.tool_calls` and `.tool_call_id` while building their
+        # provider payloads. We pass a `SimpleNamespace` rather than
+        # importing the host's `Message` dataclass because importing
         # `atlas_brain.services.protocols` triggers the full
-        # `atlas_brain.services.__init__` chain (torch / ollama / etc.).
-        # Keeping the duck-typed shape lets this adapter test cleanly
-        # in dependency-light environments.
+        # `atlas_brain.services.__init__` chain (torch / ollama / etc.)
+        # in dependency-light test envs. Including the optional
+        # tool-call fields with `None` defaults keeps the duck-typed
+        # shape compatible with all live backends without re-exposing
+        # the heavy import.
         from types import SimpleNamespace
 
         host_messages = [
-            SimpleNamespace(role=str(m.role or ""), content=str(m.content or ""))
+            SimpleNamespace(
+                role=str(m.role or ""),
+                content=str(m.content or ""),
+                tool_calls=None,
+                tool_call_id=None,
+            )
             for m in messages
         ]
         result = await asyncio.to_thread(
@@ -119,7 +128,16 @@ class _HostLLMClient:
 
 
 class _HostSkillStore:
-    """Adapter implementing `SkillStore` over a host `SkillRegistry`."""
+    """Adapter implementing `SkillStore` over a host-style `SkillRegistry`.
+
+    Used as the fallback when the extracted-package registry isn't
+    desired (e.g. tests that inject a stub registry with `.get(name)`
+    returning a `Skill`-like object). Production callers get the
+    extracted package's `LocalSkillRegistry` directly via
+    ``build_content_ops_skill_store()``, which already implements
+    ``get_prompt()`` and merges host overrides with the packaged
+    skill defaults.
+    """
 
     def __init__(self, registry: Any) -> None:
         self._registry = registry
@@ -171,24 +189,46 @@ def build_content_ops_llm_client(
     return _HostLLMClient(host_llm)
 
 
+_HOST_SKILLS_DIR = (
+    __import__("pathlib").Path(__file__).resolve().parent / "skills"
+)
+
+
 def build_content_ops_skill_store(
     *,
     registry: Any = None,
 ) -> SkillStore:
-    """Return a Content-Ops-shaped skill store backed by the host
-    `SkillRegistry`.
+    """Return a Content-Ops-shaped skill store.
 
-    Always available -- the host registry loads skills lazily
-    from disk on first access. The registry argument is
-    dependency-injection for tests; production callers omit it
-    and get the canonical singleton.
+    Production: returns the extracted package's
+    `LocalSkillRegistry` via ``get_skill_registry`` with the
+    host's `atlas_brain/skills/` tree as the override root.
+    The extracted factory already implements host-first /
+    packaged-fallback semantics, so:
+    - Host-customized prompts (e.g. a host-specific
+      `digest/blog_post_generation`) override the packaged
+      default.
+    - Packaged-only prompts (e.g. `digest/landing_page_generation`,
+      `digest/report_generation`, `digest/sales_brief_generation`,
+      `digest/b2b_campaign_reasoning_context`) resolve through
+      the bundled defaults that ship inside the extracted
+      package.
+
+    Tests: pass a stub registry via the ``registry=`` kwarg.
+    The stub must expose ``get(name)`` returning either a
+    `Skill`-like object with `.content` or `None`. The factory
+    wraps it in `_HostSkillStore` so tests can verify the
+    adapter wiring without touching real markdown files.
     """
 
-    if registry is None:
-        from atlas_brain.skills.registry import get_skill_registry
+    if registry is not None:
+        return _HostSkillStore(registry)
 
-        registry = get_skill_registry()
-    return _HostSkillStore(registry)
+    from extracted_content_pipeline.skills.registry import (
+        get_skill_registry as get_extracted_skill_registry,
+    )
+
+    return get_extracted_skill_registry(root=_HOST_SKILLS_DIR)
 
 
 __all__ = [
