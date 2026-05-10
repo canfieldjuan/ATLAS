@@ -22,6 +22,16 @@ from extracted_content_pipeline.content_ops_execution import (  # noqa: E402
 from extracted_content_pipeline.signal_extraction import SignalExtractionService  # noqa: E402
 
 
+def _sample_consumed_reasoning_contexts(count: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "summary": "Offline smoke reasoning context",
+            "proof_points": [{"label": "source_material", "value": "pricing"}],
+        }
+        for _ in range(max(0, count))
+    ]
+
+
 # PR-OptionA-1/2/3 graduated several plan-step fields to load-bearing kwargs
 # (channels, default_report_type, default_brief_type, temperature,
 # max_tokens, parse_retry_attempts, parse_retry_response_excerpt_chars,
@@ -74,7 +84,11 @@ class _ReasoningAwareOpportunityAssetService(_OpportunityAssetService):
     async def generate(self, **kwargs: Any) -> dict[str, Any]:
         result = await super().generate(**kwargs)
         if self.provider is not None:
-            result["reasoning_contexts_used"] = int(result.get("generated") or 0)
+            count = int(result.get("generated") or 0)
+            result["reasoning_contexts_used"] = count
+            result["consumed_reasoning_contexts"] = _sample_consumed_reasoning_contexts(
+                count
+            )
         return result
 
 
@@ -111,7 +125,11 @@ class _ReasoningAwareLandingPageAssetService(_LandingPageAssetService):
     async def generate(self, **kwargs: Any) -> dict[str, Any]:
         result = await super().generate(**kwargs)
         if self.provider is not None:
-            result["reasoning_contexts_used"] = int(result.get("generated") or 0)
+            count = int(result.get("generated") or 0)
+            result["reasoning_contexts_used"] = count
+            result["consumed_reasoning_contexts"] = _sample_consumed_reasoning_contexts(
+                count
+            )
         return result
 
 
@@ -294,6 +312,15 @@ def _reasoning_usage_errors(
                     f"step {index} reasoning usage mismatch: "
                     f"result={result_count} audit={audit_count}"
                 )
+    if (
+        isinstance(reasoning, Mapping)
+        and isinstance(result_count, int)
+        and not isinstance(result_count, bool)
+        and result_count > 0
+    ):
+        consumed = reasoning.get("consumed_contexts")
+        if not isinstance(consumed, list) or len(consumed) != result_count:
+            errors.append(f"step {index} missing reasoning.consumed_contexts")
     return errors
 
 

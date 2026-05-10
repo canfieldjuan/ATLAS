@@ -96,9 +96,11 @@ def test_content_ops_execution_smoke_cli_can_validate_reasoning_usage_json() -> 
     email_step, landing_step = payload["steps"]
     assert email_step["result"]["reasoning_contexts_used"] == 2
     assert email_step["reasoning"]["contexts_used"] == 2
+    assert len(email_step["reasoning"]["consumed_contexts"]) == 2
     assert email_step["reasoning"]["provider_configured"] is True
     assert landing_step["result"]["reasoning_contexts_used"] == 1
     assert landing_step["reasoning"]["contexts_used"] == 1
+    assert len(landing_step["reasoning"]["consumed_contexts"]) == 1
     assert landing_step["reasoning"]["provider_configured"] is True
 
 
@@ -141,12 +143,37 @@ def test_execution_errors_reports_reasoning_usage_mismatch() -> None:
                         "saved_ids": ["draft-1"],
                         "reasoning_contexts_used": 2,
                     },
-                    "reasoning": {"contexts_used": 1},
+                    "reasoning": {
+                        "contexts_used": 1,
+                        "consumed_contexts": [{}, {}],
+                    },
                 }
             ],
         },
         require_reasoning_usage=True,
     ) == ["step 1 reasoning usage mismatch: result=2 audit=1"]
+
+
+def test_execution_errors_require_consumed_reasoning_contexts() -> None:
+    smoke = _load_smoke_module()
+
+    assert smoke._execution_errors(
+        {
+            "status": "completed",
+            "steps": [
+                {
+                    "output": "email_campaign",
+                    "status": "completed",
+                    "result": {
+                        "saved_ids": ["draft-1"],
+                        "reasoning_contexts_used": 1,
+                    },
+                    "reasoning": {"contexts_used": 1},
+                }
+            ],
+        },
+        require_reasoning_usage=True,
+    ) == ["step 1 missing reasoning.consumed_contexts"]
 
 
 def test_content_ops_execution_smoke_cli_runs_signal_extraction_json() -> None:
