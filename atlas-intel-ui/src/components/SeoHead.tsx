@@ -1,11 +1,14 @@
 import { useEffect } from 'react'
 import type { FaqItem } from '../content/blog'
 
+const DEFAULT_OG_IMAGE = 'https://atlas-intel-ui-two.vercel.app/og-default.png'
+
 interface SeoHeadProps {
   title: string
   description: string
   canonical: string
   ogType?: string
+  ogImage?: string
   keywords?: string[]
   faq?: FaqItem[]
   jsonLd?: object
@@ -56,9 +59,11 @@ function cleanup() {
   managed.clear()
 }
 
-export default function SeoHead({ title, description, canonical, ogType = 'article', keywords, faq, jsonLd }: SeoHeadProps) {
+export default function SeoHead({ title, description, canonical, ogType = 'article', ogImage, keywords, faq, jsonLd }: SeoHeadProps) {
   useEffect(() => {
     document.title = title
+
+    const resolvedImage = ogImage ?? DEFAULT_OG_IMAGE
 
     setMeta('description', description, true)
     setMeta('og:title', title)
@@ -66,9 +71,13 @@ export default function SeoHead({ title, description, canonical, ogType = 'artic
     setMeta('og:url', canonical)
     setMeta('og:type', ogType)
     setMeta('og:site_name', 'Atlas Intelligence')
+    setMeta('og:image', resolvedImage)
+    setMeta('og:image:width', '1200')
+    setMeta('og:image:height', '630')
     setMeta('twitter:card', 'summary_large_image', true)
     setMeta('twitter:title', title, true)
     setMeta('twitter:description', description, true)
+    setMeta('twitter:image', resolvedImage, true)
     setLink('canonical', canonical)
 
     if (keywords && keywords.length > 0) {
@@ -95,7 +104,7 @@ export default function SeoHead({ title, description, canonical, ogType = 'artic
     }
 
     return cleanup
-  }, [title, description, canonical, ogType, keywords, faq, jsonLd])
+  }, [title, description, canonical, ogType, ogImage, keywords, faq, jsonLd])
 
   return null
 }

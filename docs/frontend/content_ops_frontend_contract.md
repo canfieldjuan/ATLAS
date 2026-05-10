@@ -338,7 +338,7 @@ interface ContentOpsStepExecution {
   status: "completed" | "failed" | "skipped";   // step-level
   result: Record<string, unknown>;              // runner-specific result blob
   error: string;                                // populated when status="failed"
-  reasoning?: ContentOpsStepReasoningAudit;     // compact readiness audit only
+  reasoning?: ContentOpsStepReasoningAudit;     // readiness + optional consumed context
 }
 
 interface ContentOpsStepReasoningAudit {
@@ -346,6 +346,7 @@ interface ContentOpsStepReasoningAudit {
   service_supports_reasoning: boolean;
   provider_configured: boolean;
   contexts_used?: number;
+  consumed_contexts?: CampaignReasoningContextView[];
 }
 ```
 
@@ -428,15 +429,14 @@ reasoning even when the current host has not wired a provider.
 
 Important runtime boundary: `ContentOpsStepExecution.result` contains
 the per-service summary returned by `as_dict()` (counts, saved IDs,
-warnings, and errors). It does **not** reliably expose the consumed
-reasoning payload. `ContentOpsStepExecution.reasoning` is a compact
-readiness audit only: it tells the UI whether the output can use host
-reasoning, whether the service supports the seam, and whether a
-provider was attached. When the service result includes
-`reasoning_contexts_used`, the audit also exposes `contexts_used` as
+warnings, and errors). `ContentOpsStepExecution.reasoning` tells the UI
+whether the output can use host reasoning, whether the service supports
+the seam, and whether a provider was attached. When the service result
+includes `reasoning_contexts_used`, the audit exposes `contexts_used` as
 the count of generated assets that actually consumed reasoning context.
-A Reasoning Context Drawer still requires a future field that carries
-the consumed context itself.
+When the service result also includes `consumed_reasoning_contexts`, the
+audit exposes `consumed_contexts` as the drawer-ready context payload.
+Services that do not opt into this payload keep the count-only response.
 
 ```ts
 interface CampaignReasoningContextView {
@@ -459,8 +459,8 @@ UI rules:
   `reasoningRequirement="optional_host_context"`.
 - Treat catalog badges as configuration readiness only. Use
   `step.reasoning` for execution-level readiness ("provider attached" /
-  "provider absent") but do not render a context drawer from it; it is
-  not the prompt payload.
+  "provider absent"). Render a context drawer only when
+  `step.reasoning.consumed_contexts` is present.
 
 ---
 
@@ -550,9 +550,9 @@ Dumb components only. No fetch, no business rules.
 - Full asset editor UX
 - Visual workflow builder
 - Model-selection UX
-- Reasoning Context Drawer until `/content-ops/execute` exposes an
-  explicit consumed-reasoning payload field. The current `reasoning`
-  audit only exposes readiness and `contexts_used` counts.
+- Full Reasoning Context Drawer UX. `/content-ops/execute` now exposes
+  `reasoning.consumed_contexts` when services opt in, but the actual
+  drawer component and per-output service adoption land separately.
 - Collaboration / role-permission flows
 - CMS export
 - Approval workflow (no backend approval state on the control-surface
