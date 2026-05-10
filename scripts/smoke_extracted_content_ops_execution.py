@@ -22,6 +22,20 @@ from extracted_content_pipeline.content_ops_execution import (  # noqa: E402
 from extracted_content_pipeline.signal_extraction import SignalExtractionService  # noqa: E402
 
 
+_POSTGRES_FIXTURE_PAYLOAD: dict[str, Any] = {
+    "reasoning_context": {
+        "summary": "Postgres fixture reasoning context",
+        "top_theses": [
+            {
+                "claim": "Renewal pricing",
+                "summary": "Acme is reviewing pricing pressure before renewal.",
+            }
+        ],
+        "proof_points": [{"label": "source_material", "value": "pricing"}],
+    }
+}
+
+
 def _sample_consumed_reasoning_contexts(count: int) -> list[dict[str, Any]]:
     return [
         {
@@ -30,6 +44,57 @@ def _sample_consumed_reasoning_contexts(count: int) -> list[dict[str, Any]]:
         }
         for _ in range(max(0, count))
     ]
+
+
+class _OfflinePostgresReasoningPool:
+    """Tiny asyncpg-shaped pool for the host smoke's DB-provider mode."""
+
+    async def fetchrow(
+        self,
+        _query: str,
+        _account_id: str,
+        selectors: list[str],
+    ) -> dict[str, Any] | None:
+        wanted = {"opp_smoke", "content ops smoke", "acme"}
+        if wanted.intersection({str(item).strip().lower() for item in selectors}):
+            return {"payload": _POSTGRES_FIXTURE_PAYLOAD}
+        return None
+
+
+def _postgres_fixture_reasoning_provider() -> Any:
+    from extracted_content_pipeline.campaign_reasoning_postgres import (
+        PostgresCampaignReasoningContextRepository,
+    )
+
+    return PostgresCampaignReasoningContextRepository(
+        pool=_OfflinePostgresReasoningPool()
+    )
+
+
+async def _consumed_contexts_from_provider(
+    provider: Any | None,
+    *,
+    count: int,
+    scope: Any,
+    target_id: str,
+    target_mode: str,
+    opportunity: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    if provider is None or count <= 0:
+        return []
+    reader = getattr(provider, "read_campaign_reasoning_context", None)
+    if not callable(reader):
+        return _sample_consumed_reasoning_contexts(count)
+    context = await reader(
+        scope=scope,
+        target_id=target_id,
+        target_mode=target_mode,
+        opportunity=opportunity,
+    )
+    if context is None:
+        return []
+    payload = context.as_dict() if hasattr(context, "as_dict") else dict(context)
+    return [dict(payload) for _ in range(count)]
 
 
 # PR-OptionA-1/2/3 graduated several plan-step fields to load-bearing kwargs
@@ -86,8 +151,17 @@ class _ReasoningAwareOpportunityAssetService(_OpportunityAssetService):
         if self.provider is not None:
             count = int(result.get("generated") or 0)
             result["reasoning_contexts_used"] = count
-            result["consumed_reasoning_contexts"] = _sample_consumed_reasoning_contexts(
-                count
+            result["consumed_reasoning_contexts"] = await _consumed_contexts_from_provider(
+                self.provider,
+                count=count,
+                scope=kwargs.get("scope"),
+                target_id="opp_smoke",
+                target_mode=str(kwargs.get("target_mode") or "vendor_retention"),
+                opportunity={
+                    "target_id": "opp_smoke",
+                    "company_name": "Acme",
+                    "vendor_name": "HubSpot",
+                },
             )
         return result
 
@@ -127,8 +201,15 @@ class _ReasoningAwareLandingPageAssetService(_LandingPageAssetService):
         if self.provider is not None:
             count = int(result.get("generated") or 0)
             result["reasoning_contexts_used"] = count
-            result["consumed_reasoning_contexts"] = _sample_consumed_reasoning_contexts(
-                count
+            campaign = kwargs.get("campaign")
+            campaign_name = str(getattr(campaign, "name", "") or "Content Ops smoke")
+            result["consumed_reasoning_contexts"] = await _consumed_contexts_from_provider(
+                self.provider,
+                count=count,
+                scope=kwargs.get("scope"),
+                target_id=campaign_name,
+                target_mode="marketing_campaign",
+                opportunity={"company_name": "Acme", "target_id": campaign_name},
             )
         return result
 
@@ -181,8 +262,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--with-reasoning",
         action="store_true",
         help=(
-            "Attach a fake host reasoning provider to reasoning-aware "
+            "Attach an offline host reasoning provider to reasoning-aware "
             "generated-asset services."
+        ),
+    )
+    parser.add_argument(
+        "--reasoning-provider",
+        choices=("sample", "postgres-fixture"),
+        default="sample",
+        help=(
+            "Offline provider fixture used with --with-reasoning. "
+            "'postgres-fixture' exercises the real Postgres reasoning adapter "
+            "against an in-memory asyncpg-shaped pool."
         ),
     )
     parser.add_argument("--json", action="store_true")
@@ -224,7 +315,11 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def _services(*, reasoning: bool = False) -> ContentOpsExecutionServices:
+def _services(
+    *,
+    reasoning: bool = False,
+    reasoning_provider: str = "sample",
+) -> ContentOpsExecutionServices:
     opportunity_service = (
         _ReasoningAwareOpportunityAssetService
         if reasoning
@@ -244,7 +339,12 @@ def _services(*, reasoning: bool = False) -> ContentOpsExecutionServices:
         signal_extraction=SignalExtractionService(),
     )
     if reasoning:
-        services = services.with_reasoning_context(object())
+        provider = (
+            _postgres_fixture_reasoning_provider()
+            if reasoning_provider == "postgres-fixture"
+            else object()
+        )
+        services = services.with_reasoning_context(provider)
     return services
 
 
@@ -328,7 +428,10 @@ async def _main() -> int:
     args = _parse_args()
     result = await execute_content_ops_from_mapping(
         _payload(args),
-        services=_services(reasoning=bool(args.with_reasoning)),
+        services=_services(
+            reasoning=bool(args.with_reasoning),
+            reasoning_provider=str(args.reasoning_provider or "sample"),
+        ),
     )
     errors = _execution_errors(
         result,

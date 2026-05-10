@@ -621,6 +621,7 @@ smoke before wiring real asset services:
 python scripts/smoke_extracted_content_ops_execution.py
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --target-mode challenger_intel --no-quality-gates --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --reasoning-provider postgres-fixture --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
 ```
 
@@ -629,9 +630,14 @@ normalization path through host-injected services without opening database,
 network, sender, or LLM handles. `--no-quality-gates` is an execution-smoke
 override for checking the request wiring; production hosts should leave quality
 gates enabled unless they intentionally disable them in their own policy layer.
-`--with-reasoning` attaches a fake host reasoning provider to the generated-
-asset fake services and fails unless the JSON output includes both
-`result.reasoning_contexts_used` and `reasoning.contexts_used`.
+`--with-reasoning` attaches the default `sample` host reasoning provider to
+the fake generated-asset services. In reasoning mode, the smoke fails unless
+the JSON output includes `result.reasoning_contexts_used`,
+`reasoning.contexts_used`, and `reasoning.consumed_contexts` whenever the
+usage count is positive. `--reasoning-provider postgres-fixture` switches that
+offline provider to the real Postgres reasoning adapter backed by an in-memory
+asyncpg-shaped pool, so hosts can validate the DB-adapter contract without a
+live database.
 
 Hosts can inject a `visibility_provider` when mounting the router. The four
 POST operation routes emit best-effort `campaign_operation_started`,
