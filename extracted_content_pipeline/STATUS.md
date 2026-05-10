@@ -148,9 +148,9 @@
 - Execution result summaries expose compact reasoning consumption counts when a
   generated-asset service reports them: runner results can include
   `reasoning_contexts_used`, and the per-step `reasoning` audit mirrors that
-  count as `contexts_used`. Raw consumed reasoning payloads remain intentionally
-  absent, so a per-step reasoning drawer still needs a future explicit
-  execution-result field.
+  count as `contexts_used`. Services can also opt into
+  `consumed_reasoning_contexts`; the per-step `reasoning` audit surfaces those
+  rows as `consumed_contexts` for future reasoning-drawer UIs.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared

@@ -705,6 +705,9 @@ def _step_reasoning_audit(
     contexts_used = _reasoning_contexts_used(result)
     if contexts_used is not None:
         audit["contexts_used"] = contexts_used
+    consumed_contexts = _consumed_reasoning_contexts(result)
+    if consumed_contexts:
+        audit["consumed_contexts"] = consumed_contexts
     return audit
 
 
@@ -717,6 +720,23 @@ def _reasoning_contexts_used(result: Mapping[str, Any] | None) -> int | None:
     if isinstance(raw, int) and raw >= 0:
         return raw
     return None
+
+
+def _consumed_reasoning_contexts(
+    result: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if result is None:
+        return []
+    raw = result.get("consumed_reasoning_contexts")
+    if isinstance(raw, Mapping):
+        return [dict(raw)] if raw else []
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        return []
+    contexts: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, Mapping) and item:
+            contexts.append(dict(item))
+    return contexts
 
 
 def _clean(value: Any) -> str:
