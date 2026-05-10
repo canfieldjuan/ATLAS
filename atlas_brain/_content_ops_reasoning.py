@@ -156,6 +156,14 @@ def build_postgres_content_ops_reasoning_context_provider(
             "available; DB-backed provider stays unwired.",
         )
         return None
+    if not getattr(pool, "is_initialized", True):
+        logger.warning(
+            "Content Ops reasoning DB enabled but pool is not "
+            "initialized yet (DB persistence disabled, or startup "
+            "ordering); DB-backed provider stays unwired so the "
+            "chooser can fall back to the file provider.",
+        )
+        return None
 
     factory = repository_factory or _default_repository_factory
     try:

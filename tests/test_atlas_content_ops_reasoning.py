@@ -220,6 +220,30 @@ def test_db_factory_missing_pool_returns_none_and_warns(
     assert any("pool is not" in rec.message for rec in caplog.records)
 
 
+def test_db_factory_uninitialized_pool_returns_none_and_warns(
+    caplog: Any,
+) -> None:
+    """Codex P2: ``DatabasePool`` is a wrapper that always
+    returns non-None from ``get_db_pool()`` even before
+    ``initialize()``. Without an ``is_initialized`` check the
+    chooser would treat DB as usable, skip the file fallback,
+    and the first request would raise ``RuntimeError`` from
+    ``DatabasePool.fetchrow``. Verify the guard."""
+
+    class _UninitializedPool:
+        is_initialized = False
+
+    caplog.set_level(logging.WARNING, logger="atlas_brain._content_ops_reasoning")
+
+    provider = build_postgres_content_ops_reasoning_context_provider(
+        enabled_factory=lambda: True,
+        pool_factory=lambda: _UninitializedPool(),
+    )
+
+    assert provider is None
+    assert any("not initialized" in rec.message for rec in caplog.records)
+
+
 def test_db_factory_repository_exception_returns_none_and_warns(
     caplog: Any,
 ) -> None:

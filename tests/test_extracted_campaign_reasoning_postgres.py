@@ -104,8 +104,42 @@ async def test_read_uses_candidate_selectors_array() -> None:
     query = pool.fetchrow_calls[0]["query"]
     assert "account_id = $1" in query
     assert "selectors && $2::text[]" in query
-    assert "ORDER BY updated_at DESC" in query
+    # Priority ordering (Codex P2): exact target_id should beat a
+    # broader newer company-name match. Selector-position MIN
+    # subquery ranks rows by which of the candidates they matched.
+    assert "unnest($2::text[]) WITH ORDINALITY" in query
+    assert "ORDER BY" in query and "updated_at DESC" in query
     assert "LIMIT 1" in query
+
+
+@pytest.mark.asyncio
+async def test_read_priority_subquery_ranks_before_updated_at() -> None:
+    """Pin the ORDER-BY shape: candidate-selector-position MIN
+    must rank before ``updated_at DESC``. Without this the
+    file-backed provider's first-key-wins semantics diverge
+    from the DB-backed read -- a broader newer company-name
+    row would beat an exact ``target_id`` row whose selectors
+    also overlap. (Codex P2 follow-up)"""
+
+    pool = _Pool()
+    pool.fetchrow_result = None
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    await repo.read_campaign_reasoning_context(
+        scope=TenantScope(account_id="acct-1"),
+        target_id="ACME-123",
+        target_mode="vendor",
+        opportunity={"company_name": "Acme Corp"},
+    )
+
+    query = pool.fetchrow_calls[0]["query"]
+    # Priority subquery must appear in the ORDER BY clause,
+    # before the updated_at DESC tie-breaker.
+    priority_idx = query.find("MIN(c.idx)")
+    updated_idx = query.find("updated_at DESC")
+    assert priority_idx >= 0
+    assert updated_idx >= 0
+    assert priority_idx < updated_idx
 
 
 @pytest.mark.asyncio

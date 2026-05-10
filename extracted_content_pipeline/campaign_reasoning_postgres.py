@@ -143,13 +143,31 @@ class PostgresCampaignReasoningContextRepository:
         if not selectors:
             return None
 
+        # Preserve the file-backed provider's candidate-key
+        # priority: ``_candidate_selectors`` emits target_id first,
+        # then opportunity.target_id / id / company_name / company /
+        # contact_email / email / vendor_name / vendor (with
+        # lowercase variants). A pure ``ORDER BY updated_at DESC``
+        # makes a broader newer row beat an exact ``target_id``
+        # row whose selectors also overlap -- divergent from
+        # ``FileCampaignReasoningContextProvider`` which probes
+        # candidates in order via ``setdefault``. The subquery
+        # computes the row's "priority" as the MIN candidate
+        # position whose value overlaps the row's selectors;
+        # lower priority wins, with ``updated_at`` as the
+        # within-priority tie-break.
         row = await self.pool.fetchrow(
             f"""
             SELECT payload
             FROM {self.table}
             WHERE account_id = $1
               AND selectors && $2::text[]
-            ORDER BY updated_at DESC
+            ORDER BY (
+                SELECT MIN(c.idx)
+                FROM unnest($2::text[]) WITH ORDINALITY AS c(val, idx)
+                WHERE c.val = ANY(selectors)
+            ) ASC NULLS LAST,
+            updated_at DESC
             LIMIT 1
             """,
             scope.account_id or "",
