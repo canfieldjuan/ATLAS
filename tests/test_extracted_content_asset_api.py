@@ -54,6 +54,25 @@ def _report_row():
     }
 
 
+def _blog_post_row():
+    return {
+        "slug": "acme-pricing-pressure",
+        "title": "Acme Pricing Pressure",
+        "description": "Pricing pressure dominates.",
+        "topic_type": "vendor_alternative",
+        "tags": ["pricing"],
+        "content": "body",
+        "charts": [],
+        "data_context": {
+            "_metadata": {
+                "generation_usage": {"input_tokens": 9, "output_tokens": 4},
+                "reasoning_context": {"wedge": "price_squeeze", "confidence": "high"},
+            }
+        },
+        "llm_model": "fake-llm",
+    }
+
+
 def _landing_page_row():
     return {
         "campaign_name": "acme-launch",
@@ -133,6 +152,27 @@ def test_generated_asset_router_lists_report_drafts_with_filters() -> None:
     assert args == ("acct_1", "draft", "vendor_retention", "vendor_pressure", 5)
 
 
+def test_generated_asset_router_lists_blog_post_drafts_with_filters() -> None:
+    pool = _Pool(rows=[_blog_post_row()])
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+    ).get(
+        "/content-assets/blog_post/drafts"
+        "?topic_type=vendor_alternative&limit=5"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["rows"][0]["slug"] == "acme-pricing-pressure"
+    assert body["rows"][0]["reasoning_wedge"] == "price_squeeze"
+    query, args = pool.fetch_calls[0]
+    assert "FROM blog_posts" in query
+    assert args == ("acct_1", "draft", "vendor_alternative", 5)
+
+
 def test_generated_asset_router_exports_landing_page_csv() -> None:
     pool = _Pool(rows=[_landing_page_row()])
 
@@ -194,6 +234,31 @@ def test_generated_asset_router_reviews_report_with_host_defined_status() -> Non
     assert args == ("report-uuid-1", "published", "acct_1")
 
 
+def test_generated_asset_router_reviews_blog_post_with_host_defined_status() -> None:
+    pool = _Pool()
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).post(
+        "/content-assets/blog_post/drafts/review",
+        json={"id": "blog-post-uuid-1", "status": "published"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "account_id": "acct_1",
+        "asset": "blog_post",
+        "id": "blog-post-uuid-1",
+        "status": "published",
+        "updated": True,
+    }
+    query, args = pool.execute_calls[0]
+    assert "UPDATE blog_posts" in query
+    assert args == ("blog-post-uuid-1", "published", "acct_1")
+
+
 def test_generated_asset_router_returns_miss_without_hiding_result() -> None:
     pool = _Pool(execute_result="UPDATE 0")
 
@@ -210,7 +275,7 @@ def test_generated_asset_router_returns_miss_without_hiding_result() -> None:
 
 
 def test_generated_asset_router_rejects_unknown_asset() -> None:
-    response = _client(_Pool()).get("/content-assets/blog_post/drafts")
+    response = _client(_Pool()).get("/content-assets/podcast_episode/drafts")
 
     assert response.status_code == 400
     assert "asset must be one of" in response.json()["detail"]
@@ -227,7 +292,7 @@ def test_generated_asset_router_rejects_unknown_asset_before_pool_resolution() -
 
     app.include_router(create_generated_asset_router(pool_provider=pool_provider))
 
-    response = TestClient(app).get("/content-assets/blog_post/drafts")
+    response = TestClient(app).get("/content-assets/podcast_episode/drafts")
 
     assert response.status_code == 400
     assert "asset must be one of" in response.json()["detail"]
