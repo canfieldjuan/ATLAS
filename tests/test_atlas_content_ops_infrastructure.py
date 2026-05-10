@@ -1,20 +1,36 @@
 """Pin the host's Content Ops LLM + Skill adapters.
 
 `atlas_brain/_content_ops_infrastructure.py` bridges the host's
-sync `LLMService` and `SkillRegistry` to the extracted package's
-async `LLMClient` / sync `SkillStore` ports. Four regression
-tests:
+sync `LLMService` and packaged `LocalSkillRegistry` to the
+extracted package's async `LLMClient` / sync `SkillStore`
+ports. Nine regression tests covering both adapters and both
+factories:
 
-1. Skill adapter resolves an existing skill name to its markdown
-   body.
-2. Skill adapter returns `None` for missing skill names (canary
-   for the "not loaded yet" branch).
-3. LLM adapter translates `LLMMessage` -> host `Message`,
-   bridges sync host `chat()` to async via `asyncio.to_thread`,
-   and wraps the dict response into an `LLMResponse`.
-4. `build_content_ops_llm_client()` returns `None` when no host
-   LLM is active -- the bundle factory's signal to skip wiring
-   LLM-needing services.
+Skill side:
+1. Real-disk lookup of a host-shipped skill (`digest/blog_post_generation`).
+2. Codex P2 fallback canary: skills that live only in the
+   extracted package (`digest/landing_page_generation` etc.)
+   resolve through the packaged-fallback root.
+3. Missing-skill name returns None.
+
+LLM side:
+4. Full happy-path message translation + response wrap.
+5. Codex P1 canary: each duck-typed message exposes
+   `.tool_calls` / `.tool_call_id` so cloud backends that read
+   them during payload conversion don't AttributeError.
+6. Response-shape `content` field alias.
+
+Factories:
+7. `build_content_ops_llm_client()` returns `None` when no
+   host LLM is active.
+8. `build_content_ops_llm_client()` wraps an active service.
+9. `build_content_ops_skill_store(registry=stub)` delegates
+   through the injected stub.
+
+Tests use the dependency-injection kwargs on both factories so
+the test harness doesn't trigger
+`atlas_brain.services.__init__`'s torch / ollama eager-load
+chain.
 """
 
 from __future__ import annotations

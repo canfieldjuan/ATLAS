@@ -105,7 +105,7 @@ The LLM adapter bridges sync host -> async extracted via
 
 ```python
 class _HostLLMClient:
-    def __init__(self, host_llm: LLMService) -> None:
+    def __init__(self, host_llm: Any) -> None:
         self._host = host_llm
 
     async def complete(
@@ -117,19 +117,33 @@ class _HostLLMClient:
         metadata: Mapping[str, Any] | None = None,
     ) -> LLMResponse:
         del metadata  # host's chat() doesn't accept arbitrary metadata
-        host_messages = [Message(role=m.role, content=m.content) for m in messages]
+        # SimpleNamespace duck-typing: importing
+        # `atlas_brain.services.protocols` would trigger
+        # `services/__init__.py` which eagerly loads ollama / torch.
+        # The host's `chat()` reads only `.role` / `.content`
+        # (and the cloud backends additionally read
+        # `.tool_calls` / `.tool_call_id`); a SimpleNamespace
+        # with those four attributes is structurally sufficient
+        # without re-introducing the heavy import.
+        host_messages = [
+            SimpleNamespace(
+                role=str(m.role or ""),
+                content=str(m.content or ""),
+                tool_calls=None,
+                tool_call_id=None,
+            )
+            for m in messages
+        ]
         result = await asyncio.to_thread(
             self._host.chat,
             host_messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
         )
-        return LLMResponse(
-            content=str(result.get("response") or result.get("content") or ""),
-            model=str(self._host.model_info.name) if self._host.model_info else None,
-            usage=dict(result.get("usage") or {}),
-            raw=result,
-        )
+        # Response wrap: accept "response" or "content" aliases,
+        # `model` from `host.model_info.name` (defensive), `usage`
+        # only when Mapping-shaped, `raw` is the full dict.
+        ...
 ```
 
 The skill adapter is a thin delegator:
@@ -164,6 +178,18 @@ omit the kwarg and get the canonical singleton.
   `_content_ops_services.py`: imports under `atlas_brain.api.*`
   trigger the heavy router init chain (numpy / torch / asyncpg).
   Tests can pull these adapters in cleanly without that.
+- **`SimpleNamespace` duck-typing for the host `Message`
+  shape.** Importing `atlas_brain.services.protocols` would
+  trigger `services/__init__.py` which eagerly loads ollama /
+  torch. The host's `chat()` reads only `.role` / `.content`
+  from each message (and the cloud backends additionally read
+  `.tool_calls` / `.tool_call_id`); a `SimpleNamespace` with
+  those four attributes is structurally sufficient without
+  re-introducing the heavy import. Codex P1 review on the
+  initial commit confirmed the cloud-backend touchpoints
+  (`atlas_brain/services/llm/openrouter.py:147`,
+  `groq.py:105`, etc.); fields added with `None` defaults so
+  the duck-typed shape stays compatible.
 - **`metadata` kwarg on `complete()` is dropped.** The host's
   `chat()` doesn't accept arbitrary metadata. The extracted
   package's `metadata` is informational (asset_type tags etc.);
@@ -235,12 +261,22 @@ After Codex review of the initial commit:
 
 ## Estimated diff size
 
-- `_content_ops_infrastructure.py`: ~110 LOC (LLM adapter +
-  Skill adapter + 2 factories + module docstring).
-- Test: ~150 LOC.
-- Plan doc: ~190 LOC.
+Initial estimate undershot the implementation; defensive
+typing + extracted-fallback wiring + the response-shape
+unwrap added more than the rough mental model. Updated for
+transparency.
 
-Total: ~450 LOC. Marginally over the 400 LOC soft cap; the
-plan doc is most of it. Splitting LLM adapter from Skill
-adapter would leave neither slice useful on its own (the
-generators need both). Indivisible.
+- `_content_ops_infrastructure.py`: ~205 LOC actual (initial
+  estimate ~110; the SimpleNamespace duck-type, the cloud
+  backend `tool_calls` / `tool_call_id` fix-up, the
+  defensive `Mapping` checks on the response, and the
+  extracted-skill-fallback factory all came in heavier).
+- Test: ~205 LOC actual (initial estimate ~150; 9 tests
+  rather than 4).
+- Plan doc: ~265 LOC actual (post-update, includes Updates
+  section and SimpleNamespace bullet).
+
+Total actual: **~675 LOC**. Over the 400 LOC soft cap. The
+adapters and tests are structurally indivisible (the LLM and
+Skill adapters share the docstring framing; splitting them
+would leave one half unusable). Plan doc and tests dominate.
