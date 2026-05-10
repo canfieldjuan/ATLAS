@@ -341,6 +341,25 @@ def campaign_reasoning_context_payload(
     return context.as_dict()
 
 
+def consumed_campaign_reasoning_contexts(value: Any) -> tuple[dict[str, Any], ...]:
+    """Return bounded prompt-visible reasoning contexts from an enriched payload."""
+
+    payload = _copy_dict(value)
+    nested = _copy_dict(payload.get("reasoning_context"))
+    raw_context = _first_dict(
+        payload.get("campaign_reasoning_context"),
+        nested.get("campaign_reasoning_context"),
+    )
+    if not raw_context:
+        return ()
+    context = normalize_campaign_reasoning_context({
+        "campaign_reasoning_context": raw_context,
+    })
+    if not context.has_content():
+        return ()
+    return (campaign_reasoning_context_payload(context),)
+
+
 def campaign_reasoning_context_metadata(
     context: CampaignReasoningContext,
 ) -> dict[str, Any]:
@@ -478,6 +497,7 @@ def campaign_reasoning_delta_summary(
 __all__ = [
     "campaign_reasoning_context_metadata",
     "campaign_reasoning_context_payload",
+    "consumed_campaign_reasoning_contexts",
     "campaign_reasoning_atom_context",
     "campaign_reasoning_delta_summary",
     "campaign_reasoning_scope_summary",

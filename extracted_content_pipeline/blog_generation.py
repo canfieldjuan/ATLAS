@@ -25,6 +25,7 @@ from .services._parse_retry_helpers import (
 from .services.campaign_reasoning_context import (
     campaign_reasoning_context_metadata,
     campaign_reasoning_context_payload,
+    consumed_campaign_reasoning_contexts,
     normalize_campaign_reasoning_context,
 )
 from extracted_quality_gate.blog_pack import evaluate_blog_post
@@ -58,11 +59,12 @@ class BlogPostGenerationResult:
     generated: int
     skipped: int
     reasoning_contexts_used: int = 0
+    consumed_reasoning_contexts: tuple[Mapping[str, Any], ...] = ()
     saved_ids: tuple[str, ...] = ()
     errors: tuple[Mapping[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "requested": self.requested,
             "generated": self.generated,
             "skipped": self.skipped,
@@ -70,6 +72,11 @@ class BlogPostGenerationResult:
             "saved_ids": list(self.saved_ids),
             "errors": list(self.errors),
         }
+        if self.consumed_reasoning_contexts:
+            data["consumed_reasoning_contexts"] = [
+                dict(item) for item in self.consumed_reasoning_contexts
+            ]
+        return data
 
 
 def parse_blog_post_response(text: str) -> dict[str, Any] | None:
@@ -229,6 +236,7 @@ class BlogPostGenerationService:
         errors: list[dict[str, Any]] = []
         skipped = 0
         reasoning_contexts_used = 0
+        consumed_reasoning_contexts: list[dict[str, Any]] = []
         for row in rows:
             blueprint = await self._blueprint_with_reasoning_context(
                 scope=scope,
@@ -269,6 +277,9 @@ class BlogPostGenerationService:
                 continue
             if _has_prompt_reasoning_context(blueprint):
                 reasoning_contexts_used += 1
+                consumed_reasoning_contexts.extend(
+                    consumed_campaign_reasoning_contexts(blueprint)
+                )
             drafts.append(self._build_draft(parsed, blueprint=blueprint))
 
         saved_ids: tuple[str, ...] = ()
@@ -282,6 +293,7 @@ class BlogPostGenerationService:
             generated=len(drafts),
             skipped=skipped,
             reasoning_contexts_used=reasoning_contexts_used,
+            consumed_reasoning_contexts=tuple(consumed_reasoning_contexts),
             saved_ids=saved_ids,
             errors=tuple(errors),
         )
