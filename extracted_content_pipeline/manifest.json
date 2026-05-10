@@ -203,6 +203,9 @@
       "target": "extracted_content_pipeline/report_export.py"
     },
     {
+      "target": "extracted_content_pipeline/blog_post_export.py"
+    },
+    {
       "target": "extracted_content_pipeline/landing_page_export.py"
     },
     {
@@ -257,6 +260,9 @@
       "target": "extracted_content_pipeline/blog_generation.py"
     },
     {
+      "target": "extracted_content_pipeline/blog_post_postgres.py"
+    },
+    {
       "target": "extracted_content_pipeline/content_ops_execution.py"
     },
     {
@@ -303,6 +309,9 @@
     },
     {
       "target": "extracted_content_pipeline/storage/migrations/092_subcategory_intelligence.sql"
+    },
+    {
+      "target": "extracted_content_pipeline/storage/migrations/276_blog_post_account_scope.sql"
     },
     {
       "target": "extracted_content_pipeline/pipelines/notify.py"

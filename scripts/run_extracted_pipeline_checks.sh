@@ -26,6 +26,7 @@ pytest \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_source_adapters.py \
   tests/test_extracted_blog_generation.py \
+  tests/test_extracted_blog_post_postgres.py \
   tests/test_extracted_content_control_surfaces.py \
   tests/test_extracted_content_generation_plan.py \
   tests/test_extracted_content_control_surface_api.py \
@@ -47,6 +48,7 @@ pytest \
   tests/test_extracted_content_asset_export_cli.py \
   tests/test_extracted_content_asset_review_cli.py \
   tests/test_extracted_report_export.py \
+  tests/test_extracted_blog_post_export.py \
   tests/test_extracted_landing_page_export.py \
   tests/test_extracted_sales_brief_export.py \
   tests/test_extracted_campaign_postgres_review.py \
