@@ -621,6 +621,7 @@ smoke before wiring real asset services:
 python scripts/smoke_extracted_content_ops_execution.py
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,report --target-mode challenger_intel --no-quality-gates --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --reasoning-provider postgres-fixture --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
 ```
 

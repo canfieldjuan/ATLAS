@@ -104,6 +104,33 @@ def test_content_ops_execution_smoke_cli_can_validate_reasoning_usage_json() -> 
     assert landing_step["reasoning"]["provider_configured"] is True
 
 
+def test_content_ops_execution_smoke_cli_exercises_postgres_reasoning_fixture() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "--outputs",
+            "email_campaign,landing_page",
+            "--with-reasoning",
+            "--reasoning-provider",
+            "postgres-fixture",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    email_step, landing_step = payload["steps"]
+    assert email_step["reasoning"]["consumed_contexts"][0]["top_theses"][0][
+        "claim"
+    ] == "Renewal pricing"
+    assert landing_step["reasoning"]["consumed_contexts"][0]["top_theses"][0][
+        "claim"
+    ] == "Renewal pricing"
+
+
 def test_execution_errors_require_reasoning_usage_when_requested() -> None:
     smoke = _load_smoke_module()
 

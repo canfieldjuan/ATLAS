@@ -730,6 +730,16 @@ The smoke uses fake generated-asset services and a fake provider object only.
 It fails if the JSON result omits `result.reasoning_contexts_used` or the
 step-level `reasoning.contexts_used` audit field, so hosts can verify the
 execution seam without opening database, network, sender, or LLM handles.
+To exercise the Postgres reasoning adapter contract without opening a live DB
+connection, switch the offline provider fixture:
+
+```bash
+python scripts/smoke_extracted_content_ops_execution.py \
+  --outputs email_campaign,landing_page \
+  --with-reasoning \
+  --reasoning-provider postgres-fixture \
+  --json
+```
 
 | Method | Path | Purpose |
 |---|---|---|
