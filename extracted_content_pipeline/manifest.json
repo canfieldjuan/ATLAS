@@ -314,6 +314,12 @@
       "target": "extracted_content_pipeline/storage/migrations/276_blog_post_account_scope.sql"
     },
     {
+      "target": "extracted_content_pipeline/storage/migrations/277_campaign_reasoning_contexts.sql"
+    },
+    {
+      "target": "extracted_content_pipeline/campaign_reasoning_postgres.py"
+    },
+    {
       "target": "extracted_content_pipeline/pipelines/notify.py"
     },
     {
