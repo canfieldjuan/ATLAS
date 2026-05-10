@@ -9,24 +9,39 @@ route layer maps to a per-step error the UI can render.
 Currently wired:
 - `signal_extraction` (E1, PR #452): deterministic generator
   with no external dependencies.
-- `landing_page` (E2, this slice): plugs the host LLM + Skill
-  adapters from PR #453 + `PostgresLandingPageRepository`
-  backed by the host's `DatabasePool`. Slot stays `None` when
-  no LLM is active.
+- `landing_page` (E2, PR #454 + E2.5, PR #455): plugs the
+  host LLM + Skill adapters from PR #453 +
+  `PostgresLandingPageRepository` backed by the host's
+  `DatabasePool`. `scope_provider` (PR #455) ensures drafts
+  persist under the authenticated tenant.
+- `campaign` / `report` / `sales_brief` (E3, this slice):
+  share an identical wiring shape -- a single
+  `PostgresIntelligenceRepository` (campaign opportunities)
+  plus the per-output Postgres repo + LLM/Skill adapters.
+  All three slots stay `None` when LLM or pool is absent.
 
-Follow-up slices (E3+) will plug the remaining 4 generators
-(`campaign`, `blog_post`, `report`, `sales_brief`) into the
-same bundle once an `IntelligenceRepository` host factory
-lands.
+Follow-up slice (E4) wires `blog_post` -- different repo
+shape (`BlogBlueprintRepository`).
 
-See `plans/PR-Content-Ops-Execution-Services-Wire-2.md`.
+See `plans/PR-Content-Ops-Execution-Services-Wire-3.md`.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from extracted_content_pipeline.campaign_ports import LLMClient, SkillStore
+from extracted_content_pipeline.campaign_generation import (
+    CampaignGenerationService,
+)
+from extracted_content_pipeline.campaign_ports import (
+    IntelligenceRepository,
+    LLMClient,
+    SkillStore,
+)
+from extracted_content_pipeline.campaign_postgres import (
+    PostgresCampaignRepository,
+    PostgresIntelligenceRepository,
+)
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
 )
@@ -35,6 +50,18 @@ from extracted_content_pipeline.landing_page_generation import (
 )
 from extracted_content_pipeline.landing_page_postgres import (
     PostgresLandingPageRepository,
+)
+from extracted_content_pipeline.report_generation import (
+    ReportGenerationService,
+)
+from extracted_content_pipeline.report_postgres import (
+    PostgresReportRepository,
+)
+from extracted_content_pipeline.sales_brief_generation import (
+    SalesBriefGenerationService,
+)
+from extracted_content_pipeline.sales_brief_postgres import (
+    PostgresSalesBriefRepository,
 )
 from extracted_content_pipeline.signal_extraction import (
     SignalExtractionService,
@@ -70,6 +97,64 @@ def _build_landing_page_service(
         return None
     return LandingPageGenerationService(
         landing_pages=PostgresLandingPageRepository(pool=pool),
+        llm=llm,
+        skills=skills,
+    )
+
+
+def _build_campaign_service(
+    *,
+    intelligence: IntelligenceRepository | None,
+    llm: LLMClient | None,
+    skills: SkillStore,
+    pool: Any,
+) -> CampaignGenerationService | None:
+    """E3: campaign drafts. Same short-circuit shape as
+    `_build_landing_page_service`."""
+
+    if llm is None or pool is None or intelligence is None:
+        return None
+    return CampaignGenerationService(
+        intelligence=intelligence,
+        campaigns=PostgresCampaignRepository(pool=pool),
+        llm=llm,
+        skills=skills,
+    )
+
+
+def _build_report_service(
+    *,
+    intelligence: IntelligenceRepository | None,
+    llm: LLMClient | None,
+    skills: SkillStore,
+    pool: Any,
+) -> ReportGenerationService | None:
+    """E3: structured report drafts."""
+
+    if llm is None or pool is None or intelligence is None:
+        return None
+    return ReportGenerationService(
+        intelligence=intelligence,
+        reports=PostgresReportRepository(pool=pool),
+        llm=llm,
+        skills=skills,
+    )
+
+
+def _build_sales_brief_service(
+    *,
+    intelligence: IntelligenceRepository | None,
+    llm: LLMClient | None,
+    skills: SkillStore,
+    pool: Any,
+) -> SalesBriefGenerationService | None:
+    """E3: sales-brief drafts."""
+
+    if llm is None or pool is None or intelligence is None:
+        return None
+    return SalesBriefGenerationService(
+        intelligence=intelligence,
+        sales_briefs=PostgresSalesBriefRepository(pool=pool),
         llm=llm,
         skills=skills,
     )
@@ -127,11 +212,38 @@ def build_content_ops_execution_services(
         pool_factory = get_db_pool
 
     landing_page = None
+    campaign = None
+    report = None
+    sales_brief = None
     if enable_db_services:
         llm = llm_factory()
         skills = skills_factory()
         pool = pool_factory()
+        # Shared across the three IntelligenceRepository-dependent
+        # services -- the dataclass is immutable, the underlying
+        # pool is shared anyway, no per-call state.
+        intelligence: IntelligenceRepository | None = (
+            PostgresIntelligenceRepository(pool=pool) if pool is not None else None
+        )
         landing_page = _build_landing_page_service(
+            llm=llm,
+            skills=skills,
+            pool=pool,
+        )
+        campaign = _build_campaign_service(
+            intelligence=intelligence,
+            llm=llm,
+            skills=skills,
+            pool=pool,
+        )
+        report = _build_report_service(
+            intelligence=intelligence,
+            llm=llm,
+            skills=skills,
+            pool=pool,
+        )
+        sales_brief = _build_sales_brief_service(
+            intelligence=intelligence,
             llm=llm,
             skills=skills,
             pool=pool,
@@ -140,6 +252,9 @@ def build_content_ops_execution_services(
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
         landing_page=landing_page,
+        campaign=campaign,
+        report=report,
+        sales_brief=sales_brief,
     )
 
 
