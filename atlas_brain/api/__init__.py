@@ -162,7 +162,7 @@ try:
         set_current_auth_user,
     )
     from .._content_ops_reasoning import (
-        build_content_ops_reasoning_context_provider,
+        select_content_ops_reasoning_context_provider,
     )
     from ..auth.dependencies import AuthUser
 
@@ -189,7 +189,7 @@ try:
             build_content_ops_execution_services(enable_db_services=True)
         ),
         scope_provider=build_content_ops_scope,
-        reasoning_context_provider=build_content_ops_reasoning_context_provider,
+        reasoning_context_provider=select_content_ops_reasoning_context_provider,
     )
     router.include_router(content_ops_router)
 except Exception as exc:  # pragma: no cover - defensive at import time
