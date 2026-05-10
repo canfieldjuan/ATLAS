@@ -28,6 +28,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ..._blog_blueprint_fanout import fanout_blueprint as _fanout_blog_blueprint
 from ...services.scraping.sources import (
     VERIFIED_SOURCES,
     ReviewSource,
@@ -3237,6 +3238,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 continue
 
+            try:
+                fanout_count = await _fanout_blog_blueprint(pool, blueprint)
+                if fanout_count:
+                    logger.info(
+                        "Blog blueprint fanned out: slug=%s subscribers=%d",
+                        blueprint.slug, fanout_count,
+                    )
+            except Exception as exc:
+                logger.warning("Blog blueprint fanout exception: %s", exc)
+
             from ..visibility import record_attempt
             await record_attempt(
                 pool, artifact_type="blog_post", artifact_id=blueprint.slug,
@@ -3468,6 +3479,15 @@ async def _regenerate_existing_posts(
                 attempt_no=1,
             )
             if post_id:
+                try:
+                    fanout_count = await _fanout_blog_blueprint(pool, blueprint)
+                    if fanout_count:
+                        logger.info(
+                            "Blog blueprint fanned out: slug=%s subscribers=%d",
+                            slug, fanout_count,
+                        )
+                except Exception as exc:
+                    logger.warning("Blog blueprint fanout exception: %s", exc)
                 results.append({
                     "post_id": str(post_id),
                     "topic_type": topic_type,
