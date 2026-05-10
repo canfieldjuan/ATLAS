@@ -1,13 +1,24 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs'
 import { resolve, join } from 'node:path'
 
+const BASE_URL = 'https://atlas-intel-ui-two.vercel.app'
+const DEFAULT_OG_IMAGE = `${BASE_URL}/og-default.png`
+
+// ---------------------------------------------------------------------------
+// Sitemap plugin
+// ---------------------------------------------------------------------------
 function sitemapPlugin() {
   return {
     name: 'generate-sitemap',
     closeBundle() {
-      // Read blog index to extract slugs
       const indexPath = resolve(import.meta.dirname, 'src/content/blog/index.ts')
       if (!existsSync(indexPath)) return
 
@@ -19,7 +30,6 @@ function sitemapPlugin() {
         slugs.push(match[1])
       }
 
-      // Also extract from individual .ts files in the blog directory
       const blogDir = resolve(import.meta.dirname, 'src/content/blog')
       for (const file of readdirSync(blogDir)) {
         if (file.endsWith('.ts') && file !== 'index.ts') {
@@ -31,14 +41,14 @@ function sitemapPlugin() {
 
       const today = new Date().toISOString().split('T')[0]
       const urls = [
-        { loc: 'https://atlas-intel-ui-two.vercel.app/landing', priority: '1.0', changefreq: 'weekly' },
-        { loc: 'https://atlas-intel-ui-two.vercel.app/blog', priority: '0.9', changefreq: 'daily' },
+        { loc: `${BASE_URL}/landing`, priority: '1.0', changefreq: 'weekly' },
+        { loc: `${BASE_URL}/blog`, priority: '0.9', changefreq: 'daily' },
         ...slugs.map(slug => ({
-          loc: `https://atlas-intel-ui-two.vercel.app/blog/${slug}`,
+          loc: `${BASE_URL}/blog/${slug}`,
           priority: '0.7',
           changefreq: 'monthly',
         })),
-        { loc: 'https://atlas-intel-ui-two.vercel.app/', priority: '0.3', changefreq: 'monthly' },
+        { loc: `${BASE_URL}/`, priority: '0.3', changefreq: 'monthly' },
       ]
 
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -60,8 +70,180 @@ ${urls.map(u => `  <url>
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pre-render plugin
+//
+// Strategy: at build time, clone dist/index.html into per-route directories
+// with the correct static <head> meta baked in. Crawlers (Googlebot, GPTBot,
+// PerplexityBot, ClaudeBot) fetch the HTML file directly and see proper title,
+// description, canonical, og:image, og:type, and JSON-LD without executing JS.
+//
+// Authenticated routes stay as the regular SPA (index.html fallback).
+// Only public routes are pre-rendered: /landing, /blog, /blog/:slug.
+// ---------------------------------------------------------------------------
+
+interface PrerenderedRoute {
+  path: string        // URL path, e.g. /blog/my-slug
+  title: string
+  description: string
+  canonical: string
+  ogType: string
+  jsonLd?: object
+}
+
+function buildHeadHtml(route: PrerenderedRoute): string {
+  const { title, description, canonical, ogType, jsonLd } = route
+  const lines = [
+    `<title>${title}</title>`,
+    `<meta name="description" content="${description}" />`,
+    `<link rel="canonical" href="${canonical}" />`,
+    `<meta property="og:title" content="${title}" />`,
+    `<meta property="og:description" content="${description}" />`,
+    `<meta property="og:url" content="${canonical}" />`,
+    `<meta property="og:type" content="${ogType}" />`,
+    `<meta property="og:site_name" content="Atlas Intelligence" />`,
+    `<meta property="og:image" content="${DEFAULT_OG_IMAGE}" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta name="twitter:card" content="summary_large_image" />`,
+    `<meta name="twitter:title" content="${title}" />`,
+    `<meta name="twitter:description" content="${description}" />`,
+    `<meta name="twitter:image" content="${DEFAULT_OG_IMAGE}" />`,
+  ]
+  if (jsonLd) {
+    lines.push(
+      `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>`,
+    )
+  }
+  return lines.map(l => `    ${l}`).join('\n')
+}
+
+function prerenderPlugin() {
+  return {
+    name: 'prerender-public-routes',
+    closeBundle() {
+      const distDir = resolve(import.meta.dirname, 'dist')
+      const indexHtmlPath = join(distDir, 'index.html')
+      if (!existsSync(indexHtmlPath)) return
+
+      const baseHtml = readFileSync(indexHtmlPath, 'utf-8')
+
+      // Collect blog post metadata from content files
+      const blogDir = resolve(import.meta.dirname, 'src/content/blog')
+      const blogRoutes: PrerenderedRoute[] = []
+
+      for (const file of readdirSync(blogDir)) {
+        if (!file.endsWith('.ts') || file === 'index.ts') continue
+        const content = readFileSync(join(blogDir, file), 'utf-8')
+        const slug = (content.match(/slug:\s*'([^']+)'/) || [])[1]
+        if (!slug) continue
+
+        const seoTitle =
+          (content.match(/seo_title:\s*'([^']+)'/) || [])[1] ||
+          (content.match(/title:\s*'([^']+)'/) || [])[1] ||
+          'Atlas Intelligence Blog'
+        const seoDesc =
+          (content.match(/seo_description:\s*'([^']+)'/) || [])[1] ||
+          (content.match(/description:\s*'([^']+)'/) || [])[1] ||
+          'Amazon seller intelligence and competitive analysis insights.'
+
+        blogRoutes.push({
+          path: `/blog/${slug}`,
+          title: `${seoTitle} | Atlas Intelligence`,
+          description: seoDesc,
+          canonical: `${BASE_URL}/blog/${slug}`,
+          ogType: 'article',
+          jsonLd: {
+            '@context': 'https://schema.org',
+            '@type': 'BlogPosting',
+            headline: seoTitle,
+            description: seoDesc,
+            image: DEFAULT_OG_IMAGE,
+            author: {
+              '@type': 'Organization',
+              name: 'Atlas Intelligence',
+            },
+            publisher: {
+              '@type': 'Organization',
+              name: 'Atlas Intelligence',
+              url: BASE_URL,
+            },
+            mainEntityOfPage: {
+              '@type': 'WebPage',
+              '@id': `${BASE_URL}/blog/${slug}`,
+            },
+          },
+        })
+      }
+
+      const LANDING_JSON_LD = {
+        '@context': 'https://schema.org',
+        '@graph': [
+          { '@type': 'WebSite', name: 'Atlas Intelligence', url: BASE_URL },
+          {
+            '@type': 'SoftwareApplication',
+            name: 'Atlas Intelligence',
+            applicationCategory: 'BusinessApplication',
+            operatingSystem: 'Web',
+            description:
+              'Amazon review intelligence platform for tracking competitor complaints, safety signals, and customer migration patterns.',
+            offers: {
+              '@type': 'AggregateOffer',
+              lowPrice: '49',
+              highPrice: '399',
+              priceCurrency: 'USD',
+            },
+            url: `${BASE_URL}/landing`,
+          },
+        ],
+      }
+
+      const routes: PrerenderedRoute[] = [
+        {
+          path: '/landing',
+          title: 'Atlas Intelligence — Amazon Review Monitoring & Competitor Signals',
+          description:
+            'Track competitor complaints, safety signals, and customer migration patterns across your Amazon product category. Start free for 14 days.',
+          canonical: `${BASE_URL}/landing`,
+          ogType: 'website',
+          jsonLd: LANDING_JSON_LD,
+        },
+        {
+          path: '/blog',
+          title: 'Blog | Atlas Intelligence',
+          description:
+            'Amazon seller intelligence, review monitoring strategies, and competitive analysis insights.',
+          canonical: `${BASE_URL}/blog`,
+          ogType: 'website',
+        },
+        ...blogRoutes,
+      ]
+
+      let count = 0
+      for (const route of routes) {
+        const headHtml = buildHeadHtml(route)
+        // Replace the fallback <title> in index.html and inject all meta before </head>
+        const rendered = baseHtml
+          .replace(
+            /<title>[^<]*<\/title>/,
+            `<title>${route.title}</title>`,
+          )
+          .replace('</head>', `${headHtml}\n  </head>`)
+
+        // Write to dist/<path>/index.html
+        const outDir = join(distDir, ...route.path.split('/').filter(Boolean))
+        if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true })
+        writeFileSync(join(outDir, 'index.html'), rendered)
+        count++
+      }
+
+      console.log(`  Pre-rendered ${count} public routes`)
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), sitemapPlugin()],
+  plugins: [react(), sitemapPlugin(), prerenderPlugin()],
   server: {
     host: true,
     port: 5175,
