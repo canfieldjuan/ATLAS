@@ -18,13 +18,19 @@ from extracted_content_pipeline.signal_extraction import SignalExtractionService
 class _Result:
     generated: int = 1
     reasoning_contexts_used: int = 0
+    consumed_reasoning_contexts: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "generated": self.generated,
             "reasoning_contexts_used": self.reasoning_contexts_used,
             "saved_ids": ["draft-1"],
         }
+        if self.consumed_reasoning_contexts:
+            data["consumed_reasoning_contexts"] = [
+                dict(item) for item in self.consumed_reasoning_contexts
+            ]
+        return data
 
 
 class _OpportunityService:
@@ -963,6 +969,77 @@ async def test_execute_step_reports_actual_reasoning_contexts_used():
         "service_supports_reasoning": True,
         "provider_configured": True,
         "contexts_used": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_step_reports_consumed_reasoning_contexts_when_result_includes_them():
+    consumed = {
+        "wedge": "pricing_pressure",
+        "confidence": 0.82,
+        "proof_points": [{"label": "Renewal spike", "value": "34%"}],
+    }
+
+    class _ReasoningPayloadService(_ReasoningAwareOpportunityService):
+        async def generate(self, **kwargs: Any) -> _Result:
+            self.calls.append(dict(kwargs))
+            return _Result(
+                generated=1,
+                reasoning_contexts_used=1,
+                consumed_reasoning_contexts=(consumed,),
+            )
+
+    services = ContentOpsExecutionServices(
+        campaign=_ReasoningPayloadService(),
+        reasoning_provider_configured=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=services,
+    )
+
+    assert result["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": True,
+        "contexts_used": 1,
+        "consumed_contexts": [consumed],
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_step_ignores_malformed_consumed_reasoning_contexts():
+    class _MalformedReasoningPayloadService(_ReasoningAwareOpportunityService):
+        async def generate(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(dict(kwargs))
+            return {
+                "generated": 1,
+                "reasoning_contexts_used": 1,
+                "consumed_reasoning_contexts": ["not-a-context", {}, 3],
+            }
+
+    services = ContentOpsExecutionServices(
+        campaign=_MalformedReasoningPayloadService(),
+        reasoning_provider_configured=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        },
+        services=services,
+    )
+
+    assert result["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": True,
+        "contexts_used": 1,
     }
 
 
