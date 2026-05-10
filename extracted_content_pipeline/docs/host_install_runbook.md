@@ -300,6 +300,19 @@ Use `--multi-pass-pack-name`, `--multi-pass-max-continuations`, and
 See `reasoning_handoff_contract.md` for the accepted shape and the no-direct-
 import rule. AI Content Ops consumes compressed reasoning through a provider;
 the provider may be file-backed, single-pass, multi-pass, or host-owned.
+After applying migration 277 and loading DB-backed reasoning rows, verify a
+target can resolve through the same Postgres adapter used by hosted execution:
+
+```bash
+python scripts/check_extracted_campaign_reasoning_postgres.py \
+  --account-id acct_123 \
+  --target-id opp_123 \
+  --company-name "Acme" \
+  --json
+```
+
+The check exits non-zero when no matching context is found, making it suitable
+for deployment smoke tests after a reasoning ETL or migration run.
 
 ## Step 6: Add Optional Prompt Overrides
 

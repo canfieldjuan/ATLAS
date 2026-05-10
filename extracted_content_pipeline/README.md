@@ -195,6 +195,16 @@ python scripts/run_extracted_campaign_generation_example.py \
 rows by target id, company, email, or vendor and feeds the normalized
 `CampaignReasoningContextProvider` port documented in
 `docs/reasoning_handoff_contract.md`.
+For DB-backed installs, validate a loaded `campaign_reasoning_contexts` row
+without running generation:
+
+```bash
+python scripts/check_extracted_campaign_reasoning_postgres.py \
+  --account-id acct_123 \
+  --target-id opp_123 \
+  --company-name "Acme" \
+  --json
+```
 
 For lightweight installs that do not already have reasoning JSON, use
 `services.single_pass_reasoning_provider.SinglePassCampaignReasoningProvider`.
