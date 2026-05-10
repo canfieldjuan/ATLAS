@@ -220,6 +220,49 @@ Before LGTM, the reviewer confirms:
 - [ ] Defensible trade-offs are explained in **Intentional**.
 - [ ] Deferred items have a clear next-PR home.
 
+### 4e. Substantive correctness, not just plan-doc compliance
+
+Plan-doc-vs-code drift is mechanically detectable: compare two files,
+flag mismatches. Substantive correctness needs cross-file reasoning:
+the reviewer must verify the code works in production paths that
+aren't visible in the diff. Both matter; the second is the harder
+half and easy to skip.
+
+When the diff or plan doc claims "X is sufficient because Y," the
+"because" is usually a claim about callers / fallbacks / runtime
+sequences elsewhere in the codebase -- not a property of the diff
+itself. **Verify those claims.** Use `Explore` / `grep -rn` to
+enumerate call sites before LGTM, not after.
+
+Recurring failure patterns -- when a Codex or auditor pass catches a
+bug that needed cross-file reasoning, append the pattern here so
+future reviewer sessions catch it the first time:
+
+- **Adapter-shape claims**: when a duck-typed object replaces a
+  canonical type to dodge a heavy import, sweep every caller of the
+  wrapped API for *all* attributes / methods read on the argument.
+  A `SimpleNamespace(role, content)` adapter is broken if any caller
+  also reads `.tool_calls` / `.tool_call_id`. (See PR #453 P1.)
+- **Default-fallback claims**: when a factory says "X resolves
+  through the packaged default," confirm the packaged default exists
+  for *every* name the next-slice services will look up -- not just
+  the one the regression test exercises. (See PR #453 P2.)
+- **Race-condition claims**: when state is mutated from multiple
+  async paths (form mutation during an in-flight request), trace
+  each transition by hand: "what if this resolves after that
+  mutation?" Plan docs rarely enumerate these. (See PR #406
+  stale-response guard.)
+- **Construction-time vs request-time semantics**: when a kwarg is
+  resolved at construction and the value is resolved per-request,
+  gate the per-request derivation on kwarg presence, not value
+  truthiness. (See PR #402 reasoning-provider gate.)
+- **API-path / mount-point claims**: when a frontend adapter targets
+  a path the host hasn't actually mounted there, dev requests 404 /
+  CORS-fail despite green tests. Verify the path against the host's
+  actual `include_router(prefix=...)` chain, not the comment that
+  says "host is expected to mount here." (See PR #406 Vite proxy /
+  `/api/v1/content-ops` realignment.)
+
 ---
 
 ## 5. Anti-patterns
@@ -283,6 +326,10 @@ defines:
   plans/PR-<Slice-Name>.md.
 - The PR body / commit message conventions that mirror the plan.
 - The reviewer verification template (sections 2a + 4d).
+- The substantive-correctness review patterns (section 4e) --
+  cross-file reasoning patterns that catch the bugs procedural
+  plan-vs-code review misses. Read this before commenting on a
+  non-trivial code change.
 - The 400 LOC diff budget and how to handle overage.
 - Anti-patterns that should never appear in a builder PR.
 
