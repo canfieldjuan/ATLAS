@@ -5,8 +5,12 @@
 the host has wired. Currently:
 
 - `signal_extraction` (E1, PR #452): always wired (stateless).
-- `landing_page` (E2, this slice): wired when an LLM is
-  active; slot stays `None` otherwise.
+- `landing_page` (E2 + E2.5, PRs #454/#455): wired when an
+  LLM + pool are active; slot stays `None` otherwise.
+- `campaign` / `report` / `sales_brief` (E3, this slice):
+  same shape as landing_page but each also takes a
+  shared `PostgresIntelligenceRepository`. Skip together
+  when LLM or pool is absent.
 
 Tests use the factory's dependency-injection kwargs (`llm_factory`
 / `skills_factory` / `pool_factory`) to stub host
@@ -14,29 +18,31 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (8 tests):
+Test inventory (12 tests):
 
-1. `signal_extraction` runs through the full executor with the
-   bundle attached.
-2. `landing_page` is populated when an LLM is wired AND
-   `enable_db_services=True` (E2 canary).
-3. `landing_page` slot stays `None` when no LLM is active
-   (E2 fallback behavior).
-4. `landing_page` slot stays `None` when pool is None
-   (defensive early-startup guard).
-5. `landing_page` slot stays `None` in production default
-   (Codex P1 safety: `enable_db_services=False` until E2.5
-   wires `scope_provider`).
-6. Unwired outputs still return `service_not_configured` --
-   confirms the bundle doesn't silently mask the remaining 4
-   slots (`campaign`, `blog_post`, `report`, `sales_brief`).
-7. `configured_outputs()` advertises landing_page +
-   signal_extraction with LLM + `enable_db_services=True`.
-8. `configured_outputs()` advertises only signal_extraction
-   without an LLM (or in default production mode).
+1. `signal_extraction` runs through the full executor.
+2. `landing_page` populated when LLM + db enabled (E2 canary).
+3. `landing_page` skips when no LLM (E2 fallback).
+4. `landing_page` skips when pool is None.
+5. `landing_page` skips in production default
+   (Codex P1 safety pin).
+6. `campaign` populated when LLM + db enabled (E3 canary).
+7. `report` populated when LLM + db enabled (E3 canary).
+8. `sales_brief` populated when LLM + db enabled (E3 canary).
+9. campaign / report / sales_brief skip together when no LLM.
+10. campaign / report / sales_brief skip together when pool
+    is None.
+11. `blog_post` (the only remaining unwired output after E3)
+    still returns `service_not_configured`.
+12. `configured_outputs()` with LLM + db enabled advertises
+    `(email_campaign, report, landing_page, sales_brief,
+    signal_extraction)` -- order follows the upstream
+    `ContentOpsExecutionServices.configured_outputs` iteration
+    (not alphabetical). Without LLM or in production default,
+    only `signal_extraction`.
 
-When follow-up slices add `campaign` / `blog_post` / etc.,
-tests 6 and 7 need updated expected-sets.
+When E4 wires `blog_post`, tests 11 and 12 need updated
+expected-sets.
 """
 
 from __future__ import annotations
@@ -129,7 +135,10 @@ def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
 
     assert services.landing_page is not None
     assert services.configured_outputs() == (
+        "email_campaign",
+        "report",
         "landing_page",
+        "sales_brief",
         "signal_extraction",
     )
 
@@ -191,14 +200,92 @@ def test_landing_page_slot_stays_none_in_production_default() -> None:
     assert services.configured_outputs() == ("signal_extraction",)
 
 
+def test_campaign_wired_when_llm_active_and_db_enabled() -> None:
+    """E3 canary: campaign service slot is populated with the
+    full LLM + Skill + Postgres + IntelligenceRepository chain.
+    Bundle's `for_output("email_campaign")` returns the
+    service."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_make_llm_stub,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=True,
+    )
+    assert services.campaign is not None
+    assert services.for_output("email_campaign") is services.campaign
+
+
+def test_report_wired_when_llm_active_and_db_enabled() -> None:
+    """E3 canary: report service slot populated."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_make_llm_stub,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=True,
+    )
+    assert services.report is not None
+    assert services.for_output("report") is services.report
+
+
+def test_sales_brief_wired_when_llm_active_and_db_enabled() -> None:
+    """E3 canary: sales_brief service slot populated."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_make_llm_stub,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=True,
+    )
+    assert services.sales_brief is not None
+    assert services.for_output("sales_brief") is services.sales_brief
+
+
+def test_e3_services_skip_together_when_no_active_llm() -> None:
+    """E3 fallback: campaign / report / sales_brief slots all
+    stay `None` when no LLM is active. Same short-circuit shape
+    as landing_page (PR #454). Only signal_extraction remains
+    advertised."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=True,
+    )
+    assert services.campaign is None
+    assert services.report is None
+    assert services.sales_brief is None
+    assert services.configured_outputs() == ("signal_extraction",)
+
+
+def test_e3_services_skip_together_when_pool_is_none() -> None:
+    """E3 fallback: campaign / report / sales_brief slots all
+    skip when pool is None during early host startup."""
+
+    def _no_pool() -> Any:
+        return None
+
+    services = build_content_ops_execution_services(
+        llm_factory=_make_llm_stub,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_no_pool,
+        enable_db_services=True,
+    )
+    assert services.campaign is None
+    assert services.report is None
+    assert services.sales_brief is None
+    assert services.configured_outputs() == ("signal_extraction",)
+
+
 @pytest.mark.asyncio
-async def test_unwired_outputs_still_return_service_not_configured() -> None:
-    """The bundle leaves `campaign` / `blog_post` / `report` /
-    `sales_brief` slots `None`. The executor's per-step
-    dispatcher must surface that as `service_not_configured`
-    rather than silently succeeding. Picking `report` since
-    `landing_page` is no longer in the unwired set when
-    `enable_db_services=True`."""
+async def test_unwired_blog_post_still_returns_service_not_configured() -> None:
+    """After E3 wires campaign / report / sales_brief, the only
+    output left in the unwired set is `blog_post` (different
+    repo shape -- BlogBlueprintRepository -- E4). The
+    executor's per-step dispatcher must surface that as
+    `service_not_configured`."""
 
     services = build_content_ops_execution_services(
         llm_factory=_make_llm_stub,
@@ -209,8 +296,8 @@ async def test_unwired_outputs_still_return_service_not_configured() -> None:
 
     result = await execute_content_ops_from_mapping(
         {
-            "outputs": ["report"],
-            "inputs": {"opportunity_id": "opp-1"},
+            "outputs": ["blog_post"],
+            "inputs": {"topic": "Q3 churn signals"},
         },
         services=services,
     )
@@ -233,7 +320,10 @@ def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
         enable_db_services=True,
     )
     assert services.configured_outputs() == (
+        "email_campaign",
+        "report",
         "landing_page",
+        "sales_brief",
         "signal_extraction",
     )
 
