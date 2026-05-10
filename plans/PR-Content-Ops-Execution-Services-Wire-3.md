@@ -159,7 +159,14 @@ exercise the wiring path.
 ## Estimated diff size
 
 - `_content_ops_services.py`: ~80 LOC delta.
-- Test: ~150 LOC delta.
-- Plan doc: ~150 LOC.
+- Test: ~190 LOC delta (13 tests rather than the projected
+  ~10; docstring inventory expanded).
+- Plan doc: ~165 LOC.
 
-Total: ~380 LOC. Within the 400 LOC PR target.
+Total actual: +414 / -44 = 458 changes. Marginally over the
+400-LOC soft cap. Indivisible -- the Intentional bullet
+about combining the 3 IntelligenceRepository-dependent
+services in one PR is the justification: each helper is
+~10 LOC, three near-duplicate slices would be process
+overhead with no review value. Tests dominate the line
+count; the production-code delta itself is well under cap.

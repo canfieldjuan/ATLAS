@@ -18,7 +18,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (12 tests):
+Test inventory (13 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -38,8 +38,10 @@ Test inventory (12 tests):
     `(email_campaign, report, landing_page, sales_brief,
     signal_extraction)` -- order follows the upstream
     `ContentOpsExecutionServices.configured_outputs` iteration
-    (not alphabetical). Without LLM or in production default,
-    only `signal_extraction`.
+    (not alphabetical).
+13. `configured_outputs()` without an active LLM (even with
+    `enable_db_services=True`) advertises only
+    `signal_extraction`.
 
 When E4 wires `blog_post`, tests 11 and 12 need updated
 expected-sets.
