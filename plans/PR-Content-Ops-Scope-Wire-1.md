@@ -52,15 +52,23 @@ Three files, tightly bounded:
    Flip the `execution_services_provider` to call
    `build_content_ops_execution_services(enable_db_services=True)`.
 
-3. **`tests/test_atlas_content_ops_scope.py`** (new): pin the
-   ContextVar / scope round-trip:
-   - `capture_content_ops_auth_user` sets the user;
-     `build_content_ops_scope()` reads it back as a
-     `TenantScope` with `account_id` + `user_id`.
-   - `build_content_ops_scope()` returns `None` when no
-     user is captured (e.g. background task path).
-   - `_CURRENT_AUTH_USER` is request-local: setting it in
-     one async task doesn't leak to a sibling task.
+3. **`tests/test_atlas_content_ops_scope.py`** (new): six
+   regression tests pinning the ContextVar / scope bridge:
+   - `test_build_content_ops_scope_round_trips_user_via_context_var`
+     -- set the user via `set_current_auth_user`,
+     `build_content_ops_scope()` returns the matching
+     `TenantScope`.
+   - `test_build_content_ops_scope_returns_none_when_no_user_captured`
+     -- background-task / unauthenticated path.
+   - `test_build_content_ops_scope_uses_injected_user_factory`
+     -- DI kwarg short-circuits the ContextVar read.
+   - `test_build_content_ops_scope_returns_none_when_factory_returns_none`
+     -- factory returning None -> scope None.
+   - `test_context_var_is_task_local` -- asyncio.Task-local
+     isolation; sibling tasks don't see each other's users.
+   - `test_codex_p1_contract_account_id_is_non_empty_for_authenticated_user`
+     -- explicit pin on the cross-tenant safety contract from
+     PR #454's Codex P1 review.
 
 ### What's NOT in this slice
 
@@ -86,43 +94,57 @@ The `ContextVar` bridge lets the host expose the per-request
 
 ```python
 # atlas_brain/_content_ops_scope.py
+# Test-clean: NO fastapi or .auth.dependencies imports here.
+# The capturing FastAPI dep lives in api/__init__.py because
+# importing atlas_brain.auth.dependencies pulls cryptography
+# which panics in dependency-light dev envs.
 from contextvars import ContextVar
-from fastapi import Depends
-from .auth.dependencies import AuthUser, require_b2b_plan
 from extracted_content_pipeline.campaign_ports import TenantScope
 
-_CURRENT_AUTH_USER: ContextVar[AuthUser | None] = ContextVar(
+_CURRENT_AUTH_USER: ContextVar[Any | None] = ContextVar(
     "content_ops_auth_user", default=None,
 )
 
 
-async def capture_content_ops_auth_user(
-    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
-) -> AuthUser:
+def set_current_auth_user(user: Any | None) -> None:
     _CURRENT_AUTH_USER.set(user)
-    return user
 
 
-def build_content_ops_scope() -> TenantScope | None:
-    user = _CURRENT_AUTH_USER.get()
+def build_content_ops_scope(
+    *, user_factory: Callable[[], Any | None] | None = None,
+) -> TenantScope | None:
+    user = (user_factory or _CURRENT_AUTH_USER.get)()
     if user is None:
         return None
     return TenantScope(
-        account_id=user.account_id,
-        user_id=user.user_id,
+        account_id=getattr(user, "account_id", None),
+        user_id=getattr(user, "user_id", None),
     )
 ```
 
-`ContextVar` is asyncio-aware: each request runs in its own
-task and gets its own ContextVar context, so concurrent
-requests don't see each other's users.
-
-The route mount in `atlas_brain/api/__init__.py` plugs the
-two together:
+The FastAPI dep + the route mount live in
+`atlas_brain/api/__init__.py` (which already pays the
+auth-chain import cost):
 
 ```python
+# atlas_brain/api/__init__.py
+from fastapi import Depends
+from .._content_ops_scope import (
+    build_content_ops_scope,
+    set_current_auth_user,
+)
+from ..auth.dependencies import AuthUser, require_b2b_plan
+
+
+async def _capture_content_ops_auth_user(
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+) -> AuthUser:
+    set_current_auth_user(user)
+    return user
+
+
 content_ops_router = create_content_ops_control_surface_router(
-    dependencies=[Depends(capture_content_ops_auth_user)],
+    dependencies=[Depends(_capture_content_ops_auth_user)],
     execution_services_provider=(
         lambda: build_content_ops_execution_services(
             enable_db_services=True,
@@ -147,6 +169,16 @@ ContextVar before the route handler runs.
   FastAPI-shaped `Depends` objects would couple the
   extracted package to FastAPI specifically. The
   `ContextVar` keeps the FastAPI coupling on the host side.
+- **The FastAPI capturing dep lives in `api/__init__.py`,
+  not inside `_content_ops_scope.py`.** Importing
+  `atlas_brain.auth.dependencies` pulls in `cryptography`,
+  which panics in dependency-light dev envs (the same
+  reason the LLM/Skill adapters in PR #453 use
+  `SimpleNamespace` rather than the host's `Message`
+  dataclass). `api/__init__.py` already pays the auth-chain
+  import cost, so the dep belongs there. The scope module
+  exposes `set_current_auth_user` / `get_current_auth_user`
+  so the dep can plumb the user across the boundary.
 - **Both factories accept DI kwargs.** Same pattern as PRs
   #453 and #454; tests pass stubs without triggering the
   host's auth init chain.
@@ -192,9 +224,24 @@ ContextVar before the route handler runs.
 
 ## Estimated diff size
 
-- `_content_ops_scope.py`: ~80 LOC.
-- `api/__init__.py`: ~6 LOC delta.
-- Test: ~120 LOC.
-- Plan doc: ~190 LOC.
+Initial estimate undershot api/__init__.py (5x) and the test
+file. Updated for transparency.
 
-Total: ~395 LOC. Right at the budget.
+- `_content_ops_scope.py`: ~106 LOC actual (initial ~80;
+  added defensive `getattr` reads + module docstring more
+  detail than projected).
+- `api/__init__.py`: ~30 LOC delta actual (initial ~6;
+  the new FastAPI dep + its docstring + the
+  set_current_auth_user wiring + the lambda wrapping
+  enable_db_services=True together exceed the rough
+  mental model).
+- Test: ~150 LOC actual (initial ~120; 6 tests rather
+  than 3).
+- Plan doc: ~225 LOC actual (post-update with split
+  Mechanism blocks + new Intentional bullet + expanded
+  test inventory).
+
+Total actual: ~510 LOC. Over the 400 LOC soft cap.
+Indivisible -- the ContextVar setter, reader, FastAPI dep,
+and route mount must ship together for the bridge to
+function. Plan doc and tests dominate.

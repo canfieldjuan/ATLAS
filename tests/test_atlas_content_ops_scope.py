@@ -10,7 +10,7 @@
   `scope_provider`. Reads the ContextVar (or an injected
   factory in tests) and returns a typed `TenantScope`.
 
-Five regression tests:
+Six regression tests:
 
 1. Round-trip: set a fake user, build_content_ops_scope()
    returns a TenantScope with matching account_id / user_id.
@@ -18,9 +18,11 @@ Five regression tests:
    path; matches the route's "scope not configured" branch).
 3. user_factory DI kwarg short-circuits the ContextVar read
    so tests don't need to populate it.
-4. ContextVar is asyncio-task-local: setting in one task
+4. user_factory returning None still produces None scope
+   (canary for the explicit-None branch).
+5. ContextVar is asyncio-task-local: setting in one task
    doesn't leak into a sibling task.
-5. Closes the Codex P1 contract from PR #454: the scope's
+6. Closes the Codex P1 contract from PR #454: the scope's
    account_id is non-empty when an authenticated user is
    present, so PostgresLandingPageRepository.save_drafts no
    longer falls back to account_id="".
