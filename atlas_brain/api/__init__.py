@@ -156,8 +156,10 @@ try:
     from extracted_content_pipeline.api.control_surfaces import (
         create_content_ops_control_surface_router,
     )
+    from .._content_ops_services import build_content_ops_execution_services
     content_ops_router = create_content_ops_control_surface_router(
         dependencies=[Depends(require_b2b_plan("b2b_growth"))],
+        execution_services_provider=build_content_ops_execution_services,
     )
     router.include_router(content_ops_router)
 except Exception as exc:  # pragma: no cover - defensive at import time
