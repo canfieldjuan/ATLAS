@@ -55,9 +55,13 @@ Tightly bounded:
    provider into the existing
    `create_content_ops_control_surface_router(...)` call.
 3. `tests/test_atlas_content_ops_execution_services.py` (new)
-   -- ~100 LOC. Two tests: `signal_extraction` runs through the
-   executor; the other 5 outputs still return
-   `service_not_configured`.
+   -- ~100 LOC. Three tests:
+   - `signal_extraction` runs through the executor.
+   - The other 5 outputs still return
+     `service_not_configured`.
+   - `test_bundle_only_advertises_wired_outputs`: pins that
+     `configured_outputs()` advertises only the wired output
+     (canary for future slot population).
 4. `plans/PR-Content-Ops-Execution-Services-Wire-1.md` (this
    file).
 
@@ -85,7 +89,7 @@ Tightly bounded:
 The factory returns a singleton-shaped bundle:
 
 ```python
-# atlas_brain/api/_content_ops_services.py
+# atlas_brain/_content_ops_services.py
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
 )
@@ -112,13 +116,17 @@ The router-construction call gains `execution_services_provider`:
 
 ```python
 # atlas_brain/api/__init__.py
-from ._content_ops_services import build_content_ops_execution_services
+from .._content_ops_services import build_content_ops_execution_services
 
 content_ops_router = create_content_ops_control_surface_router(
     dependencies=[Depends(require_b2b_plan("b2b_growth"))],
     execution_services_provider=build_content_ops_execution_services,
 )
 ```
+
+The factory is passed as a bare function reference (not wrapped
+in a lambda) -- `_resolve_execution_services` accepts any
+`Callable[[], ContentOpsExecutionServices]` shape.
 
 The provider is a plain `Callable[[], ContentOpsExecutionServices]`;
 the route's `_resolve_execution_services` handles both sync and
@@ -164,9 +172,9 @@ async returns.
 ## Verification
 
 - `python -m pytest tests/test_atlas_content_ops_execution_services.py`
-  -- 2 passed.
+  -- 3 passed.
 - `bash scripts/check_ascii_python.sh` -- clean.
-- `python -c "from atlas_brain.api._content_ops_services import
+- `python -c "from atlas_brain._content_ops_services import
    build_content_ops_execution_services as f; b = f(); print(
    b.configured_outputs())"` -- `('signal_extraction',)`.
 - AST-parse + ASCII-clean spot-check on
