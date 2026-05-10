@@ -1,27 +1,40 @@
 """Factory for the Content Ops execution-services bundle.
 
 Builds a `ContentOpsExecutionServices` populated with the
-generators the host has fully wired. This v0 slot wires
-`signal_extraction` only -- a deterministic generator with no
-external dependencies (no `IntelligenceRepository`, no
-`LLMClient`, no `SkillStore`). Other slots stay `None`; the
-executor's per-step dispatcher returns `service_not_configured`
-for unset slots, which the route layer maps to a per-step error
-the UI can render.
+generators the host has fully wired. Slots that aren't yet
+populated remain `None`; the executor's per-step dispatcher
+returns `service_not_configured` for unset slots, which the
+route layer maps to a per-step error the UI can render.
 
-Follow-up slices will plug the remaining 5 generators
-(`campaign`, `blog_post`, `report`, `landing_page`,
-`sales_brief`) into the same bundle once their host-side
-repository factories land.
+Currently wired:
+- `signal_extraction` (E1, PR #452): deterministic generator
+  with no external dependencies.
+- `landing_page` (E2, this slice): plugs the host LLM + Skill
+  adapters from PR #453 + `PostgresLandingPageRepository`
+  backed by the host's `DatabasePool`. Slot stays `None` when
+  no LLM is active.
 
-See `plans/PR-Content-Ops-Execution-Services-Wire-1.md` for the
-slice contract.
+Follow-up slices (E3+) will plug the remaining 4 generators
+(`campaign`, `blog_post`, `report`, `sales_brief`) into the
+same bundle once an `IntelligenceRepository` host factory
+lands.
+
+See `plans/PR-Content-Ops-Execution-Services-Wire-2.md`.
 """
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
+from extracted_content_pipeline.campaign_ports import LLMClient, SkillStore
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
+)
+from extracted_content_pipeline.landing_page_generation import (
+    LandingPageGenerationService,
+)
+from extracted_content_pipeline.landing_page_postgres import (
+    PostgresLandingPageRepository,
 )
 from extracted_content_pipeline.signal_extraction import (
     SignalExtractionService,
@@ -33,17 +46,100 @@ from extracted_content_pipeline.signal_extraction import (
 _SIGNAL_EXTRACTION_SERVICE: SignalExtractionService = SignalExtractionService()
 
 
-def build_content_ops_execution_services() -> ContentOpsExecutionServices:
+def _build_landing_page_service(
+    *,
+    llm: LLMClient | None,
+    skills: SkillStore,
+    pool: Any,
+) -> LandingPageGenerationService | None:
+    """Build a wired `LandingPageGenerationService`, or `None` if
+    no host LLM is currently active.
+
+    Returning `None` (rather than wiring a stub) lets the
+    bundle's `landing_page` slot stay empty -- the executor
+    surfaces `service_not_configured` per output, which the
+    catalog endpoint exposes to the UI's Execute enable-state.
+    """
+
+    if llm is None or pool is None:
+        # Pool can be None during early host startup before
+        # `init_database()` has run; treat the same as the
+        # no-LLM branch -- skip the slot rather than build a
+        # repo against a dead pool that would fail at first
+        # query.
+        return None
+    return LandingPageGenerationService(
+        landing_pages=PostgresLandingPageRepository(pool=pool),
+        llm=llm,
+        skills=skills,
+    )
+
+
+def build_content_ops_execution_services(
+    *,
+    llm_factory: Callable[[], LLMClient | None] | None = None,
+    skills_factory: Callable[[], SkillStore] | None = None,
+    pool_factory: Callable[[], Any] | None = None,
+    enable_db_services: bool = False,
+) -> ContentOpsExecutionServices:
     """Return the host's Content Ops execution-services bundle.
 
-    Slots not yet populated remain `None`; the executor returns
-    `service_not_configured` per output for unset slots. As host
-    repositories / LLM / skills factories arrive, follow-up
-    slices populate the remaining slots in this same bundle.
+    The factory kwargs are dependency injection for tests --
+    callers in dev environments without the host's full init
+    chain (asyncpg / torch / ollama) pass stubs. Production
+    callers omit the kwargs and the factory imports the host
+    singletons on demand.
+
+    `enable_db_services` (default `False`) gates DB-backed
+    generators (currently `landing_page`). It defaults off
+    because the host's content-ops route mount in
+    `atlas_brain/api/__init__.py` does not yet pass a
+    `scope_provider`, so the executor would fall back to an
+    empty `TenantScope` and persist drafts under
+    `account_id=""` -- cross-tenant leakage in any
+    authenticated B2B deployment. Codex P1 review on PR #454
+    flagged this. The follow-up slice (E2.5) wires
+    `scope_provider` from the authenticated `AuthUser` and
+    flips this flag on. Tests pass `enable_db_services=True`
+    explicitly to exercise the wiring path.
+
+    Slots not yet populated remain `None`; the executor
+    returns `service_not_configured` per output. As host
+    repositories arrive, follow-up slices populate the
+    remaining slots.
     """
+
+    if llm_factory is None:
+        from atlas_brain._content_ops_infrastructure import (
+            build_content_ops_llm_client,
+        )
+
+        llm_factory = build_content_ops_llm_client
+    if skills_factory is None:
+        from atlas_brain._content_ops_infrastructure import (
+            build_content_ops_skill_store,
+        )
+
+        skills_factory = build_content_ops_skill_store
+    if pool_factory is None:
+        from atlas_brain.storage.database import get_db_pool
+
+        pool_factory = get_db_pool
+
+    landing_page = None
+    if enable_db_services:
+        llm = llm_factory()
+        skills = skills_factory()
+        pool = pool_factory()
+        landing_page = _build_landing_page_service(
+            llm=llm,
+            skills=skills,
+            pool=pool,
+        )
 
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
+        landing_page=landing_page,
     )
 
 
