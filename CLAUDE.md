@@ -666,8 +666,10 @@ The wrapper service is started with `start-graphiti.sh` (compose file
 }
 ```
 
-A working development copy of this config also lives at `.mcp.json` in the
-repo root.
+The repo root also contains a `.mcp.json`, but treat it as a personal
+scratch — at the time of writing it only registers three servers and
+uses a machine-local Python path. Don't follow it as the canonical
+configuration; use the snippet above and adjust `cwd` to your checkout.
 
 ## Environment Requirements
 
