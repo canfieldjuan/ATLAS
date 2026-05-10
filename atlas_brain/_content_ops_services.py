@@ -14,22 +14,33 @@ Currently wired:
   `PostgresLandingPageRepository` backed by the host's
   `DatabasePool`. `scope_provider` (PR #455) ensures drafts
   persist under the authenticated tenant.
-- `campaign` / `report` / `sales_brief` (E3, this slice):
+- `campaign` / `report` / `sales_brief` (E3, PR #456):
   share an identical wiring shape -- a single
   `PostgresIntelligenceRepository` (campaign opportunities)
   plus the per-output Postgres repo + LLM/Skill adapters.
   All three slots stay `None` when LLM or pool is absent.
+- `blog_post` (E4, this slice): plugs the
+  `PostgresBlogBlueprintRepository` (PR #458) +
+  `PostgresBlogPostRepository` + LLM/Skill adapters. Slot
+  stays `None` when LLM or pool is absent. After E4 the
+  bundle advertises 6 of 6 outputs.
 
-Follow-up slice (E4) wires `blog_post` -- different repo
-shape (`BlogBlueprintRepository`).
-
-See `plans/PR-Content-Ops-Execution-Services-Wire-3.md`.
+See `plans/PR-Content-Ops-Execution-Services-Wire-4.md`.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
+from extracted_content_pipeline.blog_blueprint_postgres import (
+    PostgresBlogBlueprintRepository,
+)
+from extracted_content_pipeline.blog_generation import (
+    BlogPostGenerationService,
+)
+from extracted_content_pipeline.blog_post_postgres import (
+    PostgresBlogPostRepository,
+)
 from extracted_content_pipeline.campaign_generation import (
     CampaignGenerationService,
 )
@@ -160,6 +171,33 @@ def _build_sales_brief_service(
     )
 
 
+def _build_blog_post_service(
+    *,
+    llm: LLMClient | None,
+    skills: SkillStore,
+    pool: Any,
+) -> BlogPostGenerationService | None:
+    """E4: blog-post drafts.
+
+    Same short-circuit shape as `_build_landing_page_service`
+    (no `IntelligenceRepository` -- blog_post's data source is
+    the blueprint store, not campaign opportunities). An
+    empty `blog_blueprints` table just means
+    `BlogPostGenerationService.generate()` returns zero
+    drafts; the slot is still wired so the catalog endpoint
+    advertises `blog_post`.
+    """
+
+    if llm is None or pool is None:
+        return None
+    return BlogPostGenerationService(
+        blueprints=PostgresBlogBlueprintRepository(pool=pool),
+        blog_posts=PostgresBlogPostRepository(pool=pool),
+        llm=llm,
+        skills=skills,
+    )
+
+
 def build_content_ops_execution_services(
     *,
     llm_factory: Callable[[], LLMClient | None] | None = None,
@@ -215,6 +253,7 @@ def build_content_ops_execution_services(
     campaign = None
     report = None
     sales_brief = None
+    blog_post = None
     if enable_db_services:
         llm = llm_factory()
         skills = skills_factory()
@@ -248,6 +287,11 @@ def build_content_ops_execution_services(
             skills=skills,
             pool=pool,
         )
+        blog_post = _build_blog_post_service(
+            llm=llm,
+            skills=skills,
+            pool=pool,
+        )
 
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
@@ -255,6 +299,7 @@ def build_content_ops_execution_services(
         campaign=campaign,
         report=report,
         sales_brief=sales_brief,
+        blog_post=blog_post,
     )
 
 

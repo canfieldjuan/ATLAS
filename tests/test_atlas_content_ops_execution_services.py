@@ -7,10 +7,14 @@ the host has wired. Currently:
 - `signal_extraction` (E1, PR #452): always wired (stateless).
 - `landing_page` (E2 + E2.5, PRs #454/#455): wired when an
   LLM + pool are active; slot stays `None` otherwise.
-- `campaign` / `report` / `sales_brief` (E3, this slice):
+- `campaign` / `report` / `sales_brief` (E3, PR #456):
   same shape as landing_page but each also takes a
   shared `PostgresIntelligenceRepository`. Skip together
   when LLM or pool is absent.
+- `blog_post` (E4, this slice): same shape as
+  landing_page (no IntelligenceRepository); plugs the
+  `PostgresBlogBlueprintRepository` (PR #458) +
+  `PostgresBlogPostRepository`.
 
 Tests use the factory's dependency-injection kwargs (`llm_factory`
 / `skills_factory` / `pool_factory`) to stub host
@@ -18,7 +22,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (13 tests):
+Test inventory (14 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -32,19 +36,18 @@ Test inventory (13 tests):
 9. campaign / report / sales_brief skip together when no LLM.
 10. campaign / report / sales_brief skip together when pool
     is None.
-11. `blog_post` (the only remaining unwired output after E3)
-    still returns `service_not_configured`.
-12. `configured_outputs()` with LLM + db enabled advertises
-    `(email_campaign, report, landing_page, sales_brief,
-    signal_extraction)` -- order follows the upstream
-    `ContentOpsExecutionServices.configured_outputs` iteration
-    (not alphabetical).
-13. `configured_outputs()` without an active LLM (even with
+11. `blog_post` populated when LLM + db enabled (E4 canary)
+    and `for_output("blog_post")` returns the service.
+12. `blog_post` skips when no LLM (E4 fallback).
+13. `configured_outputs()` with LLM + db enabled advertises
+    all 6 outputs: `(email_campaign, blog_post, report,
+    landing_page, sales_brief, signal_extraction)` -- order
+    follows the upstream
+    `ContentOpsExecutionServices.configured_outputs`
+    iteration (not alphabetical).
+14. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
     `signal_extraction`.
-
-When E4 wires `blog_post`, tests 11 and 12 need updated
-expected-sets.
 """
 
 from __future__ import annotations
@@ -138,6 +141,7 @@ def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
     assert services.landing_page is not None
     assert services.configured_outputs() == (
         "email_campaign",
+        "blog_post",
         "report",
         "landing_page",
         "sales_brief",
@@ -263,8 +267,9 @@ def test_e3_services_skip_together_when_no_active_llm() -> None:
 
 
 def test_e3_services_skip_together_when_pool_is_none() -> None:
-    """E3 fallback: campaign / report / sales_brief slots all
-    skip when pool is None during early host startup."""
+    """E3 + E4 fallback: campaign / report / sales_brief +
+    blog_post slots all skip when pool is None during early
+    host startup."""
 
     def _no_pool() -> Any:
         return None
@@ -278,16 +283,15 @@ def test_e3_services_skip_together_when_pool_is_none() -> None:
     assert services.campaign is None
     assert services.report is None
     assert services.sales_brief is None
+    assert services.blog_post is None
     assert services.configured_outputs() == ("signal_extraction",)
 
 
-@pytest.mark.asyncio
-async def test_unwired_blog_post_still_returns_service_not_configured() -> None:
-    """After E3 wires campaign / report / sales_brief, the only
-    output left in the unwired set is `blog_post` (different
-    repo shape -- BlogBlueprintRepository -- E4). The
-    executor's per-step dispatcher must surface that as
-    `service_not_configured`."""
+def test_blog_post_wired_when_llm_active_and_db_enabled() -> None:
+    """E4 canary: blog_post slot populated with the
+    `PostgresBlogBlueprintRepository` (PR #458) +
+    `PostgresBlogPostRepository` + LLM/Skill chain. Bundle's
+    `for_output("blog_post")` returns the service."""
 
     services = build_content_ops_execution_services(
         llm_factory=_make_llm_stub,
@@ -295,18 +299,24 @@ async def test_unwired_blog_post_still_returns_service_not_configured() -> None:
         pool_factory=_make_pool_stub,
         enable_db_services=True,
     )
+    assert services.blog_post is not None
+    assert services.for_output("blog_post") is services.blog_post
 
-    result = await execute_content_ops_from_mapping(
-        {
-            "outputs": ["blog_post"],
-            "inputs": {"topic": "Q3 churn signals"},
-        },
-        services=services,
+
+def test_blog_post_slot_stays_none_when_no_active_llm() -> None:
+    """E4 fallback: blog_post slot stays `None` when no LLM
+    is active. Same short-circuit shape as landing_page
+    (PR #454). With no LLM only signal_extraction remains
+    advertised."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=True,
     )
-
-    assert result["status"] == "failed", result
-    assert len(result["errors"]) == 1
-    assert result["errors"][0]["reason"] == "service_not_configured"
+    assert services.blog_post is None
+    assert services.configured_outputs() == ("signal_extraction",)
 
 
 def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
@@ -323,6 +333,7 @@ def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
     )
     assert services.configured_outputs() == (
         "email_campaign",
+        "blog_post",
         "report",
         "landing_page",
         "sales_brief",
