@@ -13,10 +13,10 @@ products in priority order:
 
 | Product | Surface | Status |
 |---|---|---|
-| **B2B Churn Intelligence** | `atlas-churn-ui`, `atlas-intel-ui`, MCP `b2b_churn_server` (66 tools), 19 review sources, displacement graph, weekly reports, calibration loop, webhooks | **Shipped** — Intelligence Platform Roadmap phases 0–7 complete |
-| **Consumer Intelligence** | MCP `intelligence_server` (17 tools), brand registry, displacement edges, market reports, PDF export | **Shipped** — Consumer Roadmap phases 0–6+ complete |
+| **B2B Churn Intelligence** | `atlas-churn-ui`, `atlas-intel-ui`, MCP `b2b_churn_server` (83 tools), 19 review sources, displacement graph, weekly reports, calibration loop, webhooks | **Shipped** — Intelligence Platform Roadmap phases 0–7 complete |
+| **Consumer Intelligence** | MCP `intelligence_server` (33 tools), brand registry, displacement edges, market reports, PDF export | **Shipped** — Consumer Roadmap phases 0–6+ complete |
 | **Content Ops Pipeline** | `extracted_content_pipeline/` (~77 KLOC), blog post + B2B campaign + landing page + report + sales-brief generation, signal extraction, generated-asset review API | **Active iteration** — 39 of 65 open plans; signal extraction + scope wiring + landing-page wired; 4 more generators pending LLM/repo factories |
-| **Communications + CRM + Calendar + Invoicing** | MCP servers (CRM 10, Email 8, Twilio 10, Calendar 8, Invoicing 15), Postgres `contacts`/`appointments`, Gmail/IMAP/Resend, Google Calendar/CalDAV, NocoDB admin UI | **Shipped** |
+| **Communications + CRM + Calendar + Invoicing** | MCP servers (CRM 10, Email 9, Twilio 10, Calendar 8, Invoicing 18), Postgres `contacts`/`appointments`, Gmail/IMAP/Resend, Google Calendar/CalDAV, NocoDB admin UI | **Shipped** |
 | **Knowledge graph memory** | MCP `memory_server` (15 tools), Postgres short-term + Neo4j/Graphiti long-term via `graphiti-wrapper` (port 8001) | **Shipped** |
 | **Universal scraper** | MCP `scraper_server` (5 tools), LLM-driven schema extraction, Playwright JS rendering | **Shipped** |
 | **Voice + Home Automation** | `atlas_brain/voice/`, ASR (Nemotron 0.6B, port 8081), wake-word + VAD + capture, Home Assistant + MQTT capability registry, intent dispatch | **Built but not yet routed through agent** — per `CONTEXT.md`, Pipecat pipeline + agent routing are not unified yet (P0 in `BUILD_SPEC.md`) |
@@ -235,12 +235,12 @@ atlas_brain/
 | Server                  | Port | Tools | Module                                |
 |-------------------------|------|-------|---------------------------------------|
 | CRM                     | 8056 | 10    | `atlas_brain.mcp.crm_server`          |
-| Email                   | 8057 | 8     | `atlas_brain.mcp.email_server`        |
+| Email                   | 8057 | 9     | `atlas_brain.mcp.email_server`        |
 | Twilio                  | 8058 | 10    | `atlas_brain.mcp.twilio_server`       |
 | Calendar                | 8059 | 8     | `atlas_brain.mcp.calendar_server`     |
-| Invoicing               | 8060 | 15    | `atlas_brain.mcp.invoicing_server`    |
-| Intelligence            | 8061 | 17    | `atlas_brain.mcp.intelligence_server` |
-| B2B Churn Intelligence  | 8062 | 66    | `atlas_brain.mcp.b2b_churn_server` (split across 17 modules in `mcp/b2b/`) |
+| Invoicing               | 8060 | 18    | `atlas_brain.mcp.invoicing_server`    |
+| Intelligence            | 8061 | 33    | `atlas_brain.mcp.intelligence_server` |
+| B2B Churn Intelligence  | 8062 | 83    | `atlas_brain.mcp.b2b_churn_server` (split across 17 modules in `mcp/b2b/`) |
 | Universal Scraper       | 8063 | 5     | `atlas_brain.mcp.scraper_server`      |
 | Memory (Graphiti+Postgres) | 8064 | 15 | `atlas_brain.mcp.memory_server`       |
 
@@ -402,7 +402,7 @@ Tools: `search_contacts`, `get_contact`, `create_contact`, `update_contact`,
 `delete_contact`, `list_contacts`, `log_interaction`, `get_interactions`,
 `get_contact_appointments`, `get_customer_context`
 
-### Email MCP Server (8 tools)
+### Email MCP Server (9 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.email_server
@@ -486,7 +486,7 @@ ATLAS_TOOLS_CALDAV_CALENDAR_URL=   # optional; auto-discovered via PROPFIND if b
 ATLAS_MCP_CALENDAR_PORT=8059  # Calendar MCP server (SSE mode only)
 ```
 
-### Invoicing MCP Server (15 tools)
+### Invoicing MCP Server (18 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.invoicing_server
@@ -500,7 +500,7 @@ Tools: `create_invoice`, `get_invoice`, `list_invoices`, `update_invoice`,
 `payment_history`, `create_service`, `list_services`, `get_service`,
 `update_service`, `set_service_status`, `search_invoices`
 
-### Intelligence MCP Server (17 tools)
+### Intelligence MCP Server (33 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.intelligence_server
@@ -523,7 +523,7 @@ Tools (Consumer Product): `search_product_reviews`, `get_product_review`,
 review data (Amazon reviews, brand health scores, pain points, competitive
 flows, generated content). Two-pass enrichment pipeline.
 
-### B2B Churn Intelligence MCP Server (66 tools, 17 modules)
+### B2B Churn Intelligence MCP Server (83 tools, 17 modules)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.b2b_churn_server
@@ -684,7 +684,7 @@ repo root.
 
 End-to-end: 19 review sources → enrichment → weekly churn signals →
 displacement graph → reports → webhooks. The whole pipeline is exposed via
-the `b2b_churn_server` MCP (66 tools, 17 modules under `atlas_brain/mcp/b2b/`).
+the `b2b_churn_server` MCP (83 tools, 17 modules under `atlas_brain/mcp/b2b/`).
 
 ### Data flow
 
@@ -754,7 +754,10 @@ TrustRadius, Software Advice. Source groupings: `VERIFIED_SOURCES` (8),
   `outdated_count` / `unknown_count` per source. Outdated rows auto-requeue
   for re-enrichment.
 
-### MCP tool layout (`atlas_brain/mcp/b2b/`, 66 tools / 17 modules)
+### MCP tool layout (`atlas_brain/mcp/b2b/`, 83 tools / 17 modules)
+
+The full breakdown by module (per-row counts sum to 83; default
+`mcp_tool_groups=all` in `MCPConfig` registers every group):
 
 | Module | Tools | Domain |
 |---|---|---|
