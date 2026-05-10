@@ -57,12 +57,23 @@ LLM-needing service ships).
      the markdown body. Pins that the skill name space the
      extracted services expect resolves correctly through the
      host registry.
+   - `test_host_skill_store_falls_back_to_packaged_skills`
+     -- pins the four packaged-only skill names
+     (`digest/landing_page_generation`,
+     `digest/report_generation`,
+     `digest/sales_brief_generation`,
+     `digest/b2b_campaign_reasoning_context`) resolve
+     through the extracted-package fallback. Codex P2 canary.
    - `test_host_skill_store_returns_none_for_missing_skill`
      -- canary for the "skill not found" branch.
    - `test_host_llm_client_translates_messages_and_response`
      -- a fake host LLMService receives the translated messages
      and returns a dict; the adapter wraps it into an
      LLMResponse with the right shape.
+   - `test_host_llm_client_messages_carry_tool_call_attributes`
+     -- pins `.tool_calls` / `.tool_call_id` on each
+     SimpleNamespace so cloud backends that read them during
+     payload conversion don't AttributeError. Codex P1 canary.
    - `test_host_llm_client_handles_content_field_alias` --
      adapter accepts `{"content": ...}` aliases for backends
      that return the field under that key instead of
@@ -78,7 +89,7 @@ LLM-needing service ships).
      -- factory accepts an injected registry stub for tests
      and delegates lookups through it.
 
-   Total: 7 tests.
+   Total: 9 tests.
 
 3. `plans/PR-Content-Ops-LLM-Skills-Infra-1.md` (this file).
 
@@ -266,17 +277,18 @@ typing + extracted-fallback wiring + the response-shape
 unwrap added more than the rough mental model. Updated for
 transparency.
 
-- `_content_ops_infrastructure.py`: ~205 LOC actual (initial
+- `_content_ops_infrastructure.py`: ~237 LOC actual (initial
   estimate ~110; the SimpleNamespace duck-type, the cloud
   backend `tool_calls` / `tool_call_id` fix-up, the
   defensive `Mapping` checks on the response, and the
   extracted-skill-fallback factory all came in heavier).
-- Test: ~205 LOC actual (initial estimate ~150; 9 tests
+- Test: ~236 LOC actual (initial estimate ~150; 9 tests
   rather than 4).
-- Plan doc: ~265 LOC actual (post-update, includes Updates
-  section and SimpleNamespace bullet).
+- Plan doc: ~290 LOC actual (post-update, includes Updates
+  section, SimpleNamespace bullet, and the expanded test
+  inventory).
 
-Total actual: **~675 LOC**. Over the 400 LOC soft cap. The
+Total actual: **~755 LOC**. Over the 400 LOC soft cap. The
 adapters and tests are structurally indivisible (the LLM and
 Skill adapters share the docstring framing; splitting them
 would leave one half unusable). Plan doc and tests dominate.

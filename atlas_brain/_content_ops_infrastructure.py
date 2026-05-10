@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from extracted_content_pipeline.campaign_ports import (
@@ -189,9 +190,7 @@ def build_content_ops_llm_client(
     return _HostLLMClient(host_llm)
 
 
-_HOST_SKILLS_DIR = (
-    __import__("pathlib").Path(__file__).resolve().parent / "skills"
-)
+_HOST_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 
 def build_content_ops_skill_store(
