@@ -396,7 +396,11 @@ async def test_generate_consumes_reasoning_context_via_provider() -> None:
     assert reasoning_provider is not None
     assert len(reasoning_provider.calls) == 1
     assert reasoning_provider.calls[0]["target_id"] == "vendor-acme"
-    assert result.as_dict()["reasoning_contexts_used"] == 1
+    result_dict = result.as_dict()
+    assert result_dict["reasoning_contexts_used"] == 1
+    assert result_dict["consumed_reasoning_contexts"][0]["top_theses"][0]["claim"] == (
+        "Renewal pricing"
+    )
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,7 @@ from .report_ports import ReportDraft, ReportRepository, ReportSection
 from .services.campaign_reasoning_context import (
     campaign_reasoning_context_metadata,
     campaign_reasoning_context_payload,
+    consumed_campaign_reasoning_contexts,
     normalize_campaign_reasoning_context,
 )
 from .services._parse_retry_helpers import (
@@ -75,11 +76,12 @@ class ReportGenerationResult:
     generated: int
     skipped: int
     reasoning_contexts_used: int = 0
+    consumed_reasoning_contexts: tuple[Mapping[str, Any], ...] = ()
     saved_ids: tuple[str, ...] = ()
     errors: tuple[Mapping[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "requested": self.requested,
             "generated": self.generated,
             "skipped": self.skipped,
@@ -87,6 +89,11 @@ class ReportGenerationResult:
             "saved_ids": list(self.saved_ids),
             "errors": list(self.errors),
         }
+        if self.consumed_reasoning_contexts:
+            data["consumed_reasoning_contexts"] = [
+                dict(item) for item in self.consumed_reasoning_contexts
+            ]
+        return data
 
 
 def parse_report_response(text: str) -> dict[str, Any] | None:
@@ -255,6 +262,7 @@ class ReportGenerationService:
         errors: list[dict[str, Any]] = []
         skipped = 0
         reasoning_contexts_used = 0
+        consumed_reasoning_contexts: list[dict[str, Any]] = []
         for opportunity in opportunities:
             target_id = opportunity_target_id(opportunity)
             if not target_id:
@@ -308,6 +316,9 @@ class ReportGenerationService:
 
             if _has_prompt_reasoning_context(opportunity):
                 reasoning_contexts_used += 1
+                consumed_reasoning_contexts.extend(
+                    consumed_campaign_reasoning_contexts(opportunity)
+                )
             drafts.append(self._build_draft(
                 parsed,
                 target_id=target_id,
@@ -327,6 +338,7 @@ class ReportGenerationService:
             generated=len(drafts),
             skipped=skipped,
             reasoning_contexts_used=reasoning_contexts_used,
+            consumed_reasoning_contexts=tuple(consumed_reasoning_contexts),
             saved_ids=saved_ids,
             errors=tuple(errors),
         )

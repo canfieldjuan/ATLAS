@@ -411,7 +411,11 @@ async def test_generate_uses_host_reasoning_context_without_pool_compression_imp
     result = await service.generate(scope=scope, target_mode="vendor_retention")
 
     assert result.generated == 1
-    assert result.as_dict()["reasoning_contexts_used"] == 1
+    result_dict = result.as_dict()
+    assert result_dict["reasoning_contexts_used"] == 1
+    assert result_dict["consumed_reasoning_contexts"][0]["proof_points"][0]["label"] == (
+        "pricing_mentions"
+    )
     assert provider.calls[0]["scope"] == scope
     assert provider.calls[0]["target_id"] == "opp-1"
     assert provider.calls[0]["target_mode"] == "vendor_retention"
@@ -1234,4 +1238,3 @@ async def test_generate_per_call_quality_prompt_proof_term_limit_override():
     assert len(found_terms) <= 2, (
         f"override should cap proof terms at 2; saw {len(found_terms)}: {found_terms}"
     )
-

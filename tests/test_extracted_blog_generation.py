@@ -635,7 +635,11 @@ async def test_generate_with_reasoning_provider_merges_context_into_blueprint() 
     assert "reasoning_context" in system_prompt
     assert "campaign_reasoning_context" in system_prompt
     assert "Renewal pricing rose 22 percent" in system_prompt
-    assert result.as_dict()["reasoning_contexts_used"] == 1
+    result_dict = result.as_dict()
+    assert result_dict["reasoning_contexts_used"] == 1
+    assert result_dict["consumed_reasoning_contexts"][0]["top_theses"][0]["claim"] == (
+        "Renewal pricing rose 22 percent"
+    )
 
     # Draft metadata captured reasoning signal.
     drafts = blog_posts.saved[0]["drafts"]
