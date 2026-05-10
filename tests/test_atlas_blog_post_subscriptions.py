@@ -1,6 +1,6 @@
 """Pin the B2B blog-post subscription reader.
 
-`atlas_brain/services/blog_post_subscriptions.py` is the typed
+`atlas_brain/_blog_post_subscriptions.py` is the typed
 contract PR-Subscriptions-2's autonomous task fanout will
 import. This file pins:
 - `list_active_blog_post_subscriptions(pool)` filters
