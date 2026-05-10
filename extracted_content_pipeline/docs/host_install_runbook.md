@@ -459,7 +459,6 @@ python scripts/export_extracted_content_assets.py \
 python scripts/export_extracted_content_assets.py \
   --asset blog_post \
   --account-id acct_123 \
-  --target-mode vendor_retention \
   --topic-type vendor_showdown \
   --format csv \
   --output blog_post_drafts.csv
