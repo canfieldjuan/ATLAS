@@ -176,9 +176,9 @@ merges row metadata so the generator sees a single dict.
   into the new table (separate slice -- the in-memory pipeline
   keeps working; the new path is opt-in).
 - Per-blueprint quality-gate or expiry policy.
-- Read-side filters beyond `target_mode` (e.g. `topic_type`,
-  `vendor`) -- can be folded into the existing `filters`
-  arg as needed; not exercised today.
+- Read-side filters beyond `topic_type` (e.g. `vendor`,
+  `created_after`) -- already routed through the existing
+  `filters` arg; not exercised today.
 
 ## Verification
 
