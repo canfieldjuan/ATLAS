@@ -2,6 +2,11 @@
 
 ## Current state
 
+Current ordered AI Content Ops deferrals are tracked in
+`docs/audits/ai_content_ops_deferred_backlog_2026-05-11.md`. Older plan docs
+still contain historical `Deferred` sections; use the backlog doc as the active
+source of truth for what remains.
+
 - Scaffold root exists at `extracted_content_pipeline/`.
 - Primary task modules are copied and import-smokeable:
   - `blog_post_generation.py`
