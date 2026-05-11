@@ -61,12 +61,24 @@ done
 # ---------- 2. encoding="utf-8" on every read_text() ----------
 for f in "${PRE_PUSH_GATE_AUDITS[@]}"; do
     [ -f "$f" ] || continue
-    # Match `.read_text()` with no args at all -- the bug shape.
-    # An explicit encoding= argument is what we require.
-    if grep -nE '\.read_text\(\s*\)' "$f" >/dev/null; then
-        bad=$(grep -nE '\.read_text\(\s*\)' "$f" | head -3)
-        note "$f" "read_text() without encoding=\"utf-8\":"$'\n'"$bad"
+    # Match any `.read_text(...)` call whose argument list does NOT
+    # mention an `encoding=` keyword. Two cases caught:
+    #   .read_text()                   -- no args at all
+    #   .read_text(errors="replace")   -- args present but no encoding=
+    # Allowed:
+    #   .read_text(encoding="utf-8")
+    #   .read_text("utf-8")            -- positional (deliberately
+    #                                     not allowed here; force the
+    #                                     kw form so intent is explicit)
+    if grep -nE '\.read_text\([^)]*\)' "$f" \
+        | grep -v 'encoding=' \
+        | head -3 > /tmp/_hygiene_bad.$$; then
+        if [ -s /tmp/_hygiene_bad.$$ ]; then
+            bad=$(cat /tmp/_hygiene_bad.$$)
+            note "$f" "read_text() without encoding=\"utf-8\" kwarg:"$'\n'"$bad"
+        fi
     fi
+    rm -f /tmp/_hygiene_bad.$$
 done
 
 # ---------- 3. startswith("/") as absolute-path check ----------
@@ -85,6 +97,9 @@ for f in "${PRE_PUSH_GATE_SHELL[@]}"; do
     # contain `bash foo.sh`. awk because grep can't easily span lines.
     # Ignores lines starting with "#" so the docstring example doesn't
     # match against itself.
+    # awk uses literal substring (index) for the followup "bash <script>"
+    # check so script paths containing regex metacharacters (e.g. the "."
+    # in foo.sh) cannot produce false matches.
     if awk '
         /^[[:space:]]*#/ { next }
         /\[[[:space:]]+-x[[:space:]]+[^][]+\.sh[[:space:]]+\]/ {
@@ -92,8 +107,9 @@ for f in "${PRE_PUSH_GATE_SHELL[@]}"; do
             sub(/.*\[[[:space:]]+-x[[:space:]]+/, "", script)
             sub(/[[:space:]]+\].*/, "", script)
             target = script
+            needle = "bash " target
             for (i = 0; i < 5 && (getline line) > 0; i++) {
-                if (line ~ "bash[[:space:]]+" target) {
+                if (index(line, needle) > 0) {
                     print NR ": [ -x " target " ] followed by bash " target
                     exit 1
                 }
@@ -101,7 +117,7 @@ for f in "${PRE_PUSH_GATE_SHELL[@]}"; do
         }
         END { exit 0 }
     ' "$f"; then :; else
-        note "$f" "'[ -x SCRIPT.sh ]' guard followed by 'bash SCRIPT.sh' (exec-bit irrelevant; use [ -f ])"
+        note "$f" "'[ -x <script> ]' guard followed by 'bash <script>' (exec-bit irrelevant; use [ -f ])"
     fi
 done
 

@@ -56,29 +56,46 @@ PR-Audit-The-Auditors-2 backfills per-auditor fixture tests under
      that exercises a happy path, at least one negative case
      specific to its parser, and one pathological input.
 
-2. `scripts/audit_script_hygiene.sh` -- bash grep lint of our
-   own scripts/ dir. Flags:
+2. `scripts/audit_script_hygiene.sh` -- bash grep lint scoped via
+   two hardcoded allowlists (PRE_PUSH_GATE_SHELL and
+   PRE_PUSH_GATE_AUDITS, maintained at the top of the script):
 
-   - `scripts/*.sh` without `set -euo pipefail` near the top.
-   - `Path(...).read_text(` in `scripts/audit_*.py` without
-     `encoding=`.
-   - `startswith("/")` (the POSIX-only absolute path check) inside
-     any `_validate_path`-shaped function in `scripts/audit_*.py`.
-   - `[ -x ... ]` followed by `bash ...` in `scripts/*.sh` (the
-     exec-bit-irrelevant case Copilot caught on PR #483).
+   - In each allowlisted shell script: missing `set -euo pipefail`
+     in the first 25 lines.
+   - In each allowlisted Python auditor: any `read_text(...)` call
+     whose argument list does NOT include `encoding=`.
+   - In each allowlisted Python auditor: any literal
+     `startswith("/")` (the POSIX-only absolute path check;
+     misses Windows drives and UNC paths).
+   - In each allowlisted shell script: a `[ -x SCRIPT ]` guard
+     followed by `bash SCRIPT` (the exec-bit-irrelevant case
+     Copilot caught on PR #483). awk-based; ignores comment lines.
+
+   Preexisting B2B-pipeline audit scripts under `scripts/` follow
+   different conventions and are intentionally out of scope --
+   that is why the lists are explicit allowlists rather than
+   `scripts/*.sh` / `scripts/audit_*.py` globs.
 
 3. `scripts/audit_plan_code_consistency.py PLAN_PATH` -- verify
-   plan doc *Mechanism* / *Verification* claims match shipped code:
+   plan doc *Scope* / *Mechanism* / *Verification* claims match
+   shipped code:
 
-   - Path tokens (any string containing `/` plus a file-extension
-     suffix) found in Scope / Mechanism / Verification must exist on
-     disk under the repo root.
+   - Path tokens (any string ending in a known-extension suffix:
+     md / py / sh / json / yaml / toml / txt / cfg / ini) found
+     in Scope / Mechanism / Verification must resolve to a real
+     file. Exact-match against REPO_ROOT first; if the claim is
+     a bare filename (no `/`), fall back to `rglob` across the
+     repo so prose mentions like `audit_script_hygiene.sh`
+     resolve to `scripts/audit_script_hygiene.sh`.
    - Backticked function-call literals (snake_case, >=4 chars,
      followed by parens) found in Mechanism / Verification must
      appear as a "def NAME" or "async def NAME" line in some .py
      file under scripts/ or atlas_brain/.
 
-   Reports missing / extra; exits 1 on any drift.
+   Reports MISSING PATHS and MISSING FUNCTION DEFS; exits 1 on
+   any drift. (No "extra" report -- the auditor only flags
+   claims that fail to resolve; extra real files vs. doc claims
+   is out of scope, since plan docs do not enumerate every file.)
 
 ### Files touched
 
@@ -119,8 +136,8 @@ for f in scripts/audit_*.py; do
     fi
 done
 
-# 4. scripts/*.sh: [ -x SCRIPT.sh ] guards followed by `bash SCRIPT.sh`
-#    are wrong (executable bit is irrelevant when invoking via bash).
+# 4. scripts/*.sh: a "[ -x <script> ]" guard followed by "bash <script>"
+#    is wrong (the executable bit is irrelevant when invoking via bash).
 for f in scripts/*.sh; do
     if grep -B0 -A2 '\[ -x ' "$f" | grep -q 'bash '; then
         echo "FAIL $f: '[ -x ... ]' guard before 'bash ...' (exec-bit irrelevant)"
@@ -168,7 +185,7 @@ heuristic the tool-name auditor uses).
   principles slot under "Builder workflow" (section 3); they
   apply to *how* the builder writes audit scripts, not to the
   PR/reviewer contract.
-- **Hygiene lint is opt-in, not enforced via pre_push_audit.sh.**
+- **Hygiene lint is opt-in, not enforced via the pre-push wrapper.**
   Wiring is deferred to `PR-Pre-Merge-Workflow-And-Wrapper`
   (which already has wrapper-wiring as its job) so this slice
   doesn't couple to PR #483's merge cycle.
@@ -210,8 +227,8 @@ Local commands the builder ran (reviewer should reproduce):
 # 1. audit_script_hygiene.sh on this branch -- expected to pass
 #    after the fixes from earlier rounds landed on the three
 #    open audit PRs (encoding=utf-8 everywhere; set -euo pipefail
-#    in pre_push_audit.sh; Path.is_absolute() in manifest auditor;
-#    [ -x ... ] -> [ -f ... ] in pre_push_audit.sh).
+#    in the pre-push wrapper; Path.is_absolute() in manifest auditor;
+#    `[ -x ... ]` -> `[ -f ... ]` in the wrapper).
 #    On main TODAY the audits ship via the three open PRs, so on
 #    a checkout off main with none of the audit PRs merged, this
 #    new hygiene check will pass trivially (no scripts/audit_*.py
@@ -228,11 +245,11 @@ python scripts/audit_plan_code_consistency.py \
 echo "exit: $?"
 
 # 3. Known-bad case: a plan doc that claims a script function
-#    that doesn't exist.
-echo "## Mechanism
-\`\`\`
-foo_that_does_not_exist()
-\`\`\`" > /tmp/bad-plan.md
+#    that doesn't exist. The auditor only treats BACKTICKED
+#    function calls (\`foo()\`) as claims, not raw text inside a
+#    code fence, so the negative test must use inline backticks.
+printf "## Mechanism\n\nThe script defines \`foo_that_does_not_exist()\`.\n" \
+    > /tmp/bad-plan.md
 python scripts/audit_plan_code_consistency.py /tmp/bad-plan.md
 echo "exit: $?"  # expect exit 1 with the missing function flagged.
 ```

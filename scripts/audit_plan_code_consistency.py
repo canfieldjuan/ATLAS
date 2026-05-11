@@ -31,13 +31,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Path claims: a token containing at least one "/" and ending in a
-# ".<ext>" suffix. Accepted in backticked form (`scripts/foo.py`) AND
-# bare in code blocks (where the path appears literally on a command
-# line). Either way the file must exist on disk.
+# Path claims: a token ending in a known-extension suffix. Accepts
+# both subpaths (`scripts/foo.py`) AND root-level files (`AGENTS.md`).
+# The extension whitelist guards against prose words like "foo.bar"
+# matching accidentally. Add extensions here if a plan doc references
+# a path with a new shape.
+_PATH_EXT_RE = r"(?:md|py|sh|json|ya?ml|toml|txt|cfg|ini)"
 PATH_TOKEN = re.compile(
     r"(?<![A-Za-z0-9_./\-])"
-    r"([A-Za-z0-9_][A-Za-z0-9_./\-]*/[A-Za-z0-9_./\-]+\.[a-z][a-z0-9]{0,5})"
+    r"((?:[A-Za-z0-9_][A-Za-z0-9_./\-]*/)?[A-Za-z0-9_]+\." + _PATH_EXT_RE + r")"
     r"(?![A-Za-z0-9_./\-])"
 )
 
@@ -49,14 +51,22 @@ BACKTICK_FUNC = re.compile(r"`([a-z_][a-z0-9_]{3,})\(\)`")
 
 def _slice_sections(plan_text: str, section_titles: tuple[str, ...]) -> str:
     """Return the concatenated body of plan doc sections matching any
-    title in `section_titles` (case-insensitive, h2-anchored)."""
+    title in `section_titles`. Exact match on the normalized heading
+    (lowercased, leading parenthetical-suffix stripped) -- substring
+    matching is forbidden per AGENTS.md section 3e (it would treat
+    "Out of scope" as "Scope").
+    """
     out: list[str] = []
     in_section = False
+    allowed = {t.lower() for t in section_titles}
     for line in plan_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("## "):
-            heading = stripped[3:].strip().lower()
-            in_section = any(t.lower() in heading for t in section_titles)
+            heading_raw = stripped[3:].strip().lower()
+            # Allow optional trailing parenthetical like
+            # "Scope (this PR)" by stripping it for the match.
+            base = re.sub(r"\s*\([^)]*\)\s*$", "", heading_raw).strip()
+            in_section = base in allowed
             continue
         if in_section:
             out.append(line)
@@ -71,6 +81,27 @@ def parse_claims(plan_text: str) -> tuple[set[str], set[str]]:
     paths = set(PATH_TOKEN.findall(path_body))
     funcs = set(BACKTICK_FUNC.findall(func_body))
     return paths, funcs
+
+
+def _path_resolves(claim: str) -> bool:
+    """Return True if a plan-doc path claim resolves to a real file.
+
+    Exact match against REPO_ROOT is the fast path. If the claim is a
+    bare filename (no `/`), fall back to a one-shot rglob across the
+    repo so prose mentions like `audit_script_hygiene.sh` (rather than
+    `scripts/audit_script_hygiene.sh`) resolve correctly.
+    """
+    direct = REPO_ROOT / claim
+    if direct.exists():
+        return True
+    if "/" in claim:
+        return False
+    # Skip well-known noise dirs to keep rglob cheap.
+    skip_dirs = {".git", "node_modules", ".venv", "__pycache__"}
+    for entry in REPO_ROOT.rglob(claim):
+        if not any(part in skip_dirs for part in entry.parts):
+            return True
+    return False
 
 
 def collect_def_names() -> set[str]:
@@ -114,9 +145,7 @@ def main() -> int:
     drift = False
 
     if claimed_paths:
-        missing_paths = sorted(
-            p for p in claimed_paths if not (REPO_ROOT / p).exists()
-        )
+        missing_paths = sorted(p for p in claimed_paths if not _path_resolves(p))
         if missing_paths:
             drift = True
             print(f"MISSING PATHS ({len(missing_paths)}):")
