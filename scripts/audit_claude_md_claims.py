@@ -28,6 +28,10 @@ HEADER_PATTERN = re.compile(
     r"\s*\(\s*(?P<count>\d+\+?)(?:\s+tools)?\s*(?:,[^)]*)?\)",
     re.MULTILINE,
 )
+MCP_HEADING_PATTERN = re.compile(
+    r"^###\s+(?P<name>.+?)\s+MCP Server(?P<suffix>.*)$",
+    re.MULTILINE,
+)
 TOOL_DECORATOR_PATTERN = re.compile(r"^\s*@mcp\.tool(?:\s*\(|\s*$)")
 
 MISSING_FILE = "MISSING_FILE"
@@ -61,13 +65,17 @@ def actual_count_for(file_key: str) -> int | str:
 
 def audit_claims(text: str) -> list[tuple[str, str, str, str]]:
     rows: list[tuple[str, str, str, str]] = []
+    matched_spans: set[tuple[int, int]] = set()
+    seen_known: set[str] = set()
     for match in HEADER_PATTERN.finditer(text):
+        matched_spans.add(match.span())
         name = match.group("name").strip()
         claimed = match.group("count")
         file_key = HEADER_TO_FILE.get(name)
         if file_key is None:
             rows.append((name, claimed, "?", "UNKNOWN"))
             continue
+        seen_known.add(name)
 
         actual = actual_count_for(file_key)
         if isinstance(actual, str):
@@ -77,6 +85,17 @@ def audit_claims(text: str) -> list[tuple[str, str, str, str]]:
         else:
             status = "OK" if int(claimed) == actual else "DRIFT"
             rows.append((name, claimed, str(actual), status))
+
+    for heading in MCP_HEADING_PATTERN.finditer(text):
+        if heading.span() in matched_spans:
+            continue
+        name = heading.group("name").strip()
+        suffix = heading.group("suffix").strip() or "<missing count>"
+        rows.append((name, suffix, "N/A", "MALFORMED"))
+
+    for name in HEADER_TO_FILE:
+        if name not in seen_known:
+            rows.append((name, "MISSING", "N/A", "MISSING"))
     return rows
 
 

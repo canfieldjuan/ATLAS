@@ -82,4 +82,20 @@ def test_audit_claims_surfaces_unknown_server_header():
 
     rows = auditor.audit_claims("### New Thing MCP Server (1 tools)\n")
 
-    assert rows == [("New Thing", "1", "?", "UNKNOWN")]
+    assert ("New Thing", "1", "?", "UNKNOWN") in rows
+
+
+def test_audit_claims_surfaces_malformed_mcp_heading():
+    auditor = load_auditor()
+
+    rows = auditor.audit_claims("### Email MCP Server (9 tools\n")
+
+    assert ("Email", "(9 tools", "N/A", "MALFORMED") in rows
+
+
+def test_audit_claims_surfaces_missing_expected_server():
+    auditor = load_auditor()
+
+    rows = auditor.audit_claims("### Email MCP Server (9 tools)\n")
+
+    assert ("CRM", "MISSING", "N/A", "MISSING") in rows
