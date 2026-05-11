@@ -51,7 +51,7 @@ Composed at `api/control_surfaces.py:101-131`. The static portion is
 cached at module import (PR-Describe-Control-Surfaces-Cache, #397);
 only the per-output `execution_configured` / `can_execute` and
 top-level `execution.{configured,configured_outputs}` /
-`reasoning.configured` flags are recomputed per request.
+`reasoning.{configured,source}` fields are recomputed per request.
 
 ```jsonc
 {
@@ -82,7 +82,8 @@ top-level `execution.{configured,configured_outputs}` /
     "configured_outputs": ["blog_post", "email_campaign", "report"]
   },
   "reasoning": {
-    "configured": true
+    "configured": true,
+    "source": "db"
   },
   "ingestion_profiles": ["domain_specific", "manual", "existing_evidence"]
 }
@@ -191,7 +192,7 @@ interface ContentOpsCatalog {
   outputs: OutputDefinitionView[];
   presets: ControlSurfacePresetView[];
   execution: { configured: boolean; configuredOutputs: string[] };
-  reasoning: { configured: boolean };
+  reasoning: { configured: boolean; source?: "db" | "file" | "none" | string };
   ingestionProfiles: string[];           // ["domain_specific", "manual", "existing_evidence"]
 }
 
@@ -423,9 +424,12 @@ threads the resulting `CampaignReasoningContext`
 (`campaign_ports.py:53-99`) into the prompt.
 
 The catalog-level `reasoning.configured` flag tells the UI whether
-the host mounted a route-level reasoning provider. It is separate
-from each output's `reasoning_requirement`: an output can support
-reasoning even when the current host has not wired a provider.
+the host can currently build a route-level reasoning provider. Atlas
+also reports `reasoning.source` as `db`, `file`, or `none` so operators
+can distinguish the production DB adapter from the file-backed staging
+adapter. It is separate from each output's `reasoning_requirement`: an
+output can support reasoning even when the current host has not wired a
+provider.
 
 Important runtime boundary: `ContentOpsStepExecution.result` contains
 the per-service summary returned by `as_dict()` (counts, saved IDs,

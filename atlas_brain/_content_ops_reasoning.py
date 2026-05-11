@@ -25,6 +25,11 @@ WARN-and-fall-back contract -- a misconfigured provider must
 not crash the route mount or block the entire Content Ops
 surface for all tenants.
 
+``describe_content_ops_reasoning_context_provider`` mirrors that
+same DB > file > none selection for the catalog route so operator
+readiness reflects the provider that can actually be built, not
+just whether the route was passed a chooser callback.
+
 Lives at ``atlas_brain/`` root with underscore prefix to dodge
 the heavy ``atlas_brain.services`` import chain (same pattern as
 ``_content_ops_infrastructure.py`` / ``_content_ops_scope.py``).
@@ -202,6 +207,30 @@ def select_content_ops_reasoning_context_provider(
     return (file_factory or build_content_ops_reasoning_context_provider)()
 
 
+def describe_content_ops_reasoning_context_provider(
+    *,
+    db_factory: Callable[[], Any | None] | None = None,
+    file_factory: Callable[[], Any | None] | None = None,
+) -> dict[str, Any]:
+    """Return the catalog-safe reasoning provider readiness.
+
+    The execute path still calls ``select_content_ops_reasoning_context_provider``
+    per request. This companion keeps GET /control-surfaces honest:
+    a mounted chooser that resolves to ``None`` reports
+    ``configured=False`` instead of looking ready.
+    """
+
+    db_pick = (db_factory or build_postgres_content_ops_reasoning_context_provider)()
+    if db_pick is not None:
+        return {"configured": True, "source": "db"}
+
+    file_pick = (file_factory or build_content_ops_reasoning_context_provider)()
+    if file_pick is not None:
+        return {"configured": True, "source": "file"}
+
+    return {"configured": False, "source": "none"}
+
+
 def _read_db_enabled() -> bool:
     """Parse the DB opt-in env var; default ``False`` when unset
     or unrecognized so a typo'd value resolves to "off"."""
@@ -242,5 +271,6 @@ def _default_repository_factory(pool: Any) -> Any:
 __all__ = [
     "build_content_ops_reasoning_context_provider",
     "build_postgres_content_ops_reasoning_context_provider",
+    "describe_content_ops_reasoning_context_provider",
     "select_content_ops_reasoning_context_provider",
 ]

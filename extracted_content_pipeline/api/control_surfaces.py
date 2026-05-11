@@ -51,6 +51,10 @@ ReasoningContextProvider = Callable[
     [],
     Any | Awaitable[Any],
 ]
+ReasoningStatusProvider = Callable[
+    [],
+    Mapping[str, Any] | None | Awaitable[Mapping[str, Any] | None],
+]
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +114,7 @@ def _compose_describe_response(
     static: Mapping[str, Any],
     configured_outputs: frozenset[str],
     execution_configured: bool,
-    reasoning_configured: bool,
+    reasoning_status: Mapping[str, Any],
 ) -> dict[str, Any]:
     # Re-project the cached static template into a fresh dict tree so
     # the caller can serialize / mutate without aliasing the module-
@@ -135,9 +139,7 @@ def _compose_describe_response(
             "configured": execution_configured,
             "configured_outputs": sorted(configured_outputs),
         },
-        "reasoning": {
-            "configured": reasoning_configured,
-        },
+        "reasoning": dict(reasoning_status),
         "ingestion_profiles": list(static["ingestion_profiles"]),
     }
 
@@ -205,6 +207,7 @@ def create_content_ops_control_surface_router(
     execution_services_provider: ExecutionServicesProvider | None = None,
     scope_provider: ScopeProvider | None = None,
     reasoning_context_provider: ReasoningContextProvider | None = None,
+    reasoning_status_provider: ReasoningStatusProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted AI Content Ops control-surface routes.
@@ -237,11 +240,15 @@ def create_content_ops_control_surface_router(
             if execution_services is not None
             else ()
         )
+        reasoning_status = await _resolve_reasoning_status(
+            reasoning_status_provider,
+            default_configured=reasoning_context_provider is not None,
+        )
         return _compose_describe_response(
             static=_STATIC_CATALOG_PAYLOAD,
             configured_outputs=configured_outputs,
             execution_configured=execution_services is not None,
-            reasoning_configured=reasoning_context_provider is not None,
+            reasoning_status=reasoning_status,
         )
 
     @router.post("/preview")
@@ -346,6 +353,41 @@ async def _resolve_reasoning_context(
             detail="Content Ops reasoning context provider is unavailable.",
         ) from exc
     return value
+
+
+async def _resolve_reasoning_status(
+    provider: ReasoningStatusProvider | None,
+    *,
+    default_configured: bool,
+) -> dict[str, Any]:
+    if provider is None:
+        return {"configured": default_configured}
+    try:
+        value = await _resolve_provider(provider)
+    except Exception as exc:
+        logger.warning(
+            "Content Ops reasoning status provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return {"configured": default_configured}
+    return _sanitize_reasoning_status(value, default_configured=default_configured)
+
+
+def _sanitize_reasoning_status(
+    value: Mapping[str, Any] | None,
+    *,
+    default_configured: bool,
+) -> dict[str, Any]:
+    status = dict(value) if isinstance(value, Mapping) else {}
+    status["configured"] = bool(status.get("configured", default_configured))
+    for key in list(status):
+        item = status[key]
+        if key == "configured" or item is None:
+            continue
+        if isinstance(item, (str, int, float, bool)):
+            continue
+        status.pop(key)
+    return status
 
 
 async def _resolve_scope(provider: ScopeProvider | None) -> TenantScope | None:

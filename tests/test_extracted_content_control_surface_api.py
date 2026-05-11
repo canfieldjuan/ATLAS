@@ -117,6 +117,39 @@ async def test_describe_control_surfaces_reports_reasoning_provider_status():
 
 
 @pytest.mark.asyncio
+async def test_describe_control_surfaces_reports_rich_reasoning_status():
+    router = create_content_ops_control_surface_router(
+        reasoning_context_provider=lambda: object(),
+        reasoning_status_provider=lambda: {
+            "configured": True,
+            "source": "db",
+            "unsafe": {"nested": "value"},
+        },
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    assert payload["reasoning"] == {"configured": True, "source": "db"}
+
+
+@pytest.mark.asyncio
+async def test_describe_control_surfaces_status_provider_failure_falls_back():
+    def _failing_status_provider():
+        raise RuntimeError("status unavailable")
+
+    router = create_content_ops_control_surface_router(
+        reasoning_context_provider=lambda: object(),
+        reasoning_status_provider=_failing_status_provider,
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    assert payload["reasoning"] == {"configured": True}
+
+
+@pytest.mark.asyncio
 async def test_describe_control_surfaces_requires_generate_method_for_readiness():
     router = create_content_ops_control_surface_router(
         execution_services_provider=lambda: ContentOpsExecutionServices(
