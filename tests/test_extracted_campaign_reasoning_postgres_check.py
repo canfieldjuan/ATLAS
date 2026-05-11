@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 from pathlib import Path
+import sys
 from typing import Any
 
 import pytest
@@ -95,3 +96,48 @@ async def test_check_reasoning_context_returns_missing_payload() -> None:
         "target_id": "opp-404",
         "target_mode": "vendor_retention",
     }
+
+
+@pytest.mark.asyncio
+async def test_cli_boundary_returns_one_when_no_context_matches(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_script_module()
+
+    class _Pool:
+        closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    pool = _Pool()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "check_extracted_campaign_reasoning_postgres.py",
+            "--database-url",
+            "postgres://example",
+            "--account-id",
+            "acct-1",
+            "--target-id",
+            "opp-404",
+        ],
+    )
+    async def _pool_factory(_dsn: str) -> _Pool:
+        return pool
+
+    monkeypatch.setattr(module, "_create_pool", _pool_factory)
+    monkeypatch.setattr(
+        module,
+        "PostgresCampaignReasoningContextRepository",
+        lambda **_kwargs: _Repository(None),
+    )
+
+    assert await module._main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "missing reasoning context for target_id=opp-404" in captured.err
+    assert pool.closed is True
