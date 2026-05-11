@@ -28,6 +28,7 @@ HEADER_PATTERN = re.compile(
     r"\s*\(\s*(?P<count>\d+\+?)(?:\s+tools)?\s*(?:,[^)]*)?\)",
     re.MULTILINE,
 )
+TOOL_DECORATOR_PATTERN = re.compile(r"^\s*@mcp\.tool(?:\s*\(|\s*$)")
 
 MISSING_FILE = "MISSING_FILE"
 MISSING_DIR = "MISSING_DIR"
@@ -39,7 +40,7 @@ def count_decorators(path: Path) -> int | str:
     return sum(
         1
         for line in path.read_text(encoding="utf-8").splitlines()
-        if line.lstrip().startswith("@mcp.tool")
+        if TOOL_DECORATOR_PATTERN.match(line)
     )
 
 

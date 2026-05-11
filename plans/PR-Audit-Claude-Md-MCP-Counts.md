@@ -29,7 +29,8 @@ code exports another.
 
 `audit_claude_md_claims.py` parses `### <Name> MCP Server (N tools)`
 headings in `CLAUDE.md`, maps each known server name to its source
-file, counts `@mcp.tool` decorator lines, and reports `OK` or `DRIFT`.
+file, counts exact `@mcp.tool` / `@mcp.tool(...)` decorator lines, and
+reports `OK` or `DRIFT`.
 
 The B2B Churn server is split across `atlas_brain/mcp/b2b/*.py`, so
 the auditor sums that directory through a sentinel mapping. Unknown
@@ -69,7 +70,7 @@ git diff --check
 | File | LOC (approx) |
 |---|---:|
 | `scripts/audit_claude_md_claims.py` | 100 |
-| `tests/test_audit_claude_md_claims.py` | 65 |
+| `tests/test_audit_claude_md_claims.py` | 85 |
 | `plans/PR-Audit-Claude-Md-MCP-Counts.md` | 70 |
 | `docs/extraction/coordination/inflight.md` | 2 |
-| **Total** | **~237** |
+| **Total** | **~260** |

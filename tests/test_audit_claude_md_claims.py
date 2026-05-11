@@ -58,6 +58,25 @@ def test_count_decorators_counts_bare_and_called_tool_decorators(tmp_path):
     assert auditor.count_decorators(server) == 2
 
 
+def test_count_decorators_ignores_similar_non_tool_decorators(tmp_path):
+    auditor = load_auditor()
+    server = tmp_path / "server.py"
+    server.write_text(
+        "@mcp.toolbox\n"
+        "def not_a_tool():\n"
+        "    pass\n\n"
+        "@mcp.tool_extra()\n"
+        "def also_not_a_tool():\n"
+        "    pass\n\n"
+        "@mcp.tool(name='real')\n"
+        "def real_tool():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    assert auditor.count_decorators(server) == 1
+
+
 def test_audit_claims_surfaces_unknown_server_header():
     auditor = load_auditor()
 
