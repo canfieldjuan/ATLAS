@@ -582,6 +582,30 @@ class _ReasoningCapturingService:
         return {"generated": 1, "saved_ids": ["draft-1"]}
 
 
+class _ReasoningPayloadService(_ReasoningCapturingService):
+    def with_reasoning_context(self, provider):
+        return _ReasoningPayloadService(reasoning_context=provider)
+
+    async def generate(self, *, scope, target_mode, limit=None, filters=None, **kwargs):
+        self.calls.append({
+            "reasoning_context": self._reasoning_context,
+            "scope": scope,
+            "target_mode": target_mode,
+            "limit": limit,
+            "kwargs": dict(kwargs),
+        })
+        payload = {"generated": 1, "saved_ids": ["draft-1"]}
+        if self._reasoning_context is not None:
+            payload["reasoning_contexts_used"] = 1
+            payload["consumed_reasoning_contexts"] = [
+                {
+                    "summary": "Acme renewal pricing pressure",
+                    "proof_points": [{"label": "source_material", "value": "pricing"}],
+                }
+            ]
+        return payload
+
+
 @pytest.mark.asyncio
 async def test_execute_route_threads_reasoning_provider_into_services():
     """A configured ``reasoning_context_provider`` reaches the service
@@ -614,6 +638,45 @@ async def test_execute_route_threads_reasoning_provider_into_services():
     # route's behavior already implies the wiring; the unit-level
     # bundle test in test_extracted_content_ops_execution.py asserts
     # the mechanical detail.
+
+
+@pytest.mark.asyncio
+async def test_execute_route_returns_consumed_reasoning_payloads_from_rebound_service():
+    """Route-level provider resolution must compose with the executor's
+    consumed-context audit. This locks the HTTP payload shape that the
+    UI consumes, not just the lower-level executor helper."""
+
+    base = _ReasoningPayloadService()
+    sentinel = object()
+
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            campaign=base
+        ),
+        reasoning_context_provider=lambda: sentinel,
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        }
+    )
+
+    assert base.calls == []
+    assert payload["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": True,
+        "contexts_used": 1,
+        "consumed_contexts": [
+            {
+                "summary": "Acme renewal pricing pressure",
+                "proof_points": [{"label": "source_material", "value": "pricing"}],
+            }
+        ],
+    }
 
 
 @pytest.mark.asyncio
