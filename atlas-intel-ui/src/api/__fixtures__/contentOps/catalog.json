@@ -29,7 +29,7 @@
         "topic"
       ],
       "default_max_items": 1,
-      "reasoning_requirement": "absent",
+      "reasoning_requirement": "optional_host_context",
       "execution_configured": false,
       "can_execute": false
     },

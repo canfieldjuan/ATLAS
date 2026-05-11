@@ -64,7 +64,7 @@ Current output ids:
 | Output | Status | Reasoning | Notes |
 |---|---|---|---|
 | `email_campaign` | Implemented | `optional_host_context` | Existing campaign draft path. |
-| `blog_post` | Implemented | `absent` | Blog-post generation service path. |
+| `blog_post` | Implemented | `optional_host_context` | Blog-post generation service path. |
 | `report` | Implemented | `optional_host_context` | Structured report draft path. |
 | `landing_page` | Implemented | `optional_host_context` | Landing page generation service path. |
 | `sales_brief` | Implemented | `optional_host_context` | Sales brief generation service path. |
