@@ -75,5 +75,5 @@ git diff --check
 | `scripts/audit_plan_doc_diff_size.py` | 120 |
 | `tests/test_audit_plan_doc_diff_size.py` | 143 |
 | `plans/PR-Audit-Plan-Diff-Size.md` | 79 |
-| `docs/extraction/coordination/inflight.md` | 2 |
-| **Total** | **~344** |
+| `docs/extraction/coordination/inflight.md` | 4 |
+| **Total** | **~346** |
