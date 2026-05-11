@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,11 +29,13 @@ def _validate_path(
     """Return an error string if rel is unsafe or misplaced, else None.
 
     Rejects:
-      - absolute paths
+      - absolute paths (POSIX, Windows drive-letter, UNC) via
+        PurePath checks on both flavors -- not just startswith("/"),
+        so e.g. "C:\\foo" and "\\\\srv\\share" are caught too.
       - paths containing '..' segments (parent-dir traversal)
       - paths not anchored under `must_start_with`
     """
-    if rel.startswith("/"):
+    if PurePosixPath(rel).is_absolute() or PureWindowsPath(rel).is_absolute():
         return f"{kind}[{idx}]: absolute path rejected ({rel!r})"
     parts = Path(rel).parts
     if ".." in parts:
