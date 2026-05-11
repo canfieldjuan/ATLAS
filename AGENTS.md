@@ -222,7 +222,81 @@ Before LGTM, the reviewer confirms:
 
 ---
 
-## 5. Anti-patterns
+## 5. Within-session agent routing
+
+**Reasoning stays in main; retrieval goes to a subagent. Synthesis
+stays with whoever has to act on the answer (almost always main).**
+
+Applies to both builder and reviewer sessions. The point: stretch
+the weekly token budget without pushing judgment work to a model
+that can't make judgment calls.
+
+### 5a. The decision
+
+Two questions before opening a file or kicking off a search:
+
+1. *Will I edit this file in-session?* -> Main, direct `Read` (need
+   exact line numbers).
+2. *Does this need judgment* (quality, design trade-off,
+   root-cause)? -> Main only.
+
+If neither, route by shape:
+
+| Shape | Where | Why |
+|---|---|---|
+| Read-only, >400 lines, no edits planned | `Explore` subagent | Pure retrieval; summary lands in main context, raw file does not |
+| Reading 3+ files just to orient | `Explore` subagent | Width without depth -- the subagent's strength |
+| "Find every caller of X" / "where is Y defined" | `grep`/`find` via Bash | Regex match, no LLM needed |
+| Scaffold multi-file boilerplate (tests, configs, fixtures) | `general-purpose` subagent | Write-capable, separate context window |
+| Architectural decision / debugging / refactor plan | Main only | Needs holistic judgment |
+| Code review verdict | Main only | Verdict requires judgment, not a summary |
+
+The boundary that matters most: **judgment vs lookup.** "Where is
+the displacement edge schema?" -- lookup, delegate. "Is this
+displacement edge schema right?" -- judgment, do it yourself.
+
+### 5b. Parallelism
+
+Independent retrievals run as parallel subagents in a single
+message -- the main session waits once for N answers instead of N
+times for one each. We used this pattern during the CLAUDE.md
+refresh (three `Explore` agents in parallel mapped churn signals,
+extracted packages, and planned products); without it the same work
+would have cost N round-trips of main-context overhead.
+
+### 5c. The Kimi worker model relationship
+
+If a `claude-coworker-model`-style worker LLM is installed locally
+(Kimi / DeepSeek / Ollama via OpenRouter), it slots in as a
+**cheaper** retrieval channel for cases where an `Explore`
+subagent is overkill -- one big file, no reasoning needed, no other
+files to cross-reference. The decision table above is unchanged;
+just add a row:
+
+| Shape | Where | Why |
+|---|---|---|
+| Deep retrieval of one large file, no cross-refs | Worker LLM (if installed), else `Explore` | Worker is cheapest; `Explore` is the in-tree fallback |
+
+The worker never replaces `Explore` for multi-file orientation or
+the main session for judgment.
+
+### 5d. Routing anti-patterns
+
+- **Asking a subagent for a judgment call** ("is this design
+  right?"). The subagent doesn't have full session context and the
+  answer is just deferred judgment the main session has to redo.
+- **Sequencing N orthogonal `Explore` calls** instead of firing
+  them in parallel.
+- **Using `Explore` on a <400-line file you're about to edit
+  anyway.** Just `Read` it directly.
+- **Letting a subagent compose the final user-facing answer.**
+  Synthesis is a main-session job.
+- **Routing exact-line edits through a worker.** Edits need a
+  precise file:line citation; a summary won't have one.
+
+---
+
+## 6. Anti-patterns
 
 Things that should **never** appear in a PR or review:
 
@@ -242,7 +316,7 @@ Things that should **never** appear in a PR or review:
 
 ---
 
-## 6. References
+## 7. References
 
 - `AUDITOR_PROMPT.md` -- cross-cutting auditor prompt
   (canonical / integration / scope / debt). Run before any non-trivial
@@ -257,7 +331,7 @@ Things that should **never** appear in a PR or review:
 
 ---
 
-## 7. Bootstrapping a fresh reviewer session
+## 8. Bootstrapping a fresh reviewer session
 
 When the reviewer session is killed, expired, or otherwise needs to
 be re-seeded, paste the block below into a fresh Claude Code session
