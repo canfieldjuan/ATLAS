@@ -67,7 +67,32 @@
         "requirement": "optional_host_context",
         "service_supports_reasoning": true,
         "provider_configured": true,
-        "contexts_used": 2
+        "contexts_used": 2,
+        "consumed_contexts": [
+          {
+            "summary": "Acme renewal pricing pressure",
+            "top_theses": [
+              {
+                "claim": "Acme is reviewing renewal pricing."
+              }
+            ],
+            "proof_points": [
+              {
+                "label": "source_material",
+                "value": "pricing"
+              }
+            ]
+          },
+          {
+            "summary": "Acme buyer timing window",
+            "proof_points": [
+              {
+                "label": "source_material",
+                "value": "timing"
+              }
+            ]
+          }
+        ]
       }
     }
   ],

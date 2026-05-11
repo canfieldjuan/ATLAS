@@ -6,6 +6,7 @@
  */
 
 export type {
+  CampaignReasoningContextView,
   ContentOpsCatalog,
   ContentOpsExecutionResult,
   ContentOpsExecutionStatus,

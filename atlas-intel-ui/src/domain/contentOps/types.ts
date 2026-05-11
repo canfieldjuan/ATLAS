@@ -51,6 +51,7 @@ export interface ContentOpsCatalog {
   }
   reasoning: {
     configured: boolean
+    source?: 'db' | 'file' | 'none' | string
   }
   ingestionProfiles: string[]
 }
@@ -127,6 +128,22 @@ export interface ContentOpsStepReasoningAudit {
   serviceSupportsReasoning: boolean
   providerConfigured: boolean
   contextsUsed?: number
+  consumedContexts?: CampaignReasoningContextView[]
+}
+
+export interface CampaignReasoningContextView {
+  summary?: string
+  anchorExamples?: Record<string, Array<Record<string, unknown>>>
+  witnessHighlights?: Array<Record<string, unknown>>
+  referenceIds?: Record<string, string[]>
+  topTheses?: Array<Record<string, unknown>>
+  accountSignals?: Array<Record<string, unknown>>
+  timingWindows?: Array<Record<string, unknown>>
+  proofPoints?: Array<Record<string, unknown>>
+  coverageLimits?: string[]
+  scopeSummary?: Record<string, unknown>
+  deltaSummary?: Record<string, unknown>
+  extra: Record<string, unknown>
 }
 
 export interface ContentOpsStepExecution {

@@ -24,6 +24,7 @@ import type {
 import type {
   ContentOpsCatalog,
   ContentOpsExecutionResult,
+  CampaignReasoningContextView,
   ContentOpsRequest,
   ContentOpsStepExecution,
   ControlSurfacePresetView,
@@ -77,6 +78,7 @@ export function fromWireCatalog(
     },
     reasoning: {
       configured: wire.reasoning.configured,
+      source: wire.reasoning.source,
     },
     ingestionProfiles: [...wire.ingestion_profiles],
   }
@@ -208,8 +210,83 @@ export function fromWireStepExecution(
     if (typeof wire.reasoning.contexts_used === 'number') {
       step.reasoning.contextsUsed = wire.reasoning.contexts_used
     }
+    if (Array.isArray(wire.reasoning.consumed_contexts)) {
+      step.reasoning.consumedContexts =
+        wire.reasoning.consumed_contexts
+          .filter(isRecord)
+          .map(fromWireReasoningContext)
+    }
   }
   return step
+}
+
+function fromWireReasoningContext(
+  wire: Record<string, unknown>,
+): CampaignReasoningContextView {
+  const known = new Set([
+    'summary',
+    'anchor_examples',
+    'witness_highlights',
+    'reference_ids',
+    'top_theses',
+    'account_signals',
+    'timing_windows',
+    'proof_points',
+    'coverage_limits',
+    'scope_summary',
+    'delta_summary',
+  ])
+  const extra = Object.fromEntries(
+    Object.entries(wire).filter(([key]) => !known.has(key)),
+  )
+  return {
+    summary: typeof wire.summary === 'string' ? wire.summary : undefined,
+    anchorExamples: isRecordOfRecordArrays(wire.anchor_examples)
+      ? wire.anchor_examples
+      : undefined,
+    witnessHighlights: recordArray(wire.witness_highlights),
+    referenceIds: toReferenceIds(wire.reference_ids),
+    topTheses: recordArray(wire.top_theses),
+    accountSignals: recordArray(wire.account_signals),
+    timingWindows: recordArray(wire.timing_windows),
+    proofPoints: recordArray(wire.proof_points),
+    coverageLimits: stringArray(wire.coverage_limits),
+    scopeSummary: isRecord(wire.scope_summary) ? { ...wire.scope_summary } : undefined,
+    deltaSummary: isRecord(wire.delta_summary) ? { ...wire.delta_summary } : undefined,
+    extra,
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function recordArray(value: unknown): Array<Record<string, unknown>> | undefined {
+  return Array.isArray(value) ? value.filter(isRecord).map((row) => ({ ...row })) : undefined
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : undefined
+}
+
+function isRecordOfRecordArrays(
+  value: unknown,
+): value is Record<string, Array<Record<string, unknown>>> {
+  if (!isRecord(value)) return false
+  return Object.values(value).every(
+    (rows) => Array.isArray(rows) && rows.every(isRecord),
+  )
+}
+
+function toReferenceIds(value: unknown): Record<string, string[]> | undefined {
+  if (!isRecord(value)) return undefined
+  const entries = Object.entries(value).map(([key, values]) => [
+    key,
+    stringArray(values) ?? [],
+  ])
+  return Object.fromEntries(entries)
 }
 
 export function fromWireExecution(
