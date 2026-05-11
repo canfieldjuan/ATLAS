@@ -104,8 +104,9 @@ def main() -> int:
 
     audit = audit_diff_size(plan_path.read_text(encoding="utf-8"), actual)
     if audit is None:
-        print("estimated diff size total not found", file=sys.stderr)
-        return 2
+        print("status: FAIL")
+        print("estimated diff size total not found")
+        return 1
 
     print(f"plan doc: {plan_path}")
     print(f"base ref: {base_ref}")

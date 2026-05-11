@@ -85,6 +85,42 @@ def test_missing_total_returns_none():
     assert auditor.audit_diff_size(text, 10) is None
 
 
+def test_cli_treats_missing_total_as_audit_failure(tmp_path):
+    repo = _git_repo_with_base_commit(tmp_path)
+    plan = repo / "plans" / "slice.md"
+    plan.parent.mkdir()
+    plan.write_text(
+        textwrap.dedent(
+            """\
+            # Plan
+
+            ## Estimated diff size
+
+            | File | LOC |
+            |---|---:|
+            | `script.py` | 10 |
+            """
+        ),
+        encoding="utf-8",
+    )
+    (repo / "script.py").write_text("a = 1\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "change")
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), str(plan), "HEAD~1"],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "status: FAIL" in result.stdout
+    assert "estimated diff size total not found" in result.stdout
+    assert result.stderr == ""
+
+
 def test_cli_accepts_diff_within_soft_threshold(tmp_path):
     repo = _git_repo_with_base_commit(tmp_path)
     plan = repo / "plans" / "slice.md"
