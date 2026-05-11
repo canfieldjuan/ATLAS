@@ -33,6 +33,7 @@ python -m pytest -q \
   tests/test_extracted_competitive_sets.py \
   tests/test_extracted_competitive_synthesis_packets.py \
   tests/test_extracted_competitive_vendor_briefing_renderer.py \
+  tests/test_extracted_competitive_storage_models_parity.py \
   tests/test_b2b_reasoning_consumer_adapter.py \
   tests/test_b2b_mcp_signals_overlay_contract.py
 

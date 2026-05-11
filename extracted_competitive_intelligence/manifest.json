@@ -42,6 +42,7 @@
     {"target": "extracted_competitive_intelligence/reasoning/cross_vendor_selection.py"},
     {"target": "extracted_competitive_intelligence/reasoning/single_pass_prompts/cross_vendor_battle.py"},
     {"target": "extracted_competitive_intelligence/reasoning/single_pass_prompts/battle_card_reasoning.py"},
-    {"target": "extracted_competitive_intelligence/reasoning/ecosystem.py"}
+    {"target": "extracted_competitive_intelligence/reasoning/ecosystem.py"},
+    {"target": "extracted_competitive_intelligence/storage/models.py"}
   ]
 }
