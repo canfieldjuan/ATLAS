@@ -179,11 +179,13 @@ python scripts/audit_plan_doc_diff_size.py \
 echo "exit: $?"
 
 # 3. Port-assignment audit on current state.
-#    Expected: 6 documented ports (env-var style) in main's CLAUDE.md
-#    all match MCPConfig defaults; MCPConfig also defines b2b_churn /
-#    scraper / memory ports that CLAUDE.md does not document yet
-#    (PR #457 adds them), so the auditor reports MISSING-IN-DOC for
-#    those three and exits 1.
+#    Expected: 7 documented ports (env-var style) in main's CLAUDE.md
+#    -- crm, email, twilio, calendar, invoicing, intelligence,
+#    b2b_churn -- all match MCPConfig defaults. MCPConfig additionally
+#    defines memory_port and scraper_port (added in PR #457) that main
+#    does not yet document, so the auditor reports MISSING-IN-DOC for
+#    those two and exits 1. The audit contract is intentionally strict:
+#    every MCPConfig port should be documented somewhere in CLAUDE.md.
 python scripts/audit_mcp_port_assignments.py
 echo "exit: $?"
 

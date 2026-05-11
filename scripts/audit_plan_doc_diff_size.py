@@ -22,9 +22,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-TOTAL_ROW = re.compile(
-    r"\|\s*\*?\*?Total\*?\*?\s*\|\s*\*?\*?~(\d+)\*?\*?\s*\|",
+# Recognize both common Total formats in plan docs:
+#   1. Markdown table row: "| **Total** | **~310** |"
+#   2. Prose / list line:  "Total: ~360 LOC" or "**Total**: ~310 LOC ..."
+# Allows extra columns in the table row (e.g. percentage of cap).
+TOTAL_TABLE = re.compile(
+    r"\|\s*\*{0,2}Total\*{0,2}\s*\|\s*\*{0,2}~(\d+)\*{0,2}\s*\|",
     re.IGNORECASE,
+)
+TOTAL_PROSE = re.compile(
+    r"^\s*\*{0,2}Total\*{0,2}\s*:\s*~(\d+)",
+    re.IGNORECASE | re.MULTILINE,
 )
 SHORTSTAT = re.compile(
     r"(\d+)\s+insertion[s]?\(\+\)|(\d+)\s+deletion[s]?\(-\)"
@@ -52,7 +60,11 @@ def parse_estimate(plan_text: str) -> int | None:
             section.append(line)
     if not in_section:
         return None
-    m = TOTAL_ROW.search("\n".join(section))
+    body = "\n".join(section)
+    # Prefer the markdown-table form; fall back to the prose form so
+    # plan docs using "Total: ~N LOC" (common in earlier slices) still
+    # audit cleanly.
+    m = TOTAL_TABLE.search(body) or TOTAL_PROSE.search(body)
     return int(m.group(1)) if m else None
 
 

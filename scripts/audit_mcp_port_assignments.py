@@ -10,7 +10,16 @@ CLAUDE.md references these same numbers in two shapes:
 
 Either or both may be present; both should match the config source.
 
-Exits 0 if every doc claim matches config. Exits 1 on any drift.
+**Strict contract.** Every port defined in MCPConfig MUST also be
+documented somewhere in CLAUDE.md (env-var or table form). If a port
+appears in MCPConfig but nowhere in CLAUDE.md, the auditor reports it
+as MISSING-IN-DOC and exits 1. This is intentional: CLAUDE.md is the
+agent-facing setup guide; a configured-but-undocumented port is
+silent drift.
+
+Exits 0 if every MCPConfig port is documented AND every doc claim
+matches config. Exits 1 on any drift (mismatch, UNKNOWN, or
+MISSING-IN-DOC).
 
 Usage:
     python scripts/audit_mcp_port_assignments.py
@@ -26,7 +35,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PY = REPO_ROOT / "atlas_brain" / "config.py"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 
-ENV_VAR_LINE = re.compile(r"^ATLAS_MCP_([A-Z][A-Z_]+)_PORT\s*=\s*(\d{4,5})", re.MULTILINE)
+# NOTE: digits allowed in the env-var name (e.g. ATLAS_MCP_B2B_CHURN_PORT).
+# The previous [A-Z_]+ class rejected the "2" in "B2B" and silently
+# missed b2b_churn claims; the auditor then reported b2b_churn as
+# MISSING-IN-DOC even when CLAUDE.md documented it.
+ENV_VAR_LINE = re.compile(
+    r"^ATLAS_MCP_([A-Z][A-Z0-9_]+)_PORT\s*=\s*(\d{4,5})", re.MULTILINE
+)
 TABLE_ROW = re.compile(
     r"^\|\s*([A-Za-z][A-Za-z0-9 +/()-]+?)\s*\|\s*(\d{4,5})\s*\|",
     re.MULTILINE,
