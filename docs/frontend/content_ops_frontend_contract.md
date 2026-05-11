@@ -463,8 +463,9 @@ UI rules:
   `reasoningRequirement="optional_host_context"`.
 - Treat catalog badges as configuration readiness only. Use
   `step.reasoning` for execution-level readiness ("provider attached" /
-  "provider absent"). Render a context drawer only when
-  `step.reasoning.consumed_contexts` is present.
+  "provider absent"). Render compact consumed-context summaries when
+  `step.reasoning.consumed_contexts` is present; reserve richer
+  drawer/detail inspection for a follow-up.
 
 ---
 
@@ -555,9 +556,8 @@ Dumb components only. No fetch, no business rules.
 - Visual workflow builder
 - Model-selection UX
 - Full Reasoning Context Drawer UX. `/content-ops/execute` now exposes
-  `reasoning.consumed_contexts` for LLM-backed generated assets when
-  reasoning reaches the prompt, but the actual drawer component lands
-  separately.
+  `reasoning.consumed_contexts`, and Atlas Intel renders compact summaries,
+  but the richer drawer/detail inspector lands separately.
 - Collaboration / role-permission flows
 - CMS export
 - Approval workflow (no backend approval state on the control-surface

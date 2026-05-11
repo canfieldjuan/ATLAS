@@ -150,7 +150,8 @@
   services. Runner results include `reasoning_contexts_used` and, when
   reasoning reached the prompt, `consumed_reasoning_contexts`; the per-step
   `reasoning` audit mirrors those as `contexts_used` and `consumed_contexts`
-  for future reasoning-drawer UIs.
+  for UI inspection. Atlas Intel renders compact consumed-context summaries;
+  a fuller drawer/detail UX remains a frontend follow-up.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared

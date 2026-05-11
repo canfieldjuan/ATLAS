@@ -18,6 +18,7 @@ on:
       - "tests/test_extracted_competitive_cross_vendor_selection.py"
       - "tests/test_extracted_competitive_prompt_contracts.py"
       - "tests/test_extracted_competitive_ecosystem_port.py"
+      - "tests/test_extracted_competitive_storage_models_parity.py"
       # Wire-shape regression tests for the b2b reasoning consumer
       # adapter + MCP signal overlay. These import the full
       # atlas_brain.autonomous / atlas_brain.mcp.b2b chain (apscheduler,
@@ -36,6 +37,7 @@ on:
       - "atlas_brain/mcp/b2b/cross_vendor.py"
       - "atlas_brain/mcp/b2b/write_intelligence.py"
       - "atlas_brain/services/b2b/source_impact.py"
+      - "atlas_brain/storage/models.py"
       - "atlas_brain/autonomous/tasks/b2b_battle_cards.py"
       - "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py"
       - "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py"
@@ -67,6 +69,7 @@ on:
       - "tests/test_extracted_competitive_cross_vendor_selection.py"
       - "tests/test_extracted_competitive_prompt_contracts.py"
       - "tests/test_extracted_competitive_ecosystem_port.py"
+      - "tests/test_extracted_competitive_storage_models_parity.py"
       # Wire-shape regression tests for the b2b reasoning consumer
       # adapter + MCP signal overlay. These import the full
       # atlas_brain.autonomous / atlas_brain.mcp.b2b chain (apscheduler,
@@ -82,6 +85,7 @@ on:
       - "atlas_brain/mcp/b2b/cross_vendor.py"
       - "atlas_brain/mcp/b2b/write_intelligence.py"
       - "atlas_brain/services/b2b/source_impact.py"
+      - "atlas_brain/storage/models.py"
       - "atlas_brain/autonomous/tasks/b2b_battle_cards.py"
       - "atlas_brain/autonomous/tasks/b2b_vendor_briefing.py"
       - "atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py"
