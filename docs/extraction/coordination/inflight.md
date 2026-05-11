@@ -1,6 +1,6 @@
 # In-Flight PRs
 
-Last updated: 2026-05-11T01:43Z by claude-2026-05-03
+Last updated: 2026-05-11T16:25Z by codex-2026-05-11-live-execute-harness
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -10,5 +10,6 @@ Add a row before opening a PR (session protocol step 2). Drop the row when the P
 | (in flight) | Lock route-level Content Ops consumed reasoning payloads | NEW: `plans/PR-Content-Ops-Route-Reasoning-Payload-Regression.md`. EDIT: `tests/test_extracted_content_control_surface_api.py`; `docs/extraction/coordination/inflight.md`. | codex-content-ops-route-reasoning-payload | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 | (in flight) | Fix Content Ops `blog_post` reasoning fixture/doc drift | NEW: `plans/PR-Content-Ops-Blog-Reasoning-Fixture-Doc.md`. EDIT: `atlas-intel-ui/src/api/__fixtures__/contentOps/catalog.json`; `extracted_content_pipeline/docs/control_surface_preview_api.md`; `docs/extraction/coordination/inflight.md`. | codex-content-blog-reasoning-fixture-doc | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 | (in flight) | Log ordered AI Content Ops deferred backlog | NEW: `plans/PR-Content-Ops-Deferred-Backlog-Log.md`; `docs/audits/ai_content_ops_deferred_backlog_2026-05-11.md`. EDIT: `extracted_content_pipeline/STATUS.md`; `docs/extraction/coordination/inflight.md`. | codex-2026-05-11 | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
+| (in flight) | Add Content Ops live execute test harness | NEW: `plans/PR-Content-Ops-Live-Execute-Harness.md`; `tests/content_ops_live_execute_harness.py`; `tests/test_extracted_content_ops_live_execute_harness.py`. EDIT: `scripts/run_extracted_pipeline_checks.sh`; `docs/extraction/coordination/inflight.md`. | codex-2026-05-11-live-execute-harness | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
