@@ -46,4 +46,4 @@ data-feed readiness, then advanced reasoning provider work, then operator UX.
 
 ## Estimated diff size
 
-4 files, under 160 LOC.
+4 files; docs-only plus coordination.
