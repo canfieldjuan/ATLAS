@@ -35,14 +35,22 @@ HEADER_TO_FILE = {
 }
 
 HEADER_PATTERN = re.compile(
-    r"^###\s+(?P<name>.+?)\s+MCP Server\s*\(\s*(?P<count>\d+\+?)(?:\s+tools)?",
+    # Tight match for "### <Name> MCP Server (<N>[+] [tools])":
+    # require the trailing ")" and accept either bare digits "(83)" or
+    # the "N tools" form, with optional "+" suffix. Anchored to start
+    # of line; allows arbitrary whitespace inside the parens.
+    r"^###\s+(?P<name>.+?)\s+MCP Server"
+    r"\s*\(\s*(?P<count>\d+\+?)(?:\s+tools)?\s*(?:,[^)]*)?\)",
     re.MULTILINE,
 )
 
+MISSING_FILE = "MISSING_FILE"
+MISSING_DIR = "MISSING_DIR"
 
-def count_decorators(path: Path) -> int:
+
+def count_decorators(path: Path) -> int | str:
     if not path.exists():
-        return -1
+        return MISSING_FILE
     return sum(
         1
         for line in path.read_text(encoding="utf-8").splitlines()
@@ -50,12 +58,19 @@ def count_decorators(path: Path) -> int:
     )
 
 
-def actual_count_for(file_key: str) -> int:
+def actual_count_for(file_key: str) -> int | str:
     if file_key == "_b2b_sum":
         b2b = MCP_DIR / "b2b"
         if not b2b.is_dir():
-            return -1
-        return sum(count_decorators(p) for p in sorted(b2b.glob("*.py")))
+            return MISSING_DIR
+        total = 0
+        for p in sorted(b2b.glob("*.py")):
+            n = count_decorators(p)
+            if isinstance(n, str):
+                # A b2b sub-module went missing mid-walk; surface it.
+                return n
+            total += n
+        return total
     return count_decorators(MCP_DIR / file_key)
 
 
@@ -75,12 +90,15 @@ def main() -> int:
             rows.append((name, claimed, "?", "UNKNOWN"))
             continue
         actual = actual_count_for(file_key)
-        if claimed.endswith("+"):
+        if isinstance(actual, str):
+            # MISSING_FILE / MISSING_DIR sentinel -- show explicitly.
+            rows.append((name, claimed, "N/A", actual))
+        elif claimed.endswith("+"):
             # Soft / loose claim -- always drift since we have an exact count.
-            status = "DRIFT (soft count)"
+            rows.append((name, claimed, str(actual), "DRIFT (soft count)"))
         else:
             status = "OK" if int(claimed) == actual else "DRIFT"
-        rows.append((name, claimed, str(actual), status))
+            rows.append((name, claimed, str(actual), status))
 
     if not rows:
         print("No '### ... MCP Server (N tools)' headers found in CLAUDE.md.")

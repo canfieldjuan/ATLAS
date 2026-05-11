@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Verify a plan doc has the 7 AGENTS.md sections, in order.
 
-Required sections per AGENTS.md section 1a:
-    Why this slice exists
-    Scope                 (matches "Scope" or "Scope (this PR)")
-    Mechanism
-    Intentional
-    Deferred
-    Verification
-    Estimated diff size
+Required sections per AGENTS.md section 1a (with allowed variants):
+    Why this slice exists       ("Why this slice exists" only)
+    Scope                       ("Scope" or "Scope (this PR)")
+    Mechanism                   ("Mechanism")
+    Intentional                 ("Intentional")
+    Deferred                    ("Deferred")
+    Verification                ("Verification")
+    Estimated diff size         ("Estimated diff size")
 
-Scans for "## <title>" headings (case-insensitive substring match) and
-checks each required title appears at least once, in the order above.
+Scans for "## <title>" headings and checks each required slot is filled
+by a heading whose normalized text (lowercased, whitespace-collapsed) is
+in the slot's explicit allowlist. Substring matching is intentionally
+avoided so that headings like "## Out of scope" cannot pass the "Scope"
+requirement.
 
 Exits 0 if all present and ordered. Exits 1 otherwise.
 
@@ -20,18 +23,30 @@ Usage:
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
-REQUIRED = [
-    "Why this slice exists",
-    "Scope",
-    "Mechanism",
-    "Intentional",
-    "Deferred",
-    "Verification",
-    "Estimated diff size",
+# Each tuple is (canonical_title, allowlist_of_acceptable_variants).
+# Variants are matched on a normalized form (lowercased, whitespace
+# collapsed) so reviewers can use small wording tweaks without breaking
+# the audit, but unrelated headings like "Out of scope" cannot satisfy
+# the "Scope" slot.
+REQUIRED: list[tuple[str, tuple[str, ...]]] = [
+    ("Why this slice exists", ("why this slice exists",)),
+    ("Scope", ("scope", "scope (this pr)")),
+    ("Mechanism", ("mechanism",)),
+    ("Intentional", ("intentional",)),
+    ("Deferred", ("deferred",)),
+    ("Verification", ("verification",)),
+    ("Estimated diff size", ("estimated diff size",)),
 ]
+
+_WS = re.compile(r"\s+")
+
+
+def _normalize(heading: str) -> str:
+    return _WS.sub(" ", heading.strip().lower())
 
 
 def main() -> int:
@@ -54,14 +69,14 @@ def main() -> int:
 
     last_index = -1
     drift = False
-    for required in REQUIRED:
+    for canonical, variants in REQUIRED:
         match = None
         for idx, (line_no, heading) in enumerate(headings):
-            if required.lower() in heading.lower():
+            if _normalize(heading) in variants:
                 match = (idx, line_no, heading)
                 break
         if match is None:
-            print(f"MISSING        ## {required}")
+            print(f"MISSING        ## {canonical}")
             drift = True
             continue
         idx, line_no, heading = match
