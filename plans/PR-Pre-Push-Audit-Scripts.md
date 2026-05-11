@@ -59,21 +59,32 @@ No edits to existing files. No wiring into git hooks, CI, or
 
 ### `audit_claude_md_claims.py`
 
-Two functions:
+Parses CLAUDE.md for per-server section headers shaped like
+`### <Name> MCP Server (N tools)` (or `(60+ tools)` soft counts),
+then counts `@mcp.tool` decorators in each matching
+`atlas_brain/mcp/*_server.py`. For `b2b_churn` -- whose server is
+split across modules -- sums decorators across
+`atlas_brain/mcp/b2b/*.py`.
+
+Public functions:
 
 ```
-actual_counts() -> dict[str, int]
-    For each atlas_brain/mcp/*_server.py, count grep -c "@mcp.tool".
-    For atlas_brain/mcp/b2b/, sum @mcp.tool across all *.py files
-    and report as "b2b_churn".
+count_decorators(path) -> int
+    Count "@mcp.tool" prefix lines in a Python source file.
 
-claimed_counts() -> dict[str, int]
-    Parse the MCP servers table in CLAUDE.md (the "### atlas_brain/mcp/"
-    table). Match rows shaped like "| Email | 8057 | 9 | ..." and
-    extract (server name, tool count).
+actual_count_for(file_key) -> int
+    Dispatch on a HEADER_TO_FILE value: either count a single
+    server file, or sum the b2b sub-module split (sentinel
+    "_b2b_sum").
+
+HEADER_PATTERN: regex matching the section headers.
+HEADER_TO_FILE: maps the human-readable doc name (e.g. "Email")
+    to either a server filename ("email_server.py") or the
+    sentinel "_b2b_sum".
 ```
 
-Report per-server: claimed, actual, status (OK or DRIFT). Exit 1
+Report shape per server: claimed (from doc), actual (from code),
+status (OK / DRIFT / DRIFT (soft count) for "N+" claims). Exit 1
 if any DRIFT.
 
 ### `audit_plan_doc.py`
@@ -174,12 +185,23 @@ echo "exit: $?"
 
 ## Estimated diff size
 
-| File | LOC (approx) |
-|---|---|
-| `scripts/audit_claude_md_claims.py` | ~80 |
-| `scripts/audit_plan_doc.py` | ~50 |
-| `scripts/pre_push_audit.sh` | ~30 |
-| `plans/PR-Pre-Push-Audit-Scripts.md` | ~150 |
-| **Total** | **~310** |
+Original estimate at plan time: ~310 LOC. Actual shipping diff after
+review feedback applied: ~452 LOC.
 
-Well under the 400 LOC soft cap.
+| File | LOC (approx, post-review) |
+|---|---|
+| `scripts/audit_claude_md_claims.py` | ~105 |
+| `scripts/audit_plan_doc.py` | ~80 |
+| `scripts/pre_push_audit.sh` | ~75 |
+| `plans/PR-Pre-Push-Audit-Scripts.md` | ~192 |
+| **Total** | **~452** |
+
+**~52 LOC over the 400 soft cap.** The slice is genuinely
+indivisible: plan-doc and scripts ship together per AGENTS.md
+anti-pattern about plan-doc-arriving-in-a-follow-up. The plan
+doc is ~42% of the total; splitting any single script into its
+own PR would force two more ~150-LOC plan docs, net worse for
+reviewer effort. Per AGENTS.md section 1d, soft-cap overage on
+an indivisible slice is acceptable when justified in *Why*; the
+*Why* section above explains that this slice closes drift Codex
+caught 3+ times on PR #457 and ships with its own self-test.

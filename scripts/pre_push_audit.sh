@@ -17,7 +17,7 @@
 # Intended to be run manually before opening a PR. Wiring into a
 # git pre-push hook is deferred to a follow-up slice.
 
-set -u
+set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 failures=0
@@ -57,12 +57,12 @@ else
     echo "    SKIP (no plans/PR-*.md added or modified vs $base or in working tree)"
 fi
 
-if [ -x scripts/check_ascii_python.sh ]; then
+if [ -f scripts/check_ascii_python.sh ]; then
     run_check "ASCII Python policy" bash scripts/check_ascii_python.sh
 else
     echo
     echo "==> ASCII Python policy"
-    echo "    SKIP (scripts/check_ascii_python.sh not executable)"
+    echo "    SKIP (scripts/check_ascii_python.sh not found)"
 fi
 
 echo

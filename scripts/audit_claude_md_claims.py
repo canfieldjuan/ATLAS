@@ -45,7 +45,7 @@ def count_decorators(path: Path) -> int:
         return -1
     return sum(
         1
-        for line in path.read_text().splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if line.lstrip().startswith("@mcp.tool")
     )
 
@@ -64,7 +64,7 @@ def main() -> int:
         print(f"CLAUDE.md not found at {CLAUDE_MD}", file=sys.stderr)
         return 2
 
-    text = CLAUDE_MD.read_text()
+    text = CLAUDE_MD.read_text(encoding="utf-8")
     rows = []
     for m in HEADER_PATTERN.finditer(text):
         name = m.group("name").strip()

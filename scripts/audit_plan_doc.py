@@ -45,7 +45,7 @@ def main() -> int:
         return 2
 
     headings = []  # list of (line_no, heading_text) for "## ..." lines
-    for i, line in enumerate(path.read_text().splitlines(), start=1):
+    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if line.startswith("## "):
             headings.append((i, line[3:].strip()))
 
