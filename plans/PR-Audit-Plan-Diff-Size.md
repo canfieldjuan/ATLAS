@@ -72,8 +72,8 @@ git diff --check
 
 | File | LOC churn (approx) |
 |---|---:|
-| `scripts/audit_plan_doc_diff_size.py` | 125 |
+| `scripts/audit_plan_doc_diff_size.py` | 121 |
 | `tests/test_audit_plan_doc_diff_size.py` | 179 |
-| `plans/PR-Audit-Plan-Diff-Size.md` | 83 |
+| `plans/PR-Audit-Plan-Diff-Size.md` | 79 |
 | `docs/extraction/coordination/inflight.md` | 4 |
-| **Total** | **~391** |
+| **Total** | **~383** |
