@@ -73,12 +73,17 @@ that lands after PR #483 merges (see *Deferred*).
 ### `audit_mcp_tool_names_match_docs.py`
 
 ```
-parse_doc_claims(claude_md_text) -> dict[server, set[tool_name]]
+doc_claims(claude_md_text) -> (dict[server, set[tool_name]], list[str])
     For each "### <Name> MCP Server" header in CLAUDE.md:
         Slice the section text up to the next "### " or "## ".
-        Within the slice, find all backticked snake_case
-        identifiers via re.findall(r"`([a-z][a-z0-9_]+)`").
-        Store the set under HEADER_TO_KEY[name].
+        Within the slice, find backticked snake_case identifiers
+        via re.findall(r"`([a-z][a-z0-9_]{3,})`")
+        (minimum length 4 to drop noise like `id` / `url`).
+        Store the set under known-server name. Headers whose
+        name is NOT in HEADER_TO_FILE go into a separate
+        `unknown_headers` list which is reported as DRIFT --
+        a renamed or newly added server should surface, not
+        be silently dropped.
 
 actual_tool_names() -> dict[server, set[tool_name]]
     For each atlas_brain/mcp/*_server.py:
@@ -152,9 +157,18 @@ or DRIFT.
 - **`audit_extracted_manifests.py` walks `extracted_*/manifest.json`
   globs, not a hardcoded package list.** Survives future
   package additions or removals. Note: `extracted_reasoning_core/`
-  does not have a manifest today; CLAUDE.md claims it does. That
-  is a real drift the auditor surfaces, but fixing CLAUDE.md is
-  Deferred.
+  does not have a manifest today; CLAUDE.md claims it does. The
+  auditor does NOT report missing manifests (only per-manifest
+  consistency), so this drift surfaces only when someone reads
+  the audit output and notices the absence. A follow-up could
+  extend the auditor with an expected-packages list; deferred.
+- **Path validation in `audit_extracted_manifests.py`.** Rejects
+  absolute paths and `..` traversal in `source`/`target` values
+  before any disk I/O; requires `source` to start with
+  `atlas_brain/` and `target` to start with the manifest's own
+  package directory (`extracted_<name>/`). Catches malformed
+  manifests that would otherwise pass the existence check by
+  resolving to unrelated repo files.
 - **`audit_mcp_tool_names_match_docs.py` uses backtick-snake_case
   heuristic, not "lines starting with `Tools:`".** The actual
   inventory in CLAUDE.md spans multiple continuation lines and

@@ -52,22 +52,30 @@ def section_slice(text: str, start: int) -> str:
     return rest if m is None else rest[: m.start()]
 
 
-def doc_claims(text: str) -> dict[str, set[str]]:
+def doc_claims(text: str) -> tuple[dict[str, set[str]], list[str]]:
+    """Return (known_claims, unknown_headers).
+
+    `unknown_headers` collects MCP Server section names that are not in
+    HEADER_TO_FILE -- a renamed or newly added server should surface
+    as drift rather than being silently dropped.
+    """
     claims: dict[str, set[str]] = {}
+    unknown: list[str] = []
     for m in HEADER_PATTERN.finditer(text):
         name = m.group("name").strip()
         if name not in HEADER_TO_FILE:
+            unknown.append(name)
             continue
         section = section_slice(text, m.end())
         idents = set(BACKTICK_IDENT.findall(section))
         claims[name] = idents
-    return claims
+    return claims, unknown
 
 
 def tool_names_in_file(path: Path) -> set[str]:
     if not path.exists():
         return set()
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     names: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -102,12 +110,18 @@ def main() -> int:
         print(f"CLAUDE.md not found at {CLAUDE_MD}", file=sys.stderr)
         return 2
 
-    claims = doc_claims(CLAUDE_MD.read_text())
-    if not claims:
-        print("No '### ... MCP Server' headers matched the known set.")
+    claims, unknown_headers = doc_claims(CLAUDE_MD.read_text(encoding="utf-8"))
+    if not claims and not unknown_headers:
+        print("No '### ... MCP Server' headers found in CLAUDE.md.")
         return 1
 
     drift = False
+    if unknown_headers:
+        drift = True
+        print("DRIFT: unknown MCP Server header(s) in CLAUDE.md:")
+        for n in unknown_headers:
+            print(f"  - {n!r} not in HEADER_TO_FILE (rename or new server?)")
+
     for name in sorted(claims):
         file_key = HEADER_TO_FILE[name]
         actual = actual_for(file_key)

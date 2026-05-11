@@ -23,14 +23,38 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _validate_path(
+    rel: str, must_start_with: str, kind: str, idx: int
+) -> str | None:
+    """Return an error string if rel is unsafe or misplaced, else None.
+
+    Rejects:
+      - absolute paths
+      - paths containing '..' segments (parent-dir traversal)
+      - paths not anchored under `must_start_with`
+    """
+    if rel.startswith("/"):
+        return f"{kind}[{idx}]: absolute path rejected ({rel!r})"
+    parts = Path(rel).parts
+    if ".." in parts:
+        return f"{kind}[{idx}]: parent-dir traversal rejected ({rel!r})"
+    if not rel.startswith(must_start_with):
+        return (
+            f"{kind}[{idx}]: path not under expected tree "
+            f"(expected to start with {must_start_with!r}, got {rel!r})"
+        )
+    return None
+
+
 def check_manifest(manifest_path: Path) -> list[str]:
     """Return a list of failure descriptions for this manifest."""
     failures: list[str] = []
     try:
-        data = json.loads(manifest_path.read_text())
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
         return [f"{manifest_path}: failed to parse JSON ({exc})"]
 
+    package_dir = manifest_path.parent.name + "/"
     mappings = data.get("mappings", [])
     owned = data.get("owned", [])
 
@@ -41,6 +65,15 @@ def check_manifest(manifest_path: Path) -> list[str]:
             failures.append(
                 f"mappings[{i}]: missing source or target ({entry!r})"
             )
+            continue
+        # Reject malformed / unsafe paths before any disk I/O.
+        src_err = _validate_path(src_rel, "atlas_brain/", "mappings.source", i)
+        tgt_err = _validate_path(tgt_rel, package_dir, "mappings.target", i)
+        if src_err:
+            failures.append(src_err)
+        if tgt_err:
+            failures.append(tgt_err)
+        if src_err or tgt_err:
             continue
         src = REPO_ROOT / src_rel
         tgt = REPO_ROOT / tgt_rel
@@ -65,6 +98,10 @@ def check_manifest(manifest_path: Path) -> list[str]:
         if not tgt_rel:
             failures.append(f"owned[{i}]: missing target ({entry!r})")
             continue
+        tgt_err = _validate_path(tgt_rel, package_dir, "owned.target", i)
+        if tgt_err:
+            failures.append(tgt_err)
+            continue
         tgt = REPO_ROOT / tgt_rel
         if not tgt.exists():
             failures.append(f"owned[{i}].target missing: {tgt_rel}")
@@ -83,7 +120,7 @@ def main() -> int:
         rel = mf.relative_to(REPO_ROOT)
         failures = check_manifest(mf)
         if not failures:
-            data = json.loads(mf.read_text())
+            data = json.loads(mf.read_text(encoding="utf-8"))
             n_map = len(data.get("mappings", []))
             n_own = len(data.get("owned", []))
             print(f"OK     {rel}  (mappings={n_map}, owned={n_own})")

@@ -29,7 +29,7 @@ CLAIM_PATTERN = re.compile(
 def count_review_sources() -> int:
     if not SOURCES_PY.exists():
         return -1
-    tree = ast.parse(SOURCES_PY.read_text())
+    tree = ast.parse(SOURCES_PY.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "ReviewSource":
             return sum(1 for n in node.body if isinstance(n, ast.Assign))
@@ -50,7 +50,7 @@ def main() -> int:
         print(f"CLAUDE.md not found at {CLAUDE_MD}", file=sys.stderr)
         return 2
 
-    text = CLAUDE_MD.read_text()
+    text = CLAUDE_MD.read_text(encoding="utf-8")
     print(f"ReviewSource enum members: {actual}")
     print(f"Claims in {CLAUDE_MD.name}:")
     print("-" * 50)
