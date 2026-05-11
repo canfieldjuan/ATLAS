@@ -177,6 +177,80 @@ grep -B2 '"target": "<path>"' <package>/manifest.json
 A `source` line means it's synced; absence (just a `target`) means
 it's owned.
 
+### 3e. Auditors must surface, never silently skip
+
+This rule applies to any mechanical audit script under `scripts/`
+(or anywhere else): when the auditor encounters input it doesn't
+recognize, the default behavior is **report DRIFT with a clear
+message**, not "skip and pretend nothing happened."
+
+Four real cases caught by Copilot reviewers on PRs #483 / #484 /
+#485 -- all silent skips that should have been DRIFT:
+
+| What | Why it silently passed |
+|---|---|
+| `audit_mcp_tool_names_match_docs.py` silently dropped `### <Name> MCP Server` headers whose name wasn't in `HEADER_TO_FILE`. A renamed or newly added server would disappear from coverage. | `if name not in HEADER_TO_FILE: continue` |
+| `audit_mcp_port_assignments.py` silently dropped env-var lines whose normalized name wasn't in `NAME_NORMALIZER`. | `if norm is None: continue` |
+| `audit_mcp_port_assignments.py` exited 0 even when ports in `MCPConfig` had no claim in CLAUDE.md (missing-in-doc was not surfaced). | No `set(truth) - documented` check at the end. |
+| `audit_mcp_port_assignments.py` `ENV_VAR_LINE` regex `[A-Z_]+` rejected the "2" in `ATLAS_MCP_B2B_CHURN_PORT`, silently dropping the entire line. | Regex without a digit-fixture; the class didn't cover real input. |
+
+**Anti-pattern:**
+
+```python
+norm = NAME_NORMALIZER.get(env_name)
+if norm is None:
+    continue        # silently drops a valid claim
+```
+
+**Right shape:**
+
+```python
+norm = NAME_NORMALIZER.get(env_name)
+claims.append((line_no, norm or env_name, port, "env"))
+# main() then renders unknown names as DRIFT/UNKNOWN, not as skipped.
+```
+
+If you genuinely need a safe-skip (e.g., unrelated markdown tables
+that happen to share a row shape with MCP port table rows), say
+so in a comment and name the specific false-positive risk:
+
+```python
+# Markdown-table style: any "| <text> | <4-5-digit> | ..." row
+# could be an unrelated table elsewhere in the doc, so we admit
+# only rows whose first cell normalizes to a known server.
+if norm is None:
+    continue
+```
+
+A reviewer should be able to read the comment and decide whether
+the skip is intentional. If you can't articulate the false-positive
+risk in one sentence, the skip is wrong.
+
+### 3f. Auditors ship with fixture tests
+
+Every `scripts/audit_*.py` ships with a sibling
+`tests/test_audit_<name>.py` that exercises at least three cases:
+
+1. **Happy path.** Known-good input, expected exit 0 / OK output.
+2. **At least one parser-specific negative case.** The fixture must
+   include inputs the parser is supposed to handle but historically
+   has not. For `audit_mcp_port_assignments.py` the fixture must
+   include `ATLAS_MCP_B2B_CHURN_PORT=8062` (digit in name) and
+   assert the auditor matches it. A regex without a digit-fixture
+   is a regex that hasn't been thought about.
+3. **Pathological input that should be rejected.** Absolute path,
+   `..` traversal, malformed header, empty section, "Out of scope"
+   heading masquerading as "Scope".
+
+The audit script's `main()` is the contract; the fixture tests
+**lock the contract in place** so a future "small tweak" can't
+silently regress to silent-skip behavior. Without fixtures, a regex
+bug like the `ENV_VAR_LINE` digit miss can ship without anyone
+noticing for weeks.
+
+If you're touching an audit script and there isn't a sibling
+`test_audit_<name>.py`, add the fixture file in the same slice.
+
 ---
 
 ## 4. Reviewer workflow
