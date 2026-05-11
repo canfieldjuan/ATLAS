@@ -160,6 +160,7 @@
     "existing_evidence"
   ],
   "reasoning": {
-    "configured": true
+    "configured": true,
+    "source": "db"
   }
 }

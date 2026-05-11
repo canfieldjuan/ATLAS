@@ -17,6 +17,7 @@ import {
   type ContentOpsCatalog,
   type ContentOpsExecutionResult,
   type ContentOpsRequest,
+  type CampaignReasoningContextView,
   type ContentOpsStepReasoningAudit,
   type ControlSurfacePreview,
   type GenerationPlan,
@@ -95,6 +96,7 @@ export default function ContentOpsNewRun() {
     )
   }
   const reasoningConfigured = catalog.reasoning.configured
+  const reasoningSource = catalog.reasoning.source
 
   // Codex P2 fix: any form mutation invalidates a stale preview verdict
   // and plan panel so the user never sees a "Can run" badge or plan
@@ -389,7 +391,9 @@ export default function ContentOpsNewRun() {
                               : 'bg-slate-700 text-slate-400',
                           )}
                         >
-                          reasoning {reasoningConfigured ? 'ready' : 'unavailable'}
+                          {reasoningConfigured
+                            ? `reasoning ready${reasoningSource ? ` (${reasoningSource})` : ''}`
+                            : 'reasoning unavailable'}
                         </span>
                       )}
                     </div>
@@ -1023,6 +1027,39 @@ function ReasoningAuditBadge({ audit }: { audit: ContentOpsStepReasoningAudit })
         <span className="font-mono text-[11px] opacity-80">
           used {audit.contextsUsed}
         </span>
+      )}
+      {audit.consumedContexts && audit.consumedContexts.length > 0 && (
+        <ReasoningContextList contexts={audit.consumedContexts} />
+      )}
+    </div>
+  )
+}
+
+function ReasoningContextList({
+  contexts,
+}: {
+  contexts: CampaignReasoningContextView[]
+}) {
+  return (
+    <div className="basis-full space-y-1 pt-1">
+      {contexts.slice(0, 3).map((context, index) => (
+        <div
+          key={index}
+          className="rounded border border-emerald-500/20 bg-slate-950/50 px-2 py-1 text-[11px] text-emerald-100"
+        >
+          <div className="font-medium">
+            {context.summary || `Reasoning context ${index + 1}`}
+          </div>
+          <div className="mt-0.5 text-emerald-200/70">
+            theses {context.topTheses?.length ?? 0} · proof points{' '}
+            {context.proofPoints?.length ?? 0}
+          </div>
+        </div>
+      ))}
+      {contexts.length > 3 && (
+        <div className="text-[11px] text-emerald-200/70">
+          +{contexts.length - 3} more contexts
+        </div>
       )}
     </div>
   )
