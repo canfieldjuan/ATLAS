@@ -37,6 +37,12 @@ Chooser (3 tests):
 13. DB returns `None`, file factory returns a provider --
     chooser returns the file provider.
 14. Both factories return `None` -- chooser returns `None`.
+
+Status (3 tests):
+
+15. DB provider reports configured with source=db.
+16. File fallback reports configured with source=file.
+17. Neither provider reports configured=false with source=none.
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ import pytest
 from atlas_brain._content_ops_reasoning import (
     build_content_ops_reasoning_context_provider,
     build_postgres_content_ops_reasoning_context_provider,
+    describe_content_ops_reasoning_context_provider,
     select_content_ops_reasoning_context_provider,
 )
 
@@ -314,3 +321,40 @@ def test_chooser_returns_none_when_neither_configured() -> None:
     )
 
     assert provider is None
+
+
+# ---------- Status -----------------------------------------------------------
+
+
+def test_reasoning_status_reports_db_provider() -> None:
+    file_called = {"hit": False}
+
+    def _file_factory() -> Any:
+        file_called["hit"] = True
+        return "file-provider"
+
+    status = describe_content_ops_reasoning_context_provider(
+        db_factory=lambda: object(),
+        file_factory=_file_factory,
+    )
+
+    assert status == {"configured": True, "source": "db"}
+    assert file_called["hit"] is False
+
+
+def test_reasoning_status_reports_file_fallback() -> None:
+    status = describe_content_ops_reasoning_context_provider(
+        db_factory=lambda: None,
+        file_factory=lambda: object(),
+    )
+
+    assert status == {"configured": True, "source": "file"}
+
+
+def test_reasoning_status_reports_none_when_unconfigured() -> None:
+    status = describe_content_ops_reasoning_context_provider(
+        db_factory=lambda: None,
+        file_factory=lambda: None,
+    )
+
+    assert status == {"configured": False, "source": "none"}
