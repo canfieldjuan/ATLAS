@@ -76,7 +76,7 @@ def main() -> int:
         print(f"plan doc not found: {path}", file=sys.stderr)
         return 2
 
-    claimed = parse_files_touched(path.read_text())
+    claimed = parse_files_touched(path.read_text(encoding="utf-8"))
     if not claimed:
         print(
             f"could not find a 'Files touched' subsection in {path}",

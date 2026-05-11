@@ -83,7 +83,7 @@ def main() -> int:
         print(f"plan doc not found: {path}", file=sys.stderr)
         return 2
 
-    estimate = parse_estimate(path.read_text())
+    estimate = parse_estimate(path.read_text(encoding="utf-8"))
     if estimate is None:
         print(
             f"could not find a '**Total** | **~N**' row in {path}",

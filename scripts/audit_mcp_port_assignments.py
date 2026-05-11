@@ -52,7 +52,7 @@ NAME_NORMALIZER = {
 
 def config_ports() -> dict[str, int]:
     """Walk atlas_brain/config.py, find MCPConfig, extract <name>_port defaults."""
-    tree = ast.parse(CONFIG_PY.read_text())
+    tree = ast.parse(CONFIG_PY.read_text(encoding="utf-8"))
     ports: dict[str, int] = {}
     for node in ast.walk(tree):
         if not (isinstance(node, ast.ClassDef) and node.name == "MCPConfig"):
@@ -82,16 +82,20 @@ def config_ports() -> dict[str, int]:
 def doc_claims(text: str) -> list[tuple[int, str, int, str]]:
     """Return list of (line_no, normalized_name, port, source_kind)."""
     claims: list[tuple[int, str, int, str]] = []
-    # Env-var style.
+    # Env-var style: ATLAS_MCP_<NAME>_PORT=<N> is an unambiguously
+    # MCP-port-shaped claim, so unknown names surface as drift (a
+    # renamed or newly added server should not silently disappear).
     for m in ENV_VAR_LINE.finditer(text):
         env_name = m.group(1).lower()
         port = int(m.group(2))
         line_no = text[: m.start()].count("\n") + 1
         norm = NAME_NORMALIZER.get(env_name)
-        if norm is not None:
-            claims.append((line_no, norm, port, "env"))
-    # Markdown-table style: only for rows containing a 4-5-digit port and a
-    # known server name in the first cell.
+        claims.append((line_no, norm or env_name, port, "env"))
+    # Markdown-table style: any `| <text> | <4-5-digit> | ...` row
+    # could be an unrelated table elsewhere in the doc, so we only
+    # admit rows whose first cell normalizes to a known server.
+    # (Unknown table cells are skipped rather than reported, to keep
+    # false positives off the report.)
     for m in TABLE_ROW.finditer(text):
         raw = m.group(1).strip().lower()
         port = int(m.group(2))
@@ -121,7 +125,7 @@ def main() -> int:
         print(f"  {k:<14} {truth[k]}")
     print()
 
-    text = CLAUDE_MD.read_text()
+    text = CLAUDE_MD.read_text(encoding="utf-8")
     claims = doc_claims(text)
     if not claims:
         print("No port claims found in CLAUDE.md (env-var or table).")
@@ -131,7 +135,10 @@ def main() -> int:
     print("-" * 60)
 
     drift = False
+    documented_names: set[str] = set()
     for line_no, name, port, kind in claims:
+        if name in truth:
+            documented_names.add(name)
         expected = truth.get(name)
         if expected is None:
             print(f"line {line_no:>4} [{kind:<5}] {name:<14} port={port}  UNKNOWN (not in config.py)")
@@ -141,6 +148,15 @@ def main() -> int:
             drift = True
         else:
             print(f"line {line_no:>4} [{kind:<5}] {name:<14} port={port}  OK")
+
+    # Surface ports that MCPConfig declares but CLAUDE.md never mentions.
+    missing_in_doc = sorted(set(truth.keys()) - documented_names)
+    if missing_in_doc:
+        drift = True
+        print()
+        print("MISSING-IN-DOC: ports in MCPConfig but no claim in CLAUDE.md:")
+        for name in missing_in_doc:
+            print(f"  - {name}_port = {truth[name]}")
 
     return 1 if drift else 0
 

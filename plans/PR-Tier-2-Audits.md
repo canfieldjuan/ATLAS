@@ -172,15 +172,18 @@ python scripts/audit_plan_doc_files_touched.py \
 echo "exit: $?"
 
 # 2. Diff-size audit on this slice's own plan doc.
-#    Expected: drift within 25% of the estimate -> OK.
+#    Expected: actual is ~25-30% over the original ~460 estimate,
+#    which lands in the 25-50% WARN band -> prints WARN, exits 0.
 python scripts/audit_plan_doc_diff_size.py \
     plans/PR-Tier-2-Audits.md origin/main
 echo "exit: $?"
 
 # 3. Port-assignment audit on current state.
-#    Expected: all 9 ports match between config.py and CLAUDE.md
-#    on main (the env-var block is accurate even though PR #457
-#    isn't merged).
+#    Expected: 6 documented ports (env-var style) in main's CLAUDE.md
+#    all match MCPConfig defaults; MCPConfig also defines b2b_churn /
+#    scraper / memory ports that CLAUDE.md does not document yet
+#    (PR #457 adds them), so the auditor reports MISSING-IN-DOC for
+#    those three and exits 1.
 python scripts/audit_mcp_port_assignments.py
 echo "exit: $?"
 
@@ -193,15 +196,25 @@ echo "exit: $?"
 
 ## Estimated diff size
 
-| File | LOC (est) |
-|---|---|
-| `scripts/audit_plan_doc_files_touched.py` | ~85 |
-| `scripts/audit_plan_doc_diff_size.py` | ~75 |
-| `scripts/audit_mcp_port_assignments.py` | ~100 |
-| `plans/PR-Tier-2-Audits.md` | ~200 |
-| **Total** | **~460** |
+Original estimate at plan time: ~460 LOC. Actual shipping diff
+after Copilot review feedback applied: ~615 LOC.
 
-60 LOC over the 400 soft cap; same shape as PRs #483 and #484
-(plan doc is ~43% of the total). Slice is indivisible; splitting
-each script into its own PR would require three plan docs each
-~150 LOC, net worse for review.
+| File | LOC (approx, post-review) |
+|---|---|
+| `scripts/audit_plan_doc_files_touched.py` | ~110 |
+| `scripts/audit_plan_doc_diff_size.py` | ~100 |
+| `scripts/audit_mcp_port_assignments.py` | ~160 |
+| `plans/PR-Tier-2-Audits.md` | ~245 |
+| **Total** | **~615** |
+
+**~215 LOC over the 400 soft cap (~34% drift from estimate).** Same
+shape as PRs #483 and #484 (plan doc ~40% of total). Slice is
+indivisible -- splitting any single script into its own PR would
+require three plan docs each ~150 LOC, net worse for review. Per
+AGENTS.md section 1d, soft-cap overage on an indivisible slice is
+acceptable when justified in *Why*; the *Why* section above ties
+each Tier-2 auditor to an AGENTS.md contract clause it enforces.
+
+The diff-size auditor in this PR catches this overage on itself
+(33.7% drift -> WARN, exit 0) -- which is exactly the signal it
+exists to surface.
