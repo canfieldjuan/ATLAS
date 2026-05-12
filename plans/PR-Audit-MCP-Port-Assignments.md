@@ -61,8 +61,8 @@ git diff --check
 
 | File | LOC churn (approx) |
 |---|---:|
-| `scripts/audit_mcp_port_assignments.py` | 162 |
+| `scripts/audit_mcp_port_assignments.py` | 160 |
 | `tests/test_audit_mcp_port_assignments.py` | 161 |
 | `plans/PR-Audit-MCP-Port-Assignments.md` | 68 |
 | `docs/extraction/coordination/inflight.md` | 4 |
-| **Total** | **~395** |
+| **Total** | **~393** |
