@@ -10,7 +10,7 @@ run automatically before `git push`.
 ## Scope (this PR)
 
 1. Add a safe installer for `.git/hooks/pre-push`.
-2. Make the installed hook run `bash scripts/local_pr_review.sh`.
+2. Make the installed hook run `scripts/local_pr_review.sh`.
 3. Refuse to overwrite unmanaged hooks unless explicitly forced.
 4. Repair the pre-push wrapper test fixture so the two newly wired auditors
    from the previous slice are covered.
@@ -30,7 +30,7 @@ run automatically before `git push`.
 
 `scripts/install_local_pr_hook.sh` writes a managed `.git/hooks/pre-push`
 wrapper containing the marker `ATLAS_LOCAL_PR_REVIEW_HOOK`. The hook changes
-to the repo root and executes `bash scripts/local_pr_review.sh`.
+to the repo root and executes `scripts/local_pr_review.sh` through Bash.
 
 If an existing hook does not contain the marker, the installer exits
 non-zero and leaves the hook unchanged. Passing `--force` replaces the
