@@ -1,6 +1,6 @@
 # In-Flight PRs
 
-Last updated: 2026-05-12T18:08Z by codex-2026-05-12-install-local-review-hook
+Last updated: 2026-05-12T18:22Z by codex-2026-05-12-cleanup-hook-inflight
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -10,6 +10,5 @@ Add a row before opening a PR (session protocol step 2). Drop the row when the P
 | (in flight) | Lock route-level Content Ops consumed reasoning payloads | NEW: `plans/PR-Content-Ops-Route-Reasoning-Payload-Regression.md`. EDIT: `tests/test_extracted_content_control_surface_api.py`; `docs/extraction/coordination/inflight.md`. | codex-content-ops-route-reasoning-payload | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 | (in flight) | Fix Content Ops `blog_post` reasoning fixture/doc drift | NEW: `plans/PR-Content-Ops-Blog-Reasoning-Fixture-Doc.md`. EDIT: `atlas-intel-ui/src/api/__fixtures__/contentOps/catalog.json`; `extracted_content_pipeline/docs/control_surface_preview_api.md`; `docs/extraction/coordination/inflight.md`. | codex-content-blog-reasoning-fixture-doc | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 | (in flight) | Log ordered AI Content Ops deferred backlog | NEW: `plans/PR-Content-Ops-Deferred-Backlog-Log.md`; `docs/audits/ai_content_ops_deferred_backlog_2026-05-11.md`. EDIT: `extracted_content_pipeline/STATUS.md`; `docs/extraction/coordination/inflight.md`. | codex-2026-05-11 | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
-| (in flight) | Install optional local PR review pre-push hook | NEW: `scripts/install_local_pr_hook.sh`; `tests/test_install_local_pr_hook.py`; `plans/PR-Audit-Install-Local-Review-Hook.md`. EDIT: `AGENTS.md`; `tests/test_pre_push_audit.py`; `docs/extraction/coordination/inflight.md`. | codex-2026-05-12-install-local-review-hook | `scripts/local_pr_review.sh`; `scripts/pre_push_audit.sh`; `.git/hooks/pre-push` workflow docs |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
