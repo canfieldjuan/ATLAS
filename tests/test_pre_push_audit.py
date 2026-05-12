@@ -116,7 +116,9 @@ def _write_fixture_repo(repo: Path) -> None:
     (repo / "scripts").mkdir(parents=True)
     for name in (
         "audit_claude_md_claims.py",
+        "audit_extracted_manifests.py",
         "audit_mcp_port_assignments.py",
+        "audit_mcp_tool_names_match_docs.py",
         "audit_plan_doc.py",
         "audit_plan_doc_files_touched.py",
         "audit_plan_doc_diff_size.py",
@@ -129,11 +131,11 @@ def _write_fixture_repo(repo: Path) -> None:
     _write_claude_md(repo / "CLAUDE.md")
     _write_config(repo / "atlas_brain" / "config.py")
     _write_mcp_servers(repo / "atlas_brain" / "mcp")
+    _write_manifest(repo / "extracted_fixture" / "manifest.json")
 
 
 def _write_claude_md(path: Path) -> None:
-    path.write_text(
-        """# Fixture
+    text = """# Fixture
 
 ATLAS_MCP_CRM_PORT=8056
 ATLAS_MCP_EMAIL_PORT=8057
@@ -146,33 +148,51 @@ ATLAS_MCP_B2B_CHURN_PORT=8062
 ### CRM MCP Server (10 tools)
 # SSE HTTP mode (port 8056)
 python -m atlas_brain.mcp.crm_server --sse
+{crm_tools}
 ### Email MCP Server (9 tools)
 # SSE HTTP mode (port 8057)
 python -m atlas_brain.mcp.email_server --sse
+{email_tools}
 ### Twilio MCP Server (10 tools)
 # SSE HTTP mode (port 8058)
 python -m atlas_brain.mcp.twilio_server --sse
+{twilio_tools}
 ### Calendar MCP Server (8 tools)
 # SSE HTTP mode (port 8059)
 python -m atlas_brain.mcp.calendar_server --sse
+{calendar_tools}
 ### Invoicing MCP Server (18 tools)
 # SSE HTTP mode (port 8060)
 python -m atlas_brain.mcp.invoicing_server --sse
+{invoicing_tools}
 ### Intelligence MCP Server (33 tools)
 # SSE HTTP mode (port 8061)
 python -m atlas_brain.mcp.intelligence_server --sse
+{intelligence_tools}
 ### B2B Churn Intelligence MCP Server (83 tools)
 # SSE HTTP mode (port 8062)
 python -m atlas_brain.mcp.b2b_churn_server --sse
+{b2b_tools}
 ### Universal Scraper MCP Server (5 tools)
 # SSE HTTP mode (port 8063)
 python -m atlas_brain.mcp.scraper_server --sse
+{scraper_tools}
 ### Memory MCP Server (15 tools)
 # SSE HTTP mode (port 8064)
 python -m atlas_brain.mcp.memory_server --sse
-""",
-        encoding="utf-8",
+{memory_tools}
+""".format(
+        crm_tools=_tool_list(10),
+        email_tools=_tool_list(9),
+        twilio_tools=_tool_list(10),
+        calendar_tools=_tool_list(8),
+        invoicing_tools=_tool_list(18),
+        intelligence_tools=_tool_list(33),
+        b2b_tools=_tool_list(83),
+        scraper_tools=_tool_list(5),
+        memory_tools=_tool_list(15),
     )
+    path.write_text(text, encoding="utf-8")
 
 
 def _write_config(path: Path) -> None:
@@ -213,8 +233,17 @@ def _write_mcp_servers(mcp_dir: Path) -> None:
     (mcp_dir / "b2b" / "fixture.py").write_text(_decorators(83), encoding="utf-8")
 
 
+def _write_manifest(path: Path) -> None:
+    path.parent.mkdir(parents=True)
+    path.write_text('{"mappings": [], "owned": []}\n', encoding="utf-8")
+
+
 def _decorators(count: int) -> str:
     return "\n".join("@mcp.tool\ndef tool_%s():\n    pass\n" % idx for idx in range(count))
+
+
+def _tool_list(count: int) -> str:
+    return ", ".join(f"`tool_{idx}`" for idx in range(count))
 
 
 def _plan_text(*, total_loc: int) -> str:
