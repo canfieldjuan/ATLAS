@@ -59,7 +59,7 @@ git diff --check
 | File | LOC churn (approx) |
 |---|---:|
 | `scripts/pre_push_audit.sh` | 90 |
-| `tests/test_pre_push_audit.py` | 194 |
+| `tests/test_pre_push_audit.py` | 226 |
 | `plans/PR-Audit-Pre-Push-Wrapper.md` | 65 |
 | `docs/extraction/coordination/inflight.md` | 4 |
-| **Total** | **~353** |
+| **Total** | **~385** |

@@ -49,7 +49,7 @@ committed=$(
 )
 uncommitted=$(
     git status --porcelain -- 'plans/PR-*.md' 2>/dev/null |
-        awk 'substr($0, 1, 2) !~ /D/ {print $NF}' || true
+        awk 'substr($0, 1, 2) !~ /D/ {print substr($0, 4)}' || true
 )
 committed_plan_docs=$(printf '%s\n' "$committed" | sort -u | grep -v '^$' || true)
 uncommitted_plan_docs=$(printf '%s\n' "$uncommitted" | sort -u | grep -v '^$' || true)
