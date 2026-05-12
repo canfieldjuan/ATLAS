@@ -161,6 +161,17 @@ This is the fast path. It catches plan-shape, diff-size, file-claim,
 MCP-doc, ASCII, plan/code, and whitespace failures before GitHub has to
 run anything.
 
+To make that automatic for this checkout, install the optional pre-push
+hook:
+
+```bash
+bash scripts/install_local_pr_hook.sh
+```
+
+The installer refuses to overwrite unmanaged hooks unless `--force` is
+passed. The installed hook can be bypassed intentionally with
+`ATLAS_SKIP_LOCAL_PR_REVIEW=1 git push`.
+
 After the mechanical bundle passes, hand the branch to a separate local
 reviewer session for judgment review. The reviewer should read the plan
 doc and diff locally, run any focused tests needed to verify the claims,
