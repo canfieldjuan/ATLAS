@@ -177,6 +177,59 @@ grep -B2 '"target": "<path>"' <package>/manifest.json
 A `source` line means it's synced; absence (just a `target`) means
 it's owned.
 
+### 3e. Auditors must surface, never silently skip
+
+Mechanical audit scripts must report unfamiliar input as drift unless
+the skip is explicitly justified in code. Silent skips make the audit
+look green while the thing it was supposed to validate disappears from
+coverage.
+
+Recent examples this rule is meant to prevent:
+
+| What | Bad shape |
+|---|---|
+| Unknown `### <Name> MCP Server` headings disappearing from MCP tool-name coverage. | `if name not in HEADER_TO_FILE: continue` |
+| Port claims with names not in the normalizer disappearing from MCP port coverage. | `if norm is None: continue` |
+| Ports in `MCPConfig` missing from docs without any missing-in-doc check. | Only compare documented rows. |
+| Env-var regexes dropping real names with digits, such as `ATLAS_MCP_B2B_CHURN_PORT`. | `[A-Z_]+` without a digit fixture. |
+
+Preferred shape:
+
+```python
+norm = NAME_NORMALIZER.get(env_name)
+claims.append((line_no, norm or env_name, port, "env"))
+# main() then renders unknown names as DRIFT/UNKNOWN, not as skipped.
+```
+
+Safe skips are allowed only when the false-positive risk is named:
+
+```python
+# Unrelated markdown tables can share this row shape, so admit only
+# rows whose first cell normalizes to a known server.
+if norm is None:
+    continue
+```
+
+If the false-positive risk cannot be stated in one sentence, the skip
+is probably wrong.
+
+### 3f. Auditors ship with fixture tests
+
+Every new `scripts/audit_*.py` should ship with
+`tests/test_audit_<name>.py` in the same slice. The fixture set should
+cover:
+
+1. Happy path: known-good input produces the expected OK state.
+2. Parser-specific negative case: real-looking input that used to be
+   missed, such as `ATLAS_MCP_B2B_CHURN_PORT=8062`.
+3. Pathological rejection: absolute path, `..` traversal, malformed
+   header, empty section, or an "Out of scope" heading that must not
+   satisfy "Scope".
+
+The audit script's `main()` is the contract; fixture tests lock the
+parser behavior so a future small regex tweak cannot silently regress
+to false-green output.
+
 ---
 
 ## 4. Reviewer workflow
