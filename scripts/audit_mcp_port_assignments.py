@@ -11,7 +11,7 @@ from pathlib import Path
 
 ENV_PORT_PATTERN = re.compile(r"\bATLAS_MCP_([A-Z0-9_]+)_PORT\s*=\s*(\d+)\b")
 SSE_PORT_PATTERN = re.compile(r"SSE HTTP mode \(port\s+(\d+)\)")
-MODULE_PATTERN = re.compile(r"python -m atlas_brain\.mcp\.([a-z0-9_]+)_server\b")
+MODULE_PATTERN = re.compile(r"python -m atlas_brain\.mcp\.([a-z0-9_]+)_server\b[^\n#]*\s--sse\b")
 
 
 @dataclass(frozen=True)

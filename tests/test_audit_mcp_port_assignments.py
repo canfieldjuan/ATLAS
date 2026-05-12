@@ -61,6 +61,9 @@ def test_documented_port_claims_parse_env_and_sse_examples():
 
         # SSE HTTP mode (port 8064)
         python -m atlas_brain.mcp.memory_server --sse
+
+        # SSE HTTP mode (port 8063)
+        python -m atlas_brain.mcp.scraper_server
         """
     )
 
@@ -69,6 +72,7 @@ def test_documented_port_claims_parse_env_and_sse_examples():
     assert [claim.port for claim in claims["crm"]] == [8056]
     assert [claim.port for claim in claims["b2b_churn"]] == [8062]
     assert [claim.port for claim in claims["memory"]] == [8064]
+    assert "scraper" not in claims
 
 
 def test_audit_ports_reports_missing_drift_conflict_and_extra():
