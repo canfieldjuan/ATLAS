@@ -148,7 +148,28 @@ bash extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline   # 
 CI runs `scripts/run_extracted_pipeline_checks.sh`; locally is faster
 to triage.
 
-### 3c. Tests
+### 3c. Local review before PR
+
+Before opening or updating a PR, the builder runs the mechanical local
+review bundle:
+
+```bash
+bash scripts/local_pr_review.sh
+```
+
+This is the fast path. It catches plan-shape, diff-size, file-claim,
+MCP-doc, ASCII, plan/code, and whitespace failures before GitHub has to
+run anything.
+
+After the mechanical bundle passes, hand the branch to a separate local
+reviewer session for judgment review. The reviewer should read the plan
+doc and diff locally, run any focused tests needed to verify the claims,
+and return a verdict before the builder opens the GitHub PR.
+
+GitHub Actions still runs the same wrapper after the PR opens. Treat CI
+as the final enforcement layer, not the first reviewer.
+
+### 3d. Tests
 
 Each PR ships its own tests. Acceptable test patterns:
 
@@ -162,7 +183,7 @@ Locked-in regression tests for deferred follow-ups should name the
 future slice in their docstring (e.g. *"after PR-Foo-V2 lands this
 test is removed"*) so the test's lifetime is explicit.
 
-### 3d. Working with the manifest
+### 3e. Working with the manifest
 
 Files listed in `<package>/manifest.json` under `owned` are
 package-canonical -- the sync script does not overwrite them. Files
@@ -177,7 +198,7 @@ grep -B2 '"target": "<path>"' <package>/manifest.json
 A `source` line means it's synced; absence (just a `target`) means
 it's owned.
 
-### 3e. Auditors must surface, never silently skip
+### 3f. Auditors must surface, never silently skip
 
 Mechanical audit scripts must report unfamiliar input as drift unless
 the skip is explicitly justified in code. Silent skips make the audit
@@ -213,7 +234,7 @@ if norm is None:
 If the false-positive risk cannot be stated in one sentence, the skip
 is probably wrong.
 
-### 3f. Auditors ship with fixture tests
+### 3g. Auditors ship with fixture tests
 
 Every new `scripts/audit_*.py` should ship with
 `tests/test_audit_<name>.py` in the same slice. The fixture set should
