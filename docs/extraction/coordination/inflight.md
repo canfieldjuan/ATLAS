@@ -1,6 +1,6 @@
 # In-Flight PRs
 
-Last updated: 2026-05-12T15:27Z by codex-2026-05-12-mcp-count-audit
+Last updated: 2026-05-12T15:47Z by codex-2026-05-12-pre-push-wrapper
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -10,6 +10,6 @@ Add a row before opening a PR (session protocol step 2). Drop the row when the P
 | (in flight) | Lock route-level Content Ops consumed reasoning payloads | NEW: `plans/PR-Content-Ops-Route-Reasoning-Payload-Regression.md`. EDIT: `tests/test_extracted_content_control_surface_api.py`; `docs/extraction/coordination/inflight.md`. | codex-content-ops-route-reasoning-payload | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 | (in flight) | Fix Content Ops `blog_post` reasoning fixture/doc drift | NEW: `plans/PR-Content-Ops-Blog-Reasoning-Fixture-Doc.md`. EDIT: `atlas-intel-ui/src/api/__fixtures__/contentOps/catalog.json`; `extracted_content_pipeline/docs/control_surface_preview_api.md`; `docs/extraction/coordination/inflight.md`. | codex-content-blog-reasoning-fixture-doc | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 | (in flight) | Log ordered AI Content Ops deferred backlog | NEW: `plans/PR-Content-Ops-Deferred-Backlog-Log.md`; `docs/audits/ai_content_ops_deferred_backlog_2026-05-11.md`. EDIT: `extracted_content_pipeline/STATUS.md`; `docs/extraction/coordination/inflight.md`. | codex-2026-05-11 | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
-| (in flight) | Add CLAUDE.md MCP tool-count audit | NEW: `plans/PR-Audit-Claude-Md-MCP-Counts.md`; `scripts/audit_claude_md_claims.py`; `tests/test_audit_claude_md_claims.py`. EDIT: `docs/extraction/coordination/inflight.md`. | codex-2026-05-12-mcp-count-audit | `scripts/audit_plan_doc.py`; `scripts/audit_plan_doc_files_touched.py`; `scripts/audit_plan_doc_diff_size.py`; `scripts/audit_mcp_port_assignments.py`; `scripts/pre_push_audit.sh`; other audit-kit split PRs |
+| (in flight) | Add pre-push audit wrapper | NEW: `plans/PR-Audit-Pre-Push-Wrapper.md`; `scripts/pre_push_audit.sh`; `tests/test_pre_push_audit.py`. EDIT: `docs/extraction/coordination/inflight.md`. | codex-2026-05-12-pre-push-wrapper | audit scripts already on `main`; other audit-kit split PRs |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
