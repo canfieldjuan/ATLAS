@@ -75,6 +75,43 @@ def test_pre_push_audit_ignores_deleted_working_tree_plan(tmp_path):
     assert "all checks passed" in result.stdout
 
 
+def test_pre_push_audit_runs_shape_only_for_locally_modified_committed_plan(tmp_path):
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test User")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "base")
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+    plan = repo / "plans" / "PR-Wrapper-Smoke.md"
+    plan.parent.mkdir()
+    (repo / "scripts" / "wrapper_smoke.py").write_text("print('ok')\n", encoding="utf-8")
+    plan.write_text(_plan_text(total_loc=39), encoding="utf-8")
+    _git(repo, "add", "plans/PR-Wrapper-Smoke.md", "scripts/wrapper_smoke.py")
+    _git(repo, "commit", "-m", "add wrapper smoke")
+    plan.write_text(_plan_text(total_loc=999), encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(repo / "scripts" / "pre_push_audit.sh")],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(repo)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Plan shape: plans/PR-Wrapper-Smoke.md" in result.stdout
+    assert "Plan files touched: plans/PR-Wrapper-Smoke.md" not in result.stdout
+    assert "Plan diff size: plans/PR-Wrapper-Smoke.md" not in result.stdout
+    assert "all checks passed" in result.stdout
+
+
 def _write_fixture_repo(repo: Path) -> None:
     (repo / "scripts").mkdir(parents=True)
     for name in (

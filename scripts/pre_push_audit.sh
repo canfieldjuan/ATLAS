@@ -54,6 +54,11 @@ uncommitted=$(
 committed_plan_docs=$(printf '%s\n' "$committed" | sort -u | grep -v '^$' || true)
 uncommitted_plan_docs=$(printf '%s\n' "$uncommitted" | sort -u | grep -v '^$' || true)
 plan_docs=$(printf '%s\n%s\n' "$committed_plan_docs" "$uncommitted_plan_docs" | sort -u | grep -v '^$' || true)
+diff_plan_docs=$(
+    comm -23 \
+        <(printf '%s\n' "$committed_plan_docs" | grep -v '^$' || true) \
+        <(printf '%s\n' "$uncommitted_plan_docs" | grep -v '^$' || true) || true
+)
 
 if [ -n "$plan_docs" ]; then
     while IFS= read -r doc; do
@@ -65,7 +70,7 @@ if [ -n "$plan_docs" ]; then
         [ -z "$doc" ] && continue
         run_check "Plan files touched: $doc" python scripts/audit_plan_doc_files_touched.py "$doc" "$base_ref"
         run_check "Plan diff size: $doc" python scripts/audit_plan_doc_diff_size.py "$doc" "$base_ref"
-    done <<< "$committed_plan_docs"
+    done <<< "$diff_plan_docs"
 else
     echo
     echo "==> Plan docs"
