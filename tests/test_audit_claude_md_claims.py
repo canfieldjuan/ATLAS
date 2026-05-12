@@ -33,6 +33,13 @@ def test_header_pattern_rejects_missing_close_paren():
     assert auditor.HEADER_PATTERN.search("### Email MCP Server (9 tools\n") is None
 
 
+def test_header_pattern_requires_tools_token():
+    auditor = load_auditor()
+
+    assert auditor.HEADER_PATTERN.search("### Email MCP Server (9)\n") is None
+    assert auditor.HEADER_PATTERN.search("### Email MCP Server (9 modules)\n") is None
+
+
 def test_count_decorators_missing_file_returns_sentinel(tmp_path):
     auditor = load_auditor()
 
@@ -93,9 +100,26 @@ def test_audit_claims_surfaces_malformed_mcp_heading():
     assert ("Email", "(9 tools", "N/A", "MALFORMED") in rows
 
 
+def test_audit_claims_surfaces_missing_count_as_malformed_heading():
+    auditor = load_auditor()
+
+    rows = auditor.audit_claims("### Email MCP Server (9)\n")
+
+    assert ("Email", "(9)", "N/A", "MALFORMED") in rows
+
+
 def test_audit_claims_surfaces_missing_expected_server():
     auditor = load_auditor()
 
     rows = auditor.audit_claims("### Email MCP Server (9 tools)\n")
 
     assert ("CRM", "MISSING", "N/A", "MISSING") in rows
+
+
+def test_audit_claims_with_no_headers_reports_missing_expected_servers():
+    auditor = load_auditor()
+
+    rows = auditor.audit_claims("No MCP headings here.\n")
+
+    assert ("CRM", "MISSING", "N/A", "MISSING") in rows
+    assert ("Email", "MISSING", "N/A", "MISSING") in rows

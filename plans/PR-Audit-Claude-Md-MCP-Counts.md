@@ -42,8 +42,8 @@ skipped.
 
 - No wrapper script in this PR. The pre-push wrapper is a later slice
   after the individual auditors land.
-- No plan-doc-shape auditor in this PR. That becomes the next split
-  from #483.
+- Plan shape, files-touched, diff-size, and MCP port audits already
+  landed separately.
 - Soft counts like `60+` intentionally report drift because the code
   can provide an exact count.
 - Tests import the script directly through `importlib.util` because
@@ -51,10 +51,10 @@ skipped.
 
 ## Deferred
 
-- `scripts/audit_plan_doc.py` split from #483.
 - `scripts/pre_push_audit.sh` wrapper after the individual auditors
   exist on main.
-- Broader Tier-1/Tier-2 audit scripts from #484 and #485.
+- Remaining Tier-1 audit scripts from #484.
+- Fixture/meta-audit work from #486 and #487.
 - CI wiring.
 
 ## Verification
@@ -70,8 +70,8 @@ git diff --check
 
 | File | LOC (approx) |
 |---|---:|
-| `scripts/audit_claude_md_claims.py` | 100 |
-| `tests/test_audit_claude_md_claims.py` | 105 |
-| `plans/PR-Audit-Claude-Md-MCP-Counts.md` | 70 |
-| `docs/extraction/coordination/inflight.md` | 2 |
-| **Total** | **~285** |
+| `scripts/audit_claude_md_claims.py` | 124 |
+| `tests/test_audit_claude_md_claims.py` | 101 |
+| `plans/PR-Audit-Claude-Md-MCP-Counts.md` | 77 |
+| `docs/extraction/coordination/inflight.md` | 4 |
+| **Total** | **~306** |

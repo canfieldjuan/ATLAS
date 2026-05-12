@@ -25,7 +25,7 @@ HEADER_TO_FILE = {
 
 HEADER_PATTERN = re.compile(
     r"^###\s+(?P<name>.+?)\s+MCP Server"
-    r"\s*\(\s*(?P<count>\d+\+?)(?:\s+tools)?\s*(?:,[^)]*)?\)",
+    r"\s*\(\s*(?P<count>\d+\+?)\s+tools\s*(?:,[^)]*)?\)",
     re.MULTILINE,
 )
 MCP_HEADING_PATTERN = re.compile(
@@ -105,10 +105,6 @@ def main() -> int:
         return 2
 
     rows = audit_claims(CLAUDE_MD.read_text(encoding="utf-8"))
-    if not rows:
-        print("No '### ... MCP Server (N tools)' headers found in CLAUDE.md.")
-        return 1
-
     name_w = max(len(row[0]) for row in rows)
     print(f"{'server'.ljust(name_w)}  claimed  actual  status")
     print("-" * (name_w + 28))
