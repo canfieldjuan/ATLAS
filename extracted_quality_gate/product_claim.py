@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import date
 try:
     from enum import StrEnum
-except ImportError:  # pragma: no cover - Python 3.10 CI compatibility
+except ImportError:  # pragma: no cover - Python 3.10 compatibility
     from enum import Enum
 
     class StrEnum(str, Enum):

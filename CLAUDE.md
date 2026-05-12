@@ -412,7 +412,7 @@ python -m atlas_brain.mcp.email_server --sse
 ```
 
 Tools: `send_email`, `send_estimate`, `send_proposal`, `list_inbox`,
-`get_message`, `search_inbox`, `get_thread`, `list_sent_history`
+`get_message`, `search_inbox`, `get_thread`, `list_sent_history`, `list_folders`
 
 **Sending**: Gmail preferred (OAuth2); falls back to Resend if Gmail is not configured.
 **Reading**: IMAP (provider-agnostic) when configured; Gmail API fallback.
@@ -467,7 +467,7 @@ Tools: `list_calendars`, `list_events`, `get_event`, `create_event`,
 
 **Does NocoDB have a calendar?** NocoDB can display date columns in a calendar view but
 does not manage calendar events.
-The `appointments` table in PostgreSQL is the schedule; `appointments.calendar_event_id`
+The appointments table in PostgreSQL is the schedule; `appointments.calendar_event_id`
 links each booking to a calendar event.  Use `sync_appointment` to keep them in sync.
 
 ```bash
@@ -583,6 +583,24 @@ For the full pipeline / schema / tool-module breakdown, see the
 
 **Content:** `list_blog_posts`, `get_blog_post`, `list_affiliate_partners`
 
+**Account intelligence:** `list_account_intelligence`, `get_account_intelligence`,
+`build_accounts_in_motion`
+
+**Category dynamics:** `list_category_dynamics`, `get_category_dynamics`
+
+**Segment & temporal intelligence:** `list_segment_intelligence`, `get_segment_intelligence`,
+`list_temporal_intelligence`, `get_temporal_intelligence`
+
+**Displacement dynamics:** `list_displacement_dynamics`, `get_displacement_dynamics`,
+`get_source_impact_ledger`
+
+**Evidence vaults:** `list_evidence_vaults`, `get_evidence_vault`
+
+**Cross-vendor conclusions:** `list_cross_vendor_conclusions`, `get_cross_vendor_conclusion`,
+`persist_conclusion`, `persist_report`, `reason_vendor`, `compare_vendors`
+
+**Generated assets:** `build_challenger_brief`, `draft_campaign`
+
 Data sourced from 19 review sites (incl. Twitter/X via Web Unlocker). See
 the **B2B Churn Intelligence Pipeline** section for the full source list.
 
@@ -621,7 +639,7 @@ python -m atlas_brain.mcp.memory_server --sse
 `add_fact`, `add_episode`, `delete_episode`, `enhance_prompt`,
 `analyze_sentiment`
 
-**Conversation tools** (Postgres `conversation_turns`): `search_conversations`,
+**Conversation tools** (Postgres conversation_turns): `search_conversations`,
 `get_session_history`, `list_sessions`
 
 **Combined**: `get_context` (parallel graph + conversation lookup, unified result).

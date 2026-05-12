@@ -43,6 +43,8 @@ base="$(git merge-base HEAD "$base_ref")"
 
 run_check "CLAUDE.md MCP tool counts" python scripts/audit_claude_md_claims.py
 run_check "MCP port assignments" python scripts/audit_mcp_port_assignments.py
+run_check "MCP tool-name inventories" python scripts/audit_mcp_tool_names_match_docs.py
+run_check "Extracted manifest sync" python scripts/audit_extracted_manifests.py
 
 committed=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null || true
