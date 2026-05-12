@@ -48,7 +48,8 @@ committed=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null || true
 )
 uncommitted=$(
-    git status --porcelain -- 'plans/PR-*.md' 2>/dev/null | awk '{print $NF}' || true
+    git status --porcelain -- 'plans/PR-*.md' 2>/dev/null |
+        awk 'substr($0, 1, 2) !~ /D/ {print $NF}' || true
 )
 committed_plan_docs=$(printf '%s\n' "$committed" | sort -u | grep -v '^$' || true)
 uncommitted_plan_docs=$(printf '%s\n' "$uncommitted" | sort -u | grep -v '^$' || true)

@@ -24,7 +24,9 @@ and refresh the coordination row.
 The wrapper resolves trunk via `origin/HEAD` or `origin/main`, runs the
 repository-level MCP count and MCP port auditors, finds touched
 `plans/PR-*.md` files from branch diff plus working tree state, and runs
-shape/files-touched/diff-size checks for each plan.
+shape checks for each plan. Files-touched and diff-size checks run only
+for committed branch-diff plans because those auditors inspect
+`BASE...HEAD`.
 
 It also runs `scripts/check_ascii_python.sh` when present. Failures are
 accumulated so one run shows every broken mechanical check.
@@ -56,8 +58,8 @@ git diff --check
 
 | File | LOC churn (approx) |
 |---|---:|
-| `scripts/pre_push_audit.sh` | 89 |
-| `tests/test_pre_push_audit.py` | 195 |
-| `plans/PR-Audit-Pre-Push-Wrapper.md` | 63 |
+| `scripts/pre_push_audit.sh` | 90 |
+| `tests/test_pre_push_audit.py` | 194 |
+| `plans/PR-Audit-Pre-Push-Wrapper.md` | 65 |
 | `docs/extraction/coordination/inflight.md` | 4 |
-| **Total** | **~351** |
+| **Total** | **~353** |

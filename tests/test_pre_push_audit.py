@@ -5,7 +5,6 @@ import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "pre_push_audit.sh"
 
 
 def test_pre_push_audit_runs_plan_auditors_for_touched_plan(tmp_path):
