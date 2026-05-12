@@ -1,11 +1,10 @@
-"""ProductClaim contract — the shared envelope every UI card and every
+"""ProductClaim contract - the shared envelope every UI card and every
 report section consumes.
 
-Phase 10 Patch 1 (post-audit hardening). Operating rule: UI first,
-reports inherit. The dashboard / UI is the truth layer; reports are
-downstream renderings of the same validated objects.
+This module is the first standalone quality-gate core. It is pure,
+deterministic, sync, and free of Atlas runtime dependencies.
 
-Contract design (audit-driven):
+Contract design:
 
   - The caller provides OBJECTIVE FACTS (counts, witness_count,
     contradiction_count, denominator, evidence_links, claim_key).
@@ -30,10 +29,8 @@ Contract design (audit-driven):
     direct dataclass construction with hand-set gate fields and
     keeps build_product_claim() the only safe construction path.
 
-Pure deterministic, sync, pool-free. Persistence and aggregation
-land in Patch 2 onward.
-
-See docs/progress/product_claim_contract_plan_2026-04-26.md.
+Persistence, aggregation, and product-specific field mapping belong in
+adapters or packs outside this core module.
 """
 
 from __future__ import annotations
@@ -41,7 +38,13 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import date
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:  # pragma: no cover - Python 3.10 compatibility
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        pass
 
 
 class ClaimScope(StrEnum):

@@ -1,6 +1,6 @@
 # In-Flight PRs
 
-Last updated: 2026-05-12T17:27Z by codex-2026-05-12-local-review-runner
+Last updated: 2026-05-12T17:51Z by codex-2026-05-12-close-manifest-mcp-drift
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -10,6 +10,6 @@ Add a row before opening a PR (session protocol step 2). Drop the row when the P
 | (in flight) | Lock route-level Content Ops consumed reasoning payloads | NEW: `plans/PR-Content-Ops-Route-Reasoning-Payload-Regression.md`. EDIT: `tests/test_extracted_content_control_surface_api.py`; `docs/extraction/coordination/inflight.md`. | codex-content-ops-route-reasoning-payload | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 | (in flight) | Fix Content Ops `blog_post` reasoning fixture/doc drift | NEW: `plans/PR-Content-Ops-Blog-Reasoning-Fixture-Doc.md`. EDIT: `atlas-intel-ui/src/api/__fixtures__/contentOps/catalog.json`; `extracted_content_pipeline/docs/control_surface_preview_api.md`; `docs/extraction/coordination/inflight.md`. | codex-content-blog-reasoning-fixture-doc | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
 | (in flight) | Log ordered AI Content Ops deferred backlog | NEW: `plans/PR-Content-Ops-Deferred-Backlog-Log.md`; `docs/audits/ai_content_ops_deferred_backlog_2026-05-11.md`. EDIT: `extracted_content_pipeline/STATUS.md`; `docs/extraction/coordination/inflight.md`. | codex-2026-05-11 | `extracted_competitive_intelligence/manifest.json`; `extracted_competitive_intelligence/autonomous/visibility.py`; `extracted_competitive_intelligence/storage/migrations/246_pipeline_visibility.sql` |
-| (in flight) | Add local PR review runner | NEW: `scripts/local_pr_review.sh`; `plans/PR-Audit-Local-Review-Runner.md`. EDIT: `AGENTS.md`; `docs/extraction/coordination/inflight.md`. | codex-2026-05-12-local-review-runner | `scripts/pre_push_audit.sh`; `.github/workflows/pre_push_audit.yml` |
+| (in flight) | Close manifest and MCP tool-name audit drift | EDIT: `CLAUDE.md`; `atlas_brain/services/b2b/product_claim.py`; `extracted_content_pipeline/manifest.json`; `extracted_content_pipeline/services/b2b/vendor_briefing_delivery.py`; `extracted_llm_infrastructure/services/b2b/llm_exact_cache.py`; `extracted_quality_gate/product_claim.py`; `scripts/pre_push_audit.sh`; `docs/extraction/coordination/inflight.md`. NEW: `plans/PR-Audit-Close-Manifest-MCP-Drift.md`. | codex-2026-05-12-close-manifest-mcp-drift | `scripts/pre_push_audit.sh`; extracted package manifests; `CLAUDE.md` MCP sections |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
