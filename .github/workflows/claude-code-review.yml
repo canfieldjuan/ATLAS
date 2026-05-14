@@ -21,7 +21,9 @@ jobs:
   claude-review:
     # Skip draft PRs by default (open as draft until builder is
     # ready for review per Multi-Session PR Workflow in CLAUDE.md).
-    if: github.event.pull_request.draft == false
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.ref != 'claude/wire-custom-code-review-agent'
 
     runs-on: ubuntu-latest
     permissions:
