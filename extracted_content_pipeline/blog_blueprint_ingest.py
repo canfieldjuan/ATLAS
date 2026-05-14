@@ -203,7 +203,7 @@ def _load_json_rows(path: Path) -> list[Any]:
         raise ValueError("JSON blog blueprint data must be an object or array")
     blueprints = data.get("blueprints")
     if isinstance(blueprints, Sequence) and not isinstance(blueprints, (str, bytes, bytearray)):
-        return list(blueprints)
+        return _merge_wrapper_defaults(blueprints, _wrapper_defaults(data))
     if _looks_like_blueprint_row(data):
         # Bare object: treat as a single-blueprint row, preserving payload keys
         # such as "data" or "rows" when hosts use those names inside blueprints.
@@ -218,6 +218,31 @@ def _load_json_rows(path: Path) -> list[Any]:
 
 def _looks_like_blueprint_row(row: Mapping[str, Any]) -> bool:
     return any(str(key) in _BLUEPRINT_ROW_KEYS for key in row)
+
+
+def _wrapper_defaults(row: Mapping[str, Any]) -> dict[str, Any]:
+    defaults: dict[str, Any] = {}
+    for key in ("target_mode", "topic_type"):
+        if _clean(row.get(key)):
+            defaults[key] = row[key]
+    return defaults
+
+
+def _merge_wrapper_defaults(
+    rows: Sequence[Any],
+    defaults: Mapping[str, Any],
+) -> list[Any]:
+    if not defaults:
+        return list(rows)
+    merged_rows: list[Any] = []
+    for row in rows:
+        if isinstance(row, Mapping):
+            merged = dict(defaults)
+            merged.update(row)
+            merged_rows.append(merged)
+        else:
+            merged_rows.append(row)
+    return merged_rows
 
 
 def _clean(value: Any) -> str:

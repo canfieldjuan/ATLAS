@@ -126,6 +126,34 @@ def test_load_blog_blueprints_prefers_explicit_blueprints_wrapper(tmp_path: Path
     assert len(loaded.blueprints) == 1
     assert loaded.blueprints[0].slug == "wrapped-blueprint"
     assert loaded.blueprints[0].target_mode == "vendor_retention"
+    assert loaded.blueprints[0].topic_type == "pricing"
+    assert loaded.warnings == ()
+
+
+def test_load_blog_blueprints_applies_wrapper_defaults_to_child_rows(tmp_path: Path) -> None:
+    path = tmp_path / "blueprints.json"
+    path.write_text(
+        json.dumps({
+            "target_mode": "vendor_retention",
+            "topic_type": "pricing",
+            "blueprints": [
+                {"title": "Defaulted blueprint"},
+                {"title": "Custom blueprint", "topic_type": "migration"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_blog_blueprints_from_file(path)
+
+    assert [blueprint.target_mode for blueprint in loaded.blueprints] == [
+        "vendor_retention",
+        "vendor_retention",
+    ]
+    assert [blueprint.topic_type for blueprint in loaded.blueprints] == [
+        "pricing",
+        "migration",
+    ]
     assert loaded.warnings == ()
 
 
