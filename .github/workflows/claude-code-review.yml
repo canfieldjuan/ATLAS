@@ -1,44 +1,85 @@
 name: Claude Code Review
 
+# Auto-review every PR using the repo's custom code-review-agent
+# definition (.claude/agents/code-review-agent.md). Replaces the
+# default community 'code-review' plugin with our own conventions:
+# Delivery section (post comments, don't narrate), source-text test
+# pattern, plan-doc verification. See CLAUDE.md "PR Reviews".
+
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
+    # Optional: scope by file changes -- uncomment to skip auto-review
+    # for docs-only / config-only PRs.
     # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    #   - "atlas_brain/**"
+    #   - "extracted_*/**"
+    #   - "scripts/**"
+    #   - "tests/**"
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Skip draft PRs by default (open as draft until builder is
+    # ready for review per Multi-Session PR Workflow in CLAUDE.md).
+    if: github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      # WRITE on pull-requests + issues so the agent can POST review
+      # comments via `gh api .../reviews`. Per CLAUDE.md "PR Reviews",
+      # the deliverable is the review on the PR, not a chat summary.
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0  # full history so the agent can compare against base branch
 
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
 
+          # Spawn the repo's custom code-review-agent rather than
+          # the community 'code-review' plugin. The agent's contract
+          # (post findings as PR comments, don't narrate) is encoded
+          # in .claude/agents/code-review-agent.md and reinforced by
+          # the "PR Reviews" section in CLAUDE.md.
+          prompt: |
+            Review pull request #${{ github.event.pull_request.number }} on
+            ${{ github.repository }} using this repo's code-review-agent
+            (defined at .claude/agents/code-review-agent.md).
+
+            Spawn the agent via the Task tool with
+            subagent_type: code-review-agent.
+
+            Brief the agent with:
+              - PR title, body summary, head SHA, base SHA
+              - File list from `gh pr view --json files`
+              - The plan doc referenced in the PR body (if any) at
+                plans/PR-<Slice>.md
+              - Any merge-order dependencies mentioned in the PR body
+
+            CRITICAL: per CLAUDE.md "PR Reviews", the agent's deliverable
+            is GitHub PR review comments, NOT a chat summary. Findings
+            must be posted via:
+
+              gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+                --input - < /tmp/review.json
+
+            with event="COMMENT" and a comments[] array. Inline comments
+            only resolve on lines in the PR diff; out-of-diff findings
+            go in the review body with file:line refs.
+
+            Group findings as BLOCKER / MAJOR / MINOR / NIT. Don't
+            manufacture findings -- small PRs may have zero.
+
+          # Permissive tool allowlist so the agent can run gh, git,
+          # python (for verification commands), and read files.
+          # Tighten if cost / safety concerns emerge.
+          claude_args: '--allowed-tools "Bash,Read,Grep,Glob,WebFetch"'

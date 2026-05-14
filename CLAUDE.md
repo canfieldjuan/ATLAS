@@ -950,6 +950,44 @@ Companion docs:
 - `BUILD_SPEC.md` — P0/P1/P2 priorities, definition of done
 - `CONTEXT.md` — session notes, known debt
 
+### PR Reviews
+
+When asked to review a PR — whether by a local Claude Code session, a GitHub
+Actions run (e.g., `claude-code-review.yml`), or an `@claude` mention — the
+deliverable is **comments on the PR**, not a chat summary. Findings must be
+posted via:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{pr}/reviews --input - < /tmp/review.json
+```
+
+with `event: "COMMENT"` and an inline `comments[]` array. A chat-only
+narration of findings is not a deliverable; the comments on the PR are.
+
+Rules:
+
+- **Inline comments only resolve on lines in the PR diff.** GitHub returns
+  HTTP 422 "Line could not be resolved" for out-of-diff line targets. For
+  findings on unchanged lines, either move the comment to the closest
+  in-diff line or include them in the review `body` with a `file:line`
+  reference.
+- **Use stdin** (`--input - < file.json`) rather than `--input
+  /path/file.json` — the `gh` CLI sometimes errors with "no such file" on
+  direct file paths under sandboxing.
+- **Verify line numbers against the actual file at the PR head**
+  (`git show <sha>:<path>` or fetch the branch) before posting. Don't
+  trust the agent's summary blindly.
+- **Chat summary AFTER posting is fine** as a recap — but the review on
+  the PR is the deliverable.
+- **For review-on-a-PR tasks specifically, posting is mandatory.** If the
+  task only asked you to *analyze* (not post), surface findings in the
+  return message in the structured form.
+
+The `code-review-agent` definition at `.claude/agents/code-review-agent.md`
+encodes the same rules. The `claude-code-review.yml` GitHub Action spawns
+this agent on every PR open/push and inherits these conventions from this
+file.
+
 ---
 
 ## Testing
