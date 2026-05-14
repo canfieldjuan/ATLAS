@@ -111,6 +111,24 @@ def test_load_blog_blueprints_preserves_payload_data_on_bare_object(tmp_path: Pa
     assert loaded.warnings == ()
 
 
+def test_load_blog_blueprints_prefers_explicit_blueprints_wrapper(tmp_path: Path) -> None:
+    path = tmp_path / "blueprints.json"
+    path.write_text(
+        json.dumps({
+            "topic_type": "pricing",
+            "blueprints": [{"title": "Wrapped blueprint"}],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_blog_blueprints_from_file(path, target_mode="vendor_retention")
+
+    assert len(loaded.blueprints) == 1
+    assert loaded.blueprints[0].slug == "wrapped-blueprint"
+    assert loaded.blueprints[0].target_mode == "vendor_retention"
+    assert loaded.warnings == ()
+
+
 def test_load_blog_blueprints_rejects_ambiguous_extension(tmp_path: Path) -> None:
     path = tmp_path / "blueprints.txt"
     path.write_text("[]", encoding="utf-8")
@@ -147,6 +165,15 @@ def test_normalize_blog_blueprint_rows_skips_missing_target_mode() -> None:
     assert loaded.blueprints == ()
     assert loaded.warnings[0].code == "missing_target_mode"
     assert loaded.warnings[0].field == "target_mode"
+
+
+def test_normalize_blog_blueprint_rows_uses_topic_without_storing_it_as_payload() -> None:
+    loaded = normalize_blog_blueprint_rows([
+        {"topic": "Pricing story", "target_mode": "vendor_retention"}
+    ])
+
+    assert loaded.blueprints[0].slug == "pricing-story"
+    assert "topic" not in loaded.blueprints[0].payload
 
 
 @pytest.mark.asyncio

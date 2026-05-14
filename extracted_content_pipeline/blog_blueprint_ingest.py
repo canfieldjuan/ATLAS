@@ -169,7 +169,7 @@ def _normalize_row(
         or default_topic_type
         or "blog_post"
     )
-    typed_keys = {"target_mode", "topic_type", "slug", "suggested_title", "title"}
+    typed_keys = _BLUEPRINT_ROW_KEYS
     payload = {str(key): value for key, value in row.items() if str(key) not in typed_keys}
     return (
         BlogBlueprint(
@@ -201,11 +201,14 @@ def _load_json_rows(path: Path) -> list[Any]:
         return list(data)
     if not isinstance(data, Mapping):
         raise ValueError("JSON blog blueprint data must be an object or array")
+    blueprints = data.get("blueprints")
+    if isinstance(blueprints, Sequence) and not isinstance(blueprints, (str, bytes, bytearray)):
+        return list(blueprints)
     if _looks_like_blueprint_row(data):
         # Bare object: treat as a single-blueprint row, preserving payload keys
         # such as "data" or "rows" when hosts use those names inside blueprints.
         return [dict(data)]
-    for key in ("blueprints", "rows", "data"):
+    for key in ("rows", "data"):
         value = data.get(key)
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             return list(value)
