@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from extracted_content_pipeline.blog_blueprint_ingest import (
+    BlogBlueprintDataFormat,
     load_blog_blueprints_from_file,
     normalize_blog_blueprint_rows,
 )
@@ -36,6 +37,7 @@ class _Pool:
 
     async def fetchval(self, query, *args):
         self.fetchval_calls.append((str(query), args))
+        assert self.fetchval_results, "unexpected extra fetchval call"
         return self.fetchval_results.pop(0)
 
     async def close(self):
@@ -70,6 +72,34 @@ def test_load_blog_blueprints_from_json_payload_normalizes_rows(tmp_path: Path) 
     assert blueprint.suggested_title == "Acme pricing pressure"
     assert blueprint.payload["sections"] == [{"id": "intro"}]
     assert "title" not in blueprint.payload
+
+
+def test_load_blog_blueprints_from_bare_json_object(tmp_path: Path) -> None:
+    path = tmp_path / "blueprint.json"
+    path.write_text(
+        json.dumps({
+            "target_mode": "vendor_retention",
+            "title": "Single blueprint",
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_blog_blueprints_from_file(path)
+
+    assert len(loaded.blueprints) == 1
+    assert loaded.blueprints[0].slug == "single-blueprint"
+
+
+def test_load_blog_blueprints_rejects_ambiguous_extension(tmp_path: Path) -> None:
+    path = tmp_path / "blueprints.txt"
+    path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Cannot infer blog blueprint format"):
+        load_blog_blueprints_from_file(path)
+
+
+def test_blog_blueprint_data_format_is_exported_for_type_hints() -> None:
+    assert BlogBlueprintDataFormat is not None
 
 
 def test_normalize_blog_blueprint_rows_applies_defaults_and_skips_bad_rows() -> None:

@@ -9,10 +9,15 @@ from pathlib import Path
 import re
 from typing import Any, Literal
 
-from .blog_blueprint_postgres import BlogBlueprint
+from .blog_ports import BlogBlueprint
 
 
 BlogBlueprintDataFormat = Literal["auto", "json"]
+_SKIP_WARNING_CODES = frozenset({
+    "missing_slug",
+    "missing_target_mode",
+    "row_not_object",
+})
 
 
 @dataclass(frozen=True)
@@ -50,7 +55,7 @@ class BlogBlueprintLoadResult:
     def as_dict(self) -> dict[str, Any]:
         return {
             "loaded": len(self.blueprints),
-            "skipped": len(self.warnings),
+            "skipped": sum(1 for warning in self.warnings if warning.code in _SKIP_WARNING_CODES),
             "source": self.source,
             "warnings": self.warning_dicts(),
         }
@@ -122,8 +127,8 @@ def _normalize_row(
     row: Mapping[str, Any],
     *,
     row_index: int,
-    default_target_mode: str | None,
-    default_topic_type: str | None,
+    default_target_mode: str,
+    default_topic_type: str,
 ) -> tuple[BlogBlueprint | None, list[BlogBlueprintWarning]]:
     warnings: list[BlogBlueprintWarning] = []
     target_mode = _clean(row.get("target_mode")) or default_target_mode
@@ -192,6 +197,7 @@ def _load_json_rows(path: Path) -> list[Any]:
         value = data.get(key)
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             return list(value)
+    # Bare object: treat as a single-blueprint row.
     return [dict(data)]
 
 
@@ -205,6 +211,7 @@ def _slugify(value: Any) -> str:
 
 
 __all__ = [
+    "BlogBlueprintDataFormat",
     "BlogBlueprintLoadResult",
     "BlogBlueprintWarning",
     "load_blog_blueprints_from_file",

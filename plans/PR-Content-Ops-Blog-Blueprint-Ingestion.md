@@ -24,6 +24,8 @@ Add a small JSON-to-Postgres ingestion seam for blog blueprints:
 - NEW: `scripts/load_extracted_blog_blueprints.py`
 - NEW: `tests/test_extracted_blog_blueprint_ingest.py`
 - NEW: `plans/PR-Content-Ops-Blog-Blueprint-Ingestion.md`
+- EDIT: `extracted_content_pipeline/blog_ports.py`
+- EDIT: `extracted_content_pipeline/blog_blueprint_postgres.py`
 - EDIT: `scripts/run_extracted_pipeline_checks.sh`
 - EDIT: `extracted_content_pipeline/manifest.json`
 - EDIT: `extracted_content_pipeline/README.md`
@@ -65,8 +67,8 @@ dry-run mode that does not open a database connection.
 
 | Area | Estimated LOC |
 |---|---:|
-| Loader module | ~220 |
+| Loader module | ~230 |
 | CLI | ~130 |
-| Tests | ~205 |
-| Docs, manifest, coordination, and runner | ~115 |
-| Total | ~670 |
+| Tests | ~235 |
+| Ports, docs, manifest, coordination, and runner | ~130 |
+| Total | ~725 |

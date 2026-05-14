@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import os
 from pathlib import Path
@@ -105,7 +106,7 @@ async def _main() -> int:
         close = getattr(pool, "close", None)
         if close is not None:
             maybe_awaitable = close()
-            if hasattr(maybe_awaitable, "__await__"):
+            if inspect.isawaitable(maybe_awaitable):
                 await maybe_awaitable
 
     summary = {
@@ -121,7 +122,7 @@ async def _main() -> int:
         mode = "would save" if args.dry_run else "saved"
         print(
             f"{mode} {summary['loaded']} blog blueprint row(s); "
-            f"skipped {summary['skipped']}; warnings {len(summary['warnings'])}"
+            f"skipped {summary['skipped']}"
         )
     return 0
 
