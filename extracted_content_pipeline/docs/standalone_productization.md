@@ -209,6 +209,12 @@ loop for generated assets. Hosts pass `--asset`, `--id`, `--status`, and an
 optional `--account-id`; the CLI calls the matching product-owned Postgres
 repository and emits a JSON hit/miss result without requiring ad hoc SQL.
 
+`extracted_content_pipeline/blog_blueprint_ingest.py` and
+`scripts/load_extracted_blog_blueprints.py` own the host-side blog blueprint
+population path. Hosts can validate a JSON blueprint export in dry-run mode or
+write normalized rows through `PostgresBlogBlueprintRepository` before running
+the blog-post generator.
+
 `extracted_content_pipeline/api/generated_assets.py` owns the host-mounted
 FastAPI surface for generated asset review workflows. It exposes list, CSV/JSON
 export, and status-update routes for reports, landing pages, and sales briefs

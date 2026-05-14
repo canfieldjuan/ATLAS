@@ -139,6 +139,9 @@ source of truth for what remains.
   ports instead of calling the legacy autonomous task path. Blog generation
   retries unparseable LLM JSON once by default and records parse-attempt
   metadata on saved drafts.
+- `blog_blueprint_ingest` and `scripts/load_extracted_blog_blueprints.py`
+  provide the host-side population seam for `blog_blueprints`, so DB-backed
+  blog generation no longer depends on manually pre-seeded blueprint rows.
 - `report_generation`, `landing_page_generation`, and `sales_brief_generation`
   use the same parse-retry policy as campaign and blog assets, so all
   customer-facing generated asset services recover once from malformed LLM JSON
