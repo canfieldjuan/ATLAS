@@ -90,6 +90,27 @@ def test_load_blog_blueprints_from_bare_json_object(tmp_path: Path) -> None:
     assert loaded.blueprints[0].slug == "single-blueprint"
 
 
+def test_load_blog_blueprints_preserves_payload_data_on_bare_object(tmp_path: Path) -> None:
+    path = tmp_path / "blueprint.json"
+    path.write_text(
+        json.dumps({
+            "target_mode": "vendor_retention",
+            "title": "Single blueprint",
+            "data": [{"section": "intro"}],
+            "rows": [{"section": "proof"}],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_blog_blueprints_from_file(path)
+
+    assert len(loaded.blueprints) == 1
+    assert loaded.blueprints[0].slug == "single-blueprint"
+    assert loaded.blueprints[0].payload["data"] == [{"section": "intro"}]
+    assert loaded.blueprints[0].payload["rows"] == [{"section": "proof"}]
+    assert loaded.warnings == ()
+
+
 def test_load_blog_blueprints_rejects_ambiguous_extension(tmp_path: Path) -> None:
     path = tmp_path / "blueprints.txt"
     path.write_text("[]", encoding="utf-8")

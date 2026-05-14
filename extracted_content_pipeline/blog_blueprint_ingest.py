@@ -18,6 +18,14 @@ _SKIP_WARNING_CODES = frozenset({
     "missing_target_mode",
     "row_not_object",
 })
+_BLUEPRINT_ROW_KEYS = frozenset({
+    "slug",
+    "suggested_title",
+    "target_mode",
+    "title",
+    "topic",
+    "topic_type",
+})
 
 
 @dataclass(frozen=True)
@@ -193,12 +201,20 @@ def _load_json_rows(path: Path) -> list[Any]:
         return list(data)
     if not isinstance(data, Mapping):
         raise ValueError("JSON blog blueprint data must be an object or array")
+    if _looks_like_blueprint_row(data):
+        # Bare object: treat as a single-blueprint row, preserving payload keys
+        # such as "data" or "rows" when hosts use those names inside blueprints.
+        return [dict(data)]
     for key in ("blueprints", "rows", "data"):
         value = data.get(key)
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             return list(value)
     # Bare object: treat as a single-blueprint row.
     return [dict(data)]
+
+
+def _looks_like_blueprint_row(row: Mapping[str, Any]) -> bool:
+    return any(str(key) in _BLUEPRINT_ROW_KEYS for key in row)
 
 
 def _clean(value: Any) -> str:
