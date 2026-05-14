@@ -1,0 +1,263 @@
+"""File adapter for standalone blog-blueprint ingestion."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+import json
+from pathlib import Path
+import re
+from typing import Any, Literal
+
+from .blog_ports import BlogBlueprint
+
+
+BlogBlueprintDataFormat = Literal["auto", "json"]
+_SKIP_WARNING_CODES = frozenset({
+    "missing_slug",
+    "missing_target_mode",
+    "row_not_object",
+})
+_BLUEPRINT_ROW_KEYS = frozenset({
+    "slug",
+    "suggested_title",
+    "target_mode",
+    "title",
+    "topic",
+    "topic_type",
+})
+
+
+@dataclass(frozen=True)
+class BlogBlueprintWarning:
+    """Non-fatal warning for one loaded blueprint row."""
+
+    code: str
+    message: str
+    row_index: int | None = None
+    field: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "code": self.code,
+            "message": self.message,
+        }
+        if self.row_index is not None:
+            data["row_index"] = self.row_index
+        if self.field:
+            data["field"] = self.field
+        return data
+
+
+@dataclass(frozen=True)
+class BlogBlueprintLoadResult:
+    """Normalized blog blueprints plus non-fatal validation warnings."""
+
+    blueprints: tuple[BlogBlueprint, ...]
+    warnings: tuple[BlogBlueprintWarning, ...] = ()
+    source: str | None = None
+
+    def warning_dicts(self) -> list[dict[str, Any]]:
+        return [warning.as_dict() for warning in self.warnings]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "loaded": len(self.blueprints),
+            "skipped": sum(1 for warning in self.warnings if warning.code in _SKIP_WARNING_CODES),
+            "source": self.source,
+            "warnings": self.warning_dicts(),
+        }
+
+
+def load_blog_blueprints_from_file(
+    path: str | Path,
+    *,
+    file_format: BlogBlueprintDataFormat = "auto",
+    target_mode: str | None = None,
+    topic_type: str | None = None,
+) -> BlogBlueprintLoadResult:
+    """Load host-supplied blog blueprints from a JSON file."""
+
+    source = Path(path)
+    resolved_format = _resolve_format(source, file_format)
+    if resolved_format != "json":
+        raise ValueError(f"Unsupported blog blueprint file format: {resolved_format}")
+    result = normalize_blog_blueprint_rows(
+        _load_json_rows(source),
+        target_mode=target_mode,
+        topic_type=topic_type,
+    )
+    return BlogBlueprintLoadResult(
+        blueprints=result.blueprints,
+        warnings=result.warnings,
+        source=str(source),
+    )
+
+
+def normalize_blog_blueprint_rows(
+    rows: Sequence[Any],
+    *,
+    target_mode: str | None = None,
+    topic_type: str | None = None,
+) -> BlogBlueprintLoadResult:
+    """Normalize loose JSON rows into ``BlogBlueprint`` objects."""
+
+    blueprints: list[BlogBlueprint] = []
+    warnings: list[BlogBlueprintWarning] = []
+    default_target_mode = _clean(target_mode)
+    default_topic_type = _clean(topic_type)
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            warnings.append(
+                BlogBlueprintWarning(
+                    code="row_not_object",
+                    row_index=index,
+                    message="Skipped row because it is not an object.",
+                )
+            )
+            continue
+        normalized, row_warnings = _normalize_row(
+            row,
+            row_index=index,
+            default_target_mode=default_target_mode,
+            default_topic_type=default_topic_type,
+        )
+        warnings.extend(row_warnings)
+        if normalized is not None:
+            blueprints.append(normalized)
+    return BlogBlueprintLoadResult(
+        blueprints=tuple(blueprints),
+        warnings=tuple(warnings),
+    )
+
+
+def _normalize_row(
+    row: Mapping[str, Any],
+    *,
+    row_index: int,
+    default_target_mode: str,
+    default_topic_type: str,
+) -> tuple[BlogBlueprint | None, list[BlogBlueprintWarning]]:
+    warnings: list[BlogBlueprintWarning] = []
+    target_mode = _clean(row.get("target_mode")) or default_target_mode
+    if not target_mode:
+        warnings.append(
+            BlogBlueprintWarning(
+                code="missing_target_mode",
+                row_index=row_index,
+                field="target_mode",
+                message="Skipped row because target_mode is missing.",
+            )
+        )
+        return None, warnings
+
+    title = _clean(row.get("suggested_title")) or _clean(row.get("title"))
+    slug = _clean(row.get("slug")) or _slugify(title or row.get("topic") or "")
+    if not slug:
+        warnings.append(
+            BlogBlueprintWarning(
+                code="missing_slug",
+                row_index=row_index,
+                field="slug",
+                message="Skipped row because slug is missing and no title can derive it.",
+            )
+        )
+        return None, warnings
+
+    resolved_topic_type = (
+        _clean(row.get("topic_type"))
+        or default_topic_type
+        or "blog_post"
+    )
+    typed_keys = _BLUEPRINT_ROW_KEYS
+    payload = {str(key): value for key, value in row.items() if str(key) not in typed_keys}
+    return (
+        BlogBlueprint(
+            target_mode=target_mode,
+            topic_type=resolved_topic_type,
+            slug=slug,
+            suggested_title=title or slug.replace("-", " ").title(),
+            payload=payload,
+        ),
+        warnings,
+    )
+
+
+def _resolve_format(
+    path: Path,
+    file_format: BlogBlueprintDataFormat,
+) -> Literal["json"]:
+    if file_format == "json":
+        return "json"
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return "json"
+    raise ValueError(f"Cannot infer blog blueprint format from file suffix: {path}")
+
+
+def _load_json_rows(path: Path) -> list[Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, list):
+        return list(data)
+    if not isinstance(data, Mapping):
+        raise ValueError("JSON blog blueprint data must be an object or array")
+    blueprints = data.get("blueprints")
+    if isinstance(blueprints, Sequence) and not isinstance(blueprints, (str, bytes, bytearray)):
+        return _merge_wrapper_defaults(blueprints, _wrapper_defaults(data))
+    if _looks_like_blueprint_row(data):
+        # Bare object: treat as a single-blueprint row, preserving payload keys
+        # such as "data" or "rows" when hosts use those names inside blueprints.
+        return [dict(data)]
+    for key in ("rows", "data"):
+        value = data.get(key)
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return list(value)
+    # Bare object: treat as a single-blueprint row.
+    return [dict(data)]
+
+
+def _looks_like_blueprint_row(row: Mapping[str, Any]) -> bool:
+    return any(str(key) in _BLUEPRINT_ROW_KEYS for key in row)
+
+
+def _wrapper_defaults(row: Mapping[str, Any]) -> dict[str, Any]:
+    defaults: dict[str, Any] = {}
+    for key in ("target_mode", "topic_type"):
+        if _clean(row.get(key)):
+            defaults[key] = row[key]
+    return defaults
+
+
+def _merge_wrapper_defaults(
+    rows: Sequence[Any],
+    defaults: Mapping[str, Any],
+) -> list[Any]:
+    if not defaults:
+        return list(rows)
+    merged_rows: list[Any] = []
+    for row in rows:
+        if isinstance(row, Mapping):
+            merged = dict(defaults)
+            merged.update(row)
+            merged_rows.append(merged)
+        else:
+            merged_rows.append(row)
+    return merged_rows
+
+
+def _clean(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _slugify(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+
+
+__all__ = [
+    "BlogBlueprintDataFormat",
+    "BlogBlueprintLoadResult",
+    "BlogBlueprintWarning",
+    "load_blog_blueprints_from_file",
+    "normalize_blog_blueprint_rows",
+]

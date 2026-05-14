@@ -260,6 +260,9 @@
       "target": "extracted_content_pipeline/blog_generation.py"
     },
     {
+      "target": "extracted_content_pipeline/blog_blueprint_ingest.py"
+    },
+    {
       "target": "extracted_content_pipeline/blog_post_postgres.py"
     },
     {

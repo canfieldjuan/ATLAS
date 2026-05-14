@@ -90,6 +90,32 @@ python scripts/run_extracted_content_pipeline_migrations.py \
   --migration-table customer_content_pipeline_migrations
 ```
 
+## Step 2a: Load Blog Blueprints
+
+Blog-post generation reads unconsumed rows from `blog_blueprints`. Host apps can
+populate that table from an ETL, reasoning layer, editorial queue, or a JSON
+export:
+
+```bash
+python scripts/load_extracted_blog_blueprints.py blog_blueprints.json \
+  --account-id acct_123 \
+  --target-mode vendor_retention \
+  --dry-run
+```
+
+Write the rows after the dry run passes:
+
+```bash
+python scripts/load_extracted_blog_blueprints.py blog_blueprints.json \
+  --account-id acct_123 \
+  --target-mode vendor_retention
+```
+
+The loader accepts a JSON array, a single JSON object, or an object with a
+`blueprints` array. Each row can provide its own `target_mode`; `--target-mode`
+fills rows that omit it. Rows without a target mode are skipped instead of being
+written into an ambiguous tenant queue.
+
 ## Step 3: Validate Customer Data Offline
 
 Before writing to Postgres, validate the same JSON or CSV file through the file

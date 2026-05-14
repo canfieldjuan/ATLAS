@@ -36,6 +36,17 @@ class BlogPostDraft:
         }
 
 
+@dataclass(frozen=True)
+class BlogBlueprint:
+    """In-memory representation of a stored blog blueprint row."""
+
+    target_mode: str
+    topic_type: str
+    slug: str
+    suggested_title: str = ""
+    payload: Mapping[str, Any] = field(default_factory=dict)
+
+
 class BlogBlueprintRepository(Protocol):
     """Read blog blueprints from host-owned intelligence storage."""
 
@@ -82,6 +93,7 @@ class BlogPostRepository(Protocol):
 
 
 __all__ = [
+    "BlogBlueprint",
     "BlogBlueprintRepository",
     "BlogPostDraft",
     "BlogPostRepository",

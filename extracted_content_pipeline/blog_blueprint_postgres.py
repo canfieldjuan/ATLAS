@@ -23,27 +23,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
+from .blog_ports import BlogBlueprint
 from .campaign_ports import JsonDict, TenantScope
 from .storage._jsonb_helpers import (
     decode_jsonb_field,
     json_dump_jsonb,
     row_to_dict,
 )
-
-
-@dataclass(frozen=True)
-class BlogBlueprint:
-    """In-memory representation of a stored blog blueprint row.
-
-    Only used by the ``save_blueprints`` writer; the read path
-    returns plain ``Mapping`` rows for the generator to consume.
-    """
-
-    target_mode: str
-    topic_type: str
-    slug: str
-    suggested_title: str = ""
-    payload: Mapping[str, Any] = ()  # type: ignore[assignment]
 
 
 def _row_to_blueprint(row: Mapping[str, Any]) -> JsonDict:

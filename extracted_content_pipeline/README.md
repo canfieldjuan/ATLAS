@@ -310,6 +310,21 @@ the selected account and target mode before inserting the new rows.
 For the full database-backed host install path, see
 `docs/host_install_runbook.md`.
 
+Load host-produced blog blueprints into `blog_blueprints` before running the
+blog-post output. The JSON file can be an array, a single object, or an object
+with a `blueprints` array:
+
+```bash
+python scripts/load_extracted_blog_blueprints.py blog_blueprints.json \
+  --account-id acct_123 \
+  --target-mode vendor_retention \
+  --dry-run
+
+python scripts/load_extracted_blog_blueprints.py blog_blueprints.json \
+  --account-id acct_123 \
+  --target-mode vendor_retention
+```
+
 Before connecting workers to a customer database or provider, inspect local
 install readiness without opening network or DB handles:
 
