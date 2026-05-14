@@ -26,40 +26,12 @@ The following items appear in older plan docs but are no longer active backlog:
 - Generated asset export and review paths for report, blog post, landing page,
   and sales brief drafts.
 - `blog_post` reasoning catalog/fixture parity.
+- Live execute persistence smoke for all generated assets.
+- Blog blueprint population path.
 
 ## Active Backlog
 
-### 1. Live execute persistence smoke for all generated assets
-
-**Priority:** P0
-
-**Why:** This is the strongest operational proof that AI Content Ops is usable
-outside Atlas. Existing tests cover bundles, route boundaries, offline smokes,
-and provider contracts, but there is still no single live smoke proving:
-
-1. `POST /content-ops/execute` enters the hosted route.
-2. Tenant scope is applied.
-3. Host adapters are used.
-4. Each LLM-backed output persists a real draft.
-5. The response reports generated ids, reasoning usage, and failures correctly.
-
-**Likely slice:** one PR with a focused route-level smoke for the smallest
-fixture set, then expand asset-by-asset if the first version gets too large.
-
-### 2. Blog blueprint population path
-
-**Priority:** P1
-
-**Why:** Blog execution is wired, but the sellable blog path needs a reliable
-way to populate `blog_blueprints`. Older storage work intentionally deferred
-the host autonomous task or ETL that writes blueprints. Without this, blog
-generation can be technically wired while still depending on pre-seeded rows.
-
-**Likely slice:** define the host-side blueprint ingestion/population seam and
-add one CLI or task adapter that writes `PostBlueprint` rows through the
-product-owned repository.
-
-### 3. Intervention or autonomous reasoning provider
+### 1. Intervention or autonomous reasoning provider
 
 **Priority:** P1
 
@@ -72,7 +44,7 @@ layer that content products can consume.
 `intelligence/autonomous_narrative_architect` or equivalent intervention output
 and normalizes it into the existing `CampaignReasoningContextProvider` port.
 
-### 4. DB reasoning provider hardening
+### 2. DB reasoning provider hardening
 
 **Priority:** P2
 
@@ -88,7 +60,7 @@ polish:
 **Likely slice:** start with per-target-mode filtering and settings integration;
 defer admin UI until the storage semantics are stable.
 
-### 5. Full reasoning context drawer/detail UX
+### 3. Full reasoning context drawer/detail UX
 
 **Priority:** P2
 
@@ -101,7 +73,7 @@ contract is already inspectable at a compact level.
 payload first. Do not add a new backend shape unless the current bounded
 payload is insufficient.
 
-### 6. Operator review UX and richer result previews
+### 4. Operator review UX and richer result previews
 
 **Priority:** P3
 
@@ -114,7 +86,6 @@ because batch review improves operator throughput across all asset types.
 
 ## Current Pick Recommendation
 
-Take item 1 next: live execute persistence smoke. It proves the standalone
-product works end-to-end through the same route and adapter seams customers
-would use. If that smoke exposes setup friction, fix the friction before adding
-more UI surface.
+Take item 1 next: intervention/autonomous reasoning provider. It bridges the
+separate Atlas reasoning layer into the already-shipped Content Ops provider
+port without coupling the extracted package back to Atlas internals.
