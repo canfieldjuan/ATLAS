@@ -25,6 +25,7 @@ PRODUCT_OWNED_CAMPAIGN_MIGRATIONS = {
     "152_campaign_draft_export_indexes.sql",
     "092_subcategory_intelligence.sql",
     "276_blog_post_account_scope.sql",
+    "278_campaign_reasoning_context_upsert.sql",
 }
 
 DEFERRED_CROSS_PRODUCT_MIGRATIONS = {
@@ -107,6 +108,9 @@ def test_product_owned_campaign_migrations_define_product_tables() -> None:
     blog_post_scope_schema = (
         migrations_dir / "276_blog_post_account_scope.sql"
     ).read_text()
+    reasoning_upsert_schema = (
+        migrations_dir / "278_campaign_reasoning_context_upsert.sql"
+    ).read_text()
 
     assert "CREATE TABLE IF NOT EXISTS campaign_opportunities" in opportunity_schema
     assert "idx_campaign_opportunities_account_mode" in opportunity_schema
@@ -120,6 +124,10 @@ def test_product_owned_campaign_migrations_define_product_tables() -> None:
     )
     assert "idx_blog_posts_account_status" in blog_post_scope_schema
     assert "idx_blog_posts_account_topic" in blog_post_scope_schema
+    assert "ADD COLUMN IF NOT EXISTS selector_key TEXT" in reasoning_upsert_schema
+    assert "idx_campaign_reasoning_contexts_scope_mode_selector_key" in (
+        reasoning_upsert_schema
+    )
 
 
 def test_manifest_tracks_product_owned_adapter_files() -> None:
@@ -156,6 +164,7 @@ def test_manifest_tracks_product_owned_adapter_files() -> None:
     assert "extracted_content_pipeline/storage/migrations/152_campaign_draft_export_indexes.sql" in owned
     assert "extracted_content_pipeline/storage/migrations/092_subcategory_intelligence.sql" in owned
     assert "extracted_content_pipeline/storage/migrations/276_blog_post_account_scope.sql" in owned
+    assert "extracted_content_pipeline/storage/migrations/278_campaign_reasoning_context_upsert.sql" in owned
     assert "extracted_content_pipeline/reasoning/archetypes.py" in owned
     assert "extracted_content_pipeline/reasoning/temporal.py" in owned
     assert "extracted_content_pipeline/reasoning/evidence_engine.py" in owned
