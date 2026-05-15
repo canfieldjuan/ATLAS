@@ -35,6 +35,8 @@ _EXPORT_COLUMNS = (
     "charts",
     "data_context",
     "metadata",
+    "id",
+    "status",
 )
 
 

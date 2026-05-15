@@ -88,6 +88,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> LandingPageDraft:
         metadata_raw = {}
 
     return LandingPageDraft(
+        id=str(row.get("id") or ""),
         campaign_name=str(row.get("campaign_name") or ""),
         persona=str(row.get("persona") or ""),
         value_prop=str(row.get("value_prop") or ""),
@@ -99,6 +100,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> LandingPageDraft:
         meta=dict(meta_raw),
         reference_ids=tuple(str(r) for r in reference_ids_raw),
         metadata=dict(metadata_raw),
+        status=str(row.get("status") or ""),
     )
 
 
@@ -181,8 +183,8 @@ class PostgresLandingPageRepository:
             params.append(slug)
             clauses.append(f"slug = ${len(params)}")
         sql = (
-            "SELECT campaign_name, persona, value_prop, title, slug, "
-            "hero, sections, cta, meta, reference_ids, metadata "
+            "SELECT id, campaign_name, persona, value_prop, title, slug, "
+            "hero, sections, cta, meta, reference_ids, metadata, status "
             "FROM landing_pages WHERE " + " AND ".join(clauses) + " "
             "ORDER BY created_at DESC"
         )

@@ -75,6 +75,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> SalesBriefDraft:
         metadata_raw = {}
 
     return SalesBriefDraft(
+        id=str(row.get("id") or ""),
         target_id=str(row.get("target_id") or ""),
         target_mode=str(row.get("target_mode") or ""),
         brief_type=str(row.get("brief_type") or ""),
@@ -83,6 +84,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> SalesBriefDraft:
         sections=tuple(_coerce_section(s) for s in sections_raw),
         reference_ids=tuple(str(r) for r in reference_ids_raw),
         metadata=dict(metadata_raw),
+        status=str(row.get("status") or ""),
     )
 
 
@@ -152,8 +154,8 @@ class PostgresSalesBriefRepository:
             params.append(brief_type)
             clauses.append(f"brief_type = ${len(params)}")
         sql = (
-            "SELECT target_id, target_mode, brief_type, title, headline, "
-            "sections, reference_ids, metadata "
+            "SELECT id, target_id, target_mode, brief_type, title, headline, "
+            "sections, reference_ids, metadata, status "
             "FROM sales_briefs WHERE " + " AND ".join(clauses) + " "
             "ORDER BY created_at DESC"
         )
