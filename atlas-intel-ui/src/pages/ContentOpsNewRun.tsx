@@ -1043,18 +1043,33 @@ function ReasoningContextList({
   return (
     <div className="basis-full space-y-1 pt-1">
       {contexts.slice(0, 3).map((context, index) => (
-        <div
+        <details
           key={index}
-          className="rounded border border-emerald-500/20 bg-slate-950/50 px-2 py-1 text-[11px] text-emerald-100"
+          className="group rounded border border-emerald-500/20 bg-slate-950/50 px-2 py-1 text-[11px] text-emerald-100"
         >
-          <div className="font-medium">
-            {context.summary || `Reasoning context ${index + 1}`}
-          </div>
-          <div className="mt-0.5 text-emerald-200/70">
-            theses {context.topTheses?.length ?? 0} · proof points{' '}
-            {context.proofPoints?.length ?? 0}
-          </div>
-        </div>
+          <summary className="cursor-pointer list-none">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 gap-2">
+                <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-emerald-200/60 transition-transform group-open:rotate-90" />
+                <div>
+                  <div className="font-medium">
+                    {context.summary || `Reasoning context ${index + 1}`}
+                  </div>
+                  <div className="mt-0.5 text-emerald-200/70">
+                    {reasoningContextCounts(context).join(' · ')}
+                  </div>
+                </div>
+              </div>
+              <span className="shrink-0 text-[10px] uppercase tracking-wide text-emerald-200/60 group-open:hidden">
+                Details
+              </span>
+              <span className="hidden shrink-0 text-[10px] uppercase tracking-wide text-emerald-200/60 group-open:inline">
+                Hide
+              </span>
+            </div>
+          </summary>
+          <ReasoningContextDetails context={context} />
+        </details>
       ))}
       {contexts.length > 3 && (
         <div className="text-[11px] text-emerald-200/70">
@@ -1063,6 +1078,242 @@ function ReasoningContextList({
       )}
     </div>
   )
+}
+
+function ReasoningContextDetails({
+  context,
+}: {
+  context: CampaignReasoningContextView
+}) {
+  const hasDetails =
+    hasItems(context.topTheses) ||
+    hasItems(context.proofPoints) ||
+    hasAnchorExamples(context.anchorExamples) ||
+    hasItems(context.witnessHighlights) ||
+    hasItems(context.accountSignals) ||
+    hasItems(context.timingWindows) ||
+    hasStringItems(context.coverageLimits) ||
+    hasObjectItems(context.referenceIds) ||
+    hasObjectItems(context.scopeSummary) ||
+    hasObjectItems(context.deltaSummary) ||
+    hasObjectItems(context.extra)
+
+  if (!hasDetails) {
+    return (
+      <div className="mt-2 border-t border-emerald-500/10 pt-2 text-emerald-200/70">
+        No structured reasoning detail returned.
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-2 space-y-2 border-t border-emerald-500/10 pt-2">
+      <ReasoningObjectList label="Top theses" rows={context.topTheses} />
+      <ReasoningObjectList label="Proof points" rows={context.proofPoints} />
+      <ReasoningAnchorExamples anchorExamples={context.anchorExamples} />
+      <ReasoningObjectList label="Witness highlights" rows={context.witnessHighlights} />
+      <ReasoningObjectList label="Account signals" rows={context.accountSignals} />
+      <ReasoningObjectList label="Timing windows" rows={context.timingWindows} />
+      <ReasoningReferenceIds referenceIds={context.referenceIds} />
+      <ReasoningStringList label="Coverage limits" values={context.coverageLimits} />
+      <ReasoningKeyValueBlock label="Scope" value={context.scopeSummary} />
+      <ReasoningKeyValueBlock label="Delta" value={context.deltaSummary} />
+      <ReasoningKeyValueBlock label="Other" value={context.extra} />
+    </div>
+  )
+}
+
+function reasoningContextCounts(context: CampaignReasoningContextView): string[] {
+  const counts = [
+    { label: 'theses', count: context.topTheses?.length ?? 0 },
+    { label: 'proof points', count: context.proofPoints?.length ?? 0 },
+    { label: 'anchors', count: anchorExampleCount(context.anchorExamples) },
+    { label: 'witnesses', count: context.witnessHighlights?.length ?? 0 },
+    { label: 'account signals', count: context.accountSignals?.length ?? 0 },
+    { label: 'timing windows', count: context.timingWindows?.length ?? 0 },
+  ].filter(({ count }) => count > 0)
+
+  if (counts.length === 0) {
+    return ['no structured detail']
+  }
+  return counts.map(({ label, count }) => `${label} ${count}`)
+}
+
+function anchorExampleCount(
+  value?: Record<string, Array<Record<string, unknown>>>,
+): number {
+  if (!value) return 0
+  return Object.values(value).reduce((total, rows) => total + rows.length, 0)
+}
+
+function ReasoningAnchorExamples({
+  anchorExamples,
+}: {
+  anchorExamples?: Record<string, Array<Record<string, unknown>>>
+}) {
+  if (!hasAnchorExamples(anchorExamples)) return null
+  return (
+    <div>
+      <div className="mb-1 font-medium text-emerald-100">Anchor examples</div>
+      <div className="space-y-2">
+        {Object.entries(anchorExamples)
+          .filter(([, rows]) => rows.length > 0)
+          .map(([label, rows]) => (
+            <div key={label} className="space-y-1">
+              <ReasoningObjectList label={labelFromKey(label)} rows={rows} />
+            </div>
+          ))}
+      </div>
+    </div>
+  )
+}
+
+function ReasoningObjectList({
+  label,
+  rows,
+}: {
+  label: string
+  rows?: Array<Record<string, unknown>>
+}) {
+  if (!hasItems(rows)) return null
+  return (
+    <div>
+      <div className="mb-1 font-medium text-emerald-100">{label}</div>
+      <div className="space-y-1">
+        {rows.map((row, index) => (
+          <div
+            key={index}
+            className="rounded border border-slate-800/80 bg-slate-950/70 px-2 py-1 text-emerald-50/90"
+          >
+            {objectEntries(row).map(([key, value]) => (
+              <div key={key} className="grid gap-1 sm:grid-cols-[120px_1fr]">
+                <span className="text-emerald-200/60">{labelFromKey(key)}</span>
+                <span className="break-words text-emerald-50/90">
+                  {formatReasoningValue(value)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ReasoningReferenceIds({
+  referenceIds,
+}: {
+  referenceIds?: Record<string, string[]>
+}) {
+  if (!referenceIds || Object.keys(referenceIds).length === 0) return null
+  return (
+    <div>
+      <div className="mb-1 font-medium text-emerald-100">Reference ids</div>
+      <div className="space-y-1">
+        {Object.entries(referenceIds).map(([key, values]) => (
+          <div key={key} className="grid gap-1 sm:grid-cols-[120px_1fr]">
+            <span className="text-emerald-200/60">{labelFromKey(key)}</span>
+            <span className="break-words font-mono text-[10px] text-emerald-50/90">
+              {Array.isArray(values) ? values.join(', ') : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ReasoningStringList({
+  label,
+  values,
+}: {
+  label: string
+  values?: string[]
+}) {
+  if (!hasStringItems(values)) return null
+  return (
+    <div>
+      <div className="mb-1 font-medium text-emerald-100">{label}</div>
+      <ul className="space-y-1">
+        {values.map((value, index) => (
+          <li
+            key={`${value}-${index}`}
+            className="rounded border border-slate-800/80 bg-slate-950/70 px-2 py-1 text-emerald-50/90"
+          >
+            {value}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function ReasoningKeyValueBlock({
+  label,
+  value,
+}: {
+  label: string
+  value?: Record<string, unknown>
+}) {
+  if (!value || Object.keys(value).length === 0) return null
+  return (
+    <div>
+      <div className="mb-1 font-medium text-emerald-100">{label}</div>
+      <div className="rounded border border-slate-800/80 bg-slate-950/70 px-2 py-1">
+        {objectEntries(value).map(([key, item]) => (
+          <div key={key} className="grid gap-1 sm:grid-cols-[120px_1fr]">
+            <span className="text-emerald-200/60">{labelFromKey(key)}</span>
+            <span className="break-words text-emerald-50/90">
+              {formatReasoningValue(item)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function hasItems(rows?: Array<Record<string, unknown>>): rows is Array<Record<string, unknown>> {
+  return Array.isArray(rows) && rows.length > 0
+}
+
+function hasStringItems(values?: string[]): values is string[] {
+  return Array.isArray(values) && values.length > 0
+}
+
+function hasAnchorExamples(
+  value?: Record<string, Array<Record<string, unknown>>>,
+): value is Record<string, Array<Record<string, unknown>>> {
+  return Boolean(value && Object.values(value).some((rows) => rows.length > 0))
+}
+
+function hasObjectItems(value?: Record<string, unknown> | Record<string, string[]>): boolean {
+  return Boolean(value && Object.keys(value).length > 0)
+}
+
+function objectEntries(value: Record<string, unknown>): Array<[string, unknown]> {
+  return Object.entries(value).filter(([, item]) => item !== null && item !== undefined)
+}
+
+function labelFromKey(key: string): string {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function formatReasoningValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    return value.map(formatReasoningValue).filter(Boolean).join(', ')
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value)
+  }
+  return String(value)
 }
 
 function SignalExtractionSummary({ result }: { result: Record<string, unknown> }) {
