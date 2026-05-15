@@ -363,6 +363,7 @@ function AssetRow({
   const subtitle = assetSubtitle(row, asset)
   const status = textValue(row.status) || 'unknown'
   const canReview = Boolean(id)
+  const preview = assetPreview(row, asset)
 
   return (
     <article className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
@@ -399,6 +400,37 @@ function AssetRow({
                 <span>parse attempts: {row.generation_parse_attempts}</span>
               )}
             </div>
+            {preview && (
+              <div className="mt-4 rounded-md border border-slate-800 bg-slate-900/70 p-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Preview
+                </div>
+                <div className="mt-2 space-y-2">
+                  {preview.heading && (
+                    <div className="text-sm font-medium text-slate-200">
+                      {preview.heading}
+                    </div>
+                  )}
+                  {preview.body && (
+                    <p className="line-clamp-3 text-sm leading-6 text-slate-400">
+                      {preview.body}
+                    </p>
+                  )}
+                  {preview.meta.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {preview.meta.map((item, index) => (
+                        <span
+                          key={`${item}-${index}`}
+                          className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300"
+                        >
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex gap-2">
@@ -464,6 +496,81 @@ function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): str
 
 function textValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): {
+  heading: string
+  body: string
+  meta: string[]
+} | null {
+  if (asset === 'blog_post') {
+    const tags = valueList(row.tags).slice(0, 4)
+    return previewOrNull({
+      heading: textValue(row.description),
+      body: excerpt(textValue(row.content)),
+      meta: tags,
+    })
+  }
+  if (asset === 'landing_page') {
+    const section = firstSection(row.sections)
+    return previewOrNull({
+      heading: objectText(row.hero, 'headline') || section.title,
+      body: excerpt(section.body),
+      meta: [objectText(row.cta, 'label')].filter(Boolean),
+    })
+  }
+  // Reports and sales briefs share the same section/summary preview shape.
+  const section = firstSection(row.sections)
+  return previewOrNull({
+    heading: section.title,
+    body: excerpt(section.body || textValue(row.summary) || textValue(row.headline)),
+    meta: valueList(row.reference_ids).slice(0, 3).map((id) => `ref: ${id}`),
+  })
+}
+
+function previewOrNull(preview: {
+  heading: string
+  body: string
+  meta: string[]
+}): { heading: string; body: string; meta: string[] } | null {
+  return preview.heading || preview.body || preview.meta.length > 0 ? preview : null
+}
+
+function firstSection(value: unknown): { title: string; body: string } {
+  let sections = Array.isArray(value) ? value : []
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value)
+      sections = Array.isArray(parsed) ? parsed : []
+    } catch {
+      sections = []
+    }
+  }
+  const first = sections.find((item) => item && typeof item === 'object')
+  if (!first || typeof first !== 'object') return { title: '', body: '' }
+  const section = first as Record<string, unknown>
+  return {
+    title: textValue(section.title),
+    body: textValue(section.body_markdown) || textValue(section.body),
+  }
+}
+
+function objectText(value: unknown, key: string): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  return textValue((value as Record<string, unknown>)[key])
+}
+
+function valueList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(textValue).filter(Boolean)
+  const text = textValue(value)
+  if (!text) return []
+  return text.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function excerpt(value: string, limit = 260): string {
+  const clean = value.replace(/\s+/g, ' ').trim()
+  if (clean.length <= limit) return clean
+  return `${clean.slice(0, limit - 3).trim()}...`
 }
 
 function downloadCsv(csv: string, filename: string): void {
