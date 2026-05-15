@@ -140,6 +140,15 @@ class SalesBriefRepository(Protocol):
     ) -> bool:
         """Update a draft's status. Returns True on hit, False on miss."""
 
+    async def update_statuses(
+        self,
+        brief_ids: Sequence[str],
+        status: str,
+        *,
+        scope: TenantScope,
+    ) -> Sequence[str]:
+        """Bulk-update draft statuses and return ids that matched the tenant scope."""
+
 
 __all__ = [
     "BriefType",

@@ -8,7 +8,7 @@ Last updated: 2026-05-15
 This is the current ordered backlog for AI Content Ops deferrals surfaced by
 older PR plans and post-merge audits. It is not a full product roadmap; it is
 the short list of follow-up work that still matters after the execution,
-reasoning, export, compact UI parity, and DB reasoning admin seams already
+reasoning, export, review, preview, detail, and DB reasoning admin seams already
 merged.
 
 ## Retired Historical Deferrals
@@ -27,6 +27,8 @@ The following items appear in older plan docs but are no longer active backlog:
   assets.
 - Generated asset export and review paths for report, blog post, landing page,
   and sales brief drafts.
+- Generated asset batch review/status updates and one-query batch updates.
+- Generated asset preview cards and detail drawer.
 - `blog_post` reasoning catalog/fixture parity.
 - Live execute persistence smoke for all generated assets.
 - Blog blueprint population path.
@@ -43,51 +45,33 @@ The following items appear in older plan docs but are no longer active backlog:
 - DB reasoning context hosted admin list/upsert API.
 - DB reasoning context scoped delete/retire API.
 - DB reasoning context admin visibility events.
-- Generated asset batch review/status updates.
 
 ## Active Backlog
 
-### 1. Operator review UX and richer result previews
+### 1. Reasoning product depth and source breadth
 
 **Priority:** P2
 
-**Why:** Batch review/status updates are now done. Older frontend/result-summary
-plans still deferred richer generated-asset previews and component-level tests.
-These are product polish, not core readiness blockers.
-
-**Likely slice:** improve preview cards for report, blog post, landing page,
-and sales brief rows, then add component-level frontend tests for the review
-surface.
-
-### 2. Scale hardening for batch review
-
-**Priority:** P4
-
-**Why:** Generated asset batch review currently reuses the existing scoped
-single-row status update path. That preserves tenant filtering and keeps the
-implementation simple. If hosts start reviewing large batches, repository-level
-bulk SQL may be worth adding.
-
-**Likely slice:** defer until actual batch sizes justify it.
-
-### 3. Reasoning product depth and source breadth
-
-**Priority:** P4
-
 **Why:** AI Content Ops can consume file-backed, DB-backed, single-pass, and
-multi-pass reasoning context. The remaining strategic questions are broader
-than this backlog:
+multi-pass reasoning context. The next value step is deciding how much of the
+standalone reasoning layer each content type should expose and how hosts should
+feed richer customer-specific source bundles into it.
+
+Remaining work:
 
 - More source adapters for customer-specific data bundles.
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
 - Host policy for richer falsification/cache/narrative-planning knobs.
+- Per-content-type opt-in rules so simple assets avoid heavy reasoning paths
+  while long-form assets can use stateful reasoning.
 
-**Likely slice:** handle through product roadmap or the reasoning-core backlog,
-not as Content Ops cleanup.
+**Likely slice:** start with a narrow source-bundle adapter or a small
+reasoning-provider capability check that directly improves host setup, rather
+than a broad architecture refactor.
 
 ## Current Pick Recommendation
 
-Take item 1 next if we want operator-facing polish: richer generated-asset
-previews and component tests. Take item 3 if we want to switch back to the
-larger reasoning-core/product-depth track.
+Take item 1 next. The generated asset operator workflow is now usable; the
+remaining leverage is increasing the quality and breadth of reasoning/source
+inputs that feed AI Content Ops.

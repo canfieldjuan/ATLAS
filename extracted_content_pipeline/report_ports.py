@@ -131,6 +131,15 @@ class ReportRepository(Protocol):
         Returns True on hit, False on miss (wrong id or wrong tenant).
         """
 
+    async def update_statuses(
+        self,
+        report_ids: Sequence[str],
+        status: str,
+        *,
+        scope: TenantScope,
+    ) -> Sequence[str]:
+        """Bulk-update draft statuses and return ids that matched the tenant scope."""
+
 
 __all__ = [
     "ReportDraft",

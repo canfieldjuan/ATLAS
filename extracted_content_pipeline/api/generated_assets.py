@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 try:
     from fastapi import APIRouter, Body, HTTPException, Query, Response
@@ -130,6 +131,19 @@ def _review_ids(value: Any) -> tuple[str, ...]:
     if not ids:
         raise HTTPException(status_code=400, detail="ids must be a non-empty list")
     return tuple(ids)
+
+
+def _partition_uuid_ids(ids: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    valid: list[str] = []
+    invalid: list[str] = []
+    for asset_id in ids:
+        try:
+            UUID(asset_id)
+        except ValueError:
+            invalid.append(asset_id)
+        else:
+            valid.append(asset_id)
+    return tuple(valid), tuple(invalid)
 
 
 def _asset_arg(value: str) -> str:
@@ -278,22 +292,20 @@ def create_generated_asset_router(
                     "batch size exceeds max_batch_size "
                     f"({resolved_config.max_batch_size})"
                 ),
-            )
+        )
         status = _review_status(payload.get("status"))
-        updated_ids: list[str] = []
-        missing_ids: list[str] = []
-        for asset_id in ids:
-            updated = await _update_asset_status(
-                asset_name,
-                pool,
-                asset_id=asset_id,
-                status=status,
-                scope=tenant,
-            )
-            if updated:
-                updated_ids.append(asset_id)
-            else:
-                missing_ids.append(asset_id)
+        valid_ids, invalid_ids = _partition_uuid_ids(ids)
+        updated = set(await _update_asset_statuses(
+            asset_name,
+            pool,
+            asset_ids=valid_ids,
+            status=status,
+            scope=tenant,
+        ))
+        updated_ids = [asset_id for asset_id in ids if asset_id in updated]
+        missing = set(invalid_ids)
+        missing.update(asset_id for asset_id in valid_ids if asset_id not in updated)
+        missing_ids = [asset_id for asset_id in ids if asset_id in missing]
         return {
             "account_id": tenant.account_id,
             "asset": asset_name,
@@ -375,6 +387,25 @@ async def _update_asset_status(
         return await PostgresLandingPageRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "sales_brief":
         return await PostgresSalesBriefRepository(pool).update_status(asset_id, status, scope=scope)
+    raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
+
+
+async def _update_asset_statuses(
+    asset: str,
+    pool: Any,
+    *,
+    asset_ids: Sequence[str],
+    status: str,
+    scope: TenantScope,
+) -> Sequence[str]:
+    if asset == "blog_post":
+        return await PostgresBlogPostRepository(pool).update_statuses(asset_ids, status, scope=scope)
+    if asset == "report":
+        return await PostgresReportRepository(pool).update_statuses(asset_ids, status, scope=scope)
+    if asset == "landing_page":
+        return await PostgresLandingPageRepository(pool).update_statuses(asset_ids, status, scope=scope)
+    if asset == "sales_brief":
+        return await PostgresSalesBriefRepository(pool).update_statuses(asset_ids, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
 
 
