@@ -97,6 +97,9 @@ export default function ContentOpsNewRun() {
   }
   const reasoningConfigured = catalog.reasoning.configured
   const reasoningSource = catalog.reasoning.source
+  const reasoningCapabilityHint = reasoningConfigured
+    ? reasoningStatusHint(catalog.reasoning)
+    : ''
 
   // Codex P2 fix: any form mutation invalidates a stale preview verdict
   // and plan panel so the user never sees a "Can run" badge or plan
@@ -299,6 +302,11 @@ export default function ContentOpsNewRun() {
             )}
           >
             Reasoning {reasoningConfigured ? 'ready' : 'not configured'}
+            {reasoningCapabilityHint && (
+              <span className="ml-1 text-slate-400">
+                {reasoningCapabilityHint}
+              </span>
+            )}
           </span>
           <button
             type="button"
@@ -1314,6 +1322,24 @@ function formatReasoningValue(value: unknown): string {
     return JSON.stringify(value)
   }
   return String(value)
+}
+
+function reasoningStatusHint(
+  reasoning: ContentOpsCatalog['reasoning'],
+): string {
+  const values = [
+    ...(reasoning.modes ?? []),
+    ...(reasoning.packs ?? []),
+    ...(reasoning.capabilities ?? []),
+  ]
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+
+  if (values.length === 0) return ''
+  const shown = values.slice(0, 3)
+  const suffix = values.length > shown.length ? ` +${values.length - shown.length} more` : ''
+  const hint = `${shown.join(', ')}${suffix}`
+  return hint.length > 42 ? `(${values.length} capabilities)` : `(${hint})`
 }
 
 function SignalExtractionSummary({ result }: { result: Record<string, unknown> }) {

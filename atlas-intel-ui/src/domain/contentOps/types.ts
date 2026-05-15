@@ -52,6 +52,9 @@ export interface ContentOpsCatalog {
   reasoning: {
     configured: boolean
     source?: 'db' | 'file' | 'none' | string
+    modes?: Array<string | number | boolean>
+    packs?: Array<string | number | boolean>
+    capabilities?: Array<string | number | boolean>
   }
   ingestionProfiles: string[]
 }
