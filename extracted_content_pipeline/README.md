@@ -222,11 +222,13 @@ The list/export CLI defaults to `--limit 20`; raise the limit deliberately for
 larger inventories.
 
 Hosts can also mount `api.reasoning_contexts` for `GET
-/campaign-reasoning-contexts` inventory and `POST /campaign-reasoning-contexts`
-single-row upsert. The host injects pool, auth, and tenant scope; scoped
+/campaign-reasoning-contexts` inventory, `POST /campaign-reasoning-contexts`
+single-row upsert, and scoped `DELETE /campaign-reasoning-contexts/{id}`. The
+host injects pool, auth, and tenant scope; scoped
 tenants cannot override `account_id` in the request body. Upsert requests must
 use an explicit `context` object; alias keys and typoed context keys are
-rejected. Pass auth dependencies when mounting the router.
+rejected. Delete requests require tenant scope or an explicit `account_id`
+query parameter. Pass auth dependencies when mounting the router.
 
 To insert or update host-produced reasoning rows without hand-writing SQL, load
 a JSON file with selectors plus a context payload:
@@ -864,7 +866,7 @@ Several small utility shims provide product-owned local behavior by default so t
 - `api/generated_assets.py`: optional FastAPI router factory for host-mounted
   report, landing page, and sales brief list/export/review routes
 - `api/reasoning_contexts.py`: optional FastAPI router factory for
-  host-mounted reasoning context list/upsert routes
+  host-mounted reasoning context list/upsert/delete routes
 - `api/seller_campaigns.py`: optional FastAPI router factory for host-mounted
   seller target management, category refresh, opportunity preparation, and
   seller draft review routes

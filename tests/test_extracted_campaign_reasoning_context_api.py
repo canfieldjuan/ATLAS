@@ -28,6 +28,7 @@ class _Repository:
     def __init__(self) -> None:
         self.list_calls: list[dict[str, Any]] = []
         self.save_calls: list[dict[str, Any]] = []
+        self.delete_calls: list[dict[str, Any]] = []
 
     async def list_contexts(self, **kwargs: Any) -> CampaignReasoningContextListResult:
         self.list_calls.append(kwargs)
@@ -50,6 +51,10 @@ class _Repository:
     async def save_context(self, **kwargs: Any) -> str:
         self.save_calls.append(kwargs)
         return "ctx-1"
+
+    async def delete_context(self, context_id: str, **kwargs: Any) -> bool:
+        self.delete_calls.append({"context_id": context_id, **kwargs})
+        return True
 
 
 def _client(
@@ -148,3 +153,27 @@ def test_reasoning_context_admin_rejects_invalid_payloads(
 
     assert response.status_code == 400
     assert response.json()["detail"] == detail
+
+
+def test_reasoning_context_admin_deletes_with_scoped_account() -> None:
+    repository = _Repository()
+
+    response = _client(repository, scope=TenantScope(account_id="acct-scope")).delete(
+        "/campaign-reasoning-contexts/ctx-1?account_id=acct-payload"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "id": "ctx-1",
+        "account_id": "acct-scope",
+        "deleted": True,
+    }
+    assert repository.delete_calls[0]["scope"].account_id == "acct-scope"
+
+
+def test_reasoning_context_admin_rejects_unscoped_delete() -> None:
+    response = _client(_Repository(), scope=None).delete("/campaign-reasoning-contexts/ctx-1")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "account_id is required"

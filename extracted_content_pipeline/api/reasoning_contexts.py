@@ -185,4 +185,25 @@ def create_reasoning_context_admin_router(
             "selectors": list(selectors),
         }
 
+    @router.delete("/{context_id}")
+    async def delete_context(
+        context_id: str,
+        account_id: str | None = Query(None),
+    ) -> dict[str, Any]:
+        pool = await _resolve_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        scoped_account_id = scope.account_id or _clean(account_id)
+        if not scoped_account_id:
+            raise HTTPException(status_code=400, detail="account_id is required")
+        deleted = await repo_factory(pool, resolved_config.table).delete_context(
+            context_id,
+            scope=TenantScope(account_id=scoped_account_id, user_id=scope.user_id),
+        )
+        return {
+            "status": "ok",
+            "id": context_id,
+            "account_id": scoped_account_id,
+            "deleted": bool(deleted),
+        }
+
     return router

@@ -8,7 +8,7 @@ so the host route mount (PR #402 / PR #462) can swap providers
 without touching the bundle's `with_reasoning_context()`
 derivation.
 
-Test inventory (19 tests):
+Test inventory (21 tests):
 
 1. `read_campaign_reasoning_context` builds the candidate
    selector array from `target_id` + opportunity keys
@@ -46,6 +46,8 @@ Test inventory (19 tests):
 17. `delete_stale_contexts` counts stale rows in dry-run mode.
 18. `delete_stale_contexts` deletes stale rows only when requested.
 19. `delete_stale_contexts` rejects non-positive age thresholds.
+20. `delete_context` deletes one row by id within account scope.
+21. `delete_context` rejects empty ids or unscoped deletes.
 
 Test harness uses an asyncpg-shaped fake pool (matches
 `tests/test_extracted_blog_blueprint_postgres.py`).
@@ -74,6 +76,8 @@ class _Pool:
         self.fetchrow_result: Any = None
         self.fetchval_calls: list[dict[str, Any]] = []
         self.fetchrow_calls: list[dict[str, Any]] = []
+        self.execute_calls: list[dict[str, Any]] = []
+        self.execute_result: Any = "DELETE 1"
 
     async def fetchval(self, query: str, *args: Any) -> Any:
         self.fetchval_calls.append({"query": query, "args": args})
@@ -82,6 +86,10 @@ class _Pool:
     async def fetchrow(self, query: str, *args: Any) -> Any:
         self.fetchrow_calls.append({"query": query, "args": args})
         return self.fetchrow_result
+
+    async def execute(self, query: str, *args: Any) -> Any:
+        self.execute_calls.append({"query": query, "args": args})
+        return self.execute_result
 
 
 @pytest.mark.asyncio
@@ -565,3 +573,30 @@ async def test_delete_stale_contexts_rejects_non_positive_days() -> None:
     with pytest.raises(ValueError):
         await repo.delete_stale_contexts(older_than_days=0)
     assert pool.fetchval_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_context_deletes_one_scoped_row() -> None:
+    pool = _Pool()
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    deleted = await repo.delete_context(
+        "ctx-1",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert deleted is True
+    call = pool.execute_calls[0]
+    assert 'DELETE FROM "campaign_reasoning_contexts"' in call["query"]
+    assert "account_id = $2" in call["query"]
+    assert call["args"] == ("ctx-1", "acct-1")
+
+
+@pytest.mark.asyncio
+async def test_delete_context_rejects_unscoped_or_empty_ids() -> None:
+    repo = PostgresCampaignReasoningContextRepository(pool=_Pool())
+
+    with pytest.raises(ValueError, match="context_id is required"):
+        await repo.delete_context("", scope=TenantScope(account_id="acct-1"))
+    with pytest.raises(ValueError, match="scope.account_id"):
+        await repo.delete_context("ctx-1", scope=TenantScope())
