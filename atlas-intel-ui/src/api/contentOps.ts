@@ -2,12 +2,15 @@
  * AI Content Ops API adapter.
  *
  * Typed fetch wrappers + wire-shape types for the four
- * `/content-ops/*` routes the backend exposes:
+ * `/content-ops/*` and `/content-assets/*` routes the backend exposes:
  *
  *   GET  /content-ops/control-surfaces
  *   POST /content-ops/preview
  *   POST /content-ops/plan
  *   POST /content-ops/execute
+ *   GET  /content-assets/{asset}/drafts
+ *   GET  /content-assets/{asset}/drafts/export
+ *   POST /content-assets/{asset}/drafts/review
  *
  * Wire types are 1:1 with the backend JSON (snake_case), matching
  * the convention in `client.ts` / `b2bClient.ts`. camelCase
@@ -28,6 +31,7 @@ import { API_BASE } from './config'
 // via `ContentOpsControlSurfaceApiConfig(prefix="/api/v1/content-ops")`
 // or equivalent.
 const BASE = `${API_BASE}/api/v1/content-ops`
+const ASSETS_BASE = `${API_BASE}/api/v1/content-assets`
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -183,6 +187,63 @@ export type ContentOpsExecuteOutcome =
   | { kind: 'services_unavailable'; detail: string }             // 503
   | { kind: 'request_invalid'; detail: string }                  // 400 from ValueError
 
+// GET /content-assets/{asset}/drafts and review/export helpers.
+
+export type GeneratedAssetType =
+  | 'blog_post'
+  | 'report'
+  | 'landing_page'
+  | 'sales_brief'
+
+export interface GeneratedAssetDraft {
+  id?: string
+  title?: string
+  slug?: string
+  status?: string
+  target_id?: string
+  target_mode?: string
+  report_type?: string
+  topic_type?: string
+  campaign_name?: string
+  brief_type?: string
+  description?: string
+  summary?: string
+  headline?: string
+  generation_total_tokens?: number
+  generation_parse_attempts?: number
+  reasoning_context_used?: boolean
+  reasoning_wedge?: string
+  reasoning_confidence?: number
+  [key: string]: unknown
+}
+
+export interface GeneratedAssetListParams {
+  status?: string
+  target_mode?: string
+  report_type?: string
+  campaign_name?: string
+  slug?: string
+  topic_type?: string
+  brief_type?: string
+  format?: string
+  limit?: number
+}
+
+export interface GeneratedAssetListResponse {
+  count: number
+  limit: number
+  filters: Record<string, unknown>
+  rows: GeneratedAssetDraft[]
+}
+
+export interface GeneratedAssetReviewResponse {
+  account_id?: string | null
+  asset: GeneratedAssetType
+  id: string
+  status: string
+  updated: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Internal fetch plumbing
 // ---------------------------------------------------------------------------
@@ -259,6 +320,66 @@ async function postJson<T>(path: string, body: ContentOpsRequestBody): Promise<T
   return rawJson<T>(res)
 }
 
+function queryString(params: GeneratedAssetListParams): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue
+    search.set(key, String(value))
+  }
+  const query = search.toString()
+  return query ? `?${query}` : ''
+}
+
+async function getAssetJson<T>(
+  asset: GeneratedAssetType,
+  path: string,
+  params: GeneratedAssetListParams = {},
+): Promise<T> {
+  const url = `${ASSETS_BASE}/${asset}${path}${queryString(params)}`
+  const doFetch = () => fetchWithApiFallback(url, { headers: authHeaders() })
+  const res = await withRefreshOn401(doFetch)
+  if (!res.ok) {
+    const body = await rawText(res)
+    throw new Error(`API ${res.status}: ${body || res.statusText}`)
+  }
+  return rawJson<T>(res)
+}
+
+async function postAssetJson<T>(
+  asset: GeneratedAssetType,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  const url = `${ASSETS_BASE}/${asset}${path}`
+  const doFetch = () =>
+    fetchWithApiFallback(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body),
+    })
+  const res = await withRefreshOn401(doFetch)
+  if (!res.ok) {
+    const text = await rawText(res)
+    throw new Error(`API ${res.status}: ${text || res.statusText}`)
+  }
+  return rawJson<T>(res)
+}
+
+async function getAssetText(
+  asset: GeneratedAssetType,
+  path: string,
+  params: GeneratedAssetListParams = {},
+): Promise<string> {
+  const url = `${ASSETS_BASE}/${asset}${path}${queryString(params)}`
+  const doFetch = () => fetchWithApiFallback(url, { headers: authHeaders() })
+  const res = await withRefreshOn401(doFetch)
+  if (!res.ok) {
+    const body = await rawText(res)
+    throw new Error(`API ${res.status}: ${body || res.statusText}`)
+  }
+  return rawText(res)
+}
+
 // ---------------------------------------------------------------------------
 // Public fetch wrappers
 // ---------------------------------------------------------------------------
@@ -266,6 +387,34 @@ async function postJson<T>(path: string, body: ContentOpsRequestBody): Promise<T
 /** GET /content-ops/control-surfaces -- catalog + presets + execution flags. */
 export function fetchContentOpsControlSurfaces(): Promise<ContentOpsCatalogResponse> {
   return getJson<ContentOpsCatalogResponse>('/control-surfaces')
+}
+
+/** GET /content-assets/{asset}/drafts -- persisted generated assets. */
+export function fetchGeneratedAssetDrafts(
+  asset: GeneratedAssetType,
+  params: GeneratedAssetListParams = {},
+): Promise<GeneratedAssetListResponse> {
+  return getAssetJson<GeneratedAssetListResponse>(asset, '/drafts', params)
+}
+
+/** GET /content-assets/{asset}/drafts/export?format=csv -- CSV body. */
+export function exportGeneratedAssetDraftsCsv(
+  asset: GeneratedAssetType,
+  params: GeneratedAssetListParams = {},
+): Promise<string> {
+  return getAssetText(asset, '/drafts/export', { ...params, format: 'csv' })
+}
+
+/** POST /content-assets/{asset}/drafts/review -- approve/reject a draft. */
+export function reviewGeneratedAssetDraft(
+  asset: GeneratedAssetType,
+  id: string,
+  status: 'approved' | 'rejected',
+): Promise<GeneratedAssetReviewResponse> {
+  return postAssetJson<GeneratedAssetReviewResponse>(asset, '/drafts/review', {
+    id,
+    status,
+  })
 }
 
 /** POST /content-ops/preview -- preflight validation. */

@@ -1,0 +1,387 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import {
+  ArrowRight,
+  CheckCircle2,
+  Download,
+  Loader2,
+  RefreshCw,
+  XCircle,
+} from 'lucide-react'
+import { clsx } from 'clsx'
+import {
+  exportGeneratedAssetDraftsCsv,
+  fetchGeneratedAssetDrafts,
+  reviewGeneratedAssetDraft,
+  type GeneratedAssetDraft,
+  type GeneratedAssetListResponse,
+  type GeneratedAssetType,
+} from '../api/contentOps'
+import { PageError } from '../components/ErrorBoundary'
+
+type StatusFilter = 'draft' | 'approved' | 'rejected' | 'all'
+
+const ASSETS: Array<{
+  id: GeneratedAssetType
+  label: string
+  description: string
+}> = [
+  {
+    id: 'report',
+    label: 'Reports',
+    description: 'Structured market, account, and vendor reports.',
+  },
+  {
+    id: 'blog_post',
+    label: 'Blog Posts',
+    description: 'SEO-ready long-form content drafts.',
+  },
+  {
+    id: 'landing_page',
+    label: 'Landing Pages',
+    description: 'Campaign pages with hero, sections, CTA, and metadata.',
+  },
+  {
+    id: 'sales_brief',
+    label: 'Sales Briefs',
+    description: 'Pre-call and account-facing sales enablement assets.',
+  },
+]
+
+const STATUSES: StatusFilter[] = ['draft', 'approved', 'rejected', 'all']
+
+export default function ContentOpsAssetsReview() {
+  const [asset, setAsset] = useState<GeneratedAssetType>('report')
+  const [status, setStatus] = useState<StatusFilter>('draft')
+  const [limit, setLimit] = useState(20)
+  const [data, setData] = useState<GeneratedAssetListResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+
+  const params = useMemo(
+    () => ({
+      status: status === 'all' ? '' : status,
+      limit,
+    }),
+    [limit, status],
+  )
+
+  const load = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true)
+    else setLoading(true)
+    setError(null)
+    setActionError(null)
+    try {
+      const result = await fetchGeneratedAssetDrafts(asset, params)
+      setData(result)
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error(String(err)))
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [asset, params])
+
+  useEffect(() => {
+    void load(false)
+  }, [load])
+
+  const handleReview = async (row: GeneratedAssetDraft, nextStatus: 'approved' | 'rejected') => {
+    const id = assetId(row)
+    if (!id) return
+    setBusyId(id)
+    setActionError(null)
+    try {
+      await reviewGeneratedAssetDraft(asset, id, nextStatus)
+      await load(true)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleExport = async () => {
+    setExporting(true)
+    setActionError(null)
+    try {
+      const csv = await exportGeneratedAssetDraftsCsv(asset, params)
+      downloadCsv(csv, `${asset}_drafts.csv`)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  if (error && !data) {
+    return <PageError error={error} onRetry={() => void load(true)} />
+  }
+
+  const activeAsset = ASSETS.find((item) => item.id === asset) || ASSETS[0]
+  const rows = data?.rows || []
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium uppercase tracking-wide text-cyan-300">
+            AI Content Ops
+          </p>
+          <h1 className="mt-2 text-3xl font-semibold text-white">
+            Generated Asset Review
+          </h1>
+          <p className="mt-2 max-w-3xl text-sm text-slate-400">
+            Review persisted drafts from the Content Ops generation pipeline,
+            approve assets that are ready, reject misses, and export the current
+            queue for offline review.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            to="/content-ops/new"
+            className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-200"
+          >
+            New run
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+          <button
+            type="button"
+            onClick={() => void load(true)}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-200 disabled:opacity-60"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
+      </header>
+
+      <section className="grid gap-3 md:grid-cols-4">
+        {ASSETS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setAsset(item.id)}
+            className={clsx(
+              'rounded-lg border p-4 text-left transition',
+              asset === item.id
+                ? 'border-cyan-400 bg-cyan-500/10'
+                : 'border-slate-800 bg-slate-900/60 hover:border-slate-600',
+            )}
+          >
+            <div className="text-sm font-semibold text-white">{item.label}</div>
+            <p className="mt-1 text-xs text-slate-400">{item.description}</p>
+          </button>
+        ))}
+      </section>
+
+      <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-white">{activeAsset.label}</h2>
+            <p className="text-sm text-slate-400">{activeAsset.description}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value as StatusFilter)}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+            >
+              {STATUSES.map((item) => (
+                <option key={item} value={item}>
+                  {item === 'all' ? 'All statuses' : item}
+                </option>
+              ))}
+            </select>
+            <select
+              value={limit}
+              onChange={(event) => setLimit(Number(event.target.value))}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+            >
+              {[10, 20, 50, 100].map((item) => (
+                <option key={item} value={item}>
+                  {item} rows
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={exporting || loading}
+              className="inline-flex items-center gap-2 rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+            >
+              {exporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              Export CSV
+            </button>
+          </div>
+        </div>
+
+        {actionError && (
+          <div className="mt-4 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+            {actionError}
+          </div>
+        )}
+        {error && data && (
+          <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+            Refresh failed: {error.message}
+          </div>
+        )}
+
+        <div className="mt-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-20 text-slate-400">
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+              Loading generated assets...
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="rounded-md border border-slate-800 bg-slate-950/50 px-4 py-10 text-center text-sm text-slate-400">
+              No {status === 'all' ? '' : status} {activeAsset.label.toLowerCase()} found.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {rows.map((row, index) => (
+                <AssetRow
+                  key={assetId(row) || `${asset}-${index}`}
+                  row={row}
+                  asset={asset}
+                  busy={busyId === assetId(row)}
+                  onReview={handleReview}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function AssetRow({
+  row,
+  asset,
+  busy,
+  onReview,
+}: {
+  row: GeneratedAssetDraft
+  asset: GeneratedAssetType
+  busy: boolean
+  onReview: (row: GeneratedAssetDraft, status: 'approved' | 'rejected') => void
+}) {
+  const id = assetId(row)
+  const title = assetTitle(row, asset)
+  const subtitle = assetSubtitle(row, asset)
+  const status = textValue(row.status) || 'unknown'
+  const canReview = Boolean(id)
+
+  return (
+    <article className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-base font-semibold text-white">{title}</h3>
+            <span className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300">
+              {status}
+            </span>
+            {row.reasoning_context_used && (
+              <span className="rounded bg-violet-500/10 px-2 py-0.5 text-xs text-violet-200">
+                reasoning
+              </span>
+            )}
+          </div>
+          {subtitle && <p className="mt-1 text-sm text-slate-400">{subtitle}</p>}
+          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+            {id && <span className="font-mono">id: {id}</span>}
+            {row.reasoning_wedge && <span>wedge: {textValue(row.reasoning_wedge)}</span>}
+            {typeof row.generation_total_tokens === 'number' && (
+              <span>tokens: {row.generation_total_tokens}</span>
+            )}
+            {typeof row.generation_parse_attempts === 'number' && (
+              <span>parse attempts: {row.generation_parse_attempts}</span>
+            )}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onReview(row, 'approved')}
+            disabled={!canReview || busy || status === 'approved'}
+            title={canReview ? 'Approve draft' : 'Draft id missing'}
+            className="inline-flex items-center gap-2 rounded-md border border-emerald-500/40 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            Approve
+          </button>
+          <button
+            type="button"
+            onClick={() => onReview(row, 'rejected')}
+            disabled={!canReview || busy || status === 'rejected'}
+            title={canReview ? 'Reject draft' : 'Draft id missing'}
+            className="inline-flex items-center gap-2 rounded-md border border-rose-500/40 px-3 py-2 text-sm text-rose-200 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+            Reject
+          </button>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function assetId(row: GeneratedAssetDraft): string {
+  return textValue(row.id)
+}
+
+function assetTitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string {
+  return (
+    textValue(row.title) ||
+    textValue(row.headline) ||
+    textValue(row.slug) ||
+    textValue(row.target_id) ||
+    textValue(row.campaign_name) ||
+    `${asset} draft`
+  )
+}
+
+function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string {
+  if (asset === 'blog_post') {
+    return [row.topic_type, row.description].map(textValue).filter(Boolean).join(' | ')
+  }
+  if (asset === 'landing_page') {
+    return [row.campaign_name, row.slug].map(textValue).filter(Boolean).join(' | ')
+  }
+  if (asset === 'sales_brief') {
+    return [row.target_mode, row.brief_type, row.target_id]
+      .map(textValue)
+      .filter(Boolean)
+      .join(' | ')
+  }
+  return [row.target_mode, row.report_type, row.summary]
+    .map(textValue)
+    .filter(Boolean)
+    .join(' | ')
+}
+
+function textValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function downloadCsv(csv: string, filename: string): void {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}

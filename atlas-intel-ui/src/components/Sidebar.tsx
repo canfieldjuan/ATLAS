@@ -17,6 +17,8 @@ import {
   Users,
   FileText,
   Megaphone,
+  ClipboardCheck,
+  Sparkles,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuth } from '../auth/AuthContext'
@@ -59,6 +61,8 @@ const b2bRetentionLinks: NavItem[] = [
   { to: '/b2b/reviews', icon: MessageSquareText, label: 'Reviews' },
   { to: '/b2b/reports', icon: FileText, label: 'Reports', minPlan: 'b2b_starter' },
   { to: '/b2b/campaigns', icon: Megaphone, label: 'Campaigns', minPlan: 'b2b_growth' },
+  { to: '/content-ops/new', icon: Sparkles, label: 'Content Ops', minPlan: 'b2b_growth' },
+  { to: '/content-ops/assets', icon: ClipboardCheck, label: 'Asset Review', minPlan: 'b2b_growth' },
 ]
 
 const b2bChallengerLinks: NavItem[] = [
@@ -69,6 +73,8 @@ const b2bChallengerLinks: NavItem[] = [
   { to: '/b2b/campaigns', icon: Megaphone, label: 'Campaigns', minPlan: 'b2b_growth' },
   { to: '/b2b/reports', icon: FileText, label: 'Reports', minPlan: 'b2b_starter' },
   { to: '/b2b/reviews', icon: MessageSquareText, label: 'Reviews' },
+  { to: '/content-ops/new', icon: Sparkles, label: 'Content Ops', minPlan: 'b2b_growth' },
+  { to: '/content-ops/assets', icon: ClipboardCheck, label: 'Asset Review', minPlan: 'b2b_growth' },
 ]
 
 const PRODUCT_TITLES: Record<string, string> = {
