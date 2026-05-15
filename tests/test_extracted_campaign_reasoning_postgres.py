@@ -8,7 +8,7 @@ so the host route mount (PR #402 / PR #462) can swap providers
 without touching the bundle's `with_reasoning_context()`
 derivation.
 
-Test inventory (8 tests):
+Test inventory (12 tests):
 
 1. `read_campaign_reasoning_context` builds the candidate
    selector array from `target_id` + opportunity keys
@@ -33,6 +33,12 @@ Test inventory (8 tests):
    `CampaignReasoningContext`) and round-trips through
    `normalize_campaign_reasoning_context` so the persisted
    payload matches the file-backed loader's expected layout.
+9. `read_campaign_reasoning_context` filters by target_mode,
+   with blank target-mode rows kept as fallback matches.
+10. Exact target-mode rows rank before blank fallback rows at
+    the same selector priority.
+11. Target-mode caller input is normalized before filtering.
+12. `save_context` normalizes target-mode values before writing.
 
 Test harness uses an asyncpg-shaped fake pool (matches
 `tests/test_extracted_blog_blueprint_postgres.py`).
@@ -95,6 +101,7 @@ async def test_read_uses_candidate_selectors_array() -> None:
     args = pool.fetchrow_calls[0]["args"]
     assert args[0] == "acct-1"
     selectors = args[1]
+    assert args[2] == "vendor"
     # case-as-given + lowercase variants for each non-empty key
     assert "ACME-123" in selectors
     assert "acme-123" in selectors
@@ -104,11 +111,13 @@ async def test_read_uses_candidate_selectors_array() -> None:
     query = pool.fetchrow_calls[0]["query"]
     assert "account_id = $1" in query
     assert "selectors && $2::text[]" in query
+    assert "target_mode = $3 OR target_mode = ''" in query
     # Priority ordering (Codex P2): exact target_id should beat a
     # broader newer company-name match. Selector-position MIN
     # subquery ranks rows by which of the candidates they matched.
     assert "unnest($2::text[]) WITH ORDINALITY" in query
     assert "ORDER BY" in query and "updated_at DESC" in query
+    assert "CASE WHEN $3 <> '' AND target_mode = $3" in query
     assert "LIMIT 1" in query
 
 
@@ -134,12 +143,77 @@ async def test_read_priority_subquery_ranks_before_updated_at() -> None:
 
     query = pool.fetchrow_calls[0]["query"]
     # Priority subquery must appear in the ORDER BY clause,
-    # before the updated_at DESC tie-breaker.
+    # before the target-mode and updated_at tie-breakers.
     priority_idx = query.find("MIN(c.idx)")
+    target_mode_idx = query.find("CASE WHEN $3 <> '' AND target_mode = $3")
     updated_idx = query.find("updated_at DESC")
     assert priority_idx >= 0
+    assert target_mode_idx >= 0
     assert updated_idx >= 0
-    assert priority_idx < updated_idx
+    assert priority_idx < target_mode_idx < updated_idx
+
+
+@pytest.mark.asyncio
+async def test_read_filters_by_target_mode_with_blank_fallback() -> None:
+    """A nonblank request mode must not read a row saved for a
+    different nonblank mode. Blank target-mode rows remain shared
+    fallback contexts for legacy/global seed data."""
+
+    pool = _Pool()
+    pool.fetchrow_result = None
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    await repo.read_campaign_reasoning_context(
+        scope=TenantScope(account_id="acct-1"),
+        target_id="ACME-123",
+        target_mode="vendor_retention",
+        opportunity={},
+    )
+
+    query = pool.fetchrow_calls[0]["query"]
+    args = pool.fetchrow_calls[0]["args"]
+    assert args[2] == "vendor_retention"
+    assert "AND ($3 = '' OR target_mode = $3 OR target_mode = '')" in query
+
+
+@pytest.mark.asyncio
+async def test_read_normalizes_target_mode_before_filtering() -> None:
+    """Target-mode values are persisted lowercase by convention;
+    normalize caller input so mixed-case request values still match."""
+
+    pool = _Pool()
+    pool.fetchrow_result = None
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    await repo.read_campaign_reasoning_context(
+        scope=TenantScope(account_id="acct-1"),
+        target_id="ACME-123",
+        target_mode="Vendor_Retention",
+        opportunity={},
+    )
+
+    args = pool.fetchrow_calls[0]["args"]
+    assert args[2] == "vendor_retention"
+
+
+@pytest.mark.asyncio
+async def test_read_empty_target_mode_preserves_legacy_unfiltered_lookup() -> None:
+    """Empty target_mode keeps the old broad lookup behavior for
+    callers that do not know their mode yet."""
+
+    pool = _Pool()
+    pool.fetchrow_result = None
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    await repo.read_campaign_reasoning_context(
+        scope=TenantScope(account_id="acct-1"),
+        target_id="ACME-123",
+        target_mode="",
+        opportunity={},
+    )
+
+    args = pool.fetchrow_calls[0]["args"]
+    assert args[2] == ""
 
 
 @pytest.mark.asyncio
@@ -268,6 +342,28 @@ async def test_save_context_round_trips_payload_jsonb() -> None:
     payload = json.loads(args[3])
     assert "reasoning_context" in payload
     assert payload["reasoning_context"]["top_theses"][0]["summary"] == "losing on price"
+
+
+@pytest.mark.asyncio
+async def test_save_context_normalizes_target_mode_before_writing() -> None:
+    """Persisted target_mode must match the read-path lowercase
+    convention so mixed-case writer input stays readable."""
+
+    pool = _Pool()
+    pool.fetchval_results = ["ctx-uuid-mode"]
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    await repo.save_context(
+        scope=TenantScope(account_id="acct-1"),
+        selectors=("Acme Corp",),
+        context=CampaignReasoningContext(
+            top_theses=({"summary": "Acme losing on price"},),
+        ),
+        target_mode=" Vendor_Retention ",
+    )
+
+    args = pool.fetchval_calls[0]["args"]
+    assert args[1] == "vendor_retention"
 
 
 @pytest.mark.asyncio

@@ -354,18 +354,47 @@ def describe_content_ops_reasoning_context_provider(
 
 
 def _read_db_enabled() -> bool:
-    """Parse the DB opt-in env var; default ``False`` when unset
-    or unrecognized so a typo'd value resolves to "off"."""
+    """Parse the DB opt-in flag.
 
-    value = os.environ.get(_DB_ENV_VAR, "").strip().lower()
-    return value in {"true", "1", "yes", "on"}
+    The legacy top-level env var is the explicit override. When it
+    is unset, fall back to Atlas settings so operators can configure
+    the provider alongside the rest of ``b2b_campaign``.
+    """
+
+    value = os.environ.get(_DB_ENV_VAR)
+    if value is not None:
+        return _truthy(value)
+    return _settings_db_enabled()
 
 
 def _read_intervention_enabled() -> bool:
     """Parse the intervention opt-in env var."""
 
-    value = os.environ.get(_INTERVENTION_ENV_VAR, "").strip().lower()
-    return value in {"true", "1", "yes", "on"}
+    value = os.environ.get(_INTERVENTION_ENV_VAR, "")
+    return _truthy(value)
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _settings_db_enabled() -> bool:
+    try:
+        from atlas_brain.config import settings
+    except Exception as exc:
+        logger.warning(
+            "Content Ops reasoning DB settings read failed: %s; "
+            "DB-backed provider stays disabled.",
+            exc,
+        )
+        return False
+    return bool(
+        getattr(
+            settings.b2b_campaign,
+            "content_ops_reasoning_db_enabled",
+            False,
+        )
+    )
 
 
 def _intervention_candidate_selectors(

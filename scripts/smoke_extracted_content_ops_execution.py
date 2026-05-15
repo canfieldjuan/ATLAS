@@ -54,7 +54,14 @@ class _OfflinePostgresReasoningPool:
         _query: str,
         _account_id: str,
         selectors: list[str],
+        target_mode: str = "",
     ) -> dict[str, Any] | None:
+        if str(target_mode or "") not in {
+            "",
+            "vendor_retention",
+            "marketing_campaign",
+        }:
+            return None
         wanted = {"opp_smoke", "content ops smoke", "acme"}
         if wanted.intersection({str(item).strip().lower() for item in selectors}):
             return {"payload": _POSTGRES_FIXTURE_PAYLOAD}

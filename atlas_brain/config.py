@@ -4729,6 +4729,14 @@ class B2BCampaignConfig(BaseSettings):
         default="vendor_retention",
         description="Campaign target mode: vendor_retention | challenger_intel | churning_company",
     )
+    content_ops_reasoning_db_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable DB-backed AI Content Ops reasoning context reads. "
+            "Legacy ATLAS_CONTENT_OPS_REASONING_DB_ENABLED still takes "
+            "precedence when set."
+        ),
+    )
     personas: list[str] = Field(
         default=["executive", "technical", "operations", "evaluator", "champion"],
         description="Persona types to generate campaigns for (buying committee coverage)",
