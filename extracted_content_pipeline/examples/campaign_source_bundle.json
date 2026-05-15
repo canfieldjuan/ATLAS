@@ -1,0 +1,38 @@
+{
+  "account_id": "acct_demo_bundle",
+  "company": "Acme Logistics",
+  "vendor": "HubSpot",
+  "email": "ops@example.com",
+  "title": "VP Revenue Operations",
+  "segment": "enterprise logistics",
+  "reviews": [
+    {
+      "review_id": "bundle-review-acme-1",
+      "review_text": "Pricing increased again this quarter, and the RevOps team is comparing HubSpot with Salesforce before renewal.",
+      "pain_category": "pricing pressure",
+      "rating": 2,
+      "source_url": "https://example.com/reviews/bundle-acme-1"
+    }
+  ],
+  "support_tickets": [
+    {
+      "ticket_id": "bundle-ticket-acme-1",
+      "subject": "Reporting export blocked before renewal",
+      "message": "The operations team cannot export campaign attribution data without upgrading to a higher tier.",
+      "pain_category": "reporting friction",
+      "source_url": "https://example.com/tickets/bundle-acme-1"
+    }
+  ],
+  "surveys": [
+    {
+      "response_id": "bundle-survey-acme-1",
+      "nps_score": 4,
+      "open_ended_response": "We need campaign follow-up tied to buyer signals, not another manual spreadsheet.",
+      "pain_points": [
+        "manual follow-up",
+        "buyer signal gaps"
+      ],
+      "source_url": "https://example.com/surveys/bundle-acme-1"
+    }
+  ]
+}

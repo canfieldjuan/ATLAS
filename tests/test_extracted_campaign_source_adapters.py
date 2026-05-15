@@ -17,6 +17,9 @@ CLI = ROOT / "scripts/build_extracted_campaign_opportunities_from_sources.py"
 EXAMPLE_SOURCE_ROWS = (
     ROOT / "extracted_content_pipeline/examples/campaign_source_rows.jsonl"
 )
+EXAMPLE_SOURCE_BUNDLE = (
+    ROOT / "extracted_content_pipeline/examples/campaign_source_bundle.json"
+)
 
 
 def test_source_row_maps_review_text_to_campaign_opportunity() -> None:
@@ -269,6 +272,27 @@ def test_packaged_source_rows_example_loads() -> None:
     assert loaded.opportunities[0]["evidence"][0]["source_type"] == "review"
     assert loaded.opportunities[1]["evidence"][0]["source_type"] == "transcript"
     assert loaded.opportunities[2]["evidence"][0]["source_type"] == "support_ticket"
+    assert loaded.warnings == ()
+
+
+def test_packaged_source_bundle_example_loads_all_collections() -> None:
+    loaded = load_source_campaign_opportunities_from_file(EXAMPLE_SOURCE_BUNDLE)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "bundle-review-acme-1",
+        "bundle-ticket-acme-1",
+        "bundle-survey-acme-1",
+    ]
+    assert [row["company_name"] for row in loaded.opportunities] == [
+        "Acme Logistics",
+        "Acme Logistics",
+        "Acme Logistics",
+    ]
+    assert [row["source_type"] for row in loaded.opportunities] == [
+        "review",
+        "support_ticket",
+        "nps_response",
+    ]
     assert loaded.warnings == ()
 
 
