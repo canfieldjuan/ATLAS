@@ -210,6 +210,12 @@ export interface GeneratedAssetDraft {
   description?: string
   summary?: string
   headline?: string
+  content?: string
+  tags?: string[] | string
+  hero?: Record<string, unknown>
+  sections?: Array<Record<string, unknown>> | string
+  cta?: Record<string, unknown>
+  reference_ids?: string[] | string
   generation_total_tokens?: number
   generation_parse_attempts?: number
   reasoning_context_used?: boolean
