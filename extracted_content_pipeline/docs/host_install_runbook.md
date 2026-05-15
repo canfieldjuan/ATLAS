@@ -363,6 +363,7 @@ python scripts/upsert_extracted_campaign_reasoning_contexts.py \
   reasoning-contexts.json \
   --account-id acct_123 \
   --target-mode vendor_retention \
+  --validate-opportunities \
   --audit-log logs/reasoning-context-upserts.jsonl \
   --dry-run
 ```
@@ -370,7 +371,9 @@ python scripts/upsert_extracted_campaign_reasoning_contexts.py \
 Rows can include `selectors` directly or selector fields such as `target_id`,
 `company_name`, `contact_email`, and `vendor_name`. Omit `--dry-run` after
 validation to write the rows. `--audit-log` records one metadata-only JSONL
-entry per saved row after successful writes.
+entry per saved row after successful writes. `--validate-opportunities` checks
+each row against active `campaign_opportunities` before saving, which catches
+typoed selectors during larger host imports.
 
 ## Step 6: Add Optional Prompt Overrides
 

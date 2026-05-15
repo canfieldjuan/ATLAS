@@ -78,6 +78,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Optional JSONL file for one metadata-only entry per saved row.",
     )
+    parser.add_argument(
+        "--validate-opportunities",
+        action="store_true",
+        help=(
+            "Before writing, require each context row to match an active "
+            "campaign_opportunities row by selector."
+        ),
+    )
+    parser.add_argument(
+        "--opportunity-table",
+        default="campaign_opportunities",
+        help="Opportunity table used by --validate-opportunities.",
+    )
     return parser.parse_args(argv)
 
 
@@ -125,6 +138,16 @@ def _clean_values(values: Sequence[Any]) -> tuple[str, ...]:
             continue
         cleaned.append(text)
     return tuple(cleaned)
+
+
+def _identifier(value: str) -> str:
+    parts = str(value or "").strip().split(".")
+    if not parts or any(not part for part in parts):
+        raise ValueError(f"invalid SQL identifier: {value!r}")
+    for part in parts:
+        if not all(char.isalnum() or char == "_" for char in part):
+            raise ValueError(f"invalid SQL identifier: {value!r}")
+    return ".".join(f'"{part}"' for part in parts)
 
 
 def _row_selectors(row: Mapping[str, Any], extra_selectors: Sequence[str]) -> tuple[str, ...]:
@@ -175,6 +198,48 @@ def _prepare_contexts(
     return prepared
 
 
+async def _validate_opportunity_matches(
+    pool: Any,
+    prepared: Sequence[Mapping[str, Any]],
+    *,
+    opportunity_table: str,
+) -> None:
+    """Require each prepared context row to match an active opportunity."""
+
+    table = _identifier(opportunity_table)
+    missing: list[int] = []
+    for index, item in enumerate(prepared, start=1):
+        scope = item["scope"]
+        selectors = tuple(str(value) for value in item["selectors"])
+        lowered = tuple(value.lower() for value in selectors)
+        matched = await pool.fetchval(
+            f"""
+            SELECT 1
+            FROM {table}
+            WHERE status = 'active'
+              AND ($1 = '' OR account_id = $1)
+              -- NULL target_mode is a legacy/global opportunity row and remains compatible.
+              AND ($2 = '' OR target_mode = $2 OR target_mode IS NULL)
+              AND (
+                target_id = ANY($3::text[])
+                OR lower(company_name) = ANY($4::text[])
+                OR lower(vendor_name) = ANY($4::text[])
+                OR lower(contact_email) = ANY($4::text[])
+              )
+            LIMIT 1
+            """,
+            scope.account_id or "",
+            str(item["target_mode"] or "").strip().lower(),
+            list(selectors),
+            list(lowered),
+        )
+        if matched is None:
+            missing.append(index)
+    if missing:
+        rows = ", ".join(str(index) for index in missing)
+        raise ValueError(f"opportunity validation failed for rows: {rows}")
+
+
 async def _upsert_contexts(
     repository: PostgresCampaignReasoningContextRepository,
     *,
@@ -183,6 +248,9 @@ async def _upsert_contexts(
     default_target_mode: str,
     extra_selectors: Sequence[str],
     audit_log: Path | None = None,
+    validate_opportunities: bool = False,
+    opportunity_pool: Any | None = None,
+    opportunity_table: str = "campaign_opportunities",
 ) -> dict[str, Any]:
     prepared = _prepare_contexts(
         payload=payload,
@@ -190,6 +258,14 @@ async def _upsert_contexts(
         default_target_mode=default_target_mode,
         extra_selectors=extra_selectors,
     )
+    if validate_opportunities:
+        if opportunity_pool is None:
+            raise ValueError("opportunity_pool is required when validation is enabled")
+        await _validate_opportunity_matches(
+            opportunity_pool,
+            prepared,
+            opportunity_table=opportunity_table,
+        )
 
     saved_ids: list[str] = []
     for index, item in enumerate(prepared, start=1):
@@ -231,31 +307,44 @@ def _append_audit_log(path: Path, entries: Sequence[Mapping[str, Any]]) -> None:
             handle.write("\n")
 
 
-def _dry_run_contexts(
+def _dry_run_result(
+    prepared: Sequence[Mapping[str, Any]],
     *,
-    payload: Any,
-    default_account_id: str,
-    default_target_mode: str,
-    extra_selectors: Sequence[str],
+    validated_opportunities: bool = False,
 ) -> dict[str, Any]:
-    prepared = _prepare_contexts(
-        payload=payload,
-        default_account_id=default_account_id,
-        default_target_mode=default_target_mode,
-        extra_selectors=extra_selectors,
-    )
-    return {"status": "dry_run", "would_upsert": len(prepared)}
+    result = {"status": "dry_run", "would_upsert": len(prepared)}
+    if validated_opportunities:
+        result["validated_opportunities"] = len(prepared)
+    return result
 
 
 async def _main_from_args(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     payload = _load_payload(args.path)
     if args.dry_run:
-        result = _dry_run_contexts(
+        prepared = _prepare_contexts(
             payload=payload,
             default_account_id=str(args.account_id or ""),
             default_target_mode=str(args.target_mode or ""),
             extra_selectors=tuple(args.selector or ()),
+        )
+        if args.validate_opportunities:
+            if not args.database_url:
+                raise SystemExit(
+                    "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL"
+                )
+            pool = await _create_pool(args.database_url)
+            try:
+                await _validate_opportunity_matches(
+                    pool,
+                    prepared,
+                    opportunity_table=args.opportunity_table,
+                )
+            finally:
+                await pool.close()
+        result = _dry_run_result(
+            prepared,
+            validated_opportunities=bool(args.validate_opportunities),
         )
     else:
         if not args.database_url:
@@ -275,6 +364,9 @@ async def _main_from_args(argv: list[str] | None = None) -> int:
                 default_target_mode=str(args.target_mode or ""),
                 extra_selectors=tuple(args.selector or ()),
                 audit_log=args.audit_log,
+                validate_opportunities=bool(args.validate_opportunities),
+                opportunity_pool=pool,
+                opportunity_table=args.opportunity_table,
             )
         finally:
             await pool.close()

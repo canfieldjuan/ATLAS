@@ -45,6 +45,20 @@ class _FailingRepository(_Repository):
         return f"ctx-{len(self.calls)}"
 
 
+class _Pool:
+    def __init__(self, matches: list[Any] | None = None) -> None:
+        self.matches = list(matches or [])
+        self.fetchval_calls: list[dict[str, Any]] = []
+        self.closed = False
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        self.fetchval_calls.append({"query": query, "args": args})
+        return self.matches.pop(0) if self.matches else None
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def _read_audit_entries(path: Path) -> list[dict[str, Any]]:
     return [
         json.loads(line)
@@ -109,10 +123,10 @@ def test_row_context_prefers_nested_context() -> None:
     }
 
 
-def test_dry_run_contexts_validates_without_repository() -> None:
-    """Dry-run exercises row validation and reports write count only."""
+def test_dry_run_result_reports_prepared_write_count() -> None:
+    """Dry-run output is derived from already validated prepared rows."""
 
-    result = upsert_cli._dry_run_contexts(
+    prepared = upsert_cli._prepare_contexts(
         payload={
             "contexts": [
                 {
@@ -126,7 +140,23 @@ def test_dry_run_contexts_validates_without_repository() -> None:
         extra_selectors=[],
     )
 
-    assert result == {"status": "dry_run", "would_upsert": 1}
+    assert upsert_cli._dry_run_result(prepared) == {
+        "status": "dry_run",
+        "would_upsert": 1,
+    }
+
+
+def test_dry_run_result_reports_validated_opportunities() -> None:
+    """Dry-run output can report DB opportunity validation without writes."""
+
+    assert upsert_cli._dry_run_result(
+        [{"selectors": ("opp-1",)}],
+        validated_opportunities=True,
+    ) == {
+        "status": "dry_run",
+        "would_upsert": 1,
+        "validated_opportunities": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -314,6 +344,159 @@ async def test_upsert_contexts_appends_audit_log_across_runs_and_rows(
     entries = _read_audit_entries(audit_log)
     assert [entry["row_index"] for entry in entries] == [1, 2, 1]
     assert [entry["context_id"] for entry in entries] == ["ctx-1", "ctx-2", "ctx-1"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_validates_opportunity_matches_before_writing() -> None:
+    """Optional validation requires a live opportunity match for every row."""
+
+    repository = _Repository()
+    pool = _Pool(matches=[1])
+
+    result = await upsert_cli._upsert_contexts(
+        repository,  # type: ignore[arg-type]
+        payload={
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "account_id": "acct-1",
+                    "target_mode": "Vendor_Retention",
+                    "context": {"top_theses": [{"summary": "x"}]},
+                },
+            ]
+        },
+        default_account_id="",
+        default_target_mode="",
+        extra_selectors=["Acme"],
+        validate_opportunities=True,
+        opportunity_pool=pool,
+    )
+
+    assert result["upserted"] == 1
+    assert len(repository.calls) == 1
+    call = pool.fetchval_calls[0]
+    assert 'FROM "campaign_opportunities"' in call["query"]
+    assert "status = 'active'" in call["query"]
+    assert "target_id = ANY($3::text[])" in call["query"]
+    assert call["args"] == (
+        "acct-1",
+        "vendor_retention",
+        ["Acme", "opp-1"],
+        ["acme", "opp-1"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_rejects_unmatched_opportunity_before_writing() -> None:
+    """Validation failure happens before the reasoning row is saved."""
+
+    repository = _Repository()
+    pool = _Pool(matches=[None])
+
+    with pytest.raises(ValueError, match="opportunity validation failed for rows: 1"):
+        await upsert_cli._upsert_contexts(
+            repository,  # type: ignore[arg-type]
+            payload={
+                "contexts": [
+                    {
+                        "target_id": "missing-opp",
+                        "context": {"top_theses": [{"summary": "x"}]},
+                    },
+                ]
+            },
+            default_account_id="acct-1",
+            default_target_mode="vendor_retention",
+            extra_selectors=[],
+            validate_opportunities=True,
+            opportunity_pool=pool,
+        )
+
+    assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_reports_all_unmatched_opportunity_rows_before_writing() -> None:
+    """Validation collects every missing row before rejecting the batch."""
+
+    repository = _Repository()
+    pool = _Pool(matches=[1, None, None])
+
+    with pytest.raises(
+        ValueError,
+        match="opportunity validation failed for rows: 2, 3",
+    ):
+        await upsert_cli._upsert_contexts(
+            repository,  # type: ignore[arg-type]
+            payload={
+                "contexts": [
+                    {
+                        "target_id": "opp-1",
+                        "context": {"top_theses": [{"summary": "x"}]},
+                    },
+                    {
+                        "target_id": "missing-2",
+                        "context": {"top_theses": [{"summary": "y"}]},
+                    },
+                    {
+                        "target_id": "missing-3",
+                        "context": {"top_theses": [{"summary": "z"}]},
+                    },
+                ]
+            },
+            default_account_id="acct-1",
+            default_target_mode="vendor_retention",
+            extra_selectors=[],
+            validate_opportunities=True,
+            opportunity_pool=pool,
+        )
+
+    assert len(pool.fetchval_calls) == 3
+    assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_main_dry_run_with_opportunity_validation_opens_db_but_does_not_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: Any,
+) -> None:
+    """Validated dry-runs check opportunity matches but skip context writes."""
+
+    payload_path = tmp_path / "contexts.json"
+    payload_path.write_text(
+        json.dumps({
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "context": {"top_theses": [{"summary": "x"}]},
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    pool = _Pool(matches=[1])
+
+    async def create_pool(database_url: str) -> Any:
+        assert database_url == "postgres://example"
+        return pool
+
+    monkeypatch.setattr(upsert_cli, "_create_pool", create_pool)
+    exit_code = await upsert_cli._main_from_args([
+        str(payload_path),
+        "--database-url",
+        "postgres://example",
+        "--dry-run",
+        "--validate-opportunities",
+        "--json",
+    ])
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "dry_run",
+        "would_upsert": 1,
+        "validated_opportunities": 1,
+    }
+    assert pool.closed is True
 
 
 @pytest.mark.asyncio
