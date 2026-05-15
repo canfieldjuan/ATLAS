@@ -39,6 +39,7 @@ The following items appear in older plan docs but are no longer active backlog:
 - DB reasoning stale-context cleanup CLI.
 - DB reasoning upsert dry-run.
 - DB reasoning upsert metadata audit log.
+- DB reasoning upsert live-opportunity validation.
 - Generated asset batch review/status updates.
 
 ## Active Backlog
@@ -65,21 +66,7 @@ Remaining work:
 repository methods. Keep full audit-table persistence separate unless a host
 needs centralized audit storage immediately.
 
-### 2. Bulk validation before reasoning upsert
-
-**Priority:** P2
-
-**Why:** The upsert CLI validates row shape, selectors, and context payloads,
-but it does not verify that supplied selectors or target ids match live
-customer opportunity rows before saving. That is acceptable for trusted ETL,
-but risky for larger host imports where typoed selectors create unreachable or
-mis-scoped reasoning contexts.
-
-**Likely slice:** add an optional validation mode that checks input rows against
-the host opportunity table before write. Keep it opt-in so custom hosts that
-use nonstandard opportunity storage can continue using the existing CLI.
-
-### 3. Operator review UX and richer result previews
+### 2. Operator review UX and richer result previews
 
 **Priority:** P3
 
@@ -91,7 +78,7 @@ These are product polish, not core readiness blockers.
 and sales brief rows, then add component-level frontend tests for the review
 surface.
 
-### 4. Scale hardening for batch review
+### 3. Scale hardening for batch review
 
 **Priority:** P4
 
@@ -102,7 +89,7 @@ bulk SQL may be worth adding.
 
 **Likely slice:** defer until actual batch sizes justify it.
 
-### 5. Reasoning product depth and source breadth
+### 4. Reasoning product depth and source breadth
 
 **Priority:** P4
 
@@ -121,5 +108,5 @@ not as Content Ops cleanup.
 ## Current Pick Recommendation
 
 Take item 1 next if we want operator-facing progress: reasoning context admin
-workflow. Take item 2 next if we want a smaller backend-only safety slice:
-bulk validation before reasoning upsert.
+workflow. Take item 2 next if we want frontend polish: richer generated-asset
+previews and component tests.

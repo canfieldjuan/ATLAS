@@ -230,6 +230,7 @@ python scripts/upsert_extracted_campaign_reasoning_contexts.py \
   --account-id acct_123 \
   --target-mode vendor_retention \
   --selector "Acme" \
+  --validate-opportunities \
   --audit-log logs/reasoning-context-upserts.jsonl \
   --dry-run
 ```
@@ -239,7 +240,9 @@ The input may be a single row, an array, or a wrapper such as
 `target_id` / `company_name` / `contact_email`, and either `context`,
 `reasoning_context`, or `campaign_reasoning_context`. Omit `--dry-run` after
 validation to write the rows. `--audit-log` appends metadata-only JSONL entries
-after successful writes.
+after successful writes. Add `--validate-opportunities` when the host wants the
+CLI to confirm each context row matches an active `campaign_opportunities` row
+before writing.
 
 For lightweight installs that do not already have reasoning JSON, use
 `services.single_pass_reasoning_provider.SinglePassCampaignReasoningProvider`.
