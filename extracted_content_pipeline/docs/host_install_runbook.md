@@ -145,6 +145,11 @@ python scripts/smoke_extracted_content_pipeline_host.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl
+
+python scripts/smoke_extracted_content_pipeline_host.py \
+  extracted_content_pipeline/examples/campaign_source_bundle.json \
+  --source-rows \
+  --source-format json
 ```
 
 For source-row CSV exports, pass `--source-format csv` to the same smoke
@@ -178,6 +183,11 @@ ready-made opportunities, they can preview the normalized opportunity payload:
 python scripts/build_extracted_campaign_opportunities_from_sources.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --output customer_opportunities.json
+
+python scripts/build_extracted_campaign_opportunities_from_sources.py \
+  extracted_content_pipeline/examples/campaign_source_bundle.json \
+  --format json \
+  --output customer_bundle_opportunities.json
 ```
 
 The source adapter copies `review_text`, `transcript`, `complaint`, `message`,
@@ -186,6 +196,9 @@ The source adapter copies `review_text`, `transcript`, `complaint`, `message`,
 `quote`, or `text` into the opportunity `evidence` field, preserving source
 ids and inferred source types for prompt context and later review. Source rows
 can be JSON, JSONL, or CSV; pass `--format csv` for CSV source exports.
+Customer bundle JSON can group `reviews`, `support_tickets`, `surveys`, and
+other recognized collections under shared account metadata; use `--format json`
+or `--source-format json` for that shape.
 
 When a source export includes more than one source-text field, the adapter uses
 the first recognized field in this order: `text`, `review_text`, `transcript`,
@@ -205,6 +218,12 @@ python scripts/run_extracted_campaign_generation_example.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl \
+  --limit 1
+
+python scripts/run_extracted_campaign_generation_example.py \
+  extracted_content_pipeline/examples/campaign_source_bundle.json \
+  --source-rows \
+  --source-format json \
   --limit 1
 ```
 
@@ -237,6 +256,12 @@ python scripts/load_extracted_campaign_opportunities.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl \
+  --account-id acct_123
+
+python scripts/load_extracted_campaign_opportunities.py \
+  extracted_content_pipeline/examples/campaign_source_bundle.json \
+  --source-rows \
+  --source-format json \
   --account-id acct_123
 ```
 

@@ -40,10 +40,11 @@ source of truth for what remains.
 - `campaign_source_adapters` converts review, transcript, complaint,
   support-ticket, conversation, case, survey, NPS, CSAT, or document source
   rows into normalized campaign opportunities so hosts can feed richer text
-  sources into the same generation/import path. The Postgres import CLI and
-  offline generation CLI can consume these source rows directly with
-  `--source-rows`; JSON, JSONL, and CSV source-row exports are supported, and
-  `examples/campaign_source_rows.jsonl` provides a packaged starter input.
+	  sources into the same generation/import path. The Postgres import CLI and
+	  offline generation CLI can consume these source rows directly with
+	  `--source-rows`; JSON, JSONL, and CSV source-row exports are supported, and
+	  `examples/campaign_source_rows.jsonl` plus
+	  `examples/campaign_source_bundle.json` provide packaged starter inputs.
   Ticket and conversation rows can also provide nested `messages`, `comments`,
   `thread`, `conversation`, or `entries` arrays when the source text is not
   available as one scalar field.

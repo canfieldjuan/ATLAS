@@ -152,6 +152,11 @@ python scripts/build_extracted_campaign_opportunities_from_sources.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --output customer_opportunities.json
 
+python scripts/build_extracted_campaign_opportunities_from_sources.py \
+  extracted_content_pipeline/examples/campaign_source_bundle.json \
+  --format json \
+  --output customer_bundle_opportunities.json
+
 python scripts/run_extracted_campaign_generation_example.py customer_opportunities.json
 ```
 
@@ -174,6 +179,11 @@ python scripts/run_extracted_campaign_generation_example.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl
+
+python scripts/run_extracted_campaign_generation_example.py \
+  extracted_content_pipeline/examples/campaign_source_bundle.json \
+  --source-rows \
+  --source-format json
 ```
 
 They can also be loaded directly into the Postgres opportunity table:
@@ -188,6 +198,10 @@ python scripts/load_extracted_campaign_opportunities.py \
 
 For source-row CSV exports, pass `--source-format csv` to the same conversion,
 generation, import, or smoke commands.
+For customer bundle JSON files that group collections such as `reviews`,
+`support_tickets`, and `surveys` under shared account metadata, use
+`--source-format json`; the packaged `campaign_source_bundle.json` demonstrates
+that shape.
 
 Generate cold-email and follow-up drafts for each opportunity by passing
 channels:
@@ -332,6 +346,11 @@ python scripts/smoke_extracted_content_pipeline_host.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
   --source-format jsonl
+
+python scripts/smoke_extracted_content_pipeline_host.py \
+  extracted_content_pipeline/examples/campaign_source_bundle.json \
+  --source-rows \
+  --source-format json
 ```
 
 For source-row CSV exports, use `--source-format csv`.

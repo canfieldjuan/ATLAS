@@ -16,6 +16,9 @@ EXAMPLE_CSV = ROOT / "extracted_content_pipeline/examples/campaign_generation_pa
 EXAMPLE_SOURCE_ROWS = (
     ROOT / "extracted_content_pipeline/examples/campaign_source_rows.jsonl"
 )
+EXAMPLE_SOURCE_BUNDLE = (
+    ROOT / "extracted_content_pipeline/examples/campaign_source_bundle.json"
+)
 
 
 def _load_smoke_module():
@@ -130,6 +133,27 @@ def test_host_smoke_cli_accepts_source_rows() -> None:
             "--source-rows",
             "--source-format",
             "jsonl",
+            "--limit",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "AI Content Ops host smoke passed" in completed.stdout
+    assert "generated=2" in completed.stdout
+
+
+def test_host_smoke_cli_accepts_source_bundle_json() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(EXAMPLE_SOURCE_BUNDLE),
+            "--source-rows",
+            "--source-format",
+            "json",
             "--limit",
             "1",
         ],
