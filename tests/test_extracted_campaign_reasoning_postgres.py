@@ -8,7 +8,7 @@ so the host route mount (PR #402 / PR #462) can swap providers
 without touching the bundle's `with_reasoning_context()`
 derivation.
 
-Test inventory (16 tests):
+Test inventory (19 tests):
 
 1. `read_campaign_reasoning_context` builds the candidate
    selector array from `target_id` + opportunity keys
@@ -43,6 +43,9 @@ Test inventory (16 tests):
 14. Selector keys are order-independent for the same logical selector set.
 15. `save_context` accepts raw mappings after the selector-key SQL shape change.
 16. Migration 278 defines the selector_key column and unique replay index.
+17. `delete_stale_contexts` counts stale rows in dry-run mode.
+18. `delete_stale_contexts` deletes stale rows only when requested.
+19. `delete_stale_contexts` rejects non-positive age thresholds.
 
 Test harness uses an asyncpg-shaped fake pool (matches
 `tests/test_extracted_blog_blueprint_postgres.py`).
@@ -501,3 +504,64 @@ def test_campaign_reasoning_context_upsert_migration_shape() -> None:
     assert "ALTER COLUMN selector_key SET NOT NULL" in migration
     assert "idx_campaign_reasoning_contexts_scope_mode_selector_key" in migration
     assert "(account_id, target_mode, selector_key)" in migration
+
+
+@pytest.mark.asyncio
+async def test_delete_stale_contexts_dry_run_counts_matching_rows() -> None:
+    """Dry-run mode must count stale rows without deleting them."""
+
+    pool = _Pool()
+    pool.fetchval_results = [3]
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    affected = await repo.delete_stale_contexts(
+        older_than_days=30,
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="Vendor_Retention",
+        dry_run=True,
+    )
+
+    assert affected == 3
+    call = pool.fetchval_calls[0]
+    query = call["query"]
+    args = call["args"]
+    assert "SELECT COUNT(*) FROM stale" in query
+    assert "DELETE FROM campaign_reasoning_contexts" not in query
+    assert "updated_at < NOW() - ($1::int * INTERVAL '1 day')" in query
+    assert args == (30, "acct-1", "vendor_retention")
+
+
+@pytest.mark.asyncio
+async def test_delete_stale_contexts_deletes_matching_rows_when_not_dry_run() -> None:
+    """Apply mode deletes through the same stale-row predicate."""
+
+    pool = _Pool()
+    pool.fetchval_results = [2]
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    affected = await repo.delete_stale_contexts(
+        older_than_days=45,
+        scope=None,
+        target_mode=None,
+        dry_run=False,
+    )
+
+    assert affected == 2
+    call = pool.fetchval_calls[0]
+    query = call["query"]
+    args = call["args"]
+    assert "DELETE FROM campaign_reasoning_contexts" in query
+    assert "SELECT COUNT(*) FROM deleted" in query
+    assert args == (45, None, None)
+
+
+@pytest.mark.asyncio
+async def test_delete_stale_contexts_rejects_non_positive_days() -> None:
+    """A zero-day cleanup would be too broad for an operator action."""
+
+    pool = _Pool()
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    with pytest.raises(ValueError):
+        await repo.delete_stale_contexts(older_than_days=0)
+    assert pool.fetchval_calls == []

@@ -255,6 +255,67 @@ class PostgresCampaignReasoningContextRepository:
         )
         return str(context_id)
 
+    async def delete_stale_contexts(
+        self,
+        *,
+        older_than_days: int,
+        scope: TenantScope | None = None,
+        target_mode: str | None = None,
+        dry_run: bool = False,
+    ) -> int:
+        """Delete or count stale reasoning contexts.
+
+        This is an operational cleanup hook for host installs that run
+        periodic reasoning ETL. ``target_mode=None`` means all modes;
+        a string value filters to that normalized mode, including the
+        blank global-fallback mode when ``target_mode=""``.
+        """
+
+        if older_than_days < 1:
+            raise ValueError("older_than_days must be at least 1")
+
+        account_id = None if scope is None else str(scope.account_id or "")
+        mode = None if target_mode is None else str(target_mode or "").strip().lower()
+        if dry_run:
+            stale_count = await self.pool.fetchval(
+                f"""
+                WITH stale AS (
+                    SELECT id
+                    FROM {self.table}
+                    WHERE updated_at < NOW() - ($1::int * INTERVAL '1 day')
+                      AND ($2::text IS NULL OR account_id = $2)
+                      AND ($3::text IS NULL OR target_mode = $3)
+                )
+                SELECT COUNT(*) FROM stale
+                """,
+                int(older_than_days),
+                account_id,
+                mode,
+            )
+            return int(stale_count or 0)
+
+        stale_count = await self.pool.fetchval(
+            f"""
+            WITH stale AS (
+                SELECT id
+                FROM {self.table}
+                WHERE updated_at < NOW() - ($1::int * INTERVAL '1 day')
+                  AND ($2::text IS NULL OR account_id = $2)
+                  AND ($3::text IS NULL OR target_mode = $3)
+            ),
+            deleted AS (
+                DELETE FROM {self.table}
+                WHERE id IN (SELECT id FROM stale)
+                RETURNING 1
+            )
+            SELECT COUNT(*) FROM deleted
+            """,
+            int(older_than_days),
+            account_id,
+            mode,
+        )
+        return int(stale_count or 0)
+
 
 __all__ = [
     "PostgresCampaignReasoningContextRepository",
