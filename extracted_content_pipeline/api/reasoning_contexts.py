@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 try:
@@ -17,14 +18,19 @@ except ImportError as exc:  # pragma: no cover - exercised in dependency-light C
 else:
     _FASTAPI_IMPORT_ERROR = None
 
-from ..campaign_ports import TenantScope
+from ..campaign_ports import TenantScope, VisibilitySink
+from ..campaign_visibility import emit_operation_event
 from ..campaign_reasoning_postgres import PostgresCampaignReasoningContextRepository
 
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[Any]]
+VisibilityProvider = Callable[[], VisibilitySink | Awaitable[VisibilitySink]]
 
 _MATCH_KEYS = ("target_id", "id", "company", "company_name", "account", "account_name", "email", "contact_email", "vendor", "vendor_name")
+_CONTEXT_UPSERT_EVENT = "campaign_reasoning_context_upserted"
+_CONTEXT_DELETE_EVENT = "campaign_reasoning_context_deleted"
+logger = logging.getLogger(__name__)
 
 
 def _require_fastapi() -> None:
@@ -125,6 +131,7 @@ def create_reasoning_context_admin_router(
     config: ReasoningContextAdminApiConfig | None = None,
     dependencies: Sequence[Any] | None = None,
     repository_factory: Callable[[Any, str], Any] | None = None,
+    visibility_provider: VisibilityProvider | None = None,
 ) -> APIRouter:
     """Create host-mounted reasoning context admin routes.
 
@@ -177,6 +184,16 @@ def create_reasoning_context_admin_router(
             context=context,
             target_mode=target_mode,
         )
+        await _emit_admin_event(
+            visibility_provider,
+            _CONTEXT_UPSERT_EVENT,
+            {
+                "context_id": context_id,
+                "account_id": account_id or "",
+                "target_mode": target_mode,
+                "selectors_count": len(selectors),
+            },
+        )
         return {
             "status": "ok",
             "id": context_id,
@@ -199,6 +216,15 @@ def create_reasoning_context_admin_router(
             context_id,
             scope=TenantScope(account_id=scoped_account_id, user_id=scope.user_id),
         )
+        await _emit_admin_event(
+            visibility_provider,
+            _CONTEXT_DELETE_EVENT,
+            {
+                "context_id": context_id,
+                "account_id": scoped_account_id,
+                "deleted": bool(deleted),
+            },
+        )
         return {
             "status": "ok",
             "id": context_id,
@@ -207,3 +233,23 @@ def create_reasoning_context_admin_router(
         }
 
     return router
+
+
+async def _emit_admin_event(
+    visibility_provider: VisibilityProvider | None,
+    event_type: str,
+    payload: Mapping[str, Any],
+) -> None:
+    if visibility_provider is None:
+        return
+    try:
+        visibility = await _maybe_await(visibility_provider())
+        await emit_operation_event(
+            visibility,
+            event_type,
+            "campaign_reasoning_context_admin",
+            payload,
+        )
+    except Exception as exc:
+        logger.warning("Reasoning context admin visibility emit failed: %s", exc)
+        return
