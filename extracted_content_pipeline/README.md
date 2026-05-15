@@ -206,6 +206,22 @@ python scripts/check_extracted_campaign_reasoning_postgres.py \
   --json
 ```
 
+To insert or update host-produced reasoning rows without hand-writing SQL, load
+a JSON file with selectors plus a context payload:
+
+```bash
+python scripts/upsert_extracted_campaign_reasoning_contexts.py \
+  reasoning-contexts.json \
+  --account-id acct_123 \
+  --target-mode vendor_retention \
+  --selector "Acme"
+```
+
+The input may be a single row, an array, or a wrapper such as
+`{"contexts": [...]}`. Each row can provide `selectors`, selector fields such as
+`target_id` / `company_name` / `contact_email`, and either `context`,
+`reasoning_context`, or `campaign_reasoning_context`.
+
 For lightweight installs that do not already have reasoning JSON, use
 `services.single_pass_reasoning_provider.SinglePassCampaignReasoningProvider`.
 It calls the configured `LLMClient` once per opportunity with the packaged

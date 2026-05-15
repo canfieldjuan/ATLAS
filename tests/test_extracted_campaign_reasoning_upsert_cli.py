@@ -1,0 +1,212 @@
+"""Tests for the campaign reasoning context upsert CLI."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+
+_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "upsert_extracted_campaign_reasoning_contexts.py"
+)
+_SPEC = importlib.util.spec_from_file_location(
+    "upsert_extracted_campaign_reasoning_contexts",
+    _SCRIPT_PATH,
+)
+assert _SPEC is not None and _SPEC.loader is not None
+upsert_cli = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(upsert_cli)
+
+
+class _Repository:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def save_context(self, **kwargs: Any) -> str:
+        self.calls.append(kwargs)
+        return f"ctx-{len(self.calls)}"
+
+
+def test_context_rows_accepts_array_wrapper_and_mapping_index() -> None:
+    """Host files can be arrays, wrapper objects, or keyed context maps."""
+
+    assert upsert_cli._context_rows([{"target_id": "a"}]) == [{"target_id": "a"}]
+    assert upsert_cli._context_rows({"contexts": [{"target_id": "b"}]}) == [
+        {"target_id": "b"}
+    ]
+    assert upsert_cli._context_rows({
+        "contexts": {
+            "opp-1": {"top_theses": [{"summary": "Pricing pressure"}]},
+        }
+    }) == [
+        {
+            "target_id": "opp-1",
+            "context": {"top_theses": [{"summary": "Pricing pressure"}]},
+        }
+    ]
+
+
+def test_row_selectors_use_cli_row_and_matching_fields() -> None:
+    """Selectors come from explicit CLI values plus row metadata."""
+
+    selectors = upsert_cli._row_selectors(
+        {
+            "selectors": ["row-selector", "row-selector-2"],
+            "target_id": "opp-1",
+            "company_name": "Acme",
+            "contact_email": "buyer@example.com",
+        },
+        ["cli-selector"],
+    )
+
+    assert selectors == (
+        "cli-selector",
+        "row-selector",
+        "row-selector-2",
+        "opp-1",
+        "Acme",
+        "buyer@example.com",
+    )
+
+
+def test_row_context_prefers_nested_context() -> None:
+    """A nested context field is saved as the reasoning payload."""
+
+    row = {
+        "target_id": "opp-1",
+        "selectors": ["opp-1"],
+        "context": {"top_theses": [{"summary": "Renewal risk"}]},
+        "ignored": "metadata outside context",
+    }
+
+    assert upsert_cli._row_context(row) == {
+        "top_theses": [{"summary": "Renewal risk"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_saves_each_row_with_defaults() -> None:
+    """Rows without account/mode values inherit CLI defaults."""
+
+    repository = _Repository()
+
+    result = await upsert_cli._upsert_contexts(
+        repository,  # type: ignore[arg-type]
+        payload={
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "context": {"top_theses": [{"summary": "Renewal risk"}]},
+                },
+                {
+                    "selectors": ["opp-2", "Acme"],
+                    "account_id": "acct-row",
+                    "target_mode": "challenger_intel",
+                    "reasoning_context": {"proof_points": [{"label": "source"}]},
+                },
+            ]
+        },
+        default_account_id="acct-default",
+        default_target_mode="vendor_retention",
+        extra_selectors=[],
+    )
+
+    assert result == {"status": "ok", "upserted": 2, "ids": ["ctx-1", "ctx-2"]}
+    first = repository.calls[0]
+    assert first["scope"].account_id == "acct-default"
+    assert first["target_mode"] == "vendor_retention"
+    assert first["selectors"] == ("opp-1",)
+    assert first["context"]["top_theses"][0]["summary"] == "Renewal risk"
+    second = repository.calls[1]
+    assert second["scope"].account_id == "acct-row"
+    assert second["target_mode"] == "challenger_intel"
+    assert second["selectors"] == ("opp-2", "Acme")
+    assert "reasoning_context" in second["context"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_preserves_commas_inside_selector_values() -> None:
+    """Exact selector values such as company names are not split on commas."""
+
+    repository = _Repository()
+
+    await upsert_cli._upsert_contexts(
+        repository,  # type: ignore[arg-type]
+        payload={
+            "contexts": [
+                {
+                    "company_name": "Acme, Inc.",
+                    "context": {"top_theses": [{"summary": "Renewal risk"}]},
+                }
+            ]
+        },
+        default_account_id="acct-default",
+        default_target_mode="vendor_retention",
+        extra_selectors=["Global, LLC"],
+    )
+
+    assert repository.calls[0]["selectors"] == ("Global, LLC", "Acme, Inc.")
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_rejects_rows_without_selectors() -> None:
+    """An unselectable row would never be read back, so fail loudly."""
+
+    repository = _Repository()
+
+    with pytest.raises(ValueError, match="row 1 has no selectors"):
+        await upsert_cli._upsert_contexts(
+            repository,  # type: ignore[arg-type]
+            payload={"context": {"top_theses": [{"summary": "x"}]}},
+            default_account_id="acct-1",
+            default_target_mode="vendor_retention",
+            extra_selectors=[],
+        )
+    assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_validates_all_rows_before_writing() -> None:
+    """A malformed later row should not leave a partially applied file."""
+
+    repository = _Repository()
+
+    with pytest.raises(ValueError, match="row 2 has no selectors"):
+        await upsert_cli._upsert_contexts(
+            repository,  # type: ignore[arg-type]
+            payload={
+                "contexts": [
+                    {
+                        "target_id": "opp-1",
+                        "context": {"top_theses": [{"summary": "x"}]},
+                    },
+                    {"context": {"top_theses": [{"summary": "y"}]}},
+                ]
+            },
+            default_account_id="acct-1",
+            default_target_mode="vendor_retention",
+            extra_selectors=[],
+        )
+    assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_rejects_rows_without_context() -> None:
+    """Do not overwrite an existing useful row with an empty payload."""
+
+    repository = _Repository()
+
+    with pytest.raises(ValueError, match="row 1 has no context"):
+        await upsert_cli._upsert_contexts(
+            repository,  # type: ignore[arg-type]
+            payload={"target_id": "opp-1"},
+            default_account_id="acct-1",
+            default_target_mode="vendor_retention",
+            extra_selectors=[],
+        )
+    assert repository.calls == []

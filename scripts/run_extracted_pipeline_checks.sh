@@ -30,6 +30,7 @@ pytest \
   tests/test_extracted_blog_post_postgres.py \
   tests/test_extracted_campaign_reasoning_postgres.py \
   tests/test_extracted_campaign_reasoning_cleanup_cli.py \
+  tests/test_extracted_campaign_reasoning_upsert_cli.py \
   tests/test_extracted_campaign_reasoning_postgres_check.py \
   tests/test_extracted_content_control_surfaces.py \
   tests/test_extracted_content_generation_plan.py \
