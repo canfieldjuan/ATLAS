@@ -15,6 +15,7 @@ from extracted_content_pipeline.api.reasoning_contexts import (
     create_reasoning_context_admin_router,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.campaign_visibility import InMemoryVisibilitySink
 from extracted_content_pipeline.campaign_reasoning_postgres import (
     CampaignReasoningContextListResult,
 )
@@ -62,6 +63,7 @@ def _client(
     *,
     scope: TenantScope | dict[str, Any] | None = TenantScope(account_id="acct-1"),
     dependencies: list[Any] | None = None,
+    visibility: Any = None,
 ) -> TestClient:
     app = FastAPI()
     pool = _Pool()
@@ -75,6 +77,7 @@ def _client(
             scope_provider=scope_provider if scope is not None else None,
             dependencies=dependencies,
             repository_factory=lambda pool_arg, table: repository,
+            visibility_provider=(lambda: visibility) if visibility is not None else None,
         )
     )
     return TestClient(app)
@@ -177,3 +180,75 @@ def test_reasoning_context_admin_rejects_unscoped_delete() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "account_id is required"
+
+
+def test_reasoning_context_admin_emits_visibility_for_upsert() -> None:
+    visibility = InMemoryVisibilitySink()
+
+    response = _client(_Repository(), visibility=visibility).post(
+        "/campaign-reasoning-contexts",
+        json={
+            "selectors": ["opp-1", "Acme"],
+            "target_mode": "vendor_retention",
+            "context": {"top_theses": [{"summary": "Renewal pressure"}]},
+        },
+    )
+
+    assert response.status_code == 200
+    event = visibility.as_dicts()[0]
+    assert event["event_type"] == "campaign_reasoning_context_upserted"
+    assert event["payload"] == {
+        "operation": "campaign_reasoning_context_admin",
+        "context_id": "ctx-1",
+        "account_id": "acct-1",
+        "target_mode": "vendor_retention",
+        "selectors_count": 2,
+    }
+
+
+def test_reasoning_context_admin_emits_visibility_for_delete() -> None:
+    visibility = InMemoryVisibilitySink()
+
+    response = _client(_Repository(), visibility=visibility).delete(
+        "/campaign-reasoning-contexts/ctx-1"
+    )
+
+    assert response.status_code == 200
+    event = visibility.as_dicts()[0]
+    assert event["event_type"] == "campaign_reasoning_context_deleted"
+    assert event["payload"] == {
+        "operation": "campaign_reasoning_context_admin",
+        "context_id": "ctx-1",
+        "account_id": "acct-1",
+        "deleted": True,
+    }
+
+
+def test_reasoning_context_admin_visibility_failure_does_not_break_upsert() -> None:
+    class _FailingVisibility:
+        async def emit(self, event_type: str, payload: dict[str, Any]) -> None:
+            raise RuntimeError("visibility down")
+
+    response = _client(_Repository(), visibility=_FailingVisibility()).post(
+        "/campaign-reasoning-contexts",
+        json={
+            "selectors": ["opp-1"],
+            "context": {"top_theses": [{"summary": "Renewal pressure"}]},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "ctx-1"
+
+
+def test_reasoning_context_admin_visibility_failure_does_not_break_delete() -> None:
+    class _FailingVisibility:
+        async def emit(self, event_type: str, payload: dict[str, Any]) -> None:
+            raise RuntimeError("visibility down")
+
+    response = _client(_Repository(), visibility=_FailingVisibility()).delete(
+        "/campaign-reasoning-contexts/ctx-1"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["deleted"] is True

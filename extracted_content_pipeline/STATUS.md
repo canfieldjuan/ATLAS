@@ -74,6 +74,7 @@ source of truth for what remains.
   campaign reasoning context list/upsert/delete workflows. Hosts inject pool
   providers, tenant scope, and auth dependencies; scoped tenants cannot
   override `account_id` in request bodies, and deletes require account scope.
+  Hosts can inject a `VisibilitySink` provider for metadata-only admin events.
 - `scripts/smoke_extracted_content_pipeline_host.py` provides a one-command
   offline host smoke test that validates customer-data normalization through
   usable generated draft shape without a database, provider credentials, or
