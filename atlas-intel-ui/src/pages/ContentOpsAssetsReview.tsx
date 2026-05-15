@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
   CheckCircle2,
   Download,
+  Eye,
   Loader2,
   RefreshCw,
+  X,
   XCircle,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -75,6 +77,7 @@ export default function ContentOpsAssetsReview() {
   const [batchBusy, setBatchBusy] = useState<'approved' | 'rejected' | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [exporting, setExporting] = useState(false)
+  const [detailRow, setDetailRow] = useState<GeneratedAssetDraft | null>(null)
 
   const params = useMemo(
     () => ({
@@ -93,6 +96,7 @@ export default function ContentOpsAssetsReview() {
       const result = await fetchGeneratedAssetDrafts(asset, params)
       setData(result)
       setSelectedIds(new Set())
+      setDetailRow(null)
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)))
     } finally {
@@ -344,12 +348,20 @@ export default function ContentOpsAssetsReview() {
                   selected={selectedIds.has(assetId(row))}
                   onToggle={toggleRow}
                   onReview={handleReview}
+                  onOpenDetails={setDetailRow}
                 />
               ))}
             </div>
           )}
         </div>
       </section>
+      {detailRow && (
+        <AssetDetailDrawer
+          row={detailRow}
+          asset={asset}
+          onClose={() => setDetailRow(null)}
+        />
+      )}
     </div>
   )
 }
@@ -361,6 +373,7 @@ function AssetRow({
   selected,
   onToggle,
   onReview,
+  onOpenDetails,
 }: {
   row: GeneratedAssetDraft
   asset: GeneratedAssetType
@@ -368,6 +381,7 @@ function AssetRow({
   selected: boolean
   onToggle: (id: string) => void
   onReview: (row: GeneratedAssetDraft, status: 'approved' | 'rejected') => void
+  onOpenDetails: (row: GeneratedAssetDraft) => void
 }) {
   const id = assetId(row)
   const title = assetTitle(row, asset)
@@ -458,7 +472,15 @@ function AssetRow({
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenDetails(row)}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-200"
+          >
+            <Eye className="h-4 w-4" />
+            Details
+          </button>
           <button
             type="button"
             onClick={() => onReview(row, 'approved')}
@@ -485,6 +507,202 @@ function AssetRow({
   )
 }
 
+function AssetDetailDrawer({
+  row,
+  asset,
+  onClose,
+}: {
+  row: GeneratedAssetDraft
+  asset: GeneratedAssetType
+  onClose: () => void
+}) {
+  const title = assetTitle(row, asset)
+  const status = textValue(row.status) || 'unknown'
+  const preview = assetPreview(row, asset)
+  const facts = assetFacts(row, asset)
+  const sections = sectionList(row.sections)
+  const references = valueList(row.reference_ids)
+  const drawerRef = useRef<HTMLElement | null>(null)
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    const previous = document.activeElement
+    closeButtonRef.current?.focus()
+    return () => {
+      if (previous instanceof HTMLElement) {
+        previous.focus()
+      }
+    }
+  }, [])
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onClose()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = focusableElements(drawerRef.current)
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+      return
+    }
+    if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex justify-end bg-slate-950/70"
+      onClick={onClose}
+    >
+      <aside
+        ref={drawerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="asset-detail-title"
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={handleKeyDown}
+        className="h-full w-full max-w-2xl overflow-y-auto border-l border-slate-800 bg-slate-950 p-6 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-cyan-300">
+              {assetLabel(asset)}
+            </div>
+            <h2 id="asset-detail-title" className="mt-2 text-2xl font-semibold text-white">
+              {title}
+            </h2>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400">
+              <span className="rounded bg-slate-800 px-2 py-0.5">{status}</span>
+              {assetId(row) && <span className="font-mono">id: {assetId(row)}</span>}
+            </div>
+          </div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={onClose}
+            aria-label="Close details"
+            className="rounded-md border border-slate-700 p-2 text-slate-300 hover:border-cyan-400 hover:text-cyan-200"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {facts.length > 0 && (
+          <section className="mt-6">
+            <h3 className="text-sm font-semibold text-slate-200">Facts</h3>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              {facts.map((fact) => (
+                <span
+                  key={`${fact.label}:${fact.value}`}
+                  className="rounded border border-slate-800 bg-slate-900 px-2 py-1 text-slate-300"
+                >
+                  <span className="text-slate-500">{fact.label}: </span>
+                  {fact.value}
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {preview && (
+          <section className="mt-6">
+            <h3 className="text-sm font-semibold text-slate-200">Preview</h3>
+            <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-4">
+              {preview.heading && (
+                <div className="text-base font-medium text-white">{preview.heading}</div>
+              )}
+              {preview.body && (
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-300">
+                  {preview.body}
+                </p>
+              )}
+              {preview.meta.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {preview.meta.map((item, index) => (
+                    <span
+                      key={`${item}-${index}`}
+                      className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {sections.length > 0 && (
+          <section className="mt-6">
+            <h3 className="text-sm font-semibold text-slate-200">Sections</h3>
+            <div className="mt-3 space-y-3">
+              {sections.map((section, index) => (
+                <div
+                  key={`${section.title}-${index}`}
+                  className="rounded-md border border-slate-800 bg-slate-900/60 p-4"
+                >
+                  <div className="text-sm font-medium text-white">
+                    {section.title || `Section ${index + 1}`}
+                  </div>
+                  {section.body && (
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-400">
+                      {section.body}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {references.length > 0 && (
+          <section className="mt-6">
+            <h3 className="text-sm font-semibold text-slate-200">References</h3>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {references.map((reference) => (
+                <span
+                  key={reference}
+                  className="rounded bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-300"
+                >
+                  {reference}
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="mt-6">
+          <h3 className="text-sm font-semibold text-slate-200">Raw Row</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Diagnostic dump for operators with access to this review queue.
+          </p>
+          <pre className="mt-3 max-h-96 overflow-auto rounded-md border border-slate-800 bg-slate-900/70 p-4 text-xs leading-5 text-slate-300">
+            {JSON.stringify(row, null, 2)}
+          </pre>
+        </section>
+      </aside>
+    </div>
+  )
+}
+
+function focusableElements(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return []
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((item) => !item.hasAttribute('disabled') && item.offsetParent !== null)
+}
+
 function assetId(row: GeneratedAssetDraft): string {
   return textValue(row.id)
 }
@@ -498,6 +716,10 @@ function assetTitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string
     textValue(row.campaign_name) ||
     `${asset} draft`
   )
+}
+
+function assetLabel(asset: GeneratedAssetType): string {
+  return ASSETS.find((item) => item.id === asset)?.label || asset
 }
 
 function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string {
