@@ -45,6 +45,7 @@ from .services.campaign_reasoning_context import (
 from .storage._jsonb_helpers import (
     decode_jsonb_field,
     json_dump_jsonb,
+    parse_command_tag,
     row_to_dict,
 )
 
@@ -390,6 +391,32 @@ class PostgresCampaignReasoningContextRepository:
             mode,
         )
         return int(stale_count or 0)
+
+    async def delete_context(
+        self,
+        context_id: str,
+        *,
+        scope: TenantScope,
+    ) -> bool:
+        """Delete one reasoning context by id within a tenant scope."""
+
+        cleaned_id = str(context_id or "").strip()
+        if not cleaned_id:
+            raise ValueError("context_id is required")
+        account_id = str(scope.account_id or "").strip()
+        if not account_id:
+            raise ValueError("delete_context requires scope.account_id")
+        table = _identifier(self.table)
+        result = await self.pool.execute(
+            f"""
+            DELETE FROM {table}
+            WHERE id = $1
+              AND account_id = $2
+            """,
+            cleaned_id,
+            account_id,
+        )
+        return parse_command_tag(result)
 
     async def list_contexts(
         self,

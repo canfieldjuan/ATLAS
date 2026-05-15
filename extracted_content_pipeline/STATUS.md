@@ -71,9 +71,9 @@ source of truth for what remains.
   report, blog post, landing page, and sales brief list/export/review
   workflows. Hosts inject pool providers, tenant scope, and auth dependencies.
 - `api.reasoning_contexts` provides a FastAPI router factory around DB-backed
-  campaign reasoning context list/upsert workflows. Hosts inject pool
+  campaign reasoning context list/upsert/delete workflows. Hosts inject pool
   providers, tenant scope, and auth dependencies; scoped tenants cannot
-  override `account_id` in request bodies.
+  override `account_id` in request bodies, and deletes require account scope.
 - `scripts/smoke_extracted_content_pipeline_host.py` provides a one-command
   offline host smoke test that validates customer-data normalization through
   usable generated draft shape without a database, provider credentials, or
