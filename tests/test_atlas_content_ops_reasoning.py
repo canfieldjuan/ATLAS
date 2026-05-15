@@ -20,45 +20,49 @@ File-backed factory (PR #462, 7 tests):
 7. `loader_factory` DI kwarg short-circuits the lazy import
    of the package's file-backed loader.
 
-DB-backed factory (this slice, 4 tests):
+DB-backed factory (7 tests):
 
 8.  Env var unset returns `None` (default unwired path).
-9.  Env var set + pool present returns whatever the
+9.  Settings-backed DB opt-in is honored when the legacy env var
+    is unset.
+10. Legacy env var overrides settings-backed opt-in.
+11. B2B campaign config exposes the DB opt-in flag.
+12. Env var set + pool present returns whatever the
     repository factory produces.
-10. Env var set but pool factory returns `None` (DB not
+13. Env var set but pool factory returns `None` (DB not
     initialized yet) returns `None` with WARN.
-11. Repository factory exception resolves to `None` with WARN
+14. Repository factory exception resolves to `None` with WARN
     (defensive against an upstream init bug).
 
 Intervention-report factory (7 tests):
 
-12. Env var unset returns `None`.
-13. Env var set + pool present returns whatever the provider
+15. Env var unset returns `None`.
+16. Env var set + pool present returns whatever the provider
     factory produces.
-14. Env var set but pool factory returns `None` returns `None`
+17. Env var set but pool factory returns `None` returns `None`
     with WARN.
-15. Env var set but pool is uninitialized returns `None` with
+18. Env var set but pool is uninitialized returns `None` with
     WARN.
-16. Provider factory exception resolves to `None` with WARN.
-17. Matching report normalizes into campaign reasoning context.
-18. Missing selectors return `None`.
+19. Provider factory exception resolves to `None` with WARN.
+20. Matching report normalizes into campaign reasoning context.
+21. Missing selectors return `None`.
 
 Chooser (4 tests):
 
-19. DB > file > `None` priority: when DB factory returns a
+22. DB > file > `None` priority: when DB factory returns a
     provider, the file factory is never called.
-20. DB returns `None`, file factory returns a provider --
+23. DB returns `None`, file factory returns a provider --
     chooser returns the file provider.
-21. DB returns `None`, intervention returns a provider --
+24. DB returns `None`, intervention returns a provider --
     chooser returns the intervention provider before file.
-22. All factories return `None` -- chooser returns `None`.
+25. All factories return `None` -- chooser returns `None`.
 
 Status (4 tests):
 
-23. DB provider reports configured with source=db.
-24. Intervention fallback reports configured with source=intervention.
-25. File fallback reports configured with source=file.
-26. Neither provider reports configured=false with source=none.
+26. DB provider reports configured with source=db.
+27. Intervention fallback reports configured with source=intervention.
+28. File fallback reports configured with source=file.
+29. Neither provider reports configured=false with source=none.
 """
 
 from __future__ import annotations
@@ -74,8 +78,10 @@ from atlas_brain._content_ops_reasoning import (
     build_intervention_content_ops_reasoning_context_provider,
     build_postgres_content_ops_reasoning_context_provider,
     describe_content_ops_reasoning_context_provider,
+    _read_db_enabled,
     select_content_ops_reasoning_context_provider,
 )
+from atlas_brain.config import B2BCampaignConfig
 from extracted_content_pipeline.campaign_ports import TenantScope
 
 
@@ -212,6 +218,39 @@ def test_db_factory_disabled_returns_none() -> None:
         enabled_factory=lambda: False,
     )
     assert provider is None
+
+
+def test_db_enabled_reads_settings_when_legacy_env_unset(
+    monkeypatch: Any,
+) -> None:
+    """Settings integration: the host can enable the DB provider
+    through b2b_campaign config when the legacy top-level env var
+    is absent."""
+
+    monkeypatch.delenv("ATLAS_CONTENT_OPS_REASONING_DB_ENABLED", raising=False)
+    monkeypatch.setattr(
+        "atlas_brain._content_ops_reasoning._settings_db_enabled",
+        lambda: True,
+    )
+
+    assert _read_db_enabled() is True
+
+
+def test_db_enabled_legacy_env_overrides_settings(monkeypatch: Any) -> None:
+    """The old env var remains the explicit operator override."""
+
+    monkeypatch.setenv("ATLAS_CONTENT_OPS_REASONING_DB_ENABLED", "false")
+    monkeypatch.setattr(
+        "atlas_brain._content_ops_reasoning._settings_db_enabled",
+        lambda: True,
+    )
+
+    assert _read_db_enabled() is False
+
+
+def test_b2b_campaign_config_exposes_content_ops_reasoning_db_flag() -> None:
+    cfg = B2BCampaignConfig(content_ops_reasoning_db_enabled=True)
+    assert cfg.content_ops_reasoning_db_enabled is True
 
 
 def test_db_factory_enabled_returns_repository() -> None:

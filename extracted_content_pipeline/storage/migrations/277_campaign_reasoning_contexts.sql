@@ -25,18 +25,14 @@
 -- normalize-then-emit helper already used by the file-backed
 -- loader) into the column.
 --
--- target_mode is persisted but the read path does NOT filter by it
--- by default -- this mirrors `FileCampaignReasoningContextProvider`'s
--- behavior (it ignores `target_mode` and serves the same context
--- across all five LLM-using outputs). Persisting the column lets
--- a future slice add per-mode filtering without a follow-up
--- migration.
+-- target_mode is persisted and filtered by the DB read path.
+-- Blank target_mode rows are treated as global fallback contexts
+-- so legacy seed data can still serve multiple outputs, but a row
+-- saved for one nonblank mode does not satisfy another mode when
+-- selectors overlap.
 --
--- updated_at drives the tie-breaker when multiple rows match the
--- same selectors -- newest wins. The file-backed provider uses
--- `setdefault` for first-key-wins; the DB read path uses
--- `ORDER BY updated_at DESC LIMIT 1` for the equivalent
--- "single row per lookup" semantic.
+-- updated_at drives the final tie-breaker when multiple rows match
+-- the same selector priority and target-mode specificity.
 
 CREATE TABLE IF NOT EXISTS campaign_reasoning_contexts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

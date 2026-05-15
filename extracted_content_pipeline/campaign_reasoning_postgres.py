@@ -21,11 +21,10 @@ implementation lets host scripts persist a normalized
 ``CampaignReasoningContext`` payload directly, mirroring
 ``PostgresBlogBlueprintRepository.save_blueprints``.
 
-target_mode is persisted but NOT filtered in the default read
-path -- this preserves parity with the file-backed provider's
-``del target_mode`` behavior so a single context row can serve
-all five LLM-using outputs. Per-mode filtering is a future
-slice; the column is already there.
+target_mode is persisted and filtered on reads. Blank target-mode
+rows are treated as global fallback contexts so legacy seed data can
+still serve multiple outputs, but a row saved for one nonblank mode
+does not satisfy another mode when selectors overlap.
 """
 
 from __future__ import annotations
@@ -125,17 +124,17 @@ class PostgresCampaignReasoningContextRepository:
         """Return the newest matching context for ``target_id``,
         or ``None`` when no row matches.
 
-        ``target_mode`` is accepted for protocol parity but not
-        filtered in this read -- mirrors the file-backed provider's
-        ``del target_mode`` behavior. The returned context is
+        ``target_mode`` filters nonblank rows so mode-specific
+        contexts do not leak across assets. Blank target-mode rows
+        remain global fallbacks. The returned context is
         ``normalize_campaign_reasoning_context``-normalized and
-        ``has_content()``-checked; rows that decode to empty
-        contexts resolve to ``None`` so callers fall back to
-        zero-context defaults rather than passing an empty bundle
-        through to the prompt.
+        ``has_content()``-checked; rows that decode to empty contexts
+        resolve to ``None`` so callers fall back to zero-context
+        defaults rather than passing an empty bundle through to the
+        prompt.
         """
 
-        del target_mode
+        mode = str(target_mode or "").strip().lower()
         selectors = _candidate_selectors(
             target_id=target_id,
             opportunity=opportunity,
@@ -162,16 +161,19 @@ class PostgresCampaignReasoningContextRepository:
             FROM {self.table}
             WHERE account_id = $1
               AND selectors && $2::text[]
+              AND ($3 = '' OR target_mode = $3 OR target_mode = '')
             ORDER BY (
                 SELECT MIN(c.idx)
                 FROM unnest($2::text[]) WITH ORDINALITY AS c(val, idx)
                 WHERE c.val = ANY(selectors)
             ) ASC NULLS LAST,
+            CASE WHEN $3 <> '' AND target_mode = $3 THEN 0 ELSE 1 END ASC,
             updated_at DESC
             LIMIT 1
             """,
             scope.account_id or "",
             list(selectors),
+            mode,
         )
         if row is None:
             return None
@@ -228,7 +230,7 @@ class PostgresCampaignReasoningContextRepository:
             RETURNING id
             """,
             scope.account_id or "",
-            target_mode or "",
+            str(target_mode or "").strip().lower(),
             list(cleaned),
             json_dump_jsonb(payload),
         )
