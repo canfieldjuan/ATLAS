@@ -1,13 +1,15 @@
 # AI Content Ops Deferred Backlog
 
-Date: 2026-05-11
+Created: 2026-05-11
+Last updated: 2026-05-15
 
 ## Purpose
 
 This is the current ordered backlog for AI Content Ops deferrals surfaced by
 older PR plans and post-merge audits. It is not a full product roadmap; it is
 the short list of follow-up work that still matters after the execution,
-reasoning, export, and compact UI parity work already merged.
+reasoning, export, compact UI parity, and DB reasoning admin seams already
+merged.
 
 ## Retired Historical Deferrals
 
@@ -30,38 +32,94 @@ The following items appear in older plan docs but are no longer active backlog:
 - Blog blueprint population path.
 - Intervention or autonomous reasoning provider.
 - Full reasoning context drawer/detail UX.
+- DB reasoning provider target-mode filtering and settings-backed provider
+  selection.
+- DB reasoning context upsert semantics.
+- DB reasoning context list/export CLI.
+- DB reasoning stale-context cleanup CLI.
+- DB reasoning upsert dry-run.
+- DB reasoning upsert metadata audit log.
+- Generated asset batch review/status updates.
 
 ## Active Backlog
 
-### 1. DB reasoning provider hardening
+### 1. Reasoning context admin workflow
 
 **Priority:** P2
 
-**Why:** The DB provider is functional, but older plans deferred operational
-polish:
+**Why:** DB-backed reasoning context storage is now functional and has CLI
+coverage for read, export, upsert, dry-run, stale cleanup, and metadata audit
+logging. What is still missing is an operator-facing workflow for managing
+those rows without hand-running scripts.
 
-- Per-target-mode read filtering.
-- Settings integration for provider selection/config.
-- Upsert semantics for saved contexts.
-- Stale-context sweeper.
-- Admin editing workflow for context rows.
+Remaining work:
 
-**Likely slice:** start with per-target-mode filtering and settings integration;
-defer admin UI until the storage semantics are stable.
+- Browse and inspect reasoning context rows from the hosted admin surface.
+- Create or edit a context row with the same validation rules as the upsert
+  CLI.
+- Delete or retire a row deliberately, with tenant/account scoping.
+- Show recent metadata audit-log entries or equivalent operator-visible
+  provenance.
 
-### 2. Operator review UX and richer result previews
+**Likely slice:** start with a small API/admin surface over the existing
+repository methods. Keep full audit-table persistence separate unless a host
+needs centralized audit storage immediately.
+
+### 2. Bulk validation before reasoning upsert
+
+**Priority:** P2
+
+**Why:** The upsert CLI validates row shape, selectors, and context payloads,
+but it does not verify that supplied selectors or target ids match live
+customer opportunity rows before saving. That is acceptable for trusted ETL,
+but risky for larger host imports where typoed selectors create unreachable or
+mis-scoped reasoning contexts.
+
+**Likely slice:** add an optional validation mode that checks input rows against
+the host opportunity table before write. Keep it opt-in so custom hosts that
+use nonstandard opportunity storage can continue using the existing CLI.
+
+### 3. Operator review UX and richer result previews
 
 **Priority:** P3
 
-**Why:** Older frontend/result-summary plans deferred batch review/status
-updates, richer generated-asset previews, and component-level tests. These are
-product polish, not core readiness blockers.
+**Why:** Batch review/status updates are now done. Older frontend/result-summary
+plans still deferred richer generated-asset previews and component-level tests.
+These are product polish, not core readiness blockers.
 
-**Likely slice:** batch review/status updates before richer preview cards,
-because batch review improves operator throughput across all asset types.
+**Likely slice:** improve preview cards for report, blog post, landing page,
+and sales brief rows, then add component-level frontend tests for the review
+surface.
+
+### 4. Scale hardening for batch review
+
+**Priority:** P4
+
+**Why:** Generated asset batch review currently reuses the existing scoped
+single-row status update path. That preserves tenant filtering and keeps the
+implementation simple. If hosts start reviewing large batches, repository-level
+bulk SQL may be worth adding.
+
+**Likely slice:** defer until actual batch sizes justify it.
+
+### 5. Reasoning product depth and source breadth
+
+**Priority:** P4
+
+**Why:** AI Content Ops can consume file-backed, DB-backed, single-pass, and
+multi-pass reasoning context. The remaining strategic questions are broader
+than this backlog:
+
+- More source adapters for customer-specific data bundles.
+- Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
+  standalone layer.
+- Host policy for richer falsification/cache/narrative-planning knobs.
+
+**Likely slice:** handle through product roadmap or the reasoning-core backlog,
+not as Content Ops cleanup.
 
 ## Current Pick Recommendation
 
-Take item 1 next: DB reasoning provider hardening. The intervention fallback
-and detail UI now exist, so the next highest-leverage work is tightening the
-durable provider semantics before adding more operator polish.
+Take item 1 next if we want operator-facing progress: reasoning context admin
+workflow. Take item 2 next if we want a smaller backend-only safety slice:
+bulk validation before reasoning upsert.
