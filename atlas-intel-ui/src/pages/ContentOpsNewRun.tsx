@@ -1336,7 +1336,10 @@ function reasoningStatusHint(
     .filter(Boolean)
 
   if (values.length === 0) return ''
-  return `(${values.slice(0, 3).join(', ')}${values.length > 3 ? ', +' : ''})`
+  const shown = values.slice(0, 3)
+  const suffix = values.length > shown.length ? ` +${values.length - shown.length} more` : ''
+  const hint = `${shown.join(', ')}${suffix}`
+  return hint.length > 42 ? `(${values.length} capabilities)` : `(${hint})`
 }
 
 function SignalExtractionSummary({ result }: { result: Record<string, unknown> }) {
