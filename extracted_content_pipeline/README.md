@@ -206,6 +206,21 @@ python scripts/check_extracted_campaign_reasoning_postgres.py \
   --json
 ```
 
+To inventory or export durable reasoning rows before/after operator edits:
+
+```bash
+python scripts/list_extracted_campaign_reasoning_contexts.py \
+  --account-id acct_123 \
+  --target-mode vendor_retention \
+  --selector "Acme" \
+  --limit 100 \
+  --format csv \
+  --output reasoning-contexts.csv
+```
+
+The list/export CLI defaults to `--limit 20`; raise the limit deliberately for
+larger inventories.
+
 To insert or update host-produced reasoning rows without hand-writing SQL, load
 a JSON file with selectors plus a context payload:
 
