@@ -18,12 +18,45 @@ from .campaign_opportunities import normalize_campaign_opportunity
 
 SourceDataFormat = Literal["auto", "json", "jsonl", "csv"]
 
-_ROW_LIST_KEYS = ("sources", "documents", "reviews", "transcripts", "complaints", "rows", "data")
-_SOURCE_ID_KEYS = ("source_id", "id", "review_id", "transcript_id", "document_id")
-_TEXT_KEYS = ("text", "review_text", "transcript", "content", "body", "quote", "complaint")
+_ROW_LIST_KEYS = (
+    "sources",
+    "documents",
+    "reviews",
+    "transcripts",
+    "complaints",
+    "support_tickets",
+    "tickets",
+    "cases",
+    "conversations",
+    "rows",
+    "data",
+)
+_SOURCE_ID_KEYS = (
+    "source_id",
+    "id",
+    "review_id",
+    "transcript_id",
+    "document_id",
+    "ticket_id",
+    "case_id",
+    "conversation_id",
+)
+_TEXT_KEYS = (
+    "text",
+    "review_text",
+    "transcript",
+    "content",
+    "body",
+    "quote",
+    "complaint",
+    "message",
+    "description",
+    "summary",
+    "notes",
+)
 _SOURCE_TYPE_KEYS = ("source_type", "type", "kind")
-_SOURCE_TITLE_KEYS = ("source_title", "title", "name")
-_SOURCE_TITLE_COLLISION_KEYS = ("title", "name")
+_SOURCE_TITLE_KEYS = ("source_title", "ticket_subject", "subject", "title", "name")
+_SOURCE_TITLE_COLLISION_KEYS = ("subject", "ticket_subject", "title", "name")
 _PAIN_KEYS = ("pain_points", "pain_categories", "pain_category", "topic", "category")
 
 
@@ -119,6 +152,8 @@ def source_row_to_campaign_opportunity(
         opportunity["source_title"] = source_title
     if source_id and "source_id" not in opportunity:
         opportunity["source_id"] = source_id
+    if source_id and "id" not in opportunity:
+        opportunity["id"] = source_id
     if source_type:
         opportunity["source_type"] = source_type
     pain_points = _first_text_list(row, _PAIN_KEYS)
@@ -252,6 +287,12 @@ def _infer_source_type(row: Mapping[str, Any]) -> str:
         return "transcript"
     if row.get("complaint") is not None:
         return "complaint"
+    if row.get("ticket_id") is not None:
+        return "support_ticket"
+    if row.get("case_id") is not None:
+        return "case"
+    if row.get("conversation_id") is not None:
+        return "conversation"
     return "document"
 
 

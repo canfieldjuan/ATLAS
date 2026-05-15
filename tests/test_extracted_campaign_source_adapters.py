@@ -30,6 +30,8 @@ def test_source_row_maps_review_text_to_campaign_opportunity() -> None:
     })
 
     assert warnings == ()
+    assert opportunity["id"] == "review-1"
+    assert opportunity["target_id"] == "review-1"
     assert opportunity["source_id"] == "review-1"
     assert opportunity["company_name"] == "Acme Logistics"
     assert opportunity["vendor"] == "HubSpot"
@@ -82,6 +84,45 @@ def test_source_document_title_does_not_become_buyer_fields() -> None:
     assert "contact_title" not in opportunity
     assert "name" not in opportunity
     assert "title" not in opportunity
+
+
+def test_source_row_maps_support_ticket_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "ticket_id": "ticket-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "subject": "Renewal pricing escalation",
+        "message": "The renewal quote jumped and support has not explained the new tier.",
+        "pain_category": "pricing pressure",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "ticket-1"
+    assert opportunity["company_name"] == "Acme Logistics"
+    assert opportunity["vendor"] == "HubSpot"
+    assert opportunity["source_title"] == "Renewal pricing escalation"
+    assert "subject" not in opportunity
+    assert opportunity["evidence"] == [{
+        "text": "The renewal quote jumped and support has not explained the new tier.",
+        "source_id": "ticket-1",
+        "source_type": "support_ticket",
+        "source_title": "Renewal pricing escalation",
+    }]
+
+
+def test_source_row_prefers_body_over_ticket_message() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "ticket_id": "ticket-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "body": "Use this longer exported body as the evidence text.",
+        "message": "Do not use this short ticket message when body exists.",
+    })
+
+    assert warnings == ()
+    assert opportunity["evidence"][0]["text"] == (
+        "Use this longer exported body as the evidence text."
+    )
 
 
 def test_load_source_campaign_opportunities_from_jsonl(tmp_path: Path) -> None:
@@ -142,10 +183,42 @@ def test_packaged_source_rows_example_loads() -> None:
     assert [row["target_id"] for row in loaded.opportunities] == [
         "review-acme-1",
         "transcript-northstar-1",
+        "ticket-riverbend-1",
     ]
     assert loaded.opportunities[0]["evidence"][0]["source_type"] == "review"
     assert loaded.opportunities[1]["evidence"][0]["source_type"] == "transcript"
+    assert loaded.opportunities[2]["evidence"][0]["source_type"] == "support_ticket"
     assert loaded.warnings == ()
+
+
+def test_load_source_campaign_opportunities_from_support_ticket_object(tmp_path: Path) -> None:
+    path = tmp_path / "support_tickets.json"
+    path.write_text(
+        json.dumps({
+            "support_tickets": [
+                {
+                    "ticket_id": "ticket-1",
+                    "company": "Acme",
+                    "vendor": "HubSpot",
+                    "subject": "Reporting export issue",
+                    "description": "The team cannot export attribution data before renewal.",
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert loaded.opportunities[0]["target_id"] == "ticket-1"
+    assert loaded.opportunities[0]["source_type"] == "support_ticket"
+    assert loaded.opportunities[0]["source_title"] == "Reporting export issue"
+    assert loaded.opportunities[0]["evidence"][0] == {
+        "text": "The team cannot export attribution data before renewal.",
+        "source_id": "ticket-1",
+        "source_type": "support_ticket",
+        "source_title": "Reporting export issue",
+    }
 
 
 def test_source_adapter_cli_outputs_generation_payload(tmp_path: Path) -> None:
