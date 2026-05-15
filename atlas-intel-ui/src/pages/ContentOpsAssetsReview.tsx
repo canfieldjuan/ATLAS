@@ -13,6 +13,7 @@ import {
   exportGeneratedAssetDraftsCsv,
   fetchGeneratedAssetDrafts,
   reviewGeneratedAssetDraft,
+  reviewGeneratedAssetDrafts,
   type GeneratedAssetDraft,
   type GeneratedAssetListResponse,
   type GeneratedAssetType,
@@ -60,6 +61,8 @@ export default function ContentOpsAssetsReview() {
   const [error, setError] = useState<Error | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [batchBusy, setBatchBusy] = useState<'approved' | 'rejected' | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [exporting, setExporting] = useState(false)
 
   const params = useMemo(
@@ -78,6 +81,7 @@ export default function ContentOpsAssetsReview() {
     try {
       const result = await fetchGeneratedAssetDrafts(asset, params)
       setData(result)
+      setSelectedIds(new Set())
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)))
     } finally {
@@ -105,6 +109,26 @@ export default function ContentOpsAssetsReview() {
     }
   }
 
+  const handleBatchReview = async (nextStatus: 'approved' | 'rejected') => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    setBatchBusy(nextStatus)
+    setActionError(null)
+    try {
+      const result = await reviewGeneratedAssetDrafts(asset, ids, nextStatus)
+      await load(true)
+      if (result.missing_ids.length > 0) {
+        setActionError(
+          `${result.updated} updated. ${result.missing_ids.length} item(s) not found and skipped.`,
+        )
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBatchBusy(null)
+    }
+  }
+
   const handleExport = async () => {
     setExporting(true)
     setActionError(null)
@@ -124,6 +148,24 @@ export default function ContentOpsAssetsReview() {
 
   const activeAsset = ASSETS.find((item) => item.id === asset) || ASSETS[0]
   const rows = data?.rows || []
+  const reviewableIds = rows.map(assetId).filter(Boolean)
+  const selectedCount = reviewableIds.filter((id) => selectedIds.has(id)).length
+  const allSelected = reviewableIds.length > 0 && selectedCount === reviewableIds.length
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set())
+      return
+    }
+    setSelectedIds(new Set(reviewableIds))
+  }
+  const toggleRow = (id: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
@@ -187,6 +229,40 @@ export default function ContentOpsAssetsReview() {
             <p className="text-sm text-slate-400">{activeAsset.description}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleAll}
+              disabled={reviewableIds.length === 0 || loading}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-200 disabled:opacity-60"
+            >
+              {allSelected ? 'Clear' : 'Select all'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleBatchReview('approved')}
+              disabled={selectedCount === 0 || Boolean(batchBusy) || Boolean(busyId)}
+              className="inline-flex items-center gap-2 rounded-md border border-emerald-500/40 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50"
+            >
+              {batchBusy === 'approved' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="h-4 w-4" />
+              )}
+              Approve selected
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleBatchReview('rejected')}
+              disabled={selectedCount === 0 || Boolean(batchBusy) || Boolean(busyId)}
+              className="inline-flex items-center gap-2 rounded-md border border-rose-500/40 px-3 py-2 text-sm text-rose-200 hover:bg-rose-500/10 disabled:opacity-50"
+            >
+              {batchBusy === 'rejected' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <XCircle className="h-4 w-4" />
+              )}
+              Reject selected
+            </button>
             <select
               value={status}
               onChange={(event) => setStatus(event.target.value as StatusFilter)}
@@ -211,7 +287,7 @@ export default function ContentOpsAssetsReview() {
             </select>
             <button
               type="button"
-              onClick={handleExport}
+              onClick={() => void handleExport()}
               disabled={exporting || loading}
               className="inline-flex items-center gap-2 rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
             >
@@ -254,6 +330,8 @@ export default function ContentOpsAssetsReview() {
                   row={row}
                   asset={asset}
                   busy={busyId === assetId(row)}
+                  selected={selectedIds.has(assetId(row))}
+                  onToggle={toggleRow}
                   onReview={handleReview}
                 />
               ))}
@@ -269,11 +347,15 @@ function AssetRow({
   row,
   asset,
   busy,
+  selected,
+  onToggle,
   onReview,
 }: {
   row: GeneratedAssetDraft
   asset: GeneratedAssetType
   busy: boolean
+  selected: boolean
+  onToggle: (id: string) => void
   onReview: (row: GeneratedAssetDraft, status: 'approved' | 'rejected') => void
 }) {
   const id = assetId(row)
@@ -285,28 +367,38 @@ function AssetRow({
   return (
     <article className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-base font-semibold text-white">{title}</h3>
-            <span className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300">
-              {status}
-            </span>
-            {row.reasoning_context_used && (
-              <span className="rounded bg-violet-500/10 px-2 py-0.5 text-xs text-violet-200">
-                reasoning
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => id && onToggle(id)}
+            disabled={!canReview || busy}
+            aria-label={`Select ${title}`}
+            className="mt-1 h-4 w-4 rounded border-slate-700 bg-slate-950 text-cyan-400 focus:ring-cyan-400 disabled:opacity-50"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="truncate text-base font-semibold text-white">{title}</h3>
+              <span className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300">
+                {status}
               </span>
-            )}
-          </div>
-          {subtitle && <p className="mt-1 text-sm text-slate-400">{subtitle}</p>}
-          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-            {id && <span className="font-mono">id: {id}</span>}
-            {row.reasoning_wedge && <span>wedge: {textValue(row.reasoning_wedge)}</span>}
-            {typeof row.generation_total_tokens === 'number' && (
-              <span>tokens: {row.generation_total_tokens}</span>
-            )}
-            {typeof row.generation_parse_attempts === 'number' && (
-              <span>parse attempts: {row.generation_parse_attempts}</span>
-            )}
+              {row.reasoning_context_used && (
+                <span className="rounded bg-violet-500/10 px-2 py-0.5 text-xs text-violet-200">
+                  reasoning
+                </span>
+              )}
+            </div>
+            {subtitle && <p className="mt-1 text-sm text-slate-400">{subtitle}</p>}
+            <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+              {id && <span className="font-mono">id: {id}</span>}
+              {row.reasoning_wedge && <span>wedge: {textValue(row.reasoning_wedge)}</span>}
+              {typeof row.generation_total_tokens === 'number' && (
+                <span>tokens: {row.generation_total_tokens}</span>
+              )}
+              {typeof row.generation_parse_attempts === 'number' && (
+                <span>parse attempts: {row.generation_parse_attempts}</span>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex gap-2">

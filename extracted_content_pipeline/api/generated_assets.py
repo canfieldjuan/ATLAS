@@ -53,6 +53,7 @@ class GeneratedAssetApiConfig:
     default_status: str | None = "draft"
     default_limit: int = 20
     max_limit: int = 200
+    max_batch_size: int = 200
     export_filename_prefix: str = "content_assets"
 
     def __post_init__(self) -> None:
@@ -62,6 +63,8 @@ class GeneratedAssetApiConfig:
             raise ValueError("max_limit must be positive")
         if self.default_limit > self.max_limit:
             raise ValueError("default_limit must be less than or equal to max_limit")
+        if self.max_batch_size <= 0:
+            raise ValueError("max_batch_size must be positive")
         if not _clean(self.export_filename_prefix):
             raise ValueError("export_filename_prefix is required")
 
@@ -111,6 +114,22 @@ def _review_status(value: Any) -> str:
     if not status:
         raise HTTPException(status_code=400, detail="status is required")
     return status
+
+
+def _review_ids(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise HTTPException(status_code=400, detail="ids must be a non-empty list")
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        asset_id = _clean(item)
+        if not asset_id or asset_id in seen:
+            continue
+        seen.add(asset_id)
+        ids.append(asset_id)
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids must be a non-empty list")
+    return tuple(ids)
 
 
 def _asset_arg(value: str) -> str:
@@ -240,6 +259,49 @@ def create_generated_asset_router(
             "id": asset_id,
             "status": status,
             "updated": bool(updated),
+        }
+
+    @router.post("/{asset}/drafts/review-batch")
+    async def review_drafts_batch(
+        asset: str,
+        payload: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        asset_name = _asset_arg(asset)
+        pool = await _resolve_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        tenant = _tenant_scope(scope)
+        ids = _review_ids(payload.get("ids") or payload.get("asset_ids"))
+        if len(ids) > resolved_config.max_batch_size:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "batch size exceeds max_batch_size "
+                    f"({resolved_config.max_batch_size})"
+                ),
+            )
+        status = _review_status(payload.get("status"))
+        updated_ids: list[str] = []
+        missing_ids: list[str] = []
+        for asset_id in ids:
+            updated = await _update_asset_status(
+                asset_name,
+                pool,
+                asset_id=asset_id,
+                status=status,
+                scope=tenant,
+            )
+            if updated:
+                updated_ids.append(asset_id)
+            else:
+                missing_ids.append(asset_id)
+        return {
+            "account_id": tenant.account_id,
+            "asset": asset_name,
+            "ids": list(ids),
+            "status": status,
+            "updated": len(updated_ids),
+            "updated_ids": updated_ids,
+            "missing_ids": missing_ids,
         }
 
     return router
