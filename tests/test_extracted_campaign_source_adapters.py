@@ -125,6 +125,50 @@ def test_source_row_prefers_body_over_ticket_message() -> None:
     )
 
 
+def test_source_row_maps_ticket_comments_to_evidence_text() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "ticket_id": "ticket-thread-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "subject": "Reporting export blocked",
+        "comments": [
+            {
+                "author": "Customer",
+                "body": "We cannot export attribution data before renewal.",
+            },
+            {
+                "role": "Agent",
+                "message": "The export requires a higher plan.",
+            },
+        ],
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "ticket-thread-1"
+    assert opportunity["evidence"][0] == {
+        "text": (
+            "Customer: We cannot export attribution data before renewal.\n"
+            "Agent: The export requires a higher plan."
+        ),
+        "source_id": "ticket-thread-1",
+        "source_type": "support_ticket",
+        "source_title": "Reporting export blocked",
+    }
+
+
+def test_source_row_prefers_scalar_text_over_thread_messages() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "ticket_id": "ticket-thread-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "message": "Use this exported ticket summary.",
+        "comments": [{"body": "Do not use this comment when scalar text exists."}],
+    })
+
+    assert warnings == ()
+    assert opportunity["evidence"][0]["text"] == "Use this exported ticket summary."
+
+
 def test_load_source_campaign_opportunities_from_jsonl(tmp_path: Path) -> None:
     path = tmp_path / "sources.jsonl"
     path.write_text(

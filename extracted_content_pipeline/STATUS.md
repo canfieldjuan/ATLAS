@@ -44,6 +44,9 @@ source of truth for what remains.
   can consume these source rows directly with `--source-rows`; JSON, JSONL, and
   CSV source-row exports are supported, and
   `examples/campaign_source_rows.jsonl` provides a packaged starter input.
+  Ticket and conversation rows can also provide nested `messages`, `comments`,
+  `thread`, `conversation`, or `entries` arrays when the source text is not
+  available as one scalar field.
 - `signal_extraction` exposes source-row normalization as a runnable AI Content
   Ops output. It converts inline source material into normalized opportunities
   without LLM, database, or Atlas dependencies.

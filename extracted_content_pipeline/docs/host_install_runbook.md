@@ -189,6 +189,10 @@ CSV; pass `--format csv` for CSV source exports.
 When a source export includes more than one source-text field, the adapter uses
 the first recognized field in this order: `text`, `review_text`, `transcript`,
 `content`, `body`, `quote`, `complaint`, `message`, `description`, `summary`,
+then `notes`. If none of those scalar fields are present, it can build
+evidence text from nested `messages`, `comments`, `thread`, `conversation`, or
+`entries` arrays. Within each nested message, message-shaped fields win first:
+`text`, `message`, `body`, `content`, `comment`, `description`, `summary`,
 then `notes`.
 
 For an offline draft preview without writing the intermediate opportunity file:
