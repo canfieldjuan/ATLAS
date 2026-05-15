@@ -217,10 +217,18 @@ export interface GeneratedAssetDraft {
   cta?: Record<string, unknown>
   reference_ids?: string[] | string
   generation_total_tokens?: number
+  generation_input_tokens?: number
+  generation_output_tokens?: number
   generation_parse_attempts?: number
   reasoning_context_used?: boolean
   reasoning_wedge?: string
-  reasoning_confidence?: number
+  reasoning_confidence?: number | string
+  section_count?: number
+  reference_count?: number
+  tag_count?: number
+  chart_count?: number
+  persona?: string
+  value_prop?: string
   [key: string]: unknown
 }
 

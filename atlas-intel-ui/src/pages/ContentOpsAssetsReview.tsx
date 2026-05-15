@@ -22,6 +22,17 @@ import { PageError } from '../components/ErrorBoundary'
 
 type StatusFilter = 'draft' | 'approved' | 'rejected' | 'all'
 
+type AssetPreview = {
+  heading: string
+  body: string
+  meta: string[]
+}
+
+type AssetFact = {
+  label: string
+  value: string
+}
+
 const ASSETS: Array<{
   id: GeneratedAssetType
   label: string
@@ -364,6 +375,7 @@ function AssetRow({
   const status = textValue(row.status) || 'unknown'
   const canReview = Boolean(id)
   const preview = assetPreview(row, asset)
+  const facts = assetFacts(row, asset)
 
   return (
     <article className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
@@ -400,6 +412,19 @@ function AssetRow({
                 <span>parse attempts: {row.generation_parse_attempts}</span>
               )}
             </div>
+            {facts.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                {facts.map((fact) => (
+                  <span
+                    key={`${fact.label}:${fact.value}`}
+                    className="rounded border border-slate-800 bg-slate-900/70 px-2 py-1 text-slate-300"
+                  >
+                    <span className="text-slate-500">{fact.label}: </span>
+                    {fact.value}
+                  </span>
+                ))}
+              </div>
+            )}
             {preview && (
               <div className="mt-4 rounded-md border border-slate-800 bg-slate-900/70 p-3">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -477,10 +502,16 @@ function assetTitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string
 
 function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string {
   if (asset === 'blog_post') {
-    return [row.topic_type, row.description].map(textValue).filter(Boolean).join(' | ')
+    return [row.topic_type, row.slug, row.description]
+      .map(textValue)
+      .filter(Boolean)
+      .join(' | ')
   }
   if (asset === 'landing_page') {
-    return [row.campaign_name, row.slug].map(textValue).filter(Boolean).join(' | ')
+    return [row.campaign_name, row.slug, row.value_prop]
+      .map(textValue)
+      .filter(Boolean)
+      .join(' | ')
   }
   if (asset === 'sales_brief') {
     return [row.target_mode, row.brief_type, row.target_id]
@@ -494,37 +525,100 @@ function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): str
     .join(' | ')
 }
 
+function assetFacts(row: GeneratedAssetDraft, asset: GeneratedAssetType): AssetFact[] {
+  const facts: AssetFact[] = []
+  addFact(facts, 'target', row.target_id)
+  addFact(facts, 'mode', row.target_mode)
+  addAssetSpecificFacts(facts, row, asset)
+  addFact(facts, 'sections', row.section_count)
+  addFact(facts, 'references', row.reference_count)
+  addFact(facts, 'tags', row.tag_count)
+  addFact(facts, 'charts', row.chart_count)
+  addFact(facts, 'confidence', confidenceLabel(row.reasoning_confidence))
+  addFact(facts, 'input tokens', row.generation_input_tokens)
+  addFact(facts, 'output tokens', row.generation_output_tokens)
+  return facts
+}
+
+function addAssetSpecificFacts(
+  facts: AssetFact[],
+  row: GeneratedAssetDraft,
+  asset: GeneratedAssetType,
+): void {
+  if (asset === 'report') {
+    addFact(facts, 'report', row.report_type)
+    return
+  }
+  if (asset === 'blog_post') {
+    addFact(facts, 'topic', row.topic_type)
+    return
+  }
+  if (asset === 'landing_page') {
+    addFact(facts, 'campaign', row.campaign_name)
+    addFact(facts, 'persona', row.persona)
+    return
+  }
+  addFact(facts, 'brief', row.brief_type)
+}
+
+function addFact(facts: AssetFact[], label: string, value: unknown): void {
+  const text = textValue(value) || numberText(value)
+  if (!text) return
+  if (facts.some((fact) => fact.label === label && fact.value === text)) return
+  facts.push({ label, value: text })
+}
+
 function textValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): {
-  heading: string
-  body: string
-  meta: string[]
-} | null {
+function numberText(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
+}
+
+function confidenceLabel(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value !== 'number' || !Number.isFinite(value)) return ''
+  const pct = value <= 1 ? value * 100 : value
+  if (pct < 0 || pct > 100) return ''
+  return `${Math.round(pct)}%`
+}
+
+function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): AssetPreview | null {
   if (asset === 'blog_post') {
     const tags = valueList(row.tags).slice(0, 4)
     return previewOrNull({
-      heading: textValue(row.description),
+      heading: textValue(row.title) || textValue(row.description),
       body: excerpt(textValue(row.content)),
       meta: tags,
     })
   }
   if (asset === 'landing_page') {
+    const hero = recordValue(row.hero)
+    const cta = recordValue(row.cta)
     const section = firstSection(row.sections)
     return previewOrNull({
-      heading: objectText(row.hero, 'headline') || section.title,
+      heading: objectText(hero, 'headline') || section.title || textValue(row.title),
       body: excerpt(section.body),
-      meta: [objectText(row.cta, 'label')].filter(Boolean),
+      meta: [
+        objectText(hero, 'subheadline'),
+        objectText(cta, 'label'),
+        objectText(cta, 'url'),
+      ].filter(Boolean),
     })
   }
-  // Reports and sales briefs share the same section/summary preview shape.
   const section = firstSection(row.sections)
+  const sectionTitles = sectionList(row.sections)
+    .map((item) => item.title)
+    .filter(Boolean)
+    .slice(0, 3)
   return previewOrNull({
-    heading: section.title,
+    heading: section.title || textValue(row.headline) || textValue(row.title),
     body: excerpt(section.body || textValue(row.summary) || textValue(row.headline)),
-    meta: valueList(row.reference_ids).slice(0, 3).map((id) => `ref: ${id}`),
+    meta: [
+      ...sectionTitles.map((title) => `section: ${title}`),
+      ...valueList(row.reference_ids).slice(0, 3).map((id) => `ref: ${id}`),
+    ],
   })
 }
 
@@ -537,6 +631,10 @@ function previewOrNull(preview: {
 }
 
 function firstSection(value: unknown): { title: string; body: string } {
+  return sectionList(value)[0] || { title: '', body: '' }
+}
+
+function sectionList(value: unknown): Array<{ title: string; body: string }> {
   let sections = Array.isArray(value) ? value : []
   if (typeof value === 'string' && value.trim()) {
     try {
@@ -546,18 +644,35 @@ function firstSection(value: unknown): { title: string; body: string } {
       sections = []
     }
   }
-  const first = sections.find((item) => item && typeof item === 'object')
-  if (!first || typeof first !== 'object') return { title: '', body: '' }
-  const section = first as Record<string, unknown>
-  return {
-    title: textValue(section.title),
-    body: textValue(section.body_markdown) || textValue(section.body),
-  }
+  return sections
+    .filter((item): item is Record<string, unknown> =>
+      Boolean(item && typeof item === 'object' && !Array.isArray(item)),
+    )
+    .map((section) => ({
+      title: textValue(section.title) || textValue(section.heading),
+      body: textValue(section.body_markdown) || textValue(section.body),
+    }))
 }
 
-function objectText(value: unknown, key: string): string {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
-  return textValue((value as Record<string, unknown>)[key])
+function recordValue(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function objectText(value: Record<string, unknown> | null, key: string): string {
+  return value ? textValue(value[key]) : ''
 }
 
 function valueList(value: unknown): string[] {
