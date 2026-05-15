@@ -33,6 +33,25 @@ class _Repository:
         return f"ctx-{len(self.calls)}"
 
 
+class _FailingRepository(_Repository):
+    def __init__(self, *, fail_on_call: int) -> None:
+        super().__init__()
+        self.fail_on_call = fail_on_call
+
+    async def save_context(self, **kwargs: Any) -> str:
+        self.calls.append(kwargs)
+        if len(self.calls) == self.fail_on_call:
+            raise RuntimeError("database write failed")
+        return f"ctx-{len(self.calls)}"
+
+
+def _read_audit_entries(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
 def test_context_rows_accepts_array_wrapper_and_mapping_index() -> None:
     """Host files can be arrays, wrapper objects, or keyed context maps."""
 
@@ -175,6 +194,129 @@ async def test_upsert_contexts_preserves_commas_inside_selector_values() -> None
 
 
 @pytest.mark.asyncio
+async def test_upsert_contexts_appends_metadata_audit_log(tmp_path: Path) -> None:
+    """Audit entries record row metadata without serializing full context payloads."""
+
+    repository = _Repository()
+    audit_log = tmp_path / "audit" / "reasoning-upserts.jsonl"
+
+    result = await upsert_cli._upsert_contexts(
+        repository,  # type: ignore[arg-type]
+        payload={
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "account_id": "acct-row",
+                    "target_mode": "vendor_retention",
+                    "context": {
+                        "top_theses": [{"summary": "Renewal risk"}],
+                        "proof_points": [{"label": "source"}],
+                    },
+                }
+            ]
+        },
+        default_account_id="acct-default",
+        default_target_mode="",
+        extra_selectors=["Acme"],
+        audit_log=audit_log,
+    )
+
+    entries = _read_audit_entries(audit_log)
+    assert result["ids"] == ["ctx-1"]
+    assert entries[0]["action"] == "upsert_campaign_reasoning_context"
+    assert entries[0]["context_id"] == "ctx-1"
+    assert entries[0]["account_id"] == "acct-row"
+    assert entries[0]["target_mode"] == "vendor_retention"
+    assert entries[0]["selectors"] == ["Acme", "opp-1"]
+    assert entries[0]["context_keys"] == ["proof_points", "top_theses"]
+    assert "top_theses" not in entries[0]
+    assert entries[0]["recorded_at"].endswith("Z")
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_audits_each_successful_row_before_later_failure(
+    tmp_path: Path,
+) -> None:
+    """Committed rows keep audit records even when a later write fails."""
+
+    repository = _FailingRepository(fail_on_call=2)
+    audit_log = tmp_path / "reasoning-upserts.jsonl"
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        await upsert_cli._upsert_contexts(
+            repository,  # type: ignore[arg-type]
+            payload={
+                "contexts": [
+                    {
+                        "target_id": "opp-1",
+                        "context": {"top_theses": [{"summary": "x"}]},
+                    },
+                    {
+                        "target_id": "opp-2",
+                        "context": {"top_theses": [{"summary": "y"}]},
+                    },
+                ]
+            },
+            default_account_id="acct-default",
+            default_target_mode="vendor_retention",
+            extra_selectors=[],
+            audit_log=audit_log,
+        )
+
+    entries = _read_audit_entries(audit_log)
+    assert [entry["row_index"] for entry in entries] == [1]
+    assert entries[0]["context_id"] == "ctx-1"
+
+
+@pytest.mark.asyncio
+async def test_upsert_contexts_appends_audit_log_across_runs_and_rows(
+    tmp_path: Path,
+) -> None:
+    """Audit logs append JSONL entries and preserve one-based row indexes."""
+
+    audit_log = tmp_path / "reasoning-upserts.jsonl"
+
+    await upsert_cli._upsert_contexts(
+        _Repository(),  # type: ignore[arg-type]
+        payload={
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "context": {"top_theses": [{"summary": "x"}]},
+                },
+                {
+                    "target_id": "opp-2",
+                    "context": {"top_theses": [{"summary": "y"}]},
+                },
+            ]
+        },
+        default_account_id="acct-default",
+        default_target_mode="vendor_retention",
+        extra_selectors=[],
+        audit_log=audit_log,
+    )
+    await upsert_cli._upsert_contexts(
+        _Repository(),  # type: ignore[arg-type]
+        payload={
+            "contexts": [
+                {
+                    "target_id": "opp-3",
+                    "context": {"top_theses": [{"summary": "z"}]},
+                },
+            ]
+        },
+        default_account_id="acct-default",
+        default_target_mode="vendor_retention",
+        extra_selectors=[],
+        audit_log=audit_log,
+    )
+
+    entries = _read_audit_entries(audit_log)
+    assert [entry["row_index"] for entry in entries] == [1, 2, 1]
+    assert [entry["context_id"] for entry in entries] == ["ctx-1", "ctx-2", "ctx-1"]
+
+
+@pytest.mark.asyncio
 async def test_upsert_contexts_rejects_rows_without_selectors() -> None:
     """An unselectable row would never be read back, so fail loudly."""
 
@@ -227,6 +369,41 @@ async def test_main_dry_run_skips_database_pool(
         "status": "dry_run",
         "would_upsert": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_main_dry_run_does_not_write_audit_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dry-run remains read-only even when --audit-log is supplied."""
+
+    payload_path = tmp_path / "contexts.json"
+    audit_log = tmp_path / "audit.jsonl"
+    payload_path.write_text(
+        json.dumps({
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "context": {"top_theses": [{"summary": "x"}]},
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    async def create_pool(database_url: str) -> Any:
+        raise AssertionError("dry-run must not open a database pool")
+
+    monkeypatch.setattr(upsert_cli, "_create_pool", create_pool)
+    await upsert_cli._main_from_args([
+        str(payload_path),
+        "--dry-run",
+        "--audit-log",
+        str(audit_log),
+    ])
+
+    assert not audit_log.exists()
 
 
 @pytest.mark.asyncio
