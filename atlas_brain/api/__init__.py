@@ -156,6 +156,9 @@ try:
     from extracted_content_pipeline.api.control_surfaces import (
         create_content_ops_control_surface_router,
     )
+    from extracted_content_pipeline.api.generated_assets import (
+        create_generated_asset_router,
+    )
     from .._content_ops_services import build_content_ops_execution_services
     from .._content_ops_scope import (
         build_content_ops_scope,
@@ -166,6 +169,7 @@ try:
         select_content_ops_reasoning_context_provider,
     )
     from ..auth.dependencies import AuthUser
+    from ..storage.database import get_db_pool
 
     async def _capture_content_ops_auth_user(
         user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
@@ -194,6 +198,12 @@ try:
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
     )
     router.include_router(content_ops_router)
+    content_assets_router = create_generated_asset_router(
+        pool_provider=get_db_pool,
+        scope_provider=build_content_ops_scope,
+        dependencies=[Depends(_capture_content_ops_auth_user)],
+    )
+    router.include_router(content_assets_router)
 except Exception as exc:  # pragma: no cover - defensive at import time
     logger.warning(
         "Content Ops router disabled during api package import: %s", exc
