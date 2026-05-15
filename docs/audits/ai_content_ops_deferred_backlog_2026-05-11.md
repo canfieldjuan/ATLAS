@@ -28,23 +28,12 @@ The following items appear in older plan docs but are no longer active backlog:
 - `blog_post` reasoning catalog/fixture parity.
 - Live execute persistence smoke for all generated assets.
 - Blog blueprint population path.
+- Intervention or autonomous reasoning provider.
+- Full reasoning context drawer/detail UX.
 
 ## Active Backlog
 
-### 1. Intervention or autonomous reasoning provider
-
-**Priority:** P1
-
-**Why:** File and DB providers are enough for handoff, but they do not yet turn
-Atlas reasoning/intervention outputs into Content Ops context automatically.
-This is the bridge to the higher-value product story: reasoning as a separate
-layer that content products can consume.
-
-**Likely slice:** add a provider that reads
-`intelligence/autonomous_narrative_architect` or equivalent intervention output
-and normalizes it into the existing `CampaignReasoningContextProvider` port.
-
-### 2. DB reasoning provider hardening
+### 1. DB reasoning provider hardening
 
 **Priority:** P2
 
@@ -60,20 +49,7 @@ polish:
 **Likely slice:** start with per-target-mode filtering and settings integration;
 defer admin UI until the storage semantics are stable.
 
-### 3. Full reasoning context drawer/detail UX
-
-**Priority:** P2
-
-**Why:** Atlas Intel now renders compact consumed-context summaries. The richer
-drawer/detail UI remains deferred. This is useful for trust and debugging, but
-it should follow the live smoke/provider hardening work because the runtime
-contract is already inspectable at a compact level.
-
-**Likely slice:** add a drawer over the existing `reasoning.consumed_contexts`
-payload first. Do not add a new backend shape unless the current bounded
-payload is insufficient.
-
-### 4. Operator review UX and richer result previews
+### 2. Operator review UX and richer result previews
 
 **Priority:** P3
 
@@ -86,6 +62,6 @@ because batch review improves operator throughput across all asset types.
 
 ## Current Pick Recommendation
 
-Take item 1 next: intervention/autonomous reasoning provider. It bridges the
-separate Atlas reasoning layer into the already-shipped Content Ops provider
-port without coupling the extracted package back to Atlas internals.
+Take item 1 next: DB reasoning provider hardening. The intervention fallback
+and detail UI now exist, so the next highest-leverage work is tightening the
+durable provider semantics before adding more operator polish.
