@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 _MAX_INPUT_KEYS = 50
 _MAX_INPUT_DEPTH = 6
 _MAX_INPUT_STRING_CHARS = 10000
+_MAX_REASONING_STATUS_LIST_ITEMS = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
 
 
@@ -386,8 +387,26 @@ def _sanitize_reasoning_status(
             continue
         if isinstance(item, (str, int, float, bool)):
             continue
+        scalar_items = _clean_status_scalar_sequence(item)
+        if scalar_items:
+            status[key] = scalar_items
+            continue
         status.pop(key)
     return status
+
+
+def _clean_status_scalar_sequence(value: Any) -> list[str | int | float | bool]:
+    if isinstance(value, (str, bytes, bytearray, Mapping)):
+        return []
+    if not isinstance(value, Sequence):
+        return []
+    cleaned: list[str | int | float | bool] = []
+    for index, item in enumerate(value):
+        if index >= _MAX_REASONING_STATUS_LIST_ITEMS:
+            break
+        if isinstance(item, (str, int, float, bool)):
+            cleaned.append(item)
+    return cleaned
 
 
 async def _resolve_scope(provider: ScopeProvider | None) -> TenantScope | None:

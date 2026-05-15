@@ -123,6 +123,8 @@ async def test_describe_control_surfaces_reports_rich_reasoning_status():
         reasoning_status_provider=lambda: {
             "configured": True,
             "source": "db",
+            "modes": ["file", "db", "multi_pass"],
+            "packs": ("campaign", "long_form"),
             "unsafe": {"nested": "value"},
         },
     )
@@ -130,7 +132,32 @@ async def test_describe_control_surfaces_reports_rich_reasoning_status():
     route = _route(router, "/content-ops/control-surfaces", "GET")
     payload = await route.endpoint()
 
-    assert payload["reasoning"] == {"configured": True, "source": "db"}
+    assert payload["reasoning"] == {
+        "configured": True,
+        "source": "db",
+        "modes": ["file", "db", "multi_pass"],
+        "packs": ["campaign", "long_form"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_describe_control_surfaces_sanitizes_reasoning_status_lists():
+    router = create_content_ops_control_surface_router(
+        reasoning_context_provider=lambda: object(),
+        reasoning_status_provider=lambda: {
+            "configured": True,
+            "capabilities": ["falsification", {"unsafe": "nested"}, "cache"],
+            "details": [{"unsafe": "nested"}],
+        },
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    assert payload["reasoning"] == {
+        "configured": True,
+        "capabilities": ["falsification", "cache"],
+    }
 
 
 @pytest.mark.asyncio
