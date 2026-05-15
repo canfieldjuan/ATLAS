@@ -333,6 +333,114 @@ def test_load_source_campaign_opportunities_from_survey_object(tmp_path: Path) -
     }
 
 
+def test_load_source_campaign_opportunities_from_multi_collection_bundle(tmp_path: Path) -> None:
+    path = tmp_path / "customer_bundle.json"
+    path.write_text(
+        json.dumps({
+            "account_id": "acct-1",
+            "company": "Acme Logistics",
+            "vendor": "HubSpot",
+            "reviews": [
+                {
+                    "review_id": "review-1",
+                    "review_text": "Renewal pricing is hard to defend.",
+                }
+            ],
+            "support_tickets": [
+                {
+                    "ticket_id": "ticket-1",
+                    "subject": "Reporting exports blocked",
+                    "description": "Exports require a higher tier before renewal.",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "review-1",
+        "ticket-1",
+    ]
+    assert [row["company_name"] for row in loaded.opportunities] == [
+        "Acme Logistics",
+        "Acme Logistics",
+    ]
+    assert [row["vendor"] for row in loaded.opportunities] == ["HubSpot", "HubSpot"]
+    assert loaded.opportunities[0]["account_id"] == "acct-1"
+    assert loaded.opportunities[0]["evidence"][0]["source_type"] == "review"
+    assert loaded.opportunities[1]["evidence"][0] == {
+        "text": "Exports require a higher tier before renewal.",
+        "source_id": "ticket-1",
+        "source_type": "support_ticket",
+        "source_title": "Reporting exports blocked",
+    }
+
+
+def test_load_source_campaign_opportunities_from_nested_sources_bundle(tmp_path: Path) -> None:
+    path = tmp_path / "nested_sources.json"
+    path.write_text(
+        json.dumps({
+            "company": "Beta Retail",
+            "vendor": "Zendesk",
+            "sources": {
+                "reviews": [
+                    {
+                        "id": "review-1",
+                        "review_text": "The team is comparing Intercom.",
+                    }
+                ],
+                "surveys": [
+                    {
+                        "response_id": "survey-1",
+                        "csat_score": 2,
+                        "open_ended_response": "Support takes too long.",
+                    }
+                ],
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "review-1",
+        "survey-1",
+    ]
+    assert [row["company_name"] for row in loaded.opportunities] == [
+        "Beta Retail",
+        "Beta Retail",
+    ]
+    assert loaded.opportunities[0]["source_type"] == "review"
+    assert loaded.opportunities[1]["source_type"] == "csat_response"
+
+
+def test_source_bundle_child_fields_override_parent_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "child_override.json"
+    path.write_text(
+        json.dumps({
+            "company": "Parent Co",
+            "vendor": "HubSpot",
+            "reviews": [
+                {
+                    "id": "review-1",
+                    "company": "Child Co",
+                    "vendor": "Salesforce",
+                    "review_text": "The team is switching platforms.",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert loaded.opportunities[0]["company_name"] == "Child Co"
+    assert loaded.opportunities[0]["vendor"] == "Salesforce"
+
+
 def test_source_adapter_cli_outputs_generation_payload(tmp_path: Path) -> None:
     path = tmp_path / "sources.json"
     path.write_text(

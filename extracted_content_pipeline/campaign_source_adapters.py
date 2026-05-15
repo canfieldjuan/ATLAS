@@ -85,6 +85,7 @@ _SOURCE_TYPE_KEYS = ("source_type", "type", "kind")
 _SOURCE_TITLE_KEYS = ("source_title", "ticket_subject", "subject", "title", "name")
 _SOURCE_TITLE_COLLISION_KEYS = ("subject", "ticket_subject", "title", "name")
 _PAIN_KEYS = ("pain_points", "pain_categories", "pain_category", "topic", "category")
+_PARENT_EXCLUDE_KEYS = set(_ROW_LIST_KEYS) | set(_SOURCE_TITLE_COLLISION_KEYS)
 
 
 def load_source_campaign_opportunities_from_file(
@@ -215,11 +216,63 @@ def _load_source_rows(path: Path, *, file_format: SourceDataFormat) -> list[Any]
         return list(data)
     if not isinstance(data, Mapping):
         raise ValueError("Source JSON must be an object or array")
+    return _source_rows_from_bundle(data)
+
+
+def _source_rows_from_bundle(
+    bundle: Mapping[str, Any],
+    *,
+    parent_fields: Mapping[str, Any] | None = None,
+) -> list[Any]:
+    inherited = {
+        **dict(parent_fields or {}),
+        **_safe_parent_fields(bundle),
+    }
+    rows: list[Any] = []
     for key in _ROW_LIST_KEYS:
-        value = data.get(key)
+        value = bundle.get(key)
+        if isinstance(value, Mapping):
+            rows.extend(_source_rows_from_bundle(value, parent_fields=inherited))
+            continue
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            return list(value)
-    return [dict(data)]
+            rows.extend(_rows_with_parent_fields(value, inherited))
+    if rows:
+        return rows
+    if parent_fields:
+        return [{**dict(parent_fields), **dict(bundle)}]
+    return [dict(bundle)]
+
+
+def _rows_with_parent_fields(
+    rows: Sequence[Any],
+    parent_fields: Mapping[str, Any],
+) -> list[Any]:
+    out: list[Any] = []
+    for row in rows:
+        if isinstance(row, Mapping):
+            out.append({**dict(parent_fields), **dict(row)})
+        else:
+            out.append(row)
+    return out
+
+
+def _safe_parent_fields(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): value
+        for key, value in bundle.items()
+        if key not in _PARENT_EXCLUDE_KEYS
+        and _is_safe_parent_value(value)
+    }
+
+
+def _is_safe_parent_value(value: Any) -> bool:
+    if value in (None, "", [], {}):
+        return False
+    if isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, Mapping)):
+        return all(isinstance(item, (str, int, float, bool)) for item in value)
+    return False
 
 
 def _load_source_csv_rows(path: Path) -> list[dict[str, Any]]:
