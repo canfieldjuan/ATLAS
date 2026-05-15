@@ -340,6 +340,19 @@ python scripts/check_extracted_campaign_reasoning_postgres.py \
 The check exits non-zero when no matching context is found, making it suitable
 for deployment smoke tests after a reasoning ETL or migration run.
 
+If a host needs to seed or edit durable reasoning rows manually, use the upsert
+CLI instead of hand-writing SQL:
+
+```bash
+python scripts/upsert_extracted_campaign_reasoning_contexts.py \
+  reasoning-contexts.json \
+  --account-id acct_123 \
+  --target-mode vendor_retention
+```
+
+Rows can include `selectors` directly or selector fields such as `target_id`,
+`company_name`, `contact_email`, and `vendor_name`.
+
 ## Step 6: Add Optional Prompt Overrides
 
 Use packaged skills by default. To override copy strategy, provide a markdown
