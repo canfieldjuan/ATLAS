@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +90,26 @@ def test_row_context_prefers_nested_context() -> None:
     }
 
 
+def test_dry_run_contexts_validates_without_repository() -> None:
+    """Dry-run exercises row validation and reports write count only."""
+
+    result = upsert_cli._dry_run_contexts(
+        payload={
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "context": {"top_theses": [{"summary": "Renewal risk"}]},
+                }
+            ]
+        },
+        default_account_id="acct-default",
+        default_target_mode="vendor_retention",
+        extra_selectors=[],
+    )
+
+    assert result == {"status": "dry_run", "would_upsert": 1}
+
+
 @pytest.mark.asyncio
 async def test_upsert_contexts_saves_each_row_with_defaults() -> None:
     """Rows without account/mode values inherit CLI defaults."""
@@ -168,6 +189,44 @@ async def test_upsert_contexts_rejects_rows_without_selectors() -> None:
             extra_selectors=[],
         )
     assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_main_dry_run_skips_database_pool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: Any,
+) -> None:
+    """Dry-run should validate the file without needing DB credentials."""
+
+    payload_path = tmp_path / "contexts.json"
+    payload_path.write_text(
+        json.dumps({
+            "contexts": [
+                {
+                    "target_id": "opp-1",
+                    "context": {"top_theses": [{"summary": "x"}]},
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    async def create_pool(database_url: str) -> Any:
+        raise AssertionError("dry-run must not open a database pool")
+
+    monkeypatch.setattr(upsert_cli, "_create_pool", create_pool)
+    exit_code = await upsert_cli._main_from_args([
+        str(payload_path),
+        "--dry-run",
+        "--json",
+    ])
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "dry_run",
+        "would_upsert": 1,
+    }
 
 
 @pytest.mark.asyncio
