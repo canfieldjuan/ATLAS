@@ -77,6 +77,12 @@ exciting than shipping a toggle that lies to users. That is the point.
 a host or separate reasoning product, but does not run synthesis internally.
 `absent` means the output does not use the reasoning-provider path.
 
+The catalog response also includes a top-level `reasoning` object. By default
+it reports only `configured`; hosts can inject a reasoning status provider to
+add scalar fields and bounded scalar lists such as `source`, `modes`, `packs`,
+or `capabilities`. Nested objects are filtered out before the status reaches
+the API response.
+
 ## Presets
 
 Current preset ids:
