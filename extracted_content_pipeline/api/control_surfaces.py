@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -385,7 +386,7 @@ def _sanitize_reasoning_status(
         item = status[key]
         if key == "configured" or item is None:
             continue
-        if isinstance(item, (str, int, float, bool)):
+        if _is_status_scalar(item):
             continue
         scalar_items = _clean_status_scalar_sequence(item)
         if scalar_items:
@@ -404,9 +405,15 @@ def _clean_status_scalar_sequence(value: Any) -> list[str | int | float | bool]:
     for index, item in enumerate(value):
         if index >= _MAX_REASONING_STATUS_LIST_ITEMS:
             break
-        if isinstance(item, (str, int, float, bool)):
+        if _is_status_scalar(item):
             cleaned.append(item)
     return cleaned
+
+
+def _is_status_scalar(value: Any) -> bool:
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return isinstance(value, (str, int, float, bool))
 
 
 async def _resolve_scope(provider: ScopeProvider | None) -> TenantScope | None:
