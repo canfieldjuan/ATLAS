@@ -49,6 +49,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> BlogPostDraft:
         metadata["generation_model"] = str(row.get("llm_model"))
 
     return BlogPostDraft(
+        id=str(row.get("id") or ""),
         slug=str(row.get("slug") or ""),
         title=str(row.get("title") or ""),
         description=str(row.get("description") or ""),
@@ -58,6 +59,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> BlogPostDraft:
         charts=tuple(dict(chart) for chart in charts_raw if isinstance(chart, Mapping)),
         data_context=data_context,
         metadata=metadata,
+        status=str(row.get("status") or ""),
     )
 
 
@@ -149,8 +151,8 @@ class PostgresBlogPostRepository:
             params.append(topic_type)
             clauses.append(f"topic_type = ${len(params)}")
         sql = (
-            "SELECT slug, title, description, topic_type, tags, content, "
-            "charts, data_context, llm_model "
+            "SELECT id, slug, title, description, topic_type, tags, content, "
+            "charts, data_context, llm_model, status "
             "FROM blog_posts WHERE " + " AND ".join(clauses) + " "
             "ORDER BY created_at DESC"
         )

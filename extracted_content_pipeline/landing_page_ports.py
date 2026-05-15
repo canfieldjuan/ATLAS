@@ -118,6 +118,8 @@ class LandingPageDraft:
     meta: Mapping[str, Any] = field(default_factory=dict)
     reference_ids: Sequence[str] = field(default_factory=tuple)
     metadata: JsonDict = field(default_factory=dict)
+    id: str = ""
+    status: str = ""
 
     def as_dict(self) -> JsonDict:
         return {
@@ -132,6 +134,8 @@ class LandingPageDraft:
             "meta": dict(self.meta),
             "reference_ids": list(self.reference_ids),
             "metadata": dict(self.metadata),
+            "id": self.id,
+            "status": self.status,
         }
 
 

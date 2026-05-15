@@ -67,6 +67,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> ReportDraft:
         metadata_raw = {}
 
     return ReportDraft(
+        id=str(row.get("id") or ""),
         target_id=str(row.get("target_id") or ""),
         target_mode=str(row.get("target_mode") or ""),
         report_type=str(row.get("report_type") or ""),
@@ -75,6 +76,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> ReportDraft:
         sections=tuple(_coerce_section(s) for s in sections_raw),
         reference_ids=tuple(str(r) for r in reference_ids_raw),
         metadata=dict(metadata_raw),
+        status=str(row.get("status") or ""),
     )
 
 
@@ -141,8 +143,8 @@ class PostgresReportRepository:
             params.append(report_type)
             clauses.append(f"report_type = ${len(params)}")
         sql = (
-            "SELECT target_id, target_mode, report_type, title, summary, "
-            "sections, reference_ids, metadata "
+            "SELECT id, target_id, target_mode, report_type, title, summary, "
+            "sections, reference_ids, metadata, status "
             "FROM reports WHERE " + " AND ".join(clauses) + " "
             "ORDER BY created_at DESC"
         )

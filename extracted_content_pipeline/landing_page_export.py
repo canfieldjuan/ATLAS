@@ -37,6 +37,8 @@ _EXPORT_COLUMNS = (
     "meta",
     "reference_ids",
     "metadata",
+    "id",
+    "status",
 )
 
 

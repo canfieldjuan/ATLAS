@@ -21,6 +21,8 @@ class BlogPostDraft:
     charts: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     data_context: JsonDict = field(default_factory=dict)
     metadata: JsonDict = field(default_factory=dict)
+    id: str = ""
+    status: str = ""
 
     def as_dict(self) -> JsonDict:
         return {
@@ -33,6 +35,8 @@ class BlogPostDraft:
             "charts": [dict(chart) for chart in self.charts],
             "data_context": dict(self.data_context),
             "metadata": dict(self.metadata),
+            "id": self.id,
+            "status": self.status,
         }
 
 

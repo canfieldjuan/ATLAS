@@ -40,6 +40,8 @@ class _Pool:
 
 def _report_row():
     return {
+        "id": "report-uuid-1",
+        "status": "draft",
         "target_id": "vendor-acme",
         "target_mode": "vendor_retention",
         "report_type": "vendor_pressure",
@@ -56,6 +58,8 @@ def _report_row():
 
 def _blog_post_row():
     return {
+        "id": "blog-post-uuid-1",
+        "status": "draft",
         "slug": "acme-pricing-pressure",
         "title": "Acme Pricing Pressure",
         "description": "Pricing pressure dominates.",
@@ -75,6 +79,8 @@ def _blog_post_row():
 
 def _landing_page_row():
     return {
+        "id": "landing-page-uuid-1",
+        "status": "draft",
         "campaign_name": "acme-launch",
         "persona": "VP Engineering",
         "value_prop": "Catch pressure early",
@@ -91,6 +97,8 @@ def _landing_page_row():
 
 def _sales_brief_row():
     return {
+        "id": "brief-uuid-1",
+        "status": "draft",
         "target_id": "vendor-acme",
         "target_mode": "vendor_retention",
         "brief_type": "pre_call",
@@ -145,6 +153,8 @@ def test_generated_asset_router_lists_report_drafts_with_filters() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["count"] == 1
+    assert body["rows"][0]["id"] == "report-uuid-1"
+    assert body["rows"][0]["status"] == "draft"
     assert body["rows"][0]["title"] == "Acme report"
     assert body["rows"][0]["reasoning_wedge"] == "price_squeeze"
     query, args = pool.fetch_calls[0]
@@ -166,6 +176,8 @@ def test_generated_asset_router_lists_blog_post_drafts_with_filters() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["count"] == 1
+    assert body["rows"][0]["id"] == "blog-post-uuid-1"
+    assert body["rows"][0]["status"] == "draft"
     assert body["rows"][0]["slug"] == "acme-pricing-pressure"
     assert body["rows"][0]["reasoning_wedge"] == "price_squeeze"
     query, args = pool.fetch_calls[0]
