@@ -158,6 +158,10 @@ python scripts/run_extracted_campaign_generation_example.py customer_opportuniti
 When multiple source-text fields are present, the adapter uses the first
 recognized field in this order: `text`, `review_text`, `transcript`,
 `content`, `body`, `quote`, `complaint`, `message`, `description`, `summary`,
+then `notes`. If none of those scalar fields are present, it can build
+evidence text from nested `messages`, `comments`, `thread`, `conversation`, or
+`entries` arrays. Within each nested message, message-shaped fields win first:
+`text`, `message`, `body`, `content`, `comment`, `description`, `summary`,
 then `notes`.
 
 For quick offline previews, the generation CLI can consume those source rows

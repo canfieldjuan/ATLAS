@@ -54,6 +54,20 @@ _TEXT_KEYS = (
     "summary",
     "notes",
 )
+_THREAD_KEYS = ("messages", "comments", "thread", "conversation", "entries")
+# Thread items favor message-shaped keys before generic body/content keys,
+# while row-level source text keeps document/review body precedence.
+_THREAD_TEXT_KEYS = (
+    "text",
+    "message",
+    "body",
+    "content",
+    "comment",
+    "description",
+    "summary",
+    "notes",
+)
+_THREAD_SPEAKER_KEYS = ("speaker", "author", "role", "name")
 _SOURCE_TYPE_KEYS = ("source_type", "type", "kind")
 _SOURCE_TITLE_KEYS = ("source_title", "ticket_subject", "subject", "title", "name")
 _SOURCE_TITLE_COLLISION_KEYS = ("subject", "ticket_subject", "title", "name")
@@ -128,7 +142,7 @@ def source_row_to_campaign_opportunity(
     """Convert one source row while preserving original non-empty fields."""
 
     warnings: list[CampaignOpportunityWarning] = []
-    text = _first_text(row, _TEXT_KEYS)
+    text = _source_text(row)
     if not text:
         warnings.append(CampaignOpportunityWarning(
             code="missing_source_text",
@@ -136,7 +150,8 @@ def source_row_to_campaign_opportunity(
             field="text",
             message=(
                 "Source row did not contain text, review_text, transcript, "
-                "content, body, quote, or complaint."
+                "content, body, quote, complaint, message, description, "
+                "summary, notes, or thread messages."
             ),
         ))
         return {}, tuple(warnings)
@@ -252,6 +267,52 @@ def _first_text(row: Mapping[str, Any], keys: Sequence[str]) -> str:
         if text:
             return text
     return ""
+
+
+def _source_text(row: Mapping[str, Any]) -> str:
+    scalar_text = _first_text(row, _TEXT_KEYS)
+    if scalar_text:
+        return scalar_text
+    return _thread_text(row)
+
+
+def _thread_text(row: Mapping[str, Any]) -> str:
+    for key in _THREAD_KEYS:
+        value = row.get(key)
+        lines = _thread_lines(value)
+        if lines:
+            return "\n".join(lines)
+    return ""
+
+
+def _thread_lines(value: Any) -> list[str]:
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, Mapping):
+        return _thread_lines([value])
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return []
+    lines: list[str] = []
+    for item in value:
+        line = _thread_line(item)
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _thread_line(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if not isinstance(item, Mapping):
+        return ""
+    text = _first_text(item, _THREAD_TEXT_KEYS)
+    if not text:
+        return ""
+    speaker = _first_text(item, _THREAD_SPEAKER_KEYS)
+    return f"{speaker}: {text}" if speaker else text
 
 
 def _first_text_list(row: Mapping[str, Any], keys: Sequence[str]) -> list[str]:
