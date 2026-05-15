@@ -417,6 +417,58 @@ def test_load_source_campaign_opportunities_from_nested_sources_bundle(tmp_path:
     assert loaded.opportunities[1]["source_type"] == "csat_response"
 
 
+def test_load_source_campaign_opportunities_from_deep_nested_sources_bundle(tmp_path: Path) -> None:
+    path = tmp_path / "deep_nested_sources.json"
+    path.write_text(
+        json.dumps({
+            "company": "Beta Retail",
+            "sources": {
+                "sources": {
+                    "reviews": [
+                        {
+                            "id": "review-1",
+                            "review_text": "The team is comparing Intercom.",
+                        }
+                    ]
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert loaded.opportunities[0]["target_id"] == "review-1"
+    assert loaded.opportunities[0]["company_name"] == "Beta Retail"
+    assert loaded.opportunities[0]["source_type"] == "review"
+
+
+def test_source_bundle_nested_mapping_without_collection_loads_as_row(tmp_path: Path) -> None:
+    path = tmp_path / "nested_single_source.json"
+    path.write_text(
+        json.dumps({
+            "company": "Parent Co",
+            "vendor": "HubSpot",
+            "sources": {
+                "id": "review-1",
+                "review_text": "The account is comparing alternatives.",
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert loaded.opportunities[0]["target_id"] == "review-1"
+    assert loaded.opportunities[0]["company_name"] == "Parent Co"
+    assert loaded.opportunities[0]["vendor"] == "HubSpot"
+    assert loaded.opportunities[0]["evidence"][0] == {
+        "text": "The account is comparing alternatives.",
+        "source_id": "review-1",
+        "source_type": "review",
+    }
+
+
 def test_source_bundle_child_fields_override_parent_metadata(tmp_path: Path) -> None:
     path = tmp_path / "child_override.json"
     path.write_text(

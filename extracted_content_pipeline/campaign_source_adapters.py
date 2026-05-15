@@ -86,6 +86,7 @@ _SOURCE_TITLE_KEYS = ("source_title", "ticket_subject", "subject", "title", "nam
 _SOURCE_TITLE_COLLISION_KEYS = ("subject", "ticket_subject", "title", "name")
 _PAIN_KEYS = ("pain_points", "pain_categories", "pain_category", "topic", "category")
 _PARENT_EXCLUDE_KEYS = set(_ROW_LIST_KEYS) | set(_SOURCE_TITLE_COLLISION_KEYS)
+_MAX_BUNDLE_DEPTH = 8
 
 
 def load_source_campaign_opportunities_from_file(
@@ -223,7 +224,10 @@ def _source_rows_from_bundle(
     bundle: Mapping[str, Any],
     *,
     parent_fields: Mapping[str, Any] | None = None,
+    depth: int = 0,
 ) -> list[Any]:
+    if depth > _MAX_BUNDLE_DEPTH:
+        return []
     inherited = {
         **dict(parent_fields or {}),
         **_safe_parent_fields(bundle),
@@ -232,7 +236,11 @@ def _source_rows_from_bundle(
     for key in _ROW_LIST_KEYS:
         value = bundle.get(key)
         if isinstance(value, Mapping):
-            rows.extend(_source_rows_from_bundle(value, parent_fields=inherited))
+            rows.extend(_source_rows_from_bundle(
+                value,
+                parent_fields=inherited,
+                depth=depth + 1,
+            ))
             continue
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             rows.extend(_rows_with_parent_fields(value, inherited))
