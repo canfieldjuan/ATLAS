@@ -40,35 +40,16 @@ The following items appear in older plan docs but are no longer active backlog:
 - DB reasoning upsert dry-run.
 - DB reasoning upsert metadata audit log.
 - DB reasoning upsert live-opportunity validation.
+- DB reasoning context hosted admin list/upsert API.
+- DB reasoning context scoped delete/retire API.
+- DB reasoning context admin visibility events.
 - Generated asset batch review/status updates.
 
 ## Active Backlog
 
-### 1. Reasoning context admin workflow
+### 1. Operator review UX and richer result previews
 
 **Priority:** P2
-
-**Why:** DB-backed reasoning context storage is now functional and has CLI
-coverage for read, export, upsert, dry-run, stale cleanup, and metadata audit
-logging. What is still missing is an operator-facing workflow for managing
-those rows without hand-running scripts.
-
-Remaining work:
-
-- Browse and inspect reasoning context rows from the hosted admin surface.
-- Create or edit a context row with the same validation rules as the upsert
-  CLI.
-- Delete or retire a row deliberately, with tenant/account scoping.
-- Show recent metadata audit-log entries or equivalent operator-visible
-  provenance.
-
-**Likely slice:** start with a small API/admin surface over the existing
-repository methods. Keep full audit-table persistence separate unless a host
-needs centralized audit storage immediately.
-
-### 2. Operator review UX and richer result previews
-
-**Priority:** P3
 
 **Why:** Batch review/status updates are now done. Older frontend/result-summary
 plans still deferred richer generated-asset previews and component-level tests.
@@ -78,7 +59,7 @@ These are product polish, not core readiness blockers.
 and sales brief rows, then add component-level frontend tests for the review
 surface.
 
-### 3. Scale hardening for batch review
+### 2. Scale hardening for batch review
 
 **Priority:** P4
 
@@ -89,7 +70,7 @@ bulk SQL may be worth adding.
 
 **Likely slice:** defer until actual batch sizes justify it.
 
-### 4. Reasoning product depth and source breadth
+### 3. Reasoning product depth and source breadth
 
 **Priority:** P4
 
@@ -107,6 +88,6 @@ not as Content Ops cleanup.
 
 ## Current Pick Recommendation
 
-Take item 1 next if we want operator-facing progress: reasoning context admin
-workflow. Take item 2 next if we want frontend polish: richer generated-asset
-previews and component tests.
+Take item 1 next if we want operator-facing polish: richer generated-asset
+previews and component tests. Take item 3 if we want to switch back to the
+larger reasoning-core/product-depth track.
