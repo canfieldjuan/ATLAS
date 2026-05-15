@@ -169,6 +169,43 @@ def test_source_row_prefers_scalar_text_over_thread_messages() -> None:
     assert opportunity["evidence"][0]["text"] == "Use this exported ticket summary."
 
 
+def test_source_row_maps_nps_feedback_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "response_id": "nps-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "nps_score": 3,
+        "feedback_text": "Renewal pricing is hard to defend against Salesforce.",
+        "pain_category": "pricing pressure",
+    })
+
+    assert warnings == ()
+    assert opportunity["id"] == "nps-1"
+    assert opportunity["target_id"] == "nps-1"
+    assert opportunity["nps_score"] == 3
+    assert opportunity["source_type"] == "nps_response"
+    assert opportunity["pain_points"] == ["pricing pressure"]
+    assert opportunity["evidence"] == [{
+        "text": "Renewal pricing is hard to defend against Salesforce.",
+        "source_id": "nps-1",
+        "source_type": "nps_response",
+    }]
+
+
+def test_source_row_prefers_nps_over_csat_when_both_scores_exist() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "response_id": "survey-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "nps_score": 5,
+        "csat_score": 4,
+        "feedback": "The team is still evaluating alternatives.",
+    })
+
+    assert warnings == ()
+    assert opportunity["source_type"] == "nps_response"
+
+
 def test_load_source_campaign_opportunities_from_jsonl(tmp_path: Path) -> None:
     path = tmp_path / "sources.jsonl"
     path.write_text(
@@ -262,6 +299,37 @@ def test_load_source_campaign_opportunities_from_support_ticket_object(tmp_path:
         "source_id": "ticket-1",
         "source_type": "support_ticket",
         "source_title": "Reporting export issue",
+    }
+
+
+def test_load_source_campaign_opportunities_from_survey_object(tmp_path: Path) -> None:
+    path = tmp_path / "survey_responses.json"
+    path.write_text(
+        json.dumps({
+            "survey_responses": [
+                {
+                    "survey_id": "survey-1",
+                    "company": "Beta Retail",
+                    "vendor": "Zendesk",
+                    "csat_score": "2",
+                    "open_ended_response": (
+                        "Support responses take too long and the team is comparing Intercom."
+                    ),
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert loaded.opportunities[0]["target_id"] == "survey-1"
+    assert loaded.opportunities[0]["csat_score"] == "2"
+    assert loaded.opportunities[0]["source_type"] == "csat_response"
+    assert loaded.opportunities[0]["evidence"][0] == {
+        "text": "Support responses take too long and the team is comparing Intercom.",
+        "source_id": "survey-1",
+        "source_type": "csat_response",
     }
 
 
