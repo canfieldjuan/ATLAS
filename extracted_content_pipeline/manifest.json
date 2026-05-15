@@ -320,6 +320,9 @@
       "target": "extracted_content_pipeline/storage/migrations/277_campaign_reasoning_contexts.sql"
     },
     {
+      "target": "extracted_content_pipeline/storage/migrations/278_campaign_reasoning_context_upsert.sql"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_reasoning_postgres.py"
     },
     {

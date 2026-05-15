@@ -29,6 +29,7 @@ does not satisfy another mode when selectors overlap.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -104,6 +105,16 @@ def _dedupe_selectors(values: Sequence[Any]) -> tuple[str, ...]:
             seen.add(variant)
             cleaned.append(variant)
     return tuple(cleaned)
+
+
+def _selector_key(values: Sequence[str]) -> str:
+    """Return the order-independent persistence key for selectors."""
+
+    canonical = "\x1f".join(sorted(values))
+    return hashlib.md5(
+        canonical.encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -220,18 +231,26 @@ class PostgresCampaignReasoningContextRepository:
             )
 
         payload: JsonDict = campaign_reasoning_context_metadata(normalized)
+        selector_key = _selector_key(cleaned)
 
         context_id = await self.pool.fetchval(
             f"""
             INSERT INTO {self.table} (
-                account_id, target_mode, selectors, payload, updated_at
+                account_id, target_mode, selectors, selector_key,
+                payload, updated_at
             )
-            VALUES ($1, $2, $3::text[], $4::jsonb, NOW())
+            VALUES ($1, $2, $3::text[], $4, $5::jsonb, NOW())
+            ON CONFLICT (account_id, target_mode, selector_key)
+            DO UPDATE SET
+                selectors = EXCLUDED.selectors,
+                payload = EXCLUDED.payload,
+                updated_at = NOW()
             RETURNING id
             """,
             scope.account_id or "",
             str(target_mode or "").strip().lower(),
             list(cleaned),
+            selector_key,
             json_dump_jsonb(payload),
         )
         return str(context_id)

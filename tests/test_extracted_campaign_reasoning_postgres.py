@@ -8,7 +8,7 @@ so the host route mount (PR #402 / PR #462) can swap providers
 without touching the bundle's `with_reasoning_context()`
 derivation.
 
-Test inventory (12 tests):
+Test inventory (16 tests):
 
 1. `read_campaign_reasoning_context` builds the candidate
    selector array from `target_id` + opportunity keys
@@ -39,6 +39,10 @@ Test inventory (12 tests):
     the same selector priority.
 11. Target-mode caller input is normalized before filtering.
 12. `save_context` normalizes target-mode values before writing.
+13. `save_context` upserts by account, target_mode, and selector_key.
+14. Selector keys are order-independent for the same logical selector set.
+15. `save_context` accepts raw mappings after the selector-key SQL shape change.
+16. Migration 278 defines the selector_key column and unique replay index.
 
 Test harness uses an asyncpg-shaped fake pool (matches
 `tests/test_extracted_blog_blueprint_postgres.py`).
@@ -47,6 +51,7 @@ Test harness uses an asyncpg-shaped fake pool (matches
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -339,9 +344,72 @@ async def test_save_context_round_trips_payload_jsonb() -> None:
     assert "acme corp" in selectors
     assert "ACME-123" in selectors
     assert "acme-123" in selectors
-    payload = json.loads(args[3])
+    payload = json.loads(args[4])
     assert "reasoning_context" in payload
     assert payload["reasoning_context"]["top_theses"][0]["summary"] == "losing on price"
+
+
+@pytest.mark.asyncio
+async def test_save_context_upserts_by_selector_key() -> None:
+    """Replay writes update the existing row for the same account,
+    target_mode, and logical selector set."""
+
+    pool = _Pool()
+    pool.fetchval_results = ["ctx-uuid-upsert"]
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    saved = await repo.save_context(
+        scope=TenantScope(account_id="acct-1"),
+        selectors=("Acme Corp", "ACME-123"),
+        context=CampaignReasoningContext(
+            top_theses=({"summary": "Acme is losing on price"},),
+        ),
+        target_mode="vendor_retention",
+    )
+
+    assert saved == "ctx-uuid-upsert"
+    call = pool.fetchval_calls[0]
+    query = call["query"]
+    args = call["args"]
+    assert "selector_key" in query
+    assert "ON CONFLICT (account_id, target_mode, selector_key)" in query
+    assert "DO UPDATE SET" in query
+    assert "payload = EXCLUDED.payload" in query
+    assert args[0] == "acct-1"
+    assert args[1] == "vendor_retention"
+    assert "Acme Corp" in args[2]
+    assert len(args[3]) == 32
+    assert json.loads(args[4])["reasoning_context"]["top_theses"]
+
+
+@pytest.mark.asyncio
+async def test_save_context_selector_key_is_order_independent() -> None:
+    """The replay key depends on the set of cleaned selectors, not
+    caller ordering."""
+
+    pool = _Pool()
+    pool.fetchval_results = ["ctx-1", "ctx-1"]
+    repo = PostgresCampaignReasoningContextRepository(pool=pool)
+
+    context = CampaignReasoningContext(top_theses=({"summary": "x"},))
+    await repo.save_context(
+        scope=TenantScope(account_id="acct-1"),
+        selectors=("Acme Corp", "ACME-123"),
+        context=context,
+        target_mode="vendor",
+    )
+    await repo.save_context(
+        scope=TenantScope(account_id="acct-1"),
+        selectors=("ACME-123", "Acme Corp"),
+        context=context,
+        target_mode="vendor",
+    )
+
+    first_args = pool.fetchval_calls[0]["args"]
+    second_args = pool.fetchval_calls[1]["args"]
+    assert first_args[3] == second_args[3]
+    assert first_args[2] != []
+    assert second_args[2] != []
 
 
 @pytest.mark.asyncio
@@ -412,7 +480,24 @@ async def test_save_context_accepts_raw_mapping() -> None:
     )
 
     assert saved == "ctx-uuid-2"
-    payload = json.loads(pool.fetchval_calls[0]["args"][3])
+    payload = json.loads(pool.fetchval_calls[0]["args"][4])
     assert payload["reasoning_context"]["top_theses"][0]["summary"] == (
         "Acme losing on price"
     )
+
+
+def test_campaign_reasoning_context_upsert_migration_shape() -> None:
+    """Migration 278 owns the selector_key column and replay index."""
+
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "extracted_content_pipeline/storage/migrations"
+        / "278_campaign_reasoning_context_upsert.sql"
+    ).read_text()
+
+    assert "ADD COLUMN IF NOT EXISTS selector_key TEXT" in migration
+    assert "md5(" in migration
+    assert "DELETE FROM campaign_reasoning_contexts AS stale" in migration
+    assert "ALTER COLUMN selector_key SET NOT NULL" in migration
+    assert "idx_campaign_reasoning_contexts_scope_mode_selector_key" in migration
+    assert "(account_id, target_mode, selector_key)" in migration
