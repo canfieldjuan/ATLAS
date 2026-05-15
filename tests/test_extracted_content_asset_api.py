@@ -286,6 +286,97 @@ def test_generated_asset_router_returns_miss_without_hiding_result() -> None:
     assert args == ("brief-uuid-1", "ready_for_call", "")
 
 
+def test_generated_asset_router_batch_reviews_reports() -> None:
+    pool = _Pool()
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).post(
+        "/content-assets/report/drafts/review-batch",
+        json={
+            "ids": ["report-uuid-1", "report-uuid-2"],
+            "status": "approved",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account_id": "acct_1",
+        "asset": "report",
+        "ids": ["report-uuid-1", "report-uuid-2"],
+        "status": "approved",
+        "updated": 2,
+        "updated_ids": ["report-uuid-1", "report-uuid-2"],
+        "missing_ids": [],
+    }
+    assert len(pool.execute_calls) == 2
+    first_query, first_args = pool.execute_calls[0]
+    second_query, second_args = pool.execute_calls[1]
+    assert "UPDATE reports" in first_query
+    assert "UPDATE reports" in second_query
+    assert first_args == ("report-uuid-1", "approved", "acct_1")
+    assert second_args == ("report-uuid-2", "approved", "acct_1")
+
+
+def test_generated_asset_router_batch_reviews_reports_misses() -> None:
+    pool = _Pool(execute_result="UPDATE 0")
+
+    response = _client(pool).post(
+        "/content-assets/report/drafts/review-batch",
+        json={"ids": ["report-uuid-1"], "status": "approved"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["updated"] == 0
+    assert response.json()["updated_ids"] == []
+    assert response.json()["missing_ids"] == ["report-uuid-1"]
+
+
+def test_generated_asset_router_batch_review_partial_update() -> None:
+    class _PartialPool(_Pool):
+        async def execute(self, query, *args):
+            self.execute_calls.append((str(query), args))
+            return "UPDATE 1" if len(self.execute_calls) == 1 else "UPDATE 0"
+
+    response = _client(_PartialPool(), scope={"account_id": "acct_1"}).post(
+        "/content-assets/report/drafts/review-batch",
+        json={
+            "ids": ["report-uuid-1", "report-uuid-missing"],
+            "status": "approved",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated"] == 1
+    assert body["updated_ids"] == ["report-uuid-1"]
+    assert body["missing_ids"] == ["report-uuid-missing"]
+
+
+def test_generated_asset_router_batch_review_enforces_configured_cap() -> None:
+    response = _client(
+        _Pool(),
+        config=GeneratedAssetApiConfig(max_batch_size=1),
+    ).post(
+        "/content-assets/report/drafts/review-batch",
+        json={"ids": ["report-uuid-1", "report-uuid-2"], "status": "approved"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "batch size exceeds max_batch_size (1)"
+
+
+def test_generated_asset_router_batch_review_rejects_empty_ids() -> None:
+    response = _client(_Pool()).post(
+        "/content-assets/report/drafts/review-batch",
+        json={"ids": ["", "  "], "status": "approved"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "ids must be a non-empty list"
+
+
 def test_generated_asset_router_rejects_unknown_asset() -> None:
     response = _client(_Pool()).get("/content-assets/podcast_episode/drafts")
 
@@ -357,6 +448,9 @@ def test_generated_asset_api_config_rejects_invalid_limits() -> None:
 
     with pytest.raises(ValueError, match="default_limit must be less"):
         GeneratedAssetApiConfig(default_limit=5, max_limit=4)
+
+    with pytest.raises(ValueError, match="max_batch_size must be positive"):
+        GeneratedAssetApiConfig(max_batch_size=0)
 
 
 def test_generated_asset_router_requires_fastapi(monkeypatch) -> None:

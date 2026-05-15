@@ -11,6 +11,7 @@
  *   GET  /content-assets/{asset}/drafts
  *   GET  /content-assets/{asset}/drafts/export
  *   POST /content-assets/{asset}/drafts/review
+ *   POST /content-assets/{asset}/drafts/review-batch
  *
  * Wire types are 1:1 with the backend JSON (snake_case), matching
  * the convention in `client.ts` / `b2bClient.ts`. camelCase
@@ -244,6 +245,16 @@ export interface GeneratedAssetReviewResponse {
   updated: boolean
 }
 
+export interface GeneratedAssetBatchReviewResponse {
+  account_id?: string | null
+  asset: GeneratedAssetType
+  ids: string[]
+  status: string
+  updated: number
+  updated_ids: string[]
+  missing_ids: string[]
+}
+
 // ---------------------------------------------------------------------------
 // Internal fetch plumbing
 // ---------------------------------------------------------------------------
@@ -415,6 +426,19 @@ export function reviewGeneratedAssetDraft(
     id,
     status,
   })
+}
+
+/** POST /content-assets/{asset}/drafts/review-batch -- approve/reject drafts. */
+export function reviewGeneratedAssetDrafts(
+  asset: GeneratedAssetType,
+  ids: string[],
+  status: 'approved' | 'rejected',
+): Promise<GeneratedAssetBatchReviewResponse> {
+  return postAssetJson<GeneratedAssetBatchReviewResponse>(
+    asset,
+    '/drafts/review-batch',
+    { ids, status },
+  )
 }
 
 /** POST /content-ops/preview -- preflight validation. */
