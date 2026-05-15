@@ -79,9 +79,18 @@ export function fromWireCatalog(
     reasoning: {
       configured: wire.reasoning.configured,
       source: wire.reasoning.source,
+      modes: copyScalarList(wire.reasoning.modes),
+      packs: copyScalarList(wire.reasoning.packs),
+      capabilities: copyScalarList(wire.reasoning.capabilities),
     },
     ingestionProfiles: [...wire.ingestion_profiles],
   }
+}
+
+function copyScalarList(
+  value: Array<string | number | boolean> | undefined,
+): Array<string | number | boolean> | undefined {
+  return value ? [...value] : undefined
 }
 
 // ---------------------------------------------------------------------------
