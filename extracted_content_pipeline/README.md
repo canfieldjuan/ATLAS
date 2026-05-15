@@ -115,9 +115,9 @@ draft metadata fields while preserving custom columns.
 customer exports before wiring a database integration.
 
 `campaign_source_adapters.py` adds a source-to-opportunity adapter for richer
-review, transcript, complaint, support-ticket, conversation, case, or document
-rows. It preserves source text as campaign evidence and outputs the same
-payload shape as the customer-data adapter.
+review, transcript, complaint, support-ticket, conversation, case, survey,
+NPS, CSAT, or document rows. It preserves source text as campaign evidence and
+outputs the same payload shape as the customer-data adapter.
 
 ## Campaign generation example
 
@@ -143,9 +143,9 @@ draft metadata:
 python scripts/run_extracted_campaign_generation_example.py customer_opportunities.csv --format csv
 ```
 
-Review, transcript, complaint, support-ticket, conversation, case, and document
-source rows can be converted into the same opportunity payload first. Source
-rows can be JSON, JSONL, or CSV:
+Review, transcript, complaint, support-ticket, conversation, case, survey, NPS,
+CSAT, and document source rows can be converted into the same opportunity
+payload first. Source rows can be JSON, JSONL, or CSV:
 
 ```bash
 python scripts/build_extracted_campaign_opportunities_from_sources.py \
@@ -158,9 +158,11 @@ python scripts/run_extracted_campaign_generation_example.py customer_opportuniti
 When multiple source-text fields are present, the adapter uses the first
 recognized field in this order: `text`, `review_text`, `transcript`,
 `content`, `body`, `quote`, `complaint`, `message`, `description`, `summary`,
-then `notes`. If none of those scalar fields are present, it can build
-evidence text from nested `messages`, `comments`, `thread`, `conversation`, or
-`entries` arrays. Within each nested message, message-shaped fields win first:
+`notes`, `feedback`, `feedback_text`, `response_text`, `comment_text`, then
+`open_ended_response`. This precedence is global: a survey-shaped row with
+`body` and `feedback` uses `body`. If none of those scalar fields are present,
+it can build evidence text from nested `messages`, `comments`, `thread`,
+`conversation`, or `entries` arrays. Within each nested message, message-shaped fields win first:
 `text`, `message`, `body`, `content`, `comment`, `description`, `summary`,
 then `notes`.
 

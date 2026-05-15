@@ -28,6 +28,11 @@ _ROW_LIST_KEYS = (
     "tickets",
     "cases",
     "conversations",
+    "survey_responses",
+    "surveys",
+    "nps_responses",
+    "csat_responses",
+    "feedback",
     "rows",
     "data",
 )
@@ -40,6 +45,9 @@ _SOURCE_ID_KEYS = (
     "ticket_id",
     "case_id",
     "conversation_id",
+    "survey_id",
+    "response_id",
+    "feedback_id",
 )
 _TEXT_KEYS = (
     "text",
@@ -53,6 +61,11 @@ _TEXT_KEYS = (
     "description",
     "summary",
     "notes",
+    "feedback",
+    "feedback_text",
+    "response_text",
+    "comment_text",
+    "open_ended_response",
 )
 _THREAD_KEYS = ("messages", "comments", "thread", "conversation", "entries")
 # Thread items favor message-shaped keys before generic body/content keys,
@@ -354,6 +367,12 @@ def _infer_source_type(row: Mapping[str, Any]) -> str:
         return "case"
     if row.get("conversation_id") is not None:
         return "conversation"
+    if row.get("nps_score") is not None or row.get("nps") is not None:
+        return "nps_response"
+    if row.get("csat_score") is not None or row.get("csat") is not None:
+        return "csat_response"
+    if row.get("survey_id") is not None or row.get("response_id") is not None:
+        return "survey_response"
     return "document"
 
 
