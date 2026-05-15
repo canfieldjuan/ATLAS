@@ -15,6 +15,11 @@ import extracted_content_pipeline.api.generated_assets as asset_api
 from extracted_content_pipeline.campaign_ports import TenantScope
 
 
+BATCH_REPORT_ID_1 = "11111111-1111-1111-1111-111111111111"
+BATCH_REPORT_ID_2 = "22222222-2222-2222-2222-222222222222"
+BATCH_REPORT_ID_MISSING = "33333333-3333-3333-3333-333333333333"
+
+
 class _Pool:
     def __init__(
         self,
@@ -287,7 +292,7 @@ def test_generated_asset_router_returns_miss_without_hiding_result() -> None:
 
 
 def test_generated_asset_router_batch_reviews_reports() -> None:
-    pool = _Pool()
+    pool = _Pool(rows=[{"id": BATCH_REPORT_ID_1}, {"id": BATCH_REPORT_ID_2}])
 
     response = _client(
         pool,
@@ -295,7 +300,7 @@ def test_generated_asset_router_batch_reviews_reports() -> None:
     ).post(
         "/content-assets/report/drafts/review-batch",
         json={
-            "ids": ["report-uuid-1", "report-uuid-2"],
+            "ids": [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2],
             "status": "approved",
         },
     )
@@ -304,45 +309,43 @@ def test_generated_asset_router_batch_reviews_reports() -> None:
     assert response.json() == {
         "account_id": "acct_1",
         "asset": "report",
-        "ids": ["report-uuid-1", "report-uuid-2"],
+        "ids": [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2],
         "status": "approved",
         "updated": 2,
-        "updated_ids": ["report-uuid-1", "report-uuid-2"],
+        "updated_ids": [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2],
         "missing_ids": [],
     }
-    assert len(pool.execute_calls) == 2
-    first_query, first_args = pool.execute_calls[0]
-    second_query, second_args = pool.execute_calls[1]
-    assert "UPDATE reports" in first_query
-    assert "UPDATE reports" in second_query
-    assert first_args == ("report-uuid-1", "approved", "acct_1")
-    assert second_args == ("report-uuid-2", "approved", "acct_1")
+    assert pool.execute_calls == []
+    assert len(pool.fetch_calls) == 1
+    query, args = pool.fetch_calls[0]
+    assert "UPDATE reports" in query
+    assert "RETURNING id" in query
+    assert args == ([BATCH_REPORT_ID_1, BATCH_REPORT_ID_2], "approved", "acct_1")
 
 
 def test_generated_asset_router_batch_reviews_reports_misses() -> None:
-    pool = _Pool(execute_result="UPDATE 0")
+    pool = _Pool(rows=[])
 
     response = _client(pool).post(
         "/content-assets/report/drafts/review-batch",
-        json={"ids": ["report-uuid-1"], "status": "approved"},
+        json={"ids": [BATCH_REPORT_ID_1], "status": "approved"},
     )
 
     assert response.status_code == 200
     assert response.json()["updated"] == 0
     assert response.json()["updated_ids"] == []
-    assert response.json()["missing_ids"] == ["report-uuid-1"]
+    assert response.json()["missing_ids"] == [BATCH_REPORT_ID_1]
+    assert len(pool.fetch_calls) == 1
+    assert pool.execute_calls == []
 
 
 def test_generated_asset_router_batch_review_partial_update() -> None:
-    class _PartialPool(_Pool):
-        async def execute(self, query, *args):
-            self.execute_calls.append((str(query), args))
-            return "UPDATE 1" if len(self.execute_calls) == 1 else "UPDATE 0"
+    pool = _Pool(rows=[{"id": BATCH_REPORT_ID_1}])
 
-    response = _client(_PartialPool(), scope={"account_id": "acct_1"}).post(
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
         "/content-assets/report/drafts/review-batch",
         json={
-            "ids": ["report-uuid-1", "report-uuid-missing"],
+            "ids": [BATCH_REPORT_ID_1, BATCH_REPORT_ID_MISSING],
             "status": "approved",
         },
     )
@@ -350,8 +353,51 @@ def test_generated_asset_router_batch_review_partial_update() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["updated"] == 1
-    assert body["updated_ids"] == ["report-uuid-1"]
-    assert body["missing_ids"] == ["report-uuid-missing"]
+    assert body["updated_ids"] == [BATCH_REPORT_ID_1]
+    assert body["missing_ids"] == [BATCH_REPORT_ID_MISSING]
+    assert len(pool.fetch_calls) == 1
+    assert pool.execute_calls == []
+
+
+def test_generated_asset_router_batch_review_treats_invalid_uuid_as_missing() -> None:
+    pool = _Pool(rows=[{"id": BATCH_REPORT_ID_1}])
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/report/drafts/review-batch",
+        json={
+            "ids": [BATCH_REPORT_ID_1, "not-a-uuid"],
+            "status": "approved",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated_ids"] == [BATCH_REPORT_ID_1]
+    assert body["missing_ids"] == ["not-a-uuid"]
+    assert len(pool.fetch_calls) == 1
+    query, args = pool.fetch_calls[0]
+    assert "UPDATE reports" in query
+    assert args == (
+        [BATCH_REPORT_ID_1],
+        "approved",
+        "acct_1",
+    )
+    assert pool.execute_calls == []
+
+
+def test_generated_asset_router_batch_review_all_invalid_ids_skip_sql() -> None:
+    pool = _Pool()
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/report/drafts/review-batch",
+        json={"ids": ["not-a-uuid"], "status": "approved"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["updated_ids"] == []
+    assert response.json()["missing_ids"] == ["not-a-uuid"]
+    assert pool.fetch_calls == []
+    assert pool.execute_calls == []
 
 
 def test_generated_asset_router_batch_review_enforces_configured_cap() -> None:

@@ -192,6 +192,31 @@ class PostgresSalesBriefRepository:
         )
         return parse_command_tag(result)
 
+    async def update_statuses(
+        self,
+        brief_ids: Sequence[str],
+        status: str,
+        *,
+        scope: TenantScope,
+    ) -> Sequence[str]:
+        ids = [str(item).strip() for item in brief_ids if str(item).strip()]
+        if not ids:
+            return ()
+        rows = await self.pool.fetch(
+            """
+            UPDATE sales_briefs
+               SET status = $2,
+                   updated_at = NOW()
+             WHERE id = ANY($1::uuid[])
+               AND account_id = $3
+            RETURNING id
+            """,
+            ids,
+            status,
+            scope.account_id or "",
+        )
+        return tuple(str(row_to_dict(row).get("id") or "") for row in rows)
+
 
 __all__ = [
     "PostgresSalesBriefRepository",

@@ -95,6 +95,15 @@ class BlogPostRepository(Protocol):
     ) -> bool:
         """Update a draft status and return True on hit."""
 
+    async def update_statuses(
+        self,
+        blog_post_ids: Sequence[str],
+        status: str,
+        *,
+        scope: TenantScope,
+    ) -> Sequence[str]:
+        """Bulk-update draft statuses and return ids that matched the tenant scope."""
+
 
 __all__ = [
     "BlogBlueprint",

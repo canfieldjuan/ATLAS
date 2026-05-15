@@ -178,6 +178,15 @@ class LandingPageRepository(Protocol):
         learn about it at the call site, not silently succeed.
         """
 
+    async def update_statuses(
+        self,
+        landing_page_ids: Sequence[str],
+        status: str,
+        *,
+        scope: TenantScope,
+    ) -> Sequence[str]:
+        """Bulk-update draft statuses and return ids that matched the tenant scope."""
+
 
 __all__ = [
     "LandingPageDraft",
