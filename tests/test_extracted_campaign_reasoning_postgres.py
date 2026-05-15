@@ -526,7 +526,7 @@ async def test_delete_stale_contexts_dry_run_counts_matching_rows() -> None:
     query = call["query"]
     args = call["args"]
     assert "SELECT COUNT(*) FROM stale" in query
-    assert "DELETE FROM campaign_reasoning_contexts" not in query
+    assert 'DELETE FROM "campaign_reasoning_contexts"' not in query
     assert "updated_at < NOW() - ($1::int * INTERVAL '1 day')" in query
     assert args == (30, "acct-1", "vendor_retention")
 
@@ -550,7 +550,7 @@ async def test_delete_stale_contexts_deletes_matching_rows_when_not_dry_run() ->
     call = pool.fetchval_calls[0]
     query = call["query"]
     args = call["args"]
-    assert "DELETE FROM campaign_reasoning_contexts" in query
+    assert 'DELETE FROM "campaign_reasoning_contexts"' in query
     assert "SELECT COUNT(*) FROM deleted" in query
     assert args == (45, None, None)
 

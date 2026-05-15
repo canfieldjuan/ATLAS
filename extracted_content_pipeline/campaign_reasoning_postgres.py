@@ -29,9 +29,12 @@ does not satisfy another mode when selectors overlap.
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from io import StringIO
 from typing import Any
 
 from .campaign_ports import CampaignReasoningContext, JsonDict, TenantScope
@@ -117,6 +120,75 @@ def _selector_key(values: Sequence[str]) -> str:
     ).hexdigest()
 
 
+def _identifier(value: str) -> str:
+    parts = str(value or "").strip().split(".")
+    if not parts or any(not part for part in parts):
+        raise ValueError(f"invalid SQL identifier: {value!r}")
+    for part in parts:
+        if not all(char.isalnum() or char == "_" for char in part):
+            raise ValueError(f"invalid SQL identifier: {value!r}")
+    return ".".join(f'"{part}"' for part in parts)
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _csv_value(value: Any) -> Any:
+    if isinstance(value, (Mapping, list, tuple)):
+        return json.dumps(value, default=str, separators=(",", ":"))
+    return "" if value is None else value
+
+
+def _serializable_context_row(row: Mapping[str, Any]) -> JsonDict:
+    payload = decode_jsonb_field(row.get("payload"), default=None)
+    output = {
+        key: _json_ready(value)
+        for key, value in row.items()
+        if key != "payload"
+    }
+    output["payload"] = _json_ready({} if payload is None else payload)
+    return output
+
+
+@dataclass(frozen=True)
+class CampaignReasoningContextListResult:
+    rows: tuple[JsonDict, ...]
+    limit: int
+    filters: Mapping[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "count": len(self.rows),
+            "limit": self.limit,
+            "filters": dict(self.filters),
+            "rows": [dict(row) for row in self.rows],
+        }
+
+    def as_csv(self) -> str:
+        columns = (
+            "id",
+            "account_id",
+            "target_mode",
+            "selectors",
+            "selector_key",
+            "updated_at",
+            "payload",
+        )
+        handle = StringIO()
+        writer = csv.DictWriter(handle, fieldnames=list(columns))
+        writer.writeheader()
+        for row in self.rows:
+            writer.writerow({column: _csv_value(row.get(column)) for column in columns})
+        return handle.getvalue()
+
+
 @dataclass(frozen=True)
 class PostgresCampaignReasoningContextRepository:
     """Async Postgres adapter for per-tenant campaign reasoning contexts."""
@@ -152,6 +224,7 @@ class PostgresCampaignReasoningContextRepository:
         )
         if not selectors:
             return None
+        table = _identifier(self.table)
 
         # Preserve the file-backed provider's candidate-key
         # priority: ``_candidate_selectors`` emits target_id first,
@@ -169,7 +242,7 @@ class PostgresCampaignReasoningContextRepository:
         row = await self.pool.fetchrow(
             f"""
             SELECT payload
-            FROM {self.table}
+            FROM {table}
             WHERE account_id = $1
               AND selectors && $2::text[]
               AND ($3 = '' OR target_mode = $3 OR target_mode = '')
@@ -232,10 +305,11 @@ class PostgresCampaignReasoningContextRepository:
 
         payload: JsonDict = campaign_reasoning_context_metadata(normalized)
         selector_key = _selector_key(cleaned)
+        table = _identifier(self.table)
 
         context_id = await self.pool.fetchval(
             f"""
-            INSERT INTO {self.table} (
+            INSERT INTO {table} (
                 account_id, target_mode, selectors, selector_key,
                 payload, updated_at
             )
@@ -276,12 +350,13 @@ class PostgresCampaignReasoningContextRepository:
 
         account_id = None if scope is None else str(scope.account_id or "")
         mode = None if target_mode is None else str(target_mode or "").strip().lower()
+        table = _identifier(self.table)
         if dry_run:
             stale_count = await self.pool.fetchval(
                 f"""
                 WITH stale AS (
                     SELECT id
-                    FROM {self.table}
+                    FROM {table}
                     WHERE updated_at < NOW() - ($1::int * INTERVAL '1 day')
                       AND ($2::text IS NULL OR account_id = $2)
                       AND ($3::text IS NULL OR target_mode = $3)
@@ -298,13 +373,13 @@ class PostgresCampaignReasoningContextRepository:
             f"""
             WITH stale AS (
                 SELECT id
-                FROM {self.table}
+                FROM {table}
                 WHERE updated_at < NOW() - ($1::int * INTERVAL '1 day')
                   AND ($2::text IS NULL OR account_id = $2)
                   AND ($3::text IS NULL OR target_mode = $3)
             ),
             deleted AS (
-                DELETE FROM {self.table}
+                DELETE FROM {table}
                 WHERE id IN (SELECT id FROM stale)
                 RETURNING 1
             )
@@ -316,7 +391,54 @@ class PostgresCampaignReasoningContextRepository:
         )
         return int(stale_count or 0)
 
+    async def list_contexts(
+        self,
+        *,
+        scope: TenantScope | None = None,
+        target_mode: str | None = None,
+        selectors: Sequence[str] = (),
+        limit: int = 20,
+    ) -> CampaignReasoningContextListResult:
+        """Return reasoning-context rows for operator inventory/export."""
+
+        table = _identifier(self.table)
+        normalized_limit = int(limit)
+        if normalized_limit < 0:
+            raise ValueError("limit must be non-negative")
+
+        account_id = None if scope is None else str(scope.account_id or "")
+        mode = None if target_mode is None else str(target_mode or "").strip().lower()
+        cleaned_selectors = _dedupe_selectors(selectors)
+        rows = await self.pool.fetch(
+            f"""
+            SELECT
+                id, account_id, target_mode, selectors, selector_key,
+                COALESCE(payload, '{{}}'::jsonb) AS payload,
+                updated_at
+            FROM {table}
+            WHERE ($1::text IS NULL OR account_id = $1)
+              AND ($2::text IS NULL OR target_mode = $2)
+              AND ($3::text[] IS NULL OR selectors && $3::text[])
+            ORDER BY updated_at DESC
+            LIMIT $4
+            """,
+            account_id,
+            mode,
+            list(cleaned_selectors) if cleaned_selectors else None,
+            normalized_limit,
+        )
+        return CampaignReasoningContextListResult(
+            rows=tuple(_serializable_context_row(row_to_dict(row)) for row in rows),
+            limit=normalized_limit,
+            filters={
+                "account_id": account_id,
+                "target_mode": mode,
+                "selectors": cleaned_selectors,
+            },
+        )
+
 
 __all__ = [
+    "CampaignReasoningContextListResult",
     "PostgresCampaignReasoningContextRepository",
 ]

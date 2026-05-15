@@ -326,8 +326,9 @@ Use `--multi-pass-pack-name`, `--multi-pass-max-continuations`, and
 See `reasoning_handoff_contract.md` for the accepted shape and the no-direct-
 import rule. AI Content Ops consumes compressed reasoning through a provider;
 the provider may be file-backed, single-pass, multi-pass, or host-owned.
-After applying migration 277 and loading DB-backed reasoning rows, verify a
-target can resolve through the same Postgres adapter used by hosted execution:
+After applying the packaged migrations and loading DB-backed reasoning rows,
+verify a target can resolve through the same Postgres adapter used by hosted
+execution:
 
 ```bash
 python scripts/check_extracted_campaign_reasoning_postgres.py \
@@ -339,6 +340,20 @@ python scripts/check_extracted_campaign_reasoning_postgres.py \
 
 The check exits non-zero when no matching context is found, making it suitable
 for deployment smoke tests after a reasoning ETL or migration run.
+
+To inspect or export stored reasoning rows before/after manual edits:
+
+```bash
+python scripts/list_extracted_campaign_reasoning_contexts.py \
+  --account-id acct_123 \
+  --target-mode vendor_retention \
+  --selector "Acme" \
+  --limit 100 \
+  --format json
+```
+
+The list/export CLI defaults to `--limit 20`; raise the limit deliberately for
+larger inventories.
 
 If a host needs to seed or edit durable reasoning rows manually, use the upsert
 CLI instead of hand-writing SQL:
