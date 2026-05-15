@@ -170,8 +170,9 @@ Minimum useful columns:
 Unknown columns are preserved in draft metadata and prompt context through the
 normalized opportunity payload.
 
-If a host starts from reviews, transcripts, complaints, or document rows instead
-of ready-made opportunities, they can preview the normalized opportunity payload:
+If a host starts from reviews, transcripts, complaints, support tickets,
+conversations, cases, or document rows instead of ready-made opportunities,
+they can preview the normalized opportunity payload:
 
 ```bash
 python scripts/build_extracted_campaign_opportunities_from_sources.py \
@@ -179,11 +180,16 @@ python scripts/build_extracted_campaign_opportunities_from_sources.py \
   --output customer_opportunities.json
 ```
 
-The source adapter copies `review_text`, `transcript`, `complaint`, `content`,
-`body`, `quote`, or `text` into the opportunity `evidence` field, preserving
-source ids and inferred source types for prompt context and later review.
-Source rows can be JSON, JSONL, or CSV; pass `--format csv` for CSV source
-exports.
+The source adapter copies `review_text`, `transcript`, `complaint`, `message`,
+`description`, `summary`, `notes`, `content`, `body`, `quote`, or `text` into
+the opportunity `evidence` field, preserving source ids and inferred source
+types for prompt context and later review. Source rows can be JSON, JSONL, or
+CSV; pass `--format csv` for CSV source exports.
+
+When a source export includes more than one source-text field, the adapter uses
+the first recognized field in this order: `text`, `review_text`, `transcript`,
+`content`, `body`, `quote`, `complaint`, `message`, `description`, `summary`,
+then `notes`.
 
 For an offline draft preview without writing the intermediate opportunity file:
 

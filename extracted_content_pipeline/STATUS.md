@@ -37,11 +37,12 @@ source of truth for what remains.
 - `campaign_postgres_import` loads normalized JSON/CSV opportunity rows into
   `campaign_opportunities`, with dry-run validation and optional
   replace-existing semantics for repeatable customer imports.
-- `campaign_source_adapters` converts review, transcript, complaint, or
-  document source rows into normalized campaign opportunities so hosts can feed
-  richer text sources into the same generation/import path. The Postgres import
-  CLI and offline generation CLI can consume these source rows directly with
-  `--source-rows`; JSON, JSONL, and CSV source-row exports are supported, and
+- `campaign_source_adapters` converts review, transcript, complaint,
+  support-ticket, conversation, case, or document source rows into normalized
+  campaign opportunities so hosts can feed richer text sources into the same
+  generation/import path. The Postgres import CLI and offline generation CLI
+  can consume these source rows directly with `--source-rows`; JSON, JSONL, and
+  CSV source-row exports are supported, and
   `examples/campaign_source_rows.jsonl` provides a packaged starter input.
 - `signal_extraction` exposes source-row normalization as a runnable AI Content
   Ops output. It converts inline source material into normalized opportunities
