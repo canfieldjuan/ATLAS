@@ -199,9 +199,12 @@ python scripts/load_extracted_campaign_opportunities.py \
 For source-row CSV exports, pass `--source-format csv` to the same conversion,
 generation, import, or smoke commands.
 For customer bundle JSON files that group collections such as `reviews`,
-`support_tickets`, and `surveys` under shared account metadata, use
-`--source-format json`; the packaged `campaign_source_bundle.json` demonstrates
-that shape.
+`support_tickets`, `surveys`, `calls`, or `meetings` under shared account
+metadata, use `--source-format json`; the packaged
+`campaign_source_bundle.json` demonstrates that shape.
+Rows with `recording_id` are treated as sales-call rows; hosts should rename
+ambiguous screen-recording or webinar identifiers before import if they are not
+sales-call evidence.
 
 Generate cold-email and follow-up drafts for each opportunity by passing
 channels:

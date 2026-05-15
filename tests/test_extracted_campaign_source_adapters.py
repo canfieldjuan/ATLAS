@@ -159,6 +159,83 @@ def test_source_row_maps_ticket_comments_to_evidence_text() -> None:
     }
 
 
+def test_source_row_maps_call_transcript_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "call_id": "call-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "title": "Renewal discovery call",
+        "transcript": "Buyer: We are comparing Salesforce before the renewal.",
+        "pain_category": "renewal pressure",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "call-1"
+    assert opportunity["company_name"] == "Acme Logistics"
+    assert opportunity["source_title"] == "Renewal discovery call"
+    assert opportunity["source_type"] == "transcript"
+    assert opportunity["pain_points"] == ["renewal pressure"]
+    assert opportunity["evidence"][0] == {
+        "text": "Buyer: We are comparing Salesforce before the renewal.",
+        "source_id": "call-1",
+        "source_type": "transcript",
+        "source_title": "Renewal discovery call",
+    }
+
+
+def test_source_row_maps_recording_notes_to_sales_call() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "recording_id": "rec-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "notes": "RevOps asked for attribution exports before renewal.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "rec-1"
+    assert opportunity["source_type"] == "sales_call"
+    assert opportunity["evidence"][0] == {
+        "text": "RevOps asked for attribution exports before renewal.",
+        "source_id": "rec-1",
+        "source_type": "sales_call",
+    }
+
+
+def test_source_row_maps_call_speaker_turns_to_evidence_text() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "call_id": "call-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "turns": [
+            {"speaker": "Buyer", "text": "Attribution exports are blocked."},
+            {"speaker": "AE", "text": "That requires the next plan."},
+        ],
+    })
+
+    assert warnings == ()
+    assert opportunity["source_type"] == "sales_call"
+    assert opportunity["evidence"][0] == {
+        "text": (
+            "Buyer: Attribution exports are blocked.\n"
+            "AE: That requires the next plan."
+        ),
+        "source_id": "call-1",
+        "source_type": "sales_call",
+    }
+
+
+def test_source_row_with_call_and_meeting_ids_prefers_sales_call() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "call_id": "call-1",
+        "meeting_id": "meeting-1",
+        "summary": "The buyer asked about Salesforce migration risk.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "call-1"
+    assert opportunity["source_type"] == "sales_call"
+
+
 def test_source_row_prefers_scalar_text_over_thread_messages() -> None:
     opportunity, warnings = source_row_to_campaign_opportunity({
         "ticket_id": "ticket-thread-1",
@@ -399,6 +476,48 @@ def test_load_source_campaign_opportunities_from_multi_collection_bundle(tmp_pat
         "source_id": "ticket-1",
         "source_type": "support_ticket",
         "source_title": "Reporting exports blocked",
+    }
+
+
+def test_load_source_campaign_opportunities_from_meeting_bundle(tmp_path: Path) -> None:
+    path = tmp_path / "meeting_bundle.json"
+    path.write_text(
+        json.dumps({
+            "company": "Acme Logistics",
+            "vendor": "HubSpot",
+            "meetings": [
+                {
+                    "meeting_id": "meeting-1",
+                    "subject": "Renewal checkpoint",
+                    "summary": "The buying team asked for Salesforce migration risk.",
+                }
+            ],
+            "call_transcripts": [
+                {
+                    "recording_id": "recording-1",
+                    "transcript": "Buyer: Attribution exports are blocked.",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "recording-1",
+        "meeting-1",
+    ]
+    assert [row["source_type"] for row in loaded.opportunities] == [
+        "transcript",
+        "meeting",
+    ]
+    assert loaded.opportunities[0]["company_name"] == "Acme Logistics"
+    assert loaded.opportunities[1]["evidence"][0] == {
+        "text": "The buying team asked for Salesforce migration risk.",
+        "source_id": "meeting-1",
+        "source_type": "meeting",
+        "source_title": "Renewal checkpoint",
     }
 
 
