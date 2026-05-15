@@ -362,11 +362,13 @@ CLI instead of hand-writing SQL:
 python scripts/upsert_extracted_campaign_reasoning_contexts.py \
   reasoning-contexts.json \
   --account-id acct_123 \
-  --target-mode vendor_retention
+  --target-mode vendor_retention \
+  --dry-run
 ```
 
 Rows can include `selectors` directly or selector fields such as `target_id`,
-`company_name`, `contact_email`, and `vendor_name`.
+`company_name`, `contact_email`, and `vendor_name`. Omit `--dry-run` after
+validation to write the rows.
 
 ## Step 6: Add Optional Prompt Overrides
 

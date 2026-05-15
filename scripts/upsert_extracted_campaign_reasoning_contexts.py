@@ -66,6 +66,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Reasoning context table name.",
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate input rows and report how many would be upserted.",
+    )
     return parser.parse_args(argv)
 
 
@@ -134,14 +139,13 @@ def _row_context(row: Mapping[str, Any]) -> Mapping[str, Any]:
     }
 
 
-async def _upsert_contexts(
-    repository: PostgresCampaignReasoningContextRepository,
+def _prepare_contexts(
     *,
     payload: Any,
     default_account_id: str,
     default_target_mode: str,
     extra_selectors: Sequence[str],
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     rows = _context_rows(payload)
     prepared: list[dict[str, Any]] = []
     for index, row in enumerate(rows, start=1):
@@ -161,6 +165,23 @@ async def _upsert_contexts(
                 "context": context,
             }
         )
+    return prepared
+
+
+async def _upsert_contexts(
+    repository: PostgresCampaignReasoningContextRepository,
+    *,
+    payload: Any,
+    default_account_id: str,
+    default_target_mode: str,
+    extra_selectors: Sequence[str],
+) -> dict[str, Any]:
+    prepared = _prepare_contexts(
+        payload=payload,
+        default_account_id=default_account_id,
+        default_target_mode=default_target_mode,
+        extra_selectors=extra_selectors,
+    )
 
     saved_ids: list[str] = []
     for item in prepared:
@@ -174,30 +195,66 @@ async def _upsert_contexts(
     return {"status": "ok", "upserted": len(saved_ids), "ids": saved_ids}
 
 
-async def _main() -> int:
-    args = _parse_args()
-    if not args.database_url:
-        raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
-    pool = await _create_pool(args.database_url)
-    try:
-        repository = PostgresCampaignReasoningContextRepository(
-            pool=pool,
-            table=args.table,
-        )
-        result = await _upsert_contexts(
-            repository,
-            payload=_load_payload(args.path),
+def _dry_run_contexts(
+    *,
+    payload: Any,
+    default_account_id: str,
+    default_target_mode: str,
+    extra_selectors: Sequence[str],
+) -> dict[str, Any]:
+    prepared = _prepare_contexts(
+        payload=payload,
+        default_account_id=default_account_id,
+        default_target_mode=default_target_mode,
+        extra_selectors=extra_selectors,
+    )
+    return {"status": "dry_run", "would_upsert": len(prepared)}
+
+
+async def _main_from_args(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    payload = _load_payload(args.path)
+    if args.dry_run:
+        result = _dry_run_contexts(
+            payload=payload,
             default_account_id=str(args.account_id or ""),
             default_target_mode=str(args.target_mode or ""),
             extra_selectors=tuple(args.selector or ()),
         )
-    finally:
-        await pool.close()
+    else:
+        if not args.database_url:
+            raise SystemExit(
+                "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL"
+            )
+        pool = await _create_pool(args.database_url)
+        try:
+            repository = PostgresCampaignReasoningContextRepository(
+                pool=pool,
+                table=args.table,
+            )
+            result = await _upsert_contexts(
+                repository,
+                payload=payload,
+                default_account_id=str(args.account_id or ""),
+                default_target_mode=str(args.target_mode or ""),
+                extra_selectors=tuple(args.selector or ()),
+            )
+        finally:
+            await pool.close()
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
+    elif args.dry_run:
+        print(
+            "dry-run: would upsert "
+            f"{result['would_upsert']} campaign reasoning context rows"
+        )
     else:
         print(f"upserted {result['upserted']} campaign reasoning context rows")
     return 0
+
+
+async def _main() -> int:
+    return await _main_from_args()
 
 
 if __name__ == "__main__":

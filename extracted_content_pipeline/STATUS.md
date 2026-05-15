@@ -253,8 +253,8 @@ source of truth for what remains.
   extracted reasoning-core provider with `--multi-pass-reasoning` when the
   product LLM adapter is configured.
 - DB-backed reasoning context operations now include read/check, list/export,
-  upsert, and stale-row cleanup CLIs so hosts can run the durable reasoning
-  provider without hand-written SQL.
+  dry-run-safe upsert, and stale-row cleanup CLIs so hosts can run the durable
+  reasoning provider without hand-written SQL.
 - `reasoning.archetypes` is product-owned and provides deterministic
   churn-archetype scoring, best-match selection, top-match filtering, and
   falsification-condition lookup without Atlas dependencies.
