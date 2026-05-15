@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 from typing import Any
@@ -70,6 +71,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Validate input rows and report how many would be upserted.",
+    )
+    parser.add_argument(
+        "--audit-log",
+        type=Path,
+        default=None,
+        help="Optional JSONL file for one metadata-only entry per saved row.",
     )
     return parser.parse_args(argv)
 
@@ -175,6 +182,7 @@ async def _upsert_contexts(
     default_account_id: str,
     default_target_mode: str,
     extra_selectors: Sequence[str],
+    audit_log: Path | None = None,
 ) -> dict[str, Any]:
     prepared = _prepare_contexts(
         payload=payload,
@@ -184,7 +192,7 @@ async def _upsert_contexts(
     )
 
     saved_ids: list[str] = []
-    for item in prepared:
+    for index, item in enumerate(prepared, start=1):
         saved_id = await repository.save_context(
             scope=item["scope"],
             selectors=item["selectors"],
@@ -192,7 +200,35 @@ async def _upsert_contexts(
             context=item["context"],
         )
         saved_ids.append(saved_id)
+        if audit_log is not None:
+            _append_audit_log(
+                audit_log,
+                [_audit_entry(saved_id=saved_id, row_index=index, item=item)],
+            )
     return {"status": "ok", "upserted": len(saved_ids), "ids": saved_ids}
+
+
+def _audit_entry(*, saved_id: str, row_index: int, item: Mapping[str, Any]) -> dict[str, Any]:
+    scope = item["scope"]
+    context = item["context"]
+    return {
+        "action": "upsert_campaign_reasoning_context",
+        "recorded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "row_index": row_index,
+        "context_id": saved_id,
+        "account_id": scope.account_id,
+        "target_mode": item["target_mode"],
+        "selectors": list(item["selectors"]),
+        "context_keys": sorted(str(key) for key in context.keys()),
+    }
+
+
+def _append_audit_log(path: Path, entries: Sequence[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for entry in entries:
+            handle.write(json.dumps(entry, sort_keys=True, separators=(",", ":")))
+            handle.write("\n")
 
 
 def _dry_run_contexts(
@@ -238,6 +274,7 @@ async def _main_from_args(argv: list[str] | None = None) -> int:
                 default_account_id=str(args.account_id or ""),
                 default_target_mode=str(args.target_mode or ""),
                 extra_selectors=tuple(args.selector or ()),
+                audit_log=args.audit_log,
             )
         finally:
             await pool.close()
