@@ -212,6 +212,9 @@ Rows with `deal_id` or `opportunity_id` are treated as CRM deal evidence; rows
 with `note_id` or `activity_id` are treated as CRM note evidence.
 Rows with `contract_id`, `renewal_id`, or `subscription_id` are treated as
 contract, renewal, or subscription evidence.
+Source-row keys are matched leniently for common export labels, so `Ticket ID`,
+`Account Name`, `Pain Category`, and `Open Ended Response` normalize like
+`ticket_id`, `account_name`, `pain_category`, and `open_ended_response`.
 
 Generate cold-email and follow-up drafts for each opportunity by passing
 channels:

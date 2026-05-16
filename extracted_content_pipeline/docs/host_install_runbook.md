@@ -205,6 +205,9 @@ Rows with `deal_id` or `opportunity_id` are inferred as CRM deal evidence; rows
 with `note_id` or `activity_id` are inferred as CRM note evidence.
 Rows with `contract_id`, `renewal_id`, or `subscription_id` are inferred as
 contract, renewal, or subscription evidence.
+Source-row field labels are matched leniently for case, spaces, dashes, and
+underscores. A CSV export with `Ticket ID`, `Account Name`, `Pain Category`, or
+`Open Ended Response` can load without first renaming those columns.
 
 When a source export includes more than one source-text field, the adapter uses
 the first recognized field in this order: `text`, `review_text`, `transcript`,
