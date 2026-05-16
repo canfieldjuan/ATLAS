@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 try:
     from fastapi import APIRouter, Body, HTTPException
@@ -73,6 +73,7 @@ _MAX_INPUT_KEYS = 50
 _MAX_INPUT_DEPTH = 6
 _MAX_INPUT_STRING_CHARS = 10000
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
+_MAX_FALSIFICATION_RULES = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
 
 
@@ -167,7 +168,18 @@ def _require_fastapi() -> None:
 
 @dataclass(frozen=True)
 class ContentOpsControlSurfaceApiConfig:
-    """Host-owned API defaults for content-ops planning routes."""
+    """Host-owned API defaults for content-ops planning routes.
+
+    Falsification rules are opt-in and only apply to strict packaged reasoning.
+    Each rule should be a mapping with a human-readable predicate, for example
+    ``{"id": "renewal_completed", "predicate": "fresh evidence shows renewal completed"}``.
+    Falsification is evaluated per generated claim, so enabling rules can add
+    one LLM call per claim before any falsified claims are dropped.
+    ``structured_reasoning_falsification_conservative=True`` means ambiguous or
+    malformed falsification responses preserve the claim instead of invalidating
+    it. ``structured_reasoning_drop_falsified=True`` validates the filtered
+    surviving claim set, which can increase strict-mode validation blocks.
+    """
 
     prefix: str = "/content-ops"
     tags: tuple[str, ...] = ("content-ops",)
@@ -177,6 +189,9 @@ class ContentOpsControlSurfaceApiConfig:
     structured_reasoning_top_thesis_limit: int = 5
     structured_reasoning_max_continuations: int = 8
     structured_reasoning_require_citations: bool = True
+    structured_reasoning_falsification_rules: Sequence[Mapping[str, Any]] = ()
+    structured_reasoning_falsification_conservative: bool = True
+    structured_reasoning_drop_falsified: bool = False
 
     def __post_init__(self) -> None:
         if not str(self.prefix or "").strip().startswith("/"):
@@ -191,6 +206,32 @@ class ContentOpsControlSurfaceApiConfig:
             raise ValueError("structured_reasoning_top_thesis_limit must be positive")
         if self.structured_reasoning_max_continuations < 0:
             raise ValueError("structured_reasoning_max_continuations must be non-negative")
+        if not isinstance(
+            self.structured_reasoning_falsification_rules,
+            Sequence,
+        ) or isinstance(
+            self.structured_reasoning_falsification_rules,
+            (str, bytes, bytearray, Mapping),
+        ):
+            raise ValueError("structured_reasoning_falsification_rules must be a sequence")
+        if (
+            self.structured_reasoning_drop_falsified
+            and not self.structured_reasoning_falsification_rules
+        ):
+            raise ValueError(
+                "structured_reasoning_drop_falsified=True requires "
+                "non-empty structured_reasoning_falsification_rules"
+            )
+        if len(self.structured_reasoning_falsification_rules) > _MAX_FALSIFICATION_RULES:
+            raise ValueError(
+                "structured_reasoning_falsification_rules cannot exceed "
+                f"{_MAX_FALSIFICATION_RULES}"
+            )
+        for rule in self.structured_reasoning_falsification_rules:
+            if not isinstance(rule, Mapping):
+                raise ValueError(
+                    "structured_reasoning_falsification_rules entries must be mappings"
+                )
 
 
 @dataclass(frozen=True)
@@ -542,12 +583,27 @@ async def _structured_reasoning_context(
             detail="Content Ops structured reasoning LLM is unavailable.",
         )
     # Lazy import keeps hosts without structured reasoning free of these deps.
-    from extracted_reasoning_core.types import OutputPolicy, ReasoningPack, ReasoningPorts
+    from extracted_reasoning_core.types import (
+        FalsificationPolicy,
+        OutputPolicy,
+        ReasoningPack,
+        ReasoningPorts,
+    )
 
     from ..services.multi_pass_reasoning_provider import (
         MultiPassCampaignReasoningProvider,
         MultiPassReasoningProviderConfig,
     )
+
+    falsification_policy = None
+    if reasoning_definition.falsification and config.structured_reasoning_falsification_rules:
+        falsification_policy = FalsificationPolicy(
+            rules=tuple(
+                dict(rule)
+                for rule in config.structured_reasoning_falsification_rules
+            ),
+            conservative=config.structured_reasoning_falsification_conservative,
+        )
 
     provider = MultiPassCampaignReasoningProvider(
         ports=ReasoningPorts(llm=llm),
@@ -561,6 +617,11 @@ async def _structured_reasoning_context(
             ),
             output_policy=OutputPolicy(
                 require_citations=config.structured_reasoning_require_citations,
+            ),
+            falsification_policy=falsification_policy,
+            drop_falsified=bool(
+                falsification_policy is not None
+                and config.structured_reasoning_drop_falsified
             ),
             # Keep the inner provider nonblocking so strict wrappers can
             # surface validation blocker details instead of a generic None.

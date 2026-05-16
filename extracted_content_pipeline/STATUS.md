@@ -199,7 +199,14 @@ source of truth for what remains.
   fails closed before report/sales generation when validation blockers are
   present. The plan and execute paths share the same packaged runtime
   output/preset constants so unsupported reasoning requests fail consistently
-  instead of silently dropping requested reasoning.
+  instead of silently dropping requested reasoning. Hosts can attach explicit
+  falsification rules to `multi_pass_strict`; the control surface wires those
+  into `FalsificationPolicy` and never runs falsification checks by default
+  when no host-owned rules are supplied. Falsification rules are evaluated per
+  generated claim, so strict runs with rules can add one extra LLM call per
+  claim before any falsified claims are dropped. The host config rejects
+  `drop_falsified=True` without rules and caps strict falsification rules at 20
+  to keep per-claim prompt growth bounded.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared

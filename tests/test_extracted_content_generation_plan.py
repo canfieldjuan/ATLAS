@@ -89,6 +89,7 @@ def test_plan_threads_structured_reasoning_preset_to_report_and_sales_brief():
         assert step["config"]["reasoning_narrative_planning"] is True
         assert step["config"]["reasoning_output_validation"] is True
         assert step["config"]["reasoning_blocking_validation"] is False
+        assert step["config"]["reasoning_falsification"] is False
 
 
 def test_plan_threads_strict_reasoning_preset_to_report_and_sales_brief():
@@ -109,6 +110,7 @@ def test_plan_threads_strict_reasoning_preset_to_report_and_sales_brief():
         assert step["config"]["reasoning_narrative_planning"] is True
         assert step["config"]["reasoning_output_validation"] is True
         assert step["config"]["reasoning_blocking_validation"] is True
+        assert step["config"]["reasoning_falsification"] is True
 
 
 @pytest.mark.parametrize("output", PACKAGED_REASONING_RUNTIME_OUTPUTS)

@@ -127,6 +127,7 @@ def _reasoning_config_for_output(output: str, request: ContentOpsRequest) -> dic
         "reasoning_narrative_planning": definition.narrative_planning,
         "reasoning_output_validation": definition.output_validation,
         "reasoning_blocking_validation": definition.blocking_validation,
+        "reasoning_falsification": definition.falsification,
     }
 
 

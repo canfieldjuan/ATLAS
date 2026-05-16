@@ -23,6 +23,14 @@ ReasoningPreset = Literal[
 
 @dataclass(frozen=True)
 class ReasoningPresetDefinition:
+    """Catalog metadata for a host-selectable reasoning preset.
+
+    Most capability flags are delivered whenever the preset is requested.
+    ``falsification`` means the preset can run falsification when the host also
+    supplies explicit falsification rules; the catalog flag alone does not
+    create an implicit default falsification policy.
+    """
+
     id: ReasoningPreset
     label: str
     description: str
@@ -98,6 +106,7 @@ REASONING_PRESETS: Mapping[str, ReasoningPresetDefinition] = MappingProxyType({
         generated_reasoning=True,
         multi_pass=True,
         narrative_planning=True,
+        falsification=True,
         output_validation=True,
         blocking_validation=True,
     ),
