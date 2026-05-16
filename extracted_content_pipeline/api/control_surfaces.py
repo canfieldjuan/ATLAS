@@ -6,6 +6,7 @@ import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 try:
@@ -40,8 +41,8 @@ from ..control_surfaces import (
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
 from ..reasoning_policy import (
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
-    PACKAGED_REASONING_RUNTIME_PRESETS,
     ReasoningPreset,
+    packaged_reasoning_runtime_presets_for_output,
     resolve_reasoning_policy,
 )
 from ..reasoning_signals import reasoning_validation_blocked_reason
@@ -186,6 +187,7 @@ class ContentOpsControlSurfaceApiConfig:
     structured_reasoning_default_goal: str = "synthesize content reasoning context"
     structured_reasoning_depth: str = "L3"
     structured_reasoning_pack_name: str = "content_ops_structured"
+    structured_reasoning_output_pack_names: Mapping[str, str] | None = None
     structured_reasoning_top_thesis_limit: int = 5
     structured_reasoning_max_continuations: int = 8
     structured_reasoning_require_citations: bool = True
@@ -200,6 +202,29 @@ class ContentOpsControlSurfaceApiConfig:
             raise ValueError("structured_reasoning_default_goal is required")
         if not str(self.structured_reasoning_pack_name or "").strip():
             raise ValueError("structured_reasoning_pack_name is required")
+        output_pack_names = self.structured_reasoning_output_pack_names
+        if output_pack_names is None:
+            output_pack_names = {"blog_post": "content_ops_blog"}
+        if not isinstance(output_pack_names, Mapping):
+            raise ValueError("structured_reasoning_output_pack_names must be a mapping")
+        normalized_pack_names: dict[str, str] = {}
+        for output, pack_name in output_pack_names.items():
+            output_key = str(output or "").strip()
+            pack_value = str(pack_name or "").strip()
+            if not output_key:
+                raise ValueError(
+                    "structured_reasoning_output_pack_names keys must be non-empty"
+                )
+            if not pack_value:
+                raise ValueError(
+                    "structured_reasoning_output_pack_names values must be non-empty"
+                )
+            normalized_pack_names[output_key] = pack_value
+        object.__setattr__(
+            self,
+            "structured_reasoning_output_pack_names",
+            MappingProxyType(normalized_pack_names),
+        )
         if self.structured_reasoning_depth not in {"L1", "L2", "L3", "L4", "L5"}:
             raise ValueError("structured_reasoning_depth must be L1-L5")
         if self.structured_reasoning_top_thesis_limit <= 0:
@@ -434,13 +459,13 @@ def create_content_ops_control_surface_router(
             )
             services = services.with_reasoning_context(reasoning_context)
         else:
-            reasoning_context, reasoning_outputs = await _structured_reasoning_context(
+            reasoning_groups = await _structured_reasoning_contexts(
                 payload_mapping,
                 config=resolved_config,
                 services=services,
                 llm_provider=llm_provider,
             )
-            if reasoning_context is not None:
+            for reasoning_context, reasoning_outputs in reasoning_groups:
                 services = services.with_reasoning_context(
                     reasoning_context,
                     outputs=reasoning_outputs,
@@ -502,18 +527,18 @@ async def _resolve_reasoning_context(
     return value
 
 
-async def _structured_reasoning_context(
+async def _structured_reasoning_contexts(
     payload: Mapping[str, Any],
     *,
     config: ContentOpsControlSurfaceApiConfig,
     services: ContentOpsExecutionServices,
     llm_provider: LLMProvider | None,
-) -> tuple[Any | None, tuple[str, ...]]:
+) -> tuple[tuple[Any, tuple[str, ...]], ...]:
     preset = _clean(payload.get("reasoning_preset"))
     if not preset:
-        return None, ()
+        return ()
     if preset in {"none", "context_only"}:
-        return None, ()
+        return ()
     try:
         request = request_from_mapping(payload)
     except ValueError as exc:
@@ -523,7 +548,7 @@ async def _structured_reasoning_context(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not plan.can_execute:
-        return None, ()
+        return ()
     supported_outputs = [
         str(output)
         for output in resolve_outputs(request)
@@ -532,20 +557,25 @@ async def _structured_reasoning_context(
     if not supported_outputs:
         raise HTTPException(
             status_code=400,
-            detail="reasoning_preset currently applies only to report and sales_brief.",
+            detail=(
+                "reasoning_preset currently applies only to blog_post, report, "
+                "and sales_brief."
+            ),
         )
-    reasoning_definition = None
+    reasoning_definitions: dict[str, Any] = {}
     for output in supported_outputs:
         try:
             _policy, definition = resolve_reasoning_policy(output, preset)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        reasoning_definition = definition
-        if definition.id not in PACKAGED_REASONING_RUNTIME_PRESETS:
+        reasoning_definitions[output] = definition
+        runtime_presets = packaged_reasoning_runtime_presets_for_output(output)
+        if definition.id not in runtime_presets:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Content Ops packaged reasoning currently supports "
+                    "multi_pass_structured for blog_post and "
                     "multi_pass_structured or multi_pass_strict for report "
                     "and sales_brief."
                 ),
@@ -554,9 +584,7 @@ async def _structured_reasoning_context(
         output for output in supported_outputs if output in services.configured_outputs()
     ]
     if not selected_outputs:
-        return None, ()
-    if reasoning_definition is None:
-        return None, ()
+        return ()
     for output in selected_outputs:
         service = services.for_output(output)
         if not callable(getattr(service, "with_reasoning_context", None)):
@@ -596,7 +624,8 @@ async def _structured_reasoning_context(
     )
 
     falsification_policy = None
-    if reasoning_definition.falsification and config.structured_reasoning_falsification_rules:
+    definitions = tuple(reasoning_definitions[output] for output in selected_outputs)
+    if any(item.falsification for item in definitions) and config.structured_reasoning_falsification_rules:
         falsification_policy = FalsificationPolicy(
             rules=tuple(
                 dict(rule)
@@ -605,32 +634,53 @@ async def _structured_reasoning_context(
             conservative=config.structured_reasoning_falsification_conservative,
         )
 
-    provider = MultiPassCampaignReasoningProvider(
-        ports=ReasoningPorts(llm=llm),
-        config=MultiPassReasoningProviderConfig(
-            default_goal=config.structured_reasoning_default_goal,
-            default_depth=config.structured_reasoning_depth,
-            top_thesis_limit=config.structured_reasoning_top_thesis_limit,
-            max_continuations=config.structured_reasoning_max_continuations,
-            narrative_plan_pack=ReasoningPack(
-                name=config.structured_reasoning_pack_name,
+    groups: dict[str, list[str]] = {}
+    for output in selected_outputs:
+        groups.setdefault(_structured_reasoning_pack_name(output, config), []).append(output)
+
+    provider_groups: list[tuple[Any, tuple[str, ...]]] = []
+    for pack_name, outputs in groups.items():
+        # The reasoning preset is request-level, so every output in this group
+        # resolves to the same ReasoningPresetDefinition.
+        group_definition = reasoning_definitions[outputs[0]]
+        provider = MultiPassCampaignReasoningProvider(
+            ports=ReasoningPorts(llm=llm),
+            config=MultiPassReasoningProviderConfig(
+                default_goal=config.structured_reasoning_default_goal,
+                default_depth=config.structured_reasoning_depth,
+                top_thesis_limit=config.structured_reasoning_top_thesis_limit,
+                max_continuations=config.structured_reasoning_max_continuations,
+                narrative_plan_pack=ReasoningPack(name=pack_name),
+                output_policy=OutputPolicy(
+                    require_citations=config.structured_reasoning_require_citations,
+                ),
+                falsification_policy=falsification_policy
+                if group_definition.falsification else None,
+                drop_falsified=bool(
+                    group_definition.falsification
+                    and falsification_policy is not None
+                    and config.structured_reasoning_drop_falsified
+                ),
+                # Keep the inner provider nonblocking so strict wrappers can
+                # surface validation blocker details instead of a generic None.
+                block_on_validation_failure=False,
             ),
-            output_policy=OutputPolicy(
-                require_citations=config.structured_reasoning_require_citations,
-            ),
-            falsification_policy=falsification_policy,
-            drop_falsified=bool(
-                falsification_policy is not None
-                and config.structured_reasoning_drop_falsified
-            ),
-            # Keep the inner provider nonblocking so strict wrappers can
-            # surface validation blocker details instead of a generic None.
-            block_on_validation_failure=False,
-        ),
-    )
-    if reasoning_definition.blocking_validation:
-        provider = _BlockingReasoningContextProvider(provider)
-    return provider, tuple(selected_outputs)
+        )
+        if group_definition.blocking_validation:
+            provider = _BlockingReasoningContextProvider(provider)
+        provider_groups.append((provider, tuple(outputs)))
+    return tuple(provider_groups)
+
+
+def _structured_reasoning_pack_name(
+    output: str,
+    config: ContentOpsControlSurfaceApiConfig,
+) -> str:
+    configured = config.structured_reasoning_output_pack_names or {}
+    pack_name = configured.get(output)
+    if pack_name:
+        return str(pack_name)
+    return config.structured_reasoning_pack_name
 
 
 async def _resolve_reasoning_status(

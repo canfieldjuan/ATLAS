@@ -916,6 +916,95 @@ async def test_execute_route_builds_structured_reasoning_for_report_only():
 
 
 @pytest.mark.asyncio
+async def test_execute_route_builds_blog_specific_structured_reasoning_pack():
+    recorded_providers = []
+    blog_post = _ProviderRecordingService(recorded_providers)
+
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            blog_post=blog_post,
+        ),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["blog_post"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {"topic": "Churn pressure"},
+        }
+    )
+
+    assert len(recorded_providers) == 1
+    provider = recorded_providers[0]
+    assert provider._config.narrative_plan_pack.name == "content_ops_blog"
+    assert provider._config.output_policy is not None
+    assert provider._config.block_on_validation_failure is False
+
+
+@pytest.mark.asyncio
+async def test_execute_route_uses_configured_output_pack_mapping():
+    recorded_providers = []
+    blog_post = _ProviderRecordingService(recorded_providers)
+
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            blog_post=blog_post,
+        ),
+        llm_provider=lambda: object(),
+        config=ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_output_pack_names={
+                "blog_post": "custom_blog_pack",
+            },
+        ),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["blog_post"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {"topic": "Churn pressure"},
+        }
+    )
+
+    assert recorded_providers[0]._config.narrative_plan_pack.name == "custom_blog_pack"
+
+
+@pytest.mark.parametrize("outputs", (("blog_post", "report"), ("report", "blog_post")))
+@pytest.mark.asyncio
+async def test_execute_route_keeps_blog_and_report_reasoning_packs_separate(outputs):
+    blog_providers = []
+    report_providers = []
+    blog_post = _ProviderRecordingService(blog_providers)
+    report = _ProviderRecordingService(report_providers)
+
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            blog_post=blog_post,
+            report=report,
+        ),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": list(outputs),
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {
+                "topic": "Churn pressure",
+                "opportunity_id": "opp-1",
+            },
+        }
+    )
+
+    assert blog_providers[0]._config.narrative_plan_pack.name == "content_ops_blog"
+    assert report_providers[0]._config.narrative_plan_pack.name == "content_ops_structured"
+
+
+@pytest.mark.asyncio
 async def test_execute_route_wraps_strict_reasoning_with_blocking_provider():
     recorded_providers = []
     report = _ProviderRecordingService(recorded_providers)
@@ -1095,11 +1184,11 @@ async def test_blocking_reasoning_provider_surfaces_validation_blockers():
         (
             {
                 "outputs": ["blog_post"],
-                "reasoning_preset": "multi_pass_structured",
+                "reasoning_preset": "multi_pass_strict",
                 "inputs": {"topic": "Churn pressure"},
             },
             400,
-            "report and sales_brief",
+            "not supported",
         ),
     ),
 )
@@ -1253,6 +1342,30 @@ async def test_execute_route_structured_reasoning_requires_llm_provider():
 def test_content_ops_config_rejects_blank_structured_reasoning_pack_name():
     with pytest.raises(ValueError, match="structured_reasoning_pack_name"):
         ContentOpsControlSurfaceApiConfig(structured_reasoning_pack_name=" ")
+
+
+def test_content_ops_config_rejects_invalid_output_pack_names():
+    with pytest.raises(ValueError, match="must be a mapping"):
+        ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_output_pack_names="content_ops_blog"
+        )
+    with pytest.raises(ValueError, match="keys must be non-empty"):
+        ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_output_pack_names={" ": "content_ops_blog"}
+        )
+    with pytest.raises(ValueError, match="values must be non-empty"):
+        ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_output_pack_names={"blog_post": " "}
+        )
+
+
+def test_content_ops_config_stores_output_pack_names_immutably():
+    config = ContentOpsControlSurfaceApiConfig(
+        structured_reasoning_output_pack_names={"blog_post": "content_ops_blog"}
+    )
+
+    with pytest.raises(TypeError):
+        config.structured_reasoning_output_pack_names["blog_post"] = "other_pack"  # type: ignore[index]
 
 
 def test_content_ops_config_rejects_invalid_falsification_rules_shape():

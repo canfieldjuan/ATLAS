@@ -113,6 +113,73 @@ def test_services_with_reasoning_context_can_target_specific_outputs() -> None:
     assert derived.reasoning_provider_active_for("email_campaign") is False
 
 
+def test_services_with_reasoning_context_accumulates_targeted_outputs() -> None:
+    campaign_provider = object()
+    report_provider = object()
+    campaign = _ReasoningAwareOpportunityService()
+    report = _ReasoningAwareOpportunityService()
+    bundle = ContentOpsExecutionServices(campaign=campaign, report=report)
+
+    derived = bundle.with_reasoning_context(
+        campaign_provider,
+        outputs=("email_campaign",),
+    ).with_reasoning_context(
+        report_provider,
+        outputs=("report",),
+    )
+
+    assert derived.reasoning_provider_active_for("email_campaign") is True
+    assert derived.reasoning_provider_active_for("report") is True
+    assert derived.campaign._reasoning_context is campaign_provider
+    assert derived.report._reasoning_context is report_provider
+
+
+def test_services_with_reasoning_context_none_clears_targeted_output() -> None:
+    campaign_provider = object()
+    report_provider = object()
+    campaign = _ReasoningAwareOpportunityService()
+    report = _ReasoningAwareOpportunityService()
+    bundle = ContentOpsExecutionServices(campaign=campaign, report=report)
+
+    derived = bundle.with_reasoning_context(
+        campaign_provider,
+        outputs=("email_campaign",),
+    ).with_reasoning_context(
+        report_provider,
+        outputs=("report",),
+    ).with_reasoning_context(
+        None,
+        outputs=("email_campaign",),
+    )
+
+    assert derived.reasoning_provider_active_for("email_campaign") is False
+    assert derived.reasoning_provider_active_for("report") is True
+    assert derived.campaign._reasoning_context is None
+    assert derived.report._reasoning_context is report_provider
+
+
+def test_services_with_reasoning_context_none_clears_from_global_provider() -> None:
+    campaign = _ReasoningAwareOpportunityService(reasoning_context=object())
+    report = _ReasoningAwareOpportunityService(reasoning_context=object())
+    bundle = ContentOpsExecutionServices(
+        campaign=campaign,
+        report=report,
+        reasoning_provider_configured=True,
+    )
+
+    derived = bundle.with_reasoning_context(None, outputs=("email_campaign",))
+
+    assert derived.reasoning_provider_active_for("email_campaign") is False
+    assert derived.reasoning_provider_active_for("report") is True
+    assert derived.campaign._reasoning_context is None
+    assert derived.report is report
+
+
+def test_services_rejects_outputs_without_provider_flag() -> None:
+    with pytest.raises(ValueError, match="requires reasoning_provider_configured"):
+        ContentOpsExecutionServices(reasoning_provider_outputs=("report",))
+
+
 def test_services_with_reasoning_context_honors_empty_output_selection() -> None:
     campaign = _ReasoningAwareOpportunityService()
     derived = ContentOpsExecutionServices(campaign=campaign).with_reasoning_context(
@@ -130,6 +197,15 @@ def test_services_with_reasoning_context_rejects_string_outputs() -> None:
         ContentOpsExecutionServices(campaign=campaign).with_reasoning_context(
             object(),
             outputs="report",
+        )
+
+
+def test_services_with_reasoning_context_rejects_unknown_outputs() -> None:
+    campaign = _ReasoningAwareOpportunityService()
+    with pytest.raises(ValueError, match="unknown reasoning-aware outputs"):
+        ContentOpsExecutionServices(campaign=campaign).with_reasoning_context(
+            object(),
+            outputs=("signal_extraction",),
         )
 
 

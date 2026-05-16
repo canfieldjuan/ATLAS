@@ -23,7 +23,7 @@ from .landing_page_generation import LandingPageGenerationConfig
 from .reasoning_policy import (
     NOOP_REASONING_PRESETS,
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
-    PACKAGED_REASONING_RUNTIME_PRESETS,
+    packaged_reasoning_runtime_presets_for_output,
     resolve_reasoning_policy,
 )
 from .report_generation import ReportGenerationConfig
@@ -116,9 +116,11 @@ def _reasoning_config_for_output(output: str, request: ContentOpsRequest) -> dic
     _policy, definition = resolve_reasoning_policy(output, request.reasoning_preset)
     if definition.id in NOOP_REASONING_PRESETS:
         return {}
-    if definition.id not in PACKAGED_REASONING_RUNTIME_PRESETS:
+    runtime_presets = packaged_reasoning_runtime_presets_for_output(output)
+    if definition.id not in runtime_presets:
         raise ValueError(
             "Content Ops packaged reasoning currently supports "
+            "multi_pass_structured for blog_post and "
             "multi_pass_structured or multi_pass_strict for report and sales_brief."
         )
     return {
@@ -146,7 +148,8 @@ def _validate_reasoning_runtime_request(
     )
     if not runtime_outputs:
         raise ValueError(
-            "reasoning_preset currently applies only to report and sales_brief."
+            "reasoning_preset currently applies only to blog_post, report, "
+            "and sales_brief."
         )
     for output in runtime_outputs:
         _reasoning_config_for_output(output, request)
@@ -297,6 +300,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
                 "topic": request.inputs.get("topic"),
+                **_reasoning_config_for_output(output, request),
             },
         )
     if output == "signal_extraction":

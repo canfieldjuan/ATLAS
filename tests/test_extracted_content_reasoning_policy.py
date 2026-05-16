@@ -8,10 +8,10 @@ from extracted_content_pipeline.reasoning_policy import (
     NOOP_REASONING_PRESETS,
     OUTPUT_REASONING_POLICIES,
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
-    PACKAGED_REASONING_RUNTIME_PRESETS,
     REASONING_PRESETS,
     OutputReasoningPolicy,
     output_reasoning_policy,
+    packaged_reasoning_runtime_presets_for_output,
     reasoning_preset_definition,
     resolve_reasoning_policy,
     supported_reasoning_presets,
@@ -51,7 +51,7 @@ def test_output_policy_defaults_match_audit_recommendations() -> None:
         "signal_extraction": "none",
         "email_campaign": "single_pass",
         "landing_page": "single_pass",
-        "blog_post": "multi_pass_light",
+        "blog_post": "multi_pass_structured",
         "report": "multi_pass_structured",
         "sales_brief": "multi_pass_structured",
     }
@@ -70,7 +70,8 @@ def test_packaged_runtime_reasoning_surface_is_catalog_supported() -> None:
     for output in PACKAGED_REASONING_RUNTIME_OUTPUTS:
         assert OUTPUT_CATALOG[output].implemented is True
         policy = output_reasoning_policy(output)
-        for preset in PACKAGED_REASONING_RUNTIME_PRESETS:
+        assert policy.default_preset in packaged_reasoning_runtime_presets_for_output(output)
+        for preset in packaged_reasoning_runtime_presets_for_output(output):
             assert policy.supports(preset)
 
 
@@ -114,8 +115,19 @@ def test_landing_page_supports_structured_but_not_strict_preset() -> None:
     assert "multi_pass_strict" not in supported
 
 
-@pytest.mark.parametrize("output", ("blog_post", "report", "sales_brief"))
-def test_long_form_assets_support_structured_presets(output: str) -> None:
+def test_blog_post_supports_structured_but_not_strict_preset() -> None:
+    assert supported_reasoning_presets("blog_post") == (
+        "none",
+        "context_only",
+        "single_pass",
+        "multi_pass_light",
+        "multi_pass_structured",
+    )
+    assert "multi_pass_strict" not in supported_reasoning_presets("blog_post")
+
+
+@pytest.mark.parametrize("output", ("report", "sales_brief"))
+def test_report_and_sales_brief_support_structured_presets(output: str) -> None:
     assert supported_reasoning_presets(output) == (
         "none",
         "context_only",

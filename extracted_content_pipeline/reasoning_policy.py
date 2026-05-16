@@ -124,12 +124,26 @@ _LANDING_PAGE_PRESETS: tuple[ReasoningPreset, ...] = (
     "none", "context_only", "single_pass", "multi_pass_light",
     "multi_pass_structured",
 )
+_BLOG_POST_PRESETS: tuple[ReasoningPreset, ...] = (
+    "none", "context_only", "single_pass", "multi_pass_light",
+    "multi_pass_structured",
+)
 
-PACKAGED_REASONING_RUNTIME_OUTPUTS: tuple[str, ...] = ("report", "sales_brief")
+PACKAGED_REASONING_RUNTIME_OUTPUTS: tuple[str, ...] = (
+    "blog_post", "report", "sales_brief",
+)
 PACKAGED_REASONING_RUNTIME_PRESETS: tuple[ReasoningPreset, ...] = (
     "multi_pass_structured",
     "multi_pass_strict",
 )
+_PACKAGED_REASONING_RUNTIME_PRESETS_BY_OUTPUT: Mapping[
+    str,
+    tuple[ReasoningPreset, ...],
+] = MappingProxyType({
+    "blog_post": ("multi_pass_structured",),
+    "report": PACKAGED_REASONING_RUNTIME_PRESETS,
+    "sales_brief": PACKAGED_REASONING_RUNTIME_PRESETS,
+})
 NOOP_REASONING_PRESETS: tuple[ReasoningPreset, ...] = tuple(
     preset
     for preset, definition in REASONING_PRESETS.items()
@@ -155,8 +169,8 @@ OUTPUT_REASONING_POLICIES: Mapping[str, OutputReasoningPolicy] = MappingProxyTyp
     ),
     "blog_post": OutputReasoningPolicy(
         output="blog_post",
-        default_preset="multi_pass_light",
-        supported_presets=_STRUCTURED_PRESETS,
+        default_preset="multi_pass_structured",
+        supported_presets=_BLOG_POST_PRESETS,
     ),
     "report": OutputReasoningPolicy(
         output="report",
@@ -176,6 +190,14 @@ def reasoning_preset_definition(preset: str) -> ReasoningPresetDefinition:
         return REASONING_PRESETS[preset]
     except KeyError as exc:
         raise ValueError(f"unknown reasoning preset: {preset}") from exc
+
+
+def packaged_reasoning_runtime_presets_for_output(
+    output: str,
+) -> tuple[ReasoningPreset, ...]:
+    """Return packaged runtime presets supported for a generated output."""
+
+    return _PACKAGED_REASONING_RUNTIME_PRESETS_BY_OUTPUT.get(str(output), ())
 
 
 def output_reasoning_policy(output: str) -> OutputReasoningPolicy:

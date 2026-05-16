@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from .campaign_ports import TenantScope
@@ -15,6 +16,15 @@ from .landing_page_ports import MarketingCampaign
 from .reasoning_signals import REASONING_VALIDATION_BLOCKED
 
 logger = logging.getLogger(__name__)
+
+_REASONING_OUTPUT_TO_ATTR: Mapping[str, str] = MappingProxyType({
+    "email_campaign": "campaign",
+    "blog_post": "blog_post",
+    "report": "report",
+    "landing_page": "landing_page",
+    "sales_brief": "sales_brief",
+})
+_REASONING_AWARE_OUTPUTS = tuple(_REASONING_OUTPUT_TO_ATTR)
 
 
 @dataclass(frozen=True)
@@ -38,6 +48,12 @@ class ContentOpsExecutionServices:
     signal_extraction: Any | None = None
     reasoning_provider_configured: bool = False
     reasoning_provider_outputs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.reasoning_provider_outputs and not self.reasoning_provider_configured:
+            raise ValueError(
+                "reasoning_provider_outputs requires reasoning_provider_configured=True"
+            )
 
     def for_output(self, output: str) -> Any | None:
         if output == "email_campaign":
@@ -84,33 +100,55 @@ class ContentOpsExecutionServices:
         consume reasoning context) are passed through unchanged. When
         ``outputs`` is ``None``, all reasoning-aware services are rebound.
         Passing a sequence scopes rebinding to those output ids; an empty
-        sequence rebinds none.
+        sequence rebinds none. Multiple targeted calls accumulate active
+        output metadata. Passing ``provider=None`` for selected outputs clears
+        those outputs from the active metadata while preserving other bindings.
         """
 
         if isinstance(outputs, str):
             raise TypeError("outputs must be a sequence of output ids, not a string")
-        selected = frozenset((
-            "email_campaign",
-            "blog_post",
-            "report",
-            "landing_page",
-            "sales_brief",
-        ) if outputs is None else outputs)
+        selected = frozenset(_REASONING_AWARE_OUTPUTS if outputs is None else outputs)
+        unknown = selected - frozenset(_REASONING_AWARE_OUTPUTS)
+        if unknown:
+            joined = ", ".join(sorted(unknown))
+            raise ValueError(f"unknown reasoning-aware outputs: {joined}")
+        existing_outputs = (
+            frozenset(self.reasoning_provider_outputs)
+            if self.reasoning_provider_outputs
+            else frozenset(_REASONING_AWARE_OUTPUTS)
+            if self.reasoning_provider_configured
+            else frozenset()
+        )
+        active_outputs = (
+            existing_outputs | selected
+            if provider is not None
+            else existing_outputs - selected
+        )
+        active_tuple = (
+            ()
+            if active_outputs == frozenset(_REASONING_AWARE_OUTPUTS)
+            else tuple(sorted(active_outputs))
+        )
+        services = {
+            "campaign": self.campaign,
+            "blog_post": self.blog_post,
+            "report": self.report,
+            "landing_page": self.landing_page,
+            "sales_brief": self.sales_brief,
+        }
+        for output, attr in _REASONING_OUTPUT_TO_ATTR.items():
+            if output in selected:
+                services[attr] = _rebind_reasoning(services[attr], provider)
         return ContentOpsExecutionServices(
-            campaign=_rebind_reasoning(self.campaign, provider)
-            if "email_campaign" in selected else self.campaign,
-            blog_post=_rebind_reasoning(self.blog_post, provider)
-            if "blog_post" in selected else self.blog_post,
-            report=_rebind_reasoning(self.report, provider)
-            if "report" in selected else self.report,
-            landing_page=_rebind_reasoning(self.landing_page, provider)
-            if "landing_page" in selected else self.landing_page,
-            sales_brief=_rebind_reasoning(self.sales_brief, provider)
-            if "sales_brief" in selected else self.sales_brief,
+            campaign=services["campaign"],
+            blog_post=services["blog_post"],
+            report=services["report"],
+            landing_page=services["landing_page"],
+            sales_brief=services["sales_brief"],
             # signal_extraction stays as-is; it does not consume reasoning.
             signal_extraction=self.signal_extraction,
-            reasoning_provider_configured=provider is not None and bool(selected),
-            reasoning_provider_outputs=tuple(sorted(selected)) if provider is not None else (),
+            reasoning_provider_configured=bool(active_outputs),
+            reasoning_provider_outputs=active_tuple,
         )
 
     def reasoning_provider_active_for(self, output: str) -> bool:
