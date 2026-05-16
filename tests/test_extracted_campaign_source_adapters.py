@@ -59,6 +59,51 @@ def test_source_type_precedence_table_controls_ambiguous_rows() -> None:
     assert opportunity["target_id"] == "sales_call-value"
 
 
+def test_source_field_lookup_preserves_exact_key_precedence() -> None:
+    lookup = adapters._SourceFieldLookup({
+        "ticket_id": "exact-ticket",
+        "Ticket ID": "provider-ticket",
+    })
+
+    assert adapters._field_value(lookup, "ticket_id") == "exact-ticket"
+
+
+def test_source_field_lookup_caches_provider_style_aliases() -> None:
+    lookup = adapters._SourceFieldLookup({
+        "Ticket ID": "ticket-1",
+        "Vendor Name": "HubSpot",
+    })
+
+    assert adapters._field_value(lookup, "ticket_id") == "ticket-1"
+    # Private cache assertion is intentional: this slice exists to avoid repeat scans.
+    assert lookup._cache["ticket_id"] == "ticket-1"
+    assert adapters._field_value(lookup, "ticket_id") == "ticket-1"
+    assert adapters._field_value(lookup, "vendor_name") == "HubSpot"
+
+
+def test_source_field_lookup_reuses_cached_alias_results(monkeypatch) -> None:
+    calls = 0
+    original = adapters._normalized_field_key
+
+    def spy(key: str) -> str:
+        nonlocal calls
+        calls += 1
+        return original(key)
+
+    monkeypatch.setattr(adapters, "_normalized_field_key", spy)
+    lookup = adapters._SourceFieldLookup({
+        "Ticket ID": "ticket-1",
+        "Vendor Name": "HubSpot",
+    })
+
+    for _ in range(5):
+        assert adapters._field_value(lookup, "ticket_id") == "ticket-1"
+    assert adapters._field_value(lookup, "vendor_name") == "HubSpot"
+    assert adapters._field_value(lookup, "missing_key") is None
+    assert adapters._field_value(lookup, "missing_key") is None
+    assert calls == 5
+
+
 def test_source_row_maps_review_text_to_campaign_opportunity() -> None:
     opportunity, warnings = source_row_to_campaign_opportunity({
         "review_id": "review-1",

@@ -167,6 +167,61 @@ _SOURCE_TYPE_PRECEDENCE = (
 )
 _FIELD_SEPARATOR_RE = re.compile(r"[^a-z0-9]+")
 _MAX_BUNDLE_DEPTH = 8
+_MISSING = object()
+
+
+class _SourceFieldLookup(Mapping[str, Any]):
+    """Mapping wrapper that caches string-key alias lookups for one source row."""
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self._row = row
+        self._indexed = tuple(
+            (
+                _normalized_field_key(str(raw_key)),
+                _compact_field_key(str(raw_key)),
+                value,
+            )
+            for raw_key, value in row.items()
+        )
+        self._cache: dict[str, Any] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        value = self.field_value(key)
+        if value is _MISSING:
+            raise KeyError(key)
+        return value
+
+    def __iter__(self):
+        return iter(self._row)
+
+    def __len__(self) -> int:
+        return len(self._row)
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return key in self._row
+        return self.field_value(key) is not _MISSING
+
+    def get(self, key: str, default: Any = None) -> Any:
+        value = self.field_value(key)
+        return default if value is _MISSING else value
+
+    def items(self):
+        return self._row.items()
+
+    def field_value(self, key: str) -> Any:
+        if key in self._row:
+            return self._row.get(key)
+        if key in self._cache:
+            return self._cache[key]
+        normalized = _normalized_field_key(key)
+        compact = _compact_field_key(key)
+        for raw_normalized, raw_compact, value in self._indexed:
+            if raw_normalized == normalized or raw_compact == compact:
+                self._cache[key] = value
+                return value
+        self._cache[key] = _MISSING
+        return _MISSING
 
 
 def load_source_campaign_opportunities_from_file(
@@ -236,8 +291,9 @@ def source_row_to_campaign_opportunity(
 ) -> tuple[dict[str, Any], tuple[CampaignOpportunityWarning, ...]]:
     """Convert one source row while preserving original non-empty fields."""
 
+    lookup = _SourceFieldLookup(row)
     warnings: list[CampaignOpportunityWarning] = []
-    text = _source_text(row)
+    text = _source_text(lookup)
     if not text:
         warnings.append(CampaignOpportunityWarning(
             code="missing_source_text",
@@ -250,21 +306,21 @@ def source_row_to_campaign_opportunity(
             ),
         ))
         return {}, tuple(warnings)
-    source_id = _first_text(row, _SOURCE_ID_KEYS)
-    source_type = _first_text(row, _SOURCE_TYPE_KEYS) or _infer_source_type(row)
-    source_title = _first_text(row, _SOURCE_TITLE_KEYS)
+    source_id = _first_text(lookup, _SOURCE_ID_KEYS)
+    source_type = _first_text(lookup, _SOURCE_TYPE_KEYS) or _infer_source_type(lookup)
+    source_title = _first_text(lookup, _SOURCE_TITLE_KEYS)
     opportunity = {
         str(key): value
         for key, value in row.items()
         if value not in (None, "", [], {}) and key not in _SOURCE_TITLE_COLLISION_KEYS
     }
-    _copy_alias_text(opportunity, row, "company_name", _COMPANY_KEYS)
-    _copy_alias_text(opportunity, row, "vendor_name", _VENDOR_KEYS)
-    _copy_alias_text(opportunity, row, "contact_name", _CONTACT_NAME_KEYS)
-    _copy_alias_text(opportunity, row, "contact_email", _CONTACT_EMAIL_KEYS)
-    _copy_alias_text(opportunity, row, "contact_title", _CONTACT_TITLE_KEYS)
-    _copy_alias_value(opportunity, row, "nps_score", _NPS_SCORE_KEYS)
-    _copy_alias_value(opportunity, row, "csat_score", _CSAT_SCORE_KEYS)
+    _copy_alias_text(opportunity, lookup, "company_name", _COMPANY_KEYS)
+    _copy_alias_text(opportunity, lookup, "vendor_name", _VENDOR_KEYS)
+    _copy_alias_text(opportunity, lookup, "contact_name", _CONTACT_NAME_KEYS)
+    _copy_alias_text(opportunity, lookup, "contact_email", _CONTACT_EMAIL_KEYS)
+    _copy_alias_text(opportunity, lookup, "contact_title", _CONTACT_TITLE_KEYS)
+    _copy_alias_value(opportunity, lookup, "nps_score", _NPS_SCORE_KEYS)
+    _copy_alias_value(opportunity, lookup, "csat_score", _CSAT_SCORE_KEYS)
     if source_title:
         opportunity["source_title"] = source_title
     if source_id and "source_id" not in opportunity:
@@ -273,11 +329,11 @@ def source_row_to_campaign_opportunity(
         opportunity["id"] = source_id
     if source_type:
         opportunity["source_type"] = source_type
-    pain_points = _first_text_list(row, _PAIN_KEYS)
+    pain_points = _first_text_list(lookup, _PAIN_KEYS)
     if pain_points:
         opportunity["pain_points"] = pain_points
     evidence = _source_evidence(
-        row,
+        lookup,
         text=text,
         source_id=source_id,
         source_type=source_type,
@@ -315,13 +371,14 @@ def _source_rows_from_bundle(
 ) -> list[Any]:
     if depth > _MAX_BUNDLE_DEPTH:
         return []
+    lookup = _SourceFieldLookup(bundle)
     inherited = {
         **dict(parent_fields or {}),
         **_safe_parent_fields(bundle),
     }
     rows: list[Any] = []
     for key in _ROW_LIST_KEYS:
-        value = _field_value(bundle, key)
+        value = _field_value(lookup, key)
         if isinstance(value, Mapping):
             rows.extend(_source_rows_from_bundle(
                 value,
@@ -538,6 +595,9 @@ def _copy_alias_value(
 
 
 def _field_value(row: Mapping[str, Any], key: str) -> Any:
+    if isinstance(row, _SourceFieldLookup):
+        value = row.field_value(key)
+        return None if value is _MISSING else value
     if key in row:
         return row.get(key)
     normalized = _normalized_field_key(key)
