@@ -33,6 +33,7 @@ class ContentOpsExecutionServices:
     sales_brief: Any | None = None
     signal_extraction: Any | None = None
     reasoning_provider_configured: bool = False
+    reasoning_provider_outputs: tuple[str, ...] = ()
 
     def for_output(self, output: str) -> Any | None:
         if output == "email_campaign":
@@ -66,6 +67,7 @@ class ContentOpsExecutionServices:
     def with_reasoning_context(
         self,
         provider: Any | None,
+        outputs: Sequence[str] | None = None,
     ) -> "ContentOpsExecutionServices":
         """Return a derived bundle with each reasoning-aware service rebound.
 
@@ -75,19 +77,44 @@ class ContentOpsExecutionServices:
         in ``execution_services_provider`` are not mutated. Services that
         opt in expose ``with_reasoning_context(provider) -> Self``;
         services that don't (e.g. signal_extraction, which doesn't
-        consume reasoning context) are passed through unchanged.
+        consume reasoning context) are passed through unchanged. When
+        ``outputs`` is ``None``, all reasoning-aware services are rebound.
+        Passing a sequence scopes rebinding to those output ids; an empty
+        sequence rebinds none.
         """
 
+        if isinstance(outputs, str):
+            raise TypeError("outputs must be a sequence of output ids, not a string")
+        selected = frozenset((
+            "email_campaign",
+            "blog_post",
+            "report",
+            "landing_page",
+            "sales_brief",
+        ) if outputs is None else outputs)
         return ContentOpsExecutionServices(
-            campaign=_rebind_reasoning(self.campaign, provider),
-            blog_post=_rebind_reasoning(self.blog_post, provider),
-            report=_rebind_reasoning(self.report, provider),
-            landing_page=_rebind_reasoning(self.landing_page, provider),
-            sales_brief=_rebind_reasoning(self.sales_brief, provider),
+            campaign=_rebind_reasoning(self.campaign, provider)
+            if "email_campaign" in selected else self.campaign,
+            blog_post=_rebind_reasoning(self.blog_post, provider)
+            if "blog_post" in selected else self.blog_post,
+            report=_rebind_reasoning(self.report, provider)
+            if "report" in selected else self.report,
+            landing_page=_rebind_reasoning(self.landing_page, provider)
+            if "landing_page" in selected else self.landing_page,
+            sales_brief=_rebind_reasoning(self.sales_brief, provider)
+            if "sales_brief" in selected else self.sales_brief,
             # signal_extraction stays as-is; it does not consume reasoning.
             signal_extraction=self.signal_extraction,
-            reasoning_provider_configured=provider is not None,
+            reasoning_provider_configured=provider is not None and bool(selected),
+            reasoning_provider_outputs=tuple(sorted(selected)) if provider is not None else (),
         )
+
+    def reasoning_provider_active_for(self, output: str) -> bool:
+        if not self.reasoning_provider_configured:
+            return False
+        if not self.reasoning_provider_outputs:
+            return True
+        return output in self.reasoning_provider_outputs
 
 
 def _rebind_reasoning(service: Any | None, provider: Any | None) -> Any | None:
@@ -178,7 +205,9 @@ async def execute_content_ops_request(
             service=services.for_output(step.output),
             scope=resolved_scope,
             filters=filters,
-            reasoning_provider_configured=services.reasoning_provider_configured,
+            reasoning_provider_configured=services.reasoning_provider_active_for(
+                step.output
+            ),
         )
         for step in plan.steps
     ))

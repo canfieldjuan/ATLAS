@@ -33,9 +33,12 @@ from ..control_surfaces import (
     OUTPUT_CATALOG,
     PRESETS,
     preview_from_mapping,
+    request_from_mapping,
     retry_adjusted_unit_cost_usd,
+    resolve_outputs,
 )
-from ..generation_plan import build_generation_plan_from_mapping
+from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
+from ..reasoning_policy import ReasoningPreset, resolve_reasoning_policy
 
 ExecutionServicesProvider = Callable[
     [],
@@ -56,6 +59,7 @@ ReasoningStatusProvider = Callable[
     [],
     Mapping[str, Any] | None | Awaitable[Mapping[str, Any] | None],
 ]
+LLMProvider = Callable[[], Any | Awaitable[Any]]
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,7 @@ _MAX_INPUT_DEPTH = 6
 _MAX_INPUT_STRING_CHARS = 10000
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
+_RUNTIME_STRUCTURED_REASONING_OUTPUTS = frozenset({"report", "sales_brief"})
 
 
 def _build_static_catalog_payload() -> Mapping[str, Any]:
@@ -161,10 +166,25 @@ class ContentOpsControlSurfaceApiConfig:
 
     prefix: str = "/content-ops"
     tags: tuple[str, ...] = ("content-ops",)
+    structured_reasoning_default_goal: str = "synthesize content reasoning context"
+    structured_reasoning_depth: str = "L3"
+    structured_reasoning_pack_name: str = "content_ops_structured"
+    structured_reasoning_top_thesis_limit: int = 5
+    structured_reasoning_max_continuations: int = 8
 
     def __post_init__(self) -> None:
         if not str(self.prefix or "").strip().startswith("/"):
             raise ValueError("prefix must start with /")
+        if not str(self.structured_reasoning_default_goal or "").strip():
+            raise ValueError("structured_reasoning_default_goal is required")
+        if not str(self.structured_reasoning_pack_name or "").strip():
+            raise ValueError("structured_reasoning_pack_name is required")
+        if self.structured_reasoning_depth not in {"L1", "L2", "L3", "L4", "L5"}:
+            raise ValueError("structured_reasoning_depth must be L1-L5")
+        if self.structured_reasoning_top_thesis_limit <= 0:
+            raise ValueError("structured_reasoning_top_thesis_limit must be positive")
+        if self.structured_reasoning_max_continuations < 0:
+            raise ValueError("structured_reasoning_max_continuations must be non-negative")
 
 
 if BaseModel is not None:
@@ -176,6 +196,7 @@ if BaseModel is not None:
 
         target_mode: str = Field("vendor_retention", min_length=1, max_length=80)
         preset: str | None = Field(default=None, max_length=80)
+        reasoning_preset: ReasoningPreset | None = Field(default=None)
         outputs: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
         limit: int = Field(1, ge=1, le=1000)
         max_cost_usd: float | None = Field(default=None, gt=0)
@@ -191,6 +212,16 @@ if BaseModel is not None:
                 text = str(item or "").strip()
                 if not text or len(text) > 80:
                     raise ValueError("outputs entries must be 1-80 characters")
+            return value
+
+        @field_validator("reasoning_preset", mode="before")
+        @classmethod
+        def _normalize_reasoning_preset(cls, value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                text = value.strip()
+                return text or None
             return value
 
         @field_validator("inputs")
@@ -210,6 +241,7 @@ def create_content_ops_control_surface_router(
     scope_provider: ScopeProvider | None = None,
     reasoning_context_provider: ReasoningContextProvider | None = None,
     reasoning_status_provider: ReasoningStatusProvider | None = None,
+    llm_provider: LLMProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted AI Content Ops control-surface routes.
@@ -295,15 +327,32 @@ def create_content_ops_control_surface_router(
         # bundle is derived with reasoning rebound to None (predictable,
         # no leak of construction-time reasoning). When the kwarg was
         # never supplied, leave the host-baked reasoning alone.
+        payload_mapping = _payload_to_mapping(payload)
         if reasoning_context_provider is not None:
+            if _clean(payload_mapping.get("reasoning_preset")):
+                logger.info(
+                    "Content Ops reasoning_preset ignored because host provider is configured"
+                )
             reasoning_context = await _resolve_reasoning_context(
                 reasoning_context_provider
             )
             services = services.with_reasoning_context(reasoning_context)
+        else:
+            reasoning_context, reasoning_outputs = await _structured_reasoning_context(
+                payload_mapping,
+                config=resolved_config,
+                services=services,
+                llm_provider=llm_provider,
+            )
+            if reasoning_context is not None:
+                services = services.with_reasoning_context(
+                    reasoning_context,
+                    outputs=reasoning_outputs,
+                )
         scope = await _resolve_scope(scope_provider)
         try:
             result = await execute_content_ops_from_mapping(
-                _payload_to_mapping(payload),
+                payload_mapping,
                 services=services,
                 scope=scope,
             )
@@ -355,6 +404,103 @@ async def _resolve_reasoning_context(
             detail="Content Ops reasoning context provider is unavailable.",
         ) from exc
     return value
+
+
+async def _structured_reasoning_context(
+    payload: Mapping[str, Any],
+    *,
+    config: ContentOpsControlSurfaceApiConfig,
+    services: ContentOpsExecutionServices,
+    llm_provider: LLMProvider | None,
+) -> tuple[Any | None, tuple[str, ...]]:
+    preset = _clean(payload.get("reasoning_preset"))
+    if not preset:
+        return None, ()
+    if preset in {"none", "context_only"}:
+        return None, ()
+    try:
+        request = request_from_mapping(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        plan = build_generation_plan(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not plan.can_execute:
+        return None, ()
+    supported_outputs = [
+        str(output)
+        for output in resolve_outputs(request)
+        if output in _RUNTIME_STRUCTURED_REASONING_OUTPUTS
+    ]
+    if not supported_outputs:
+        raise HTTPException(
+            status_code=400,
+            detail="reasoning_preset currently applies only to report and sales_brief.",
+        )
+    for output in supported_outputs:
+        try:
+            _policy, definition = resolve_reasoning_policy(output, preset)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if definition.id != "multi_pass_structured":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Content Ops packaged reasoning currently supports "
+                    "multi_pass_structured for report and sales_brief."
+                ),
+            )
+    selected_outputs = [
+        output for output in supported_outputs if output in services.configured_outputs()
+    ]
+    if not selected_outputs:
+        return None, ()
+    for output in selected_outputs:
+        service = services.for_output(output)
+        if not callable(getattr(service, "with_reasoning_context", None)):
+            raise HTTPException(
+                status_code=503,
+                detail=f"{output} service does not support structured reasoning.",
+            )
+    if llm_provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops structured reasoning LLM is unavailable.",
+        )
+    try:
+        llm = await _resolve_provider(llm_provider)
+    except Exception as exc:
+        logger.exception("Content Ops structured reasoning LLM provider failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops structured reasoning LLM is unavailable.",
+        ) from exc
+    if llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops structured reasoning LLM is unavailable.",
+        )
+    # Lazy import keeps hosts without structured reasoning free of these deps.
+    from extracted_reasoning_core.types import ReasoningPack, ReasoningPorts
+
+    from ..services.multi_pass_reasoning_provider import (
+        MultiPassCampaignReasoningProvider,
+        MultiPassReasoningProviderConfig,
+    )
+
+    return MultiPassCampaignReasoningProvider(
+        ports=ReasoningPorts(llm=llm),
+        config=MultiPassReasoningProviderConfig(
+            default_goal=config.structured_reasoning_default_goal,
+            default_depth=config.structured_reasoning_depth,
+            top_thesis_limit=config.structured_reasoning_top_thesis_limit,
+            max_continuations=config.structured_reasoning_max_continuations,
+            narrative_plan_pack=ReasoningPack(
+                name=config.structured_reasoning_pack_name,
+            ),
+        ),
+    ), tuple(selected_outputs)
 
 
 async def _resolve_reasoning_status(
