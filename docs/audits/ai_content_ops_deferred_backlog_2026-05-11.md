@@ -1,7 +1,7 @@
 # AI Content Ops Deferred Backlog
 
 Created: 2026-05-11
-Last updated: 2026-05-15
+Last updated: 2026-05-16
 
 ## Purpose
 
@@ -46,40 +46,57 @@ The following items appear in older plan docs but are no longer active backlog:
 - DB reasoning context scoped delete/retire API.
 - DB reasoning context admin visibility events.
 - Campaign operations status reasoning-provider capability check.
+- Source-adapter field alias support for common provider-style exports.
+- Source-adapter cumulative audit and decision rules.
+- Source-type precedence consolidation.
+- Source-row field lookup cache for provider-style aliases.
 
 ## Active Backlog
 
-### 1. Reasoning product depth and source breadth
+### 1. Reasoning product depth
 
 **Priority:** P2
 
 **Why:** AI Content Ops can consume file-backed, DB-backed, single-pass, and
-multi-pass reasoning context. The next value step is deciding how much of the
-standalone reasoning layer each content type should expose and how hosts should
-feed richer customer-specific source bundles into it.
+multi-pass reasoning context. Source ingestion is now broad enough for current
+standalone use. The next value step is deciding how much of the standalone
+reasoning layer each content type should expose.
 
 Remaining work:
 
-- More source adapters for customer-specific data bundles, only when backed by
-  a real host export or evidence that cannot be represented by existing
-  generic fields without losing important context.
-- Source-adapter consolidation when the next source family would extend the
-  existing key-list / inference-chain pattern without a concrete export.
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
 - Host policy for richer falsification/cache/narrative-planning knobs.
 - Per-content-type opt-in rules so simple assets avoid heavy reasoning paths
   while long-form assets can use stateful reasoning.
 
-**Likely slice:** if a real customer/source export is available, add the
-minimum adapter support for that file. If not, prefer a small source-adapter
-consolidation or a focused reasoning-provider setup improvement over another
-speculative source-shape PR.
+**Likely slice:** audit and document host-facing reasoning policy choices for
+falsification, narrative planning, output validation, and per-content-type
+opt-in depth. Use that audit to pick the first small wiring slice. Do not add
+more source-adapter breadth unless a real customer/source export requires it.
+
+### 2. Source breadth from real host exports
+
+**Priority:** P3
+
+**Why:** The source adapter now supports the current generic families, explicit
+source-type precedence, tolerant field aliases, nested bundles, and cached
+field lookup. More breadth should be driven by an actual customer export, not
+by plausible platform shapes.
+
+Remaining work:
+
+- Add the minimum aliases/source keys required by a real host export fixture.
+- Add end-to-end generated-asset quality tests by source type when that fixture
+  exists.
+
+**Likely slice:** wait for a real export. If none exists, skip this item.
+If no export appears after the next reasoning-policy pass, decide whether this
+remains roadmap work or should be removed from active backlog.
 
 ## Current Pick Recommendation
 
-Take item 1 next, but do not add more source breadth speculatively. The
-generated asset operator workflow is now usable; the remaining leverage is
-increasing the quality and breadth of reasoning/source inputs that feed AI
-Content Ops, anchored to real host data, documented field-loss risk, or a clear
-adapter-maintenance win.
+Take item 1 next. Source-adapter consolidation is complete for now; the
+remaining leverage is reasoning-policy depth for long-form and multi-asset
+outputs. Source breadth should pause until a real host export or field-loss
+risk appears.

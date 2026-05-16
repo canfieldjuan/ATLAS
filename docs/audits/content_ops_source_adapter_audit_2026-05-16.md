@@ -9,6 +9,11 @@ working, but the cumulative shape is now large enough that the next source
 slice should be chosen by customer/export demand or by a small consolidation
 step, not by adding another possible row family.
 
+Update: the immediate consolidation follow-ups from this audit are complete.
+PR #550 made source-type precedence explicit in code/tests, and PR #551 added
+the per-row field lookup cache for provider-style aliases. Further source work
+should now require a real host export or field-loss risk.
+
 ## Current Surface
 
 The source adapter converts host source rows into the existing campaign
@@ -48,16 +53,15 @@ Current size markers:
 
 ## Accumulated Risks
 
-### Source-Type Precedence Is Implicit
+### Source-Type Precedence Is Explicit
 
-The inference chain is ordered, and that order is now part of the product
-contract. For example, review text wins over CRM ids, transcript text wins over
-call ids, and renewal ids win over contract/subscription context in specific
-tests. The order is tested in fragments, but not documented as a table in the
-code.
+The inference chain is ordered, and that order is part of the product contract.
+PR #550 records that order as `_SOURCE_TYPE_PRECEDENCE` and locks the table in
+tests. For example, review text wins over CRM ids, transcript text wins over
+call ids, and renewal ids win over contract/subscription context.
 
-Risk: a future source family can accidentally shift precedence for ambiguous
-rows.
+Remaining risk: a future source family can still shift precedence, but that
+now requires an explicit table/test update.
 
 ### Key Lists Are Becoming The Configuration Surface
 
@@ -88,6 +92,9 @@ also accept typo-like labels.
 Risk: unexpected host fields can silently map when a warning would be more
 helpful.
 
+Mitigation: PR #551 added a per-row lookup cache so broad matching does not
+repeat normalized/compact scans for every helper call.
+
 ## Decision Rules
 
 Add a new source family only when at least one condition is true:
@@ -114,23 +121,24 @@ Do not add a new source family when:
 
 1. If a real host export is available, add only the minimal alias/source keys
    needed to load that file and include a fixture shaped like the export.
-2. If no export is available, do a consolidation slice before more breadth:
-   document the source-type precedence table in code and tests.
+2. If no export is available, do not add more source breadth. The current
+   consolidation items are complete; move to reasoning-policy depth instead.
 
 ## Performance Improvements
 
-If ingestion performance becomes visible, add a per-row normalized key index so
-provider-style rows do not scan keys repeatedly. This is a performance fix, not
-a reason to add more source families.
+Provider-style field lookup now uses a per-row normalized/compact key cache.
+Future performance work should be driven by measured ingestion bottlenecks, not
+by source-shape breadth.
 
 ## Refactor Triggers
 
-Move from static tuples and an if-chain to a data-driven registry when one of
-these happens:
+Move from the static precedence table and helper constants to a data-driven
+registry when one of these happens:
 
-- Source-type inference grows beyond 20 branches.
+- Source-type precedence grows beyond 20 table entries.
 - A new source family requires edits to more than five independent constants.
-- Two source families need custom precedence beyond simple ordered checks.
+- Two source families need custom precedence beyond a simple ordered table.
+- Hosts need runtime extension of source families without product code changes.
 - Downstream generation starts selecting prompts or quality policy by
   `source_type`.
 
@@ -143,4 +151,6 @@ distinction.
 
 This should be added when a real export fixture is available. Without that
 fixture, broad end-to-end tests risk checking plumbing rather than product
-quality.
+quality. This is still a real coverage gap: until a fixture exists, source-type
+distinctions could remain label-only without an output-quality regression test
+catching it.
