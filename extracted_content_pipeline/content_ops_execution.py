@@ -11,6 +11,7 @@ from .campaign_ports import TenantScope
 from .control_surfaces import OUTPUT_CATALOG, ContentOpsRequest, request_from_mapping
 from .generation_plan import GenerationPlan, GenerationPlanStep, build_generation_plan
 from .landing_page_ports import MarketingCampaign
+from .reasoning_signals import REASONING_VALIDATION_BLOCKED
 
 
 @dataclass(frozen=True)
@@ -509,6 +510,8 @@ _DISPATCH: Mapping[str, Any] = {
     "signal_extraction": _dispatch_signal_extraction,
 }
 
+_MAX_REASONING_VALIDATION_FAILURES = 50
+
 
 def _step_config_text(config: Mapping[str, Any], key: str) -> str | None:
     """Pull a non-empty string from step.config or return None."""
@@ -737,6 +740,14 @@ def _step_reasoning_audit(
     consumed_contexts = _consumed_reasoning_contexts(result)
     if consumed_contexts:
         audit["consumed_contexts"] = consumed_contexts
+    validation_failures, validation_failures_truncated = (
+        _reasoning_validation_failures(result)
+    )
+    if validation_failures:
+        audit["validation_blocked"] = True
+        audit["validation_failures"] = validation_failures
+        if validation_failures_truncated:
+            audit["validation_failures_truncated"] = True
     return audit
 
 
@@ -766,6 +777,49 @@ def _consumed_reasoning_contexts(
         if isinstance(item, Mapping) and item:
             contexts.append(dict(item))
     return contexts
+
+
+def _reasoning_validation_failures(
+    result: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    if result is None:
+        return [], False
+    raw_errors = result.get("errors")
+    if isinstance(raw_errors, Mapping):
+        candidates = (raw_errors,)
+    elif isinstance(raw_errors, Sequence) and not isinstance(
+        raw_errors, (str, bytes, bytearray)
+    ):
+        candidates = tuple(item for item in raw_errors if isinstance(item, Mapping))
+    else:
+        return [], False
+    failures: list[dict[str, Any]] = []
+    truncated = False
+    for item in candidates:
+        reason = _clean(item.get("reason") or item.get("error"))
+        if reason != REASONING_VALIDATION_BLOCKED and not reason.startswith(
+            f"{REASONING_VALIDATION_BLOCKED}:"
+        ):
+            continue
+        if len(failures) >= _MAX_REASONING_VALIDATION_FAILURES:
+            truncated = True
+            break
+        failure: dict[str, Any] = {"reason": REASONING_VALIDATION_BLOCKED}
+        target_id = _clean(item.get("target_id"))
+        if target_id:
+            failure["target_id"] = target_id
+        blockers = _reasoning_validation_blockers(reason)
+        if blockers:
+            failure["blockers"] = blockers
+        failures.append(failure)
+    return failures, truncated
+
+
+def _reasoning_validation_blockers(reason: str) -> list[str]:
+    suffix = reason.removeprefix(REASONING_VALIDATION_BLOCKED)
+    if not suffix.startswith(":"):
+        return []
+    return [item.strip() for item in suffix[1:].split(",") if item.strip()]
 
 
 def _clean(value: Any) -> str:

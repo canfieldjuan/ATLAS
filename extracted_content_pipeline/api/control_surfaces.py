@@ -39,6 +39,7 @@ from ..control_surfaces import (
 )
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
 from ..reasoning_policy import ReasoningPreset, resolve_reasoning_policy
+from ..reasoning_signals import reasoning_validation_blocked_reason
 
 ExecutionServicesProvider = Callable[
     [],
@@ -207,7 +208,7 @@ class _BlockingReasoningContextProvider:
             opportunity=opportunity,
         )
         if context is None:
-            raise RuntimeError("reasoning_validation_blocked")
+            raise RuntimeError(reasoning_validation_blocked_reason(()))
         validation = _reasoning_validation_from_context(context)
         if validation is not None and validation.get("passed") is False:
             blockers = [
@@ -215,8 +216,7 @@ class _BlockingReasoningContextProvider:
                 for item in _clean_status_scalar_sequence(validation.get("blockers"))
                 if str(item).strip()
             ]
-            suffix = f":{','.join(blockers)}" if blockers else ""
-            raise RuntimeError(f"reasoning_validation_blocked{suffix}")
+            raise RuntimeError(reasoning_validation_blocked_reason(tuple(blockers)))
         return context
 
 
