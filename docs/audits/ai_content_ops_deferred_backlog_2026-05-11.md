@@ -60,19 +60,26 @@ feed richer customer-specific source bundles into it.
 
 Remaining work:
 
-- More source adapters for customer-specific data bundles.
+- More source adapters for customer-specific data bundles, only when backed by
+  a real host export or evidence that cannot be represented by existing
+  generic fields without losing important context.
+- Source-adapter consolidation when the next source family would extend the
+  existing key-list / inference-chain pattern without a concrete export.
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
 - Host policy for richer falsification/cache/narrative-planning knobs.
 - Per-content-type opt-in rules so simple assets avoid heavy reasoning paths
   while long-form assets can use stateful reasoning.
 
-**Likely slice:** continue with narrow source-bundle adapters or a focused
-reasoning-provider setup improvement, rather than a broad architecture
-refactor.
+**Likely slice:** if a real customer/source export is available, add the
+minimum adapter support for that file. If not, prefer a small source-adapter
+consolidation or a focused reasoning-provider setup improvement over another
+speculative source-shape PR.
 
 ## Current Pick Recommendation
 
-Take item 1 next. The generated asset operator workflow is now usable; the
-remaining leverage is increasing the quality and breadth of reasoning/source
-inputs that feed AI Content Ops.
+Take item 1 next, but do not add more source breadth speculatively. The
+generated asset operator workflow is now usable; the remaining leverage is
+increasing the quality and breadth of reasoning/source inputs that feed AI
+Content Ops, anchored to real host data, documented field-loss risk, or a clear
+adapter-maintenance win.
