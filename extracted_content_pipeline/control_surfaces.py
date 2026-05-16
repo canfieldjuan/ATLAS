@@ -46,6 +46,7 @@ class ContentOpsRequest:
 
     target_mode: str = "vendor_retention"
     preset: str | None = None
+    reasoning_preset: str | None = None
     outputs: tuple[str, ...] = ()
     limit: int = 1
     max_cost_usd: float | None = None
@@ -80,6 +81,7 @@ class ControlSurfacePreview:
             else {
                 "target_mode": self.normalized_request.target_mode,
                 "preset": self.normalized_request.preset,
+                "reasoning_preset": self.normalized_request.reasoning_preset,
                 "outputs": list(self.normalized_request.outputs),
                 "limit": self.normalized_request.limit,
                 "max_cost_usd": self.normalized_request.max_cost_usd,
@@ -237,6 +239,9 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
         preset=(str(payload.get("preset")).strip() or None)
         if payload.get("preset") is not None
         else None,
+        reasoning_preset=(str(payload.get("reasoning_preset")).strip() or None)
+        if payload.get("reasoning_preset") is not None
+        else None,
         outputs=normalize_outputs(payload.get("outputs")),
         limit=limit,
         max_cost_usd=max_cost_usd,
@@ -362,6 +367,7 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
     normalized_request = ContentOpsRequest(
         target_mode=request.target_mode,
         preset=request.preset,
+        reasoning_preset=request.reasoning_preset,
         outputs=selected_outputs,
         limit=request.limit,
         max_cost_usd=request.max_cost_usd,

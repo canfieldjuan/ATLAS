@@ -716,6 +716,19 @@ class _ReasoningPayloadService(_ReasoningCapturingService):
         return payload
 
 
+class _ProviderRecordingService:
+    def __init__(self, providers=None):
+        self.providers = providers if providers is not None else []
+
+    def with_reasoning_context(self, provider):
+        self.providers.append(provider)
+        return _ProviderRecordingService(self.providers)
+
+    async def generate(self, *, scope, target_mode, limit=None, filters=None, **kwargs):
+        del scope, target_mode, limit, filters, kwargs
+        return {"generated": 1, "saved_ids": ["draft-1"]}
+
+
 @pytest.mark.asyncio
 async def test_execute_route_threads_reasoning_provider_into_services():
     """A configured ``reasoning_context_provider`` reaches the service
@@ -851,3 +864,224 @@ async def test_execute_route_reasoning_provider_returning_none_rebinds_to_none()
     # itself is unchanged (cached service stays intact).
     assert base.calls == []  # original untouched, kept its construction-time reasoning
     assert base._reasoning_context is sentinel_construction_time  # preserved
+
+
+@pytest.mark.asyncio
+async def test_execute_route_builds_structured_reasoning_for_report_only():
+    campaign = _ReasoningCapturingService()
+    recorded_providers = []
+    report = _ProviderRecordingService(recorded_providers)
+
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            campaign=campaign,
+            report=report,
+        ),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["email_campaign", "report"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Audit",
+                "opportunity_id": "opp-1",
+            },
+        }
+    )
+
+    assert len(recorded_providers) == 1
+    provider = recorded_providers[0]
+    assert provider._config.default_goal == "synthesize content reasoning context"
+    assert provider._config.narrative_plan_pack.name == "content_ops_structured"
+    assert provider._config.output_policy is None
+    assert campaign.calls[0]["reasoning_context"] is None
+    email_step = next(step for step in payload["steps"] if step["output"] == "email_campaign")
+    assert email_step["reasoning"]["provider_configured"] is False
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_status", "expected_detail"),
+    (
+        (
+            {
+                "outputs": ["report"],
+                "reasoning_preset": "garbage",
+                "inputs": {"opportunity_id": "opp-1"},
+            },
+            422,
+            "multi_pass_strict",
+        ),
+        (
+            {
+                "outputs": ["report"],
+                "reasoning_preset": "multi_pass_strict",
+                "inputs": {"opportunity_id": "opp-1"},
+            },
+            400,
+            "multi_pass_structured",
+        ),
+        (
+            {
+                "outputs": ["blog_post"],
+                "reasoning_preset": "multi_pass_structured",
+                "inputs": {"topic": "Churn pressure"},
+            },
+            400,
+            "report and sales_brief",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_execute_route_rejects_invalid_reasoning_preset_requests(
+    payload,
+    expected_status,
+    expected_detail,
+):
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            blog_post=_ProviderRecordingService(),
+            report=_ProviderRecordingService(),
+        ),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(payload)
+
+    assert exc.value.status_code == expected_status
+    assert expected_detail in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_execute_route_host_reasoning_provider_beats_reasoning_preset():
+    base = _ReasoningCapturingService()
+    sentinel = object()
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(report=base),
+        reasoning_context_provider=lambda: sentinel,
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["report"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {"opportunity_id": "opp-1"},
+        }
+    )
+
+    assert base.calls == []
+
+
+@pytest.mark.parametrize("preset", ("none", "context_only", " "))
+@pytest.mark.asyncio
+async def test_execute_route_noop_reasoning_presets_skip_packaged_provider(preset):
+    base = _ReasoningCapturingService()
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(report=base),
+        llm_provider=lambda: pytest.fail("packaged reasoning should be skipped"),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint({
+        "outputs": ["report"],
+        "reasoning_preset": preset,
+        "inputs": {"opportunity_id": "opp-1"},
+    })
+
+    assert len(base.calls) == 1
+    assert base.calls[0]["reasoning_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_execute_route_validates_plan_before_structured_reasoning_provider():
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            report=_ProviderRecordingService()
+        ),
+        llm_provider=lambda: pytest.fail("llm provider should not be resolved"),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "outputs": ["report"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {},
+        })
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["errors"] == [{"reason": "plan_not_executable"}]
+
+
+@pytest.mark.asyncio
+async def test_execute_route_validates_packaged_preset_before_service_capability():
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            report=_CampaignService()
+        ),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "outputs": ["report"],
+            "reasoning_preset": "multi_pass_strict",
+            "inputs": {"opportunity_id": "opp-1"},
+        })
+
+    assert exc.value.status_code == 400
+    assert "multi_pass_structured" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_execute_route_structured_reasoning_requires_reasoning_aware_service():
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            report=_CampaignService()
+        ),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "outputs": ["report"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {"opportunity_id": "opp-1"},
+        })
+
+    assert exc.value.status_code == 503
+    assert "does not support structured reasoning" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_execute_route_structured_reasoning_requires_llm_provider():
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            report=_ProviderRecordingService()
+        )
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["report"],
+                "reasoning_preset": "multi_pass_structured",
+                "inputs": {"opportunity_id": "opp-1"},
+            }
+        )
+
+    assert exc.value.status_code == 503
+
+
+def test_content_ops_config_rejects_blank_structured_reasoning_pack_name():
+    with pytest.raises(ValueError, match="structured_reasoning_pack_name"):
+        ContentOpsControlSurfaceApiConfig(structured_reasoning_pack_name=" ")

@@ -67,6 +67,49 @@ def test_plan_maps_report_to_report_generation_service():
     }
 
 
+def test_plan_threads_structured_reasoning_preset_to_report_and_sales_brief():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["report", "sales_brief"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {
+                "opportunity_id": "opp_123",
+                "target_account": "Acme",
+            },
+        }
+    )
+
+    for step in plan["steps"]:
+        assert step["config"]["reasoning_preset"] == "multi_pass_structured"
+        assert step["config"]["reasoning_multi_pass"] is True
+        assert step["config"]["reasoning_narrative_planning"] is True
+        assert step["config"]["reasoning_output_validation"] is True
+        assert step["config"]["reasoning_blocking_validation"] is False
+
+
+def test_plan_rejects_unknown_reasoning_preset_for_report():
+    with pytest.raises(ValueError, match="unknown reasoning preset"):
+        build_generation_plan_from_mapping(
+            {
+                "outputs": ["report"],
+                "reasoning_preset": "unsupported",
+                "inputs": {"opportunity_id": "opp_123"},
+            }
+        )
+
+
+@pytest.mark.parametrize("preset", ("single_pass", "multi_pass_light", "multi_pass_strict"))
+def test_plan_rejects_runtime_unsupported_reasoning_preset_for_report(preset):
+    with pytest.raises(ValueError, match="multi_pass_structured"):
+        build_generation_plan_from_mapping(
+            {
+                "outputs": ["report"],
+                "reasoning_preset": preset,
+                "inputs": {"opportunity_id": "opp_123"},
+            }
+        )
+
+
 def test_plan_maps_blog_to_blog_generation_service():
     plan = build_generation_plan_from_mapping(
         {

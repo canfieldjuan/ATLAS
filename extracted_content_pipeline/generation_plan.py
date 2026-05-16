@@ -20,9 +20,16 @@ from .control_surfaces import (
     request_from_mapping,
 )
 from .landing_page_generation import LandingPageGenerationConfig
+from .reasoning_policy import resolve_reasoning_policy
 from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
+
+_RUNTIME_PACKAGED_REASONING_PRESETS = frozenset({
+    "none",
+    "context_only",
+    "multi_pass_structured",
+})
 
 
 @dataclass(frozen=True)
@@ -100,6 +107,26 @@ def _report_config_for_request(request: ContentOpsRequest) -> ReportGenerationCo
         default_report_type=report_type,
         limit=request.limit,
     )
+
+
+def _reasoning_config_for_output(output: str, request: ContentOpsRequest) -> dict[str, Any]:
+    # Informational plan metadata only. Runtime behavior is applied by
+    # ContentOpsExecutionServices.with_reasoning_context at execute time.
+    if request.reasoning_preset is None:
+        return {}
+    _policy, definition = resolve_reasoning_policy(output, request.reasoning_preset)
+    if definition.id not in _RUNTIME_PACKAGED_REASONING_PRESETS:
+        raise ValueError(
+            "Content Ops packaged reasoning currently supports "
+            "multi_pass_structured for report and sales_brief."
+        )
+    return {
+        "reasoning_preset": definition.id,
+        "reasoning_multi_pass": definition.multi_pass,
+        "reasoning_narrative_planning": definition.narrative_planning,
+        "reasoning_output_validation": definition.output_validation,
+        "reasoning_blocking_validation": definition.blocking_validation,
+    }
 
 
 def _landing_page_config_for_request(request: ContentOpsRequest) -> LandingPageGenerationConfig:
@@ -196,6 +223,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "quality_gates_enabled": request.require_quality_gates,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_reasoning_config_for_output(output, request),
             },
         )
     if output == "landing_page":
@@ -228,6 +256,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "quality_gates_enabled": request.require_quality_gates,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_reasoning_config_for_output(output, request),
             },
         )
     if output == "blog_post":

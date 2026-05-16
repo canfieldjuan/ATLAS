@@ -97,6 +97,41 @@ class _ReasoningAwareOpportunityService(_OpportunityService):
         return _ReasoningAwareOpportunityService(reasoning_context=provider)
 
 
+def test_services_with_reasoning_context_can_target_specific_outputs() -> None:
+    provider = object()
+    campaign = _ReasoningAwareOpportunityService()
+    report = _ReasoningAwareOpportunityService()
+    bundle = ContentOpsExecutionServices(campaign=campaign, report=report)
+
+    derived = bundle.with_reasoning_context(provider, outputs=("report",))
+
+    assert derived.campaign is campaign
+    assert derived.report is not report
+    assert derived.report._reasoning_context is provider
+    assert derived.reasoning_provider_active_for("report") is True
+    assert derived.reasoning_provider_active_for("email_campaign") is False
+
+
+def test_services_with_reasoning_context_honors_empty_output_selection() -> None:
+    campaign = _ReasoningAwareOpportunityService()
+    derived = ContentOpsExecutionServices(campaign=campaign).with_reasoning_context(
+        object(),
+        outputs=(),
+    )
+
+    assert derived.campaign is campaign
+    assert derived.reasoning_provider_configured is False
+
+
+def test_services_with_reasoning_context_rejects_string_outputs() -> None:
+    campaign = _ReasoningAwareOpportunityService()
+    with pytest.raises(TypeError, match="outputs must be a sequence"):
+        ContentOpsExecutionServices(campaign=campaign).with_reasoning_context(
+            object(),
+            outputs="report",
+        )
+
+
 class _LandingPageService:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
