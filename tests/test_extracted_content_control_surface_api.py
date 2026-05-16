@@ -936,7 +936,79 @@ async def test_execute_route_wraps_strict_reasoning_with_blocking_provider():
 
     provider = recorded_providers[0]
     assert provider.provider._config.output_policy is not None
+    assert provider.provider._config.falsification_policy is None
     assert provider.provider._config.block_on_validation_failure is False
+
+
+@pytest.mark.asyncio
+async def test_execute_route_wires_strict_reasoning_falsification_policy():
+    recorded_providers = []
+    report = _ProviderRecordingService(recorded_providers)
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_falsification_rules=(
+                {
+                    "id": "renewal_signal_lost",
+                    "predicate": "fresh evidence shows renewal completed",
+                },
+            ),
+            structured_reasoning_falsification_conservative=False,
+            structured_reasoning_drop_falsified=True,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(report=report),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["report"],
+            "reasoning_preset": "multi_pass_strict",
+            "inputs": {"opportunity_id": "opp-1"},
+        }
+    )
+
+    provider = recorded_providers[0].provider
+    assert provider._config.falsification_policy is not None
+    assert provider._config.falsification_policy.rules == (
+        {
+            "id": "renewal_signal_lost",
+            "predicate": "fresh evidence shows renewal completed",
+        },
+    )
+    assert provider._config.falsification_policy.conservative is False
+    assert provider._config.drop_falsified is True
+
+
+@pytest.mark.asyncio
+async def test_execute_route_does_not_wire_falsification_for_structured_preset():
+    recorded_providers = []
+    report = _ProviderRecordingService(recorded_providers)
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_falsification_rules=(
+                {"id": "renewal_signal_lost"},
+            ),
+            structured_reasoning_drop_falsified=True,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(report=report),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["report"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {"opportunity_id": "opp-1"},
+        }
+    )
+
+    provider = recorded_providers[0]
+    assert provider._config.falsification_policy is None
+    assert provider._config.drop_falsified is False
 
 
 @pytest.mark.asyncio
@@ -1181,3 +1253,34 @@ async def test_execute_route_structured_reasoning_requires_llm_provider():
 def test_content_ops_config_rejects_blank_structured_reasoning_pack_name():
     with pytest.raises(ValueError, match="structured_reasoning_pack_name"):
         ContentOpsControlSurfaceApiConfig(structured_reasoning_pack_name=" ")
+
+
+def test_content_ops_config_rejects_invalid_falsification_rules_shape():
+    with pytest.raises(ValueError, match="must be a sequence"):
+        ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_falsification_rules={"id": "rule-1"}
+        )
+    with pytest.raises(ValueError, match="must be a sequence"):
+        ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_falsification_rules=5
+        )
+    with pytest.raises(ValueError, match="entries must be mappings"):
+        ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_falsification_rules=("rule-1",)
+        )
+
+
+def test_content_ops_config_rejects_drop_falsified_without_rules():
+    with pytest.raises(ValueError, match="requires non-empty"):
+        ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_drop_falsified=True,
+        )
+
+
+def test_content_ops_config_rejects_too_many_falsification_rules():
+    rules = tuple({"id": f"rule-{index}"} for index in range(21))
+
+    with pytest.raises(ValueError, match="cannot exceed 20"):
+        ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_falsification_rules=rules,
+        )

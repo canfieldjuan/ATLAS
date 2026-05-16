@@ -79,7 +79,6 @@ Remaining work:
 
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
-- Host-owned falsification policy wiring for strict presets.
 
 **Shipped slice:** structured and strict multi-pass reasoning are wired for
 `report` and `sales_brief`. Strict mode now fails closed before those assets are
@@ -88,7 +87,9 @@ reason includes the validation blocker identifiers. Content Ops execution also
 mirrors those strict validation failures into per-step reasoning telemetry for
 operator inspection and logs a structured warning when strict validation
 blocks a step. Plan and execute paths also share packaged reasoning runtime
-constants so unsupported reasoning requests fail consistently.
+constants so unsupported reasoning requests fail consistently. Hosts can now
+attach explicit falsification rules to the strict preset; no falsification LLM
+calls are made unless the host supplies those rules.
 
 ### 2. Source breadth from real host exports
 
