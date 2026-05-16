@@ -1,6 +1,10 @@
 import pytest
 
 from extracted_content_pipeline.generation_plan import build_generation_plan_from_mapping
+from extracted_content_pipeline.reasoning_policy import (
+    PACKAGED_REASONING_RUNTIME_OUTPUTS,
+    PACKAGED_REASONING_RUNTIME_PRESETS,
+)
 
 
 def test_plan_maps_email_campaign_to_campaign_generation_service():
@@ -107,6 +111,27 @@ def test_plan_threads_strict_reasoning_preset_to_report_and_sales_brief():
         assert step["config"]["reasoning_blocking_validation"] is True
 
 
+@pytest.mark.parametrize("output", PACKAGED_REASONING_RUNTIME_OUTPUTS)
+@pytest.mark.parametrize("preset", PACKAGED_REASONING_RUNTIME_PRESETS)
+def test_plan_threads_all_packaged_runtime_reasoning_presets(output, preset):
+    inputs = {
+        "report": {"opportunity_id": "opp_123"},
+        "sales_brief": {"target_account": "Acme"},
+    }[output]
+
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": [output],
+            "reasoning_preset": preset,
+            "inputs": inputs,
+        }
+    )
+
+    step = plan["steps"][0]
+    assert step["config"]["reasoning_preset"] == preset
+    assert step["config"]["reasoning_multi_pass"] is True
+
+
 def test_plan_rejects_unknown_reasoning_preset_for_report():
     with pytest.raises(ValueError, match="unknown reasoning preset"):
         build_generation_plan_from_mapping(
@@ -128,6 +153,55 @@ def test_plan_rejects_runtime_unsupported_reasoning_preset_for_report(preset):
                 "inputs": {"opportunity_id": "opp_123"},
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("output", "inputs", "preset"),
+    (
+        ("blog_post", {"topic": "Churn pressure"}, "multi_pass_structured"),
+        (
+            "landing_page",
+            {"offer": "Audit", "audience": "RevOps"},
+            "multi_pass_structured",
+        ),
+        (
+            "email_campaign",
+            {"target_account": "Acme", "offer": "Audit"},
+            "single_pass",
+        ),
+    ),
+)
+def test_plan_rejects_runtime_reasoning_when_no_packaged_output_selected(
+    output,
+    inputs,
+    preset,
+):
+    with pytest.raises(ValueError, match="only to report and sales_brief"):
+        build_generation_plan_from_mapping(
+            {
+                "outputs": [output],
+                "reasoning_preset": preset,
+                "inputs": inputs,
+            }
+        )
+
+
+def test_plan_ignores_non_runtime_outputs_when_packaged_output_selected():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["email_campaign", "report"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Audit",
+                "opportunity_id": "opp_123",
+            },
+        }
+    )
+
+    configs = {step["output"]: step["config"] for step in plan["steps"]}
+    assert "reasoning_preset" not in configs["email_campaign"]
+    assert configs["report"]["reasoning_preset"] == "multi_pass_structured"
 
 
 def test_plan_maps_blog_to_blog_generation_service():

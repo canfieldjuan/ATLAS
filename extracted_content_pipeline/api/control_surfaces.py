@@ -38,7 +38,12 @@ from ..control_surfaces import (
     resolve_outputs,
 )
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
-from ..reasoning_policy import ReasoningPreset, resolve_reasoning_policy
+from ..reasoning_policy import (
+    PACKAGED_REASONING_RUNTIME_OUTPUTS,
+    PACKAGED_REASONING_RUNTIME_PRESETS,
+    ReasoningPreset,
+    resolve_reasoning_policy,
+)
 from ..reasoning_signals import reasoning_validation_blocked_reason
 
 ExecutionServicesProvider = Callable[
@@ -69,7 +74,6 @@ _MAX_INPUT_DEPTH = 6
 _MAX_INPUT_STRING_CHARS = 10000
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
-_RUNTIME_STRUCTURED_REASONING_OUTPUTS = frozenset({"report", "sales_brief"})
 
 
 def _build_static_catalog_payload() -> Mapping[str, Any]:
@@ -482,7 +486,7 @@ async def _structured_reasoning_context(
     supported_outputs = [
         str(output)
         for output in resolve_outputs(request)
-        if output in _RUNTIME_STRUCTURED_REASONING_OUTPUTS
+        if output in PACKAGED_REASONING_RUNTIME_OUTPUTS
     ]
     if not supported_outputs:
         raise HTTPException(
@@ -496,7 +500,7 @@ async def _structured_reasoning_context(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         reasoning_definition = definition
-        if definition.id not in {"multi_pass_structured", "multi_pass_strict"}:
+        if definition.id not in PACKAGED_REASONING_RUNTIME_PRESETS:
             raise HTTPException(
                 status_code=400,
                 detail=(

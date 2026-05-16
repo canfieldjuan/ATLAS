@@ -87,7 +87,8 @@ generated when validation blockers are present, and the generated-asset error
 reason includes the validation blocker identifiers. Content Ops execution also
 mirrors those strict validation failures into per-step reasoning telemetry for
 operator inspection and logs a structured warning when strict validation
-blocks a step.
+blocks a step. Plan and execute paths also share packaged reasoning runtime
+constants so unsupported reasoning requests fail consistently.
 
 ### 2. Source breadth from real host exports
 
