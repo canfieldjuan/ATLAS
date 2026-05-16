@@ -144,6 +144,27 @@ _CONTACT_EMAIL_KEYS = ("contact_email", "recipient_email", "email")
 _CONTACT_TITLE_KEYS = ("contact_title", "recipient_title", "job_title")
 _NPS_SCORE_KEYS = ("nps_score", "nps")
 _CSAT_SCORE_KEYS = ("csat_score", "csat")
+# Ordered source-type contract for ambiguous rows. Text-bearing source fields
+# win over ids, and note ids win over lifecycle ids because lifecycle ids can
+# travel as context on notes without changing the evidence row type.
+_SOURCE_TYPE_PRECEDENCE = (
+    (("review_text",), "review"),
+    (("transcript",), "transcript"),
+    (("call_id", "recording_id"), "sales_call"),
+    (("meeting_id",), "meeting"),
+    (("deal_id", "opportunity_id"), "crm_deal"),
+    (("note_id", "activity_id"), "crm_note"),
+    (("renewal_id",), "renewal"),
+    (("contract_id",), "contract"),
+    (("subscription_id",), "subscription"),
+    (("complaint",), "complaint"),
+    (("ticket_id",), "support_ticket"),
+    (("case_id",), "case"),
+    (("conversation_id",), "conversation"),
+    (("nps_score", "nps"), "nps_response"),
+    (("csat_score", "csat"), "csat_response"),
+    (("survey_id", "response_id"), "survey_response"),
+)
 _FIELD_SEPARATOR_RE = re.compile(r"[^a-z0-9]+")
 _MAX_BUNDLE_DEPTH = 8
 
@@ -482,40 +503,9 @@ def _text_list(value: Any) -> list[str]:
 
 
 def _infer_source_type(row: Mapping[str, Any]) -> str:
-    if _has_field_value(row, ("review_text",)):
-        return "review"
-    if _has_field_value(row, ("transcript",)):
-        return "transcript"
-    if _has_field_value(row, ("call_id", "recording_id")):
-        return "sales_call"
-    if _has_field_value(row, ("meeting_id",)):
-        return "meeting"
-    if _has_field_value(row, ("deal_id", "opportunity_id")):
-        return "crm_deal"
-    if _has_field_value(row, ("note_id", "activity_id")):
-        return "crm_note"
-    # Notes stay typed as notes even when attached to a contract, renewal, or
-    # subscription export; the lifecycle id is context, not the evidence row.
-    if _has_field_value(row, ("renewal_id",)):
-        return "renewal"
-    if _has_field_value(row, ("contract_id",)):
-        return "contract"
-    if _has_field_value(row, ("subscription_id",)):
-        return "subscription"
-    if _has_field_value(row, ("complaint",)):
-        return "complaint"
-    if _has_field_value(row, ("ticket_id",)):
-        return "support_ticket"
-    if _has_field_value(row, ("case_id",)):
-        return "case"
-    if _has_field_value(row, ("conversation_id",)):
-        return "conversation"
-    if _has_field_value(row, ("nps_score", "nps")):
-        return "nps_response"
-    if _has_field_value(row, ("csat_score", "csat")):
-        return "csat_response"
-    if _has_field_value(row, ("survey_id", "response_id")):
-        return "survey_response"
+    for keys, source_type in _SOURCE_TYPE_PRECEDENCE:
+        if _has_field_value(row, keys):
+            return source_type
     return "document"
 
 

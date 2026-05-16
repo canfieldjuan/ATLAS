@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from extracted_content_pipeline import campaign_source_adapters as adapters
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
     source_row_to_campaign_opportunity,
@@ -20,6 +21,42 @@ EXAMPLE_SOURCE_ROWS = (
 EXAMPLE_SOURCE_BUNDLE = (
     ROOT / "extracted_content_pipeline/examples/campaign_source_bundle.json"
 )
+
+
+def test_source_type_precedence_table_matches_current_contract() -> None:
+    # This intentionally locks a private table: source-type order is product behavior.
+    assert adapters._SOURCE_TYPE_PRECEDENCE == (
+        (("review_text",), "review"),
+        (("transcript",), "transcript"),
+        (("call_id", "recording_id"), "sales_call"),
+        (("meeting_id",), "meeting"),
+        (("deal_id", "opportunity_id"), "crm_deal"),
+        (("note_id", "activity_id"), "crm_note"),
+        (("renewal_id",), "renewal"),
+        (("contract_id",), "contract"),
+        (("subscription_id",), "subscription"),
+        (("complaint",), "complaint"),
+        (("ticket_id",), "support_ticket"),
+        (("case_id",), "case"),
+        (("conversation_id",), "conversation"),
+        (("nps_score", "nps"), "nps_response"),
+        (("csat_score", "csat"), "csat_response"),
+        (("survey_id", "response_id"), "survey_response"),
+    )
+
+
+def test_source_type_precedence_table_controls_ambiguous_rows() -> None:
+    row = {
+        keys[0]: f"{source_type}-value"
+        for keys, source_type in adapters._SOURCE_TYPE_PRECEDENCE
+    }
+    row["summary"] = "Ambiguous source row with every source-type key."
+
+    opportunity, warnings = source_row_to_campaign_opportunity(row)
+
+    assert warnings == ()
+    assert opportunity["source_type"] == "review"
+    assert opportunity["target_id"] == "sales_call-value"
 
 
 def test_source_row_maps_review_text_to_campaign_opportunity() -> None:
