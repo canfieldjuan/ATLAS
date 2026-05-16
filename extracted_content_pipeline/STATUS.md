@@ -175,6 +175,12 @@ source of truth for what remains.
   `reasoning` audit mirrors those as `contexts_used` and `consumed_contexts`
   for UI inspection. Atlas Intel renders compact consumed-context summaries;
   a fuller drawer/detail UX remains a frontend follow-up.
+- `docs/audits/content_ops_reasoning_policy_audit_2026-05-16.md` defines the
+  next reasoning-depth direction: keep reasoning behind the
+  `CampaignReasoningContextProvider` boundary, expose depth through named
+  presets instead of raw policy objects, start structured multi-pass wiring
+  with reports and sales briefs, and keep Evidence-to-Story separate from AI
+  Content Ops.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
