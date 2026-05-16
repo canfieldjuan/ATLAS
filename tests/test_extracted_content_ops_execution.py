@@ -1047,6 +1047,104 @@ async def test_execute_step_reports_consumed_reasoning_contexts_when_result_incl
 
 
 @pytest.mark.asyncio
+async def test_execute_step_reports_strict_validation_failures_from_result_errors():
+    class _StrictBlockedService(_ReasoningAwareOpportunityService):
+        async def generate(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(dict(kwargs))
+            return {
+                "generated": 0,
+                "skipped": 1,
+                "reasoning_contexts_used": 0,
+                "errors": [
+                    {
+                        "target_id": "vendor-acme",
+                        "reason": (
+                            "reasoning_validation_blocked:"
+                            "claim_missing_citations:0,no_claims"
+                        ),
+                    }
+                ],
+            }
+
+    services = ContentOpsExecutionServices(
+        report=_StrictBlockedService(),
+        reasoning_provider_configured=True,
+        reasoning_provider_outputs=("report",),
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["report"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Audit",
+                "opportunity_id": "opp-1",
+            },
+        },
+        services=services,
+    )
+
+    assert result["steps"][0]["reasoning"] == {
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": True,
+        "provider_configured": True,
+        "contexts_used": 0,
+        "validation_blocked": True,
+        "validation_failures": [
+            {
+                "reason": "reasoning_validation_blocked",
+                "target_id": "vendor-acme",
+                "blockers": ["claim_missing_citations:0", "no_claims"],
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_step_caps_strict_validation_failures():
+    class _StrictBlockedService(_ReasoningAwareOpportunityService):
+        async def generate(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(dict(kwargs))
+            return {
+                "generated": 0,
+                "skipped": 55,
+                "reasoning_contexts_used": 0,
+                "errors": [
+                    {
+                        "target_id": f"vendor-{index}",
+                        "reason": "reasoning_validation_blocked:no_claims",
+                    }
+                    for index in range(55)
+                ],
+            }
+
+    services = ContentOpsExecutionServices(
+        report=_StrictBlockedService(),
+        reasoning_provider_configured=True,
+        reasoning_provider_outputs=("report",),
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["report"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Audit",
+                "opportunity_id": "opp-1",
+            },
+        },
+        services=services,
+    )
+
+    reasoning = result["steps"][0]["reasoning"]
+    assert reasoning["validation_blocked"] is True
+    assert reasoning["validation_failures_truncated"] is True
+    assert len(reasoning["validation_failures"]) == 50
+    assert reasoning["validation_failures"][0]["target_id"] == "vendor-0"
+    assert reasoning["validation_failures"][-1]["target_id"] == "vendor-49"
+
+
+@pytest.mark.asyncio
 async def test_execute_step_ignores_malformed_consumed_reasoning_contexts():
     class _MalformedReasoningPayloadService(_ReasoningAwareOpportunityService):
         async def generate(self, **kwargs: Any) -> dict[str, Any]:

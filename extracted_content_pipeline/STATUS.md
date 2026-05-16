@@ -172,9 +172,12 @@ source of truth for what remains.
   bounded consumed-context payloads for the five LLM-backed generated-asset
   services. Runner results include `reasoning_contexts_used` and, when
   reasoning reached the prompt, `consumed_reasoning_contexts`; the per-step
-  `reasoning` audit mirrors those as `contexts_used` and `consumed_contexts`
-  for UI inspection. Atlas Intel renders compact consumed-context summaries;
-  a fuller drawer/detail UX remains a frontend follow-up.
+  `reasoning` audit mirrors those as `contexts_used` and `consumed_contexts`.
+  When strict reasoning validation blocks an asset before prompt generation,
+  the same per-step audit marks `validation_blocked` and includes compact
+  `validation_failures` for operator inspection. Atlas Intel renders compact
+  consumed-context summaries; a fuller drawer/detail UX remains a frontend
+  follow-up.
 - `docs/audits/content_ops_reasoning_policy_audit_2026-05-16.md` defines the
   next reasoning-depth direction: keep reasoning behind the
   `CampaignReasoningContextProvider` boundary, expose depth through named

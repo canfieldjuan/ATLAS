@@ -53,6 +53,7 @@ The following items appear in older plan docs but are no longer active backlog:
 - Host-facing reasoning policy audit for falsification, narrative planning,
   validation, and per-content-type depth.
 - Reasoning preset catalog for host-facing depth choices.
+- Operator-facing strict validation telemetry in Content Ops execution results.
 
 ## Active Backlog
 
@@ -78,14 +79,13 @@ Remaining work:
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
 - Host-owned falsification policy wiring for strict presets.
-- Operator-facing validation telemetry beyond the current strict failure
-  reason surfaced through generated-asset errors.
 
 **Shipped slice:** structured and strict multi-pass reasoning are wired for
 `report` and `sales_brief`. Strict mode now fails closed before those assets are
 generated when validation blockers are present, and the generated-asset error
-reason includes the validation blocker identifiers. Richer operator telemetry
-is still a follow-up.
+reason includes the validation blocker identifiers. Content Ops execution also
+mirrors those strict validation failures into per-step reasoning telemetry for
+operator inspection.
 
 ### 2. Source breadth from real host exports
 
