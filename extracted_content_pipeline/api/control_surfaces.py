@@ -386,6 +386,13 @@ def _sanitize_reasoning_status(
         item = status[key]
         if key == "configured" or item is None:
             continue
+        if key == "capabilities" and isinstance(item, Mapping):
+            capabilities = _sanitize_reasoning_capabilities(item)
+            if capabilities:
+                status[key] = capabilities
+                continue
+            status.pop(key)
+            continue
         if _is_status_scalar(item):
             continue
         scalar_items = _clean_status_scalar_sequence(item)
@@ -394,6 +401,28 @@ def _sanitize_reasoning_status(
             continue
         status.pop(key)
     return status
+
+
+def _sanitize_reasoning_capabilities(value: Mapping[str, Any]) -> dict[str, Any]:
+    capabilities: dict[str, Any] = {}
+    for name, raw_status in value.items():
+        capability_name = _clean(name)
+        if not capability_name or not isinstance(raw_status, Mapping):
+            continue
+        item: dict[str, Any] = {}
+        for flag in ("configured", "ready", "active"):
+            if flag in raw_status:
+                item[flag] = bool(raw_status.get(flag))
+        missing = [
+            str(entry).strip()
+            for entry in _clean_status_scalar_sequence(raw_status.get("missing"))
+            if str(entry).strip()
+        ]
+        if missing:
+            item["missing"] = missing
+        if item:
+            capabilities[capability_name] = item
+    return capabilities
 
 
 def _clean_status_scalar_sequence(value: Any) -> list[str | int | float | bool]:

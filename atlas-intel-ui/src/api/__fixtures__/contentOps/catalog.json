@@ -161,6 +161,29 @@
   ],
   "reasoning": {
     "configured": true,
-    "source": "db"
+    "source": "db",
+    "capabilities": {
+      "explicit_provider": {
+        "configured": true,
+        "ready": true,
+        "active": true
+      },
+      "single_pass": {
+        "configured": false,
+        "ready": false,
+        "active": false,
+        "missing": [
+          "generation_single_pass_reasoning"
+        ]
+      },
+      "multi_pass": {
+        "configured": false,
+        "ready": false,
+        "active": false,
+        "missing": [
+          "generation_multi_pass_reasoning"
+        ]
+      }
+    }
   }
 }
