@@ -55,6 +55,7 @@ The following items appear in older plan docs but are no longer active backlog:
 - Reasoning preset catalog for host-facing depth choices.
 - Operator-facing strict validation telemetry in Content Ops execution results.
 - Strict validation blocked-event logging in Content Ops execution.
+- Blog-specific packaged narrative pack for structured reasoning.
 
 ## Active Backlog
 
@@ -80,16 +81,19 @@ Remaining work:
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
 
-**Shipped slice:** structured and strict multi-pass reasoning are wired for
-`report` and `sales_brief`. Strict mode now fails closed before those assets are
-generated when validation blockers are present, and the generated-asset error
-reason includes the validation blocker identifiers. Content Ops execution also
-mirrors those strict validation failures into per-step reasoning telemetry for
-operator inspection and logs a structured warning when strict validation
-blocks a step. Plan and execute paths also share packaged reasoning runtime
-constants so unsupported reasoning requests fail consistently. Hosts can now
-attach explicit falsification rules to the strict preset; no falsification LLM
-calls are made unless the host supplies those rules.
+**Shipped slice:** structured multi-pass reasoning is wired for `blog_post`,
+`report`, and `sales_brief`; strict multi-pass reasoning is wired for `report`
+and `sales_brief`. Blog posts use a separate `content_ops_blog` narrative pack
+so they do not inherit generic report section policy. Strict mode now fails
+closed before report/sales generation when validation blockers are present, and
+the generated-asset error reason includes the validation blocker identifiers.
+Content Ops execution also mirrors those strict validation failures into
+per-step reasoning telemetry for operator inspection and logs a structured
+warning when strict validation blocks a step. Plan and execute paths share
+packaged reasoning runtime constants so unsupported reasoning requests fail
+consistently. Hosts can now attach explicit falsification rules to the strict
+preset; no falsification LLM calls are made unless the host supplies those
+rules.
 
 ### 2. Source breadth from real host exports
 

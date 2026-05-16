@@ -189,20 +189,23 @@ source of truth for what remains.
   reasoning-depth choices. It maps generated-asset outputs to supported
   presets (`none`, `context_only`, `single_pass`, `multi_pass_light`,
   `multi_pass_structured`, `multi_pass_strict`) without constructing providers
-  or changing runtime behavior. `blog_post` defaults to `multi_pass_light` as
-  a quality-over-cost choice; hosts that want cheaper blog runs can select
-  `single_pass`.
-- `/content-ops/execute` can construct packaged `multi_pass_structured` or
-  `multi_pass_strict` reasoning for `report` and `sales_brief` when the
+  or changing runtime behavior. `blog_post` defaults to
+  `multi_pass_structured` so its catalog default matches the packaged runtime;
+  hosts that want cheaper blog runs can select `single_pass`.
+- `/content-ops/execute` can construct packaged `multi_pass_structured`
+  reasoning for `blog_post`, `report`, and `sales_brief`, or
+  `multi_pass_strict` reasoning for `report` and `sales_brief`, when the
   request explicitly sets `reasoning_preset` and the host supplies an LLM
-  provider. Strict mode uses the same provider plus citation validation and
-  fails closed before report/sales generation when validation blockers are
-  present. The plan and execute paths share the same packaged runtime
-  output/preset constants so unsupported reasoning requests fail consistently
-  instead of silently dropping requested reasoning. Hosts can attach explicit
-  falsification rules to `multi_pass_strict`; the control surface wires those
-  into `FalsificationPolicy` and never runs falsification checks by default
-  when no host-owned rules are supplied. Falsification rules are evaluated per
+  provider. Blog posts use the `content_ops_blog` narrative pack; reports and
+  sales briefs keep the `content_ops_structured` pack. Strict mode uses the
+  same provider plus citation validation and fails closed before report/sales
+  generation when validation blockers are present. The plan and execute paths
+  share the same packaged runtime output/preset constants so unsupported
+  reasoning requests fail consistently instead of silently dropping requested
+  reasoning. Hosts can attach explicit falsification rules to
+  `multi_pass_strict`; the control surface wires those into
+  `FalsificationPolicy` and never runs falsification checks by default when no
+  host-owned rules are supplied. Falsification rules are evaluated per
   generated claim, so strict runs with rules can add one extra LLM call per
   claim before any falsified claims are dropped. The host config rejects
   `drop_falsified=True` without rules and caps strict falsification rules at 20

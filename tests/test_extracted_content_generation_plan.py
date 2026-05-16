@@ -3,7 +3,7 @@ import pytest
 from extracted_content_pipeline.generation_plan import build_generation_plan_from_mapping
 from extracted_content_pipeline.reasoning_policy import (
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
-    PACKAGED_REASONING_RUNTIME_PRESETS,
+    packaged_reasoning_runtime_presets_for_output,
 )
 
 
@@ -113,25 +113,46 @@ def test_plan_threads_strict_reasoning_preset_to_report_and_sales_brief():
         assert step["config"]["reasoning_falsification"] is True
 
 
-@pytest.mark.parametrize("output", PACKAGED_REASONING_RUNTIME_OUTPUTS)
-@pytest.mark.parametrize("preset", PACKAGED_REASONING_RUNTIME_PRESETS)
-def test_plan_threads_all_packaged_runtime_reasoning_presets(output, preset):
-    inputs = {
-        "report": {"opportunity_id": "opp_123"},
-        "sales_brief": {"target_account": "Acme"},
-    }[output]
-
+def test_plan_threads_structured_reasoning_preset_to_blog_post():
     plan = build_generation_plan_from_mapping(
         {
-            "outputs": [output],
-            "reasoning_preset": preset,
-            "inputs": inputs,
+            "outputs": ["blog_post"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {
+                "topic": "Churn pressure",
+            },
         }
     )
 
     step = plan["steps"][0]
-    assert step["config"]["reasoning_preset"] == preset
+    assert step["config"]["reasoning_preset"] == "multi_pass_structured"
     assert step["config"]["reasoning_multi_pass"] is True
+    assert step["config"]["reasoning_narrative_planning"] is True
+    assert step["config"]["reasoning_output_validation"] is True
+    assert step["config"]["reasoning_blocking_validation"] is False
+    assert step["config"]["reasoning_falsification"] is False
+
+
+@pytest.mark.parametrize("output", PACKAGED_REASONING_RUNTIME_OUTPUTS)
+def test_plan_threads_all_packaged_runtime_reasoning_presets(output):
+    inputs = {
+        "blog_post": {"topic": "Churn pressure"},
+        "report": {"opportunity_id": "opp_123"},
+        "sales_brief": {"target_account": "Acme"},
+    }[output]
+
+    for preset in packaged_reasoning_runtime_presets_for_output(output):
+        plan = build_generation_plan_from_mapping(
+            {
+                "outputs": [output],
+                "reasoning_preset": preset,
+                "inputs": inputs,
+            }
+        )
+
+        step = plan["steps"][0]
+        assert step["config"]["reasoning_preset"] == preset
+        assert step["config"]["reasoning_multi_pass"] is True
 
 
 def test_plan_rejects_unknown_reasoning_preset_for_report():
@@ -145,14 +166,47 @@ def test_plan_rejects_unknown_reasoning_preset_for_report():
         )
 
 
-@pytest.mark.parametrize("preset", ("single_pass", "multi_pass_light"))
-def test_plan_rejects_runtime_unsupported_reasoning_preset_for_report(preset):
-    with pytest.raises(ValueError, match="multi_pass_structured or multi_pass_strict"):
+@pytest.mark.parametrize(
+    ("output", "inputs", "preset", "expected_match"),
+    (
+        (
+            "report",
+            {"opportunity_id": "opp_123"},
+            "single_pass",
+            "multi_pass_structured or multi_pass_strict",
+        ),
+        (
+            "report",
+            {"opportunity_id": "opp_123"},
+            "multi_pass_light",
+            "multi_pass_structured or multi_pass_strict",
+        ),
+        (
+            "blog_post",
+            {"topic": "Churn pressure"},
+            "multi_pass_light",
+            "multi_pass_structured or multi_pass_strict",
+        ),
+        (
+            "blog_post",
+            {"topic": "Churn pressure"},
+            "multi_pass_strict",
+            "not supported",
+        ),
+    ),
+)
+def test_plan_rejects_runtime_unsupported_reasoning_preset(
+    output,
+    inputs,
+    preset,
+    expected_match,
+):
+    with pytest.raises(ValueError, match=expected_match):
         build_generation_plan_from_mapping(
             {
-                "outputs": ["report"],
+                "outputs": [output],
                 "reasoning_preset": preset,
-                "inputs": {"opportunity_id": "opp_123"},
+                "inputs": inputs,
             }
         )
 
@@ -160,7 +214,6 @@ def test_plan_rejects_runtime_unsupported_reasoning_preset_for_report(preset):
 @pytest.mark.parametrize(
     ("output", "inputs", "preset"),
     (
-        ("blog_post", {"topic": "Churn pressure"}, "multi_pass_structured"),
         (
             "landing_page",
             {"offer": "Audit", "audience": "RevOps"},
@@ -178,7 +231,7 @@ def test_plan_rejects_runtime_reasoning_when_no_packaged_output_selected(
     inputs,
     preset,
 ):
-    with pytest.raises(ValueError, match="only to report and sales_brief"):
+    with pytest.raises(ValueError, match="only to blog_post, report, and sales_brief"):
         build_generation_plan_from_mapping(
             {
                 "outputs": [output],
