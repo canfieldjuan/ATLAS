@@ -181,6 +181,13 @@ source of truth for what remains.
   presets instead of raw policy objects, start structured multi-pass wiring
   with reports and sales briefs, and keep Evidence-to-Story separate from AI
   Content Ops.
+- `reasoning_policy` provides the product-owned preset catalog for those named
+  reasoning-depth choices. It maps generated-asset outputs to supported
+  presets (`none`, `context_only`, `single_pass`, `multi_pass_light`,
+  `multi_pass_structured`, `multi_pass_strict`) without constructing providers
+  or changing runtime behavior. `blog_post` defaults to `multi_pass_light` as
+  a quality-over-cost choice; hosts that want cheaper blog runs can select
+  `single_pass`.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared

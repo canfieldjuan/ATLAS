@@ -269,6 +269,9 @@
       "target": "extracted_content_pipeline/content_ops_execution.py"
     },
     {
+      "target": "extracted_content_pipeline/reasoning_policy.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_opportunities.py"
     },
     {

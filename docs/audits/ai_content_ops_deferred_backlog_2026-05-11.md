@@ -52,6 +52,7 @@ The following items appear in older plan docs but are no longer active backlog:
 - Source-row field lookup cache for provider-style aliases.
 - Host-facing reasoning policy audit for falsification, narrative planning,
   validation, and per-content-type depth.
+- Reasoning preset catalog for host-facing depth choices.
 
 ## Active Backlog
 
@@ -68,18 +69,21 @@ Current policy audit:
 
 - `docs/audits/content_ops_reasoning_policy_audit_2026-05-16.md`
 
+Current policy catalog:
+
+- `extracted_content_pipeline/reasoning_policy.py`
+
 Remaining work:
 
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
-- Reasoning preset catalog for `none`, `context_only`, `single_pass`,
-  `multi_pass_light`, `multi_pass_structured`, and `multi_pass_strict`.
 - First runtime wiring for structured reasoning on `report` and `sales_brief`.
 - Validation metadata surfacing before any strict blocking mode.
 
-**Likely slice:** add the reasoning preset catalog as a pure policy/config
-layer first. Do not wire every typed policy object into runtime yet. Use the
-catalog to make the next report/sales-brief structured-reasoning slice small.
+**Likely slice:** use the reasoning preset catalog to wire structured
+multi-pass reasoning for `report` and `sales_brief`. Keep provider construction
+scoped to those two outputs; do not add strict blocking until validation
+metadata is visible to operators.
 
 ### 2. Source breadth from real host exports
 
@@ -102,7 +106,8 @@ remains roadmap work or should be removed from active backlog.
 
 ## Current Pick Recommendation
 
-Take item 1 next, specifically the reasoning preset catalog. Source-adapter
-consolidation is complete for now; the remaining leverage is controlled
-reasoning-policy depth for long-form and multi-asset outputs. Source breadth
-should pause until a real host export or field-loss risk appears.
+Take item 1 next, specifically structured reasoning for `report` and
+`sales_brief` using the preset catalog. Source-adapter consolidation is
+complete for now; the remaining leverage is controlled reasoning-policy depth
+for long-form and multi-asset outputs. Source breadth should pause until a
+real host export or field-loss risk appears.
