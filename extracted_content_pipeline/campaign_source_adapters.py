@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 import csv
 import json
 from pathlib import Path
+import re
 from typing import Any, Literal
 
 from .campaign_customer_data import (
@@ -124,6 +125,26 @@ _SOURCE_TITLE_KEYS = ("source_title", "ticket_subject", "subject", "title", "nam
 _SOURCE_TITLE_COLLISION_KEYS = ("subject", "ticket_subject", "title", "name")
 _PAIN_KEYS = ("pain_points", "pain_categories", "pain_category", "topic", "category")
 _PARENT_EXCLUDE_KEYS = set(_ROW_LIST_KEYS) | set(_SOURCE_TITLE_COLLISION_KEYS)
+_COMPANY_KEYS = (
+    "company_name",
+    "company",
+    "account_name",
+    "reviewer_company",
+    "customer_name",
+)
+_VENDOR_KEYS = (
+    "vendor_name",
+    "vendor",
+    "incumbent_vendor",
+    "current_vendor",
+    "product_name",
+)
+_CONTACT_NAME_KEYS = ("contact_name", "recipient_name", "person_name")
+_CONTACT_EMAIL_KEYS = ("contact_email", "recipient_email", "email")
+_CONTACT_TITLE_KEYS = ("contact_title", "recipient_title", "job_title")
+_NPS_SCORE_KEYS = ("nps_score", "nps")
+_CSAT_SCORE_KEYS = ("csat_score", "csat")
+_FIELD_SEPARATOR_RE = re.compile(r"[^a-z0-9]+")
 _MAX_BUNDLE_DEPTH = 8
 
 
@@ -216,6 +237,13 @@ def source_row_to_campaign_opportunity(
         for key, value in row.items()
         if value not in (None, "", [], {}) and key not in _SOURCE_TITLE_COLLISION_KEYS
     }
+    _copy_alias_text(opportunity, row, "company_name", _COMPANY_KEYS)
+    _copy_alias_text(opportunity, row, "vendor_name", _VENDOR_KEYS)
+    _copy_alias_text(opportunity, row, "contact_name", _CONTACT_NAME_KEYS)
+    _copy_alias_text(opportunity, row, "contact_email", _CONTACT_EMAIL_KEYS)
+    _copy_alias_text(opportunity, row, "contact_title", _CONTACT_TITLE_KEYS)
+    _copy_alias_value(opportunity, row, "nps_score", _NPS_SCORE_KEYS)
+    _copy_alias_value(opportunity, row, "csat_score", _CSAT_SCORE_KEYS)
     if source_title:
         opportunity["source_title"] = source_title
     if source_id and "source_id" not in opportunity:
@@ -272,7 +300,7 @@ def _source_rows_from_bundle(
     }
     rows: list[Any] = []
     for key in _ROW_LIST_KEYS:
-        value = bundle.get(key)
+        value = _field_value(bundle, key)
         if isinstance(value, Mapping):
             rows.extend(_source_rows_from_bundle(
                 value,
@@ -375,7 +403,7 @@ def _source_evidence(
 
 def _first_text(row: Mapping[str, Any], keys: Sequence[str]) -> str:
     for key in keys:
-        text = str(row.get(key) or "").strip()
+        text = str(_field_value(row, key) or "").strip()
         if text:
             return text
     return ""
@@ -429,7 +457,7 @@ def _thread_line(item: Any) -> str:
 
 def _first_text_list(row: Mapping[str, Any], keys: Sequence[str]) -> list[str]:
     for key in keys:
-        value = row.get(key)
+        value = _field_value(row, key)
         values = _text_list(value)
         if values:
             return values
@@ -454,41 +482,99 @@ def _text_list(value: Any) -> list[str]:
 
 
 def _infer_source_type(row: Mapping[str, Any]) -> str:
-    if row.get("review_text") is not None:
+    if _has_field_value(row, ("review_text",)):
         return "review"
-    if row.get("transcript") is not None:
+    if _has_field_value(row, ("transcript",)):
         return "transcript"
-    if row.get("call_id") is not None or row.get("recording_id") is not None:
+    if _has_field_value(row, ("call_id", "recording_id")):
         return "sales_call"
-    if row.get("meeting_id") is not None:
+    if _has_field_value(row, ("meeting_id",)):
         return "meeting"
-    if row.get("deal_id") is not None or row.get("opportunity_id") is not None:
+    if _has_field_value(row, ("deal_id", "opportunity_id")):
         return "crm_deal"
-    if row.get("note_id") is not None or row.get("activity_id") is not None:
+    if _has_field_value(row, ("note_id", "activity_id")):
         return "crm_note"
     # Notes stay typed as notes even when attached to a contract, renewal, or
     # subscription export; the lifecycle id is context, not the evidence row.
-    if row.get("renewal_id") is not None:
+    if _has_field_value(row, ("renewal_id",)):
         return "renewal"
-    if row.get("contract_id") is not None:
+    if _has_field_value(row, ("contract_id",)):
         return "contract"
-    if row.get("subscription_id") is not None:
+    if _has_field_value(row, ("subscription_id",)):
         return "subscription"
-    if row.get("complaint") is not None:
+    if _has_field_value(row, ("complaint",)):
         return "complaint"
-    if row.get("ticket_id") is not None:
+    if _has_field_value(row, ("ticket_id",)):
         return "support_ticket"
-    if row.get("case_id") is not None:
+    if _has_field_value(row, ("case_id",)):
         return "case"
-    if row.get("conversation_id") is not None:
+    if _has_field_value(row, ("conversation_id",)):
         return "conversation"
-    if row.get("nps_score") is not None or row.get("nps") is not None:
+    if _has_field_value(row, ("nps_score", "nps")):
         return "nps_response"
-    if row.get("csat_score") is not None or row.get("csat") is not None:
+    if _has_field_value(row, ("csat_score", "csat")):
         return "csat_response"
-    if row.get("survey_id") is not None or row.get("response_id") is not None:
+    if _has_field_value(row, ("survey_id", "response_id")):
         return "survey_response"
     return "document"
+
+
+def _copy_alias_text(
+    opportunity: dict[str, Any],
+    row: Mapping[str, Any],
+    canonical_key: str,
+    keys: Sequence[str],
+) -> None:
+    if opportunity.get(canonical_key):
+        return
+    text = _first_text(row, keys)
+    if text:
+        opportunity[canonical_key] = text
+
+
+def _copy_alias_value(
+    opportunity: dict[str, Any],
+    row: Mapping[str, Any],
+    canonical_key: str,
+    keys: Sequence[str],
+) -> None:
+    if opportunity.get(canonical_key) not in (None, "", [], {}):
+        return
+    for key in keys:
+        value = _field_value(row, key)
+        if value not in (None, "", [], {}):
+            opportunity[canonical_key] = value
+            return
+
+
+def _field_value(row: Mapping[str, Any], key: str) -> Any:
+    if key in row:
+        return row.get(key)
+    normalized = _normalized_field_key(key)
+    compact = _compact_field_key(key)
+    for raw_key, value in row.items():
+        raw_text = str(raw_key)
+        if (
+            _normalized_field_key(raw_text) == normalized
+            or _compact_field_key(raw_text) == compact
+        ):
+            return value
+    return None
+
+
+def _has_field_value(row: Mapping[str, Any], keys: Sequence[str]) -> bool:
+    for key in keys:
+        if _field_value(row, key) not in (None, "", [], {}):
+            return True
+    return False
+
+
+def _normalized_field_key(key: str) -> str:
+    return _FIELD_SEPARATOR_RE.sub("_", key.strip().lower()).strip("_")
+
+
+def _compact_field_key(key: str) -> str:
+    return _FIELD_SEPARATOR_RE.sub("", key.strip().lower())
 
 
 __all__ = [

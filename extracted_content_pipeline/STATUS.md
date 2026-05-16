@@ -48,7 +48,9 @@ source of truth for what remains.
   `examples/campaign_source_bundle.json` provide packaged starter inputs.
   Ticket and conversation rows can also provide nested `messages`, `comments`,
   `thread`, `conversation`, or `entries` arrays when the source text is not
-  available as one scalar field.
+  available as one scalar field. Source-row field labels are matched leniently
+  for common CSV/export variants such as `Ticket ID`, `Account Name`,
+  `Pain Category`, and `Open Ended Response`.
 - `signal_extraction` exposes source-row normalization as a runnable AI Content
   Ops output. It converts inline source material into normalized opportunities
   without LLM, database, or Atlas dependencies.

@@ -113,6 +113,30 @@ def test_source_row_maps_support_ticket_to_campaign_opportunity() -> None:
     }]
 
 
+def test_source_row_accepts_provider_style_ticket_field_labels() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "Ticket ID": "ticket-1",
+        "Account Name": "Acme Logistics",
+        "Vendor Name": "HubSpot",
+        "Subject": "Renewal pricing escalation",
+        "Description": "The renewal quote jumped before the team could export reports.",
+        "Pain Category": "pricing pressure",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "ticket-1"
+    assert opportunity["company_name"] == "Acme Logistics"
+    assert opportunity["vendor_name"] == "HubSpot"
+    assert opportunity["source_title"] == "Renewal pricing escalation"
+    assert opportunity["pain_points"] == ["pricing pressure"]
+    assert opportunity["evidence"] == [{
+        "text": "The renewal quote jumped before the team could export reports.",
+        "source_id": "ticket-1",
+        "source_type": "support_ticket",
+        "source_title": "Renewal pricing escalation",
+    }]
+
+
 def test_source_row_prefers_body_over_ticket_message() -> None:
     opportunity, warnings = source_row_to_campaign_opportunity({
         "ticket_id": "ticket-1",
@@ -434,6 +458,28 @@ def test_source_row_maps_nps_feedback_to_campaign_opportunity() -> None:
     }]
 
 
+def test_source_row_accepts_provider_style_survey_field_labels() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "Response ID": "survey-1",
+        "Company": "Beta Retail",
+        "Vendor": "Zendesk",
+        "NPS Score": "4",
+        "Open Ended Response": "Support takes too long and we are comparing Intercom.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "survey-1"
+    assert opportunity["company_name"] == "Beta Retail"
+    assert opportunity["vendor_name"] == "Zendesk"
+    assert opportunity["nps_score"] == "4"
+    assert opportunity["source_type"] == "nps_response"
+    assert opportunity["evidence"] == [{
+        "text": "Support takes too long and we are comparing Intercom.",
+        "source_id": "survey-1",
+        "source_type": "nps_response",
+    }]
+
+
 def test_source_row_prefers_nps_over_csat_when_both_scores_exist() -> None:
     opportunity, warnings = source_row_to_campaign_opportunity({
         "response_id": "survey-1",
@@ -559,6 +605,39 @@ def test_load_source_campaign_opportunities_from_support_ticket_object(tmp_path:
     assert loaded.opportunities[0]["source_title"] == "Reporting export issue"
     assert loaded.opportunities[0]["evidence"][0] == {
         "text": "The team cannot export attribution data before renewal.",
+        "source_id": "ticket-1",
+        "source_type": "support_ticket",
+        "source_title": "Reporting export issue",
+    }
+
+
+def test_load_source_campaign_opportunities_from_provider_style_bundle_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "provider_bundle.json"
+    path.write_text(
+        json.dumps({
+            "Account Name": "Acme Logistics",
+            "Vendor Name": "HubSpot",
+            "Support Tickets": [
+                {
+                    "Ticket ID": "ticket-1",
+                    "Subject": "Reporting export issue",
+                    "Description": "Exports require a higher tier before renewal.",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert [warning.code for warning in loaded.warnings] == ["missing_contact_email"]
+    assert loaded.opportunities[0]["target_id"] == "ticket-1"
+    assert loaded.opportunities[0]["company_name"] == "Acme Logistics"
+    assert loaded.opportunities[0]["vendor_name"] == "HubSpot"
+    assert loaded.opportunities[0]["evidence"][0] == {
+        "text": "Exports require a higher tier before renewal.",
         "source_id": "ticket-1",
         "source_type": "support_ticket",
         "source_title": "Reporting export issue",
