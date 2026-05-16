@@ -490,12 +490,67 @@ def _operation_readiness(
             "single_pass_ready": single_pass_ready,
             "multi_pass_configured": bool(config.generation_multi_pass_reasoning),
             "multi_pass_ready": multi_pass_ready,
+            "capabilities": _reasoning_capabilities(
+                active_mode=reasoning_mode,
+                explicit_provider=explicit_reasoning,
+                single_pass_configured=bool(config.generation_single_pass_reasoning),
+                multi_pass_configured=bool(config.generation_multi_pass_reasoning),
+                llm_configured=llm_configured,
+                skills_configured=skills_configured,
+            ),
         },
         "features": {
             "draft_generation": generation_ready,
             "send_queued": database_available and sender_provider is not None,
             "sequence_progression": sequence_ready,
             "analytics_refresh": database_available,
+        },
+    }
+
+
+def _reasoning_capabilities(
+    *,
+    active_mode: str,
+    explicit_provider: bool,
+    single_pass_configured: bool,
+    multi_pass_configured: bool,
+    llm_configured: bool,
+    skills_configured: bool,
+) -> dict[str, Any]:
+    """Return host-facing readiness for each supported reasoning mode."""
+
+    single_missing = []
+    if not llm_configured:
+        single_missing.append("llm")
+    if not skills_configured:
+        single_missing.append("skills")
+    multi_missing = [] if llm_configured else ["llm"]
+    return {
+        "explicit_provider": {
+            "configured": explicit_provider,
+            "ready": explicit_provider,
+            "active": active_mode == "explicit_provider",
+            "missing": [] if explicit_provider else ["reasoning_provider"],
+        },
+        "single_pass": {
+            "configured": single_pass_configured,
+            "ready": single_pass_configured and not single_missing,
+            "active": active_mode == "single_pass",
+            "missing": (
+                single_missing
+                if single_pass_configured
+                else ["generation_single_pass_reasoning"]
+            ),
+        },
+        "multi_pass": {
+            "configured": multi_pass_configured,
+            "ready": multi_pass_configured and not multi_missing,
+            "active": active_mode == "multi_pass",
+            "missing": (
+                multi_missing
+                if multi_pass_configured
+                else ["generation_multi_pass_reasoning"]
+            ),
         },
     }
 

@@ -128,10 +128,11 @@ source of truth for what remains.
   packaged single-pass reasoning provider through config when LLM and skill
   providers are injected. The router also exposes `GET
   /campaigns/operations/status` for admin dashboards to inspect database
-  availability, provider presence, feature readiness, and configured limits
-  without exposing credentials. Hosts can inject a `VisibilitySink` provider
-  so operation triggers emit best-effort start/completed/failed telemetry
-  without making dashboard storage a product dependency.
+  availability, provider presence, feature readiness, configured limits, and
+  per-mode reasoning capability readiness with active-mode and missing-input
+  signals without exposing credentials. Hosts can inject a `VisibilitySink`
+  provider so operation triggers emit best-effort start/completed/failed
+  telemetry without making dashboard storage a product dependency.
 - `content_ops_execution` provides the host-injected execution seam for
   runnable AI Content Ops control-surface plans. It dispatches executable
   outputs to configured campaign, blog-post, report, landing-page, and
