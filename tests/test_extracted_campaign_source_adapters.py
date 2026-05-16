@@ -236,6 +236,58 @@ def test_source_row_with_call_and_meeting_ids_prefers_sales_call() -> None:
     assert opportunity["source_type"] == "sales_call"
 
 
+def test_source_row_maps_crm_deal_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "deal_id": "deal-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "stage": "renewal_review",
+        "summary": "The account is evaluating Salesforce before renewal.",
+        "pain_category": "renewal pressure",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "deal-1"
+    assert opportunity["company_name"] == "Acme Logistics"
+    assert opportunity["stage"] == "renewal_review"
+    assert opportunity["source_type"] == "crm_deal"
+    assert opportunity["pain_points"] == ["renewal pressure"]
+    assert opportunity["evidence"][0] == {
+        "text": "The account is evaluating Salesforce before renewal.",
+        "source_id": "deal-1",
+        "source_type": "crm_deal",
+    }
+
+
+def test_source_row_maps_crm_note_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "note_id": "note-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "notes": "Champion asked for pricing proof before the renewal call.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "note-1"
+    assert opportunity["source_type"] == "crm_note"
+    assert opportunity["evidence"][0] == {
+        "text": "Champion asked for pricing proof before the renewal call.",
+        "source_id": "note-1",
+        "source_type": "crm_note",
+    }
+
+
+def test_source_row_prefers_review_type_over_crm_deal_id() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "deal_id": "deal-1",
+        "review_text": "The reviewer called out reporting limits.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "deal-1"
+    assert opportunity["source_type"] == "review"
+
+
 def test_source_row_prefers_scalar_text_over_thread_messages() -> None:
     opportunity, warnings = source_row_to_campaign_opportunity({
         "ticket_id": "ticket-thread-1",
@@ -518,6 +570,52 @@ def test_load_source_campaign_opportunities_from_meeting_bundle(tmp_path: Path) 
         "source_id": "meeting-1",
         "source_type": "meeting",
         "source_title": "Renewal checkpoint",
+    }
+
+
+def test_load_source_campaign_opportunities_from_crm_bundle(tmp_path: Path) -> None:
+    path = tmp_path / "crm_bundle.json"
+    path.write_text(
+        json.dumps({
+            "account_id": "acct-1",
+            "company": "Acme Logistics",
+            "vendor": "HubSpot",
+            "deals": [
+                {
+                    "deal_id": "deal-1",
+                    "stage": "renewal_review",
+                    "summary": "The buying committee is comparing Salesforce.",
+                }
+            ],
+            "account_notes": [
+                {
+                    "note_id": "note-1",
+                    "notes": "RevOps asked for proof on attribution exports.",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "deal-1",
+        "note-1",
+    ]
+    assert [row["source_type"] for row in loaded.opportunities] == [
+        "crm_deal",
+        "crm_note",
+    ]
+    assert [row["company_name"] for row in loaded.opportunities] == [
+        "Acme Logistics",
+        "Acme Logistics",
+    ]
+    assert loaded.opportunities[0]["account_id"] == "acct-1"
+    assert loaded.opportunities[1]["evidence"][0] == {
+        "text": "RevOps asked for proof on attribution exports.",
+        "source_id": "note-1",
+        "source_type": "crm_note",
     }
 
 
