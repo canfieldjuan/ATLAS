@@ -45,6 +45,7 @@ The following items appear in older plan docs but are no longer active backlog:
 - DB reasoning context hosted admin list/upsert API.
 - DB reasoning context scoped delete/retire API.
 - DB reasoning context admin visibility events.
+- Campaign operations status reasoning-provider capability check.
 
 ## Active Backlog
 
@@ -66,9 +67,9 @@ Remaining work:
 - Per-content-type opt-in rules so simple assets avoid heavy reasoning paths
   while long-form assets can use stateful reasoning.
 
-**Likely slice:** start with a narrow source-bundle adapter or a small
-reasoning-provider capability check that directly improves host setup, rather
-than a broad architecture refactor.
+**Likely slice:** continue with narrow source-bundle adapters or a focused
+reasoning-provider setup improvement, rather than a broad architecture
+refactor.
 
 ## Current Pick Recommendation
 

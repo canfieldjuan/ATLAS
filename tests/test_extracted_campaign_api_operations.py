@@ -122,6 +122,25 @@ def _client(
     return TestClient(app)
 
 
+def _reasoning_capabilities(
+    *,
+    active_mode: str = "none",
+    explicit_provider: bool = False,
+    single_pass_configured: bool = False,
+    multi_pass_configured: bool = False,
+    llm_configured: bool = False,
+    skills_configured: bool = False,
+) -> dict[str, Any]:
+    return operations_api._reasoning_capabilities(
+        active_mode=active_mode,
+        explicit_provider=explicit_provider,
+        single_pass_configured=single_pass_configured,
+        multi_pass_configured=multi_pass_configured,
+        llm_configured=llm_configured,
+        skills_configured=skills_configured,
+    )
+
+
 def test_campaign_operations_router_generates_campaign_drafts(monkeypatch) -> None:
     pool = _Pool()
     llm = _LLM()
@@ -391,6 +410,12 @@ def test_campaign_operations_router_reports_status() -> None:
             "single_pass_ready": False,
             "multi_pass_configured": False,
             "multi_pass_ready": False,
+            "capabilities": _reasoning_capabilities(
+                active_mode="explicit_provider",
+                explicit_provider=True,
+                llm_configured=True,
+                skills_configured=True,
+            ),
         },
         "features": {
             "draft_generation": True,
@@ -452,6 +477,10 @@ def test_campaign_operations_router_status_reports_single_pass_readiness() -> No
         "single_pass_ready": False,
         "multi_pass_configured": False,
         "multi_pass_ready": False,
+        "capabilities": _reasoning_capabilities(
+            active_mode="single_pass",
+            single_pass_configured=True,
+        ),
     }
     assert payload["features"]["draft_generation"] is False
 
@@ -472,6 +501,12 @@ def test_campaign_operations_router_status_marks_single_pass_ready() -> None:
         "single_pass_ready": True,
         "multi_pass_configured": False,
         "multi_pass_ready": False,
+        "capabilities": _reasoning_capabilities(
+            active_mode="single_pass",
+            single_pass_configured=True,
+            llm_configured=True,
+            skills_configured=True,
+        ),
     }
     assert payload["features"]["draft_generation"] is True
 
@@ -491,6 +526,11 @@ def test_campaign_operations_router_status_treats_explicit_reasoning_as_ready() 
         "single_pass_ready": False,
         "multi_pass_configured": False,
         "multi_pass_ready": False,
+        "capabilities": _reasoning_capabilities(
+            active_mode="explicit_provider",
+            explicit_provider=True,
+            single_pass_configured=True,
+        ),
     }
     assert payload["features"]["draft_generation"] is True
 
@@ -1409,6 +1449,10 @@ def test_campaign_operations_router_status_reports_multi_pass_readiness() -> Non
         "single_pass_ready": False,
         "multi_pass_configured": True,
         "multi_pass_ready": False,
+        "capabilities": _reasoning_capabilities(
+            active_mode="multi_pass",
+            multi_pass_configured=True,
+        ),
     }
     # Configured but no LLM provider -> draft_generation gated off.
     assert payload["features"]["draft_generation"] is False
@@ -1429,6 +1473,11 @@ def test_campaign_operations_router_status_marks_multi_pass_ready() -> None:
         "single_pass_ready": False,
         "multi_pass_configured": True,
         "multi_pass_ready": True,
+        "capabilities": _reasoning_capabilities(
+            active_mode="multi_pass",
+            multi_pass_configured=True,
+            llm_configured=True,
+        ),
     }
     # Multi-pass needs LLM only (no SkillStore required) -> ready when LLM
     # provider is wired, even without skills.
@@ -1452,6 +1501,11 @@ def test_campaign_operations_router_status_explicit_provider_beats_multi_pass() 
         "single_pass_ready": False,
         "multi_pass_configured": True,
         "multi_pass_ready": False,
+        "capabilities": _reasoning_capabilities(
+            active_mode="explicit_provider",
+            explicit_provider=True,
+            multi_pass_configured=True,
+        ),
     }
 
 
