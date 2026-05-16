@@ -54,6 +54,7 @@ The following items appear in older plan docs but are no longer active backlog:
   validation, and per-content-type depth.
 - Reasoning preset catalog for host-facing depth choices.
 - Operator-facing strict validation telemetry in Content Ops execution results.
+- Strict validation blocked-event logging in Content Ops execution.
 
 ## Active Backlog
 
@@ -85,7 +86,8 @@ Remaining work:
 generated when validation blockers are present, and the generated-asset error
 reason includes the validation blocker identifiers. Content Ops execution also
 mirrors those strict validation failures into per-step reasoning telemetry for
-operator inspection.
+operator inspection and logs a structured warning when strict validation
+blocks a step.
 
 ### 2. Source breadth from real host exports
 

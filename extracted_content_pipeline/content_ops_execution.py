@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -12,6 +13,8 @@ from .control_surfaces import OUTPUT_CATALOG, ContentOpsRequest, request_from_ma
 from .generation_plan import GenerationPlan, GenerationPlanStep, build_generation_plan
 from .landing_page_ports import MarketingCampaign
 from .reasoning_signals import REASONING_VALIDATION_BLOCKED
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -748,6 +751,14 @@ def _step_reasoning_audit(
         audit["validation_failures"] = validation_failures
         if validation_failures_truncated:
             audit["validation_failures_truncated"] = True
+        logger.warning(
+            "content_ops_strict_validation_blocked",
+            extra={
+                "output": step.output,
+                "failure_count": len(validation_failures),
+                "truncated": validation_failures_truncated,
+            },
+        )
     return audit
 
 
