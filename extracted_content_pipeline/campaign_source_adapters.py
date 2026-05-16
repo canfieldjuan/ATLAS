@@ -23,6 +23,10 @@ _ROW_LIST_KEYS = (
     "documents",
     "reviews",
     "transcripts",
+    "calls",
+    "call_transcripts",
+    "meetings",
+    "meeting_transcripts",
     "complaints",
     "support_tickets",
     "tickets",
@@ -41,6 +45,9 @@ _SOURCE_ID_KEYS = (
     "id",
     "review_id",
     "transcript_id",
+    "call_id",
+    "meeting_id",
+    "recording_id",
     "document_id",
     "ticket_id",
     "case_id",
@@ -67,7 +74,17 @@ _TEXT_KEYS = (
     "comment_text",
     "open_ended_response",
 )
-_THREAD_KEYS = ("messages", "comments", "thread", "conversation", "entries")
+_THREAD_KEYS = (
+    "messages",
+    "comments",
+    "thread",
+    "conversation",
+    "entries",
+    "turns",
+    "segments",
+    "utterances",
+    "dialogue",
+)
 # Thread items favor message-shaped keys before generic body/content keys,
 # while row-level source text keeps document/review body precedence.
 _THREAD_TEXT_KEYS = (
@@ -420,6 +437,10 @@ def _infer_source_type(row: Mapping[str, Any]) -> str:
         return "review"
     if row.get("transcript") is not None:
         return "transcript"
+    if row.get("call_id") is not None or row.get("recording_id") is not None:
+        return "sales_call"
+    if row.get("meeting_id") is not None:
+        return "meeting"
     if row.get("complaint") is not None:
         return "complaint"
     if row.get("ticket_id") is not None:

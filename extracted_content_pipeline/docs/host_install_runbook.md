@@ -413,6 +413,14 @@ entry per saved row after successful writes. `--validate-opportunities` checks
 each row against active `campaign_opportunities` before saving, which catches
 typoed selectors during larger host imports.
 
+Source-row bundles can also include sales-call and meeting exports under
+`calls`, `call_transcripts`, `meetings`, or `meeting_transcripts`. Use
+`call_id`, `meeting_id`, or `recording_id` as the source identifier and provide
+`transcript`, `summary`, `notes`, or threaded `messages` / `turns` / `segments`
+when the export does not have a single `review_text` field. `recording_id`
+infers `sales_call`; rename ambiguous non-call recording identifiers before
+import.
+
 ## Step 6: Add Optional Prompt Overrides
 
 Use packaged skills by default. To override copy strategy, provide a markdown
