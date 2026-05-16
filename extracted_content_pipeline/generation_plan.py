@@ -20,17 +20,15 @@ from .control_surfaces import (
     request_from_mapping,
 )
 from .landing_page_generation import LandingPageGenerationConfig
-from .reasoning_policy import resolve_reasoning_policy
+from .reasoning_policy import (
+    NOOP_REASONING_PRESETS,
+    PACKAGED_REASONING_RUNTIME_OUTPUTS,
+    PACKAGED_REASONING_RUNTIME_PRESETS,
+    resolve_reasoning_policy,
+)
 from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
-
-_RUNTIME_PACKAGED_REASONING_PRESETS = frozenset({
-    "none",
-    "context_only",
-    "multi_pass_structured",
-    "multi_pass_strict",
-})
 
 
 @dataclass(frozen=True)
@@ -116,7 +114,9 @@ def _reasoning_config_for_output(output: str, request: ContentOpsRequest) -> dic
     if request.reasoning_preset is None:
         return {}
     _policy, definition = resolve_reasoning_policy(output, request.reasoning_preset)
-    if definition.id not in _RUNTIME_PACKAGED_REASONING_PRESETS:
+    if definition.id in NOOP_REASONING_PRESETS:
+        return {}
+    if definition.id not in PACKAGED_REASONING_RUNTIME_PRESETS:
         raise ValueError(
             "Content Ops packaged reasoning currently supports "
             "multi_pass_structured or multi_pass_strict for report and sales_brief."
@@ -128,6 +128,27 @@ def _reasoning_config_for_output(output: str, request: ContentOpsRequest) -> dic
         "reasoning_output_validation": definition.output_validation,
         "reasoning_blocking_validation": definition.blocking_validation,
     }
+
+
+def _validate_reasoning_runtime_request(
+    outputs: tuple[str, ...],
+    request: ContentOpsRequest,
+) -> None:
+    preset = request.reasoning_preset
+    if preset is None:
+        return
+    selected = str(preset or "").strip()
+    if not selected or selected in NOOP_REASONING_PRESETS:
+        return
+    runtime_outputs = tuple(
+        output for output in outputs if output in PACKAGED_REASONING_RUNTIME_OUTPUTS
+    )
+    if not runtime_outputs:
+        raise ValueError(
+            "reasoning_preset currently applies only to report and sales_brief."
+        )
+    for output in runtime_outputs:
+        _reasoning_config_for_output(output, request)
 
 
 def _landing_page_config_for_request(request: ContentOpsRequest) -> LandingPageGenerationConfig:
@@ -306,6 +327,7 @@ def build_generation_plan(request: ContentOpsRequest) -> GenerationPlan:
 
     preview = preview_control_surface(request)
     normalized = preview.normalized_request or request
+    _validate_reasoning_runtime_request(preview.outputs, normalized)
     steps = tuple(_step_for_output(output, normalized) for output in preview.outputs)
     can_execute = (
         preview.can_run

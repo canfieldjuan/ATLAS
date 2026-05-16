@@ -116,6 +116,17 @@ _LANDING_PAGE_PRESETS: tuple[ReasoningPreset, ...] = (
     "multi_pass_structured",
 )
 
+PACKAGED_REASONING_RUNTIME_OUTPUTS: tuple[str, ...] = ("report", "sales_brief")
+PACKAGED_REASONING_RUNTIME_PRESETS: tuple[ReasoningPreset, ...] = (
+    "multi_pass_structured",
+    "multi_pass_strict",
+)
+NOOP_REASONING_PRESETS: tuple[ReasoningPreset, ...] = tuple(
+    preset
+    for preset, definition in REASONING_PRESETS.items()
+    if not definition.generated_reasoning
+)
+
 
 OUTPUT_REASONING_POLICIES: Mapping[str, OutputReasoningPolicy] = MappingProxyType({
     "signal_extraction": OutputReasoningPolicy(

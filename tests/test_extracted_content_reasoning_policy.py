@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 
 from extracted_content_pipeline.reasoning_policy import (
+    NOOP_REASONING_PRESETS,
     OUTPUT_REASONING_POLICIES,
+    PACKAGED_REASONING_RUNTIME_OUTPUTS,
+    PACKAGED_REASONING_RUNTIME_PRESETS,
     REASONING_PRESETS,
     OutputReasoningPolicy,
     output_reasoning_policy,
@@ -58,6 +61,23 @@ def test_reasoning_policies_cover_every_output_catalog_entry() -> None:
     from extracted_content_pipeline.control_surfaces import OUTPUT_CATALOG
 
     assert set(OUTPUT_REASONING_POLICIES) == set(OUTPUT_CATALOG)
+
+
+def test_packaged_runtime_reasoning_surface_is_catalog_supported() -> None:
+    from extracted_content_pipeline.control_surfaces import OUTPUT_CATALOG
+
+    assert set(PACKAGED_REASONING_RUNTIME_OUTPUTS) <= set(OUTPUT_CATALOG)
+    for output in PACKAGED_REASONING_RUNTIME_OUTPUTS:
+        assert OUTPUT_CATALOG[output].implemented is True
+        policy = output_reasoning_policy(output)
+        for preset in PACKAGED_REASONING_RUNTIME_PRESETS:
+            assert policy.supports(preset)
+
+
+def test_noop_reasoning_presets_are_derived_from_catalog() -> None:
+    assert NOOP_REASONING_PRESETS == ("none", "context_only")
+    for preset in NOOP_REASONING_PRESETS:
+        assert not REASONING_PRESETS[preset].generated_reasoning
 
 
 def test_output_policy_invariants_are_enforced() -> None:

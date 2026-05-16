@@ -197,7 +197,9 @@ source of truth for what remains.
   request explicitly sets `reasoning_preset` and the host supplies an LLM
   provider. Strict mode uses the same provider plus citation validation and
   fails closed before report/sales generation when validation blockers are
-  present.
+  present. The plan and execute paths share the same packaged runtime
+  output/preset constants so unsupported reasoning requests fail consistently
+  instead of silently dropping requested reasoning.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
