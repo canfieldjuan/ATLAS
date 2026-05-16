@@ -171,6 +171,7 @@ class ContentOpsControlSurfaceApiConfig:
     structured_reasoning_pack_name: str = "content_ops_structured"
     structured_reasoning_top_thesis_limit: int = 5
     structured_reasoning_max_continuations: int = 8
+    structured_reasoning_require_citations: bool = True
 
     def __post_init__(self) -> None:
         if not str(self.prefix or "").strip().startswith("/"):
@@ -185,6 +186,56 @@ class ContentOpsControlSurfaceApiConfig:
             raise ValueError("structured_reasoning_top_thesis_limit must be positive")
         if self.structured_reasoning_max_continuations < 0:
             raise ValueError("structured_reasoning_max_continuations must be non-negative")
+
+
+@dataclass(frozen=True)
+class _BlockingReasoningContextProvider:
+    provider: Any
+
+    async def read_campaign_reasoning_context(
+        self,
+        *,
+        scope: TenantScope,
+        target_id: str,
+        target_mode: str,
+        opportunity: Mapping[str, Any],
+    ) -> Any:
+        context = await self.provider.read_campaign_reasoning_context(
+            scope=scope,
+            target_id=target_id,
+            target_mode=target_mode,
+            opportunity=opportunity,
+        )
+        if context is None:
+            raise RuntimeError("reasoning_validation_blocked")
+        validation = _reasoning_validation_from_context(context)
+        if validation is not None and validation.get("passed") is False:
+            blockers = [
+                str(item).strip()
+                for item in _clean_status_scalar_sequence(validation.get("blockers"))
+                if str(item).strip()
+            ]
+            suffix = f":{','.join(blockers)}" if blockers else ""
+            raise RuntimeError(f"reasoning_validation_blocked{suffix}")
+        return context
+
+
+def _reasoning_validation_from_context(context: Any) -> Mapping[str, Any] | None:
+    canonical = getattr(context, "canonical_reasoning", None)
+    if isinstance(canonical, Mapping):
+        validation = canonical.get("validation")
+        if isinstance(validation, Mapping):
+            return validation
+    if isinstance(context, Mapping):
+        validation = context.get("validation")
+        if isinstance(validation, Mapping):
+            return validation
+        canonical = context.get("canonical_reasoning")
+        if isinstance(canonical, Mapping):
+            validation = canonical.get("validation")
+            if isinstance(validation, Mapping):
+                return validation
+    return None
 
 
 if BaseModel is not None:
@@ -438,23 +489,28 @@ async def _structured_reasoning_context(
             status_code=400,
             detail="reasoning_preset currently applies only to report and sales_brief.",
         )
+    reasoning_definition = None
     for output in supported_outputs:
         try:
             _policy, definition = resolve_reasoning_policy(output, preset)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if definition.id != "multi_pass_structured":
+        reasoning_definition = definition
+        if definition.id not in {"multi_pass_structured", "multi_pass_strict"}:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Content Ops packaged reasoning currently supports "
-                    "multi_pass_structured for report and sales_brief."
+                    "multi_pass_structured or multi_pass_strict for report "
+                    "and sales_brief."
                 ),
             )
     selected_outputs = [
         output for output in supported_outputs if output in services.configured_outputs()
     ]
     if not selected_outputs:
+        return None, ()
+    if reasoning_definition is None:
         return None, ()
     for output in selected_outputs:
         service = services.for_output(output)
@@ -482,14 +538,14 @@ async def _structured_reasoning_context(
             detail="Content Ops structured reasoning LLM is unavailable.",
         )
     # Lazy import keeps hosts without structured reasoning free of these deps.
-    from extracted_reasoning_core.types import ReasoningPack, ReasoningPorts
+    from extracted_reasoning_core.types import OutputPolicy, ReasoningPack, ReasoningPorts
 
     from ..services.multi_pass_reasoning_provider import (
         MultiPassCampaignReasoningProvider,
         MultiPassReasoningProviderConfig,
     )
 
-    return MultiPassCampaignReasoningProvider(
+    provider = MultiPassCampaignReasoningProvider(
         ports=ReasoningPorts(llm=llm),
         config=MultiPassReasoningProviderConfig(
             default_goal=config.structured_reasoning_default_goal,
@@ -499,8 +555,17 @@ async def _structured_reasoning_context(
             narrative_plan_pack=ReasoningPack(
                 name=config.structured_reasoning_pack_name,
             ),
+            output_policy=OutputPolicy(
+                require_citations=config.structured_reasoning_require_citations,
+            ),
+            # Keep the inner provider nonblocking so strict wrappers can
+            # surface validation blocker details instead of a generic None.
+            block_on_validation_failure=False,
         ),
-    ), tuple(selected_outputs)
+    )
+    if reasoning_definition.blocking_validation:
+        provider = _BlockingReasoningContextProvider(provider)
+    return provider, tuple(selected_outputs)
 
 
 async def _resolve_reasoning_status(

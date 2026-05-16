@@ -188,6 +188,12 @@ source of truth for what remains.
   or changing runtime behavior. `blog_post` defaults to `multi_pass_light` as
   a quality-over-cost choice; hosts that want cheaper blog runs can select
   `single_pass`.
+- `/content-ops/execute` can construct packaged `multi_pass_structured` or
+  `multi_pass_strict` reasoning for `report` and `sales_brief` when the
+  request explicitly sets `reasoning_preset` and the host supplies an LLM
+  provider. Strict mode uses the same provider plus citation validation and
+  fails closed before report/sales generation when validation blockers are
+  present.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared

@@ -98,7 +98,6 @@ REASONING_PRESETS: Mapping[str, ReasoningPresetDefinition] = MappingProxyType({
         generated_reasoning=True,
         multi_pass=True,
         narrative_planning=True,
-        falsification=True,
         output_validation=True,
         blocking_validation=True,
     ),

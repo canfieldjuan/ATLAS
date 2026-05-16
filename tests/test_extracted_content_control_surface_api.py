@@ -5,6 +5,7 @@ from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
 )
+from extracted_content_pipeline.campaign_ports import CampaignReasoningContext
 from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
 
 
@@ -729,6 +730,15 @@ class _ProviderRecordingService:
         return {"generated": 1, "saved_ids": ["draft-1"]}
 
 
+class _StaticReasoningProvider:
+    def __init__(self, context):
+        self.context = context
+
+    async def read_campaign_reasoning_context(self, **kwargs):
+        del kwargs
+        return self.context
+
+
 @pytest.mark.asyncio
 async def test_execute_route_threads_reasoning_provider_into_services():
     """A configured ``reasoning_context_provider`` reaches the service
@@ -897,10 +907,87 @@ async def test_execute_route_builds_structured_reasoning_for_report_only():
     provider = recorded_providers[0]
     assert provider._config.default_goal == "synthesize content reasoning context"
     assert provider._config.narrative_plan_pack.name == "content_ops_structured"
-    assert provider._config.output_policy is None
+    assert provider._config.output_policy is not None
+    assert provider._config.output_policy.require_citations is True
+    assert provider._config.block_on_validation_failure is False
     assert campaign.calls[0]["reasoning_context"] is None
     email_step = next(step for step in payload["steps"] if step["output"] == "email_campaign")
     assert email_step["reasoning"]["provider_configured"] is False
+
+
+@pytest.mark.asyncio
+async def test_execute_route_wraps_strict_reasoning_with_blocking_provider():
+    recorded_providers = []
+    report = _ProviderRecordingService(recorded_providers)
+
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(report=report),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["report"],
+            "reasoning_preset": "multi_pass_strict",
+            "inputs": {"opportunity_id": "opp-1"},
+        }
+    )
+
+    provider = recorded_providers[0]
+    assert provider.provider._config.output_policy is not None
+    assert provider.provider._config.block_on_validation_failure is False
+
+
+@pytest.mark.asyncio
+async def test_execute_route_can_relax_strict_reasoning_citation_policy():
+    recorded_providers = []
+    report = _ProviderRecordingService(recorded_providers)
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            structured_reasoning_require_citations=False,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(report=report),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["report"],
+            "reasoning_preset": "multi_pass_strict",
+            "inputs": {"opportunity_id": "opp-1"},
+        }
+    )
+
+    provider = recorded_providers[0]
+    assert provider.provider._config.output_policy is not None
+    assert provider.provider._config.output_policy.require_citations is False
+    assert provider.provider._config.block_on_validation_failure is False
+
+
+@pytest.mark.asyncio
+async def test_blocking_reasoning_provider_surfaces_validation_blockers():
+    context = CampaignReasoningContext(
+        canonical_reasoning={
+            "validation": {
+                "passed": False,
+                "blockers": ("claim_missing_citations:0",),
+            }
+        }
+    )
+    provider = api_module._BlockingReasoningContextProvider(
+        _StaticReasoningProvider(context)
+    )
+
+    with pytest.raises(RuntimeError, match="claim_missing_citations:0"):
+        await provider.read_campaign_reasoning_context(
+            scope=None,
+            target_id="opp-1",
+            target_mode="vendor_retention",
+            opportunity={},
+        )
 
 
 @pytest.mark.parametrize(
@@ -917,12 +1004,21 @@ async def test_execute_route_builds_structured_reasoning_for_report_only():
         ),
         (
             {
+                "outputs": ["blog_post"],
+                "reasoning_preset": "garbage",
+                "inputs": {"topic": "Churn pressure"},
+            },
+            422,
+            "multi_pass_strict",
+        ),
+        (
+            {
                 "outputs": ["report"],
-                "reasoning_preset": "multi_pass_strict",
+                "reasoning_preset": "multi_pass_light",
                 "inputs": {"opportunity_id": "opp-1"},
             },
             400,
-            "multi_pass_structured",
+            "multi_pass_structured or multi_pass_strict",
         ),
         (
             {
@@ -1032,12 +1128,12 @@ async def test_execute_route_validates_packaged_preset_before_service_capability
     with pytest.raises(api_module.HTTPException) as exc:
         await route.endpoint({
             "outputs": ["report"],
-            "reasoning_preset": "multi_pass_strict",
+            "reasoning_preset": "multi_pass_light",
             "inputs": {"opportunity_id": "opp-1"},
         })
 
     assert exc.value.status_code == 400
-    assert "multi_pass_structured" in str(exc.value.detail)
+    assert "multi_pass_structured or multi_pass_strict" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,7 @@ _RUNTIME_PACKAGED_REASONING_PRESETS = frozenset({
     "none",
     "context_only",
     "multi_pass_structured",
+    "multi_pass_strict",
 })
 
 
@@ -118,7 +119,7 @@ def _reasoning_config_for_output(output: str, request: ContentOpsRequest) -> dic
     if definition.id not in _RUNTIME_PACKAGED_REASONING_PRESETS:
         raise ValueError(
             "Content Ops packaged reasoning currently supports "
-            "multi_pass_structured for report and sales_brief."
+            "multi_pass_structured or multi_pass_strict for report and sales_brief."
         )
     return {
         "reasoning_preset": definition.id,
