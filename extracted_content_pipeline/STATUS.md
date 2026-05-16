@@ -175,9 +175,10 @@ source of truth for what remains.
   `reasoning` audit mirrors those as `contexts_used` and `consumed_contexts`.
   When strict reasoning validation blocks an asset before prompt generation,
   the same per-step audit marks `validation_blocked` and includes compact
-  `validation_failures` for operator inspection. Atlas Intel renders compact
-  consumed-context summaries; a fuller drawer/detail UX remains a frontend
-  follow-up.
+  `validation_failures` for operator inspection, and the executor logs
+  `content_ops_strict_validation_blocked` with output/failure-count metadata.
+  Atlas Intel renders compact consumed-context summaries; a fuller
+  drawer/detail UX remains a frontend follow-up.
 - `docs/audits/content_ops_reasoning_policy_audit_2026-05-16.md` defines the
   next reasoning-depth direction: keep reasoning behind the
   `CampaignReasoningContextProvider` boundary, expose depth through named

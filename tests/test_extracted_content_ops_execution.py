@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -1098,6 +1099,56 @@ async def test_execute_step_reports_strict_validation_failures_from_result_error
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_execute_step_logs_strict_validation_failures(caplog: pytest.LogCaptureFixture):
+    class _StrictBlockedService(_ReasoningAwareOpportunityService):
+        async def generate(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(dict(kwargs))
+            return {
+                "generated": 0,
+                "skipped": 1,
+                "reasoning_contexts_used": 0,
+                "errors": [
+                    {
+                        "target_id": "vendor-acme",
+                        "reason": "reasoning_validation_blocked:no_claims",
+                    }
+                ],
+            }
+
+    caplog.set_level(
+        logging.WARNING,
+        logger="extracted_content_pipeline.content_ops_execution",
+    )
+    services = ContentOpsExecutionServices(
+        report=_StrictBlockedService(),
+        reasoning_provider_configured=True,
+        reasoning_provider_outputs=("report",),
+    )
+
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["report"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Audit",
+                "opportunity_id": "opp-1",
+            },
+        },
+        services=services,
+    )
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "content_ops_strict_validation_blocked"
+    ]
+    assert len(records) == 1
+    assert records[0].output == "report"
+    assert records[0].failure_count == 1
+    assert records[0].truncated is False
 
 
 @pytest.mark.asyncio
