@@ -114,8 +114,9 @@ class HostReasoningProvider:
 `campaign_reasoning_data.FileCampaignReasoningContextProvider` is the reference
 adapter for hosts that already have reasoning output as JSON. It accepts
 context rows keyed by target id, company, email, or vendor, normalizes them into
-`CampaignReasoningContext`, and keeps AI Content Ops independent from any
-reasoning producer.
+`CampaignReasoningContext`, filters mode-specific rows by `target_mode`, and
+keeps AI Content Ops independent from any reasoning producer. Rows that omit
+`target_mode` remain shared fallback contexts for simple installs.
 
 ```bash
 python scripts/run_extracted_campaign_generation_example.py \
