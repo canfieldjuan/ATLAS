@@ -27,6 +27,14 @@ _ROW_LIST_KEYS = (
     "call_transcripts",
     "meetings",
     "meeting_transcripts",
+    "deals",
+    "crm_deals",
+    "crm_opportunities",
+    "deal_notes",
+    "opportunity_notes",
+    "account_notes",
+    "crm_notes",
+    "activities",
     "complaints",
     "support_tickets",
     "tickets",
@@ -48,6 +56,10 @@ _SOURCE_ID_KEYS = (
     "call_id",
     "meeting_id",
     "recording_id",
+    "deal_id",
+    "opportunity_id",
+    "note_id",
+    "activity_id",
     "document_id",
     "ticket_id",
     "case_id",
@@ -441,6 +453,10 @@ def _infer_source_type(row: Mapping[str, Any]) -> str:
         return "sales_call"
     if row.get("meeting_id") is not None:
         return "meeting"
+    if row.get("deal_id") is not None or row.get("opportunity_id") is not None:
+        return "crm_deal"
+    if row.get("note_id") is not None or row.get("activity_id") is not None:
+        return "crm_note"
     if row.get("complaint") is not None:
         return "complaint"
     if row.get("ticket_id") is not None:
