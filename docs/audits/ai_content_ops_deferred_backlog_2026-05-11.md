@@ -50,6 +50,8 @@ The following items appear in older plan docs but are no longer active backlog:
 - Source-adapter cumulative audit and decision rules.
 - Source-type precedence consolidation.
 - Source-row field lookup cache for provider-style aliases.
+- Host-facing reasoning policy audit for falsification, narrative planning,
+  validation, and per-content-type depth.
 
 ## Active Backlog
 
@@ -62,18 +64,22 @@ multi-pass reasoning context. Source ingestion is now broad enough for current
 standalone use. The next value step is deciding how much of the standalone
 reasoning layer each content type should expose.
 
+Current policy audit:
+
+- `docs/audits/content_ops_reasoning_policy_audit_2026-05-16.md`
+
 Remaining work:
 
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
-- Host policy for richer falsification/cache/narrative-planning knobs.
-- Per-content-type opt-in rules so simple assets avoid heavy reasoning paths
-  while long-form assets can use stateful reasoning.
+- Reasoning preset catalog for `none`, `context_only`, `single_pass`,
+  `multi_pass_light`, `multi_pass_structured`, and `multi_pass_strict`.
+- First runtime wiring for structured reasoning on `report` and `sales_brief`.
+- Validation metadata surfacing before any strict blocking mode.
 
-**Likely slice:** audit and document host-facing reasoning policy choices for
-falsification, narrative planning, output validation, and per-content-type
-opt-in depth. Use that audit to pick the first small wiring slice. Do not add
-more source-adapter breadth unless a real customer/source export requires it.
+**Likely slice:** add the reasoning preset catalog as a pure policy/config
+layer first. Do not wire every typed policy object into runtime yet. Use the
+catalog to make the next report/sales-brief structured-reasoning slice small.
 
 ### 2. Source breadth from real host exports
 
@@ -96,7 +102,7 @@ remains roadmap work or should be removed from active backlog.
 
 ## Current Pick Recommendation
 
-Take item 1 next. Source-adapter consolidation is complete for now; the
-remaining leverage is reasoning-policy depth for long-form and multi-asset
-outputs. Source breadth should pause until a real host export or field-loss
-risk appears.
+Take item 1 next, specifically the reasoning preset catalog. Source-adapter
+consolidation is complete for now; the remaining leverage is controlled
+reasoning-policy depth for long-form and multi-asset outputs. Source breadth
+should pause until a real host export or field-loss risk appears.
