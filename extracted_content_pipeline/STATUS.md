@@ -50,7 +50,8 @@ source of truth for what remains.
   `thread`, `conversation`, or `entries` arrays when the source text is not
   available as one scalar field. Source-row field labels are matched leniently
   for common CSV/export variants such as `Ticket ID`, `Account Name`,
-  `Pain Category`, and `Open Ended Response`.
+  `Pain Category`, and `Open Ended Response`; source-type precedence is
+  explicit and provider-style field lookups are cached per row.
 - `signal_extraction` exposes source-row normalization as a runnable AI Content
   Ops output. It converts inline source material into normalized opportunities
   without LLM, database, or Atlas dependencies.
