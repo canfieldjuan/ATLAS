@@ -288,6 +288,116 @@ def test_source_row_prefers_review_type_over_crm_deal_id() -> None:
     assert opportunity["source_type"] == "review"
 
 
+def test_source_row_maps_contract_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "contract_id": "contract-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "contract_end_date": "2026-07-01",
+        "summary": "The contract is up for renewal while Salesforce is in evaluation.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "contract-1"
+    assert opportunity["company_name"] == "Acme Logistics"
+    assert opportunity["contract_end_date"] == "2026-07-01"
+    assert opportunity["source_type"] == "contract"
+    assert opportunity["evidence"][0] == {
+        "text": "The contract is up for renewal while Salesforce is in evaluation.",
+        "source_id": "contract-1",
+        "source_type": "contract",
+    }
+
+
+def test_source_row_maps_renewal_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "renewal_id": "renewal-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "notes": "Renewal is blocked until attribution exports are resolved.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "renewal-1"
+    assert opportunity["source_type"] == "renewal"
+    assert opportunity["evidence"][0] == {
+        "text": "Renewal is blocked until attribution exports are resolved.",
+        "source_id": "renewal-1",
+        "source_type": "renewal",
+    }
+
+
+def test_source_row_maps_subscription_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "subscription_id": "subscription-1",
+        "company": "Acme Logistics",
+        "vendor": "HubSpot",
+        "message": "The team reduced seats after pricing changed.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "subscription-1"
+    assert opportunity["source_type"] == "subscription"
+    assert opportunity["evidence"][0] == {
+        "text": "The team reduced seats after pricing changed.",
+        "source_id": "subscription-1",
+        "source_type": "subscription",
+    }
+
+
+def test_source_row_prefers_review_type_over_contract_id() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "contract_id": "contract-1",
+        "review_text": "The reviewer called out implementation delays.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "contract-1"
+    assert opportunity["source_type"] == "review"
+
+
+def test_source_row_prefers_renewal_over_contract_id() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "renewal_id": "renewal-1",
+        "contract_id": "contract-1",
+        "summary": "Renewal approval is blocked on contract pricing proof.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "renewal-1"
+    assert opportunity["source_id"] == "renewal-1"
+    assert opportunity["source_type"] == "renewal"
+    assert opportunity["evidence"][0] == {
+        "text": "Renewal approval is blocked on contract pricing proof.",
+        "source_id": "renewal-1",
+        "source_type": "renewal",
+    }
+
+
+def test_source_row_prefers_renewal_over_subscription_id() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "renewal_id": "renewal-1",
+        "subscription_id": "subscription-1",
+        "message": "Renewal is at risk after the subscription seat reduction.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "renewal-1"
+    assert opportunity["source_type"] == "renewal"
+
+
+def test_source_row_prefers_note_type_over_subscription_context() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "note_id": "note-1",
+        "subscription_id": "subscription-1",
+        "notes": "CSM logged a subscription downgrade note.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "note-1"
+    assert opportunity["source_type"] == "crm_note"
+
+
 def test_source_row_prefers_scalar_text_over_thread_messages() -> None:
     opportunity, warnings = source_row_to_campaign_opportunity({
         "ticket_id": "ticket-thread-1",
@@ -616,6 +726,60 @@ def test_load_source_campaign_opportunities_from_crm_bundle(tmp_path: Path) -> N
         "text": "RevOps asked for proof on attribution exports.",
         "source_id": "note-1",
         "source_type": "crm_note",
+    }
+
+
+def test_load_source_campaign_opportunities_from_renewal_bundle(tmp_path: Path) -> None:
+    path = tmp_path / "renewal_bundle.json"
+    path.write_text(
+        json.dumps({
+            "account_id": "acct-1",
+            "company": "Acme Logistics",
+            "vendor": "HubSpot",
+            "contracts": [
+                {
+                    "contract_id": "contract-1",
+                    "summary": "Contract renewal is due this quarter.",
+                }
+            ],
+            "renewal_notes": [
+                {
+                    "renewal_id": "renewal-1",
+                    "notes": "Procurement asked for proof before renewal approval.",
+                }
+            ],
+            "subscriptions": [
+                {
+                    "subscription_id": "subscription-1",
+                    "message": "Seat count dropped after the new pricing tier.",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "contract-1",
+        "renewal-1",
+        "subscription-1",
+    ]
+    assert [row["source_type"] for row in loaded.opportunities] == [
+        "contract",
+        "renewal",
+        "subscription",
+    ]
+    assert [row["company_name"] for row in loaded.opportunities] == [
+        "Acme Logistics",
+        "Acme Logistics",
+        "Acme Logistics",
+    ]
+    assert loaded.opportunities[0]["account_id"] == "acct-1"
+    assert loaded.opportunities[2]["evidence"][0] == {
+        "text": "Seat count dropped after the new pricing tier.",
+        "source_id": "subscription-1",
+        "source_type": "subscription",
     }
 
 

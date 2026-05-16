@@ -35,6 +35,12 @@ _ROW_LIST_KEYS = (
     "account_notes",
     "crm_notes",
     "activities",
+    "contracts",
+    "contract_notes",
+    "renewals",
+    "renewal_notes",
+    "subscriptions",
+    "subscription_notes",
     "complaints",
     "support_tickets",
     "tickets",
@@ -60,6 +66,9 @@ _SOURCE_ID_KEYS = (
     "opportunity_id",
     "note_id",
     "activity_id",
+    "renewal_id",
+    "contract_id",
+    "subscription_id",
     "document_id",
     "ticket_id",
     "case_id",
@@ -457,6 +466,14 @@ def _infer_source_type(row: Mapping[str, Any]) -> str:
         return "crm_deal"
     if row.get("note_id") is not None or row.get("activity_id") is not None:
         return "crm_note"
+    # Notes stay typed as notes even when attached to a contract, renewal, or
+    # subscription export; the lifecycle id is context, not the evidence row.
+    if row.get("renewal_id") is not None:
+        return "renewal"
+    if row.get("contract_id") is not None:
+        return "contract"
+    if row.get("subscription_id") is not None:
+        return "subscription"
     if row.get("complaint") is not None:
         return "complaint"
     if row.get("ticket_id") is not None:
