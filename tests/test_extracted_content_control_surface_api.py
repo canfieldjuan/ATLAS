@@ -161,6 +161,53 @@ async def test_describe_control_surfaces_sanitizes_reasoning_status_lists():
 
 
 @pytest.mark.asyncio
+async def test_describe_control_surfaces_preserves_reasoning_capability_statuses():
+    router = create_content_ops_control_surface_router(
+        reasoning_context_provider=lambda: object(),
+        reasoning_status_provider=lambda: {
+            "configured": True,
+            "capabilities": {
+                "explicit_provider": {
+                    "configured": False,
+                    "ready": False,
+                    "active": False,
+                    "missing": ["reasoning_provider"],
+                    "unsafe": {"nested": "value"},
+                },
+                "multi_pass": {
+                    "configured": True,
+                    "ready": True,
+                    "active": True,
+                    "missing": [],
+                },
+                "bad": {"missing": [{"nested": "value"}]},
+                "": {"ready": True},
+            },
+        },
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    assert payload["reasoning"] == {
+        "configured": True,
+        "capabilities": {
+            "explicit_provider": {
+                "configured": False,
+                "ready": False,
+                "active": False,
+                "missing": ["reasoning_provider"],
+            },
+            "multi_pass": {
+                "configured": True,
+                "ready": True,
+                "active": True,
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_describe_control_surfaces_caps_reasoning_status_lists():
     router = create_content_ops_control_surface_router(
         reasoning_context_provider=lambda: object(),

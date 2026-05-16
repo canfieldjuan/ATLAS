@@ -32,6 +32,7 @@ import type {
   GenerationPlan,
   GenerationPlanStep,
   OutputDefinitionView,
+  ReasoningCapabilityStatus,
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -81,7 +82,7 @@ export function fromWireCatalog(
       source: wire.reasoning.source,
       modes: copyScalarList(wire.reasoning.modes),
       packs: copyScalarList(wire.reasoning.packs),
-      capabilities: copyScalarList(wire.reasoning.capabilities),
+      capabilities: copyReasoningCapabilities(wire.reasoning.capabilities),
     },
     ingestionProfiles: [...wire.ingestion_profiles],
   }
@@ -91,6 +92,28 @@ function copyScalarList(
   value: Array<string | number | boolean> | undefined,
 ): Array<string | number | boolean> | undefined {
   return value ? [...value] : undefined
+}
+
+function copyReasoningCapabilities(
+  value:
+    | Array<string | number | boolean>
+    | Record<string, ReasoningCapabilityStatus>
+    | undefined,
+):
+  | Array<string | number | boolean>
+  | Record<string, ReasoningCapabilityStatus>
+  | undefined {
+  if (!value) return undefined
+  if (Array.isArray(value)) return [...value]
+  return Object.fromEntries(
+    Object.entries(value).map(([key, status]) => [
+      key,
+      {
+        ...status,
+        missing: status.missing ? [...status.missing] : undefined,
+      },
+    ]),
+  )
 }
 
 // ---------------------------------------------------------------------------

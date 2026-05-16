@@ -1330,7 +1330,7 @@ function reasoningStatusHint(
   const values = [
     ...(reasoning.modes ?? []),
     ...(reasoning.packs ?? []),
-    ...(reasoning.capabilities ?? []),
+    ...reasoningCapabilityValues(reasoning.capabilities),
   ]
     .map((value) => String(value).trim())
     .filter(Boolean)
@@ -1340,6 +1340,27 @@ function reasoningStatusHint(
   const suffix = values.length > shown.length ? ` +${values.length - shown.length} more` : ''
   const hint = `${shown.join(', ')}${suffix}`
   return hint.length > 42 ? `(${values.length} capabilities)` : `(${hint})`
+}
+
+function reasoningCapabilityValues(
+  capabilities: ContentOpsCatalog['reasoning']['capabilities'],
+): string[] {
+  if (!capabilities) return []
+  if (Array.isArray(capabilities)) {
+    return capabilities.map((value) => String(value))
+  }
+  return Object.entries(capabilities)
+    .map(([name, status]) => {
+      const label = name.replace(/_/g, ' ')
+      if (status.active && status.ready) return `${label} active`
+      if (status.ready) return `${label} ready`
+      if (status.configured) {
+        const missing = status.missing?.filter(Boolean).join('/')
+        return missing ? `${label} missing ${missing}` : `${label} configured`
+      }
+      return ''
+    })
+    .filter(Boolean)
 }
 
 function SignalExtractionSummary({ result }: { result: Record<string, unknown> }) {

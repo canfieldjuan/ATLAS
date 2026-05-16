@@ -54,9 +54,18 @@ export interface ContentOpsCatalog {
     source?: 'db' | 'file' | 'none' | string
     modes?: Array<string | number | boolean>
     packs?: Array<string | number | boolean>
-    capabilities?: Array<string | number | boolean>
+    capabilities?:
+      | Array<string | number | boolean>
+      | Record<string, ReasoningCapabilityStatus>
   }
   ingestionProfiles: string[]
+}
+
+export interface ReasoningCapabilityStatus {
+  configured?: boolean
+  ready?: boolean
+  active?: boolean
+  missing?: string[]
 }
 
 // ---------------------------------------------------------------------------

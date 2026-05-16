@@ -75,9 +75,18 @@ export interface ContentOpsCatalogResponse {
     source?: 'db' | 'file' | 'none' | string
     modes?: Array<string | number | boolean>
     packs?: Array<string | number | boolean>
-    capabilities?: Array<string | number | boolean>
+    capabilities?:
+      | Array<string | number | boolean>
+      | Record<string, ContentOpsReasoningCapabilityStatus>
   }
   ingestion_profiles: string[]
+}
+
+export interface ContentOpsReasoningCapabilityStatus {
+  configured?: boolean
+  ready?: boolean
+  active?: boolean
+  missing?: string[]
 }
 
 // POST /content-ops/preview, /plan, /execute share this body shape.
