@@ -225,9 +225,10 @@ python scripts/run_extracted_campaign_generation_example.py \
 ```
 
 `campaign_reasoning_data.FileCampaignReasoningContextProvider` matches context
-rows by target id, company, email, or vendor and feeds the normalized
-`CampaignReasoningContextProvider` port documented in
-`docs/reasoning_handoff_contract.md`.
+rows by target id, company, email, or vendor, filters rows by `target_mode`
+when provided, and feeds the normalized `CampaignReasoningContextProvider` port
+documented in `docs/reasoning_handoff_contract.md`. Rows with blank
+`target_mode` remain global fallbacks for lightweight legacy files.
 For DB-backed installs, validate a loaded `campaign_reasoning_contexts` row
 without running generation:
 

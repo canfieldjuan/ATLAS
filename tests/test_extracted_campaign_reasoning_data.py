@@ -136,6 +136,122 @@ async def test_file_reasoning_provider_does_not_match_on_target_mode_only() -> N
 
 
 @pytest.mark.asyncio
+async def test_file_reasoning_provider_filters_contexts_by_target_mode() -> None:
+    provider = FileCampaignReasoningContextProvider.from_payload({
+        "contexts": [
+            {
+                "target_id": "opp-1",
+                "target_mode": "sales_brief",
+                "reasoning_context": {"summary": "Sales brief context"},
+            },
+            {
+                "target_id": "opp-1",
+                "target_mode": "vendor_retention",
+                "reasoning_context": {"summary": "Campaign context"},
+            },
+        ]
+    })
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="opp-1",
+        target_mode="vendor_retention",
+        opportunity={},
+    )
+
+    assert context is not None
+    assert context.as_dict()["summary"] == "Campaign context"
+
+
+@pytest.mark.asyncio
+async def test_file_reasoning_provider_uses_blank_mode_as_fallback() -> None:
+    provider = FileCampaignReasoningContextProvider.from_payload({
+        "contexts": [
+            {
+                "target_id": "opp-1",
+                "reasoning_context": {"summary": "Global fallback"},
+            }
+        ]
+    })
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="opp-1",
+        target_mode="landing_page",
+        opportunity={},
+    )
+
+    assert context is not None
+    assert context.as_dict()["summary"] == "Global fallback"
+
+
+@pytest.mark.asyncio
+async def test_file_reasoning_provider_rejects_other_mode_without_fallback() -> None:
+    provider = FileCampaignReasoningContextProvider.from_payload({
+        "contexts": [
+            {
+                "target_id": "opp-1",
+                "target_mode": "sales_brief",
+                "reasoning_context": {"summary": "Sales brief context"},
+            }
+        ]
+    })
+
+    assert await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="opp-1",
+        target_mode="vendor_retention",
+        opportunity={},
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_file_reasoning_provider_normalizes_target_mode() -> None:
+    provider = FileCampaignReasoningContextProvider.from_payload({
+        "contexts": [
+            {
+                "target_id": "opp-1",
+                "target_mode": "Vendor_Retention",
+                "reasoning_context": {"summary": "Campaign context"},
+            }
+        ]
+    })
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="opp-1",
+        target_mode=" vendor_retention ",
+        opportunity={},
+    )
+
+    assert context is not None
+    assert context.as_dict()["summary"] == "Campaign context"
+
+
+@pytest.mark.asyncio
+async def test_file_reasoning_provider_empty_mode_keeps_legacy_broad_lookup() -> None:
+    provider = FileCampaignReasoningContextProvider.from_payload({
+        "contexts": [
+            {
+                "target_id": "opp-1",
+                "target_mode": "sales_brief",
+                "reasoning_context": {"summary": "First indexed context"},
+            }
+        ]
+    })
+
+    context = await provider.read_campaign_reasoning_context(
+        scope=TenantScope(),
+        target_id="opp-1",
+        target_mode="",
+        opportunity={},
+    )
+
+    assert context is not None
+    assert context.as_dict()["summary"] == "First indexed context"
+
+
+@pytest.mark.asyncio
 async def test_load_file_reasoning_provider(tmp_path) -> None:
     path = tmp_path / "reasoning.json"
     path.write_text(

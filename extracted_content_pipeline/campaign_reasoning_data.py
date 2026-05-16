@@ -31,6 +31,12 @@ _CONTEXT_FIELD_KEYS = {"context", "reasoning_context", "campaign_reasoning_conte
 
 
 @dataclass(frozen=True)
+class _IndexedReasoningContext:
+    target_mode: str
+    context: CampaignReasoningContext
+
+
+@dataclass(frozen=True)
 class FileCampaignReasoningContextProvider:
     """CampaignReasoningContextProvider backed by loaded JSON rows.
 
@@ -40,7 +46,7 @@ class FileCampaignReasoningContextProvider:
     reasoning producer.
     """
 
-    contexts: Mapping[str, CampaignReasoningContext]
+    contexts: Mapping[str, tuple[_IndexedReasoningContext, ...]]
     source: str | None = None
 
     @classmethod
@@ -69,9 +75,9 @@ class FileCampaignReasoningContextProvider:
         opportunity: Mapping[str, Any],
     ) -> CampaignReasoningContext | None:
         del scope
-        del target_mode
+        mode = str(target_mode or "").strip().lower()
         for key in _candidate_keys(target_id=target_id, opportunity=opportunity):
-            context = self.contexts.get(key)
+            context = _select_context(self.contexts.get(key, ()), target_mode=mode)
             if context is not None:
                 return context
         return None
@@ -119,16 +125,41 @@ def _looks_like_mapping_index(payload: Mapping[str, Any]) -> bool:
     return all(isinstance(value, Mapping) for value in payload.values())
 
 
-def _index_contexts(rows: Sequence[Mapping[str, Any]]) -> dict[str, CampaignReasoningContext]:
-    indexed: dict[str, CampaignReasoningContext] = {}
+def _index_contexts(rows: Sequence[Mapping[str, Any]]) -> dict[str, tuple[_IndexedReasoningContext, ...]]:
+    indexed: dict[str, tuple[_IndexedReasoningContext, ...]] = {}
     for row in rows:
         selectors = _row_selectors(row)
         context = normalize_campaign_reasoning_context(_row_context(row))
         if not selectors or not context.has_content():
             continue
+        indexed_context = _IndexedReasoningContext(
+            target_mode=str(row.get("target_mode") or "").strip().lower(),
+            context=context,
+        )
         for selector in selectors:
-            indexed.setdefault(selector, context)
+            existing = indexed.get(selector, ())
+            if any(item.target_mode == indexed_context.target_mode for item in existing):
+                continue
+            indexed[selector] = (*existing, indexed_context)
     return indexed
+
+
+def _select_context(
+    entries: Sequence[_IndexedReasoningContext],
+    *,
+    target_mode: str,
+) -> CampaignReasoningContext | None:
+    if not entries:
+        return None
+    if not target_mode:
+        return entries[0].context
+    for entry in entries:
+        if entry.target_mode == target_mode:
+            return entry.context
+    for entry in entries:
+        if entry.target_mode == "":
+            return entry.context
+    return None
 
 
 def _row_context(row: Mapping[str, Any]) -> Mapping[str, Any]:
