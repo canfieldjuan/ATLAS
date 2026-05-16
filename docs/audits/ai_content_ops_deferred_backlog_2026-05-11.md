@@ -77,13 +77,15 @@ Remaining work:
 
 - Continued `extracted_reasoning_core` work if reasoning is sold as a stronger
   standalone layer.
-- First runtime wiring for structured reasoning on `report` and `sales_brief`.
-- Validation metadata surfacing before any strict blocking mode.
+- Host-owned falsification policy wiring for strict presets.
+- Operator-facing validation telemetry beyond the current strict failure
+  reason surfaced through generated-asset errors.
 
-**Likely slice:** use the reasoning preset catalog to wire structured
-multi-pass reasoning for `report` and `sales_brief`. Keep provider construction
-scoped to those two outputs; do not add strict blocking until validation
-metadata is visible to operators.
+**Shipped slice:** structured and strict multi-pass reasoning are wired for
+`report` and `sales_brief`. Strict mode now fails closed before those assets are
+generated when validation blockers are present, and the generated-asset error
+reason includes the validation blocker identifiers. Richer operator telemetry
+is still a follow-up.
 
 ### 2. Source breadth from real host exports
 

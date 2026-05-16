@@ -35,7 +35,7 @@ def test_preset_capabilities_increase_by_depth() -> None:
     assert REASONING_PRESETS["multi_pass_structured"].narrative_planning
     assert REASONING_PRESETS["multi_pass_structured"].output_validation
     assert not REASONING_PRESETS["multi_pass_structured"].blocking_validation
-    assert REASONING_PRESETS["multi_pass_strict"].falsification
+    assert REASONING_PRESETS["multi_pass_strict"].falsification is False
     assert REASONING_PRESETS["multi_pass_strict"].blocking_validation
 
 

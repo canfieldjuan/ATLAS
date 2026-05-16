@@ -114,6 +114,19 @@ class _ReasoningProvider:
         return self.context
 
 
+class _BlockingReasoningProvider:
+    async def read_campaign_reasoning_context(
+        self,
+        *,
+        scope,
+        target_id,
+        target_mode,
+        opportunity,
+    ):
+        del scope, target_id, target_mode, opportunity
+        raise RuntimeError("reasoning_validation_blocked")
+
+
 def _opportunity():
     return {
         "id": "opp-1",
@@ -401,6 +414,29 @@ async def test_generate_consumes_reasoning_context_via_provider() -> None:
     assert result_dict["consumed_reasoning_contexts"][0]["top_theses"][0]["claim"] == (
         "Renewal pricing"
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_when_strict_reasoning_blocks_context() -> None:
+    intelligence = _Intelligence([_opportunity()])
+    reports = _Reports()
+    llm = _LLM([_valid_report_json()])
+    skills = _Skills({"digest/report_generation": "TEMPLATE {opportunity_json}"})
+    service = ReportGenerationService(
+        intelligence=intelligence,
+        reports=reports,
+        llm=llm,
+        skills=skills,
+        reasoning_context=_BlockingReasoningProvider(),
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert reports.saved == []
+    assert llm.calls == []
+    assert result.errors[0]["reason"] == "reasoning_validation_blocked"
 
 
 @pytest.mark.asyncio
