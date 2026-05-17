@@ -8,6 +8,9 @@
 export type {
   CampaignReasoningContextView,
   ContentOpsCatalog,
+  ContentOpsIngestionDiagnostics,
+  ContentOpsIngestionInspectRequest,
+  ContentOpsIngestionWarning,
   ContentOpsExecutionResult,
   ContentOpsExecutionStatus,
   ContentOpsRequest,
@@ -27,6 +30,7 @@ export type {
 export {
   fromWireCatalog,
   fromWireExecution,
+  fromWireIngestionDiagnostics,
   fromWireOutputDefinition,
   fromWirePlan,
   fromWirePlanStep,
@@ -34,5 +38,6 @@ export {
   fromWirePreview,
   fromWireRequest,
   fromWireStepExecution,
+  toWireIngestionInspectRequest,
   toWireRequest,
 } from './fromWire'

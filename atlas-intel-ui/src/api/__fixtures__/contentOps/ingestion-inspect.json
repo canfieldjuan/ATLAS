@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "mode": "source_rows",
+  "source": "operator-upload",
+  "opportunity_count": 1,
+  "warning_count": 1,
+  "warning_counts": {
+    "missing_vendor_name": 1
+  },
+  "missing_field_counts": {
+    "vendor_name": 1
+  },
+  "source_type_counts": {
+    "transcript": 1
+  },
+  "samples": [
+    {
+      "target_id": "call-1",
+      "company_name": "Acme",
+      "source_type": "transcript",
+      "evidence": [
+        {
+          "text": "The renewal process is too manual.",
+          "source_id": "call-1",
+          "source_type": "transcript"
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "code": "missing_vendor_name",
+      "message": "Row does not contain a current/incumbent vendor name.",
+      "row_index": 1,
+      "field": "vendor_name"
+    }
+  ]
+}

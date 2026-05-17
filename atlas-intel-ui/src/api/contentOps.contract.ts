@@ -17,10 +17,12 @@
 import type {
   ContentOpsCatalogResponse,
   ContentOpsExecutionResult,
+  ContentOpsIngestionDiagnosticsResponse,
   ContentOpsPreviewResponse,
   GenerationPlanResponse,
 } from './contentOps'
 import catalogFixture from './__fixtures__/contentOps/catalog.json'
+import ingestionInspectFixture from './__fixtures__/contentOps/ingestion-inspect.json'
 import previewCanRunFixture from './__fixtures__/contentOps/preview-can-run.json'
 import previewBlockedFixture from './__fixtures__/contentOps/preview-blocked.json'
 import planRunnableFixture from './__fixtures__/contentOps/plan-runnable.json'
@@ -50,6 +52,7 @@ type Loosen<T> = T extends string
       : T
 
 export const __catalogContract = catalogFixture satisfies Loosen<ContentOpsCatalogResponse>
+export const __ingestionInspectContract = ingestionInspectFixture satisfies Loosen<ContentOpsIngestionDiagnosticsResponse>
 export const __previewCanRunContract = previewCanRunFixture satisfies Loosen<ContentOpsPreviewResponse>
 export const __previewBlockedContract = previewBlockedFixture satisfies Loosen<ContentOpsPreviewResponse>
 export const __planRunnableContract = planRunnableFixture satisfies Loosen<GenerationPlanResponse>

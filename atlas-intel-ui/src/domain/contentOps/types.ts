@@ -85,6 +85,39 @@ export interface ContentOpsRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Ingestion inspect (POST /content-ops/ingestion/inspect)
+// ---------------------------------------------------------------------------
+
+export interface ContentOpsIngestionInspectRequest {
+  rows: Array<Record<string, unknown>>
+  sourceRows: boolean
+  source: string | null
+  targetMode: string | null
+  maxSourceTextChars: number
+  sampleLimit: number
+}
+
+export interface ContentOpsIngestionWarning {
+  code: string
+  message: string
+  rowIndex?: number
+  field?: string
+}
+
+export interface ContentOpsIngestionDiagnostics {
+  ok: boolean
+  mode: 'opportunities' | 'source_rows'
+  source: string
+  opportunityCount: number
+  warningCount: number
+  warningCounts: Record<string, number>
+  missingFieldCounts: Record<string, number>
+  sourceTypeCounts: Record<string, number>
+  samples: Array<Record<string, unknown>>
+  warnings: ContentOpsIngestionWarning[]
+}
+
+// ---------------------------------------------------------------------------
 // Preview (POST /content-ops/preview)
 // ---------------------------------------------------------------------------
 
