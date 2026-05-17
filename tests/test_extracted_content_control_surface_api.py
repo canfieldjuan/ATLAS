@@ -443,6 +443,73 @@ async def test_plan_generation_route_rejects_invalid_signal_text_cap_as_400():
 
 
 @pytest.mark.asyncio
+async def test_ingestion_inspect_route_reports_source_rows():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/inspect", "POST")
+    payload = await route.endpoint({
+        "source_rows": True,
+        "source": "fixture",
+        "rows": [{
+            "call_id": "call-1",
+            "company": "Acme",
+            "vendor": "HubSpot",
+            "transcript": "The renewal process is too manual.",
+            "contact_email": "ops@example.com",
+        }],
+    })
+
+    assert payload["ok"] is True
+    assert payload["mode"] == "source_rows"
+    assert payload["source"] == "fixture"
+    assert payload["opportunity_count"] == 1
+    assert payload["source_type_counts"] == {"transcript": 1}
+    assert payload["samples"][0]["source_type"] == "transcript"
+
+
+@pytest.mark.asyncio
+async def test_ingestion_inspect_route_reports_missing_opportunity_fields():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/inspect", "POST")
+    payload = await route.endpoint({
+        "rows": [{
+            "target_id": "opp-1",
+            "company_name": "Acme",
+        }],
+    })
+
+    assert payload["ok"] is True
+    assert payload["mode"] == "opportunities"
+    assert payload["missing_field_counts"] == {
+        "evidence": 1,
+        "vendor_name": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ingestion_inspect_route_rejects_oversized_rows():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/inspect", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "rows": [
+                {"target_id": f"opp-{index}"}
+                for index in range(501)
+            ],
+        })
+
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_execute_generation_route_runs_configured_services():
     service = _CampaignService()
     router = create_content_ops_control_surface_router(

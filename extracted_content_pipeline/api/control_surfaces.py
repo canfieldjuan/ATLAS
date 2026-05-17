@@ -39,6 +39,7 @@ from ..control_surfaces import (
     resolve_outputs,
 )
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
+from ..ingestion_diagnostics import inspect_ingestion_rows
 from ..reasoning_policy import (
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
     ReasoningPreset,
@@ -73,6 +74,8 @@ logger = logging.getLogger(__name__)
 _MAX_INPUT_KEYS = 50
 _MAX_INPUT_DEPTH = 6
 _MAX_INPUT_STRING_CHARS = 10000
+_MAX_INGESTION_ROWS = 500
+_MAX_INGESTION_SAMPLE_LIMIT = 25
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
@@ -351,8 +354,34 @@ if BaseModel is not None:
             _validate_input_shape(value, depth=0)
             return value
 
+    class ContentOpsIngestionInspectModel(BaseModel):
+        """Bounded API request body for offline ingestion diagnostics."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        rows: tuple[dict[str, Any], ...] = Field(
+            default_factory=tuple,
+            max_length=_MAX_INGESTION_ROWS,
+        )
+        source_rows: bool = False
+        source: str | None = Field(default="api", max_length=200)
+        target_mode: str | None = Field(default="vendor_retention", max_length=80)
+        max_source_text_chars: int = Field(1200, ge=1, le=_MAX_INPUT_STRING_CHARS)
+        sample_limit: int = Field(3, ge=0, le=_MAX_INGESTION_SAMPLE_LIMIT)
+
+        @field_validator("rows")
+        @classmethod
+        def _validate_rows(
+            cls,
+            value: tuple[dict[str, Any], ...],
+        ) -> tuple[dict[str, Any], ...]:
+            for row in value:
+                _validate_input_shape(row, depth=0)
+            return value
+
 else:  # pragma: no cover - module import fallback when FastAPI is unavailable.
     ContentOpsRequestModel = Any
+    ContentOpsIngestionInspectModel = Any
 
 
 def create_content_ops_control_surface_router(
@@ -420,6 +449,24 @@ def create_content_ops_control_surface_router(
             return build_generation_plan_from_mapping(_payload_to_mapping(payload))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/ingestion/inspect")
+    async def inspect_ingestion(
+        payload: ContentOpsIngestionInspectModel = Body(...),
+    ) -> dict[str, Any]:
+        data = _ingestion_payload_to_mapping(payload)
+        try:
+            report = inspect_ingestion_rows(
+                data["rows"],
+                source_rows=bool(data.get("source_rows")),
+                source=_clean(data.get("source")) or "api",
+                target_mode=_clean(data.get("target_mode")),
+                max_source_text_chars=int(data.get("max_source_text_chars") or 1200),
+                sample_limit=int(data.get("sample_limit") or 0),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return report.as_dict()
 
     @router.post("/execute")
     async def execute_generation(
@@ -829,6 +876,15 @@ def _payload_to_mapping(payload: Any) -> dict[str, Any]:
         return payload.model_dump()
     try:
         return ContentOpsRequestModel.model_validate(payload).model_dump()
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+
+
+def _ingestion_payload_to_mapping(payload: Any) -> dict[str, Any]:
+    if BaseModel is not None and isinstance(payload, ContentOpsIngestionInspectModel):
+        return payload.model_dump()
+    try:
+        return ContentOpsIngestionInspectModel.model_validate(payload).model_dump()
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
 

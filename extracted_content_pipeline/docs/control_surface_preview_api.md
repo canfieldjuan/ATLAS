@@ -55,6 +55,7 @@ size and nesting limits.
 | `GET` | `/content-ops/control-surfaces` | List output types, presets, required inputs, implementation status, execution-service readiness, reasoning-provider readiness, cost estimates, and ingestion profiles. |
 | `POST` | `/content-ops/preview` | Validate a requested preset/output selection and return cost, missing inputs, warnings, and blocked outputs. |
 | `POST` | `/content-ops/plan` | Convert a previewable request into deterministic generation steps. Does not execute generation. |
+| `POST` | `/content-ops/ingestion/inspect` | Inspect inline opportunity rows or source rows and return the same readiness diagnostics as the host CLI. |
 | `POST` | `/content-ops/execute` | Execute a runnable plan through host-injected services. Disabled unless the host configures execution services. |
 
 ## Output Catalog
@@ -213,6 +214,34 @@ preview passes and every selected output maps to a runnable service-shaped step.
 `signal_extraction` is deterministic and offline once the host supplies a
 configured `SignalExtractionService`; without that service, preview and plan can
 pass, but `/execute` reports the output as not configured.
+
+## Ingestion Inspect Route
+
+`POST /content-ops/ingestion/inspect` accepts inline rows and returns the same
+diagnostics shape as `scripts/inspect_extracted_content_ingestion.py`. It does
+not call a database, LLM, sender, or execution service.
+
+```json
+{
+  "source_rows": true,
+  "source": "operator-upload",
+  "rows": [
+    {
+      "call_id": "call-1",
+      "company": "Acme",
+      "vendor": "HubSpot",
+      "transcript": "The renewal process is too manual."
+    }
+  ],
+  "target_mode": "vendor_retention",
+  "sample_limit": 3
+}
+```
+
+The response includes `ok`, `opportunity_count`, `warning_counts`,
+`missing_field_counts`, `source_type_counts`, bounded `samples`, and row-level
+`warnings`. Hosts should use this route for uploaded rows in an operator UI and
+the CLI for local files.
 
 ## Execute Route
 
