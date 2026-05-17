@@ -70,7 +70,7 @@ def test_packaged_runtime_reasoning_surface_is_catalog_supported() -> None:
     for output in PACKAGED_REASONING_RUNTIME_OUTPUTS:
         assert OUTPUT_CATALOG[output].implemented is True
         policy = output_reasoning_policy(output)
-        if output != "landing_page":
+        if output not in {"email_campaign", "landing_page"}:
             assert policy.default_preset in packaged_reasoning_runtime_presets_for_output(output)
         for preset in packaged_reasoning_runtime_presets_for_output(output):
             assert policy.supports(preset)
@@ -97,10 +97,15 @@ def test_signal_extraction_only_supports_no_reasoning() -> None:
         resolve_reasoning_policy("signal_extraction", "single_pass")
 
 
-def test_email_campaign_does_not_support_structured_or_strict_presets() -> None:
+def test_email_campaign_supports_structured_but_not_strict_preset() -> None:
     supported = supported_reasoning_presets("email_campaign")
-    assert supported == ("none", "context_only", "single_pass", "multi_pass_light")
-    assert "multi_pass_structured" not in supported
+    assert supported == (
+        "none",
+        "context_only",
+        "single_pass",
+        "multi_pass_light",
+        "multi_pass_structured",
+    )
     assert "multi_pass_strict" not in supported
 
 

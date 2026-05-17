@@ -113,9 +113,6 @@ REASONING_PRESETS: Mapping[str, ReasoningPresetDefinition] = MappingProxyType({
 })
 
 
-_MULTI_PASS_OPTIONAL: tuple[ReasoningPreset, ...] = (
-    "none", "context_only", "single_pass", "multi_pass_light",
-)
 _STRUCTURED_PRESETS: tuple[ReasoningPreset, ...] = (
     "none", "context_only", "single_pass", "multi_pass_light",
     "multi_pass_structured", "multi_pass_strict",
@@ -128,9 +125,13 @@ _BLOG_POST_PRESETS: tuple[ReasoningPreset, ...] = (
     "none", "context_only", "single_pass", "multi_pass_light",
     "multi_pass_structured",
 )
+_EMAIL_CAMPAIGN_PRESETS: tuple[ReasoningPreset, ...] = (
+    "none", "context_only", "single_pass", "multi_pass_light",
+    "multi_pass_structured",
+)
 
 PACKAGED_REASONING_RUNTIME_OUTPUTS: tuple[str, ...] = (
-    "blog_post", "report", "landing_page", "sales_brief",
+    "email_campaign", "blog_post", "report", "landing_page", "sales_brief",
 )
 PACKAGED_REASONING_RUNTIME_PRESETS: tuple[ReasoningPreset, ...] = (
     "multi_pass_structured",
@@ -140,6 +141,7 @@ _PACKAGED_REASONING_RUNTIME_PRESETS_BY_OUTPUT: Mapping[
     str,
     tuple[ReasoningPreset, ...],
 ] = MappingProxyType({
+    "email_campaign": ("multi_pass_structured",),
     "blog_post": ("multi_pass_structured",),
     "report": PACKAGED_REASONING_RUNTIME_PRESETS,
     "landing_page": ("multi_pass_structured",),
@@ -161,7 +163,7 @@ OUTPUT_REASONING_POLICIES: Mapping[str, OutputReasoningPolicy] = MappingProxyTyp
     "email_campaign": OutputReasoningPolicy(
         output="email_campaign",
         default_preset="single_pass",
-        supported_presets=_MULTI_PASS_OPTIONAL,
+        supported_presets=_EMAIL_CAMPAIGN_PRESETS,
     ),
     "landing_page": OutputReasoningPolicy(
         output="landing_page",

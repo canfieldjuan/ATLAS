@@ -193,8 +193,9 @@ source of truth for what remains.
   `multi_pass_structured` so its catalog default matches the packaged runtime;
   hosts that want cheaper blog runs can select `single_pass`.
 - `/content-ops/execute` can construct packaged `multi_pass_structured`
-  reasoning for `blog_post`, `report`, `landing_page`, and `sales_brief`, or
-  `multi_pass_strict` reasoning for `report` and `sales_brief`, when the
+  reasoning for `email_campaign`, `blog_post`, `report`, `landing_page`, and
+  `sales_brief`, or `multi_pass_strict` reasoning for `report` and
+  `sales_brief`, when the
   request explicitly sets `reasoning_preset` and the host supplies an LLM
   provider. Blog posts use the `content_ops_blog` narrative pack; reports and
   sales briefs keep the `content_ops_structured` pack. Strict mode uses the

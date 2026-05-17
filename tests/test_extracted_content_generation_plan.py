@@ -137,6 +137,7 @@ def test_plan_threads_structured_reasoning_preset_to_blog_post():
 def test_plan_threads_all_packaged_runtime_reasoning_presets(output):
     inputs = {
         "blog_post": {"topic": "Churn pressure"},
+        "email_campaign": {"target_account": "Acme", "offer": "Audit"},
         "report": {"opportunity_id": "opp_123"},
         "landing_page": {"offer": "Audit", "audience": "RevOps"},
         "sales_brief": {"target_account": "Acme"},
@@ -183,10 +184,16 @@ def test_plan_rejects_unknown_reasoning_preset_for_report():
             "multi_pass_structured or multi_pass_strict",
         ),
         (
+            "email_campaign",
+            {"target_account": "Acme", "offer": "Audit"},
+            "multi_pass_light",
+            "multi_pass_structured for email_campaign, blog_post, and landing_page",
+        ),
+        (
             "landing_page",
             {"offer": "Audit", "audience": "RevOps"},
             "multi_pass_light",
-            "multi_pass_structured for blog_post and landing_page",
+            "multi_pass_structured for email_campaign, blog_post, and landing_page",
         ),
         (
             "blog_post",
@@ -212,35 +219,23 @@ def test_plan_rejects_runtime_unsupported_reasoning_preset(
         )
 
 
-@pytest.mark.parametrize(
-    ("output", "inputs", "preset"),
-    (
-        (
-            "email_campaign",
-            {"target_account": "Acme", "offer": "Audit"},
-            "single_pass",
-        ),
-    ),
-)
-def test_plan_rejects_runtime_reasoning_when_no_packaged_output_selected(
-    output,
-    inputs,
-    preset,
-):
+def test_plan_rejects_runtime_reasoning_when_no_packaged_output_selected():
     with pytest.raises(
         ValueError,
-        match="only to blog_post, report, landing_page, and sales_brief",
+        match="only to email_campaign, blog_post, report, landing_page, and sales_brief",
     ):
         build_generation_plan_from_mapping(
             {
-                "outputs": [output],
-                "reasoning_preset": preset,
-                "inputs": inputs,
+                "outputs": ["signal_extraction"],
+                "reasoning_preset": "single_pass",
+                "inputs": {
+                    "source_material": "Pricing pressure came up at renewal.",
+                },
             }
         )
 
 
-def test_plan_ignores_non_runtime_outputs_when_packaged_output_selected():
+def test_plan_threads_structured_reasoning_to_email_and_report():
     plan = build_generation_plan_from_mapping(
         {
             "outputs": ["email_campaign", "report"],
@@ -254,7 +249,8 @@ def test_plan_ignores_non_runtime_outputs_when_packaged_output_selected():
     )
 
     configs = {step["output"]: step["config"] for step in plan["steps"]}
-    assert "reasoning_preset" not in configs["email_campaign"]
+    assert configs["email_campaign"]["reasoning_preset"] == "multi_pass_structured"
+    assert configs["email_campaign"]["reasoning_multi_pass"] is True
     assert configs["report"]["reasoning_preset"] == "multi_pass_structured"
 
 
