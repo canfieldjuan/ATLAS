@@ -116,8 +116,20 @@ remains roadmap work or should be removed from active backlog.
 
 ## Current Pick Recommendation
 
-Take item 1 next, specifically structured reasoning for `report` and
-`sales_brief` using the preset catalog. Source-adapter consolidation is
-complete for now; the remaining leverage is controlled reasoning-policy depth
-for long-form and multi-asset outputs. Source breadth should pause until a
-real host export or field-loss risk appears.
+The host-facing AI Content Ops reasoning-policy arc is complete for the current
+standalone product surface: preset catalog, structured report/sales/blog
+execution, strict report/sales validation, explicit strict falsification rules,
+and blog-specific narrative packs have shipped.
+
+Do not take another AI Content Ops reasoning-policy slice unless it answers one
+of these concrete needs:
+
+- A host asks for a new packaged runtime output or preset.
+- A real generated-asset run exposes validation metadata that operators cannot
+  act on.
+- `extracted_reasoning_core` advances enough that AI Content Ops needs a new
+  stable provider port or capability check.
+
+Until then, pause speculative Content Ops reasoning-policy work. The next
+highest-leverage code should come from either a real source export fixture
+(item 2) or the separate `extracted_reasoning_core` productization track.
