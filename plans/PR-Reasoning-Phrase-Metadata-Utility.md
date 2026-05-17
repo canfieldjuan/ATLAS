@@ -54,8 +54,9 @@ also import from the new module, keeping one canonical implementation.
 - No helper behavior changes.
 - No public function signature changes.
 - No extraction-core API expansion in this slice.
-- The old `_b2b_phrase_metadata` import path remains supported for callers that
-  have not migrated yet.
+- The old `_b2b_phrase_metadata` import path remains supported via a compat
+  wrapper but now emits `DeprecationWarning` on import to signal migration
+  intent; the wrapper is not a permanent alias.
 
 ## Deferred
 
