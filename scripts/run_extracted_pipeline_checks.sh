@@ -5,17 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 bash scripts/validate_extracted_content_pipeline.sh
-bash extracted/_shared/scripts/validate_extracted.sh extracted_reasoning_core
 bash scripts/check_ascii_python.sh
-bash extracted/_shared/scripts/check_ascii_python.sh extracted_reasoning_core
 python scripts/check_extracted_imports.py
-python extracted/_shared/scripts/check_extracted_imports.py --no-atlas-fallback extracted_reasoning_core
 python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
-python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_reasoning_core
 python scripts/smoke_extracted_pipeline_imports.py
 python scripts/smoke_extracted_pipeline_standalone.py
-python scripts/smoke_extracted_reasoning_core_standalone.py
 python scripts/audit_extracted_standalone.py --fail-on-debt
+bash scripts/run_extracted_reasoning_core_checks.sh
 pytest \
   tests/test_extracted_campaign_analytics.py \
   tests/test_extracted_campaign_install_check.py \
@@ -85,27 +81,6 @@ pytest \
   tests/test_extracted_content_pipeline_reasoning_archetypes.py \
   tests/test_extracted_content_pipeline_reasoning_temporal.py \
   tests/test_extracted_content_pipeline_reasoning_evidence_engine.py \
-  tests/test_extracted_reasoning_core_manifest.py \
-  tests/test_extracted_reasoning_core_api.py \
-  tests/test_extracted_reasoning_core_run_reasoning.py \
-  tests/test_extracted_reasoning_core_continue_reasoning.py \
-  tests/test_extracted_reasoning_core_check_falsification.py \
-  tests/test_extracted_reasoning_core_build_narrative_plan.py \
-  tests/test_extracted_reasoning_core_semantic_cache.py \
-  tests/test_extracted_reasoning_core_load_reasoning_pack.py \
-  tests/test_extracted_reasoning_core_validate_reasoning_output.py \
-  tests/test_extracted_reasoning_core_archetypes.py \
-  tests/test_extracted_reasoning_core_evidence_engine.py \
-  tests/test_extracted_reasoning_core_event_trace_ports.py \
-  tests/test_extracted_reasoning_core_graph.py \
-  tests/test_extracted_reasoning_core_graph_helpers.py \
-  tests/test_extracted_reasoning_core_graph_nodes.py \
-  tests/test_extracted_reasoning_core_pack_registry.py \
-  tests/test_extracted_reasoning_core_semantic_cache_keys.py \
-  tests/test_extracted_reasoning_core_temporal.py \
-  tests/test_extracted_reasoning_core_types.py \
-  tests/test_extracted_reasoning_core_domains.py \
-  tests/test_extracted_reasoning_core_wedge_registry.py \
   tests/test_atlas_reasoning_state_inherits_core.py \
   tests/test_atlas_reasoning_port_adapters.py \
   tests/test_atlas_reasoning_vendor_pressure.py \
@@ -119,7 +94,6 @@ pytest \
   tests/test_atlas_reasoning_temporal_aliases.py \
   tests/test_atlas_reasoning_archetypes_aliases.py \
   tests/test_atlas_reasoning_evidence_engine_aliases.py \
-  tests/test_forbid_atlas_reasoning_imports.py \
   tests/test_extracted_product_utilities.py \
   tests/test_extracted_b2b_batch_utils.py \
   tests/test_extracted_blog_matching.py \
