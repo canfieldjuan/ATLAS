@@ -6,7 +6,7 @@ about an enrichment dict without reaching into the JSONB themselves.
 
 It wraps two existing internal pieces:
 
-  - ``atlas_brain.autonomous.tasks._b2b_phrase_metadata`` -- low-level
+  - ``atlas_brain.reasoning.phrase_metadata`` -- low-level
     accessors for the v2 ``phrase_metadata`` parallel field. Re-exported
     here so consumers have one import path.
 
@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from ...autonomous.tasks._b2b_phrase_metadata import (
+from ...reasoning.phrase_metadata import (
     enrichment_schema_version,
     is_v2_tagged,
     phrase_metadata_by_field,

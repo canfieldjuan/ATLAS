@@ -186,12 +186,7 @@ class ReviewEnrichmentMixin:
         enrichment: dict[str, Any],
     ) -> bool:
         """Derive price_complaint from Tier 1 flags + extracted phrases."""
-        # Lazy import keeps this atlas-owned mixin importable without loading
-        # task-layer phrase metadata until the derivation path needs it.
-        from ..autonomous.tasks._b2b_phrase_metadata import (
-            is_v2_tagged,
-            phrase_metadata_map,
-        )
+        from .phrase_metadata import is_v2_tagged, phrase_metadata_map
 
         cfg = self._enrichment.get("price_complaint_derivation", {})
 

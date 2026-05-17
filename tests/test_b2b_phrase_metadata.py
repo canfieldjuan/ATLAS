@@ -3,7 +3,7 @@
 Covers:
 - `_coerce_legacy_phrase_arrays`: legacy arrays stay list[str] under all inputs
 - `_normalize_phrase_metadata`: canonicalization, text invariant, enum coercion
-- Reader helpers in `_b2b_phrase_metadata`: v1 safe defaults, v2 lookups
+- Reader helpers in `atlas_brain.reasoning.phrase_metadata`: v1 safe defaults, v2 lookups
 - `_compute_derived_fields` integration: conditional version bump 3 vs 4
 """
 
@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import copy
 
-from atlas_brain.autonomous.tasks._b2b_phrase_metadata import (
+from atlas_brain.autonomous.tasks import _b2b_phrase_metadata as task_phrase_metadata
+from atlas_brain.reasoning import phrase_metadata as reasoning_phrase_metadata
+from atlas_brain.reasoning.phrase_metadata import (
     enrichment_schema_version,
     is_v2_tagged,
     phrase_metadata_by_field,
@@ -210,8 +212,22 @@ def test_normalize_metadata_missing_entirely_defaults_all():
 
 
 # ---------------------------------------------------------------------------
-# Reader helpers (_b2b_phrase_metadata)
+# Reader helpers (atlas_brain.reasoning.phrase_metadata)
 # ---------------------------------------------------------------------------
+
+
+def test_task_phrase_metadata_module_reexports_reasoning_helpers():
+    assert task_phrase_metadata.enrichment_schema_version is (
+        reasoning_phrase_metadata.enrichment_schema_version
+    )
+    assert task_phrase_metadata.is_v2_tagged is reasoning_phrase_metadata.is_v2_tagged
+    assert task_phrase_metadata.phrase_metadata_by_field is (
+        reasoning_phrase_metadata.phrase_metadata_by_field
+    )
+    assert task_phrase_metadata.phrase_metadata_map is (
+        reasoning_phrase_metadata.phrase_metadata_map
+    )
+    assert task_phrase_metadata.phrase_tag is reasoning_phrase_metadata.phrase_tag
 
 
 def test_reader_helpers_v1_short_circuit():

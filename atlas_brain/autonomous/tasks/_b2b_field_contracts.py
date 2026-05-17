@@ -456,9 +456,11 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "owner_path": "enrichment_internal",
         "owner_pool": None,
         "stranded": False,
+        # Same-package consumers use local labels; cross-package consumers
+        # use a fully qualified module path to avoid ambiguity.
         "approved_consumers": (
             "backfill_derived_fields",
-            "_b2b_phrase_metadata",
+            "atlas_brain.reasoning.phrase_metadata",
         ),
         "migration_target": None,
     },
