@@ -1,6 +1,6 @@
 # Upcoming Queue
 
-Last updated: 2026-05-17T17:18Z by codex-2026-05-17
+Last updated: 2026-05-17T17:41Z by codex-2026-05-17
 
 Sequence reflects dependencies. Claim a slice (set Owner) before starting code so a parallel session does not pick the same one. See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
@@ -13,4 +13,4 @@ A-series (cost-closure, `extracted_llm_infrastructure`) is fully merged: PR-A1 #
 | PR-C3-enrichment-pack-split | `extracted_reasoning_core` | merged #564 | PR-C2-current-state-reset | Atlas-side per-review enrichment now lives in an explicit product pack. |
 | PR-C4-phrase-metadata-utility | `extracted_reasoning_core` | merged #565 | PR-C3-enrichment-pack-split | Pure phrase metadata readers now live in `atlas_brain.reasoning.phrase_metadata`; the task module is a compatibility wrapper. |
 | PR-D23-landing-reasoning-parity | `extracted_content_pipeline` | merged #566 | Content Ops packaged reasoning runtime | Added `landing_page` to the packaged structured reasoning runtime allowlist so catalog support and execution behavior match. |
-| PR-D24-email-campaign-reasoning-parity | `extracted_content_pipeline` | codex-2026-05-17 | PR-D23-landing-reasoning-parity | Add `email_campaign` to the packaged structured reasoning runtime allowlist so the core campaign output can use packaged multi-pass reasoning. |
+| PR-D24-email-campaign-reasoning-parity | `extracted_content_pipeline` | merged #567 | PR-D23-landing-reasoning-parity | Added `email_campaign` to the packaged structured reasoning runtime allowlist so the core campaign output can use packaged multi-pass reasoning. |

@@ -211,6 +211,9 @@ source of truth for what remains.
   claim before any falsified claims are dropped. The host config rejects
   `drop_falsified=True` without rules and caps strict falsification rules at 20
   to keep per-claim prompt growth bounded.
+- Packaged structured reasoning runtime support is now at parity for every
+  reasoning-aware generated output. `signal_extraction` remains intentionally
+  outside the reasoning-provider path.
 - `tests/test_extracted_campaign_api_hosted_workflow.py` locks the intended
   host-mounted B2B admin flow: generate drafts, list/review them through the
   B2B router, send queued rows, and refresh analytics while preserving shared
