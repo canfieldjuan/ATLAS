@@ -4,7 +4,7 @@ PR-D7b3 promoted the slim conclusions+suppression engine into
 ``extracted_reasoning_core.evidence_engine`` (per PR-C1's slim-core
 split). Atlas keeps the import surface
 ``atlas_brain.reasoning.evidence_engine`` as a subclass wrapper that
-adds the per-review enrichment methods (``compute_urgency`` /
+mixes in the per-review enrichment pack methods (``compute_urgency`` /
 ``override_pain`` / ``derive_recommend`` / ``derive_price_complaint``
 / ``derive_budget_authority``) that stay atlas-side because
 ``derive_price_complaint`` depends on atlas-only
@@ -17,24 +17,36 @@ These tests pin:
     ``evaluate_conclusion`` are inherited, not duplicated).
   - atlas's ``ConclusionResult`` and ``SuppressionResult`` ARE core's
     types -- not look-alike local re-definitions.
-  - the six atlas-side enrichment methods are present on the subclass
-    and return shape-correct values from real YAML.
+  - the six atlas-side enrichment methods are present through the
+    atlas-owned mixin pack and return shape-correct values from real YAML.
   - the wrapper module body has no ``ConclusionResult`` /
     ``SuppressionResult`` / ``EvidenceEngine`` re-definitions
     (subclass pattern means EvidenceEngine IS defined here, so the
     AST guard checks only that the result types are NOT redefined).
+
+Behavioral coverage for these moved methods lives in
+``tests/test_evidence_engine.py``, ``tests/test_b2b_phase2_subject_gate.py``,
+and ``tests/test_b2b_phase3_polarity_gate.py``.
 """
 
 from __future__ import annotations
 
 from atlas_brain.reasoning import evidence_engine as atlas_engine
+from atlas_brain.reasoning import review_enrichment
 from extracted_reasoning_core import evidence_engine as core_engine
 from extracted_reasoning_core import types as core_types
 
 
 def test_evidence_engine_subclasses_core() -> None:
     assert issubclass(atlas_engine.EvidenceEngine, core_engine.EvidenceEngine)
+    assert issubclass(atlas_engine.EvidenceEngine, review_enrichment.ReviewEnrichmentMixin)
     assert atlas_engine.EvidenceEngine is not core_engine.EvidenceEngine
+
+
+def test_review_enrichment_pack_is_atlas_owned() -> None:
+    assert review_enrichment.ReviewEnrichmentMixin.__module__ == (
+        "atlas_brain.reasoning.review_enrichment"
+    )
 
 
 def test_conclusion_result_alias_identity() -> None:
@@ -59,10 +71,13 @@ def test_atlas_enrichment_methods_present() -> None:
     for name in expected:
         attr = getattr(atlas_engine.EvidenceEngine, name, None)
         assert callable(attr), f"missing or non-callable: {name}"
-        # Must be defined on the subclass, not core (else PR-C1's
-        # slim-core split silently regressed)
+        # Must come from the atlas product pack, not core (else PR-C1's
+        # slim-core split silently regressed).
         assert name not in vars(core_engine.EvidenceEngine), (
             f"{name} unexpectedly present on core slim engine"
+        )
+        assert name in vars(review_enrichment.ReviewEnrichmentMixin), (
+            f"{name} missing from atlas review enrichment pack"
         )
 
 

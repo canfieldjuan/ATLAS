@@ -8,8 +8,8 @@ sufficient and which report sections should be suppressed or degraded.
 This is the slim-core split documented in PR #82's audit. The
 per-review enrichment surface (`compute_urgency`, `override_pain`,
 `derive_recommend`, `derive_price_complaint`, `derive_budget_authority`)
-is **not** included here -- it stays atlas-side until PR-C1e moves it
-to `atlas_brain/reasoning/review_enrichment.py`. Reasoning core's
+is **not** included here -- it stays outside core in the atlas-owned
+`atlas_brain.reasoning.review_enrichment` pack. Reasoning core's
 public boundary is the conclusions / suppression surface plus the
 public `EvidenceDecision` / `ConclusionResult` / `SuppressionResult`
 types defined in `extracted_reasoning_core.types`.
@@ -66,8 +66,8 @@ class EvidenceEngine:
         callers should use ``from_rules`` instead.
 
     Slim-core split: per-review enrichment lives in
-    `atlas_brain.reasoning.review_enrichment` (will be carved out in
-    PR-C1e). This class only exposes the conclusions + suppression
+    `atlas_brain.reasoning.review_enrichment`. This class only exposes
+    the conclusions + suppression
     surface that the public reasoning core needs.
     """
 
