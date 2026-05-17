@@ -149,6 +149,16 @@ subscription, complaint, support-ticket, conversation, case, survey, NPS, CSAT,
 and document source rows can be converted into the same opportunity payload
 first. Source rows can be JSON, JSONL, or CSV:
 
+Before converting or importing a customer export, inspect ingestion readiness:
+
+```bash
+python scripts/inspect_extracted_content_ingestion.py \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
+  --source-rows \
+  --source-format jsonl \
+  --json
+```
+
 ```bash
 python scripts/build_extracted_campaign_opportunities_from_sources.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \

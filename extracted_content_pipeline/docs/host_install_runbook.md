@@ -118,6 +118,23 @@ written into an ambiguous tenant queue.
 
 ## Step 3: Validate Customer Data Offline
 
+Before generating or importing, inspect the file for normalized opportunity
+count, warning groups, missing prompt fields, inferred source types, and sample
+rows:
+
+```bash
+python scripts/inspect_extracted_content_ingestion.py \
+  customer_opportunities.csv \
+  --format csv \
+  --json
+
+python scripts/inspect_extracted_content_ingestion.py \
+  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
+  --source-rows \
+  --source-format jsonl \
+  --json
+```
+
 Before writing to Postgres, validate the same JSON or CSV file through the file
 adapter:
 

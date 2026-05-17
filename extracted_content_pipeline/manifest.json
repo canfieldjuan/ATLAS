@@ -251,6 +251,9 @@
       "target": "extracted_content_pipeline/campaign_source_adapters.py"
     },
     {
+      "target": "extracted_content_pipeline/ingestion_diagnostics.py"
+    },
+    {
       "target": "extracted_content_pipeline/signal_extraction.py"
     },
     {
