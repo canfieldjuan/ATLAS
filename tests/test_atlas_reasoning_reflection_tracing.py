@@ -16,12 +16,11 @@ These tests pin:
 - An exception inside the cycle still closes the span -- with status
   ``"error"`` and ``error_message`` / ``error_type`` -- and re-raises
 
-Atlas's heavy chains (services / pipelines / config) plus the
-reflection-internal helpers (patterns detectors, graph helpers, the
-LLM client) are stubbed in ``sys.modules`` so the test runs in
-standalone CI without the full atlas dep stack. Stubs are restored on
-teardown (lesson from PR-C4d's Codex review -- otherwise sibling test
-files in the same pytest invocation would see this file's stubs).
+Atlas's heavy chains (services / pipelines / config) plus the pattern detector
+are stubbed in ``sys.modules`` so the test runs in standalone CI without the
+full atlas dep stack. Stubs are restored on teardown (lesson from PR-C4d's
+Codex review -- otherwise sibling test files in the same pytest invocation
+would see this file's stubs).
 """
 
 from __future__ import annotations
@@ -40,12 +39,12 @@ import pytest
 
 _STUBBED_MODULE_NAMES = (
     "atlas_brain.services",
+    "atlas_brain.services.protocols",
     "atlas_brain.services.tracing",
     "atlas_brain.pipelines",
     "atlas_brain.pipelines.llm",
     "atlas_brain.config",
     "atlas_brain.reasoning.patterns",
-    "atlas_brain.reasoning.graph",
     "atlas_brain.reasoning.graph_prompts",
 )
 
@@ -55,6 +54,14 @@ def _build_atlas_stubs(
 ) -> dict[str, types.ModuleType]:
     services_pkg = types.ModuleType("atlas_brain.services")
     services_pkg.__path__ = []
+    protocols_mod = types.ModuleType("atlas_brain.services.protocols")
+
+    class Message:
+        def __init__(self, role: str, content: str) -> None:
+            self.role = role
+            self.content = content
+
+    protocols_mod.Message = Message
     tracing_mod = types.ModuleType("atlas_brain.services.tracing")
     tracing_mod.tracer = object()  # never reached; explicit ports bypass default
 
@@ -90,29 +97,17 @@ def _build_atlas_stubs(
 
     patterns_mod.run_all_pattern_detectors = _fake_run_all_pattern_detectors
 
-    graph_mod = types.ModuleType("atlas_brain.reasoning.graph")
-
-    async def _fake_llm_generate(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {"response": '{"findings": []}', "usage": {}}
-
-    def _fake_parse_llm_json(text: str) -> dict[str, Any]:
-        import json as _json
-        return _json.loads(text)
-
-    graph_mod._llm_generate = _fake_llm_generate
-    graph_mod._parse_llm_json = _fake_parse_llm_json
-
     graph_prompts_mod = types.ModuleType("atlas_brain.reasoning.graph_prompts")
     graph_prompts_mod.REFLECTION_SYSTEM = "system"
 
     return {
         "atlas_brain.services": services_pkg,
+        "atlas_brain.services.protocols": protocols_mod,
         "atlas_brain.services.tracing": tracing_mod,
         "atlas_brain.pipelines": pipelines_pkg,
         "atlas_brain.pipelines.llm": pipelines_llm_mod,
         "atlas_brain.config": config_mod,
         "atlas_brain.reasoning.patterns": patterns_mod,
-        "atlas_brain.reasoning.graph": graph_mod,
         "atlas_brain.reasoning.graph_prompts": graph_prompts_mod,
     }
 

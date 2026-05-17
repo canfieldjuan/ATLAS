@@ -118,19 +118,16 @@ async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
 async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
     monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "triage")
     calls = []
+    service = _StaticChatService('{"findings":[]}')
 
     def _fake_get_pipeline_llm(**kwargs):
         calls.append(kwargs)
-        return object()
+        return service
 
     monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
     monkeypatch.setattr(
         "atlas_brain.reasoning.patterns.run_all_pattern_detectors",
         AsyncMock(return_value=[{"description": "signal"}]),
-    )
-    monkeypatch.setattr(
-        "atlas_brain.reasoning.graph._llm_generate",
-        AsyncMock(return_value={"response": '{"findings":[]}', "usage": {}}),
     )
 
     result = await run_reflection()
@@ -139,6 +136,8 @@ async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["workload"] == "triage"
     assert calls[0]["auto_activate_ollama"] is False
+    assert service.calls
+    assert service.calls[0]["response_format"] == {"type": "json_object"}
     assert result["findings"] == 1
 
 
