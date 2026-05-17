@@ -517,6 +517,8 @@ src/domain/
 - Generated-asset result summary for `blog_post`, `report`,
   `landing_page`, and `sales_brief`, all of which currently expose
   `requested`, `generated`, `skipped`, `saved_ids`, and `errors`
+- Ingestion inspect panel (driven by `ContentOpsIngestionDiagnostics`)
+  for pasted opportunity/source rows before preview or execution.
 - Signal extraction table (driven by `SignalExtractionResultView`)
 
 ### UI layer
@@ -532,6 +534,8 @@ Dumb components only. No fetch, no business rules.
    - Renders preset picker, output picker, required-input form,
      options (`limit`, `maxCostUsd`, `requireQualityGates`,
      `allowUnimplementedOutputs`, `ingestionProfile`).
+   - Supports a read-only ingestion inspector that calls
+     `POST /content-ops/ingestion/inspect` for pasted rows.
    - On submit: `POST /content-ops/preview`, render
      `ControlSurfacePreview`.
 

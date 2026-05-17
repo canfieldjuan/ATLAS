@@ -1,20 +1,24 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronRight, Loader2, Play, RefreshCw } from 'lucide-react'
+import { ChevronRight, Loader2, Play, RefreshCw, Search } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   executeContentOpsRun,
   fetchContentOpsControlSurfaces,
+  inspectContentOpsIngestion,
   planContentOpsRun,
   previewContentOpsRun,
 } from '../api/contentOps'
 import {
   fromWireCatalog,
   fromWireExecution,
+  fromWireIngestionDiagnostics,
   fromWirePlan,
   fromWirePreview,
   fromWireRequest,
+  toWireIngestionInspectRequest,
   toWireRequest,
   type ContentOpsCatalog,
+  type ContentOpsIngestionDiagnostics,
   type ContentOpsExecutionResult,
   type ContentOpsRequest,
   type CampaignReasoningContextView,
@@ -49,7 +53,18 @@ type ExecutionState =
   | { kind: 'error'; message: string }
   | { kind: 'success'; result: ContentOpsExecutionResult }
 
+type IngestionInspectState =
+  | { kind: 'idle' }
+  | { kind: 'submitting' }
+  | { kind: 'invalid_input'; message: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'success'; diagnostics: ContentOpsIngestionDiagnostics }
+
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
+const DEFAULT_INGESTION_ROWS_JSON = '[\n  \n]'
+const DEFAULT_INGESTION_SOURCE = 'manual'
+const INGESTION_SAMPLE_LIMIT = 5
+const INGESTION_MAX_SOURCE_TEXT_CHARS = 1200
 
 export default function ContentOpsNewRun() {
   const {
@@ -73,16 +88,24 @@ export default function ContentOpsNewRun() {
   // swallowing the decimal point. Parsed to a number at submit time.
   const [maxCostUsdInput, setMaxCostUsdInput] = useState<string>('')
   const [inputsJson, setInputsJson] = useState<string>(DEFAULT_INPUTS_JSON)
+  const [ingestionRowsJson, setIngestionRowsJson] = useState<string>(
+    DEFAULT_INGESTION_ROWS_JSON,
+  )
+  const [ingestionSourceRows, setIngestionSourceRows] = useState(false)
+  const [ingestionSource, setIngestionSource] = useState(DEFAULT_INGESTION_SOURCE)
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' })
   const [planState, setPlanState] = useState<PlanState>({ kind: 'idle' })
   const [executionState, setExecutionState] = useState<ExecutionState>({
     kind: 'idle',
   })
+  const [ingestionInspectState, setIngestionInspectState] =
+    useState<IngestionInspectState>({ kind: 'idle' })
   // Codex P2 fix: request-id ref so a stale in-flight preview/plan
   // response can't overwrite a result the user has since invalidated
   // by editing the form. Both preview and plan share the same id
   // namespace -- any form mutation invalidates both.
   const submitRequestIdRef = useRef(0)
+  const ingestionInspectRequestIdRef = useRef(0)
 
   if (error) {
     return <PageError error={error} onRetry={refresh} />
@@ -111,6 +134,13 @@ export default function ContentOpsNewRun() {
     setSubmitState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
     setPlanState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
     setExecutionState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
+  }
+
+  const markIngestionInspectStale = () => {
+    ingestionInspectRequestIdRef.current += 1
+    setIngestionInspectState((prev) =>
+      prev.kind === 'idle' ? prev : { kind: 'idle' },
+    )
   }
 
   const togglePreset = (presetId: string) => {
@@ -282,6 +312,43 @@ export default function ContentOpsNewRun() {
     }
   }
 
+  const handleInspectIngestion = async () => {
+    const requestId = ++ingestionInspectRequestIdRef.current
+    const parsed = parseIngestionRowsJson(ingestionRowsJson)
+    if (!parsed.ok) {
+      setIngestionInspectState({
+        kind: 'invalid_input',
+        message: parsed.message,
+      })
+      return
+    }
+
+    setIngestionInspectState({ kind: 'submitting' })
+    try {
+      const wire = await inspectContentOpsIngestion(
+        toWireIngestionInspectRequest({
+          rows: parsed.rows,
+          sourceRows: ingestionSourceRows,
+          source: ingestionSource.trim() || null,
+          targetMode: request.targetMode,
+          maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
+          sampleLimit: INGESTION_SAMPLE_LIMIT,
+        }),
+      )
+      if (requestId !== ingestionInspectRequestIdRef.current) return
+      setIngestionInspectState({
+        kind: 'success',
+        diagnostics: fromWireIngestionDiagnostics(wire),
+      })
+    } catch (err) {
+      if (requestId !== ingestionInspectRequestIdRef.current) return
+      setIngestionInspectState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -441,6 +508,71 @@ export default function ContentOpsNewRun() {
             className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
             placeholder='{"target_account": "Acme", "offer": "Audit"}'
           />
+        </section>
+
+        {/* Ingestion inspection */}
+        <section className="rounded-lg border border-slate-800 bg-slate-900/50 p-4">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-sm font-medium uppercase tracking-wide text-slate-400">
+                Ingestion inspector
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Paste customer export rows before running generation.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleInspectIngestion}
+              disabled={ingestionInspectState.kind === 'submitting'}
+              className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
+            >
+              {ingestionInspectState.kind === 'submitting' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Search className="h-3.5 w-3.5" />
+              )}
+              Inspect rows
+            </button>
+          </div>
+          <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label className="block text-sm sm:col-span-2">
+              <span className="text-slate-300">Source label</span>
+              <input
+                type="text"
+                value={ingestionSource}
+                onChange={(e) => {
+                  setIngestionSource(e.target.value)
+                  markIngestionInspectStale()
+                }}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+              />
+            </label>
+            <label className="flex items-end gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={ingestionSourceRows}
+                onChange={(e) => {
+                  setIngestionSourceRows(e.target.checked)
+                  markIngestionInspectStale()
+                }}
+                className="mb-1 h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500"
+              />
+              <span className="pb-0.5 text-slate-300">Rows are source exports</span>
+            </label>
+          </div>
+          <textarea
+            value={ingestionRowsJson}
+            onChange={(e) => {
+              setIngestionRowsJson(e.target.value)
+              markIngestionInspectStale()
+            }}
+            rows={5}
+            spellCheck={false}
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+            placeholder='[{"company_name": "Acme", "vendor": "HubSpot", "email": "ops@example.com"}]'
+          />
+          <IngestionInspectResult state={ingestionInspectState} />
         </section>
 
         {/* Options */}
@@ -718,6 +850,119 @@ function Section({ label, children }: { label: string; children: React.ReactNode
       {children}
     </div>
   )
+}
+
+function IngestionInspectResult({ state }: { state: IngestionInspectState }) {
+  if (state.kind === 'idle' || state.kind === 'submitting') {
+    return null
+  }
+  if (state.kind === 'invalid_input') {
+    return (
+      <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+        Invalid ingestion payload: {state.message}
+      </div>
+    )
+  }
+  if (state.kind === 'error') {
+    return (
+      <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+        Ingestion inspect failed: {state.message}
+      </div>
+    )
+  }
+
+  const diagnostics = state.diagnostics
+  return (
+    <div className="mt-3 rounded-md border border-slate-800 bg-slate-950/50 p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-3 text-xs">
+        <span
+          className={clsx(
+            'rounded-full px-2.5 py-0.5 font-medium',
+            diagnostics.ok
+              ? 'bg-emerald-500/20 text-emerald-300'
+              : 'bg-amber-500/20 text-amber-200',
+          )}
+        >
+          {diagnostics.ok ? 'Ready' : 'Needs attention'}
+        </span>
+        <span className="text-slate-400">Mode: {diagnostics.mode}</span>
+        <span className="text-slate-400">
+          Opportunities: {diagnostics.opportunityCount}
+        </span>
+        <span className="text-slate-400">
+          Warnings: {diagnostics.warningCount}
+        </span>
+      </div>
+      {diagnostics.warnings.length > 0 && (
+        <Section label="Warnings">
+          <ul className="ml-4 list-disc text-xs text-amber-100">
+            {diagnostics.warnings.slice(0, INGESTION_SAMPLE_LIMIT).map((warning, i) => (
+              <li key={`${warning.code}-${warning.rowIndex ?? i}-${warning.field ?? ''}`}>
+                {warning.code}: {warning.message}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+      {diagnostics.samples.length > 0 && (
+        <Section label="Sample rows">
+          <pre className="max-h-52 overflow-auto rounded-md bg-slate-950/80 p-3 font-mono text-[11px] text-slate-300">
+            {JSON.stringify(diagnostics.samples, null, 2)}
+          </pre>
+        </Section>
+      )}
+    </div>
+  )
+}
+
+type ParsedIngestionRows =
+  | { ok: true; rows: Array<Record<string, unknown>> }
+  | { ok: false; message: string }
+
+function parseIngestionRowsJson(value: string): ParsedIngestionRows {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value.trim() || '[]')
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  const rows = extractIngestionRows(parsed)
+  if (!rows.ok) return rows
+  if (rows.rows.length === 0) {
+    return { ok: false, message: 'Provide at least one row to inspect.' }
+  }
+  return rows
+}
+
+function extractIngestionRows(value: unknown): ParsedIngestionRows {
+  if (Array.isArray(value)) {
+    return normalizeIngestionRows(value)
+  }
+  if (isRecord(value)) {
+    for (const key of ['rows', 'opportunities', 'source_rows']) {
+      const nested = value[key]
+      if (Array.isArray(nested)) {
+        return normalizeIngestionRows(nested)
+      }
+    }
+    return { ok: true, rows: [{ ...value }] }
+  }
+  return { ok: false, message: 'Expected a row object or an array of row objects.' }
+}
+
+function normalizeIngestionRows(value: unknown[]): ParsedIngestionRows {
+  const rows: Array<Record<string, unknown>> = []
+  for (const [index, row] of value.entries()) {
+    if (!isRecord(row)) {
+      return { ok: false, message: `Row ${index + 1} must be a JSON object.` }
+    }
+    rows.push({ ...row })
+  }
+  return { ok: true, rows }
 }
 
 function PlanPanel({
