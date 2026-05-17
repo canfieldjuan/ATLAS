@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from atlas_brain.reasoning.graph import _llm_generate
+from atlas_brain.reasoning.port_adapters import AtlasLLMClient
 from atlas_brain.services.llm.anthropic import AnthropicLLM
 from atlas_brain.services.protocols import Message
 
@@ -43,11 +43,14 @@ def test_anthropic_chat_uses_request_timeout_override():
 
 
 @pytest.mark.asyncio
-async def test_graph_llm_generate_passes_timeout(monkeypatch):
+async def test_atlas_llm_client_passes_timeout_metadata(monkeypatch):
     async def _direct_to_thread(func, /, *args, **kwargs):
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("atlas_brain.reasoning.graph.asyncio.to_thread", _direct_to_thread)
+    monkeypatch.setattr(
+        "atlas_brain.reasoning.port_adapters.asyncio.to_thread",
+        _direct_to_thread,
+    )
 
     class FakeLLM:
         def __init__(self):
@@ -61,13 +64,14 @@ async def test_graph_llm_generate_passes_timeout(monkeypatch):
             }
 
     llm = FakeLLM()
-    result = await _llm_generate(
-        llm,
-        prompt="hello",
-        system_prompt="system",
+    result = await AtlasLLMClient(llm).complete(
+        [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "hello"},
+        ],
         max_tokens=64,
         temperature=0.2,
-        timeout=120.0,
+        metadata={"timeout": 120.0},
     )
 
     assert llm.kwargs["timeout"] == 120.0

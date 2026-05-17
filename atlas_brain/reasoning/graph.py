@@ -7,15 +7,13 @@ PR-C4e1 promoted the host-agnostic helpers (regex constants, summary
 text post-processing, JSON parsing, UUID validation, the
 ``plan_actions`` filter) into ``extracted_reasoning_core.graph_helpers``.
 This module re-exports them under their existing private names so
-internal callers (notably ``reflection.py`` which imports
-``_parse_llm_json``) keep working without touching their import sites.
-The next sub-slices (PR-C4e2/e3) will move the LLM-driven nodes and
-the orchestrator behind those imports.
+internal callers keep working without touching their import sites. The
+next sub-slices (PR-C4e2/e3) will move the LLM-driven nodes and the
+orchestrator behind those imports.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any
@@ -34,11 +32,10 @@ from .state import ReasoningAgentState
 
 logger = logging.getLogger("atlas.reasoning.graph")
 
-# Per-call deadline for the graph's LLM round-trips. Atlas's pre-
-# extraction ``_llm_generate`` enforced 120s via ``asyncio.wait_for``;
-# the new path threads this through Port metadata so ``AtlasLLMClient``
-# can apply the same outer ``wait_for`` (and forward it to ``chat`` as
-# a kwarg, in case the underlying client honors timeouts natively).
+# Per-call deadline for the graph's LLM round-trips. Threaded through Port
+# metadata so ``AtlasLLMClient`` can apply an outer ``asyncio.wait_for`` and
+# forward it to ``chat`` as a kwarg in case the underlying client honors
+# timeouts natively.
 _GRAPH_LLM_TIMEOUT_S: float = 120.0
 
 
@@ -61,48 +58,6 @@ def _resolve_graph_llm(workload: str, *, use_model_override: bool = False):
         auto_activate_ollama=False,
         openrouter_model=model_override,
     )
-
-
-async def _llm_generate(llm, prompt: str, system_prompt: str,
-                         max_tokens: int = 1024, temperature: float = 0.3,
-                         timeout: float = 120.0,
-                         json_mode: bool = False) -> dict[str, Any]:
-    """Call LLM.chat() from async context and return response with usage.
-
-    Args:
-        timeout: Maximum seconds to wait for the LLM response (default 120s).
-                 Raises asyncio.TimeoutError if exceeded.
-        json_mode: When True, pass response_format={"type":"json_object"} to
-                   force structured JSON output (needed for some reasoning
-                   models that may return prose otherwise).
-
-    Returns:
-        Dict with 'response' (str) and 'usage' (dict with input_tokens, output_tokens)
-    """
-    from ..services.protocols import Message
-
-    messages = [
-        Message(role="system", content=system_prompt),
-        Message(role="user", content=prompt),
-    ]
-    kwargs: dict[str, Any] = {
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "timeout": timeout,
-    }
-    if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
-    # Always use sync chat() via thread -- chat_async() returns only str,
-    # losing the usage dict needed for token tracking.
-    result = await asyncio.wait_for(
-        asyncio.to_thread(llm.chat, **kwargs),
-        timeout=timeout,
-    )
-    return {
-        "response": result.get("response", ""),
-        "usage": result.get("usage", {}),
-    }
 
 
 def _build_atlas_graph_nodes() -> "GraphNodes":

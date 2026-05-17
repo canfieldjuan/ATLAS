@@ -88,17 +88,20 @@ async def _run_reflection_cycle(ports: "ReasoningPorts") -> dict[str, Any]:
 
     try:
         import asyncio
-        from .graph import _llm_generate, _parse_llm_json
-        result = await asyncio.wait_for(
-            _llm_generate(
-                llm, prompt, REFLECTION_SYSTEM,
-                max_tokens=settings.reasoning.max_tokens,
-                temperature=settings.reasoning.temperature,
-            ),
+        from extracted_reasoning_core.graph_helpers import complete_with_json
+
+        from .port_adapters import AtlasLLMClient
+
+        result = await complete_with_json(
+            AtlasLLMClient(llm),
+            REFLECTION_SYSTEM,
+            prompt,
+            max_tokens=settings.reasoning.max_tokens,
+            temperature=settings.reasoning.temperature,
+            json_mode=True,
             timeout=120.0,
         )
-        text = result["response"]
-        analyzed = _parse_llm_json(text)
+        analyzed = result["parsed"] if result["parse_ok"] else {}
         llm_findings = analyzed.get("findings", [])
     except asyncio.TimeoutError:
         logger.warning("Reflection LLM timed out, using rule-based findings only")
