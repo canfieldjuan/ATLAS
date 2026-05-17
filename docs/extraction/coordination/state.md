@@ -1,6 +1,6 @@
 # Per-Product State
 
-Last updated: 2026-05-17T19:31Z by codex-2026-05-17
+Last updated: 2026-05-17T19:46Z by codex-2026-05-17
 
 Cross-product state-of-the-world for the extraction effort. Update when a PR merges or a product's phase advances. See [`../COORDINATION.md`](../COORDINATION.md) for the protocol that governs edits to this file.
 
@@ -9,7 +9,7 @@ Cross-product state-of-the-world for the extraction effort. Update when a PR mer
 | `extracted_llm_infrastructure` | 3 (runtime-decoupled + 100% standalone-operational; no OSS publish — internal refactor only) | #171 | — | Extraction effort terminal. PR-A6a #169 carved `ProviderCostSubConfig` into `_standalone/config.py`; PR-A6b #171 ported `SkillRegistry` substrate. Customer-facing API/SaaS work tracks under product roadmap (P1/P5/P6), not this scaffold. | none |
 | `extracted_competitive_intelligence` | 2 in progress (standalone toggle surfaces landing) | #160 | — | Continue Phase 2 ownership of standalone-ready product surfaces | none |
 | `extracted_content_pipeline` | 2 in progress (host-operational productization seams) | #567 | — | Packaged reasoning-policy parity is closed for all reasoning-aware generated outputs. Next high-leverage work should come from a real source export fixture or the separate `extracted_reasoning_core` productization track. | none |
-| `extracted_reasoning_core` | 2 in progress (public API, semantic-cache keys, pack registry, graph/state ports, manifest, standalone smoke, and partial product wrappers landed) | #571 | TBD | Route reflection LLM analysis through the current port-adapter seam, then continue graph/state wrapper split work. | reflection LLM routing |
+| `extracted_reasoning_core` | 2 in progress (public API, semantic-cache keys, pack registry, graph/state ports, manifest, standalone smoke, and partial product wrappers landed) | #572 | TBD | Document the graph/reflection boundary closeout, then only continue extraction when a concrete product needs more than the current host-wrapper seam. | graph boundary docs |
 | `extracted_quality_gate` | 1 (scaffold + 7 deterministic packs landed: product_claim core #85; safety-gate split #114; blog quality pack #118; campaign quality pack #120; witness specificity pack #125; evidence coverage gate #130; source-quality pack #132) | #154 | — | Decoupling work effectively complete; no OSS publish. Future quality-gate features land here as new packs when needed. | none |
 
 Phase legend: 0 = pre-extraction (audit doc only). 1 = byte-for-byte scaffold, still imports from `atlas_brain`. 2 = standalone toggle loads local substrate (per-product env var: `EXTRACTED_LLM_INFRA_STANDALONE`, `EXTRACTED_COMP_INTEL_STANDALONE`, `EXTRACTED_PIPELINE_STANDALONE`, etc.; see `extracted/METHODOLOGY.md` for the canonical list). 3 = full Protocol-based decoupling, no `atlas_brain` runtime imports.
