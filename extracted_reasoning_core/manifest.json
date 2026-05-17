@@ -1,0 +1,74 @@
+{
+  "mappings": [],
+  "owned": [
+    {
+      "target": "extracted_reasoning_core/__init__.py"
+    },
+    {
+      "target": "extracted_reasoning_core/_synthesis.py"
+    },
+    {
+      "target": "extracted_reasoning_core/api.py"
+    },
+    {
+      "target": "extracted_reasoning_core/archetypes.py"
+    },
+    {
+      "target": "extracted_reasoning_core/domains.py"
+    },
+    {
+      "target": "extracted_reasoning_core/evidence_engine.py"
+    },
+    {
+      "target": "extracted_reasoning_core/evidence_map.yaml"
+    },
+    {
+      "target": "extracted_reasoning_core/graph.py"
+    },
+    {
+      "target": "extracted_reasoning_core/graph_helpers.py"
+    },
+    {
+      "target": "extracted_reasoning_core/graph_nodes.py"
+    },
+    {
+      "target": "extracted_reasoning_core/pack_registry.py"
+    },
+    {
+      "target": "extracted_reasoning_core/ports.py"
+    },
+    {
+      "target": "extracted_reasoning_core/semantic_cache_keys.py"
+    },
+    {
+      "target": "extracted_reasoning_core/skills/__init__.py"
+    },
+    {
+      "target": "extracted_reasoning_core/skills/digest/reasoning_continuation.md"
+    },
+    {
+      "target": "extracted_reasoning_core/skills/digest/reasoning_falsification.md"
+    },
+    {
+      "target": "extracted_reasoning_core/skills/digest/reasoning_synthesis.md"
+    },
+    {
+      "target": "extracted_reasoning_core/skills/registry.py"
+    },
+    {
+      "target": "extracted_reasoning_core/state.py"
+    },
+    {
+      "target": "extracted_reasoning_core/temporal.py"
+    },
+    {
+      "target": "extracted_reasoning_core/tiers.py"
+    },
+    {
+      "target": "extracted_reasoning_core/types.py"
+    },
+    {
+      "target": "extracted_reasoning_core/wedge_registry.py"
+    }
+  ]
+}
