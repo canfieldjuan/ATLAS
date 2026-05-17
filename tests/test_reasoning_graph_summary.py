@@ -1,5 +1,3 @@
-from unittest.mock import AsyncMock
-
 import pytest
 
 from atlas_brain.reasoning.graph import (
@@ -7,6 +5,15 @@ from atlas_brain.reasoning.graph import (
     _node_synthesize,
     _sanitize_notification_summary,
 )
+
+
+class _StaticChatService:
+    def __init__(self, response: str, usage: dict | None = None) -> None:
+        self.response = response
+        self.usage = usage or {}
+
+    def chat(self, **kwargs):
+        return {"response": self.response, "usage": dict(self.usage)}
 
 
 def test_sanitize_notification_summary_removes_meta_narration():
@@ -59,22 +66,17 @@ def test_build_notification_fallback_prefers_connections():
 
 @pytest.mark.asyncio
 async def test_node_synthesize_sanitizes_graph_summary(monkeypatch):
-    monkeypatch.setattr(
-        "atlas_brain.reasoning.graph._resolve_graph_llm",
-        lambda workload: object(),
+    service = _StaticChatService(
+        (
+            "**Summarizing Atlas's results**\n\n"
+            "We alerted you about LARKI's reliability concerns and queued a reminder.\n\n"
+            "I'm thinking the owner should follow up soon."
+        ),
+        usage={"input_tokens": 5, "output_tokens": 7},
     )
     monkeypatch.setattr(
-        "atlas_brain.reasoning.graph._llm_generate",
-        AsyncMock(
-            return_value={
-                "response": (
-                    "**Summarizing Atlas's results**\n\n"
-                    "We alerted you about LARKI's reliability concerns and queued a reminder.\n\n"
-                    "I'm thinking the owner should follow up soon."
-                ),
-                "usage": {"input_tokens": 5, "output_tokens": 7},
-            }
-        ),
+        "atlas_brain.reasoning.graph._resolve_graph_llm",
+        lambda workload: service,
     )
 
     state = {

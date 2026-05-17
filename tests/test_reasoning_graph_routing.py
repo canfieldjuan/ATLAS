@@ -9,6 +9,17 @@ from atlas_brain.reasoning.reflection import run_reflection
 from atlas_brain.pipelines.llm import get_pipeline_llm
 
 
+class _StaticChatService:
+    def __init__(self, response: str, usage: dict | None = None) -> None:
+        self.response = response
+        self.usage = usage or {}
+        self.calls = []
+
+    def chat(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"response": self.response, "usage": dict(self.usage)}
+
+
 def test_reasoning_prompt_exports_are_available_from_both_modules():
     from atlas_brain.reasoning import graph_prompts, prompts
 
@@ -27,16 +38,15 @@ async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
     monkeypatch.setattr(settings.reasoning, "graph_triage_workload", "triage")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
+    service = _StaticChatService(
+        '{"priority":"high","needs_reasoning":true,"reasoning":"ok"}'
+    )
 
     def _fake_get_pipeline_llm(**kwargs):
         calls.append(kwargs)
-        return object()
+        return service
 
     monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
-    monkeypatch.setattr(
-        "atlas_brain.reasoning.graph._llm_generate",
-        AsyncMock(return_value={"response": '{"priority":"high","needs_reasoning":true,"reasoning":"ok"}', "usage": {}}),
-    )
 
     state = {"event_type": "b2b.high_intent_detected", "source": "test", "entity_type": "company", "entity_id": "Acme", "payload": {}}
     result = await _node_triage(state)
@@ -47,6 +57,7 @@ async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
         "auto_activate_ollama": False,
         "openrouter_model": None,
     }]
+    assert service.calls
     assert result["triage_priority"] == "high"
 
 
@@ -55,16 +66,15 @@ async def test_graph_reason_uses_configured_pipeline_workload(monkeypatch):
     monkeypatch.setattr(settings.reasoning, "graph_reasoning_workload", "openrouter")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
+    service = _StaticChatService(
+        '{"connections":["pricing"],"actions":[],"rationale":"ok","should_notify":true}'
+    )
 
     def _fake_get_pipeline_llm(**kwargs):
         calls.append(kwargs)
-        return object()
+        return service
 
     monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
-    monkeypatch.setattr(
-        "atlas_brain.reasoning.graph._llm_generate",
-        AsyncMock(return_value={"response": '{"connections":["pricing"],"actions":[],"rationale":"ok","should_notify":true}', "usage": {}}),
-    )
 
     state = {"event_type": "b2b.high_intent_detected", "source": "test", "payload": {}, "b2b_churn": {}}
     result = await _node_reason(state)
@@ -74,6 +84,7 @@ async def test_graph_reason_uses_configured_pipeline_workload(monkeypatch):
         "auto_activate_ollama": False,
         "openrouter_model": "openai/o4-mini",
     }]
+    assert service.calls
     assert result["connections_found"] == ["pricing"]
 
 
@@ -82,16 +93,13 @@ async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
     monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "triage")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
+    service = _StaticChatService("Summary")
 
     def _fake_get_pipeline_llm(**kwargs):
         calls.append(kwargs)
-        return object()
+        return service
 
     monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
-    monkeypatch.setattr(
-        "atlas_brain.reasoning.graph._llm_generate",
-        AsyncMock(return_value={"response": "Summary", "usage": {}}),
-    )
 
     state = {"should_notify": True, "event_type": "b2b.high_intent_detected", "action_results": [], "rationale": "ok"}
     result = await _node_synthesize(state)
@@ -102,6 +110,7 @@ async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
         "auto_activate_ollama": False,
         "openrouter_model": None,
     }]
+    assert service.calls
     assert result["summary"] == "Summary."
 
 
