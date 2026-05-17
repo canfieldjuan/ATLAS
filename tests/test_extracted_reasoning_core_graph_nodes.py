@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
-from extracted_reasoning_core.graph_nodes import node_synthesize, node_triage
+from extracted_reasoning_core.graph_nodes import node_reason, node_synthesize, node_triage
 
 
 _TRIAGE_PROMPT = "You are a triage classifier."
@@ -168,6 +168,132 @@ async def test_node_triage_threads_timeout_through_metadata() -> None:
 
 
 @pytest.mark.asyncio
+async def test_node_reason_writes_parsed_actions_and_accumulates_tokens() -> None:
+    fake = _RecordingLLMClient(
+        response_text=(
+            '{"connections": ["pricing pattern"], '
+            '"actions": [{"tool": "send_notification", "confidence": 0.9}], '
+            '"rationale": "Pricing risk is rising.", '
+            '"should_notify": true}'
+        ),
+        usage={"input_tokens": 20, "output_tokens": 11},
+    )
+    state: dict = {"total_input_tokens": 3, "total_output_tokens": 2}
+
+    await node_reason(
+        state,
+        fake,
+        reasoning_system_prompt="Reason.",
+        prompt="Context.",
+        max_tokens=700,
+        temperature=0.2,
+        timeout=55.0,
+    )
+
+    assert state["reasoning_output"].startswith('{"connections"')
+    assert state["connections_found"] == ["pricing pattern"]
+    assert state["recommended_actions"] == [
+        {"tool": "send_notification", "confidence": 0.9}
+    ]
+    assert state["rationale"] == "Pricing risk is rising."
+    assert state["should_notify"] is True
+    assert state["total_input_tokens"] == 23
+    assert state["total_output_tokens"] == 13
+
+    call = fake.calls[0]
+    assert call["max_tokens"] == 700
+    assert call["temperature"] == 0.2
+    assert call["metadata"]["json_mode"] is True
+    assert call["metadata"]["response_format"] == {"type": "json_object"}
+    assert call["metadata"]["timeout"] == 55.0
+
+
+@pytest.mark.asyncio
+async def test_node_reason_drops_wrong_parsed_shapes() -> None:
+    fake = _RecordingLLMClient(
+        response_text=(
+            '{"connections": {"bad": "shape"}, '
+            '"actions": [{"tool": "send_notification"}, "bad"], '
+            '"rationale": {"bad": "shape"}, '
+            '"should_notify": "yes"}'
+        )
+    )
+    state: dict = {}
+
+    await node_reason(
+        state,
+        fake,
+        reasoning_system_prompt="Reason.",
+        prompt="Context.",
+    )
+
+    assert state["connections_found"] == []
+    assert state["recommended_actions"] == [{"tool": "send_notification"}]
+    assert state["rationale"] == ""
+    assert state["should_notify"] is False
+
+
+@pytest.mark.asyncio
+async def test_node_reason_falls_back_when_llm_is_none() -> None:
+    state: dict = {"should_notify": True}
+    await node_reason(
+        state,
+        None,
+        reasoning_system_prompt="Reason.",
+        prompt="Context.",
+    )
+    assert state["reasoning_output"] == ""
+    assert state["connections_found"] == []
+    assert state["recommended_actions"] == []
+    assert state["rationale"] == "Reasoning LLM unavailable"
+    assert state["should_notify"] is False
+
+
+@pytest.mark.asyncio
+async def test_node_reason_falls_back_when_llm_raises() -> None:
+    fake = _RecordingLLMClient(response_text="")
+    fake.exc = RuntimeError("reasoning failed")
+    state: dict = {"should_notify": True}
+
+    await node_reason(
+        state,
+        fake,
+        reasoning_system_prompt="Reason.",
+        prompt="Context.",
+    )
+
+    assert state["reasoning_output"] == ""
+    assert state["connections_found"] == []
+    assert state["recommended_actions"] == []
+    assert state["rationale"] == "Reasoning failed"
+    assert state["should_notify"] is False
+
+
+@pytest.mark.asyncio
+async def test_node_reason_surfaces_raw_text_on_unparseable_output() -> None:
+    fake = _RecordingLLMClient(
+        response_text="Unstructured reasoning text.",
+        usage={"input_tokens": 5, "output_tokens": 4},
+    )
+    state: dict = {"total_input_tokens": 1, "total_output_tokens": 1}
+
+    await node_reason(
+        state,
+        fake,
+        reasoning_system_prompt="Reason.",
+        prompt="Context.",
+    )
+
+    assert state["reasoning_output"] == "Unstructured reasoning text."
+    assert state["connections_found"] == []
+    assert state["recommended_actions"] == []
+    assert state["rationale"] == "Unstructured reasoning text."
+    assert state["should_notify"] is True
+    assert state["total_input_tokens"] == 6
+    assert state["total_output_tokens"] == 5
+
+
+@pytest.mark.asyncio
 async def test_node_synthesize_threads_timeout_through_metadata() -> None:
     fake = _RecordingLLMClient(response_text="A summary line.")
     state: dict = {
@@ -274,7 +400,7 @@ async def test_node_synthesize_falls_back_on_empty_response() -> None:
         "total_output_tokens": 0,
     }
     await node_synthesize(state, fake, synthesis_system_prompt=_SYNTH_PROMPT)
-    # Empty response → fallback uses connections.
+    # Empty response -> fallback uses connections.
     assert "Vendor signal: pricing pressure" in state["summary"]
     # Tokens still accumulate even when response is empty.
     assert state["total_input_tokens"] == 5

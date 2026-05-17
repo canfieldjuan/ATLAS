@@ -1,21 +1,10 @@
 """LLM-driven graph nodes promoted into core.
 
-PR-C4e2 (this module) is the second sub-slice of the audit's PR 6
-graph-engine extraction. ``node_triage`` and ``node_synthesize`` are
-fully self-contained -- they read only fields declared on core's
-:class:`extracted_reasoning_core.state.ReasoningAgentState` and call
-the LLM through the :class:`extracted_reasoning_core.ports.LLMClient`
-Protocol. Atlas's ``_node_triage`` / ``_node_synthesize`` become thin
-wrappers that resolve an atlas LLM, wrap it in the ``AtlasLLMClient``
-adapter, and delegate here.
-
-``_node_reason`` is *not* moved in this slice -- it reads atlas-
-specific extended-state fields (``crm_context``, ``b2b_churn``, voice
-turns, etc. that atlas adds via the ``ReasoningAgentState`` subclass
-established in PR-C4b). Atlas keeps the prompt builder and calls the
-shared ``complete_with_json`` helper for the LLM round-trip. PR-C4e3
-or a later slice can decide whether to push those fields up to core
-or expose a richer prompt-building hook.
+``node_triage``, ``node_reason``, and ``node_synthesize`` read only fields
+declared on core's :class:`extracted_reasoning_core.state.ReasoningAgentState`
+and call the LLM through the :class:`extracted_reasoning_core.ports.LLMClient`
+Protocol. Hosts keep workload routing and prompt/context assembly in their
+adapters, then delegate the LLM call / parse / fallback behavior here.
 
 Each node accepts ``llm: LLMClient | None``. ``None`` means "LLM
 unavailable" -- the node applies the same conservative fallback
@@ -53,6 +42,20 @@ _TRIAGE_TEMPERATURE = 0.1
 
 _SYNTH_MAX_TOKENS_DEFAULT = 256
 _SYNTH_TEMPERATURE_DEFAULT = 0.3
+_REASON_MAX_TOKENS_DEFAULT = 4096
+_REASON_TEMPERATURE_DEFAULT = 0.3
+
+
+def _reason_list_of_strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _reason_list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 async def node_triage(
@@ -206,4 +209,80 @@ async def node_synthesize(
     return state
 
 
-__all__ = ["node_synthesize", "node_triage"]
+async def node_reason(
+    state: ReasoningAgentState,
+    llm: LLMClient | None,
+    *,
+    reasoning_system_prompt: str,
+    prompt: str,
+    max_tokens: int = _REASON_MAX_TOKENS_DEFAULT,
+    temperature: float = _REASON_TEMPERATURE_DEFAULT,
+    timeout: float | None = None,
+) -> ReasoningAgentState:
+    """Run the deep-reasoning LLM call and normalize its state writes.
+
+    Hosts build the prompt because each product has different context fields.
+    Core owns the provider-port call, usage accounting, parsed JSON projection,
+    and conservative fallbacks.
+    """
+    if llm is None:
+        state["reasoning_output"] = ""
+        state["connections_found"] = []
+        state["recommended_actions"] = []
+        state["rationale"] = "Reasoning LLM unavailable"
+        state["should_notify"] = False
+        return state
+
+    try:
+        result = await complete_with_json(
+            llm,
+            reasoning_system_prompt,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_mode=True,
+            timeout=timeout,
+        )
+    except Exception:
+        logger.error("Reasoning node failed", exc_info=True)
+        state["reasoning_output"] = ""
+        state["connections_found"] = []
+        state["recommended_actions"] = []
+        state["rationale"] = "Reasoning failed"
+        state["should_notify"] = False
+        return state
+
+    text = result["response"]
+    usage = result["usage"]
+    state["total_input_tokens"] = (
+        state.get("total_input_tokens", 0) + int(usage.get("input_tokens", 0) or 0)
+    )
+    state["total_output_tokens"] = (
+        state.get("total_output_tokens", 0) + int(usage.get("output_tokens", 0) or 0)
+    )
+    state["reasoning_output"] = text
+
+    if result["parse_ok"]:
+        parsed = result["parsed"]
+        rationale = parsed.get("rationale", "")
+        should_notify = parsed.get("should_notify", False)
+        state["connections_found"] = _reason_list_of_strings(
+            parsed.get("connections", [])
+        )
+        state["recommended_actions"] = _reason_list_of_dicts(
+            parsed.get("actions", [])
+        )
+        state["rationale"] = rationale if isinstance(rationale, str) else ""
+        state["should_notify"] = (
+            should_notify if isinstance(should_notify, bool) else False
+        )
+    else:
+        state["connections_found"] = []
+        state["recommended_actions"] = []
+        state["rationale"] = text
+        state["should_notify"] = True
+
+    return state
+
+
+__all__ = ["node_reason", "node_synthesize", "node_triage"]

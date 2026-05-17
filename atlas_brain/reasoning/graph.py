@@ -246,11 +246,10 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
     Atlas keeps the prompt builder here because it reads atlas-specific
     extended-state fields (``crm_context``, ``b2b_churn``, ``voice_turns``,
     etc. -- the slots atlas's ``ReasoningAgentState`` adds on top of
-    core's TypedDict per PR-C4b). The LLM round-trip itself goes through
-    core's ``complete_with_json`` helper via the ``AtlasLLMClient``
-    adapter.
+    core's TypedDict per PR-C4b). Core owns the LLM call / parse / fallback
+    behavior via ``node_reason``.
     """
-    from extracted_reasoning_core.graph_helpers import complete_with_json
+    from extracted_reasoning_core.graph_nodes import node_reason
     from .graph_prompts import REASONING_SYSTEM
     from .port_adapters import AtlasLLMClient
     from ..config import settings
@@ -312,64 +311,17 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
         settings.reasoning.graph_reasoning_workload,
         use_model_override=True,
     )
-    if not llm_service:
-        state["reasoning_output"] = ""
-        state["connections_found"] = []
-        state["recommended_actions"] = []
-        state["rationale"] = "Reasoning LLM unavailable"
-        return state
+    client = AtlasLLMClient(llm_service) if llm_service else None
 
-    client = AtlasLLMClient(llm_service)
-
-    try:
-        result = await complete_with_json(
-            client,
-            REASONING_SYSTEM,
-            prompt,
-            max_tokens=settings.reasoning.max_tokens,
-            temperature=settings.reasoning.temperature,
-            json_mode=True,
-            timeout=_GRAPH_LLM_TIMEOUT_S,
-        )
-    except Exception:
-        logger.error("Reasoning node failed", exc_info=True)
-        state["reasoning_output"] = ""
-        state["connections_found"] = []
-        state["recommended_actions"] = []
-        state["rationale"] = "Reasoning failed"
-        return state
-
-    text = result["response"]
-    usage = result["usage"]
-    state["total_input_tokens"] = (
-        state.get("total_input_tokens", 0) + int(usage.get("input_tokens", 0) or 0)
+    return await node_reason(
+        state,
+        client,
+        reasoning_system_prompt=REASONING_SYSTEM,
+        prompt=prompt,
+        max_tokens=settings.reasoning.max_tokens,
+        temperature=settings.reasoning.temperature,
+        timeout=_GRAPH_LLM_TIMEOUT_S,
     )
-    state["total_output_tokens"] = (
-        state.get("total_output_tokens", 0) + int(usage.get("output_tokens", 0) or 0)
-    )
-
-    state["reasoning_output"] = text
-
-    if result["parse_ok"]:
-        parsed = result["parsed"]
-        state["connections_found"] = parsed.get("connections", [])
-        state["recommended_actions"] = parsed.get("actions", [])
-        state["rationale"] = parsed.get("rationale", "")
-        state["should_notify"] = parsed.get("should_notify", False)
-    else:
-        # ``complete_with_json`` returns ``parse_ok=False`` on
-        # JSON-decode failure (or non-object JSON / empty response).
-        # Preserve atlas's pre-extraction behavior: surface the raw
-        # text as rationale + force notify so the human sees the
-        # unparsed reasoning output. ``parse_ok=False`` distinguishes
-        # this from a *valid* empty JSON object, which would
-        # mistakenly trip the same fallback under a truthiness check.
-        state["connections_found"] = []
-        state["recommended_actions"] = []
-        state["rationale"] = text
-        state["should_notify"] = True
-
-    return state
 
 
 async def _node_execute_actions(
