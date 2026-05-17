@@ -138,6 +138,7 @@ def test_plan_threads_all_packaged_runtime_reasoning_presets(output):
     inputs = {
         "blog_post": {"topic": "Churn pressure"},
         "report": {"opportunity_id": "opp_123"},
+        "landing_page": {"offer": "Audit", "audience": "RevOps"},
         "sales_brief": {"target_account": "Acme"},
     }[output]
 
@@ -182,10 +183,10 @@ def test_plan_rejects_unknown_reasoning_preset_for_report():
             "multi_pass_structured or multi_pass_strict",
         ),
         (
-            "blog_post",
-            {"topic": "Churn pressure"},
+            "landing_page",
+            {"offer": "Audit", "audience": "RevOps"},
             "multi_pass_light",
-            "multi_pass_structured or multi_pass_strict",
+            "multi_pass_structured for blog_post and landing_page",
         ),
         (
             "blog_post",
@@ -215,11 +216,6 @@ def test_plan_rejects_runtime_unsupported_reasoning_preset(
     ("output", "inputs", "preset"),
     (
         (
-            "landing_page",
-            {"offer": "Audit", "audience": "RevOps"},
-            "multi_pass_structured",
-        ),
-        (
             "email_campaign",
             {"target_account": "Acme", "offer": "Audit"},
             "single_pass",
@@ -231,7 +227,10 @@ def test_plan_rejects_runtime_reasoning_when_no_packaged_output_selected(
     inputs,
     preset,
 ):
-    with pytest.raises(ValueError, match="only to blog_post, report, and sales_brief"):
+    with pytest.raises(
+        ValueError,
+        match="only to blog_post, report, landing_page, and sales_brief",
+    ):
         build_generation_plan_from_mapping(
             {
                 "outputs": [output],
@@ -257,6 +256,27 @@ def test_plan_ignores_non_runtime_outputs_when_packaged_output_selected():
     configs = {step["output"]: step["config"] for step in plan["steps"]}
     assert "reasoning_preset" not in configs["email_campaign"]
     assert configs["report"]["reasoning_preset"] == "multi_pass_structured"
+
+
+def test_plan_threads_structured_reasoning_preset_to_landing_page():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {
+                "offer": "Audit",
+                "audience": "RevOps",
+            },
+        }
+    )
+
+    step = plan["steps"][0]
+    assert step["config"]["reasoning_preset"] == "multi_pass_structured"
+    assert step["config"]["reasoning_multi_pass"] is True
+    assert step["config"]["reasoning_narrative_planning"] is True
+    assert step["config"]["reasoning_output_validation"] is True
+    assert step["config"]["reasoning_blocking_validation"] is False
+    assert step["config"]["reasoning_falsification"] is False
 
 
 def test_plan_maps_blog_to_blog_generation_service():

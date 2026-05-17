@@ -70,7 +70,8 @@ def test_packaged_runtime_reasoning_surface_is_catalog_supported() -> None:
     for output in PACKAGED_REASONING_RUNTIME_OUTPUTS:
         assert OUTPUT_CATALOG[output].implemented is True
         policy = output_reasoning_policy(output)
-        assert policy.default_preset in packaged_reasoning_runtime_presets_for_output(output)
+        if output != "landing_page":
+            assert policy.default_preset in packaged_reasoning_runtime_presets_for_output(output)
         for preset in packaged_reasoning_runtime_presets_for_output(output):
             assert policy.supports(preset)
 

@@ -725,8 +725,17 @@ class _ProviderRecordingService:
         self.providers.append(provider)
         return _ProviderRecordingService(self.providers)
 
-    async def generate(self, *, scope, target_mode, limit=None, filters=None, **kwargs):
-        del scope, target_mode, limit, filters, kwargs
+    async def generate(
+        self,
+        *,
+        scope,
+        target_mode=None,
+        limit=None,
+        filters=None,
+        campaign=None,
+        **kwargs,
+    ):
+        del scope, target_mode, limit, filters, campaign, kwargs
         return {"generated": 1, "saved_ids": ["draft-1"]}
 
 
@@ -939,6 +948,34 @@ async def test_execute_route_builds_blog_specific_structured_reasoning_pack():
     assert len(recorded_providers) == 1
     provider = recorded_providers[0]
     assert provider._config.narrative_plan_pack.name == "content_ops_blog"
+    assert provider._config.output_policy is not None
+    assert provider._config.block_on_validation_failure is False
+
+
+@pytest.mark.asyncio
+async def test_execute_route_builds_structured_reasoning_for_landing_page():
+    recorded_providers = []
+    landing_page = _ProviderRecordingService(recorded_providers)
+
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            landing_page=landing_page,
+        ),
+        llm_provider=lambda: object(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["landing_page"],
+            "reasoning_preset": "multi_pass_structured",
+            "inputs": {"offer": "Audit", "audience": "RevOps"},
+        }
+    )
+
+    assert len(recorded_providers) == 1
+    provider = recorded_providers[0]
+    assert provider._config.narrative_plan_pack.name == "content_ops_structured"
     assert provider._config.output_policy is not None
     assert provider._config.block_on_validation_failure is False
 
