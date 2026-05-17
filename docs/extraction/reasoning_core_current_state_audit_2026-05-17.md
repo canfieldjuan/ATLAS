@@ -1,6 +1,8 @@
 # Extracted Reasoning Core Current State
 
 Date: 2026-05-17
+Current-state refresh: 2026-05-17 after the #564 implementation, surfaced
+during post-#575 cleanup
 
 ## Purpose
 
@@ -28,6 +30,10 @@ actually exists.
   `_synthesis.py`.
 - Graph/state modules: `graph.py`, `graph_nodes.py`, `graph_helpers.py`,
   and `state.py`.
+- Atlas-side product pack split:
+  `atlas_brain.reasoning.review_enrichment.ReviewEnrichmentMixin` owns
+  per-review enrichment methods while `atlas_brain.reasoning.evidence_engine`
+  stays a wrapper over core's slim evidence engine.
 - Core test coverage under `tests/test_extracted_reasoning_core_*.py`.
 
 ## Status Against The Old PR 4-7 Backlog
@@ -35,7 +41,7 @@ actually exists.
 | Old backlog item | Current status | Notes |
 |---|---|---|
 | PR 4: Semantic cache split | Mostly shipped at the core boundary | `semantic_cache_keys.py`, `SemanticCacheStore`, `compute_evidence_hash`, and `build_semantic_cache_key` exist. Concrete storage remains outside core, which is the intended port split. |
-| PR 5: Reasoning pack registry | Mostly shipped | `pack_registry.py` exists, and atlas single-pass prompt packs register into it. The remaining gap is per-review enrichment, still atlas-side in `atlas_brain.reasoning.evidence_engine`. |
+| PR 5: Reasoning pack registry | Shipped for current scope | `pack_registry.py` exists, atlas single-pass prompt packs register into it, and atlas per-review enrichment now lives in `atlas_brain.reasoning.review_enrichment` with `evidence_engine` as a wrapper/mixin host. |
 | PR 6: Graph/state engine with ports | Shipped to the intended boundary | Core graph, graph node, graph helper, and state modules exist. After #570-#572, Atlas graph is a host wrapper around core node contracts plus Atlas-owned orchestration. |
 | PR 7: Product migration pass | Partially shipped | `extracted_content_pipeline.reasoning.*` wrappers point at core. Atlas wrappers for archetypes, temporal, evidence engine, and graph helpers are covered by alias tests. Import-boundary guard exists and is wired for extracted products. |
 
@@ -86,10 +92,14 @@ contracts and generated reasoning contexts, not on moving Atlas wrappers.
 ## Remaining Gaps
 
 1. **Per-review enrichment pack split.**
+   Closed for the current Atlas wrapper boundary. The enrichment methods
+   `compute_urgency`, `override_pain`, `derive_recommend`,
+   `derive_price_complaint`, `derive_budget_authority`, and
+   `_check_derivation_rule` live on
+   `atlas_brain.reasoning.review_enrichment.ReviewEnrichmentMixin`.
    `atlas_brain.reasoning.evidence_engine.EvidenceEngine` subclasses core and
-   keeps atlas-only enrichment methods: `compute_urgency`, `override_pain`,
-   `derive_recommend`, `derive_price_complaint`, `derive_budget_authority`,
-   and `_check_derivation_rule`. This is the clearest remaining PR 5 gap.
+   mixes in that atlas product pack so existing callers keep the same object
+   shape while core stays slim.
 
 2. **Atlas graph/state host wrapper split.**
    This is now intentionally closed at the host-wrapper boundary described
@@ -97,9 +107,10 @@ contracts and generated reasoning contexts, not on moving Atlas wrappers.
    resolution and side-effect orchestration.
 
 3. **Queue/status drift.**
-   Coordination docs still pointed at PR-C1 even though the code had advanced
-   through semantic cache keys, pack registry, graph/state, and migration
-   guards. This PR fixes that planning drift before more code work starts.
+   Coordination docs have now advanced through semantic cache keys, pack
+   registry, graph/state, migration guards, node reasoning, routing, reflection,
+   and graph-boundary closeout. Future drift should be fixed with targeted
+   closeout docs rather than reopening old PR-C1/PR-C5 work.
 
 4. **Standalone-toggle status.**
    The reasoning core is moving toward the phase-2 boundary, but this audit did
@@ -108,17 +119,35 @@ contracts and generated reasoning contexts, not on moving Atlas wrappers.
 
 ## Recommendation
 
-Take the next code slice as the **per-review enrichment pack split**:
+Do not take another reasoning-core code slice from the stale PR 4-7 backlog.
+Semantic cache keys, pack registry, per-review enrichment pack split,
+phrase-metadata utility, manifest smoke, graph node contracts, graph routing,
+and reflection port adapters have all landed for the current boundary.
 
-- Create a product-owned enrichment pack module outside core.
-- Keep `extracted_reasoning_core.evidence_engine` slim.
-- Preserve the atlas wrapper behavior so existing callers still get the same
-  `EvidenceEngine` object shape.
-- Add tests that prove the atlas wrapper delegates slim evidence decisions to
-  core while enrichment methods live in the product pack.
+The next reasoning-core slice should name a concrete runtime need, such as:
 
-Do not rebuild semantic cache, pack registry, graph helpers, or public API
-surfaces from the old audit wording; those already exist.
+1. a non-Atlas product needs a reusable host adapter contract for LLM/workload
+   resolution;
+2. a product asks for a slimmed state model beyond the current core state;
+3. AI Content Ops needs a new stable provider port or capability check after a
+   real generated-asset run exposes an operator/runtime gap.
 
 Do not keep extracting Atlas graph wrappers unless a product-specific runtime
 needs one of the stop-rule capabilities above.
+
+## Recommendation History
+
+- 2026-05-17 original audit: take the per-review enrichment pack split next.
+- 2026-05-17 post-#564 refresh: the split is closed for the current Atlas
+  wrapper boundary. Do not take another slice from the old backlog unless a
+  concrete runtime need appears.
+
+## Refresh Log
+
+### 2026-05-17
+
+- Marked the per-review enrichment pack split as closed after verifying
+  `atlas_brain.reasoning.review_enrichment` and the atlas evidence-engine
+  wrapper tests exist.
+- Reframed the next recommendation around concrete runtime triggers instead of
+  stale PR-C backlog items.
