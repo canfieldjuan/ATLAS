@@ -1329,14 +1329,14 @@ def validate_reasoning_output(
     Pure deterministic check (no LLM call). Each policy field maps to a
     specific blocker class:
 
-      * ``min_confidence`` → ``confidence_below_min`` blocker if the
+      * ``min_confidence`` -> ``confidence_below_min`` blocker if the
         result's overall confidence is under the threshold.
-      * ``require_citations`` → ``claim_missing_citations:<idx>``
+      * ``require_citations`` -> ``claim_missing_citations:<idx>``
         blocker for each claim with no ``source_ids``.
-      * ``required_claim_types`` → ``missing_required_claim_type:<type>``
+      * ``required_claim_types`` -> ``missing_required_claim_type:<type>``
         blocker for each declared type absent from any claim's
         ``type``/``category`` field.
-      * ``blocked_phrasing`` → ``blocked_phrasing:<phrase>`` blocker if
+      * ``blocked_phrasing`` -> ``blocked_phrasing:<phrase>`` blocker if
         any blocked phrase (case-insensitive, **word-boundary** match)
         appears in the result summary or any claim's prose fields. The
         scanned claim keys are: ``claim``, ``summary``, ``narrative``,

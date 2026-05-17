@@ -5,11 +5,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 bash scripts/validate_extracted_content_pipeline.sh
+bash extracted/_shared/scripts/validate_extracted.sh extracted_reasoning_core
 bash scripts/check_ascii_python.sh
+bash extracted/_shared/scripts/check_ascii_python.sh extracted_reasoning_core
 python scripts/check_extracted_imports.py
+python extracted/_shared/scripts/check_extracted_imports.py --no-atlas-fallback extracted_reasoning_core
 python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
+python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_reasoning_core
 python scripts/smoke_extracted_pipeline_imports.py
 python scripts/smoke_extracted_pipeline_standalone.py
+python scripts/smoke_extracted_reasoning_core_standalone.py
 python scripts/audit_extracted_standalone.py --fail-on-debt
 pytest \
   tests/test_extracted_campaign_analytics.py \
@@ -80,6 +85,7 @@ pytest \
   tests/test_extracted_content_pipeline_reasoning_archetypes.py \
   tests/test_extracted_content_pipeline_reasoning_temporal.py \
   tests/test_extracted_content_pipeline_reasoning_evidence_engine.py \
+  tests/test_extracted_reasoning_core_manifest.py \
   tests/test_extracted_reasoning_core_api.py \
   tests/test_extracted_reasoning_core_run_reasoning.py \
   tests/test_extracted_reasoning_core_continue_reasoning.py \
