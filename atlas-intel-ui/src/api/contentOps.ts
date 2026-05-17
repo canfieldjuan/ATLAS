@@ -1,12 +1,13 @@
 /**
  * AI Content Ops API adapter.
  *
- * Typed fetch wrappers + wire-shape types for the four
+ * Typed fetch wrappers + wire-shape types for the
  * `/content-ops/*` and `/content-assets/*` routes the backend exposes:
  *
  *   GET  /content-ops/control-surfaces
  *   POST /content-ops/preview
  *   POST /content-ops/plan
+ *   POST /content-ops/ingestion/inspect
  *   POST /content-ops/execute
  *   GET  /content-assets/{asset}/drafts
  *   GET  /content-assets/{asset}/drafts/export
@@ -101,6 +102,37 @@ export interface ContentOpsRequestBody {
   ingestion_profile?: string                       // default "domain_specific"
   require_quality_gates?: boolean                  // default true
   allow_unimplemented_outputs?: boolean            // default false
+}
+
+// POST /content-ops/ingestion/inspect body and response
+
+export interface ContentOpsIngestionInspectRequest {
+  rows: Array<Record<string, unknown>>
+  source_rows?: boolean                             // default false
+  source?: string | null                            // default "api"
+  target_mode?: string | null                       // default "vendor_retention"
+  max_source_text_chars?: number                    // 1..10000
+  sample_limit?: number                             // 0..25
+}
+
+export interface ContentOpsIngestionWarning {
+  code: string
+  message: string
+  row_index?: number
+  field?: string
+}
+
+export interface ContentOpsIngestionDiagnosticsResponse {
+  ok: boolean
+  mode: 'opportunities' | 'source_rows'
+  source: string
+  opportunity_count: number
+  warning_count: number
+  warning_counts: Record<string, number>
+  missing_field_counts: Record<string, number>
+  source_type_counts: Record<string, number>
+  samples: Array<Record<string, unknown>>
+  warnings: ContentOpsIngestionWarning[]
 }
 
 // POST /content-ops/preview response
@@ -341,7 +373,7 @@ async function getJson<T>(path: string): Promise<T> {
   return rawJson<T>(res)
 }
 
-async function postJson<T>(path: string, body: ContentOpsRequestBody): Promise<T> {
+async function postJson<T>(path: string, body: unknown): Promise<T> {
   const url = `${BASE}${path}`
   const doFetch = () =>
     fetchWithApiFallback(url, {
@@ -479,6 +511,13 @@ export function planContentOpsRun(
   body: ContentOpsRequestBody,
 ): Promise<GenerationPlanResponse> {
   return postJson<GenerationPlanResponse>('/plan', body)
+}
+
+/** POST /content-ops/ingestion/inspect -- inspect inline opportunity/source rows. */
+export function inspectContentOpsIngestion(
+  body: ContentOpsIngestionInspectRequest,
+): Promise<ContentOpsIngestionDiagnosticsResponse> {
+  return postJson<ContentOpsIngestionDiagnosticsResponse>('/ingestion/inspect', body)
 }
 
 /**

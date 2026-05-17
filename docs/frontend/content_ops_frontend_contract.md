@@ -37,13 +37,15 @@ reproduce them") in its inverse: trusting a stale local tree to
 | `GET` | `/content-ops/control-surfaces` | Output catalog + presets + ingestion-profile menu + per-output execution flags |
 | `POST` | `/content-ops/preview` | Preflight validation; returns `ControlSurfacePreview` |
 | `POST` | `/content-ops/plan` | Build runnable plan; returns `GenerationPlan` |
+| `POST` | `/content-ops/ingestion/inspect` | Inspect inline opportunity/source rows before import or generation; returns `ContentOpsIngestionDiagnostics` |
 | `POST` | `/content-ops/execute` | Execute the plan via host-injected services; returns `ContentOpsExecutionResult` |
 
 The router prefix is configurable via `ContentOpsControlSurfaceApiConfig`
-(`api/control_surfaces.py:143`). All four routes share one pydantic
+(`api/control_surfaces.py:143`). Preview, plan, and execute share one pydantic
 body model (`ContentOpsRequestModel`, `api/control_surfaces.py:157-185`)
-with bounded sizes (max 50 input keys, depth 6, string ≤ 10000 chars,
-`outputs` length ≤ 20, `limit` 1–1000).
+with bounded sizes (max 50 input keys, depth 6, string <= 10000 chars,
+`outputs` length <= 20, `limit` 1-1000). The ingestion inspect route has its
+own bounded row-inspection body.
 
 ### Catalog response shape (`/content-ops/control-surfaces`)
 
@@ -96,6 +98,7 @@ top-level `execution.{configured,configured_outputs}` /
 | `OutputDefinition` | `control_surfaces.py:16-30` | `id`, `label`, `description`, `implemented`, `estimated_unit_cost_usd`, `required_inputs`, `default_max_items`, `reasoning_requirement`, `default_parse_retry_attempts` |
 | `ControlSurfacePreset` | `control_surfaces.py:33-40` | `id`, `label`, `outputs`, `description` |
 | `ContentOpsRequest` | `control_surfaces.py:43-55` | `target_mode`, `preset`, `outputs`, `limit`, `max_cost_usd`, `inputs`, `ingestion_profile`, `require_quality_gates`, `allow_unimplemented_outputs` |
+| `ContentOpsIngestionDiagnostics` | `ingestion_diagnostics.py:28-57` | `ok`, counts, bounded samples, and row warnings from inline ingestion inspection |
 | `ControlSurfacePreview` | `control_surfaces.py:58-90` | `can_run`, `outputs`, `estimated_cost_usd`, `missing_inputs`, `blocked_outputs`, `warnings`, `normalized_request` |
 | `GenerationPlanStep` | `generation_plan.py:28-45` | `output`, `runner`, `status`, `config`, `reason` |
 | `GenerationPlan` | `generation_plan.py:48-65` | `can_execute`, `target_mode`, `limit`, `steps`, `preview` |
@@ -480,6 +483,7 @@ src/api/
   contentOpsControlSurfaces.ts   // GET  /content-ops/control-surfaces
   contentOpsPreview.ts           // POST /content-ops/preview
   contentOpsPlan.ts              // POST /content-ops/plan
+  contentOpsIngestionInspect.ts  // POST /content-ops/ingestion/inspect
   contentOpsExecute.ts           // POST /content-ops/execute
 ```
 

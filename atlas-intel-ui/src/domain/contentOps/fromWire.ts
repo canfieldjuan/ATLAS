@@ -12,6 +12,8 @@
 
 import type {
   ContentOpsCatalogResponse,
+  ContentOpsIngestionDiagnosticsResponse,
+  ContentOpsIngestionInspectRequest as WireIngestionInspectRequest,
   ContentOpsExecutionResult as WireExecutionResult,
   ContentOpsOutputDefinition as WireOutputDefinition,
   ContentOpsPreset as WirePreset,
@@ -23,6 +25,8 @@ import type {
 } from '../../api/contentOps'
 import type {
   ContentOpsCatalog,
+  ContentOpsIngestionDiagnostics,
+  ContentOpsIngestionInspectRequest,
   ContentOpsExecutionResult,
   CampaignReasoningContextView,
   ContentOpsRequest,
@@ -158,6 +162,45 @@ export function toWireRequest(
     ingestion_profile: domain.ingestionProfile,
     require_quality_gates: domain.requireQualityGates,
     allow_unimplemented_outputs: domain.allowUnimplementedOutputs,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ingestion inspect
+// ---------------------------------------------------------------------------
+
+export function toWireIngestionInspectRequest(
+  domain: ContentOpsIngestionInspectRequest,
+): WireIngestionInspectRequest {
+  return {
+    rows: domain.rows.map((row) => ({ ...row })),
+    source_rows: domain.sourceRows,
+    source: domain.source,
+    target_mode: domain.targetMode,
+    max_source_text_chars: domain.maxSourceTextChars,
+    sample_limit: domain.sampleLimit,
+  }
+}
+
+export function fromWireIngestionDiagnostics(
+  wire: ContentOpsIngestionDiagnosticsResponse,
+): ContentOpsIngestionDiagnostics {
+  return {
+    ok: wire.ok,
+    mode: wire.mode,
+    source: wire.source,
+    opportunityCount: wire.opportunity_count,
+    warningCount: wire.warning_count,
+    warningCounts: { ...wire.warning_counts },
+    missingFieldCounts: { ...wire.missing_field_counts },
+    sourceTypeCounts: { ...wire.source_type_counts },
+    samples: wire.samples.map((row) => ({ ...row })),
+    warnings: wire.warnings.map((warning) => ({
+      code: warning.code,
+      message: warning.message,
+      rowIndex: warning.row_index,
+      field: warning.field,
+    })),
   }
 }
 
