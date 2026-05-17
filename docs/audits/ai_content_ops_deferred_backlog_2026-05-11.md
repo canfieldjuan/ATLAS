@@ -111,15 +111,21 @@ Remaining work:
   exists.
 
 **Likely slice:** wait for a real export. If none exists, skip this item.
-If no export appears after the next reasoning-policy pass, decide whether this
-remains roadmap work or should be removed from active backlog.
+No export appeared before the reasoning-policy parity pass closed. Keep this as
+roadmap work, not an active slice, until a real host export fixture exists.
 
 ## Current Pick Recommendation
 
 The host-facing AI Content Ops reasoning-policy arc is complete for the current
-standalone product surface: preset catalog, structured report/sales/blog
-execution, strict report/sales validation, explicit strict falsification rules,
-and blog-specific narrative packs have shipped.
+standalone product surface: preset catalog, packaged structured runtime support
+for all reasoning-aware generated outputs (`email_campaign`, `blog_post`,
+`report`, `landing_page`, `sales_brief`), strict report/sales validation,
+explicit strict falsification rules, and blog-specific narrative packs have
+shipped.
+
+PR #566 and PR #567 were audit-recommended parity closures that landed after
+the previous closeout. They do not reopen the reasoning-policy arc; they
+complete the deferred audit scope that already existed at closeout time.
 
 Do not take another AI Content Ops reasoning-policy slice unless it answers one
 of these concrete needs:
@@ -132,4 +138,6 @@ of these concrete needs:
 
 Until then, pause speculative Content Ops reasoning-policy work. The next
 highest-leverage code should come from either a real source export fixture
-(item 2) or the separate `extracted_reasoning_core` productization track.
+(item 2) or the separate `extracted_reasoning_core` productization track. If a
+future slice touches reasoning policy, it should name the concrete trigger from
+the list above in its plan doc.
