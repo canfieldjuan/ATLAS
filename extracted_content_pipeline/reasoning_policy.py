@@ -130,7 +130,7 @@ _BLOG_POST_PRESETS: tuple[ReasoningPreset, ...] = (
 )
 
 PACKAGED_REASONING_RUNTIME_OUTPUTS: tuple[str, ...] = (
-    "blog_post", "report", "sales_brief",
+    "blog_post", "report", "landing_page", "sales_brief",
 )
 PACKAGED_REASONING_RUNTIME_PRESETS: tuple[ReasoningPreset, ...] = (
     "multi_pass_structured",
@@ -142,6 +142,7 @@ _PACKAGED_REASONING_RUNTIME_PRESETS_BY_OUTPUT: Mapping[
 ] = MappingProxyType({
     "blog_post": ("multi_pass_structured",),
     "report": PACKAGED_REASONING_RUNTIME_PRESETS,
+    "landing_page": ("multi_pass_structured",),
     "sales_brief": PACKAGED_REASONING_RUNTIME_PRESETS,
 })
 NOOP_REASONING_PRESETS: tuple[ReasoningPreset, ...] = tuple(

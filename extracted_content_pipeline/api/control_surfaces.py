@@ -559,7 +559,7 @@ async def _structured_reasoning_contexts(
             status_code=400,
             detail=(
                 "reasoning_preset currently applies only to blog_post, report, "
-                "and sales_brief."
+                "landing_page, and sales_brief."
             ),
         )
     reasoning_definitions: dict[str, Any] = {}
@@ -575,7 +575,7 @@ async def _structured_reasoning_contexts(
                 status_code=400,
                 detail=(
                     "Content Ops packaged reasoning currently supports "
-                    "multi_pass_structured for blog_post and "
+                    "multi_pass_structured for blog_post and landing_page, and "
                     "multi_pass_structured or multi_pass_strict for report "
                     "and sales_brief."
                 ),
