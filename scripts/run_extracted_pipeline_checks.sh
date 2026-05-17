@@ -26,6 +26,7 @@ pytest \
   tests/test_extracted_campaign_generation_example.py \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_source_adapters.py \
+  tests/test_extracted_content_ingestion_diagnostics.py \
   tests/test_extracted_blog_generation.py \
   tests/test_extracted_blog_blueprint_ingest.py \
   tests/test_extracted_blog_post_postgres.py \
