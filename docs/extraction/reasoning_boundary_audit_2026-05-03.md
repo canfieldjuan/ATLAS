@@ -471,7 +471,17 @@ larger engine modules.
 
 ## PR-C1 Implementation Outcomes (2026-05-04)
 
-This section records the actual outcomes from the PR-C1 sequence (PR-C1a → PR-C1k) so the audit reflects what shipped, not just what was planned. The original PR 2 / PR 3 acceptance criteria from the "Follow-Up PR Sequence" above are now satisfied; the PR 4 / PR 5 / PR 6 / PR 7 sequence remains as planned.
+This section records the actual outcomes from the PR-C1 sequence (PR-C1a → PR-C1k) so the audit reflects what shipped, not just what was planned. The original PR 2 / PR 3 acceptance criteria from the "Follow-Up PR Sequence" above are now satisfied. The older PR 4 / PR 5 / PR 6 / PR 7 plan was later advanced by follow-up work and is no longer the source of truth; see the 2026-05-17 reconciliation below.
+
+## Current-State Reconciliation (2026-05-17)
+
+See `docs/extraction/reasoning_core_current_state_audit_2026-05-17.md`.
+
+The PR 4 / PR 5 / PR 6 / PR 7 backlog below is superseded as a planning
+source. Current main already contains semantic-cache key and port split work,
+the pack registry, graph/state ports, content-pipeline wrappers, atlas wrapper
+tests, and the extracted-product import-boundary guard. Use the current-state
+audit for next-slice selection instead of replaying the older backlog verbatim.
 
 ### Slices that landed
 
