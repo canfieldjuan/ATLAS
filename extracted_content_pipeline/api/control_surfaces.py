@@ -558,8 +558,8 @@ async def _structured_reasoning_contexts(
         raise HTTPException(
             status_code=400,
             detail=(
-                "reasoning_preset currently applies only to blog_post, report, "
-                "landing_page, and sales_brief."
+                "reasoning_preset currently applies only to email_campaign, "
+                "blog_post, report, landing_page, and sales_brief."
             ),
         )
     reasoning_definitions: dict[str, Any] = {}
@@ -575,9 +575,9 @@ async def _structured_reasoning_contexts(
                 status_code=400,
                 detail=(
                     "Content Ops packaged reasoning currently supports "
-                    "multi_pass_structured for blog_post and landing_page, and "
-                    "multi_pass_structured or multi_pass_strict for report "
-                    "and sales_brief."
+                    "multi_pass_structured for email_campaign, blog_post, "
+                    "and landing_page, and multi_pass_structured or "
+                    "multi_pass_strict for report and sales_brief."
                 ),
             )
     selected_outputs = [

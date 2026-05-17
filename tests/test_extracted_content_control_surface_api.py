@@ -886,10 +886,11 @@ async def test_execute_route_reasoning_provider_returning_none_rebinds_to_none()
 
 
 @pytest.mark.asyncio
-async def test_execute_route_builds_structured_reasoning_for_report_only():
-    campaign = _ReasoningCapturingService()
-    recorded_providers = []
-    report = _ProviderRecordingService(recorded_providers)
+async def test_execute_route_builds_structured_reasoning_for_campaign_and_report():
+    campaign_providers = []
+    report_providers = []
+    campaign = _ProviderRecordingService(campaign_providers)
+    report = _ProviderRecordingService(report_providers)
 
     router = create_content_ops_control_surface_router(
         execution_services_provider=lambda: ContentOpsExecutionServices(
@@ -912,16 +913,17 @@ async def test_execute_route_builds_structured_reasoning_for_report_only():
         }
     )
 
-    assert len(recorded_providers) == 1
-    provider = recorded_providers[0]
+    assert len(campaign_providers) == 1
+    assert len(report_providers) == 1
+    assert campaign_providers[0] is report_providers[0]
+    provider = report_providers[0]
     assert provider._config.default_goal == "synthesize content reasoning context"
     assert provider._config.narrative_plan_pack.name == "content_ops_structured"
     assert provider._config.output_policy is not None
     assert provider._config.output_policy.require_citations is True
     assert provider._config.block_on_validation_failure is False
-    assert campaign.calls[0]["reasoning_context"] is None
     email_step = next(step for step in payload["steps"] if step["output"] == "email_campaign")
-    assert email_step["reasoning"]["provider_configured"] is False
+    assert email_step["reasoning"]["provider_configured"] is True
 
 
 @pytest.mark.asyncio
@@ -1217,6 +1219,15 @@ async def test_blocking_reasoning_provider_surfaces_validation_blockers():
             },
             400,
             "multi_pass_structured or multi_pass_strict",
+        ),
+        (
+            {
+                "outputs": ["email_campaign"],
+                "reasoning_preset": "multi_pass_strict",
+                "inputs": {"target_account": "Acme", "offer": "Audit"},
+            },
+            400,
+            "not supported",
         ),
         (
             {
