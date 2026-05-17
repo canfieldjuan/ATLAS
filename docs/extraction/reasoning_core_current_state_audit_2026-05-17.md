@@ -89,7 +89,7 @@ Reopen this track only when a product needs one of these concrete capabilities:
 Until then, the higher-value reasoning work is on product-specific provider
 contracts and generated reasoning contexts, not on moving Atlas wrappers.
 
-## Remaining Gaps
+## Gap Status
 
 1. **Per-review enrichment pack split.**
    Closed for the current Atlas wrapper boundary. The enrichment methods

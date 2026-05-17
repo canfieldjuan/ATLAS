@@ -7,7 +7,7 @@ table still lists #575 as in flight, and the reasoning-core current-state audit
 still recommends the per-review enrichment pack split even though that split
 already landed in code and queue as #564.
 
-## Scope
+## Scope (this PR)
 
 1. Remove merged #575 from the in-flight coordination table.
 2. Update Content Ops state to show #575 as the latest merged productization
