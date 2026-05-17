@@ -1,6 +1,7 @@
 # Remaining Productization Audit
 
 Date: 2026-05-02
+Current-state refresh: 2026-05-17
 
 This audit follows the helper ownership pass that moved `_b2b_batch_utils`,
 `_blog_matching`, `_campaign_sequence_context`, and `campaign_audit` into the
@@ -15,26 +16,29 @@ EXTRACTED_PIPELINE_STANDALONE=1 python scripts/audit_extracted_standalone.py --f
 # Atlas runtime import findings: 0
 ```
 
-The extracted runner is green after the helper pass:
+The extracted runner was green after the helper pass:
 
 ```bash
 EXTRACTED_PIPELINE_STANDALONE=1 bash scripts/run_extracted_pipeline_checks.sh
 # 177 passed
 ```
 
-The smoke import script now includes both campaign-core copied tasks after the
-PR 1 and PR 2 seams made them importable. Direct import of all remaining
-manifest-mapped Python files still shows two failing surfaces:
+The current smoke import script is manifest-driven: it imports every Python
+target listed in `manifest.json`, excluding migrations and package
+`__init__.py` files. The copied task modules that were originally blockers now
+import in standalone mode through product-owned seams.
 
 | Module | Standalone import | First blocker |
 | --- | --- | --- |
 | `autonomous.tasks.b2b_campaign_generation` | Passes | PR 2 seams present |
 | `autonomous.tasks.b2b_vendor_briefing` | Passes | PR 1 seams present |
-| `autonomous.tasks._b2b_pool_compression` | Fails | missing `autonomous.tasks._b2b_witnesses` |
-| `autonomous.tasks.competitive_intelligence` | Fails | missing `services.brand_registry` |
+| `autonomous.tasks._b2b_pool_compression` | Passes | Product-owned witness/compatibility seams present |
+| `autonomous.tasks.competitive_intelligence` | Passes | Product-owned brand registry seam present |
 
-Everything else still mapped from Atlas imports in standalone mode, but many
-files remain Atlas-shaped and should not be product-owned as-is.
+Many manifest-mapped files remain Atlas-shaped references. Passing import does
+not make those whole files product-owned; production paths should continue
+moving behavior into native extracted modules instead of expanding ownership of
+copied task files.
 
 ## Remaining Mapped Python Surface
 
@@ -48,7 +52,7 @@ files remain Atlas-shaped and should not be product-owned as-is.
 | `_b2b_reasoning_contracts.py` | 1,773 | Reasoning policy; importable but large |
 | `_b2b_synthesis_reader.py` | 1,767 | Reasoning read model; importable but large |
 | `blog_post_generation.py` | 1,758 | Consumer/blog sidecar |
-| `competitive_intelligence.py` | 1,455 | Consumer intelligence sidecar; currently not importable |
+| `competitive_intelligence.py` | 1,455 | Consumer intelligence sidecar; importable through compatibility seams |
 | `_b2b_cross_vendor_synthesis.py` | 1,063 | Reasoning/synthesis helper; importable |
 | `_b2b_specificity.py` | 772 | Specificity policy; importable |
 | `complaint_analysis.py` | 527 | Consumer/complaint sidecar |
@@ -56,7 +60,7 @@ files remain Atlas-shaped and should not be product-owned as-is.
 | `article_enrichment.py` | 431 | Consumer/blog sidecar |
 | `complaint_content_generation.py` | 348 | Consumer/complaint sidecar |
 
-## Missing Seams For Campaign-Core Imports
+## Import Seams Closed
 
 `b2b_campaign_generation.py` had these missing top-level dependencies, now
 covered by product-owned compatibility seams:
@@ -76,11 +80,16 @@ by product-owned compatibility seams:
 - `templates.email.vendor_briefing`
 - `autonomous.tasks.campaign_suppression`
 
-`_b2b_pool_compression.py` has one missing dependency:
+`_b2b_pool_compression.py` was originally left outside campaign-core ownership.
+It now imports in standalone mode through product-owned compatibility seams,
+but remains upstream reasoning infrastructure rather than a campaign-core
+runtime dependency.
 
 - `autonomous.tasks._b2b_witnesses`
 
-`competitive_intelligence.py` has one missing dependency:
+`competitive_intelligence.py` now imports in standalone mode through the
+product-owned brand registry seam, but remains a consumer-intelligence sidecar
+rather than part of the email/campaign runtime.
 
 - `services.brand_registry`
 
@@ -221,8 +230,9 @@ context already present on the opportunity row is normalized defensively.
 
 These remain outside the immediate campaign-core import path:
 
-- `competitive_intelligence.py` and `services.brand_registry`
-  - Consumer intelligence sidecar, not required for the email/campaign product.
+- `competitive_intelligence.py`
+  - Consumer intelligence sidecar, not required for the email/campaign product
+    runtime even though it is now importable.
 - Consumer/blog generation tasks
   - `blog_post_generation.py`, `article_enrichment.py`,
     `complaint_*` modules.
@@ -231,31 +241,27 @@ These remain outside the immediate campaign-core import path:
 - Whole-file ownership of `b2b_blog_post_generation.py`
   - Blog/content product, separate from the campaign delivery product.
 
-## Next Concrete Slice
+## Current Next Slice Guidance
 
 With the campaign-core import path and reasoning-context boundary settled, the
-next slice should move behavior from copied Atlas task files into the
-product-owned spine instead of expanding import coverage sideways.
+next slice should be driven by a concrete runtime gap: a real host export, a
+failed install/readiness check, or a product-owned generator behavior that still
+requires the copied Atlas task path. Do not keep expanding import coverage
+sideways just because a copied task exists.
 
-Recommended next slice: migrate one concrete producer flow from the copied
-`b2b_campaign_generation.py` reference into `CampaignGenerationService` using
-the normalized ports:
+Previously recommended producer-flow migration has landed: the native
+`CampaignGenerationService` expands one normalized opportunity into configured
+channels such as `email_cold` and `email_followup`, passes generated cold-email
+context into the follow-up prompt, and saves drafts through
+`CampaignRepository`.
 
-Acceptance criteria:
+Future behavior migrations should satisfy the same boundary:
 
 - Use `IntelligenceRepository.read_campaign_opportunities(...)` as the source.
 - Optionally enrich with `CampaignReasoningContextProvider`.
 - Generate and persist drafts through `CampaignRepository`.
 - Keep `_b2b_pool_compression.py`, `_b2b_witnesses.py`, and `_b2b_shared.py`
   out of the product-owned path.
-
-Status: first slice implemented. `CampaignGenerationService` now expands one
-normalized opportunity into configured channels such as `email_cold` and
-`email_followup`, passes the generated cold-email context into the follow-up
-prompt, and saves both drafts through `CampaignRepository`. The offline
-customer-data runner and Postgres runner both expose `--channels` so the copied
-task's cold/follow-up producer shape is now available through the product-owned
-ports.
 
 ## Reasoning Producer Gap (logged 2026-05-03)
 
@@ -351,3 +357,14 @@ folder, Option B is sufficient for the podcast repurposing offer (no
 reasoning needed at all) and insufficient for either creative-content or
 B2B-campaign-as-product offers unless a reasoning provider is bundled,
 integrated, or supplied by the buyer.
+
+## Refresh Log
+
+### 2026-05-17
+
+- Updated the stale import-state table after the manifest-driven standalone
+  smoke confirmed `_b2b_pool_compression.py` and `competitive_intelligence.py`
+  now import successfully.
+- Reframed the next-slice guidance away from sideways import coverage and
+  toward concrete runtime gaps.
+- Kept the host-owned reasoning decision unchanged.
