@@ -311,15 +311,7 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
         settings.reasoning.graph_reasoning_workload,
         use_model_override=True,
     )
-    if not llm_service:
-        return await node_reason(
-            state,
-            None,
-            reasoning_system_prompt=REASONING_SYSTEM,
-            prompt=prompt,
-        )
-
-    client = AtlasLLMClient(llm_service)
+    client = AtlasLLMClient(llm_service) if llm_service else None
 
     return await node_reason(
         state,
