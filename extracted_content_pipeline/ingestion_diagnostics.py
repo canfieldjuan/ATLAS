@@ -12,10 +12,12 @@ from .campaign_customer_data import (
     CampaignOpportunityLoadResult,
     CustomerDataFormat,
     load_campaign_opportunities_from_file,
+    normalize_campaign_opportunity_rows,
 )
 from .campaign_source_adapters import (
     SourceDataFormat,
     load_source_campaign_opportunities_from_file,
+    source_rows_to_campaign_opportunities,
 )
 
 
@@ -99,6 +101,44 @@ def inspect_ingestion_file(
     )
 
 
+def inspect_ingestion_rows(
+    rows: Sequence[Any],
+    *,
+    source_rows: bool = False,
+    source: str | None = "api",
+    target_mode: str | None = "vendor_retention",
+    max_source_text_chars: int = 1200,
+    sample_limit: int = 3,
+) -> IngestionDiagnosticsReport:
+    """Inspect already-loaded host rows without writing to a database."""
+
+    if sample_limit < 0:
+        raise ValueError("sample_limit must be non-negative")
+    if max_source_text_chars < 1:
+        raise ValueError("max_source_text_chars must be positive")
+
+    if source_rows:
+        loaded = source_rows_to_campaign_opportunities(
+            rows,
+            target_mode=target_mode,
+            max_text_chars=max_source_text_chars,
+        )
+        mode: IngestionMode = "source_rows"
+    else:
+        loaded = normalize_campaign_opportunity_rows(
+            rows,
+            target_mode=target_mode,
+        )
+        mode = "opportunities"
+
+    return build_ingestion_diagnostics(
+        loaded,
+        mode=mode,
+        source=source,
+        sample_limit=sample_limit,
+    )
+
+
 def build_ingestion_diagnostics(
     loaded: CampaignOpportunityLoadResult,
     *,
@@ -174,4 +214,5 @@ __all__ = [
     "IngestionMode",
     "build_ingestion_diagnostics",
     "inspect_ingestion_file",
+    "inspect_ingestion_rows",
 ]

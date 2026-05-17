@@ -88,6 +88,11 @@ source of truth for what remains.
   offline host smoke test that validates customer-data normalization through
   usable generated draft shape without a database, provider credentials, or
   send side effects. It accepts both opportunity files and source-row files.
+- `ingestion_diagnostics` plus `scripts/inspect_extracted_content_ingestion.py`
+  provide offline readiness reports for opportunity/source-row exports before
+  import or generation. The hosted control-surface API also exposes
+  `POST /content-ops/ingestion/inspect` for inline rows so operator UIs can use
+  the same diagnostics path without reading local files.
 - `campaign_postgres_review` provides a product-owned draft review/status
   update path so hosts can approve, queue, cancel, or expire generated
   `b2b_campaigns` rows after export without handwritten SQL.
