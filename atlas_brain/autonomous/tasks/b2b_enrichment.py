@@ -1055,7 +1055,7 @@ def _is_no_signal_result(result: dict, source_row: dict[str, Any]) -> bool:
 
 # ---------------------------------------------------------------------------
 # Phrase metadata v2 schema (parallel to legacy list[str] phrase arrays).
-# See atlas_brain/autonomous/tasks/_b2b_phrase_metadata.py for the reader API.
+# See atlas_brain.reasoning.phrase_metadata for the reader API.
 # ---------------------------------------------------------------------------
 
 def _coerce_legacy_phrase_arrays(result: dict) -> None:

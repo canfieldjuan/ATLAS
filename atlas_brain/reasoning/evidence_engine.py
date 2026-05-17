@@ -10,7 +10,7 @@ pack from ``atlas_brain.reasoning.review_enrichment``:
   - ``override_pain``
   - ``derive_recommend``
   - ``derive_price_complaint`` (depends on atlas-only
-    ``_b2b_phrase_metadata``)
+    ``atlas_brain.reasoning.phrase_metadata``)
   - ``derive_budget_authority``
 
 The subclass pattern keeps existing atlas callers

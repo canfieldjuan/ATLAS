@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from atlas_brain.reasoning.phrase_metadata import is_v2_tagged, phrase_metadata_map
+
 
 @dataclass(frozen=True)
 class EnrichmentPainCompetitionDeps:
@@ -49,8 +51,6 @@ def subject_vendor_phrase_texts(
     if not raw:
         return []
 
-    from atlas_brain.autonomous.tasks._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
-
     if not is_v2_tagged(result):
         return deps.normalize_text_list(raw)
 
@@ -71,8 +71,6 @@ def derive_pain_categories(
     *,
     deps: EnrichmentPainCompetitionDeps,
 ) -> list[dict[str, str]]:
-    from atlas_brain.autonomous.tasks._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
-
     if is_v2_tagged(result):
         meta = phrase_metadata_map(result)
         weighted_items: list[tuple[str, float]] = []
@@ -154,8 +152,6 @@ def _count_pain_phrase_matches(
     pattern = deps.pain_patterns.get(pain_category)
     if pattern is None:
         return 0
-
-    from atlas_brain.autonomous.tasks._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
 
     count = 0
     if is_v2_tagged(result):

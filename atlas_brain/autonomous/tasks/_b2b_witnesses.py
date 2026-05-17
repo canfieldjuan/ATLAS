@@ -718,7 +718,7 @@ def derive_evidence_spans(
     # Phase 2 (Layer 1): when v2 metadata is present, look up each phrase's
     # subject so the complaint classifier can drop non-subject_vendor
     # phrases. Empty map for v1 enrichments leaves the legacy behavior.
-    from ._b2b_phrase_metadata import is_v2_tagged, phrase_metadata_map
+    from ...reasoning.phrase_metadata import is_v2_tagged, phrase_metadata_map
     phrase_meta = phrase_metadata_map(result) if is_v2_tagged(result) else {}
 
     for signal_type, metadata_field, raw_values, pain_category, competitor in item_sources:
