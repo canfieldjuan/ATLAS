@@ -36,8 +36,52 @@ actually exists.
 |---|---|---|
 | PR 4: Semantic cache split | Mostly shipped at the core boundary | `semantic_cache_keys.py`, `SemanticCacheStore`, `compute_evidence_hash`, and `build_semantic_cache_key` exist. Concrete storage remains outside core, which is the intended port split. |
 | PR 5: Reasoning pack registry | Mostly shipped | `pack_registry.py` exists, and atlas single-pass prompt packs register into it. The remaining gap is per-review enrichment, still atlas-side in `atlas_brain.reasoning.evidence_engine`. |
-| PR 6: Graph/state engine with ports | Partially shipped | Core graph, graph node, graph helper, and state modules exist. Atlas graph still has host-specific LLM resolution and orchestration wrappers. |
+| PR 6: Graph/state engine with ports | Shipped to the intended boundary | Core graph, graph node, graph helper, and state modules exist. After #570-#572, Atlas graph is a host wrapper around core node contracts plus Atlas-owned orchestration. |
 | PR 7: Product migration pass | Partially shipped | `extracted_content_pipeline.reasoning.*` wrappers point at core. Atlas wrappers for archetypes, temporal, evidence engine, and graph helpers are covered by alias tests. Import-boundary guard exists and is wired for extracted products. |
+
+## Graph Boundary Closeout After PR-C6 Through PR-C8
+
+PRs #570, #571, and #572 narrowed the graph/state gap enough that further
+graph extraction should stop unless a concrete product asks for it.
+
+Core now owns:
+
+- `extracted_reasoning_core.graph_helpers`: prompt rendering, JSON parsing,
+  token accounting, and `complete_with_json`.
+- `extracted_reasoning_core.graph_nodes`: `node_triage`, `node_reason`, and
+  `node_synthesize` LLM-call, parse, fallback, and usage-accumulation
+  contracts.
+- `extracted_reasoning_core.graph` and `state`: the package-local graph and
+  state substrate used by extracted products.
+
+Atlas now intentionally owns:
+
+- workload-specific LLM resolution in `_resolve_graph_llm`;
+- Atlas settings, timeout constants, and model override selection;
+- prompt assembly for Atlas event fields in `_node_reason`;
+- LangGraph orchestration and conditional routing;
+- context aggregation from Atlas stores;
+- entity lock checks;
+- action execution and notification side effects;
+- reflection as a host-side analysis pass routed through `AtlasLLMClient` and
+  `complete_with_json`.
+
+That boundary is deliberate. The remaining Atlas code depends on Atlas config,
+event payloads, stores, and side effects. Moving it into core would not make AI
+Content Ops more operational; it would make core own host integration behavior.
+
+### Stop rule
+
+Do not continue graph extraction just to match the old 2026-05-03 backlog.
+Reopen this track only when a product needs one of these concrete capabilities:
+
+1. a product-local event graph that cannot call the current core graph APIs;
+2. a reusable host adapter contract for non-Atlas LLM/workload resolution;
+3. a shared action/notification abstraction used by more than one product;
+4. a slimmed core state model needed by a product runtime.
+
+Until then, the higher-value reasoning work is on product-specific provider
+contracts and generated reasoning contexts, not on moving Atlas wrappers.
 
 ## Remaining Gaps
 
@@ -48,9 +92,9 @@ actually exists.
    and `_check_derivation_rule`. This is the clearest remaining PR 5 gap.
 
 2. **Atlas graph/state host wrapper split.**
-   `atlas_brain.reasoning.graph` still owns host-specific LLM resolution,
-   timeout handling, and orchestration glue. Core owns graph helpers/nodes, but
-   a full migration would be larger and riskier than the enrichment pack split.
+   This is now intentionally closed at the host-wrapper boundary described
+   above. Core owns reusable helpers and node contracts. Atlas owns workload
+   resolution and side-effect orchestration.
 
 3. **Queue/status drift.**
    Coordination docs still pointed at PR-C1 even though the code had advanced
@@ -75,3 +119,6 @@ Take the next code slice as the **per-review enrichment pack split**:
 
 Do not rebuild semantic cache, pack registry, graph helpers, or public API
 surfaces from the old audit wording; those already exist.
+
+Do not keep extracting Atlas graph wrappers unless a product-specific runtime
+needs one of the stop-rule capabilities above.
