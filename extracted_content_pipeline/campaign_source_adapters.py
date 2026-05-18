@@ -230,6 +230,7 @@ def load_source_campaign_opportunities_from_file(
     file_format: SourceDataFormat = "auto",
     target_mode: str | None = None,
     max_text_chars: int = 1200,
+    default_fields: Mapping[str, Any] | None = None,
 ) -> CampaignOpportunityLoadResult:
     """Load review/transcript/document rows as campaign opportunities."""
 
@@ -239,6 +240,7 @@ def load_source_campaign_opportunities_from_file(
         rows,
         target_mode=target_mode,
         max_text_chars=max_text_chars,
+        default_fields=default_fields,
     )
     return CampaignOpportunityLoadResult(
         opportunities=result.opportunities,
@@ -252,11 +254,13 @@ def source_rows_to_campaign_opportunities(
     *,
     target_mode: str | None = None,
     max_text_chars: int = 1200,
+    default_fields: Mapping[str, Any] | None = None,
 ) -> CampaignOpportunityLoadResult:
     """Normalize richer source rows into the existing opportunity contract."""
 
     opportunities: list[dict[str, Any]] = []
     warnings: list[CampaignOpportunityWarning] = []
+    defaults = _clean_default_fields(default_fields)
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, Mapping):
             warnings.append(CampaignOpportunityWarning(
@@ -265,8 +269,9 @@ def source_rows_to_campaign_opportunities(
                 message="Skipped source row because it is not an object.",
             ))
             continue
+        merged_row = {**defaults, **dict(row)} if defaults else row
         opportunity, row_warnings = source_row_to_campaign_opportunity(
-            row,
+            merged_row,
             row_index=index,
             max_text_chars=max_text_chars,
         )
@@ -281,6 +286,31 @@ def source_rows_to_campaign_opportunities(
         opportunities=normalized.opportunities,
         warnings=tuple(warnings) + normalized.warnings,
     )
+
+
+def parse_default_fields(values: Sequence[str] | None) -> dict[str, str]:
+    """Parse repeatable ``key=value`` source-row fallback metadata."""
+
+    out: dict[str, str] = {}
+    for raw in values or ():
+        if "=" not in str(raw):
+            raise ValueError("--default-field values must use key=value")
+        key, value = str(raw).split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise ValueError("--default-field key must be non-empty")
+        if value:
+            out[key] = value
+    return out
+
+
+def _clean_default_fields(default_fields: Mapping[str, Any] | None) -> dict[str, Any]:
+    return {
+        str(key): value
+        for key, value in (default_fields or {}).items()
+        if str(key).strip() and value not in (None, "", [], {})
+    }
 
 
 def source_row_to_campaign_opportunity(
@@ -630,6 +660,7 @@ def _compact_field_key(key: str) -> str:
 __all__ = [
     "SourceDataFormat",
     "load_source_campaign_opportunities_from_file",
+    "parse_default_fields",
     "source_row_to_campaign_opportunity",
     "source_rows_to_campaign_opportunities",
 ]

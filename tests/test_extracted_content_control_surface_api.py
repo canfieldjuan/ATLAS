@@ -532,6 +532,32 @@ async def test_ingestion_inspect_route_reports_source_rows():
 
 
 @pytest.mark.asyncio
+async def test_ingestion_inspect_route_applies_source_default_fields():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/inspect", "POST")
+    payload = await route.endpoint({
+        "source_rows": True,
+        "source": "fixture",
+        "default_fields": {
+            "company_name": "Acme Logistics",
+            "contact_email": "ops@example.com",
+        },
+        "rows": [{
+            "id": "g2-review-1",
+            "vendor": "Slack",
+            "review_text": "Search gets slow once message history grows.",
+        }],
+    })
+
+    assert payload["ok"] is True
+    assert payload["samples"][0]["company_name"] == "Acme Logistics"
+    assert payload["samples"][0]["contact_email"] == "ops@example.com"
+
+
+@pytest.mark.asyncio
 async def test_ingestion_inspect_route_reports_missing_opportunity_fields():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),

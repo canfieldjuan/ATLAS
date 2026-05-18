@@ -373,6 +373,7 @@ if BaseModel is not None:
         target_mode: str | None = Field(default="vendor_retention", max_length=80)
         max_source_text_chars: int = Field(1200, ge=1, le=_MAX_INPUT_STRING_CHARS)
         sample_limit: int = Field(3, ge=0, le=_MAX_INGESTION_SAMPLE_LIMIT)
+        default_fields: dict[str, Any] = Field(default_factory=dict)
 
         @field_validator("rows")
         @classmethod
@@ -382,6 +383,14 @@ if BaseModel is not None:
         ) -> tuple[dict[str, Any], ...]:
             for row in value:
                 _validate_input_shape(row, depth=0)
+            return value
+
+        @field_validator("default_fields")
+        @classmethod
+        def _validate_default_fields(cls, value: dict[str, Any]) -> dict[str, Any]:
+            if len(value) > 50:
+                raise ValueError("default_fields cannot contain more than 50 entries")
+            _validate_input_shape(value, depth=0)
             return value
 
     class ContentOpsIngestionImportModel(ContentOpsIngestionInspectModel):
@@ -476,6 +485,7 @@ def create_content_ops_control_surface_router(
                 target_mode=_clean(data.get("target_mode")),
                 max_source_text_chars=int(data.get("max_source_text_chars") or 1200),
                 sample_limit=int(data.get("sample_limit") or 0),
+                default_fields=data.get("default_fields"),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -495,6 +505,7 @@ def create_content_ops_control_surface_router(
                 target_mode=target_mode,
                 max_source_text_chars=int(data.get("max_source_text_chars") or 1200),
                 sample_limit=int(data.get("sample_limit") or 0),
+                default_fields=data.get("default_fields"),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

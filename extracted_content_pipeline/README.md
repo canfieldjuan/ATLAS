@@ -169,6 +169,8 @@ python scripts/inspect_extracted_content_ingestion.py \
   g2_review_sources.jsonl \
   --source-rows \
   --source-format jsonl \
+  --default-field company_name="Acme Logistics" \
+  --default-field contact_email=ops@example.com \
   --json
 ```
 
@@ -223,6 +225,10 @@ python scripts/load_extracted_campaign_opportunities.py \
 
 For source-row CSV exports, pass `--source-format csv` to the same conversion,
 generation, import, or smoke commands.
+For anonymous review exports such as G2 rows without buyer/contact columns,
+repeat `--default-field key=value` to bind the evidence to a target account at
+conversion, generation, inspection, smoke, or import time. Source-row values
+win when both the row and the default provide the same field.
 For customer bundle JSON files that group collections such as `reviews`,
 `support_tickets`, `surveys`, `calls`, `meetings`, `deals`, `account_notes`,
 `contracts`, `renewals`, or `subscriptions` under shared account metadata, use

@@ -72,6 +72,29 @@ def test_inspect_source_rows_counts_source_types_and_warnings(tmp_path: Path) ->
     assert payload["samples"][0]["evidence"][0]["source_type"] == "support_ticket"
 
 
+def test_inspect_source_rows_applies_default_fields(tmp_path: Path) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(json.dumps({
+        "id": "g2-review-1",
+        "vendor": "Slack",
+        "review_text": "Search gets slow once message history grows.",
+    }))
+
+    report = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="jsonl",
+        default_fields={
+            "company_name": "Acme Logistics",
+            "contact_email": "ops@example.com",
+        },
+    )
+
+    assert report.ok is True
+    assert report.opportunities[0]["company_name"] == "Acme Logistics"
+    assert report.opportunities[0]["contact_email"] == "ops@example.com"
+
+
 def test_inspect_reports_missing_generation_fields(tmp_path: Path) -> None:
     path = tmp_path / "opportunities.json"
     path.write_text(json.dumps([

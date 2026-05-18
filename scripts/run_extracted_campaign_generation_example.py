@@ -23,6 +23,7 @@ from extracted_content_pipeline.campaign_customer_data import (  # noqa: E402
 )
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
+    parse_default_fields,
 )
 from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
     load_reasoning_provider_port,
@@ -51,12 +52,14 @@ def _load_payload(
     source_rows: bool = False,
     source_format: str = "auto",
     max_source_text_chars: int = 1200,
+    default_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if source_rows:
         loaded = load_source_campaign_opportunities_from_file(
             path,
             file_format=source_format,
             max_text_chars=max_source_text_chars,
+            default_fields=default_fields,
         )
         return loaded.as_payload()
     if file_format == "csv" or (file_format == "auto" and path.suffix.lower() == ".csv"):
@@ -120,6 +123,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1200,
         help="Maximum source text characters copied into each evidence row.",
+    )
+    parser.add_argument(
+        "--default-field",
+        action="append",
+        default=[],
+        help=(
+            "Fallback metadata applied to every source row when --source-rows "
+            "is selected. Repeat as key=value."
+        ),
     )
     parser.add_argument(
         "--limit",
@@ -317,6 +329,7 @@ async def _main() -> int:
         source_rows=bool(args.source_rows),
         source_format=args.source_format,
         max_source_text_chars=int(args.max_source_text_chars),
+        default_fields=parse_default_fields(args.default_field),
     )
     if args.target_mode:
         payload["target_mode"] = args.target_mode

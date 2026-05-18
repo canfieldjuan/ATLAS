@@ -8,6 +8,7 @@ from pathlib import Path
 from extracted_content_pipeline import campaign_source_adapters as adapters
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
+    parse_default_fields,
     source_row_to_campaign_opportunity,
     source_rows_to_campaign_opportunities,
 )
@@ -149,6 +150,48 @@ def test_source_rows_normalize_and_warn_for_missing_text() -> None:
     assert first["target_mode"] == "vendor_retention"
     assert first["evidence"][0]["source_type"] == "transcript"
     assert "missing_source_text" in [warning.code for warning in loaded.warnings]
+
+
+def test_source_rows_apply_default_fields_without_overriding_row_values() -> None:
+    loaded = source_rows_to_campaign_opportunities(
+        [
+            {
+                "id": "review-1",
+                "vendor": "HubSpot",
+                "review_text": "Pricing is a problem.",
+            },
+            {
+                "id": "review-2",
+                "company_name": "Row Company",
+                "vendor": "HubSpot",
+                "review_text": "Reporting exports are blocked.",
+            },
+        ],
+        default_fields={
+            "company_name": "Acme Logistics",
+            "contact_email": "ops@example.com",
+        },
+    )
+
+    assert loaded.warnings == ()
+    assert loaded.opportunities[0]["company_name"] == "Acme Logistics"
+    assert loaded.opportunities[0]["contact_email"] == "ops@example.com"
+    assert loaded.opportunities[1]["company_name"] == "Row Company"
+    assert loaded.opportunities[1]["contact_email"] == "ops@example.com"
+
+
+def test_parse_default_fields_rejects_invalid_values() -> None:
+    assert parse_default_fields(["company_name=Acme", "contact_email=ops@example.com"]) == {
+        "company_name": "Acme",
+        "contact_email": "ops@example.com",
+    }
+
+    try:
+        parse_default_fields(["company_name"])
+    except ValueError as exc:
+        assert "key=value" in str(exc)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("expected invalid default field to fail")
 
 
 def test_source_document_title_does_not_become_buyer_fields() -> None:
@@ -626,6 +669,30 @@ def test_load_source_campaign_opportunities_from_csv(tmp_path: Path) -> None:
         "source_id": "review-1",
         "source_type": "review",
     }]
+
+
+def test_load_source_campaign_opportunities_applies_default_fields(tmp_path: Path) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        json.dumps({
+            "id": "g2-review-1",
+            "vendor": "Slack",
+            "review_text": "Search gets slow once message history grows.",
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(
+        path,
+        default_fields={
+            "company_name": "Acme Logistics",
+            "contact_email": "ops@example.com",
+        },
+    )
+
+    assert loaded.warnings == ()
+    assert loaded.opportunities[0]["company_name"] == "Acme Logistics"
+    assert loaded.opportunities[0]["contact_email"] == "ops@example.com"
 
 
 def test_packaged_source_rows_example_loads() -> None:
@@ -1127,6 +1194,39 @@ def test_source_adapter_cli_outputs_csv_generation_payload(tmp_path: Path) -> No
     payload = json.loads(completed.stdout)
     assert payload["opportunities"][0]["target_id"] == "call-1"
     assert payload["opportunities"][0]["evidence"][0]["source_type"] == "transcript"
+
+
+def test_source_adapter_cli_applies_default_fields(tmp_path: Path) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        json.dumps({
+            "id": "g2-review-1",
+            "vendor": "Slack",
+            "review_text": "Search gets slow once message history grows.",
+        }),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(path),
+            "--format",
+            "jsonl",
+            "--default-field",
+            "company_name=Acme Logistics",
+            "--default-field",
+            "contact_email=ops@example.com",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    opportunity = json.loads(completed.stdout)["opportunities"][0]
+    assert opportunity["company_name"] == "Acme Logistics"
+    assert opportunity["contact_email"] == "ops@example.com"
 
 
 def test_source_adapter_cli_rejects_non_positive_text_limit(tmp_path: Path) -> None:

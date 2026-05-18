@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
+    parse_default_fields,
 )
 
 
@@ -42,6 +43,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum source text characters copied into each evidence row.",
     )
     parser.add_argument(
+        "--default-field",
+        action="append",
+        default=[],
+        help=(
+            "Fallback metadata applied to every source row when that row omits "
+            "the field. Repeat as key=value, for example company_name=Acme."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write opportunity payload JSON to this path instead of stdout.",
@@ -58,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         file_format=args.format,
         target_mode=args.target_mode,
         max_text_chars=args.max_text_chars,
+        default_fields=parse_default_fields(args.default_field),
     )
     payload = loaded.as_payload(
         target_mode=args.target_mode,

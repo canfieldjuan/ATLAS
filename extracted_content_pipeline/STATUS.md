@@ -46,6 +46,9 @@ source of truth for what remains.
   `--source-rows`; JSON, JSONL, and CSV source-row exports are supported, and
   `examples/campaign_source_rows.jsonl` plus
   `examples/campaign_source_bundle.json` provide packaged starter inputs.
+  Source-row CLIs and hosted ingestion APIs accept fallback `default_fields`
+  so anonymous review evidence can be bound to a real account/contact without
+  editing every exported row; row-specific values still win.
   Ticket and conversation rows can also provide nested `messages`, `comments`,
   `thread`, `conversation`, or `entries` arrays when the source text is not
   available as one scalar field. Source-row field labels are matched leniently
