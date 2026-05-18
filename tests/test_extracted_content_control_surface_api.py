@@ -43,6 +43,68 @@ class _FailingCampaignService:
         raise RuntimeError("postgres://user:secret@example/internal")
 
 
+class _Pool:
+    def __init__(self):
+        self.executed = []
+        self.is_initialized = True
+
+    async def execute(self, query, *args):
+        self.executed.append((str(query), args))
+        return "EXECUTE"
+
+
+class _Transaction:
+    def __init__(self):
+        self.entered = False
+        self.exited_with = None
+
+    async def __aenter__(self):
+        self.entered = True
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        del exc, tb
+        self.exited_with = exc_type
+        return False
+
+
+class _Connection(_Pool):
+    def __init__(self, *, fail_on_insert=False):
+        super().__init__()
+        self.fail_on_insert = fail_on_insert
+        self.tx = _Transaction()
+
+    def transaction(self):
+        return self.tx
+
+    async def execute(self, query, *args):
+        self.executed.append((str(query), args))
+        if self.fail_on_insert and "INSERT INTO" in str(query):
+            raise RuntimeError("postgres://user:secret@example/internal")
+        return "EXECUTE"
+
+
+class _Acquire:
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        del exc_type, exc, tb
+        return False
+
+
+class _PoolWithAcquire:
+    def __init__(self, connection):
+        self.connection = connection
+        self.is_initialized = True
+
+    def acquire(self):
+        return _Acquire(self.connection)
+
+
 @pytest.mark.asyncio
 async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     router = create_content_ops_control_surface_router()
@@ -507,6 +569,143 @@ async def test_ingestion_inspect_route_rejects_oversized_rows():
         })
 
     assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_ingestion_import_route_dry_run_does_not_require_pool_provider():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/import", "POST")
+    payload = await route.endpoint({
+        "dry_run": True,
+        "source": "operator-upload",
+        "rows": [{
+            "target_id": "opp-1",
+            "company_name": "Acme",
+            "vendor_name": "HubSpot",
+            "evidence": [{"quote": "Renewal process is too manual."}],
+        }],
+    })
+
+    assert payload["diagnostics"]["ok"] is True
+    assert payload["import"]["dry_run"] is True
+    assert payload["import"]["inserted"] == 1
+    assert payload["import"]["source"] == "operator-upload"
+    assert payload["import"]["target_ids"] == ["opp-1"]
+
+
+@pytest.mark.asyncio
+async def test_ingestion_import_route_writes_rows_with_scope_and_replace_existing():
+    pool = _Pool()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        opportunity_import_pool_provider=lambda: pool,
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+
+    route = _route(router, "/ops/ingestion/import", "POST")
+    payload = await route.endpoint({
+        "replace_existing": True,
+        "target_mode": "vendor_retention",
+        "rows": [{
+            "target_id": "opp-1",
+            "company_name": "Acme",
+            "vendor_name": "HubSpot",
+            "evidence": [{"quote": "Renewal process is too manual."}],
+        }],
+    })
+
+    assert payload["import"]["inserted"] == 1
+    assert payload["import"]["replace_existing"] is True
+    assert len(pool.executed) == 2
+    delete_query, delete_args = pool.executed[0]
+    insert_query, insert_args = pool.executed[1]
+    assert "DELETE FROM \"campaign_opportunities\"" in delete_query
+    assert delete_args == ("acct-1", "vendor_retention", ["opp-1"])
+    assert "INSERT INTO \"campaign_opportunities\"" in insert_query
+    assert insert_args[0] == "acct-1"
+    assert insert_args[1] == "opp-1"
+
+
+@pytest.mark.asyncio
+async def test_ingestion_import_route_requires_pool_for_write():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/import", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "rows": [{
+                "target_id": "opp-1",
+                "company_name": "Acme",
+                "vendor_name": "HubSpot",
+                "evidence": [{"quote": "Renewal process is too manual."}],
+            }],
+        })
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Content Ops ingestion import database is not configured."
+
+
+@pytest.mark.asyncio
+async def test_ingestion_import_route_rejects_not_ready_diagnostics():
+    pool = _Pool()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        opportunity_import_pool_provider=lambda: pool,
+    )
+
+    route = _route(router, "/ops/ingestion/import", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "rows": [{
+                "evidence": [{"quote": "Renewal process is too manual."}],
+            }],
+        })
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["reason"] == "ingestion_not_ready"
+    assert exc.value.detail["diagnostics"]["missing_field_counts"] == {
+        "company_name": 1,
+        "target_id": 1,
+        "vendor_name": 1,
+    }
+    assert pool.executed == []
+
+
+@pytest.mark.asyncio
+async def test_ingestion_import_route_wraps_transactional_db_failures(caplog):
+    connection = _Connection(fail_on_insert=True)
+    pool = _PoolWithAcquire(connection)
+    caplog.set_level("WARNING", logger="extracted_content_pipeline.api.control_surfaces")
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        opportunity_import_pool_provider=lambda: pool,
+    )
+
+    route = _route(router, "/ops/ingestion/import", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "replace_existing": True,
+            "rows": [{
+                "target_id": "opp-1",
+                "company_name": "Acme",
+                "vendor_name": "HubSpot",
+                "evidence": [{"quote": "Renewal process is too manual."}],
+            }],
+        })
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Content Ops ingestion import failed."
+    assert connection.tx.entered is True
+    assert connection.tx.exited_with is RuntimeError
+    assert any("DELETE FROM" in query for query, _args in connection.executed)
+    assert any("INSERT INTO" in query for query, _args in connection.executed)
+    assert "postgres://" not in str(exc.value.detail)
+    assert "postgres://" not in caplog.text
 
 
 @pytest.mark.asyncio

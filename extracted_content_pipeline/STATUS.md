@@ -93,6 +93,10 @@ source of truth for what remains.
   import or generation. The hosted control-surface API also exposes
   `POST /content-ops/ingestion/inspect` for inline rows so operator UIs can use
   the same diagnostics path without reading local files.
+- The hosted control-surface API exposes `POST /content-ops/ingestion/import`
+  for inline rows. It runs the same diagnostics first, fails closed when rows
+  are not import-ready, then writes normalized opportunities through the
+  existing Postgres importer when the host supplies a pool provider.
 - `campaign_postgres_review` provides a product-owned draft review/status
   update path so hosts can approve, queue, cancel, or expire generated
   `b2b_campaigns` rows after export without handwritten SQL.

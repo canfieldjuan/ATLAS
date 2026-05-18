@@ -56,6 +56,7 @@ size and nesting limits.
 | `POST` | `/content-ops/preview` | Validate a requested preset/output selection and return cost, missing inputs, warnings, and blocked outputs. |
 | `POST` | `/content-ops/plan` | Convert a previewable request into deterministic generation steps. Does not execute generation. |
 | `POST` | `/content-ops/ingestion/inspect` | Inspect inline opportunity rows or source rows and return the same readiness diagnostics as the host CLI. |
+| `POST` | `/content-ops/ingestion/import` | Inspect inline rows, fail closed when not import-ready, then write normalized opportunities into `campaign_opportunities`. |
 | `POST` | `/content-ops/execute` | Execute a runnable plan through host-injected services. Disabled unless the host configures execution services. |
 
 ## Output Catalog
@@ -235,6 +236,53 @@ not call a database, LLM, sender, or execution service.
   ],
   "target_mode": "vendor_retention",
   "sample_limit": 3
+}
+```
+
+## Ingestion Import Route
+
+`POST /content-ops/ingestion/import` accepts the same inline rows as the inspect
+route plus `replace_existing` and `dry_run`. The route runs diagnostics first
+and refuses to write when the rows are not import-ready, for example when every
+row is missing `target_id`.
+
+Hosts must pass `opportunity_import_pool_provider` when mounting the router for
+real writes. `dry_run=true` uses the same normalization and readiness checks but
+does not require a database provider.
+
+```json
+{
+  "source": "operator-upload",
+  "rows": [
+    {
+      "target_id": "opp-1",
+      "company_name": "Acme",
+      "vendor_name": "HubSpot",
+      "evidence": [{"quote": "The renewal process is too manual."}]
+    }
+  ],
+  "replace_existing": true,
+  "dry_run": false
+}
+```
+
+Response:
+
+```json
+{
+  "diagnostics": {
+    "ok": true,
+    "mode": "opportunities",
+    "opportunity_count": 1,
+    "warning_count": 0
+  },
+  "import": {
+    "inserted": 1,
+    "skipped": 0,
+    "dry_run": false,
+    "replace_existing": true,
+    "target_ids": ["opp-1"]
+  }
 }
 ```
 
