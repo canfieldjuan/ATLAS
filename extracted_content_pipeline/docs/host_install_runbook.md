@@ -445,7 +445,14 @@ typoed selectors during larger host imports.
 Atlas review rows can seed source-row ingestion when a host wants to test with
 scraped review evidence before wiring its own export. Start with one reliable
 source such as G2 so the generated output does not mix review-site tone with
-community sources:
+community sources. Check source readiness first; `quote_grade_rows` is the
+count that can actually export under the verbatim negative/mixed phrase gate:
+
+```bash
+python scripts/export_content_ops_review_sources.py \
+  --source-summary \
+  --summary-sources g2,capterra,trustradius,trustpilot
+```
 
 ```bash
 python scripts/export_content_ops_review_sources.py \

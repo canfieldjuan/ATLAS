@@ -91,6 +91,10 @@ source of truth for what remains.
   offline host smoke test that validates customer-data normalization through
   usable generated draft shape without a database, provider credentials, or
   send side effects. It accepts both opportunity files and source-row files.
+- `scripts/export_content_ops_review_sources.py --source-summary` reports
+  canonical, enriched, export-candidate, and quote-grade row counts for
+  scraped review sources before operators choose a source for Content Ops
+  ingestion.
 - `ingestion_diagnostics` plus `scripts/inspect_extracted_content_ingestion.py`
   provide offline readiness reports for opportunity/source-row exports before
   import or generation. The hosted control-surface API also exposes
