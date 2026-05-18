@@ -68,6 +68,7 @@ type IngestionImportState =
   | { kind: 'idle' }
   | { kind: 'submitting' }
   | { kind: 'invalid_input'; message: string }
+  | { kind: 'not_ready'; diagnostics: ContentOpsIngestionDiagnostics }
   | { kind: 'error'; message: string }
   | { kind: 'success'; response: ContentOpsIngestionImportResponse }
 
@@ -383,7 +384,7 @@ export default function ContentOpsNewRun() {
 
     setIngestionImportState({ kind: 'submitting' })
     try {
-      const wire = await importContentOpsIngestion(
+      const outcome = await importContentOpsIngestion(
         toWireIngestionImportRequest({
           rows: parsed.rows,
           sourceRows: ingestionSourceRows,
@@ -396,16 +397,34 @@ export default function ContentOpsNewRun() {
         }),
       )
       if (requestId !== ingestionImportRequestIdRef.current) return
-      setIngestionImportState({
-        kind: 'success',
-        response: fromWireIngestionImportResponse(wire),
-      })
-      if (inspectRequestId === ingestionInspectRequestIdRef.current) {
-        setIngestionInspectState({
+      if (outcome.kind === 'success') {
+        setIngestionImportState({
           kind: 'success',
-          diagnostics: fromWireIngestionDiagnostics(wire.diagnostics),
+          response: fromWireIngestionImportResponse(outcome.response),
         })
+        if (inspectRequestId === ingestionInspectRequestIdRef.current) {
+          setIngestionInspectState({
+            kind: 'success',
+            diagnostics: fromWireIngestionDiagnostics(outcome.response.diagnostics),
+          })
+        }
+        return
       }
+      if (outcome.kind === 'not_ready') {
+        const diagnostics = fromWireIngestionDiagnostics(outcome.diagnostics)
+        setIngestionImportState({ kind: 'not_ready', diagnostics })
+        if (inspectRequestId === ingestionInspectRequestIdRef.current) {
+          setIngestionInspectState({
+            kind: 'success',
+            diagnostics,
+          })
+        }
+        return
+      }
+      setIngestionImportState({
+        kind: 'error',
+        message: importOutcomeMessage(outcome),
+      })
     } catch (err) {
       if (requestId !== ingestionImportRequestIdRef.current) return
       setIngestionImportState({
@@ -1041,6 +1060,32 @@ function IngestionImportResult({ state }: { state: IngestionImportState }) {
       </div>
     )
   }
+  if (state.kind === 'not_ready') {
+    return (
+      <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">
+        <div className="mb-2 font-medium">
+          Import blocked: rows need attention before they can be written.
+        </div>
+        <div className="mb-2 flex flex-wrap gap-3 text-slate-300">
+          <span>Opportunities: {state.diagnostics.opportunityCount}</span>
+          <span>Warnings: {state.diagnostics.warningCount}</span>
+        </div>
+        {state.diagnostics.warnings.length > 0 && (
+          <Section label="Blocking diagnostics">
+            <ul className="ml-4 list-disc text-xs text-amber-100">
+              {state.diagnostics.warnings
+                .slice(0, INGESTION_SAMPLE_LIMIT)
+                .map((warning, i) => (
+                  <li key={`${warning.code}-${warning.rowIndex ?? i}-${warning.field ?? ''}`}>
+                    {warning.code}: {warning.message}
+                  </li>
+                ))}
+            </ul>
+          </Section>
+        )}
+      </div>
+    )
+  }
 
   const result = state.response.importResult
   return (
@@ -1075,6 +1120,18 @@ function IngestionImportResult({ state }: { state: IngestionImportState }) {
       )}
     </div>
   )
+}
+
+function importOutcomeMessage(
+  outcome: Exclude<
+    Awaited<ReturnType<typeof importContentOpsIngestion>>,
+    { kind: 'success' } | { kind: 'not_ready' }
+  >,
+): string {
+  if (outcome.kind === 'validation_error') {
+    return JSON.stringify(outcome.detail)
+  }
+  return outcome.detail
 }
 
 type ParsedIngestionRows =
