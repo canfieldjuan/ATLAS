@@ -13,6 +13,8 @@
 import type {
   ContentOpsCatalogResponse,
   ContentOpsIngestionDiagnosticsResponse,
+  ContentOpsIngestionImportRequest as WireIngestionImportRequest,
+  ContentOpsIngestionImportResponse as WireIngestionImportResponse,
   ContentOpsIngestionInspectRequest as WireIngestionInspectRequest,
   ContentOpsExecutionResult as WireExecutionResult,
   ContentOpsOutputDefinition as WireOutputDefinition,
@@ -26,6 +28,8 @@ import type {
 import type {
   ContentOpsCatalog,
   ContentOpsIngestionDiagnostics,
+  ContentOpsIngestionImportRequest,
+  ContentOpsIngestionImportResponse,
   ContentOpsIngestionInspectRequest,
   ContentOpsExecutionResult,
   CampaignReasoningContextView,
@@ -182,6 +186,16 @@ export function toWireIngestionInspectRequest(
   }
 }
 
+export function toWireIngestionImportRequest(
+  domain: ContentOpsIngestionImportRequest,
+): WireIngestionImportRequest {
+  return {
+    ...toWireIngestionInspectRequest(domain),
+    replace_existing: domain.replaceExisting,
+    dry_run: domain.dryRun,
+  }
+}
+
 export function fromWireIngestionDiagnostics(
   wire: ContentOpsIngestionDiagnosticsResponse,
 ): ContentOpsIngestionDiagnostics {
@@ -201,6 +215,28 @@ export function fromWireIngestionDiagnostics(
       rowIndex: warning.row_index,
       field: warning.field,
     })),
+  }
+}
+
+export function fromWireIngestionImportResponse(
+  wire: WireIngestionImportResponse,
+): ContentOpsIngestionImportResponse {
+  return {
+    diagnostics: fromWireIngestionDiagnostics(wire.diagnostics),
+    importResult: {
+      inserted: wire.import.inserted,
+      skipped: wire.import.skipped,
+      dryRun: wire.import.dry_run,
+      replaceExisting: wire.import.replace_existing,
+      targetIds: [...wire.import.target_ids],
+      source: wire.import.source,
+      warnings: wire.import.warnings.map((warning) => ({
+        code: warning.code,
+        message: warning.message,
+        rowIndex: warning.row_index,
+        field: warning.field,
+      })),
+    },
   }
 }
 

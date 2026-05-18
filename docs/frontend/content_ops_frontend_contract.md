@@ -38,6 +38,7 @@ reproduce them") in its inverse: trusting a stale local tree to
 | `POST` | `/content-ops/preview` | Preflight validation; returns `ControlSurfacePreview` |
 | `POST` | `/content-ops/plan` | Build runnable plan; returns `GenerationPlan` |
 | `POST` | `/content-ops/ingestion/inspect` | Inspect inline opportunity/source rows before import or generation; returns `ContentOpsIngestionDiagnostics` |
+| `POST` | `/content-ops/ingestion/import` | Inspect and import inline opportunity/source rows; returns diagnostics plus import counts |
 | `POST` | `/content-ops/execute` | Execute the plan via host-injected services; returns `ContentOpsExecutionResult` |
 
 The router prefix is configurable via `ContentOpsControlSurfaceApiConfig`
@@ -99,6 +100,7 @@ top-level `execution.{configured,configured_outputs}` /
 | `ControlSurfacePreset` | `control_surfaces.py:33-40` | `id`, `label`, `outputs`, `description` |
 | `ContentOpsRequest` | `control_surfaces.py:43-55` | `target_mode`, `preset`, `outputs`, `limit`, `max_cost_usd`, `inputs`, `ingestion_profile`, `require_quality_gates`, `allow_unimplemented_outputs` |
 | `ContentOpsIngestionDiagnostics` | `ingestion_diagnostics.py:28-57` | `ok`, counts, bounded samples, and row warnings from inline ingestion inspection |
+| `ContentOpsIngestionImportResult` | `control_surfaces.py` import route response | `inserted`, `skipped`, `dry_run`, `replace_existing`, `target_ids`, `warnings`, `source` |
 | `ControlSurfacePreview` | `control_surfaces.py:58-90` | `can_run`, `outputs`, `estimated_cost_usd`, `missing_inputs`, `blocked_outputs`, `warnings`, `normalized_request` |
 | `GenerationPlanStep` | `generation_plan.py:28-45` | `output`, `runner`, `status`, `config`, `reason` |
 | `GenerationPlan` | `generation_plan.py:48-65` | `can_execute`, `target_mode`, `limit`, `steps`, `preview` |
@@ -484,6 +486,7 @@ src/api/
   contentOpsPreview.ts           // POST /content-ops/preview
   contentOpsPlan.ts              // POST /content-ops/plan
   contentOpsIngestionInspect.ts  // POST /content-ops/ingestion/inspect
+  contentOpsIngestionImport.ts   // POST /content-ops/ingestion/import
   contentOpsExecute.ts           // POST /content-ops/execute
 ```
 
@@ -517,7 +520,8 @@ src/domain/
 - Generated-asset result summary for `blog_post`, `report`,
   `landing_page`, and `sales_brief`, all of which currently expose
   `requested`, `generated`, `skipped`, `saved_ids`, and `errors`
-- Ingestion inspect panel (driven by `ContentOpsIngestionDiagnostics`)
+- Ingestion inspect/import panel (driven by
+  `ContentOpsIngestionDiagnostics` and `ContentOpsIngestionImportResult`)
   for pasted opportunity/source rows before preview or execution.
 - Signal extraction table (driven by `SignalExtractionResultView`)
 
@@ -534,8 +538,9 @@ Dumb components only. No fetch, no business rules.
    - Renders preset picker, output picker, required-input form,
      options (`limit`, `maxCostUsd`, `requireQualityGates`,
      `allowUnimplementedOutputs`, `ingestionProfile`).
-   - Supports a read-only ingestion inspector that calls
-     `POST /content-ops/ingestion/inspect` for pasted rows.
+   - Supports an ingestion inspector/importer that calls
+     `POST /content-ops/ingestion/inspect` for pasted rows and
+     `POST /content-ops/ingestion/import` for dry-run or write import.
    - On submit: `POST /content-ops/preview`, render
      `ControlSurfacePreview`.
 

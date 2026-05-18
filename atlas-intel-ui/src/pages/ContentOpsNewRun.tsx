@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronRight, Loader2, Play, RefreshCw, Search } from 'lucide-react'
+import { ChevronRight, Loader2, Play, RefreshCw, Search, Upload } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   executeContentOpsRun,
   fetchContentOpsControlSurfaces,
+  importContentOpsIngestion,
   inspectContentOpsIngestion,
   planContentOpsRun,
   previewContentOpsRun,
@@ -12,13 +13,16 @@ import {
   fromWireCatalog,
   fromWireExecution,
   fromWireIngestionDiagnostics,
+  fromWireIngestionImportResponse,
   fromWirePlan,
   fromWirePreview,
   fromWireRequest,
   toWireIngestionInspectRequest,
+  toWireIngestionImportRequest,
   toWireRequest,
   type ContentOpsCatalog,
   type ContentOpsIngestionDiagnostics,
+  type ContentOpsIngestionImportResponse,
   type ContentOpsExecutionResult,
   type ContentOpsRequest,
   type CampaignReasoningContextView,
@@ -60,6 +64,13 @@ type IngestionInspectState =
   | { kind: 'error'; message: string }
   | { kind: 'success'; diagnostics: ContentOpsIngestionDiagnostics }
 
+type IngestionImportState =
+  | { kind: 'idle' }
+  | { kind: 'submitting' }
+  | { kind: 'invalid_input'; message: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'success'; response: ContentOpsIngestionImportResponse }
+
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_ROWS_JSON = '[\n  \n]'
 const DEFAULT_INGESTION_SOURCE = 'manual'
@@ -93,6 +104,8 @@ export default function ContentOpsNewRun() {
   )
   const [ingestionSourceRows, setIngestionSourceRows] = useState(false)
   const [ingestionSource, setIngestionSource] = useState(DEFAULT_INGESTION_SOURCE)
+  const [ingestionDryRun, setIngestionDryRun] = useState(true)
+  const [ingestionReplaceExisting, setIngestionReplaceExisting] = useState(false)
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' })
   const [planState, setPlanState] = useState<PlanState>({ kind: 'idle' })
   const [executionState, setExecutionState] = useState<ExecutionState>({
@@ -100,12 +113,15 @@ export default function ContentOpsNewRun() {
   })
   const [ingestionInspectState, setIngestionInspectState] =
     useState<IngestionInspectState>({ kind: 'idle' })
+  const [ingestionImportState, setIngestionImportState] =
+    useState<IngestionImportState>({ kind: 'idle' })
   // Codex P2 fix: request-id ref so a stale in-flight preview/plan
   // response can't overwrite a result the user has since invalidated
   // by editing the form. Both preview and plan share the same id
   // namespace -- any form mutation invalidates both.
   const submitRequestIdRef = useRef(0)
   const ingestionInspectRequestIdRef = useRef(0)
+  const ingestionImportRequestIdRef = useRef(0)
 
   if (error) {
     return <PageError error={error} onRetry={refresh} />
@@ -136,9 +152,13 @@ export default function ContentOpsNewRun() {
     setExecutionState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
   }
 
-  const markIngestionInspectStale = () => {
+  const markIngestionStale = () => {
     ingestionInspectRequestIdRef.current += 1
+    ingestionImportRequestIdRef.current += 1
     setIngestionInspectState((prev) =>
+      prev.kind === 'idle' ? prev : { kind: 'idle' },
+    )
+    setIngestionImportState((prev) =>
       prev.kind === 'idle' ? prev : { kind: 'idle' },
     )
   }
@@ -349,6 +369,52 @@ export default function ContentOpsNewRun() {
     }
   }
 
+  const handleImportIngestion = async () => {
+    const requestId = ++ingestionImportRequestIdRef.current
+    const inspectRequestId = ++ingestionInspectRequestIdRef.current
+    const parsed = parseIngestionRowsJson(ingestionRowsJson)
+    if (!parsed.ok) {
+      setIngestionImportState({
+        kind: 'invalid_input',
+        message: parsed.message,
+      })
+      return
+    }
+
+    setIngestionImportState({ kind: 'submitting' })
+    try {
+      const wire = await importContentOpsIngestion(
+        toWireIngestionImportRequest({
+          rows: parsed.rows,
+          sourceRows: ingestionSourceRows,
+          source: ingestionSource.trim() || null,
+          targetMode: request.targetMode,
+          maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
+          sampleLimit: INGESTION_SAMPLE_LIMIT,
+          replaceExisting: ingestionReplaceExisting,
+          dryRun: ingestionDryRun,
+        }),
+      )
+      if (requestId !== ingestionImportRequestIdRef.current) return
+      setIngestionImportState({
+        kind: 'success',
+        response: fromWireIngestionImportResponse(wire),
+      })
+      if (inspectRequestId === ingestionInspectRequestIdRef.current) {
+        setIngestionInspectState({
+          kind: 'success',
+          diagnostics: fromWireIngestionDiagnostics(wire.diagnostics),
+        })
+      }
+    } catch (err) {
+      if (requestId !== ingestionImportRequestIdRef.current) return
+      setIngestionImportState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -521,19 +587,34 @@ export default function ContentOpsNewRun() {
                 Paste customer export rows before running generation.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleInspectIngestion}
-              disabled={ingestionInspectState.kind === 'submitting'}
-              className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
-            >
-              {ingestionInspectState.kind === 'submitting' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Search className="h-3.5 w-3.5" />
-              )}
-              Inspect rows
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleInspectIngestion}
+                disabled={ingestionInspectState.kind === 'submitting'}
+                className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
+              >
+                {ingestionInspectState.kind === 'submitting' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Search className="h-3.5 w-3.5" />
+                )}
+                Inspect rows
+              </button>
+              <button
+                type="button"
+                onClick={handleImportIngestion}
+                disabled={ingestionImportState.kind === 'submitting'}
+                className="flex items-center justify-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                {ingestionImportState.kind === 'submitting' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
+                {ingestionDryRun ? 'Dry-run import' : 'Import rows'}
+              </button>
+            </div>
           </div>
           <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <label className="block text-sm sm:col-span-2">
@@ -543,7 +624,7 @@ export default function ContentOpsNewRun() {
                 value={ingestionSource}
                 onChange={(e) => {
                   setIngestionSource(e.target.value)
-                  markIngestionInspectStale()
+                  markIngestionStale()
                 }}
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
               />
@@ -554,18 +635,44 @@ export default function ContentOpsNewRun() {
                 checked={ingestionSourceRows}
                 onChange={(e) => {
                   setIngestionSourceRows(e.target.checked)
-                  markIngestionInspectStale()
+                  markIngestionStale()
                 }}
                 className="mb-1 h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500"
               />
               <span className="pb-0.5 text-slate-300">Rows are source exports</span>
             </label>
           </div>
+          <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={ingestionDryRun}
+                onChange={(e) => {
+                  setIngestionDryRun(e.target.checked)
+                  setIngestionImportState({ kind: 'idle' })
+                }}
+                className="h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500"
+              />
+              <span className="text-slate-300">Dry run only</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={ingestionReplaceExisting}
+                onChange={(e) => {
+                  setIngestionReplaceExisting(e.target.checked)
+                  setIngestionImportState({ kind: 'idle' })
+                }}
+                className="h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500"
+              />
+              <span className="text-slate-300">Replace existing targets</span>
+            </label>
+          </div>
           <textarea
             value={ingestionRowsJson}
             onChange={(e) => {
               setIngestionRowsJson(e.target.value)
-              markIngestionInspectStale()
+              markIngestionStale()
             }}
             rows={5}
             spellCheck={false}
@@ -573,6 +680,7 @@ export default function ContentOpsNewRun() {
             placeholder='[{"company_name": "Acme", "vendor": "HubSpot", "email": "ops@example.com"}]'
           />
           <IngestionInspectResult state={ingestionInspectState} />
+          <IngestionImportResult state={ingestionImportState} />
         </section>
 
         {/* Options */}
@@ -909,6 +1017,60 @@ function IngestionInspectResult({ state }: { state: IngestionInspectState }) {
           <pre className="max-h-52 overflow-auto rounded-md bg-slate-950/80 p-3 font-mono text-[11px] text-slate-300">
             {JSON.stringify(diagnostics.samples, null, 2)}
           </pre>
+        </Section>
+      )}
+    </div>
+  )
+}
+
+function IngestionImportResult({ state }: { state: IngestionImportState }) {
+  if (state.kind === 'idle' || state.kind === 'submitting') {
+    return null
+  }
+  if (state.kind === 'invalid_input') {
+    return (
+      <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+        Invalid ingestion payload: {state.message}
+      </div>
+    )
+  }
+  if (state.kind === 'error') {
+    return (
+      <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+        Import failed: {state.message}
+      </div>
+    )
+  }
+
+  const result = state.response.importResult
+  return (
+    <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs">
+      <div className="mb-2 flex flex-wrap items-center gap-3">
+        <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 font-medium text-emerald-200">
+          {result.dryRun ? 'Dry run complete' : 'Import complete'}
+        </span>
+        <span className="text-slate-300">Inserted: {result.inserted}</span>
+        <span className="text-slate-300">Skipped: {result.skipped}</span>
+        {result.replaceExisting && (
+          <span className="text-amber-200">Replace existing enabled</span>
+        )}
+      </div>
+      {result.targetIds.length > 0 && (
+        <Section label="Target ids">
+          <div className="break-all font-mono text-[11px] text-slate-300">
+            {result.targetIds.slice(0, INGESTION_SAMPLE_LIMIT).join(', ')}
+          </div>
+        </Section>
+      )}
+      {result.warnings.length > 0 && (
+        <Section label="Import warnings">
+          <ul className="ml-4 list-disc text-xs text-amber-100">
+            {result.warnings.slice(0, INGESTION_SAMPLE_LIMIT).map((warning, i) => (
+              <li key={`${warning.code}-${warning.rowIndex ?? i}-${warning.field ?? ''}`}>
+                {warning.code}: {warning.message}
+              </li>
+            ))}
+          </ul>
         </Section>
       )}
     </div>

@@ -1,0 +1,31 @@
+{
+  "diagnostics": {
+    "ok": true,
+    "mode": "opportunities",
+    "source": "manual",
+    "opportunity_count": 1,
+    "warning_count": 0,
+    "warning_counts": {},
+    "missing_field_counts": {},
+    "source_type_counts": {},
+    "samples": [
+      {
+        "company_name": "Acme",
+        "vendor": "HubSpot",
+        "email": "ops@example.com"
+      }
+    ],
+    "warnings": []
+  },
+  "import": {
+    "inserted": 1,
+    "skipped": 0,
+    "dry_run": false,
+    "replace_existing": false,
+    "target_ids": [
+      "acme"
+    ],
+    "warnings": [],
+    "source": "manual"
+  }
+}

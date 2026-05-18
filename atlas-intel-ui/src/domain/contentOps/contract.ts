@@ -16,10 +16,12 @@ import type {
   ContentOpsCatalogResponse,
   ContentOpsExecutionResult as WireExecutionResult,
   ContentOpsIngestionDiagnosticsResponse,
+  ContentOpsIngestionImportResponse as WireIngestionImportResponse,
   ContentOpsPreviewResponse,
   GenerationPlanResponse,
 } from '../../api/contentOps'
 import catalogFixture from '../../api/__fixtures__/contentOps/catalog.json'
+import ingestionImportFixture from '../../api/__fixtures__/contentOps/ingestion-import.json'
 import ingestionInspectFixture from '../../api/__fixtures__/contentOps/ingestion-inspect.json'
 import executionBlockedFixture from '../../api/__fixtures__/contentOps/execution-blocked.json'
 import executionCompletedFixture from '../../api/__fixtures__/contentOps/execution-completed.json'
@@ -33,6 +35,7 @@ import {
   fromWireCatalog,
   fromWireExecution,
   fromWireIngestionDiagnostics,
+  fromWireIngestionImportResponse,
   fromWirePlan,
   fromWirePreview,
 } from './fromWire'
@@ -40,6 +43,7 @@ import type {
   ContentOpsCatalog,
   ContentOpsExecutionResult,
   ContentOpsIngestionDiagnostics,
+  ContentOpsIngestionImportResponse,
   ControlSurfacePreview,
   GenerationPlan,
 } from './types'
@@ -67,6 +71,10 @@ export const __domainCatalogContract = fromWireCatalog(
 export const __domainIngestionInspectContract = fromWireIngestionDiagnostics(
   ingestionInspectFixture as ContentOpsIngestionDiagnosticsResponse,
 ) satisfies Loosen<ContentOpsIngestionDiagnostics>
+
+export const __domainIngestionImportContract = fromWireIngestionImportResponse(
+  ingestionImportFixture as WireIngestionImportResponse,
+) satisfies Loosen<ContentOpsIngestionImportResponse>
 
 export const __domainPreviewCanRunContract = fromWirePreview(
   previewCanRunFixture as ContentOpsPreviewResponse,
